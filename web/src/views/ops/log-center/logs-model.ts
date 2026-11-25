@@ -1,4 +1,5 @@
 import type { LogBucket, LogRecord } from "@/api/monitor";
+import { toInstantMs } from "@/utils/time-zone";
 
 /** 级别的中文：关键事件按 info 级写出，单独叫“事件”。 */
 export function levelLabel(record: LogRecord): string {
@@ -55,10 +56,10 @@ export function rangeWindow(range: LogRange, nowMs: number): LogWindow {
   return { startMs: endMs - RANGE_HOURS[range] * HOUR_MS, endMs };
 }
 
-/** 某条日志前后各 minutes 分钟的窗口；时间无效时为 null。 */
+/** 某条日志（logged_at 是毫秒数字字符串）前后各 minutes 分钟的窗口；时间无效时为 null。 */
 export function aroundWindow(loggedAt: string | undefined, minutes = 5): LogWindow | null {
-  const at = Date.parse(loggedAt ?? "");
-  if (!Number.isFinite(at)) return null;
+  const at = toInstantMs(loggedAt);
+  if (at === null) return null;
   return { startMs: at - minutes * 60_000, endMs: at + minutes * 60_000 + 1 };
 }
 
@@ -86,8 +87,8 @@ export function logBars(buckets: LogBucket[] | undefined, window: LogWindow): Lo
       events: 0
     });
   for (const bucket of buckets ?? []) {
-    const at = Date.parse(bucket.start_at ?? "");
-    const bar = Number.isFinite(at) ? bars[Math.floor((at - first) / stepMs)] : undefined;
+    const at = toInstantMs(bucket.start_at);
+    const bar = at !== null ? bars[Math.floor((at - first) / stepMs)] : undefined;
     if (!bar) continue;
     bar.errors += Number(bucket.errors ?? 0) || 0;
     bar.events += Number(bucket.events ?? 0) || 0;

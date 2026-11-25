@@ -36,8 +36,8 @@ const (
 	// followEnvPrefillBatch 是预填 View 时每次直接写入索引的行数。
 	followEnvPrefillBatch = 20000
 	followEnvSchemaHash   = "follow-env-schema-1"
-	// followEnvDatasetCreatedAt 是数据集元数据的创建时间。
-	followEnvDatasetCreatedAt = "2026-11-01T00:00:00Z"
+	// followEnvDatasetCreatedAt 是数据集元数据的创建时刻（2026-11-01T00:00:00Z 的 Unix 毫秒）。
+	followEnvDatasetCreatedAt int64 = 1793491200000
 )
 
 // followEnv 是一套装配好的 Storage：Primary、跟随变更日志的 View、EventBus。实现 readyBenchEnv。

@@ -30,7 +30,7 @@ func eventToPB(event domain.AlertEvent) *monitorpb.AlertEvent {
 		Severity:    event.Severity,
 		Message:     event.Message,
 		PayloadJson: event.Payload,
-		CreatedAt:   timeToString(event.CreatedAt),
+		CreatedAt:   millis(event.CreatedAt),
 	}
 }
 
@@ -47,9 +47,18 @@ func alertEventTypeToPB(eventType string) monitorpb.AlertEventType {
 	}
 }
 
-func timeToString(t time.Time) string {
+// millis 把墙钟时刻转成接口用的毫秒；零值是 0。
+func millis(t time.Time) int64 {
 	if t.IsZero() {
-		return ""
+		return 0
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return t.UnixMilli()
+}
+
+// msTime 把请求里的毫秒时刻转成 time.Time；0 表示没有给，得到零值。
+func msTime(ms int64) time.Time {
+	if ms == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
 }

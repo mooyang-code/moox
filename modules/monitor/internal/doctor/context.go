@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
@@ -64,16 +63,17 @@ type Watermark struct {
 }
 
 type Context struct {
-	GeneratedAt, ManifestChecksum string
-	ExpectedComponents            []ExpectedComponent
-	HealthObservations            []Observation
-	ReporterObservations          []Observation
-	ModuleObservations            []Observation
-	Watermarks                    []Watermark
-	Hosts                         []hostmetrics.AgentView
-	Forecasts                     map[string][]hostmetrics.DiskForecast
-	Alerts                        []domain.AlertEvent
-	MissingObservations           []Observation
+	GeneratedAt          time.Time
+	ManifestChecksum     string
+	ExpectedComponents   []ExpectedComponent
+	HealthObservations   []Observation
+	ReporterObservations []Observation
+	ModuleObservations   []Observation
+	Watermarks           []Watermark
+	Hosts                []hostmetrics.AgentView
+	Forecasts            map[string][]hostmetrics.DiskForecast
+	Alerts               []domain.AlertEvent
+	MissingObservations  []Observation
 }
 
 func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthCheckIDs []string) (Context, error) {
@@ -92,7 +92,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 	if b.Now != nil {
 		now = b.Now().UTC()
 	}
-	out := Context{GeneratedAt: now.Format(time.RFC3339Nano), ManifestChecksum: manifest.Checksum, Forecasts: map[string][]hostmetrics.DiskForecast{}}
+	out := Context{GeneratedAt: now, ManifestChecksum: manifest.Checksum, Forecasts: map[string][]hostmetrics.DiskForecast{}}
 	snapshot, deploymentErr := b.loadDeployments(ctx)
 	hosts := make(map[string]bool, len(snapshot.Hosts))
 	for _, host := range snapshot.Hosts {
@@ -109,7 +109,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 				ComponentID: component.ComponentID, ServiceName: component.ServiceName, NodeID: deployed.GetHostId(),
 				Expected: hosts[deployed.GetHostId()] && deployed.GetStatus() == "enabled", DeploymentStatus: deployed.GetStatus(),
 				Transport: string(component.Transport), FunctionalObservability: string(component.FunctionalObservability),
-				DeploymentCreatedAt: parseTimestamp(deployed.GetCreatedAt()),
+				DeploymentCreatedAt: millisTime(deployed.GetCreatedAt()),
 			})
 		}
 		if !found {
@@ -458,9 +458,12 @@ func stringSelection(values []string) map[string]bool {
 	return out
 }
 
-func parseTimestamp(value string) time.Time {
-	parsed, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
-	return parsed
+// millisTime 把 Unix 毫秒换成时刻，0 为零时间。
+func millisTime(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
 }
 
 func observationAge(now, observedAt time.Time) int64 {

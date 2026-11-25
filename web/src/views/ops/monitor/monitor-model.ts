@@ -98,7 +98,7 @@ function datasetFacts(dataset: HealthDataset | undefined, nowMs: number): Fact[]
   if (delay.text !== "—") facts.push({ label: "到达", value: delay.text });
   const limit = toSeconds(dataset.lateness_limit_seconds);
   if (limit) facts.push({ label: "允许迟到", value: humanizeDuration(limit) });
-  if (dataset.last_success_at)
+  if (toMillis(dataset.last_success_at) !== null)
     facts.push({
       label: "最近成功",
       value: relativeTime(dataset.last_success_at, nowMs),
@@ -167,7 +167,7 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
     };
   }
   // 已按交易日历识别出最新一根、只是生产者没上报到达时间时说明原因；没有交易日历的空间不判断到达延迟，不提示。
-  if (item.latest_bar_close_at) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
+  if (toMillis(item.latest_bar_close_at) !== null) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
   return { text: "—", tone: "idle", title: "", ratio: 0 };
 }
 

@@ -94,8 +94,8 @@ function replay(id: string, status: string, metrics = "{}", extra: Record<string
     dsl_yaml: "name: demo",
     space_id: "crypto",
     tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" } },
-    start_time: "2026-09-01T00:00:00Z",
-    end_time: "2026-09-02T00:00:00Z",
+    start_time: "1788220800000",
+    end_time: "1788307200000",
     spot_fee_bps: 10,
     swap_fee_bps: 0,
     status,
@@ -113,7 +113,7 @@ function replay(id: string, status: string, metrics = "{}", extra: Record<string
 
 function bar(summary = "{}") {
   return {
-    bar_end_time: "2026-09-01T01:00:00Z",
+    bar_end_time: "1788224400000",
     status: "ok",
     targets: [],
     positions_json: '{"cash":0.5,"positions":{}}',
@@ -134,7 +134,7 @@ const bars = { items: [bar()], page: { total: 1 } };
 
 /** 刚被取消的回放：updated_at 是当前时间（假时钟）。 */
 function justCancelled(id: string, metrics = "{}") {
-  return replay(id, "cancelled", metrics, { updated_at: new Date().toISOString() });
+  return replay(id, "cancelled", metrics, { updated_at: String(Date.now()) });
 }
 const noBars = { items: [], page: { total: 0 } };
 
@@ -579,10 +579,10 @@ describe("strategy replay page", () => {
     api.getReplay.mockResolvedValue(computed);
     api.listReplayBars.mockResolvedValue({
       items: [
-        { ...bar(), bar_end_time: "2026-09-01T01:00:00Z", params_json: "{}" },
+        { ...bar(), bar_end_time: "1788224400000", params_json: "{}" },
         {
           ...bar(),
-          bar_end_time: "2026-09-01T02:00:00Z",
+          bar_end_time: "1788228000000",
           params_json: '{"f__var":{"window":{"default":30,"overrides":{"A":40,"B":45}}}}'
         }
       ],
@@ -691,7 +691,7 @@ describe("strategy replay page", () => {
   });
 
   it("scopes the waiting hint to the replay being waited on", async () => {
-    const stale = replay("r2", "cancelled", "{}", { updated_at: "2026-01-01T00:00:00Z" });
+    const stale = replay("r2", "cancelled", "{}", { updated_at: "1767225600000" });
     api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), stale], page: { total: 2 } });
     api.getReplay.mockImplementation((id: string) => Promise.resolve(id === "r1" ? replay("r1", "running") : stale));
     api.cancelReplay.mockResolvedValue({});
@@ -880,7 +880,7 @@ describe("strategy replay page", () => {
     const wrapper = mountPage();
     await flushPromises();
     // 浏览器比服务端快 10 分钟：取消时间在浏览器看来是 10 分钟前，但这是本页刚取消的。
-    const cancelledAt = new Date(Date.now() - 600_000).toISOString();
+    const cancelledAt = String(Date.now() - 600_000);
     api.getReplay.mockResolvedValue(replay("r1", "cancelled", "{}", { updated_at: cancelledAt }));
     api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled")], page: { total: 1 } });
     await wrapper.find(".cancel-replay").trigger("click");
@@ -893,16 +893,14 @@ describe("strategy replay page", () => {
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     const wrapper = mountPage();
     await flushPromises();
-    api.getReplay.mockResolvedValue(
-      replay("r1", "cancelled", "{}", { updated_at: new Date(Date.now() - 600_000).toISOString() })
-    );
+    api.getReplay.mockResolvedValue(replay("r1", "cancelled", "{}", { updated_at: String(Date.now() - 600_000) }));
     await pollOnce();
     expect(wrapper.text()).toContain("正在等待写入");
   });
 
   it("judges a directly opened cancelled replay by server time", async () => {
     const cancelledAt = Date.now() - 600_000;
-    const cancelled = replay("r1", "cancelled", "{}", { updated_at: new Date(cancelledAt).toISOString() });
+    const cancelled = replay("r1", "cancelled", "{}", { updated_at: String(cancelledAt) });
     api.listReplays.mockResolvedValue({ items: [cancelled], page: { total: 1 } });
     api.getReplay.mockResolvedValue(cancelled);
     // 服务端看来 30 秒前刚取消（浏览器时钟快 10 分钟）：等待。
@@ -1123,7 +1121,7 @@ describe("strategy replay page", () => {
     api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));
     await pollOnce();
     expect(api.listReplayBars.mock.calls.filter(call => !call[1]?.brief)).toHaveLength(0);
-    const page2 = { items: [bar(), { ...bar(), bar_end_time: "2026-09-01T02:00:00Z" }], page: { total: 102 } };
+    const page2 = { items: [bar(), { ...bar(), bar_end_time: "1788228000000" }], page: { total: 102 } };
     manual.resolve(page2);
     await flushPromises();
     expect((wrapper.vm as any).tablePage).toBe(2);
@@ -1264,7 +1262,7 @@ describe("strategy replay page", () => {
     const long = {
       items: Array.from({ length: 120 }, (_, index) => ({
         ...bar(),
-        bar_end_time: new Date(Date.UTC(2026, 8, 1, index)).toISOString()
+        bar_end_time: String(Date.UTC(2026, 8, 1, index))
       })),
       page: { total: 120 }
     };
@@ -1464,7 +1462,7 @@ describe("strategy replay page", () => {
 
   it("counts the wait for a directly opened cancelled replay from the cancel time", async () => {
     const cancelledAt = Date.now() - 100_000;
-    const cancelled = replay("r1", "cancelled", "{}", { updated_at: new Date(cancelledAt).toISOString() });
+    const cancelled = replay("r1", "cancelled", "{}", { updated_at: String(cancelledAt) });
     api.listReplays.mockResolvedValue({ items: [cancelled], page: { total: 1 } });
     api.getReplay.mockResolvedValue(cancelled);
     api.serverNow = Date.now();
@@ -1481,8 +1479,8 @@ describe("strategy replay page", () => {
     api.space = reactive({ selectedSpaceId: "stockcn", selectedSpace: { timezone: "Asia/Shanghai" } });
     const stock = replay("r1", "done", "{}", {
       calendar: "cn_stock",
-      start_time: "2026-08-31T16:00:00Z",
-      end_time: "2026-09-30T16:00:00Z"
+      start_time: "1788192000000",
+      end_time: "1790784000000"
     });
     api.listReplays.mockResolvedValue({ items: [stock], page: { total: 1 } });
     api.getReplay.mockResolvedValue(stock);
@@ -1652,8 +1650,8 @@ describe("strategy replay page URL state and create drawer", () => {
     await click(wrapper, "开始回放");
     expect(api.startReplay).toHaveBeenCalledTimes(1);
     expect(api.startReplay.mock.calls[0][0]).toMatchObject({
-      start_time: "2026-09-01T01:30:00Z",
-      end_time: "2026-09-01T07:00:00Z"
+      start_time: Date.parse("2026-09-01T01:30:00Z"),
+      end_time: Date.parse("2026-09-01T07:00:00Z")
     });
     expect(nav.route.query).toEqual({ tab: "replay", replay_id: "r5" });
     expect(wrapper.find(".drawer").attributes("data-visible")).toBe("false");

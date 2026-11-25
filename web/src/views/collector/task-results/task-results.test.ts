@@ -21,13 +21,13 @@ describe("collector result workflow", () => {
     {
       task_id: "older",
       task_name: "旧任务",
-      create_time: "2026-09-19T00:00:00Z",
+      created_at: "1789776000000",
       result: { dataset_id: "dataset-older", status: "active" }
     },
     {
       task_id: "newer",
       task_name: "新任务",
-      create_time: "2026-09-20T00:00:00Z",
+      created_at: "1789862400000",
       result: { dataset_id: "dataset-newer", status: "active", last_data_time: "2026-09-20T12:00:00Z" }
     }
   ];
@@ -43,13 +43,14 @@ describe("collector result workflow", () => {
     expect(tabs.map(tab => tab.title)).toEqual(["新任务", "旧任务"]);
   });
 
-  it("创建时间是 RFC3339 文本或毫秒数字字符串都能排序", () => {
+  it('创建时刻是毫秒数字字符串，没有创建时刻（"0" 或缺省）的排最后', () => {
     const mixed: CollectorTask[] = [
-      { task_id: "text", create_time: "2026-09-19T00:00:00Z" },
-      { task_id: "ms", create_time: String(Date.parse("2026-09-20T00:00:00Z")) },
+      { task_id: "older", created_at: "1789776000000" },
+      { task_id: "newer", created_at: "1789862400000" },
+      { task_id: "zero", created_at: "0" },
       { task_id: "none" }
     ];
-    expect(buildTaskResultTabs(mixed).map(tab => tab.taskId)).toEqual(["ms", "text", "none"]);
+    expect(buildTaskResultTabs(mixed).map(tab => tab.taskId)).toEqual(["newer", "older", "none", "zero"]);
   });
 
   it("keeps unknown list state stale until the selected task is inspected", () => {
@@ -86,7 +87,7 @@ describe("collector result workflow", () => {
       task_id: "res-1",
       task_name: "45m 合成",
       data_type: "kline_resample",
-      create_time: "2026-10-22T00:00:00Z",
+      created_at: "1792627200000",
       collect_params: { source_task_id: "src-1", target_frequency: "45m" },
       prepare_state: "ready",
       result: { dataset_id: "dataset-res", status: "active" }
@@ -119,14 +120,14 @@ describe("按结果数据集选任务", () => {
         data_type: "kline",
         collect_params: { frequency: "1m" },
         result: { dataset_id: "ds" },
-        create_time: "2026-10-01T00:00:00Z"
+        created_at: "1790812800000"
       },
       {
         task_id: "b",
         data_type: "kline_resample",
         collect_params: { target_frequency: "5m" },
         result: { dataset_id: "ds" },
-        create_time: "2026-10-02T00:00:00Z"
+        created_at: "1790899200000"
       }
     ];
     expect(taskIdForDataset(list, "ds", "1m")).toBe("a");

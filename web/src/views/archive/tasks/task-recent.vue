@@ -28,7 +28,7 @@
     <template v-else>
       <div v-if="error" class="load-error">读取最新数据失败：{{ error }} · <a-link @click="load(cursor)">重试</a-link></div>
       <div v-if="result" class="sub head-note">
-        <template v-if="lastSuccessAt"
+        <template v-if="toInstantMs(lastSuccessAt) !== null"
           >最近一次跟随 {{ formatInstant(lastSuccessAt, zone, "minute") }}，之后写进 Storage 的行可能还没进暂存库</template
         >
         <template v-else>还没有成功的跟随，暂存库可能还没有从 Storage 读过</template
@@ -70,7 +70,7 @@ import { fetchArchiveRecentRows, type ArchiveRecentColumn, type ArchiveRecentRow
 import { listSubjects } from "@/api/storage/metadata";
 import type { Subject } from "@/api/storage/types";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { recentCellText } from "../shared/archive-model";
 
 /**

@@ -153,9 +153,9 @@ type ViewIndexSchema struct {
 	SchemaHash  string
 	// RowsPerSeries 是建立索引时使用的每序列保留行数，写入索引自身的元数据；0 表示未知。不参与 schema 哈希。
 	RowsPerSeries uint64
-	// DatasetCreatedAt 是数据集元数据的创建时间，写入索引自身的元数据，不参与 schema 哈希：
+	// DatasetCreatedAt 是数据集元数据的创建时刻（Unix 毫秒），写入索引自身的元数据，不参与 schema 哈希：
 	// 索引标识只由空间与数据集决定，删除后按同一 ID 重建的数据集靠它认出旧索引不是自己的。
-	DatasetCreatedAt string
+	DatasetCreatedAt int64
 }
 
 // BuiltColumn 是索引文件里记下的一列已建列，只含列契约（schema 哈希）用到的字段。
@@ -188,9 +188,9 @@ func DecodeBuiltColumns(built []BuiltColumn) []*Column {
 
 type ViewIndexStats struct {
 	Exists bool
-	// DatasetID 与 Columns 是索引建成时记下的数据集与已建列，DatasetCreatedAt 是建索引时数据集的创建时间（StatMetadata 与 Stat 都返回）。
+	// DatasetID 与 Columns 是索引建成时记下的数据集与已建列，DatasetCreatedAt 是建索引时数据集的创建时刻（Unix 毫秒，StatMetadata 与 Stat 都返回）。
 	DatasetID        string
-	DatasetCreatedAt string
+	DatasetCreatedAt int64
 	Columns          []*Column
 	ViewVersion      uint64
 	EntryCount       int64

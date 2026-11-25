@@ -147,29 +147,59 @@ func scanMessageWithSQLTimestamps[T proto.Message](row rowScanner, newMessage fu
 		var zero T
 		return zero, err
 	}
-	setStringField(msg, "created_at", normalizeSQLTimestamp(createdAt))
-	setStringField(msg, "updated_at", normalizeSQLTimestamp(updatedAt))
+	if err := setTimestampField(msg, "created_at", createdAt); err != nil {
+		var zero T
+		return zero, err
+	}
+	if err := setTimestampField(msg, "updated_at", updatedAt); err != nil {
+		var zero T
+		return zero, err
+	}
 	return msg, nil
 }
 
-func setStringField(msg proto.Message, name, value string) {
-	if value == "" {
-		return
-	}
+// setTimestampField 把库里的时间文本按字段类型回填到消息：int64 字段写 Unix 毫秒，string 字段写 RFC3339Nano（UTC）。
+// 文本为空时不回填；字段不存在、类型既不是 int64 也不是 string、文本解析不了都报错，不静默跳过。
+func setTimestampField(msg proto.Message, name, text string) error {
 	field := msg.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name(name))
-	if field != nil && field.Kind() == protoreflect.StringKind {
-		msg.ProtoReflect().Set(field, protoreflect.ValueOfString(value))
+	if field == nil {
+		return fmt.Errorf("元数据消息 %s 没有时间字段 %s", msg.ProtoReflect().Descriptor().FullName(), name)
 	}
+	ms, err := sqlTimestampMillis(text)
+	if err != nil {
+		return fmt.Errorf("元数据字段 %s：%w", name, err)
+	}
+	if ms == 0 {
+		return nil
+	}
+	switch field.Kind() {
+	case protoreflect.Int64Kind:
+		msg.ProtoReflect().Set(field, protoreflect.ValueOfInt64(ms))
+	case protoreflect.StringKind:
+		msg.ProtoReflect().Set(field, protoreflect.ValueOfString(time.UnixMilli(ms).UTC().Format(time.RFC3339Nano)))
+	default:
+		return fmt.Errorf("元数据字段 %s 的类型 %s 不能回填时间", name, field.Kind())
+	}
+	return nil
 }
 
-func normalizeSQLTimestamp(value string) string {
+// sqlTimestampMillis 把 SQLite 时间列的文本（RFC3339Nano，或 CURRENT_TIMESTAMP 的“年-月-日 时:分:秒”）换成 Unix 毫秒；空文本得 0。
+func sqlTimestampMillis(value string) (int64, error) {
 	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"} {
 		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed.UTC().Format(time.RFC3339Nano)
+			return parsed.UnixMilli(), nil
 		}
 	}
-	return value
+	return 0, fmt.Errorf("无法解析时间文本 %q", value)
+}
+
+// sqlTimestampText 是写进 SQLite 时间列的文本；与 sqlTimestampMillis 配对，读回得到同一个毫秒数。
+func sqlTimestampText(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 func marshal(msg proto.Message) (string, error) {

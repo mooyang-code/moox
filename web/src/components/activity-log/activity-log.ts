@@ -1,5 +1,4 @@
 /** 活动日志的展示辅助。 */
-import { formatInstant } from "@/utils/time-zone";
 
 /** 级别的文字颜色：错误红、警告橙，普通信息不上色（不用绿色）。 */
 export function activityLevelColor(level?: string) {
@@ -25,11 +24,6 @@ export const ACTIVITY_CATEGORY_LABELS: Record<string, string> = {
 
 export function activityCategoryLabel(category?: string) {
   return ACTIVITY_CATEGORY_LABELS[category || ""] || category || "-";
-}
-
-/** 操作记录的时间：按调用方传入的时区带后缀显示（当前空间的记录用空间时区，系统事件用 UTC）。 */
-export function activityTimeText(value: string | undefined, zone: string) {
-  return formatInstant(value, zone);
 }
 
 /** 详情是 JSON 文本：能解析就缩进展示，否则原样展示。 */

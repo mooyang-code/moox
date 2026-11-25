@@ -93,7 +93,10 @@ func (s *Store) ReadMarkerChanges(ctx context.Context, after uint64, limit int) 
 			if err := proto.Unmarshal(iter.Value(), change); err != nil {
 				return MarkerPage{}, fmt.Errorf("decode change log %s: %w", iter.Key(), err)
 			}
-			created, _ := time.Parse(time.RFC3339Nano, change.GetCreatedAt())
+			var created time.Time
+			if ms := change.GetCreatedAt(); ms > 0 {
+				created = time.UnixMilli(ms)
+			}
 			page.Markers = append(page.Markers, MarkerChange{Sequence: head.sequence, CreatedAt: created, Data: change.GetMarker()})
 			pageBytes += size
 		}

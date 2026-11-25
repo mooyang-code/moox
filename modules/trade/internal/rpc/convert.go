@@ -542,9 +542,9 @@ func logicalAccountTargetToPB(
 	if value.LogicalAccountID == "" {
 		return nil
 	}
-	targets := make([]*tradepb.InstrumentTarget, 0, len(value.Targets))
+	targets := make([]*tradepb.InstrumentQuantity, 0, len(value.Targets))
 	for _, target := range value.Targets {
-		targets = append(targets, &tradepb.InstrumentTarget{
+		targets = append(targets, &tradepb.InstrumentQuantity{
 			InstrumentId: target.InstrumentID,
 			Quantity:     target.Quantity,
 			Hold:         target.Hold,

@@ -82,7 +82,7 @@ func weightTarget(instrumentID, market, weight string) *tradeeventpb.InstrumentW
 	return &tradeeventpb.InstrumentWeightTarget{InstrumentId: instrumentID, MarketType: market, TargetWeight: weight}
 }
 
-func quantityOf(t *testing.T, conversion WeightConversion, instrumentID string) store.InstrumentTarget {
+func quantityOf(t *testing.T, conversion WeightConversion, instrumentID string) store.InstrumentQuantity {
 	t.Helper()
 	for _, target := range conversion.QuantityTargets {
 		if target.InstrumentID == instrumentID {
@@ -90,7 +90,7 @@ func quantityOf(t *testing.T, conversion WeightConversion, instrumentID string) 
 		}
 	}
 	t.Fatalf("换算结果里没有 %s", instrumentID)
-	return store.InstrumentTarget{}
+	return store.InstrumentQuantity{}
 }
 
 // 现货 BTC 余额只对现货标的有意义：目标里同时有 BTC 现货和 BTC 合约时，只按现货算一次，合约标的不会把它再加一遍。

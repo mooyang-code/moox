@@ -16,7 +16,7 @@ func TestStrategyProtoUsesInstanceAndResultVocabulary(t *testing.T) {
 	for _, required := range []string{
 		"message Strategy ",
 		"message StrategyResult ",
-		"message InstrumentTarget ",
+		"message InstrumentWeight ",
 		"rpc CreateStrategy",
 		"rpc GetStrategy",
 		"rpc ListStrategies",

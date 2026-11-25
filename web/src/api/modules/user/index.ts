@@ -2,7 +2,8 @@ import { call } from "@/api/http";
 
 export interface LoginResult {
   user_info?: Record<string, any>;
-  expires_at?: number;
+  /** 会话过期时刻，Unix 毫秒的数字字符串。 */
+  expires_at?: string;
 }
 
 /** 登录：密码明文交给 HTTPS 保护；成功后会话在 HttpOnly Cookie 里，响应体里没有会话信息。错误由登录页自己提示。 */

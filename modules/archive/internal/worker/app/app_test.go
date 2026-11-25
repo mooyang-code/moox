@@ -194,7 +194,7 @@ func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.
 	a := &archivepb.RunAssignment{
 		RunId: runID, LeaseToken: "tok-" + runID, Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
 		Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
-		StartedAt: "2026-10-17T01:04:43Z", ScheduledAt: "2026-10-17T01:04:43Z",
+		StartedAt: rfcMillis("2026-10-17T01:04:43Z"), ScheduledAt: rfcMillis("2026-10-17T01:04:43Z"),
 	}
 	if mutate != nil {
 		mutate(a)
@@ -410,7 +410,7 @@ func TestPulledRunsAreExecutedAndReportedWithStatsAndPartitions(t *testing.T) {
 	}
 	h.idle()
 	// 同样的数据再跑一次：没有新增。
-	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(x *archivepb.RunAssignment) { x.StartedAt = "2026-10-17T02:04:43Z" })}
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(x *archivepb.RunAssignment) { x.StartedAt = rfcMillis("2026-10-17T02:04:43Z") })}
 	h.now = h.now.Add(time.Hour)
 	h.app.heartbeatOnce(ctx) // 一小时后租约需要靠新的心跳续上
 	h.app.pullOnce(ctx)
@@ -584,7 +584,7 @@ func TestPartitionsAreMarkedReportedOnlyAfterTheManagerAcknowledges(t *testing.T
 	}
 	// 第二次：上报成功，随后清除标记。
 	h.now = h.now.Add(time.Hour)
-	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(a *archivepb.RunAssignment) { a.StartedAt = "2026-10-17T02:04:43Z" })}
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(a *archivepb.RunAssignment) { a.StartedAt = rfcMillis("2026-10-17T02:04:43Z") })}
 	h.app.heartbeatOnce(ctx)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
@@ -777,4 +777,13 @@ func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 
 func (f *fakeSource) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {
 	return source.Changes{Next: source.ChangeCursor{StoreID: "store"}}, nil
+}
+
+// rfcMillis 把测试里写的 RFC3339 时刻换成 Unix 毫秒。
+func rfcMillis(text string) int64 {
+	at, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		panic(err)
+	}
+	return at.UnixMilli()
 }

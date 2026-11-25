@@ -144,7 +144,7 @@ func runIngestModeSet(ctx context.Context, out io.Writer, flags ingestModeFlags)
 	}
 	if err := collectorRetError("set ingest mode", rsp.GetRetInfo()); err != nil {
 		if stream := rsp.GetStream(); stream != nil {
-			return fmt.Errorf("%w（collector-stream %s 最近心跳 %s）", err, stream.GetInstanceId(), stream.GetHeartbeatAt())
+			return fmt.Errorf("%w（collector-stream %s 最近心跳 %s）", err, stream.GetInstanceId(), time.UnixMilli(stream.GetHeartbeatAt()).UTC().Format(time.RFC3339))
 		}
 		return err
 	}

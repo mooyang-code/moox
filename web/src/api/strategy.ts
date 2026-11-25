@@ -2,7 +2,7 @@ import { call, RequestError } from "@/api/http";
 import { readAllPages } from "@/api/read-all-pages";
 import type {
   DisplayHidden,
-  InstrumentTarget,
+  InstrumentWeight,
   PageRequest,
   PageResponse,
   Replay,
@@ -19,14 +19,19 @@ import type {
   ValidateStrategyResult
 } from "./strategy-types";
 
+/** 时刻字段原样保留 JSON 里的毫秒数字字符串，缺省为 "0"（没有）。 */
+function instant(value: unknown): string {
+  return value === undefined || value === null || value === "" ? "0" : String(value);
+}
+
 function normalizeStrategy(value: any): Strategy {
   return {
     strategy_id: value?.strategy_id ?? "",
     name: value?.name ?? "",
     dsl_yaml: value?.dsl_yaml ?? "",
     dsl_hash: value?.dsl_hash ?? "",
-    created_at: value?.created_at ?? "",
-    updated_at: value?.updated_at ?? ""
+    created_at: instant(value?.created_at),
+    updated_at: instant(value?.updated_at)
   };
 }
 
@@ -53,14 +58,14 @@ function normalizeInstance(value: any): StrategyInstance {
     session_id: value?.session_id ?? "",
     resolved_json: value?.resolved_json || "{}",
     health: value?.health || "ok",
-    created_at: value?.created_at ?? "",
-    updated_at: value?.updated_at ?? "",
+    created_at: instant(value?.created_at),
+    updated_at: instant(value?.updated_at),
     missing_factor_tasks: [...(value?.missing_factor_tasks ?? [])],
-    confirmed_at: value?.confirmed_at ?? ""
+    confirmed_at: instant(value?.confirmed_at)
   };
 }
 
-function normalizeTarget(value: any): InstrumentTarget {
+function normalizeTarget(value: any): InstrumentWeight {
   return { instrument_id: value?.instrument_id ?? "", target_weight: value?.target_weight ?? "0", market: value?.market ?? "" };
 }
 
@@ -69,8 +74,8 @@ function normalizeResult(value: any): StrategyResult {
     result_id: value?.result_id ?? "",
     instance_id: value?.instance_id ?? "",
     session_id: value?.session_id ?? "",
-    bar_end_time: value?.bar_end_time ?? "",
-    valid_until: value?.valid_until ?? "",
+    bar_end_time: instant(value?.bar_end_time),
+    valid_until: instant(value?.valid_until),
     status: value?.status ?? "",
     skip_reason: value?.skip_reason ?? "",
     dsl_hash: value?.dsl_hash ?? "",
@@ -78,9 +83,9 @@ function normalizeResult(value: any): StrategyResult {
     summary_json: value?.summary_json || "{}",
     input_json: value?.input_json || "{}",
     publish_status: value?.publish_status ?? "",
-    created_at: value?.created_at ?? "",
+    created_at: instant(value?.created_at),
     next_params_json: value?.next_params_json ?? "",
-    params_delivered_at: value?.params_delivered_at ?? "",
+    params_delivered_at: instant(value?.params_delivered_at),
     params_error: value?.params_error ?? ""
   };
 }
@@ -111,18 +116,18 @@ function normalizeReplay(value: any): Replay {
         { factor_task_id: task?.factor_task_id ?? "", dataset_id: task?.dataset_id ?? "" }
       ])
     ),
-    start_time: value?.start_time ?? "",
-    end_time: value?.end_time ?? "",
+    start_time: instant(value?.start_time),
+    end_time: instant(value?.end_time),
     spot_fee_bps: Number(value?.spot_fee_bps ?? 0),
     swap_fee_bps: Number(value?.swap_fee_bps ?? 0),
     slippage_bps: Number(value?.slippage_bps ?? 0),
     funding_column: value?.funding_column ?? "",
     status: value?.status ?? "",
-    progress_time: value?.progress_time ?? "",
+    progress_time: instant(value?.progress_time),
     metrics_json: value?.metrics_json || "{}",
     error: value?.error ?? "",
-    created_at: value?.created_at ?? "",
-    updated_at: value?.updated_at ?? "",
+    created_at: instant(value?.created_at),
+    updated_at: instant(value?.updated_at),
     dsl_hash: value?.dsl_hash ?? "",
     instance_id: value?.instance_id ?? "",
     session_id: value?.session_id ?? "",
@@ -133,7 +138,7 @@ function normalizeReplay(value: any): Replay {
 
 function normalizeReplayBar(value: any): ReplayBar {
   return {
-    bar_end_time: value?.bar_end_time ?? "",
+    bar_end_time: instant(value?.bar_end_time),
     status: value?.status ?? "",
     targets: (value?.targets ?? []).map(normalizeTarget),
     positions_json: value?.positions_json || "{}",
@@ -351,13 +356,13 @@ export async function getStrategyResult(result_id: string): Promise<StrategyResu
 export async function listStrategyTargets(instance_id: string): Promise<StrategyTargetSnapshot> {
   const response = await callStrategy<
     { instance_id: string },
-    { targets?: InstrumentTarget[]; session_id?: string; bar_end_time?: string; valid_until?: string; result_id?: string }
+    { targets?: InstrumentWeight[]; session_id?: string; bar_end_time?: string; valid_until?: string; result_id?: string }
   >("ListStrategyTargets", { instance_id });
   return {
     targets: (response.targets ?? []).map(normalizeTarget),
     session_id: response.session_id ?? "",
-    bar_end_time: response.bar_end_time ?? "",
-    valid_until: response.valid_until ?? "",
+    bar_end_time: instant(response.bar_end_time),
+    valid_until: instant(response.valid_until),
     result_id: response.result_id ?? ""
   };
 }
@@ -370,8 +375,8 @@ export async function startReplay(request: StartReplayRequest): Promise<StartedR
   return {
     replay: normalizeReplay(response.replay),
     bar_count: Number(response.bar_count ?? 0),
-    first_bar_end: response.first_bar_end ?? "",
-    last_bar_end: response.last_bar_end ?? ""
+    first_bar_end: instant(response.first_bar_end),
+    last_bar_end: instant(response.last_bar_end)
   };
 }
 

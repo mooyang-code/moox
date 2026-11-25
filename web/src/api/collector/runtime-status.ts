@@ -6,6 +6,7 @@ export interface FetchPlanSummary {
   id?: number | string;
   status?: string;
   last_error?: string;
+  /** Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
 }
@@ -56,7 +57,7 @@ export interface CollectorFunctionStatus {
   cloud_exists?: boolean;
   cloud_timer_matches?: boolean;
   cloud_package_latest?: boolean;
-  /** 读回时间（RFC3339），空表示还没有读回。 */
+  /** 读回时刻：Unix 毫秒（数字字符串），"0" 表示还没有读回。 */
   cloud_read_at?: string;
 }
 
@@ -71,6 +72,7 @@ export interface StreamConnStatus {
   market?: string;
   frequency?: string;
   streams?: number;
+  /** 最近一条消息的时刻：Unix 毫秒（数字字符串）。 */
   last_message_at?: string;
   reconnects?: number | string;
   subscribed?: boolean;
@@ -98,6 +100,7 @@ export interface StreamPeriodStat {
 export interface StreamWorkerStatus {
   instance_id?: string;
   online?: boolean;
+  /** 心跳时刻：Unix 毫秒（数字字符串）。 */
   heartbeat_at?: string;
   applied_plan_id?: number | string;
   conns?: StreamConnStatus[];
@@ -123,6 +126,7 @@ export interface GetCollectorStatusResponse {
   functions?: CollectorFunctionStatus[];
   active_backfills?: number;
   failed_backfills_24h?: number;
+  /** Unix 毫秒（数字字符串）。 */
   generated_at?: string;
   stream?: StreamWorkerStatus;
   ingest_modes?: IngestMode[];
@@ -144,6 +148,7 @@ export interface KlineBackfillJob {
   to?: string;
   status?: string;
   last_error?: string;
+  /** Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   pending?: number;

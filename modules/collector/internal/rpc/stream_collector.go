@@ -98,8 +98,8 @@ func (s *StreamService) StreamHeartbeat(ctx context.Context, req *pb.StreamHeart
 	}
 	now := s.now().UTC()
 	offset := time.Duration(0)
-	if req.GetSentAtMs() > 0 {
-		offset = time.UnixMilli(req.GetSentAtMs()).Sub(now)
+	if req.GetSentAt() > 0 {
+		offset = time.UnixMilli(req.GetSentAt()).Sub(now)
 	}
 	status := streamWorkerStatus{Version: req.GetVersion(), ClockOffsetMS: offset.Milliseconds(), Conns: req.GetConns()}
 	applied := fetchplan.StreamApplied{ID: req.GetAppliedPlanId()}
@@ -115,7 +115,7 @@ func (s *StreamService) StreamHeartbeat(ctx context.Context, req *pb.StreamHeart
 	if err != nil {
 		return &pb.StreamHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	return &pb.StreamHeartbeatRsp{RetInfo: retOK(), PlanId: id, ServerTimeMs: now.UnixMilli(), CommitReserveMs: int32(s.settings.CommitReserveMS)}, nil
+	return &pb.StreamHeartbeatRsp{RetInfo: retOK(), PlanId: id, ServerTime: now.UnixMilli(), CommitReserveMs: int32(s.settings.CommitReserveMS)}, nil
 }
 
 // PullStreamPlan 返回分给推送与本地执行端的计划项。
@@ -238,7 +238,7 @@ func (s *StreamService) WorkerStatus(ctx context.Context, spaceID string) (*pb.S
 	_ = json.Unmarshal([]byte(worker.Applied), &applied)
 	var status streamWorkerStatus
 	_ = json.Unmarshal([]byte(worker.Status), &status)
-	result := &pb.StreamWorkerStatus{InstanceId: worker.InstanceID, Online: online, HeartbeatAt: worker.HeartbeatAt.UTC().Format(time.RFC3339), AppliedPlanId: applied.ID,
+	result := &pb.StreamWorkerStatus{InstanceId: worker.InstanceID, Online: online, HeartbeatAt: unixMillis(worker.HeartbeatAt), AppliedPlanId: applied.ID,
 		Conns: status.Conns, ClockOffsetMs: status.ClockOffsetMS, Version: status.Version}
 	s.mu.Lock()
 	recent := append([]*pb.StreamPeriodStat(nil), s.recent[spaceID]...)

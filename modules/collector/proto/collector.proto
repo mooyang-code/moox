@@ -27,8 +27,8 @@ message CollectionTask {
   google.protobuf.Struct collect_params = 7;
   optional bool enabled = 8;
   string creator = 9;
-  string create_time = 10;    // RFC3339
-  string modify_time = 11;    // RFC3339
+  int64 created_at = 10; // Unix 毫秒
+  int64 updated_at = 11; // Unix 毫秒
   string definition_hash = 12;
   string prepare_state = 13;  // pending/waiting_view/ready/error
   string last_error = 14;
@@ -95,7 +95,7 @@ message TaskResultInventoryEntry {
   string latest_completed_period = 10; // RFC3339; complete or degraded
   string latest_completed_status = 11;
   string view_last_data_time = 12; // RFC3339 when Storage provides one
-  string observed_at = 13; // RFC3339 metadata observation time
+  int64 observed_at = 13; // 元数据观察时刻，Unix 毫秒
   bool enabled = 14;
   bool ownership_verified = 15;
   string result_status = 16; // ready/pending/error
@@ -118,7 +118,8 @@ message GetTaskResultInventoryRsp {
   repeated TaskResultInventoryEntry entries = 2;
   common.PageResult page = 3;
   string snapshot_id = 4;
-  string observed_at = 5;
+  // Unix 毫秒。
+  int64 observed_at = 5;
 }
 
 message CreateTaskReq {
@@ -171,8 +172,8 @@ message DataTypeConfig {
   google.protobuf.Struct data_source_options = 5;
   int32 sort_order = 6;
   int32 version = 7;
-  string create_time = 8;          // RFC3339
-  string modify_time = 9;          // RFC3339
+  int64 created_at = 8; // Unix 毫秒
+  int64 updated_at = 9; // Unix 毫秒
 }
 
 // DataTypeFieldConfig 字段配置。
@@ -187,8 +188,8 @@ message DataTypeFieldConfig {
   google.protobuf.Struct field_options = 8;
   google.protobuf.Struct data_source_options = 9;
   int32 sort_order = 10;
-  string create_time = 11;         // RFC3339
-  string modify_time = 12;         // RFC3339
+  int64 created_at = 11; // Unix 毫秒
+  int64 updated_at = 12; // Unix 毫秒
 }
 
 // DataTypeConfigDetail 数据类型配置详情（含字段）。
@@ -248,8 +249,8 @@ message ResampleJob {
   string start = 6;
   string end = 7;
   string next_bucket = 8;
-  // 最早开始时间，之前不开始。
-  string not_before = 9;
+  // 最早开始时刻（Unix 毫秒），之前不开始；0 表示不限。
+  int64 not_before = 9;
   // queued / running / syncing / succeeded / failed / cancelled
   string status = 10;
   uint32 total_buckets = 11;
@@ -258,8 +259,9 @@ message ResampleJob {
   uint64 skipped = 14;
   repeated string skipped_samples = 15;
   string last_error = 16;
-  string created_at = 17;
-  string updated_at = 18;
+  // Unix 毫秒。
+  int64 created_at = 17;
+  int64 updated_at = 18;
 }
 
 message SubmitKlineResampleJobReq {
@@ -374,12 +376,12 @@ message SyncSubjectsRsp {
 message TagSyncStatus {
   string space_id = 1;
   string tag_id = 2;
-  // 上次运行时间（RFC3339，UTC）与结果（success / failed）。
-  string last_run_at = 3;
+  // 上次运行时刻（Unix 毫秒）与结果（success / failed）。
+  int64 last_run_at = 3;
   string last_status = 4;
   string last_error = 5;
-  // 最近一次成功的时间；从未成功过为空。
-  string last_success_at = 6;
+  // 最近一次成功的时刻（Unix 毫秒）；从未成功过为 0。
+  int64 last_success_at = 6;
 }
 
 message ListTagSyncStatusReq {
@@ -484,8 +486,9 @@ message KlineBackfillJob {
   string to = 9;
   string status = 10;
   string last_error = 11;
-  string created_at = 12;
-  string updated_at = 13;
+  // Unix 毫秒。
+  int64 created_at = 12;
+  int64 updated_at = 13;
   int32 pending = 14;
   int32 running = 15;
   int32 succeeded = 16;
@@ -565,8 +568,9 @@ message FetchPlanSummary {
   int64 id = 1;
   string status = 2;
   string last_error = 3;
-  string created_at = 4;
-  string updated_at = 5;
+  // Unix 毫秒。
+  int64 created_at = 4;
+  int64 updated_at = 5;
 }
 
 // CollectorDatasetStatus 是一个正在采集的数据集（某个频率）的健康度。
@@ -622,8 +626,8 @@ message CollectorFunctionStatus {
   bool cloud_exists = 10;
   bool cloud_timer_matches = 11;
   bool cloud_package_latest = 12;
-  // cloud_read_at 是读回时间（RFC3339），没有读回时为空。
-  string cloud_read_at = 13;
+  // cloud_read_at 是读回时刻（Unix 毫秒），没有读回时为 0。
+  int64 cloud_read_at = 13;
 }
 
 message GetCollectorStatusRsp {
@@ -639,7 +643,8 @@ message GetCollectorStatusRsp {
   repeated CollectorFunctionStatus functions = 7;
   int32 active_backfills = 8;
   int32 failed_backfills_24h = 9;
-  string generated_at = 10;
+  // Unix 毫秒。
+  int64 generated_at = 10;
   // stream 是该空间 collector-stream 实例的状态（心跳、连接、最近周期），没有实例时为空。
   StreamWorkerStatus stream = 11;
   // ingest_modes 是各启用的 K 线任务的采集方式。
@@ -749,9 +754,9 @@ message SubjectExclusion {
   string reason = 4;
   // operator 是设置人（moox-cli 填本机用户与主机，旁路程序填自己的名字）。
   string operator = 5;
-  // created_at、expires_at 为 RFC3339；expires_at 为空表示不过期。
-  string created_at = 6;
-  string expires_at = 7;
+  // created_at、expires_at 为 Unix 毫秒；expires_at 为 0 表示不过期。
+  int64 created_at = 6;
+  int64 expires_at = 7;
 }
 
 // SetSubjectExclusions 按空间加入一批排除；同一标的重复设置时更新原因与到期时间。
@@ -761,8 +766,8 @@ message SetSubjectExclusionsReq {
   string market_type = 3;
   string reason = 4;
   string operator = 5;
-  // expires_at 为 RFC3339，空表示不过期；必须晚于当前时间。
-  string expires_at = 6;
+  // expires_at 为 Unix 毫秒，0 表示不过期；必须晚于当前时间。
+  int64 expires_at = 6;
 }
 
 message SetSubjectExclusionsRsp {
@@ -798,7 +803,8 @@ message StreamConnStatus {
   string market = 1;
   string frequency = 2;
   int32 streams = 3;
-  string last_message_at = 4;
+  // Unix 毫秒，没有收到过消息为 0。
+  int64 last_message_at = 4;
   int64 reconnects = 5;
   bool subscribed = 6;
   string endpoint = 7;
@@ -827,7 +833,8 @@ message StreamPeriodStat {
 message StreamWorkerStatus {
   string instance_id = 1;
   bool online = 2;
-  string heartbeat_at = 3;
+  // Unix 毫秒。
+  int64 heartbeat_at = 3;
   int64 applied_plan_id = 4;
   repeated StreamConnStatus conns = 6;
   repeated StreamPeriodStat recent = 7;
@@ -842,7 +849,8 @@ message StreamHeartbeatReq {
   // applied_plan_id 是实例已应用的计划记录。
   int64 applied_plan_id = 3;
   repeated StreamConnStatus conns = 5;
-  int64 sent_at_ms = 6;
+  // Unix 毫秒。
+  int64 sent_at = 6;
   string version = 7;
 }
 
@@ -850,7 +858,8 @@ message StreamHeartbeatRsp {
   common.RetInfo ret_info = 1;
   // plan_id 是 Collector 当前要求推送与本地执行端应用的计划记录。
   int64 plan_id = 2;
-  int64 server_time_ms = 4;
+  // Unix 毫秒。
+  int64 server_time = 4;
   // commit_reserve_ms 是周期闸门当前的提交预留：配置变化不改计划版本，随心跳下发，已有闸门从下一个周期起使用。
   int32 commit_reserve_ms = 5;
 }
@@ -1029,8 +1038,8 @@ message CloudAccount {
   string app_id = 5;
   string cos_region = 6;
   string cos_bucket = 7;
-  string create_time = 8; // RFC3339
-  string modify_time = 9; // RFC3339
+  int64 created_at = 8; // Unix 毫秒
+  int64 updated_at = 9; // Unix 毫秒
 }
 
 message ListCloudAccountsReq {}
@@ -1040,7 +1049,7 @@ message ListCloudAccountsRsp {
   repeated CloudAccount accounts = 2;
 }
 
-// CreateCloudAccountReq 与 UpdateCloudAccountReq 都是整行写入；create_time、modify_time 不用填。
+// CreateCloudAccountReq 与 UpdateCloudAccountReq 都是整行写入；created_at、updated_at 不用填。
 message CreateCloudAccountReq {
   CloudAccount account = 1;
 }
@@ -1099,8 +1108,8 @@ message FunctionPackage {
   string cos_bucket = 10;
   string cos_path = 11;
   string status = 12;
-  string create_time = 13; // RFC3339
-  string modify_time = 14; // RFC3339
+  int64 created_at = 13; // Unix 毫秒
+  int64 updated_at = 14; // Unix 毫秒
 }
 
 // InitPackageUploadReq 登记一个待上传的代码包并返回 COS 预签名上传地址；filename 为空时用“包名-版本.zip”。
@@ -1117,7 +1126,7 @@ message InitPackageUploadRsp {
   common.RetInfo ret_info = 1;
   FunctionPackage package = 2;
   string upload_url = 3;
-  string expires_at = 4; // RFC3339
+  int64 expires_at = 4; // Unix 毫秒
 }
 
 // CompletePackageUploadReq 在上传完成后核对 COS 对象的大小与 MD5，通过后代码包变成可用。
@@ -1182,7 +1191,7 @@ message CloudFunction {
   string timer_cron = 14;
   bool timer_enabled = 15;
   string timer_available_status = 16;
-  string read_at = 17; // RFC3339
+  int64 read_at = 17; // Unix 毫秒
   string read_error = 18;
   // 读回与期望的比对。
   bool timer_matches = 19;

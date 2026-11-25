@@ -29,10 +29,10 @@ func TestQueryHostMetricHistoryClampsToRetention(t *testing.T) {
 	}
 	service := New(mgr.Repositories(), Options{HostStore: hostmetrics.NewStore(samples)})
 
-	ts := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339Nano) }
+	ts := func(d time.Duration) int64 { return now.Add(d).UnixMilli() }
 	for _, tc := range []struct {
 		name       string
-		start, end string
+		start, end int64
 		points     int
 		gap        bool
 	}{

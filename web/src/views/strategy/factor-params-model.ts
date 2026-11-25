@@ -1,5 +1,5 @@
 import type { StrategyResult } from "@/api/strategy-types";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 
 /** 实例创建时选定的计算任务及其可变成员（来自启用时固化的解析结果）；解析结果里没有任务时返回 null。 */
 export interface FactorBinding {
@@ -62,7 +62,8 @@ export function memberParamsSummary(members: Record<string, Record<string, any>>
 
 /** 结果上的参数投递状态：已送达、被因子侧拒绝（不再重试）、待送达。 */
 export function deliveryStatus(result: Pick<StrategyResult, "params_delivered_at" | "params_error">) {
-  if (result.params_delivered_at) return { key: "delivered", label: "已送达", color: "green", hint: "因子管理端已接受" };
+  if (toInstantMs(result.params_delivered_at) !== null)
+    return { key: "delivered", label: "已送达", color: "green", hint: "因子管理端已接受" };
   if (result.params_error) return { key: "rejected", label: "被拒绝", color: "red", hint: result.params_error };
   return {
     key: "pending",
@@ -111,7 +112,7 @@ export function nextParamsRows(results: StrategyResult[], zone: string): NextPar
       hint: status.hint
     });
   }
-  return rows.sort((a, b) => b.barEnd.localeCompare(a.barEnd));
+  return rows.sort((a, b) => (toInstantMs(b.barEnd) ?? 0) - (toInstantMs(a.barEnd) ?? 0));
 }
 
 /** 把 Unix 秒转成与上面一致的文本。 */

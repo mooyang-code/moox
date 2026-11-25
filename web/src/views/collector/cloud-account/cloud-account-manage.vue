@@ -42,9 +42,9 @@
               <span>{{ record.cos_bucket || "-" }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="创建时间" data-index="create_time" :width="180">
+          <a-table-column title="创建时间" data-index="created_at" :width="180">
             <template #cell="{ record }">
-              {{ formatInstant(record.create_time, "UTC") }}
+              {{ formatInstant(record.created_at, "UTC") }}
             </template>
           </a-table-column>
           <a-table-column title="操作" :width="160" align="center" fixed="right">

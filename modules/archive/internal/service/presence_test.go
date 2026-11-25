@@ -75,7 +75,7 @@ func TestArchiveObjectStoreState(t *testing.T) {
 	if _, _, _, ok := state(); ok {
 		t.Fatal("没配置对象存储时不应上报")
 	}
-	since := h.now.Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	since := h.now.Add(-2 * time.Minute).UnixMilli()
 	down := &archivepb.ObjectStoreInfo{Endpoint: "127.0.0.1:11473", Bucket: "moox-archive", Prefix: "moox-archive/", UrlStyle: "path",
 		ProbeError: "查询 _probe/absent: 访问被拒绝", UnavailableSince: since}
 	beat(down)

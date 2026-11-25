@@ -33,8 +33,8 @@ func (f *targetFixture) addETH(t *testing.T) {
 	}))
 }
 
-func batchTargets() []store.InstrumentTarget {
-	return []store.InstrumentTarget{
+func batchTargets() []store.InstrumentQuantity {
+	return []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"},
 		{InstrumentID: "ETH-USDT-SWAP", Quantity: "3"},
 	}
@@ -94,7 +94,7 @@ func TestBatchQuotaDefersWithoutRerouting(t *testing.T) {
 
 func TestBatchIntervalPacesNextBatch(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
 	executor := f.executor()
 	executor.MinBatchInterval = time.Hour
 	_, err := executor.Converge(context.Background(), "space-1", "logical-1")
@@ -136,7 +136,7 @@ func TestBatchStopsWhenRateLimited(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newTargetFixture(t, exchange.MarketTypeSwap)
-			f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+			f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
 			executor := f.executor()
 			executor.RateStatus = func(string) (exchange.RateStatus, bool) { return status, true }
 			result, err := executor.Converge(context.Background(), "space-1", "logical-1")
@@ -167,7 +167,7 @@ func TestInFlightChildBlocksNewBatch(t *testing.T) {
 func TestResidualPendingChildIsDiscarded(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.orders.store = f.store
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
 	pending := filledChild("residual", "target-current", "TARGET", "BUY", "0", 0)
 	pending.State, pending.FilledQuantity, pending.FinishedAt, pending.SubmittedAt = "PENDING", "0", 0, 0
 	f.order(t, pending)

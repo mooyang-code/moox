@@ -620,8 +620,8 @@ func (s *Service) GetStatus(ctx context.Context, _ *factorpb.GetStatusReq) (*fac
 		Lifecycle: factorwire.LifecycleToPB(status.Lifecycle),
 		Engine: &factorpb.EngineInfo{
 			EngineId: info.EngineID, BootId: info.BootID, Version: info.Version, Online: info.Online,
-			LastHeartbeatAt: factorwire.FormatTime(info.LastHeartbeatAt), CatalogHash: info.CatalogHash,
-			CatalogSyncedAt: factorwire.FormatTime(info.CatalogSyncedAt), CatalogInSync: info.CatalogInSync,
+			LastHeartbeatAt: factorwire.Millis(info.LastHeartbeatAt), CatalogHash: info.CatalogHash,
+			CatalogSyncedAt: factorwire.Millis(info.CatalogSyncedAt), CatalogInSync: info.CatalogInSync,
 		},
 	}, nil
 }

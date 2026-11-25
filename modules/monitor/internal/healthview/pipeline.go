@@ -78,11 +78,11 @@ func projectDataset(item observability.DatasetFrequencyStatus) *pb.HealthDataset
 	return &pb.HealthDataset{
 		Producer: item.Producer, SpaceId: item.SpaceID, DatasetId: item.DatasetID, DisplayName: item.DisplayName, Freq: item.Freq,
 		Status: status, Reason: ChineseReason(item.Reason), RawError: unhealthyRaw(status, item.Reason, ""),
-		InputWatermarkAt: stamp(item.InputWatermarkAt), OutputWatermarkAt: stamp(item.OutputWatermarkAt),
+		InputWatermarkAt: dataTimeText(item.InputWatermarkAt), OutputWatermarkAt: dataTimeText(item.OutputWatermarkAt),
 		LastSuccessAt: stamp(item.LastSuccessAt), LastRunAt: stamp(item.LastRunAt), LastReportedAt: stamp(item.LastReportedAt),
 		LatestBarCloseAt: stamp(item.LatestBarClose), ArrivedAt: stamp(item.OutputArrivedAt),
 		DelaySeconds: item.DelaySeconds, DelayKnown: item.DelayKnown,
-		ExpectedBarAt: stamp(item.ExpectedBarAt), ExpectedBarCloseAt: stamp(item.ExpectedBarClose),
+		ExpectedBarAt: dataTimeText(item.ExpectedBarAt), ExpectedBarCloseAt: stamp(item.ExpectedBarClose),
 		WaitingBars: int32(item.WaitingBars), WaitingSince: stamp(item.WaitingSince), OverdueSeconds: item.OverdueSeconds,
 		LateConfirmed:        item.LateConfirmed,
 		LatenessLimitSeconds: item.LatenessLimitSeconds, ClockIssue: item.ClockIssue, Timezone: item.Timezone,

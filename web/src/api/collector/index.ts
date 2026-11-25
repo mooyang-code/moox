@@ -32,8 +32,9 @@ export interface CollectorTask {
   collect_params?: Record<string, unknown>;
   enabled?: boolean | string;
   creator?: string;
-  create_time?: string;
-  modify_time?: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
+  created_at?: string;
+  updated_at?: string;
   prepare_state?: string;
   last_error?: string;
   result?: CollectorTaskResult;
@@ -85,11 +86,11 @@ export interface GetTaskDetailResponse {
 export interface TagSyncStatus {
   space_id: string;
   tag_id: string;
-  /** 上次运行时间（RFC3339，UTC）。 */
+  /** 上次运行时刻：Unix 毫秒（数字字符串）。 */
   last_run_at?: string;
   last_status?: "success" | "failed" | string;
   last_error?: string;
-  /** 最近一次成功的时间；从未成功过为空。 */
+  /** 最近一次成功的时刻：Unix 毫秒（数字字符串）；从未成功过为 "0"。 */
   last_success_at?: string;
 }
 
@@ -139,6 +140,7 @@ export interface ResampleJob {
   start: string;
   end: string;
   next_bucket: string;
+  /** 最早开始时刻：Unix 毫秒（数字字符串），"0" 表示不限。 */
   not_before: string;
   status: string;
   total_buckets: number;
@@ -147,6 +149,7 @@ export interface ResampleJob {
   skipped: number;
   skipped_samples?: string[];
   last_error?: string;
+  /** Unix 毫秒（数字字符串）。 */
   created_at: string;
   updated_at: string;
 }
@@ -182,8 +185,9 @@ export interface DataTypeConfig {
   data_source_options?: Record<string, unknown>;
   sort_order: number;
   version: number;
-  create_time: string;
-  modify_time: string;
+  /** Unix 毫秒（数字字符串）。 */
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DataTypeFieldConfig {

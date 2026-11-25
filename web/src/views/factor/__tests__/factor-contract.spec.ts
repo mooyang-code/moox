@@ -35,8 +35,8 @@ describe("factor API contract", () => {
       lookback_periods: 100,
       definition_hash: "sha256:definition",
       allow_partial_universe: false,
-      created_at: "2026-10-04T00:00:00Z",
-      updated_at: "2026-10-04T00:00:00Z"
+      created_at: "1791072000000",
+      updated_at: "1791072000000"
     };
     const info: FactorInfo = { factor, usages: [{ task_id: "factor_task_crypto_1m", status: "enabled" }] };
     const member: FactorMember = {

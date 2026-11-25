@@ -71,7 +71,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	return &pb.LoginRsp{
 		RetInfo:   &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "登录成功"},
 		UserInfo:  authutils.BuildSafeUserInfo(user),
-		ExpiresAt: created.ExpiresAt.Unix(),
+		ExpiresAt: created.ExpiresAt.UnixMilli(),
 	}, nil
 }
 

@@ -4,6 +4,9 @@ import { call } from "@/api/http";
 import type { HealthOverview } from "@/api/monitor";
 import ArrivalChart from "./arrival-chart.vue";
 
+// Monitor 接口里的时刻是毫秒数字字符串。
+const ms = (text: string) => String(Date.parse(text));
+
 vi.mock("@/api/http", () => ({ call: vi.fn() }));
 const charts = vi.hoisted(() => ({ created: 0, released: 0 }));
 vi.mock("@visactor/vchart", () => ({
@@ -45,14 +48,14 @@ describe("arrival chart", () => {
     mockedCallControl.mockResolvedValue({
       timezone: "UTC",
       day: "2026-10-16",
-      start_at: "2026-10-16T00:00:00Z",
-      end_at: "2026-10-17T00:00:00Z",
+      start_at: ms("2026-10-16T00:00:00Z"),
+      end_at: ms("2026-10-17T00:00:00Z"),
       series: [
         {
           stage: "storage",
           dataset_id: "dataset_spot_1m",
           lateness_limit_seconds: "30",
-          points: [{ close_at: "2026-10-16T18:55:00Z", delay_seconds: "1" }]
+          points: [{ close_at: ms("2026-10-16T18:55:00Z"), delay_seconds: "1" }]
         }
       ]
     });
@@ -138,8 +141,8 @@ describe("arrival chart", () => {
     mockedCallControl.mockResolvedValue({
       timezone: "UTC",
       day: "2026-10-16",
-      start_at: "2026-10-16T00:00:00Z",
-      end_at: "2026-10-17T00:00:00Z",
+      start_at: ms("2026-10-16T00:00:00Z"),
+      end_at: ms("2026-10-17T00:00:00Z"),
       series: []
     });
     const page = mount(ArrivalChart, { props: { overview, names, nowMs } });

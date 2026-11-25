@@ -89,7 +89,7 @@
         </template>
         <template #expand-row="{ record }">
           <div class="jobs-detail">
-            <div v-if="record.not_before && record.status === 'queued'">
+            <div v-if="toInstantMs(record.not_before) !== null && record.status === 'queued'">
               最早开始时间：<TimeText :value="record.not_before" :zone="displayZone" precision="minute" />
             </div>
             <div v-if="record.subjects && record.subjects.length">标的：{{ record.subjects.join("、") }}</div>
@@ -129,6 +129,7 @@ import {
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { usePolling } from "@/hooks/usePolling";
 import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
+import { toInstantMs } from "@/utils/time-zone";
 
 const props = defineProps<{ visible: boolean; spaceId: string; taskId: string; taskName: string; targetFrequency: string }>();
 const emit = defineEmits<{ (event: "update:visible", value: boolean): void }>();

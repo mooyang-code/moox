@@ -63,7 +63,7 @@ func shadowTargetToPB(record store.TargetHistoryRecord) (*tradepb.ShadowTarget, 
 	if err := json.Unmarshal([]byte(record.ReferencePricesJSON), &prices); err != nil {
 		return nil, fmt.Errorf("影子目标 %s 的参考价无法解析：%w", record.TargetID, err)
 	}
-	var quantities []store.InstrumentTarget
+	var quantities []store.InstrumentQuantity
 	if err := json.Unmarshal([]byte(record.QuantityTargetsJSON), &quantities); err != nil {
 		return nil, fmt.Errorf("影子目标 %s 的目标数量无法解析：%w", record.TargetID, err)
 	}
@@ -80,7 +80,7 @@ func shadowTargetToPB(record store.TargetHistoryRecord) (*tradepb.ShadowTarget, 
 		out.ReferencePrices[instrumentID] = price.Price
 	}
 	for _, quantity := range quantities {
-		out.Targets = append(out.Targets, &tradepb.InstrumentTarget{InstrumentId: quantity.InstrumentID, Quantity: quantity.Quantity, Hold: quantity.Hold})
+		out.Targets = append(out.Targets, &tradepb.InstrumentQuantity{InstrumentId: quantity.InstrumentID, Quantity: quantity.Quantity, Hold: quantity.Hold})
 	}
 	return out, nil
 }

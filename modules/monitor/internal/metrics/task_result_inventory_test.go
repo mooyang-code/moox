@@ -39,7 +39,7 @@ func (c *fakeCollectorTaskResultInventoryClient) GetTaskResultInventory(ctx cont
 	return c.responses[index], nil
 }
 
-func inventoryPage(page, size, total uint32, hasMore bool, snapshot, observed string, entries ...*collectorpb.TaskResultInventoryEntry) *collectorpb.GetTaskResultInventoryRsp {
+func inventoryPage(page, size, total uint32, hasMore bool, snapshot string, observed int64, entries ...*collectorpb.TaskResultInventoryEntry) *collectorpb.GetTaskResultInventoryRsp {
 	return &collectorpb.GetTaskResultInventoryRsp{
 		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Entries: entries,
 		Page:       &commonpb.PageResult{Page: page, Size: size, Total: total, HasMore: hasMore},
@@ -48,7 +48,7 @@ func inventoryPage(page, size, total uint32, hasMore bool, snapshot, observed st
 }
 
 func TestCollectorTaskResultInventorySourceReadsOneBoundedSnapshot(t *testing.T) {
-	observed := "2026-10-03T10:00:00Z"
+	observed := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
 	client := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
 		inventoryPage(1, 1, 2, true, "snapshot-1", observed, &collectorpb.TaskResultInventoryEntry{
 			SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m",
@@ -86,8 +86,8 @@ func TestContextWithInventorySpaceIDMatchesBodyAndPreservesOtherMetadata(t *test
 }
 
 func TestCollectorTaskResultInventorySourceReadsConfiguredSpacesIndependently(t *testing.T) {
-	observedCrypto := "2026-10-03T10:00:00Z"
-	observedStock := "2026-10-03T10:00:05Z"
+	observedCrypto := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
+	observedStock := mustParseInventoryTime(t, "2026-10-03T10:00:05Z").UnixMilli()
 	client := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
 		inventoryPage(1, 1, 1, false, "crypto-snapshot", observedCrypto, &collectorpb.TaskResultInventoryEntry{
 			SpaceId: "crypto", TaskId: "crypto-task", DatasetId: "crypto-dataset", Frequency: "1m", ObservedAt: observedCrypto,
@@ -105,7 +105,7 @@ func TestCollectorTaskResultInventorySourceReadsConfiguredSpacesIndependently(t 
 	require.NoError(t, err)
 	require.NotEmpty(t, snapshot.ID, "combined identity must bind both per-Space snapshot IDs")
 	require.NotEqual(t, "crypto-snapshot", snapshot.ID)
-	require.Equal(t, mustParseInventoryTime(t, observedCrypto), snapshot.ObservedAt, "combined observation time is the oldest constituent snapshot")
+	require.Equal(t, time.UnixMilli(observedCrypto).UTC(), snapshot.ObservedAt, "combined observation time is the oldest constituent snapshot")
 	require.Equal(t, []string{"crypto", "stockcn", "stockcn"}, client.requestSpaces)
 	require.Equal(t, []string{"crypto", "stockcn", "stockcn"}, client.metadataSpaces)
 	require.Equal(t, []string{"crypto-task", "stock-task-a", "stock-task-b"}, []string{
@@ -114,7 +114,7 @@ func TestCollectorTaskResultInventorySourceReadsConfiguredSpacesIndependently(t 
 }
 
 func TestCollectorTaskResultInventorySourceRejectsMixedIncompleteAndOversizedSnapshots(t *testing.T) {
-	observed := "2026-10-03T10:00:00Z"
+	observed := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
 	entry := &collectorpb.TaskResultInventoryEntry{SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m", ObservedAt: observed}
 	tests := []struct {
 		name      string

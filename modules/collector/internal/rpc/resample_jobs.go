@@ -196,9 +196,9 @@ func resampleJobToPB(job store.ResampleJob) *pb.ResampleJob {
 	return &pb.ResampleJob{
 		JobId: job.JobID, TaskId: job.TaskID, RequestId: job.RequestID, Origin: job.Origin, Subjects: job.Subjects,
 		Start: job.Start.Format(time.RFC3339), End: job.End.Format(time.RFC3339), NextBucket: job.NextBucket.Format(time.RFC3339),
-		NotBefore: job.NotBefore.Format(time.RFC3339), Status: job.Status, TotalBuckets: uint32(job.TotalBuckets), DoneBuckets: uint32(job.DoneBuckets),
+		NotBefore: unixMillis(job.NotBefore), Status: job.Status, TotalBuckets: uint32(job.TotalBuckets), DoneBuckets: uint32(job.DoneBuckets),
 		Written: uint64(job.Written), Skipped: uint64(job.Skipped), SkippedSamples: job.SkippedSamples, LastError: job.LastError,
-		CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: job.UpdatedAt.UTC().Format(time.RFC3339),
+		CreatedAt: unixMillis(job.CreatedAt), UpdatedAt: unixMillis(job.UpdatedAt),
 	}
 }
 

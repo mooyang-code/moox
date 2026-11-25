@@ -58,7 +58,7 @@ func (f *targetFixture) restingOrder(t *testing.T, orderID, side, quantity, fill
 func TestRestingBuyIsLimitGTCAtBestBid(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.position(t, "account-a", "BTCUSDT", "100")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	_, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1)
@@ -72,7 +72,7 @@ func TestRestingBuyIsLimitGTCAtBestBid(t *testing.T) {
 func TestRestingSellIsLimitGTCAtBestAsk(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.position(t, "account-a", "BTCUSDT", "120")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	_, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1)
@@ -83,7 +83,7 @@ func TestRestingSellIsLimitGTCAtBestAsk(t *testing.T) {
 // 建仓、清仓不挂单，没有买一卖一的报价来源时退回普通下单。
 func TestRestingIsSkippedForOpeningClosingAndWithoutABook(t *testing.T) {
 	opening := swapPolicyFixture(t, restingSettings)
-	opening.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	opening.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	_, err := opening.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, exchange.OrderTypeMarket, opening.orders.specs[0].Type, "建仓不挂单")
@@ -97,7 +97,7 @@ func TestRestingIsSkippedForOpeningClosingAndWithoutABook(t *testing.T) {
 
 	noBook := swapPolicyFixture(t, restingSettings)
 	noBook.position(t, "account-a", "BTCUSDT", "100")
-	noBook.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	noBook.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	executor := noBook.executor()
 	executor.MinBatchInterval = 0
 	_, err = executor.Converge(context.Background(), "space-1", "logical-1")
@@ -108,7 +108,7 @@ func TestRestingIsSkippedForOpeningClosingAndWithoutABook(t *testing.T) {
 func TestRestingRatioZeroNeverRests(t *testing.T) {
 	f := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"0"}`)
 	f.position(t, "account-a", "BTCUSDT", "100")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	_, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, exchange.OrderTypeMarket, f.orders.specs[0].Type)
@@ -119,7 +119,7 @@ func TestRestingOrderCoveringTheWholeDifferenceStopsFurtherOrders(t *testing.T) 
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	f.position(t, "account-a", "BTCUSDT", "100")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	f.restingOrder(t, "resting-1", "BUY", "10", "0", f.now)
 	result, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
@@ -134,7 +134,7 @@ func TestPartiallyFilledRestingOrderDoesNotCauseOverbuy(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	f.position(t, "account-a", "BTCUSDT", "104")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	f.restingOrder(t, "resting-1", "BUY", "10", "4", f.now)
 	_, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
@@ -147,7 +147,7 @@ func TestRestingOrderCoveringPartOfTheDifferenceLeavesTheRestToTheTaker(t *testi
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	f.position(t, "account-a", "BTCUSDT", "100")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	f.restingOrder(t, "resting-1", "BUY", "4", "0", f.now)
 	_, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestStaleRestingOrdersAreCancelled(t *testing.T) {
 		f := swapPolicyFixture(t, restingSettings)
 		f.now = time.Now().UTC()
 		f.position(t, "account-a", "BTCUSDT", position)
-		f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+		f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 		f.restingOrder(t, "resting-1", "BUY", "10", "0", f.now)
 		result, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 		require.NoError(t, err, name)
@@ -178,7 +178,7 @@ func TestRestingTTLCancelsExpiredOrdersAndWakesAtExpiry(t *testing.T) {
 	expired := swapPolicyFixture(t, settings)
 	expired.now = time.Now().UTC()
 	expired.position(t, "account-a", "BTCUSDT", "100")
-	expired.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	expired.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	expired.restingOrder(t, "resting-1", "BUY", "10", "0", expired.now.Add(-700*time.Second))
 	_, err := expired.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
@@ -187,7 +187,7 @@ func TestRestingTTLCancelsExpiredOrdersAndWakesAtExpiry(t *testing.T) {
 	fresh := swapPolicyFixture(t, settings)
 	fresh.now = time.Now().UTC()
 	fresh.position(t, "account-a", "BTCUSDT", "100")
-	fresh.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	fresh.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	fresh.restingOrder(t, "resting-1", "BUY", "10", "0", fresh.now.Add(-100*time.Second))
 	result, err := fresh.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestRestingLogicNeverCancelsOperatorOrders(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	f.position(t, "account-a", "BTCUSDT", "110")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "manual-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
 		ClientOrderID: "manual-1", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
@@ -288,7 +288,7 @@ func TestRestingEligibleExcludesOpeningClosingAndReversal(t *testing.T) {
 func TestSystemOrdersDoNotPauseTheLogicalAccountOrBlockTheTarget(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "system-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
 		ClientOrderID: "system-1", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
@@ -311,7 +311,7 @@ func TestRestingFallbackToPseudoMarketStillHonoursMaxAttempts(t *testing.T) {
 	f := swapPolicyFixture(t, `{"min_notional_swap":"0","resting_ratio":"1"}`)
 	f.now = time.Now().UTC()
 	f.position(t, "account-a", "BTCUSDT", "100")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	for attempt := 0; attempt < 4; attempt++ {
 		f.iocChild(t, "ioc-a"+string(rune('a'+attempt)), "10", "0", attempt)
 		f.iocChildOn(t, "account-b", "okx", "BTC-USDT-SWAP", "ioc-b"+string(rune('a'+attempt)), "10", "0", attempt)
@@ -333,7 +333,7 @@ func TestRestingFallbackContinuesTheAttemptCount(t *testing.T) {
 	f := swapPolicyFixture(t, `{"min_notional_swap":"0","resting_ratio":"1"}`)
 	f.now = time.Now().UTC()
 	f.position(t, "account-a", "BTCUSDT", "100")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	f.iocChild(t, "ioc-0", "10", "0", 0)
 	f.iocChildOn(t, "account-b", "okx", "BTC-USDT-SWAP", "ioc-b0", "10", "0", 0)
 	executor := f.executor()
@@ -349,7 +349,7 @@ func TestRestingFallbackContinuesTheAttemptCount(t *testing.T) {
 func TestSystemOrdersDoNotDefeatTheWaitingFastPath(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
@@ -379,7 +379,7 @@ func TestRestingExpiryGoesFromWaitBackToBlocked(t *testing.T) {
 	f.now = time.Now().UTC()
 	// BTC 现货买单金额低于交易所最小名义金额（真实阻塞）；BTC 合约有一张挂单。
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
-	f.target(t, []store.InstrumentTarget{
+	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
 	})

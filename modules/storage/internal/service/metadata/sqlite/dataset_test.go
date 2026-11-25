@@ -285,13 +285,13 @@ func TestMetadataStoreErrorsCarryKinds(t *testing.T) {
 	}
 }
 
-// 数据集的 created_at 是查询索引的归属标识：停用、启用、改优先级之后列出时必须逐字不变，否则索引会被当成不属于它而重建。
+// 数据集的 created_at 是查询索引的归属标识：停用、启用、改优先级之后列出时必须不变，否则索引会被当成不属于它而重建。
 func TestDatasetCreatedAtSurvivesUpdates(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
 	createTestDataset(t, ctx, store, "dataset")
-	createdAt := func() string {
+	createdAt := func() int64 {
 		t.Helper()
 		listed, _, err := store.ListDatasets(ctx, DatasetQuery{SpaceID: "space"})
 		if err != nil || len(listed) != 1 {
@@ -309,7 +309,7 @@ func TestDatasetCreatedAtSurvivesUpdates(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := createdAt(); got != before {
-			t.Fatalf("更新后 created_at = %q，原来是 %q", got, before)
+			t.Fatalf("更新后 created_at = %d，原来是 %d", got, before)
 		}
 	}
 }

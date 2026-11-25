@@ -260,7 +260,7 @@
                   ><template #cell="{ record }"
                     ><span class="targets">{{
                       record.targets
-                        .map((target: InstrumentTarget) => `${target.instrument_id} ${percent(target.target_weight)}`)
+                        .map((target: InstrumentWeight) => `${target.instrument_id} ${percent(target.target_weight)}`)
                         .join("、") || "-"
                     }}</span></template
                   ></a-table-column
@@ -296,7 +296,7 @@ import type VChart from "@visactor/vchart";
 import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getInstance, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
 import type { PageResult } from "@/api/strategy";
-import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
+import type { InstrumentWeight, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportError, serverNow } from "@/api/http";
 import { listAllFactorTasks } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
@@ -318,7 +318,7 @@ import {
 import { buildReplayQuery, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
 import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
 import PoolDetail from "@/views/strategy/components/strategy-pool-detail.vue";
-import { formatInstant, msToWallClock, zoneSuffix } from "@/utils/time-zone";
+import { formatInstant, msToWallClock, toInstantMs, zoneSuffix } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { usePolling } from "@/hooks/usePolling";
 import {
@@ -637,8 +637,8 @@ function maybeAwaitMetrics(replay: Replay, observedCancel: boolean) {
   let elapsed = 0;
   if (!observedCancel) {
     const now = serverNow();
-    const updated = Date.parse(replay.updated_at);
-    if (now === null || !Number.isFinite(updated) || now - updated > 120_000) return;
+    const updated = toInstantMs(replay.updated_at);
+    if (now === null || updated === null || now - updated > 120_000) return;
     elapsed = Math.max(0, now - updated);
   }
   clock.value = Date.now();
@@ -818,7 +818,7 @@ async function start() {
   errors.start = validateReplayForm(form, strategyStore.strategyCatalog);
   const source = replaySourceOf(form);
   if (errors.start || !source || !form.range) return;
-  const [startTime, endTime] = form.range.map(ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z"));
+  const [startTime, endTime] = form.range;
   const gen = generation;
   const picks = userPicks;
   const fundingColumn = replayFundingColumn(form, strategyStore.strategyCatalog);

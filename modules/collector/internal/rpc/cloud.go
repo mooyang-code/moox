@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
@@ -139,15 +138,8 @@ func cloudAccountToPB(account store.CloudAccount) *pb.CloudAccount {
 	return &pb.CloudAccount{
 		AccountId: account.AccountID, AccountName: account.AccountName, Provider: account.Provider, CredentialSecretId: account.CredentialSecretID,
 		AppId: account.AppID, CosRegion: account.COSRegion, CosBucket: account.COSBucket,
-		CreateTime: formatCloudTime(account.CreateTime), ModifyTime: formatCloudTime(account.ModifyTime),
+		CreatedAt: unixMillis(account.CreateTime), UpdatedAt: unixMillis(account.ModifyTime),
 	}
-}
-
-func formatCloudTime(at time.Time) string {
-	if at.IsZero() {
-		return ""
-	}
-	return at.UTC().Format(time.RFC3339)
 }
 
 // ----- 代码包 -----
@@ -169,7 +161,7 @@ func (s *Service) InitPackageUpload(ctx context.Context, req *pb.InitPackageUplo
 	if err != nil {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	return &pb.InitPackageUploadRsp{RetInfo: retOK(), Package: functionPackageToPB(upload.Package), UploadUrl: upload.UploadURL, ExpiresAt: formatCloudTime(upload.ExpiresAt)}, nil
+	return &pb.InitPackageUploadRsp{RetInfo: retOK(), Package: functionPackageToPB(upload.Package), UploadUrl: upload.UploadURL, ExpiresAt: unixMillis(upload.ExpiresAt)}, nil
 }
 
 // CompletePackageUpload 核对 COS 里的对象（大小与 MD5）后把代码包标成可用。
@@ -221,7 +213,7 @@ func functionPackageToPB(pkg store.FunctionPackage) *pb.FunctionPackage {
 	return &pb.FunctionPackage{
 		SpaceId: pkg.SpaceID, PackageId: pkg.PackageID, PackageName: pkg.PackageName, Version: pkg.Version, Runtime: pkg.Runtime,
 		FileSize: pkg.FileSize, FileMd5: pkg.FileMD5, CloudAccountId: pkg.CloudAccountID, CosRegion: pkg.COSRegion, CosBucket: pkg.COSBucket,
-		CosPath: pkg.COSPath, Status: pkg.Status, CreateTime: formatCloudTime(pkg.CreateTime), ModifyTime: formatCloudTime(pkg.ModifyTime),
+		CosPath: pkg.COSPath, Status: pkg.Status, CreatedAt: unixMillis(pkg.CreateTime), UpdatedAt: unixMillis(pkg.ModifyTime),
 	}
 }
 
@@ -266,7 +258,7 @@ func cloudFunctionToPB(view fetchplan.CloudFunctionView) *pb.CloudFunction {
 		Operation: view.Operation, TimerMatches: view.TimerMatches, PackageLatest: view.PackageLatest, EnvironmentMatches: view.EnvironmentMatches,
 	}
 	readback := view.Readback
-	out.ReadAt, out.ReadError = formatCloudTime(readback.ReadAt), readback.Error
+	out.ReadAt, out.ReadError = unixMillis(readback.ReadAt), readback.Error
 	if readback.Error == "" && readback.Exists {
 		out.Exists, out.Status, out.PackageId = true, readback.Status, readback.PackageID
 		out.AssignmentHash = readback.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
@@ -346,7 +338,7 @@ func (s *Service) fillCloudReadbacks(spaceID string, rsp *pb.GetCollectorStatusR
 
 // applyCloudReadback 把一次读回填进函数状态：读回出错或云上没有函数时只填读回时间；只读了代码包（没有定时器读回）时定时器算不一致。
 func applyCloudReadback(function *pb.CollectorFunctionStatus, readback fetchplan.FunctionReadback, packageLatest func(string) bool) {
-	function.CloudReadAt = formatCloudTime(readback.ReadAt)
+	function.CloudReadAt = unixMillis(readback.ReadAt)
 	if readback.Error != "" || !readback.Exists {
 		return
 	}

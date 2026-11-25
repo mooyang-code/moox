@@ -19,8 +19,9 @@ export interface FunctionPackage {
   cos_bucket: string;
   cos_path: string;
   status: PackageStatus | string;
-  create_time?: string;
-  modify_time?: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface UploadPackageRequest {
@@ -33,6 +34,7 @@ export interface UploadPackageRequest {
 interface InitPackageUploadResponse {
   package?: FunctionPackage;
   upload_url: string;
+  /** 上传地址的过期时刻：Unix 毫秒（数字字符串）。 */
   expires_at?: string;
 }
 

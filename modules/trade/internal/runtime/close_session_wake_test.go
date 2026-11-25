@@ -111,7 +111,7 @@ func TestClosedConvergedTargetCancelsRestingOrderWithinSeconds(t *testing.T) {
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
 			InstanceID: "instance-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 			BarEndTime: now.Add(-time.Minute).UnixMilli(), ValidUntil: now.Add(2 * time.Hour).UnixMilli(),
-			Targets: []store.InstrumentTarget{}, Status: targetapp.StatusPending, AcceptedAt: now.UnixMilli(),
+			Targets: []store.InstrumentQuantity{}, Status: targetapp.StatusPending, AcceptedAt: now.UnixMilli(),
 		}); err != nil {
 			return err
 		}

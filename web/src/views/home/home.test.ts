@@ -25,7 +25,7 @@ vi.mock("@/api/admin/activity", () => ({
         category: "collector.subject_change",
         level: "info",
         title: "dataset_abc 1h：新增 1 个",
-        created_at: new Date().toISOString()
+        created_at: String(Date.now())
       }
     ]
   }))
@@ -130,8 +130,8 @@ describe("home page", () => {
       i1: {
         targets: [{ instrument_id: "BTC-USDT", target_weight: "0.2" }],
         session_id: "sess",
-        bar_end_time: new Date(Date.now() - 60_000).toISOString(),
-        valid_until: new Date(Date.now() + 60_000).toISOString(),
+        bar_end_time: String(Date.now() - 60_000),
+        valid_until: String(Date.now() + 60_000),
         result_id: "r"
       }
     };
@@ -251,7 +251,7 @@ describe("home page", () => {
         id: "a1",
         severity: "warning",
         title: "数据中断",
-        triggered_at: new Date().toISOString(),
+        triggered_at: String(Date.now()),
         object: { type: "dataset", producer: "collector", dataset_id: "ds_cn", freq: "5m", space_id: "stockcn" }
       }
     ];
@@ -274,7 +274,7 @@ describe("home page", () => {
             dataset_id: "dataset_abc",
             freq: "1m",
             status: "degraded",
-            latest_bar_close_at: new Date(Date.now() - 52980_000).toISOString(),
+            latest_bar_close_at: String(Date.now() - 52980_000),
             waiting_bars: 882,
             overdue_seconds: "52920"
           }

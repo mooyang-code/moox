@@ -169,7 +169,7 @@ type rpcSpec struct {
 type rpcMerge func(ctx context.Context, inv rpcInvocation, request map[string]any) error
 
 // readOnlyObjectFields 是取回的对象里永远不回传的只读字段。
-var readOnlyObjectFields = map[string]bool{"id": true, "created_at": true, "updated_at": true, "create_time": true, "modify_time": true}
+var readOnlyObjectFields = map[string]bool{"id": true, "created_at": true, "updated_at": true}
 
 // mergeExisting 返回一个合并函数：fetch 取回现有对象，只保留 keep 里的字段（keep 为空表示除只读字段外全部保留），
 // 用户在 request[into] 里给出的字段覆盖它，结果写回 request[into]。

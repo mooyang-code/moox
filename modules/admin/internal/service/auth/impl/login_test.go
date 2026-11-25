@@ -69,7 +69,7 @@ func TestLoginWithPlainPasswordIssuesSessionOutsideResponse(t *testing.T) {
 	require.NotNil(t, carrier.Issued)
 	assert.Len(t, carrier.Issued.ID, 64)
 	assert.Equal(t, "user-login-1", carrier.Issued.UserID)
-	assert.Equal(t, carrier.Issued.ExpiresAt.Unix(), rsp.GetExpiresAt())
+	assert.Equal(t, carrier.Issued.ExpiresAt.UnixMilli(), rsp.GetExpiresAt())
 	assert.Equal(t, "admin", rsp.GetUserInfo().GetUsername())
 	stored, ok := f.svc.sessions.Get(carrier.Issued.ID)
 	require.True(t, ok)

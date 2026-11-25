@@ -41,8 +41,8 @@ func ForecastDisks(points []HistoryPoint, now time.Time) []DiskForecast {
 	}
 	byMount := map[string][]sample{}
 	for _, point := range points {
-		at, err := time.Parse(time.RFC3339Nano, point.ObservedAt)
-		if err != nil || at.Before(now.Add(-forecastWindow)) || at.After(now) || point.Snapshot == nil {
+		at := point.ObservedAt
+		if at.IsZero() || at.Before(now.Add(-forecastWindow)) || at.After(now) || point.Snapshot == nil {
 			continue
 		}
 		for _, fs := range point.Snapshot.GetFilesystems() {

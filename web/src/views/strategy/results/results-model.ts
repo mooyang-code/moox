@@ -1,4 +1,5 @@
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
+import { toInstantMs } from "@/utils/time-zone";
 
 export interface InstanceTab {
   instanceId: string;
@@ -14,7 +15,7 @@ export function sortInstancesForResults(instances: StrategyInstance[]): Strategy
     (a, b) =>
       Number(b.enabled) - Number(a.enabled) ||
       attention(a) - attention(b) ||
-      (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0) ||
+      (toInstantMs(b.updated_at) ?? 0) - (toInstantMs(a.updated_at) ?? 0) ||
       a.instance_id.localeCompare(b.instance_id)
   );
 }

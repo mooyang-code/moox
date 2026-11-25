@@ -32,7 +32,10 @@ func newWatchHarness() *watchHarness {
 	return h
 }
 
-func (h *watchHarness) tick(startedAt string, err error) {
+// startedMs 是测试里 Monitor 的启动时刻（毫秒）。
+var startedMs = time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC).UnixMilli()
+
+func (h *watchHarness) tick(startedAt int64, err error) {
 	h.watch.Observe(context.Background(), startedAt, err)
 	h.clock = h.clock.Add(time.Minute)
 }
@@ -49,17 +52,17 @@ func (h *watchHarness) titles() []string {
 func TestWatchPushesUnreachableAfterThreeFailuresAndRecovers(t *testing.T) {
 	h := newWatchHarness()
 	down := errors.New("dial control:11003: connection refused")
-	h.tick("2026-11-15T09:00:00Z", nil)
-	h.tick("", down)
-	h.tick("", down)
+	h.tick(startedMs, nil)
+	h.tick(0, down)
+	h.tick(0, down)
 	require.Empty(t, h.sent, "两次失败还不推送")
-	h.tick("", down)
+	h.tick(0, down)
 	require.Equal(t, []string{"【MooX】控制机或 Monitor 不可达（由 storage 观测）"}, h.titles())
 	require.Equal(t, notification.SeverityCritical, h.sent[0].Severity)
 	require.Contains(t, h.sent[0].Body, "connection refused")
-	h.tick("", down)
+	h.tick(0, down)
 	require.Len(t, h.sent, 1, "持续失败不重复推送")
-	h.tick("2026-11-15T09:00:00Z", nil)
+	h.tick(startedMs, nil)
 	require.Len(t, h.sent, 2)
 	require.Equal(t, "【MooX】控制机与 Monitor 已恢复可达（由 storage 观测）", h.sent[1].Title)
 	require.Equal(t, notification.SeverityInfo, h.sent[1].Severity)
@@ -68,7 +71,7 @@ func TestWatchPushesUnreachableAfterThreeFailuresAndRecovers(t *testing.T) {
 	control := newWatchHarness()
 	control.local = true
 	for i := 0; i < 5; i++ {
-		control.tick("", down)
+		control.tick(0, down)
 	}
 	require.Empty(t, control.sent, "本机部署了 Monitor 时不推送")
 }
@@ -77,20 +80,20 @@ func TestWatchPushesUnreachableAfterThreeFailuresAndRecovers(t *testing.T) {
 // 窗口里的变化少于 3 次后推一条恢复。第一次看到的启动时间不算变化。
 func TestWatchPushesMonitorRestartLoopAndRecovers(t *testing.T) {
 	h := newWatchHarness()
-	h.tick("boot-0", nil)
-	h.tick("boot-1", nil)
-	h.tick("boot-1", nil)
-	h.tick("boot-2", nil)
+	h.tick(startedMs+1, nil)
+	h.tick(startedMs+2, nil)
+	h.tick(startedMs+2, nil)
+	h.tick(startedMs+3, nil)
 	require.Empty(t, h.sent, "10 分钟内变了 2 次还不推送")
-	h.tick("boot-3", nil)
+	h.tick(startedMs+4, nil)
 	require.Equal(t, []string{"【MooX】Monitor 反复重启（由 storage 观测）"}, h.titles())
 	require.Contains(t, h.sent[0].Body, "变了 3 次")
 	require.Contains(t, h.sent[0].Body, "连续部署控制机三次也会出现这一条")
 	for i := 0; i < 7; i++ {
-		h.tick("boot-3", nil)
+		h.tick(startedMs+4, nil)
 	}
 	require.Len(t, h.sent, 1, "还在窗口里，不推恢复")
-	h.tick("boot-3", nil)
+	h.tick(startedMs+4, nil)
 	require.Len(t, h.sent, 2)
 	require.Equal(t, "【MooX】Monitor 不再反复重启（由 storage 观测）", h.sent[1].Title)
 }
@@ -101,7 +104,7 @@ func TestSyncerHandsFetchResultToWatch(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	var fetchErr error
 	syncer, err := New(path, func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
-		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: "2026-11-15T09:00:00Z"}, fetchErr
+		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: startedMs}, fetchErr
 	})
 	require.NoError(t, err)
 	var seen []string
@@ -113,7 +116,7 @@ func TestSyncerHandsFetchResultToWatch(t *testing.T) {
 	syncer.SetWatch(h.watch)
 	_, err = syncer.SyncOnce(t.Context(), nil)
 	require.NoError(t, err)
-	require.Equal(t, "2026-11-15T09:00:00Z", h.watch.lastStart)
+	require.Equal(t, startedMs, h.watch.lastStart)
 	fetchErr = errors.New("gateway unavailable")
 	for i := 0; i < UnreachableAfter; i++ {
 		_, _ = syncer.SyncOnce(t.Context(), nil)
@@ -134,15 +137,15 @@ func TestWatchRecoversOnlyAfterTheAlertWasDelivered(t *testing.T) {
 	}
 	down := errors.New("dial control:11003: connection refused")
 	for i := 0; i < UnreachableAfter; i++ {
-		h.tick("", down)
+		h.tick(0, down)
 	}
 	deliver = true
-	h.tick("2026-11-15T09:00:00Z", nil)
+	h.tick(startedMs, nil)
 	require.Empty(t, h.sent, "告警没送达，恢复也不推")
 	for i := 0; i < UnreachableAfter; i++ {
-		h.tick("", down)
+		h.tick(0, down)
 	}
-	h.tick("2026-11-15T09:00:00Z", nil)
+	h.tick(startedMs, nil)
 	require.Equal(t, []string{"【MooX】控制机或 Monitor 不可达（由 storage 观测）", "【MooX】控制机与 Monitor 已恢复可达（由 storage 观测）"}, h.titles())
 }
 
@@ -151,7 +154,7 @@ func TestSyncerLocalWriteFailureIsNotUnreachable(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
 	syncer, err := New(filepath.Join(blocked, "host-policy.json"), func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
-		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: "2026-11-15T09:00:00Z"}, nil
+		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: startedMs}, nil
 	})
 	require.NoError(t, err)
 	h := newWatchHarness()
@@ -161,5 +164,5 @@ func TestSyncerLocalWriteFailureIsNotUnreachable(t *testing.T) {
 		require.Error(t, err, "写缓存失败照样报错")
 	}
 	require.Empty(t, h.sent)
-	require.Equal(t, "2026-11-15T09:00:00Z", h.watch.lastStart)
+	require.Equal(t, startedMs, h.watch.lastStart)
 }

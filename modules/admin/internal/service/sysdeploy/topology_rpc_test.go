@@ -128,9 +128,7 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 		require.Positive(t, route.GetMaxBodyBytes())
 		require.True(t, strings.HasPrefix(route.GetAddress(), "127.0.0.1:"), route.GetAddress())
 	}
-	compiledAt, err := time.Parse(time.RFC3339Nano, routes.GetCompiledAt())
-	require.NoError(t, err)
-	require.WithinDuration(t, time.Now(), compiledAt, 5*time.Second)
+	require.WithinDuration(t, time.Now(), time.UnixMilli(routes.GetCompiledAt()), 5*time.Second)
 	require.NotEmpty(t, routes.GetRoutes())
 	require.NotEmpty(t, routes.GetGatewayStatus().GetExpectedHash())
 	require.Empty(t, routes.GetGatewayStatus().GetLastSeenAt(), "reading desired state must not create a heartbeat")

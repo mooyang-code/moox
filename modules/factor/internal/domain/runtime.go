@@ -24,8 +24,8 @@ type FactorPeriodState struct {
 type TaskRunSummary struct {
 	TaskID         string
 	LastPeriodTime int64
-	// CompletedAt 是引擎写完 LastPeriodTime 这一期的 Unix 秒；0 表示未知（引擎重启前的期次）。
-	CompletedAt    int64
+	// CompletedAt 是引擎写完 LastPeriodTime 这一期的时刻；零值表示未知（引擎重启前的期次）。
+	CompletedAt    time.Time
 	LastStatus     string
 	LagSeconds     int64
 	Factors        []FactorPeriodState

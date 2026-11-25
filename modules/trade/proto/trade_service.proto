@@ -278,7 +278,8 @@ message Position {
   int64 updated_at = 15;
 }
 
-message InstrumentTarget {
+// InstrumentQuantity 是一个标的的目标数量（由目标权重换算而来）。
+message InstrumentQuantity {
   string instrument_id = 1;
   string quantity = 2;
   // hold 为 true 表示保持当前持仓数量不动，此时 quantity 为空。
@@ -296,7 +297,7 @@ message BlockedTarget {
 message LogicalAccountTarget {
   string target_id = 1;
   string logical_account_id = 2;
-  repeated InstrumentTarget targets = 5;
+  repeated InstrumentQuantity targets = 5;
   string status = 6;
   repeated BlockedTarget blocked_targets = 7;
   string last_error = 8;
@@ -716,7 +717,7 @@ message ShadowTarget {
   // 换算用的参考价：标的 → 价格。
   map<string, string> reference_prices = 12;
   // 换算出的数量；保持的标的 hold 为 true、不带数量。
-  repeated InstrumentTarget targets = 13;
+  repeated InstrumentQuantity targets = 13;
   int64 recorded_at = 14;
 }
 

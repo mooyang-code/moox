@@ -47,7 +47,7 @@ func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 	require.Equal(t, "target-2", got.TargetID)
 	require.Equal(t, "runner-1", got.InstanceID)
 	require.Equal(t, now.UnixMilli(), got.BarEndTime)
-	require.Equal(t, []store.InstrumentTarget{{
+	require.Equal(t, []store.InstrumentQuantity{{
 		InstrumentID: "BTC-USDT-SPOT", Quantity: "2.5",
 	}}, got.Targets)
 	require.Equal(t, "PENDING", got.Status)
@@ -250,7 +250,7 @@ func seedSessionTarget(t *testing.T, db *store.Store, targetID, instanceID, sess
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
 			InstanceID: instanceID, SessionID: sessionID, SessionStartedAt: startedAt, StrategyID: "strategy-1",
 			BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
-			Targets: []store.InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+			Targets: []store.InstrumentQuantity{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 		})
 		if err == nil && !accepted {
 			err = errors.New("目标没有写成当前目标")
@@ -540,10 +540,10 @@ func (testWeightResolver) Resolve(_ context.Context, request *tradeeventpb.Logic
 	if err != nil {
 		return targetapp.WeightConversion{}, err
 	}
-	targets := make([]store.InstrumentTarget, 0, len(request.GetTargets()))
+	targets := make([]store.InstrumentQuantity, 0, len(request.GetTargets()))
 	weights := make([]map[string]string, 0, len(request.GetTargets()))
 	for _, target := range request.GetTargets() {
-		targets = append(targets, store.InstrumentTarget{InstrumentID: target.GetInstrumentId(), Quantity: target.GetTargetWeight()})
+		targets = append(targets, store.InstrumentQuantity{InstrumentID: target.GetInstrumentId(), Quantity: target.GetTargetWeight()})
 		weights = append(weights, map[string]string{"instrument_id": target.GetInstrumentId(), "target_weight": target.GetTargetWeight()})
 	}
 	weightsJSON, _ := json.Marshal(weights)

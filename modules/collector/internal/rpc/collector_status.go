@@ -35,7 +35,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 	if err != nil {
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	rsp := &pb.GetCollectorStatusRsp{RetInfo: retOK(), Level: klinecheck.HealthOK, Open: planSummary(open), Applied: planSummary(applied), GeneratedAt: now.Format(time.RFC3339)}
+	rsp := &pb.GetCollectorStatusRsp{RetInfo: retOK(), Level: klinecheck.HealthOK, Open: planSummary(open), Applied: planSummary(applied), GeneratedAt: unixMillis(now)}
 	raise := func(level, reason string) {
 		rsp.Level = klinecheck.WorseLevel(rsp.Level, level)
 		rsp.Reasons = append(rsp.Reasons, reason)
@@ -150,7 +150,7 @@ func planSummary(record *store.FetchPlanRecord) *pb.FetchPlanSummary {
 	if record == nil {
 		return nil
 	}
-	return &pb.FetchPlanSummary{Id: record.ID, Status: record.Status, LastError: record.LastError, CreatedAt: record.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: record.UpdatedAt.UTC().Format(time.RFC3339)}
+	return &pb.FetchPlanSummary{Id: record.ID, Status: record.Status, LastError: record.LastError, CreatedAt: unixMillis(record.CreatedAt), UpdatedAt: unixMillis(record.UpdatedAt)}
 }
 
 func datasetStatusToPB(item klinecheck.DatasetHealth, functions int) *pb.CollectorDatasetStatus {

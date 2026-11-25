@@ -164,9 +164,12 @@ func sftpListResultToPB(data interface{}, currentDir string) *pb.SftpListRsp {
 			} else if s, ok := f["size"].(int); ok {
 				item.Size = int64(s)
 			}
-			if s, ok := f["mod_time"].(string); ok {
-				item.ModTime = s
+			// 修改时刻是 Unix 毫秒；类型不对说明服务层写法变了，报错而不是留成 0 让页面显示“—”
+			modifiedAt, ok := f["modified_at"].(int64)
+			if !ok {
+				return &pb.SftpListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "目录条目的修改时刻不是 Unix 毫秒")}
 			}
+			item.ModifiedAt = modifiedAt
 			if s, ok := f["type"].(string); ok {
 				item.Type = s
 			}

@@ -34,7 +34,7 @@ func orderCurrentSession(t *testing.T, db *store.Store, instanceID, sessionID, t
 			InstanceID: instanceID, SessionID: sessionID, SessionStartedAt: orderSessionStartedAt(sessionID), StrategyID: "strategy-1",
 			BarEndTime: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 			Status: "PENDING", AcceptedAt: 1,
-			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}},
+			Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}},
 		})
 		if err == nil && current.TargetID != targetID {
 			err = errors.New("目标没有写成当前目标")

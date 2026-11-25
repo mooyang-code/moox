@@ -35,7 +35,7 @@ func TestQueryLogRecordsPagesAndValidates(t *testing.T) {
 	require.True(t, first.GetHasMore())
 	require.Len(t, first.GetRecords(), 2)
 	require.Equal(t, "第三条", first.GetRecords()[0].GetMessage())
-	require.Equal(t, "2026-11-12T04:02:00Z", first.GetRecords()[0].GetLoggedAt())
+	require.Equal(t, logMs("2026-11-12T04:02:00Z"), first.GetRecords()[0].GetLoggedAt())
 
 	next, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Limit: 2, BeforeId: first.GetRecords()[1].GetId()})
 	require.NoError(t, err)
@@ -48,17 +48,17 @@ func TestQueryLogRecordsPagesAndValidates(t *testing.T) {
 	require.Equal(t, "v1", record.GetFields()["view"])
 	require.Equal(t, int32(2), record.GetMergedCount())
 
-	filtered, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Component: "storage-primary", Level: "ERROR", StartAt: "2026-11-12T03:00:00Z", EndAt: "2026-11-12T05:00:00+00:00"})
+	filtered, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Component: "storage-primary", Level: "ERROR", StartAt: logMs("2026-11-12T03:00:00Z"), EndAt: logMs("2026-11-12T05:00:00Z")})
 	require.NoError(t, err)
 	require.Len(t, filtered.GetRecords(), 1)
 
 	// 不要分布时不返回；要分布时按小时统计，不受 limit 影响。
 	require.Empty(t, first.GetBuckets())
-	withBuckets, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Limit: 1, WithBuckets: true, StartAt: "2026-11-12T00:00:00Z"})
+	withBuckets, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Limit: 1, WithBuckets: true, StartAt: logMs("2026-11-12T00:00:00Z")})
 	require.NoError(t, err)
 	require.Len(t, withBuckets.GetRecords(), 1)
 	require.Len(t, withBuckets.GetBuckets(), 1)
-	require.Equal(t, "2026-11-12T04:00:00Z", withBuckets.GetBuckets()[0].GetStartAt())
+	require.Equal(t, logMs("2026-11-12T04:00:00Z"), withBuckets.GetBuckets()[0].GetStartAt())
 	require.Equal(t, int32(2), withBuckets.GetBuckets()[0].GetErrors())
 	require.Equal(t, int32(1), withBuckets.GetBuckets()[0].GetEvents())
 	// 没有给起点时分布只统计最近 7 天，列表不受影响。
@@ -73,7 +73,7 @@ func TestQueryLogRecordsPagesAndValidates(t *testing.T) {
 	require.Len(t, recent.GetBuckets(), 1)
 	require.Equal(t, int32(1), recent.GetBuckets()[0].GetErrors())
 
-	for _, req := range []*monitorpb.QueryLogRecordsReq{{Level: "verbose"}, {StartAt: "昨天"}, {EndAt: "2026-11-12"}} {
+	for _, req := range []*monitorpb.QueryLogRecordsReq{{Level: "verbose"}, {StartAt: -1}, {EndAt: -1}} {
 		rsp, err := service.QueryLogRecords(t.Context(), req)
 		require.NoError(t, err)
 		require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "%+v", req)
@@ -101,4 +101,13 @@ func TestQueryLogRecordsReportsMoreAtTheMaximumPageSize(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rsp.GetRecords(), store.MaxLogRecordPage)
 	require.True(t, rsp.GetHasMore())
+}
+
+// logMs 把测试里写的 RFC3339 时刻换成请求用的毫秒。
+func logMs(value string) int64 {
+	at, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		panic(err)
+	}
+	return at.UnixMilli()
 }

@@ -95,11 +95,11 @@ func TestListTagSyncStatusReadsCollectorRuns(t *testing.T) {
 	spot, swap := rsp.GetItems()[0], rsp.GetItems()[1]
 	require.Equal(t, "binance_spot", spot.GetTagId())
 	require.Equal(t, "success", spot.GetLastStatus())
-	require.Equal(t, "2026-10-27T09:00:00Z", spot.GetLastSuccessAt())
+	require.Equal(t, ok.UnixMilli(), spot.GetLastSuccessAt())
 	require.Equal(t, "failed", swap.GetLastStatus())
 	require.Equal(t, "HTTP 451", swap.GetLastError())
-	require.Equal(t, "2026-10-27T10:00:00Z", swap.GetLastRunAt())
-	require.Equal(t, "2026-10-27T09:00:00Z", swap.GetLastSuccessAt(), "失败不抹掉上一次成功时间")
+	require.Equal(t, ok.Add(time.Hour).UnixMilli(), swap.GetLastRunAt())
+	require.Equal(t, ok.UnixMilli(), swap.GetLastSuccessAt(), "失败不抹掉上一次成功时间")
 
 	all, err := service.ListTagSyncStatus(ctx, &pb.ListTagSyncStatusReq{})
 	require.NoError(t, err)

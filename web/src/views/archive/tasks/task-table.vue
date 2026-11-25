@@ -29,7 +29,10 @@
         <a-table-column title="跟随" :width="250">
           <template #cell="{ record }">
             <div>{{ followText(record) }}</div>
-            <div class="sub" :title="record.last_success_at ? formatInstant(record.last_success_at, zone) : undefined">
+            <div
+              class="sub"
+              :title="toInstantMs(record.last_success_at) !== null ? formatInstant(record.last_success_at, zone) : undefined"
+            >
               {{ lastFollowText(record, zone) }}
             </div>
           </template>
@@ -58,7 +61,7 @@
                 {{ kindLabel(record.last_run.kind) }}
                 <span :class="`tone-${runTone(record.last_run.status)}`">{{ runStatusLabel(record.last_run.status) }}</span>
                 <span class="sub"
-                  >{{ formatInstant(record.last_run.started_at || record.last_run.scheduled_at, zone, "minute") }} ·
+                  >{{ formatInstant(toInstantMs(record.last_run.started_at) ?? record.last_run.scheduled_at, zone, "minute") }} ·
                   {{ runDurationText(record.last_run, nowMs) }}</span
                 >
               </div>
@@ -112,7 +115,7 @@
 import { computed } from "vue";
 import type { ArchiveTask } from "@/api/archive";
 import { formatBytes } from "@/api/modules/host-monitor";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { formatRetention } from "@/utils/retention";
 import {
   healthLabel,

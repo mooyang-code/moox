@@ -75,7 +75,7 @@ func (record *TargetHistoryRecord) validate() error {
 	if record.Shadow {
 		return nil
 	}
-	var quantityTargets []InstrumentTarget
+	var quantityTargets []InstrumentQuantity
 	if err := json.Unmarshal([]byte(record.QuantityTargetsJSON), &quantityTargets); err != nil {
 		return fmt.Errorf("%w: 目标历史的 quantity_targets 无法解析", ErrInvalidRecord)
 	}

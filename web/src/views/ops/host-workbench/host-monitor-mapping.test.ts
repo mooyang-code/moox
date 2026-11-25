@@ -8,7 +8,7 @@ function monitor(overrides: Partial<HostMetrics> = {}): HostMetrics {
     host_id: "control",
     hostname: "VM-0-1-ubuntu",
     status: "online",
-    timestamp: "2026-07-15T02:00:00Z",
+    timestamp: "1784080800000",
     cpu: { usage: 24, usage_available: true, cores: 4 },
     memory: { total: 100, used: 38, available: 62, percent: 38, percent_available: true },
     filesystems: [

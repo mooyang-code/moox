@@ -212,8 +212,8 @@ export interface CollectionTaskRecord {
   collect_params: Record<string, unknown>;
   enabled: boolean;
   creator: string;
-  create_time: string;
-  modify_time: string;
+  created_at: string;
+  updated_at: string;
   prepare_state?: string;
   last_error?: string;
   result?: CollectorTask["result"];
@@ -308,8 +308,8 @@ export function normalizeCollectionTask(raw: unknown): CollectionTaskRecord {
     collect_params: normalizeObject(value.collect_params),
     enabled: value.enabled !== false && value.enabled !== "false",
     creator: stringValue(value.creator),
-    create_time: stringValue(value.create_time),
-    modify_time: stringValue(value.modify_time),
+    created_at: stringValue(value.created_at),
+    updated_at: stringValue(value.updated_at),
     prepare_state: stringValue(value.prepare_state),
     last_error: stringValue(value.last_error),
     result: normalizeResult(value.result)

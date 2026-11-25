@@ -58,7 +58,7 @@ const task = (over: Partial<ArchiveTask> = {}): ArchiveTask => ({
   freq: "1m",
   retention: "840h",
   status: "enabled",
-  last_success_at: "2026-11-07T04:41:25Z",
+  last_success_at: String(Date.parse("2026-11-07T04:41:25Z")),
   health: "warning",
   health_reason: "最近一次运行失败：Storage 超时",
   partition_count: 3,

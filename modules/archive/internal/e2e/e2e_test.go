@@ -198,7 +198,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	list, _ := svc.Mgr().ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
 	task := list.GetTasks()[0]
-	if task.GetLastSuccessAt() != now.Format(time.RFC3339) || task.GetPartitionCount() != 1 || task.GetFileCount() != 1 || task.GetTotalRows() != 480 || task.GetHealth() != "ok" {
+	if task.GetLastSuccessAt() != now.UnixMilli() || task.GetPartitionCount() != 1 || task.GetFileCount() != 1 || task.GetTotalRows() != 480 || task.GetHealth() != "ok" {
 		t.Fatalf("task = %v", task)
 	}
 
@@ -217,7 +217,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 		t.Fatalf("follow runs = %v requests=%d", follows.GetRuns(), len(storage.requests)-requestsBefore)
 	}
 	list, _ = svc.Mgr().ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
-	if list.GetTasks()[0].GetLastSuccessAt() != now.Format(time.RFC3339) {
+	if list.GetTasks()[0].GetLastSuccessAt() != now.UnixMilli() {
 		t.Fatalf("follow 后的任务 = %v", list.GetTasks()[0])
 	}
 
@@ -270,7 +270,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	runOnce()
 	final, _ := svc.Mgr().GetArchivePartition(ctx, &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
-	if final.GetPartition().GetStatus() != "final" || final.GetPartition().GetFinalizedAt() == "" || final.GetPartition().GetRowCount() != 481 {
+	if final.GetPartition().GetStatus() != "final" || final.GetPartition().GetFinalizedAt() == 0 || final.GetPartition().GetRowCount() != 481 {
 		t.Fatalf("final = %v", final.GetPartition())
 	}
 	list, _ = svc.Mgr().ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})

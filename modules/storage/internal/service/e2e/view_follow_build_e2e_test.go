@@ -395,7 +395,7 @@ func TestRecreatedDatasetDoesNotReuseOldIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.metadata.mu.Lock()
-	env.metadata.datasets[0].CreatedAt = "2026-11-02T00:00:00Z"
+	env.metadata.datasets[0].CreatedAt = 1793577600000
 	env.metadata.mu.Unlock()
 	next := readyBenchBase.Add(readyBenchStep)
 	write(next, 1)

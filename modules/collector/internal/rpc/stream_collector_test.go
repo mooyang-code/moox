@@ -56,7 +56,7 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	stream.SetTradingStatus(trading)
 	service.SetStreamService(stream)
 
-	rsp, err := stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", SentAtMs: time.Now().UnixMilli()})
+	rsp, err := stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", SentAt: time.Now().UnixMilli()})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Zero(t, rsp.GetPlanId(), "没有计划时版本为空")

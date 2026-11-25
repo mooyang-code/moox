@@ -5,7 +5,7 @@ import type {
   HealthLevel
 } from "@/api/collector/runtime-status";
 
-import { marketTime } from "@/utils/time-zone";
+import { marketTime, toInstantMs } from "@/utils/time-zone";
 
 const levels: Record<HealthLevel, { text: string; color: string; icon: string }> = {
   ok: { text: "正常", color: "green", icon: "icon-check-circle" },
@@ -274,7 +274,7 @@ export function cloudStateInfo(
   >
 ): CloudStateInfo {
   if ((fn.executor || "scf") !== "scf") return { text: "—", tone: "muted" };
-  if (!fn.cloud_read_at) return { text: "未读回", tone: "muted" };
+  if (toInstantMs(fn.cloud_read_at) === null) return { text: "未读回", tone: "muted" };
   if (!fn.cloud_exists) return { text: "不存在", tone: "warn" };
   const problems = [...(fn.cloud_timer_matches ? [] : ["定时器不一致"]), ...(fn.cloud_package_latest ? [] : ["代码包落后"])];
   return problems.length ? { text: problems.join("、"), tone: "warn" } : { text: "一致", tone: "ok" };

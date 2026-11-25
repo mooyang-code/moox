@@ -91,7 +91,7 @@ func TestWeightResolverHoldTargetSkipsConversionAndChangesRequestHash(t *testing
 	}
 	conversion, err := resolver.Resolve(context.Background(), request(true), "space-1")
 	require.NoError(t, err)
-	require.Equal(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Hold: true}}, conversion.QuantityTargets)
+	require.Equal(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Hold: true}}, conversion.QuantityTargets)
 	require.Empty(t, conversion.ReferencePrices)
 
 	held, err := RequestHash(request(true))
@@ -119,7 +119,7 @@ func TestWeightResolverAllHoldTargetDoesNotNeedEquity(t *testing.T) {
 	}
 	conversion, err := resolver.Resolve(context.Background(), request, "space-1")
 	require.NoError(t, err)
-	require.Equal(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Hold: true}}, conversion.QuantityTargets)
+	require.Equal(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Hold: true}}, conversion.QuantityTargets)
 
 	// 混有需要换算的目标时仍然需要权益快照。
 	request.Targets = append(request.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "ETH-USDT-SWAP", MarketType: "swap", TargetWeight: "0.2"})

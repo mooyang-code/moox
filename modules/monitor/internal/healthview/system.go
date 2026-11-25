@@ -108,7 +108,7 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 			if l.Pause != nil && l.Pause.Kind != "" {
 				out.PauseKinds[l.Pause.Kind]++
 			}
-			if l.Pause != nil && l.Pause.Since != "" && (out.PausedSince == "" || l.Pause.Since < out.PausedSince) {
+			if l.Pause != nil && l.Pause.Since > 0 && (out.PausedSince == 0 || l.Pause.Since < out.PausedSince) {
 				out.PausedSince = l.Pause.Since
 			}
 			out.Issues = append(out.Issues, fmt.Sprintf("%s：%s", m.name, firstNonEmpty(l.Reason, "已暂停")))

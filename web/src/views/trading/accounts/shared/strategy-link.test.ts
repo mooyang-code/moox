@@ -12,7 +12,7 @@ const instance = (id: string, extra: Partial<StrategyInstance> = {}) =>
     logical_account_id: "la",
     enabled: false,
     health: "ok",
-    created_at: "2026-01-01T00:00:00Z",
+    created_at: "1767225600000",
     ...extra
   }) as StrategyInstance;
 const names = new Map([
@@ -38,8 +38,8 @@ describe("关联策略取哪个实例", () => {
 
   it("都没启用时取最新创建的，不因列表顺序留下最老的", () => {
     const list = [
-      instance("old", { strategy_id: "st-old", created_at: "2026-01-01T00:00:00Z" }),
-      instance("new", { strategy_id: "st-new", created_at: "2026-03-01T00:00:00Z" })
+      instance("old", { strategy_id: "st-old", created_at: "1767225600000" }),
+      instance("new", { strategy_id: "st-new", created_at: "1772323200000" })
     ];
     expect(link(list)?.instanceId).toBe("new");
     expect(link([...list].reverse())?.instanceId).toBe("new");

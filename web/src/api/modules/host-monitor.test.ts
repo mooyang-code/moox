@@ -5,7 +5,7 @@ describe("host monitor wire conversion", () => {
   it("converts protobuf JSON uint64 strings into numeric metrics", () => {
     const metrics = toHostMetrics({
       host_id: "control",
-      last_seen_at: new Date().toISOString(),
+      last_seen_at: String(Date.now()),
       snapshot: {
         memory: {
           total_bytes: "8589934592",

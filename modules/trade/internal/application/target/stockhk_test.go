@@ -55,8 +55,8 @@ func TestHKBuyFloorsToInstrumentLotSize(t *testing.T) {
 	// 价格取 60 港元，两手 4.8 万港元，不触发默认的单笔上限拆单。
 	fixture.quotes["00005.XHKG"] = hkQuote("60", "59.95", "60", hkNow)
 	fixture.target(t,
-		store.InstrumentTarget{InstrumentID: "00005.XHKG", Quantity: "1000"},
-		store.InstrumentTarget{InstrumentID: "00700.XHKG", Quantity: "250"})
+		store.InstrumentQuantity{InstrumentID: "00005.XHKG", Quantity: "1000"},
+		store.InstrumentQuantity{InstrumentID: "00700.XHKG", Quantity: "250"})
 
 	fixture.converge(t)
 
@@ -67,7 +67,7 @@ func TestHKBuyFloorsToInstrumentLotSize(t *testing.T) {
 	require.Equal(t, map[string]string{"00005.XHKG": "800", "00700.XHKG": "200"}, quantities)
 	// 不足一手的买入差额视为已满足。
 	small := newHKFixture(t)
-	small.target(t, store.InstrumentTarget{InstrumentID: "00005.XHKG", Quantity: "399"})
+	small.target(t, store.InstrumentQuantity{InstrumentID: "00005.XHKG", Quantity: "399"})
 	result, current := small.converge(t)
 	require.Equal(t, StatusConverged, result.Status)
 	require.Empty(t, small.orders.specs)
@@ -82,7 +82,7 @@ func TestHKPseudoMarketPriceSnapsToTickTable(t *testing.T) {
 	require.NoError(t, buy.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetLogicalAccountOrderSettings("space-1", "logical-1", settings)
 	}))
-	buy.target(t, store.InstrumentTarget{InstrumentID: "00700.XHKG", Quantity: "200"})
+	buy.target(t, store.InstrumentQuantity{InstrumentID: "00700.XHKG", Quantity: "200"})
 	buy.converge(t)
 	require.Len(t, buy.orders.specs, 1)
 	require.Equal(t, exchange.OrderTypeLimit, buy.orders.specs[0].Type)
@@ -94,7 +94,7 @@ func TestHKPseudoMarketPriceSnapsToTickTable(t *testing.T) {
 		return tx.SetLogicalAccountOrderSettings("space-1", "logical-1", settings)
 	}))
 	sell.holding(t, "00700.XHKG", "200", "200")
-	sell.target(t, store.InstrumentTarget{InstrumentID: "00700.XHKG", Quantity: "0"})
+	sell.target(t, store.InstrumentQuantity{InstrumentID: "00700.XHKG", Quantity: "0"})
 	sell.converge(t)
 	require.Len(t, sell.orders.specs, 1)
 	require.Equal(t, exchange.SideSell, sell.orders.specs[0].Side)
@@ -106,7 +106,7 @@ func TestHKPseudoMarketPriceSnapsToTickTable(t *testing.T) {
 func TestHKHasNoT1Deferral(t *testing.T) {
 	fixture := newHKFixture(t)
 	fixture.holding(t, "00700.XHKG", "300", "0")
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "00700.XHKG", Quantity: "0"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "00700.XHKG", Quantity: "0"})
 
 	_, current := fixture.converge(t)
 
@@ -124,7 +124,7 @@ func TestHKHaltedIsDeferred(t *testing.T) {
 	halted := hkQuote("376", "0", "0", hkNow)
 	halted.Halted = true
 	fixture.quotes["00700.XHKG"] = halted
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "00700.XHKG", Quantity: "200"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "00700.XHKG", Quantity: "200"})
 
 	result, current := fixture.converge(t)
 
@@ -145,7 +145,7 @@ func TestHKOutOfSessionTargetsWait(t *testing.T) {
 	} {
 		fixture := newHKFixture(t)
 		hkAt(fixture, at)
-		fixture.target(t, store.InstrumentTarget{InstrumentID: "00700.XHKG", Quantity: "200"})
+		fixture.target(t, store.InstrumentQuantity{InstrumentID: "00700.XHKG", Quantity: "200"})
 		result, current := fixture.converge(t)
 		require.Equal(t, StatusPaused, result.Status, name)
 		require.Equal(t, execution.ReasonOutOfSession, current.LastError, name)
@@ -154,13 +154,13 @@ func TestHKOutOfSessionTargetsWait(t *testing.T) {
 
 	late := newHKFixture(t)
 	hkAt(late, time.Date(2026, 11, 17, 15, 58, 0, 0, hk))
-	late.target(t, store.InstrumentTarget{InstrumentID: "00700.XHKG", Quantity: "200"})
+	late.target(t, store.InstrumentQuantity{InstrumentID: "00700.XHKG", Quantity: "200"})
 	late.converge(t)
 	require.Len(t, late.orders.specs, 1, "收市前都能发单")
 
 	expired := newHKFixture(t)
 	hkAt(expired, time.Date(2030, 1, 3, 10, 0, 0, 0, hk))
-	expired.target(t, store.InstrumentTarget{InstrumentID: "00700.XHKG", Quantity: "200"})
+	expired.target(t, store.InstrumentQuantity{InstrumentID: "00700.XHKG", Quantity: "200"})
 	_, current := expired.converge(t)
 	require.Equal(t, stockfeed.ReasonCalendarExpired, current.LastError)
 }

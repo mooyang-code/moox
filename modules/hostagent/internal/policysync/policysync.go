@@ -92,17 +92,17 @@ func (s *Syncer) SyncOnce(ctx context.Context, report *monitorpb.HostReport) (Re
 	return result, nil
 }
 
-// syncOnce 拉取并写入一次；startedAt 是 Monitor 在响应里给出的进程启动时间（拉取失败时为空）。
+// syncOnce 拉取并写入一次；startedAt 是 Monitor 在响应里给出的进程启动时刻（毫秒，拉取失败时为 0）。
 // fetchErr 只在没能从 Monitor 拿到策略时非空，err 还包括本机写缓存的失败。
-func (s *Syncer) syncOnce(ctx context.Context, report *monitorpb.HostReport) (result Result, startedAt string, fetchErr, err error) {
+func (s *Syncer) syncOnce(ctx context.Context, report *monitorpb.HostReport) (result Result, startedAt int64, fetchErr, err error) {
 	rsp, err := s.fetch(ctx, &monitorpb.GetHostPolicyReq{Host: report})
 	if err != nil {
 		err = fmt.Errorf("fetch host policy: %w", err)
-		return "", "", err, err
+		return "", 0, err, err
 	}
 	if code := rsp.GetRetInfo().GetCode(); code != commonpb.ErrorCode_SUCCESS {
 		err = fmt.Errorf("fetch host policy: %s %s", code, rsp.GetRetInfo().GetMsg())
-		return "", "", err, err
+		return "", 0, err, err
 	}
 	result, err = s.write(rsp)
 	return result, rsp.GetMonitorStartedAt(), nil, err

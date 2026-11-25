@@ -37,7 +37,7 @@ func TestThresholdDefaultKeepsTargetRatioBehaviour(t *testing.T) {
 	}{{"95", 0}, {"94", 1}, {"100", 0}} {
 		f := swapPolicyFixture(t, legacyOrderSettings)
 		f.position(t, "account-a", "BTCUSDT", c.position)
-		f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+		f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 		f.converge(t)
 		require.Len(t, f.orders.specs, c.orders, "持仓 %s", c.position)
 	}
@@ -52,7 +52,7 @@ func TestThresholdPositionRatioUsesHoldingNotional(t *testing.T) {
 	}{{"104", 0}, {"105", 1}, {"106", 1}} {
 		f := swapPolicyFixture(t, settings)
 		f.position(t, "account-a", "BTCUSDT", "100")
-		f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: c.target}})
+		f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: c.target}})
 		f.converge(t)
 		require.Len(t, f.orders.specs, c.orders, "目标 %s", c.target)
 	}
@@ -84,7 +84,7 @@ func TestThresholdEquityRatioUsesLatestEquityPoint(t *testing.T) {
 			}))
 		}
 		f.position(t, "account-a", "BTCUSDT", "100")
-		f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "103"}})
+		f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "103"}})
 		f.converge(t)
 		require.Len(t, f.orders.specs, c.orders, c.name)
 	}
@@ -93,7 +93,7 @@ func TestThresholdEquityRatioUsesLatestEquityPoint(t *testing.T) {
 func TestThresholdAlwaysTradesTinyDifferences(t *testing.T) {
 	f := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"0","rebalance_threshold_mode":"ALWAYS"}`)
 	f.position(t, "account-a", "BTCUSDT", "1000")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1001"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1001"}})
 	f.converge(t)
 	require.Len(t, f.orders.specs, 1)
 }
@@ -103,7 +103,7 @@ func TestThresholdNeverBlocksOpeningOrClosing(t *testing.T) {
 	for _, mode := range []string{"TARGET_RATIO", "POSITION_RATIO", "EQUITY_RATIO"} {
 		settings := `{"order_mode":"MARKET","min_notional_swap":"0","rebalance_threshold_mode":"` + mode + `","rebalance_threshold_ratio":"1"}`
 		opening := swapPolicyFixture(t, settings)
-		opening.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+		opening.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 		opening.converge(t)
 		require.Len(t, opening.orders.specs, 1, "%s 建仓", mode)
 
@@ -120,7 +120,7 @@ func TestThresholdDoesNotSkipWhenAMemberHoldsTheOppositeSide(t *testing.T) {
 	f := swapPolicyFixture(t, legacyOrderSettings)
 	f.position(t, "account-a", "BTCUSDT", "-50")
 	f.position(t, "account-b", "BTC-USDT-SWAP", "150")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	f.converge(t)
 	require.Len(t, f.orders.specs, 1, "合计 100 等于目标，但 account-a 的空头要先平掉")
 	require.Equal(t, "account-a", f.orders.specs[0].TradingAccountID)
@@ -131,7 +131,7 @@ func TestThresholdDoesNotSkipWhenAMemberHoldsTheOppositeSide(t *testing.T) {
 func TestHasDifferenceAgreesWithConvergeOnThreshold(t *testing.T) {
 	f := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"0","rebalance_threshold_mode":"POSITION_RATIO","rebalance_threshold_ratio":"0.05"}`)
 	f.position(t, "account-a", "BTCUSDT", "100")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "104"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "104"}})
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	different, err := f.executor().HasDifference(context.Background(), target)
@@ -142,7 +142,7 @@ func TestHasDifferenceAgreesWithConvergeOnThreshold(t *testing.T) {
 // 设置读不出来时这个组合不下单，原因写进目标。
 func TestUnreadableOrderSettingsPauseTheTarget(t *testing.T) {
 	f := swapPolicyFixture(t, `{"order_mode":"LIMIT"}`)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	result := f.converge(t)
 	require.Equal(t, StatusPaused, result.Status)
 	require.Empty(t, f.orders.specs)
@@ -155,7 +155,7 @@ func TestConfiguredMinimumNotionalSkipsSmallOpening(t *testing.T) {
 	// 配置合约最小下单额 50；价格 100：0.4 个 = 40 不下，0.6 个 = 60 下。
 	settings := `{"order_mode":"MARKET","min_notional_swap":"50"}`
 	small := swapPolicyFixture(t, settings)
-	small.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.4"}})
+	small.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.4"}})
 	result := small.converge(t)
 	require.Empty(t, small.orders.specs)
 	require.Equal(t, StatusConverged, result.Status, "低于最小下单额的差额视为已满足：不阻塞，免得“目标持续阻塞”误告警")
@@ -168,7 +168,7 @@ func TestConfiguredMinimumNotionalSkipsSmallOpening(t *testing.T) {
 	require.False(t, different)
 
 	large := swapPolicyFixture(t, settings)
-	large.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.6"}})
+	large.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.6"}})
 	large.converge(t)
 	require.Len(t, large.orders.specs, 1)
 }
@@ -184,7 +184,7 @@ func TestConfiguredMinimumNotionalDoesNotBlockSwapReduceOrClose(t *testing.T) {
 
 	reducing := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"50","rebalance_threshold_mode":"ALWAYS"}`)
 	reducing.position(t, "account-a", "BTCUSDT", "1")
-	reducing.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.8"}})
+	reducing.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.8"}})
 	reducing.converge(t)
 	require.Len(t, reducing.orders.specs, 1, "减仓 0.2 个 = 20，低于 50 也要下")
 	require.Equal(t, exchange.SideSell, reducing.orders.specs[0].Side)
@@ -194,7 +194,7 @@ func TestConfiguredMinimumNotionalDoesNotBlockSwapReduceOrClose(t *testing.T) {
 func TestConfiguredMinimumNotionalIsPerMarket(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"150","min_notional_swap":"0"}`)
-	f.target(t, []store.InstrumentTarget{
+	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}, // 100，低于现货 150
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}, // 100，合约不限
 	})
@@ -208,7 +208,7 @@ func TestExchangeMinimumQuantityActsAsMinimumNotional(t *testing.T) {
 	f := swapPolicyFixture(t, legacyOrderSettings)
 	f.setQuantityRule(t, "binance", "BTCUSDT", "1", "10") // 合约面值 0.001，最小 10 张 = 0.01 个 = 金额 1
 	f.setQuantityRule(t, "okx", "BTC-USDT-SWAP", "1", "10")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.005"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.005"}})
 	f.converge(t)
 	require.Empty(t, f.orders.specs)
 }

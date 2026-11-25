@@ -62,8 +62,8 @@ type viewSpec struct {
 	Freq                string
 	Status              string
 	MaintenancePriority uint32
-	// CreatedAt 是数据集的创建时间：索引文件记下它，删除后按同一 ID 重建的数据集靠它认出旧索引不是自己的。
-	CreatedAt string
+	// CreatedAt 是数据集的创建时刻（Unix 毫秒，元数据读出的值）：索引文件记下它，删除后按同一 ID 重建的数据集靠它认出旧索引不是自己的。
+	CreatedAt int64
 	// Columns 是数据集里启用的列，按建列顺序编号；HiddenColumns 是停用的列（只在返回结果时隐藏，数据保留）。
 	Columns       []*viewindex.Column
 	HiddenColumns []string

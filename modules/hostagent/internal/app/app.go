@@ -101,7 +101,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		return nil, err
 	}
 	report := &monitorpb.HostReport{
-		ReportId: reportID.String(), CollectedAt: collectedAt.Format(time.RFC3339Nano),
+		ReportId: reportID.String(), CollectedAt: collectedAt.UnixMilli(),
 		Metric: &hostmetricpb.HostMetric{HostId: a.cfg.HostID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot},
 	}
 	if err := a.report(ctx, report); err != nil {
@@ -150,10 +150,10 @@ func (a *Agent) GetStatus(context.Context, *hostagentpb.GetStatusReq) (*hostagen
 	defer a.latestMu.RUnlock()
 	rsp := &hostagentpb.GetStatusRsp{HostId: a.cfg.HostID, Version: a.version, Hostname: a.hostname, BootId: a.bootID, LastError: a.lastErr, Collected: a.collected.Load(), Reported: a.reported.Load(), Dropped: a.dropped.Load(), Skipped: a.skipped.Load()}
 	if !a.lastCollect.IsZero() {
-		rsp.LastCollectAt = a.lastCollect.Format(time.RFC3339Nano)
+		rsp.LastCollectAt = a.lastCollect.UnixMilli()
 	}
 	if !a.lastReport.IsZero() {
-		rsp.LastReportAt = a.lastReport.Format(time.RFC3339Nano)
+		rsp.LastReportAt = a.lastReport.UnixMilli()
 	}
 	if a.latest != nil {
 		rsp.Latest = proto.Clone(a.latest).(*hostmetricpb.HostSnapshot)
@@ -168,7 +168,7 @@ func (a *Agent) GetSnapshot(context.Context, *hostagentpb.GetSnapshotReq) (*host
 		rsp.Snapshot = proto.Clone(a.latest).(*hostmetricpb.HostSnapshot)
 	}
 	if !a.lastCollect.IsZero() {
-		rsp.CollectedAt = a.lastCollect.Format(time.RFC3339Nano)
+		rsp.CollectedAt = a.lastCollect.UnixMilli()
 	}
 	return rsp, nil
 }

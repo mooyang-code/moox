@@ -20,10 +20,10 @@ message Space {
   string owner = 4;
   // status 取值 active、disabled 或 deleted。
   string status = 5;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 6;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 7;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 6;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 7;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 8;
   // market 是空间所属市场，取值见种子 config/setup/metadata.yaml：crypto、CN、HK、US。
@@ -42,10 +42,10 @@ message DataSource {
   string name = 3;
   // status 取值 active、disabled 或 deleted。
   string status = 4;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 5;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 6;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 5;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 6;
   // attributes 是写入方维护的扩展属性，Storage 原样保存。
   map<string, string> attributes = 7;
 }
@@ -60,8 +60,9 @@ message Tag {
   bool builtin = 6;
   uint32 active_count = 7;
   uint32 inactive_count = 8;
-  string created_at = 9;
-  string updated_at = 10;
+  // Unix 毫秒。
+  int64 created_at = 9;
+  int64 updated_at = 10;
   // attributes 是写入方维护的扩展属性，Storage 原样保存；改动会递增标的修订号。
   map<string, string> attributes = 11;
 }
@@ -71,7 +72,8 @@ message TagMember {
   string space_id = 1;
   string tag_id = 2;
   string status = 3;
-  string inactive_at = 4;
+  // inactive_at 是成员失效时刻（Unix 毫秒），在册成员为 0。
+  int64 inactive_at = 4;
   Subject subject = 5;
   repeated string tag_ids = 6;
   // trading_status 是成员在这个标签（即这个市场）上的交易状态：trading、suspended 或 delisted，由 Collector 的交易状态检测写入。
@@ -110,10 +112,10 @@ message Subject {
   string timezone = 4;
   // status 取值 active 或 disabled；disabled 仅表示人工停用。
   string status = 5;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 6;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 7;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 6;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 7;
   // attributes 是写入方维护的扩展属性，Storage 原样保存；改动会递增标的修订号。
   map<string, string> attributes = 8;
 }
@@ -138,10 +140,10 @@ message Dataset {
   string freq = 7;
   // status 取值 active 或 disabled。
   string status = 8;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 9;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 10;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 9;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 10;
   // attributes 是调用方自用的扩展属性，Storage 不解释。
   map<string, string> attributes = 11;
   // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, freq) 解析，取值为 "<n>h" 或
@@ -195,10 +197,10 @@ message DatasetColumn {
   repeated string aliases = 8;
   // status 取值 active 或 disabled：disabled 的列不再写入，读取时隐藏，数据保留。
   string status = 9;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 10;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 11;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 10;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 11;
   // attributes 是写入方自用的扩展属性（fill、member_kind 等），Storage 不解释。
   map<string, string> attributes = 12;
 }

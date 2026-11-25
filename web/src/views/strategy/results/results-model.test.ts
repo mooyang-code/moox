@@ -13,7 +13,7 @@ function instance(id: string, overrides: Partial<StrategyInstance> = {}): Strate
     resolved_json: "{}",
     health: "ok",
     created_at: "",
-    updated_at: "2026-10-01T00:00:00Z",
+    updated_at: "1790812800000",
     ...overrides
   };
 }
@@ -22,10 +22,10 @@ const catalog = [{ strategy_id: "s1", name: "动量", dsl_yaml: "", dsl_hash: ""
 describe("strategy results model", () => {
   it("orders enabled first, then instances needing attention, then the most recently updated", () => {
     const ordered = sortInstancesForResults([
-      instance("off", { enabled: false, updated_at: "2026-10-09T00:00:00Z" }),
-      instance("old", { updated_at: "2026-10-01T00:00:00Z" }),
-      instance("new", { updated_at: "2026-10-05T00:00:00Z" }),
-      instance("bad", { health: "degraded", updated_at: "2026-09-01T00:00:00Z" })
+      instance("off", { enabled: false, updated_at: "1791504000000" }),
+      instance("old", { updated_at: "1790812800000" }),
+      instance("new", { updated_at: "1791158400000" }),
+      instance("bad", { health: "degraded", updated_at: "1788220800000" })
     ]);
     expect(ordered.map(item => item.instance_id)).toEqual(["bad", "new", "old", "off"]);
   });

@@ -37,7 +37,7 @@
     >
       <template #columns>
         <a-table-column title="时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.created_at, zone) }}</template>
+          <template #cell="{ record }">{{ formatInstant(record.created_at, zone) }}</template>
         </a-table-column>
         <a-table-column v-if="showSpace" title="空间" data-index="space_id" :width="110">
           <template #cell="{ record }">{{ record.space_id || "系统事件" }}</template>
@@ -75,9 +75,9 @@ import {
   activityCategoryLabel,
   activityDetailText,
   activityLevelColor,
-  activityLevelText,
-  activityTimeText
+  activityLevelText
 } from "./activity-log";
+import { formatInstant } from "@/utils/time-zone";
 import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
 
 const props = withDefaults(
@@ -109,7 +109,6 @@ const detailText = ref("");
 
 const paginationConfig = computed(() => ({ current: page.value, pageSize: props.pageSize, total: total.value, showTotal: true }));
 const levelColor = activityLevelColor;
-const formatTime = activityTimeText;
 
 async function load() {
   const request = guard.begin();
@@ -121,8 +120,8 @@ async function load() {
       global: props.global || undefined,
       category: filters.value.category.trim() || undefined,
       source: filters.value.source.trim() || undefined,
-      since: range ? new Date(range[0]).toISOString() : undefined,
-      until: range ? new Date(range[1]).toISOString() : undefined,
+      since: range ? String(range[0]) : undefined,
+      until: range ? String(range[1]) : undefined,
       page: { page: page.value, size: props.pageSize }
     });
     if (!request.isLatest()) return;

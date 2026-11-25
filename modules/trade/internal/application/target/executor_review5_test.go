@@ -73,7 +73,7 @@ func TestRejectedFirstMemberIsNotFundedButOtherMemberStillPlaces(t *testing.T) {
 		}
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
 	}))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "rejected-child", ClientOrderID: "rejected-child",
 		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",

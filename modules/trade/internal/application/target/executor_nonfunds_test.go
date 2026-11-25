@@ -18,7 +18,7 @@ func realWalletFixture(t *testing.T, price, spot, futures, targetQty string) (*t
 	t.Helper()
 	f := liveStandardFixture(t)
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"10","min_notional_swap":"5"}`)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: targetQty}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: targetQty}})
 	fake := &wallettest.Exchange{Spot: spot, Futures: futures, Ask: price}
 	newExecutor := func() *Executor {
 		executor := f.executor()

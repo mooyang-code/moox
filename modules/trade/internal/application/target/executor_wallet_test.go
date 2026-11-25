@@ -24,7 +24,7 @@ func newWalletIntegration(t *testing.T) (*targetFixture, *wallettest.Exchange, f
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION',
 		c_credential_secret_id = 'secret-1', c_account_mode = 'BINANCE_STANDARD'`).Error)
 	f.setSpotBalance("ETH", "0")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
 	f.now = time.Now().UTC()
 	fake := &wallettest.Exchange{Spot: "10", Futures: "100000", Ask: "50000"}
 	// 每次调用都新建服务和执行器：等价于进程重启，状态只在库里（划转表）。

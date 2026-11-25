@@ -63,7 +63,7 @@ export function parseMetrics(raw?: string): ReplayMetrics | null {
 
 export function equitySeries(bars: ReplayBar[]): { time: number; value: number }[] {
   return bars
-    .map(bar => ({ time: Date.parse(bar.bar_end_time), value: bar.equity }))
+    .map(bar => ({ time: toInstantMs(bar.bar_end_time) ?? NaN, value: bar.equity }))
     .filter(point => Number.isFinite(point.time) && Number.isFinite(point.value));
 }
 
@@ -121,7 +121,7 @@ export function mergeBars(known: ReplayBar[], incoming: ReplayBar[]): ReplayBar[
     seen.add(bar.bar_end_time);
     merged.push(bar);
   }
-  return merged.sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
+  return merged.sort((a, b) => (toInstantMs(a.bar_end_time) ?? 0) - (toInstantMs(b.bar_end_time) ?? 0));
 }
 
 /** 回放读取的计算任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
@@ -284,15 +284,15 @@ export function replayMetricsLine(raw?: string): string {
 /** 按某个回放的配置重新发起时的表单值。 */
 export function replayFormFromReplay(replay: Replay) {
   const tasks = Object.fromEntries(Object.entries(replay.tasks || {}).map(([market, task]) => [market, task.factor_task_id]));
-  const start = Date.parse(replay.start_time);
-  const end = Date.parse(replay.end_time);
+  const start = toInstantMs(replay.start_time);
+  const end = toInstantMs(replay.end_time);
   return {
     source: "dsl" as const,
     strategy_id: replay.strategy_id,
     dsl_yaml: replay.dsl_yaml,
     instance_id: "",
     tasks,
-    range: Number.isFinite(start) && Number.isFinite(end) ? ([start, end] as [number, number]) : null,
+    range: start !== null && end !== null ? ([start, end] as [number, number]) : null,
     spot_fee_bps: replay.spot_fee_bps,
     swap_fee_bps: replay.swap_fee_bps,
     slippage_bps: replay.slippage_bps ?? 0,

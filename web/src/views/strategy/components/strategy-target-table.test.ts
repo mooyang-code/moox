@@ -23,8 +23,8 @@ const snapshot = {
     { instrument_id: "SOL-USDT", target_weight: "-0.2" }
   ],
   session_id: "s",
-  bar_end_time: "2026-10-10T11:00:00Z",
-  valid_until: "2026-10-10T12:00:00Z",
+  bar_end_time: "1791630000000",
+  valid_until: "1791633600000",
   result_id: "r"
 };
 

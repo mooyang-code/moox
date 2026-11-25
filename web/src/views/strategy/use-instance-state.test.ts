@@ -112,8 +112,8 @@ describe("实例详情与实例列表", () => {
     targets.resolve({
       targets: [],
       session_id: "session-1",
-      bar_end_time: "2026-09-06T01:00:00Z",
-      valid_until: "2026-09-06T02:00:00Z",
+      bar_end_time: "1788656400000",
+      valid_until: "1788660000000",
       result_id: "r1"
     });
     await request;

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -44,9 +43,10 @@ func (s *Store) CreateSpace(ctx context.Context, item *pb.Space) (*pb.Space, err
 		return nil, storeerr.Invalidf("space_id and name are required")
 	}
 	item.Status = defaultStatus(item.GetStatus())
-	now := s.nowUTC().Format(time.RFC3339Nano)
-	item.CreatedAt = now
-	item.UpdatedAt = now
+	nowTime := s.nowUTC()
+	now := sqlTimestampText(nowTime)
+	item.CreatedAt = nowTime.UnixMilli()
+	item.UpdatedAt = nowTime.UnixMilli()
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err

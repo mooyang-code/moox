@@ -52,7 +52,7 @@ func TestStartReplayChecksActiveLimitFirst(t *testing.T) {
 		}
 	}
 	calls := h.resolver.calls
-	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z"})
+	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-02T00:00:00Z"), EndTime: ms("2026-09-03T00:00:00Z")})
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "排队或运行中")
 	if h.resolver.calls != calls {
 		t.Fatalf("排队已满时不应解析绑定：%d → %d", calls, h.resolver.calls)

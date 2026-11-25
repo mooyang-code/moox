@@ -50,7 +50,7 @@ func TestApplyAutoTagSnapshotResolvesAndInactivatesMembers(t *testing.T) {
 	if len(all) != 2 || all[0].GetStatus() != metadata.TagMemberActive || all[1].GetStatus() != metadata.TagMemberInactive {
 		t.Fatalf("members after snapshot = %v", all)
 	}
-	if all[1].GetInactiveAt() == "" {
+	if all[1].GetInactiveAt() <= 0 {
 		t.Fatalf("被移出的成员应记录收到快照的时间：%v", all[1])
 	}
 }

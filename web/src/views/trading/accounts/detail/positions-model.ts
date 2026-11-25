@@ -1,4 +1,4 @@
-import type { BlockedTarget, Holding, InstrumentTarget, MarketType, Position, TargetLane } from "@/api/trade/types";
+import type { BlockedTarget, Holding, InstrumentQuantity, MarketType, Position, TargetLane } from "@/api/trade/types";
 import { coinOf, marketOfInstrument } from "../shared/markets";
 import { decimalAdd, decimalSub } from "../shared/order-rules";
 
@@ -58,7 +58,7 @@ export interface CoinRow {
 }
 
 export interface BuildCoinRowsInput {
-  targets: readonly InstrumentTarget[];
+  targets: readonly InstrumentQuantity[];
   blocked: readonly BlockedTarget[];
   swapPositions: readonly Position[];
   spotHoldings: readonly Holding[];
@@ -340,7 +340,7 @@ export function rowOrderHints(row: CoinRow, quote: string): OrderHint[] {
 }
 
 /** 目标里涉及的币的个数：同一个币的现货、永续目标算一个。 */
-export function targetCoinCount(targets: readonly InstrumentTarget[]): number {
+export function targetCoinCount(targets: readonly InstrumentQuantity[]): number {
   return new Set(targets.map(item => coinOf(item.instrument_id))).size;
 }
 

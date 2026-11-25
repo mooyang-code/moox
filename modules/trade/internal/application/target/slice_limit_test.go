@@ -23,13 +23,13 @@ func TestSliceLimitNearMinimumNotionalIsNeverSilentlyConverged(t *testing.T) {
 		"合约全平，单笔上限 3U": func(t *testing.T) *targetFixture {
 			f := swap(t, `{"order_mode":"MARKET","min_notional_swap":"0","max_child_notional":"3"}`)
 			f.position(t, "account-a", "BTCUSDT", "1")
-			f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0"}})
+			f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0"}})
 			return f
 		},
 		"合约减仓 1 到 0.5，单笔上限 3U": func(t *testing.T) *targetFixture {
 			f := swap(t, `{"order_mode":"MARKET","min_notional_swap":"0","max_child_notional":"3"}`)
 			f.position(t, "account-a", "BTCUSDT", "1")
-			f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.5"}})
+			f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.5"}})
 			return f
 		},
 		"现货清仓，单笔上限 3U": func(t *testing.T) *targetFixture {
@@ -38,13 +38,13 @@ func TestSliceLimitNearMinimumNotionalIsNeverSilentlyConverged(t *testing.T) {
 			f.setQuantityRule(t, "binance", "BTCUSDT", "0.01", "0.01")
 			f.setMinNotional(t, "binance", "BTCUSDT", "5")
 			f.setBalance(t, "account-a", "BTC", "1")
-			f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0"}})
+			f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0"}})
 			return f
 		},
 		"伪市价加空，单笔上限 5.04U": func(t *testing.T) *targetFixture {
 			f := swap(t, `{"min_notional_swap":"0","max_child_notional":"5.04","rebalance_threshold_mode":"ALWAYS"}`)
 			f.position(t, "account-a", "BTCUSDT", "-10")
-			f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "-20"}})
+			f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "-20"}})
 			return f
 		},
 	}

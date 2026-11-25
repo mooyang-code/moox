@@ -47,8 +47,8 @@ function instance(id: string, overrides: Partial<StrategyInstance> = {}): Strate
     session_id: "sess",
     resolved_json: "{}",
     health: "ok",
-    created_at: "",
-    updated_at: "2026-10-13T00:00:00Z",
+    created_at: "0",
+    updated_at: "1791849600000",
     ...overrides
   };
 }
@@ -56,7 +56,7 @@ function snapshot(validUntil: string, weights: Record<string, string>): Strategy
   return {
     targets: Object.entries(weights).map(([instrument_id, target_weight]) => ({ instrument_id, target_weight })),
     session_id: "sess",
-    bar_end_time: new Date(NOW - 120_000).toISOString(),
+    bar_end_time: String(NOW - 120_000),
     valid_until: validUntil,
     result_id: "r"
   };
@@ -85,8 +85,9 @@ describe("home formatting", () => {
     expect(relativeTime(new Date(NOW + 60_000).toISOString(), NOW, "Asia/Shanghai")).toBe("18:01 UTC+8");
   });
 
-  it("相对时间悬停显示的完整时间：数字和 relativeTime 一样按 Unix 秒", () => {
-    expect(fullTime(String(Math.floor(NOW / 1000)), "UTC")).toBe("2026-10-13 10:00:00 UTC");
+  it("相对时间悬停显示的完整时间：数字和 relativeTime 一样按 Unix 毫秒", () => {
+    expect(fullTime(String(NOW), "UTC")).toBe("2026-10-13 10:00:00 UTC");
+    expect(relativeTime(String(NOW - 10_000), NOW)).toBe("10 秒前");
     expect(fullTime(new Date(NOW).toISOString(), "Asia/Shanghai")).toBe("2026-10-13 18:00:00 UTC+8");
     expect(fullTime(undefined)).toBe("—");
   });
@@ -172,7 +173,7 @@ describe("home data rows", () => {
   });
 
   it("shows what each strategy wants to hold, largest weights first", () => {
-    const later = new Date(NOW + 60_000).toISOString();
+    const later = String(NOW + 60_000);
     const rows = strategyRows(
       [instance("a"), instance("off", { enabled: false, session_id: "" })],
       { a: snapshot(later, { "ETH-USDT": "0.1", "BTC-USDT": "0.2", "SOL-USDT": "-0.15" }) },
@@ -262,7 +263,7 @@ describe("home data rows", () => {
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 1 个",
-          created_at: new Date(NOW - 3600_000).toISOString()
+          created_at: String(NOW - 3600_000)
         }
       ],
       names,
@@ -284,7 +285,7 @@ describe("home data rows", () => {
 });
 
 describe("home tiles", () => {
-  const later = new Date(NOW + 60_000).toISOString();
+  const later = String(NOW + 60_000);
   const catalog = [{ strategy_id: "s1", name: "动量" }] as never;
 
   it("draws weight bars relative to the largest bar, cash included", () => {
@@ -512,14 +513,14 @@ describe("home tiles", () => {
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 0 个、移除 0 个标的，将于 2026-10-12 13:00 生效",
-          created_at: new Date(NOW - 3600_000).toISOString()
+          created_at: String(NOW - 3600_000)
         },
         {
           id: 2,
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 1 个、移除 0 个标的，将于 2026-10-13 09:00 生效",
-          created_at: new Date(NOW - 7200_000).toISOString()
+          created_at: String(NOW - 7200_000)
         }
       ],
       names,
@@ -553,8 +554,8 @@ describe("home tiles", () => {
 
 describe("systemStage", () => {
   const trial = { enabled: true, logical_account_id: "acc-1", confirmed_at: "" };
-  const confirmed = { enabled: true, logical_account_id: "acc-1", confirmed_at: "2026-11-15T00:00:00Z" };
-  const observer = { enabled: true, logical_account_id: "", confirmed_at: "2026-11-15T00:00:00Z" };
+  const confirmed = { enabled: true, logical_account_id: "acc-1", confirmed_at: "1794700800000" };
+  const observer = { enabled: true, logical_account_id: "", confirmed_at: "1794700800000" };
 
   it("没有模块上报生命周期状态时不显示", () => {
     expect(systemStage(undefined)).toBeUndefined();
