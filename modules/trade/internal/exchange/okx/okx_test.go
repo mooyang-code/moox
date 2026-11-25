@@ -218,6 +218,26 @@ func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
 	}
 }
 
+// 行情请求的 instType 是 OKX 协议原文 SPOT、SWAP，与市场类型的取值无关（期望值写死原文）。
+func TestAllPricesSendsOKXInstType(t *testing.T) {
+	for market, want := range map[exchange.MarketType]string{exchange.MarketTypeSpot: "SPOT", exchange.MarketTypeSwap: "SWAP"} {
+		var got string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			got = request.URL.Query().Get("instType")
+			ok(w, `[]`)
+		}))
+		adapter := newWithClient(exchange.AccountConfig{Markets: []exchange.MarketType{market}}, exchange.Credential{}, httpclient.New(server.URL))
+		_, err := adapter.allPrices(context.Background())
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("市场 %s 的 instType = %q，want %q", market, got, want)
+		}
+	}
+}
+
 func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 	var orderBody map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

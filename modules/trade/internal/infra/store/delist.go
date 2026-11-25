@@ -147,11 +147,20 @@ const (
 		ORDER BY c_round, c_space_id, c_logical_account_id`
 )
 
-func upperTrim(value string) string { return strings.ToUpper(strings.TrimSpace(value)) }
+// NormalizeVenue 归一名单与下架记录里的交易所、市场类型，写库与查询都经它。
+func NormalizeVenue(value string) string { return strings.ToUpper(strings.TrimSpace(value)) }
+
+// NormalizeExchangeSymbol 归一交易所代码（FOOUSDT、FOO-USDT-SWAP）：它是交易所原文，一律转大写。
+func NormalizeExchangeSymbol(value string) string { return strings.ToUpper(strings.TrimSpace(value)) }
+
+// normalizeBlockKey 归一名单的（交易所、市场、交易所代码）。
+func normalizeBlockKey(exchange, marketType, exchangeSymbol string) (string, string, string) {
+	return NormalizeVenue(exchange), NormalizeVenue(marketType), NormalizeExchangeSymbol(exchangeSymbol)
+}
 
 // BlockInstrument 在事务里写一行名单；已经在名单里时不改动，返回 created=false。范围为空按 ALL 写。
 func (tx *Tx) BlockInstrument(record BlockedInstrumentRecord) (bool, error) {
-	record.Exchange, record.MarketType, record.ExchangeSymbol = upperTrim(record.Exchange), upperTrim(record.MarketType), upperTrim(record.ExchangeSymbol)
+	record.Exchange, record.MarketType, record.ExchangeSymbol = normalizeBlockKey(record.Exchange, record.MarketType, record.ExchangeSymbol)
 	record.Reason = strings.TrimSpace(record.Reason)
 	if record.Scope == "" {
 		record.Scope = DelistScopeAll
@@ -173,8 +182,9 @@ func (tx *Tx) BlockInstrument(record BlockedInstrumentRecord) (bool, error) {
 
 // GetBlockedInstrument 读一行名单；不在名单里 found=false。
 func (tx *Tx) GetBlockedInstrument(exchange, marketType, exchangeSymbol string) (record BlockedInstrumentRecord, found bool, err error) {
+	exchange, marketType, exchangeSymbol = normalizeBlockKey(exchange, marketType, exchangeSymbol)
 	rows := []BlockedInstrumentRecord{}
-	if err := tx.db.Raw(sqlGetBlockedInstrument, upperTrim(exchange), upperTrim(marketType), upperTrim(exchangeSymbol)).Scan(&rows).Error; err != nil {
+	if err := tx.db.Raw(sqlGetBlockedInstrument, exchange, marketType, exchangeSymbol).Scan(&rows).Error; err != nil {
 		return BlockedInstrumentRecord{}, false, err
 	}
 	if len(rows) == 0 {
@@ -185,13 +195,15 @@ func (tx *Tx) GetBlockedInstrument(exchange, marketType, exchangeSymbol string) 
 
 // UpdateBlockedInstrument 改写一行名单的范围、原因和下架记录。
 func (tx *Tx) UpdateBlockedInstrument(record BlockedInstrumentRecord) error {
+	exchange, marketType, exchangeSymbol := normalizeBlockKey(record.Exchange, record.MarketType, record.ExchangeSymbol)
 	return writeError(tx.db.Exec(sqlUpdateBlockedInstrument, record.Scope, record.Reason, record.DelistID,
-		upperTrim(record.Exchange), upperTrim(record.MarketType), upperTrim(record.ExchangeSymbol)).Error)
+		exchange, marketType, exchangeSymbol).Error)
 }
 
 // DeletePaperOnlyBlockedInstrument 删掉范围仍是 PAPER_ONLY 的那一行（演练结束）；已被升级为 ALL 的不删。
 func (tx *Tx) DeletePaperOnlyBlockedInstrument(exchange, marketType, exchangeSymbol string) (bool, error) {
-	result := tx.db.Exec(sqlDeletePaperOnlyBlockedInstrument, upperTrim(exchange), upperTrim(marketType), upperTrim(exchangeSymbol))
+	exchange, marketType, exchangeSymbol = normalizeBlockKey(exchange, marketType, exchangeSymbol)
+	result := tx.db.Exec(sqlDeletePaperOnlyBlockedInstrument, exchange, marketType, exchangeSymbol)
 	if err := writeError(result.Error); err != nil {
 		return false, err
 	}
@@ -201,7 +213,7 @@ func (tx *Tx) DeletePaperOnlyBlockedInstrument(exchange, marketType, exchangeSym
 // UnblockInstrument 在事务里删掉名单行，并把这个标的所有进行中的下架记录（两种范围都算）记为 CANCELED。
 // 不在名单里返回 removed=false，不算错误；进行中的记录照样取消。
 func (tx *Tx) UnblockInstrument(exchange, marketType, exchangeSymbol, result string, at int64) (removed bool, canceled int64, err error) {
-	exchange, marketType, exchangeSymbol = upperTrim(exchange), upperTrim(marketType), upperTrim(exchangeSymbol)
+	exchange, marketType, exchangeSymbol = normalizeBlockKey(exchange, marketType, exchangeSymbol)
 	deleted := tx.db.Exec(sqlDeleteBlockedInstrument, exchange, marketType, exchangeSymbol)
 	if err := writeError(deleted.Error); err != nil {
 		return false, 0, err
@@ -423,7 +435,7 @@ func (b BlockedSet) SpotBaseAssets(account TradingAccountRecord, instruments []I
 		return assets
 	}
 	for _, instrument := range instruments {
-		if instrument.MarketType == "SPOT" && b.Contains(account, "SPOT", instrument.ExchangeSymbol) {
+		if instrument.MarketType == string(exchange.MarketTypeSpot) && b.Contains(account, string(exchange.MarketTypeSpot), instrument.ExchangeSymbol) {
 			assets[instrument.BaseAsset] = struct{}{}
 		}
 	}

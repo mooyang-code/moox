@@ -139,10 +139,10 @@ func (d Document) Validate() (Settings, error) {
 	if settings.MinNotionalSwap, err = nonNegative(d.MinNotionalSwap, defaultMinNotionalSwap, "合约最小下单额"); err != nil {
 		return Settings{}, err
 	}
-	if settings.HourlyCapSpot, err = hourlyCaps(d.HourlyCapSpot, "SPOT", "现货", true); err != nil {
+	if settings.HourlyCapSpot, err = hourlyCaps(d.HourlyCapSpot, exchange.SuffixSpot, "现货", true); err != nil {
 		return Settings{}, err
 	}
-	if settings.HourlyCapSwap, err = hourlyCaps(d.HourlyCapSwap, "SWAP", "合约", false); err != nil {
+	if settings.HourlyCapSwap, err = hourlyCaps(d.HourlyCapSwap, exchange.SuffixSwap, "合约", false); err != nil {
 		return Settings{}, err
 	}
 	if settings.MaxChildNotional, err = decimalOr(d.MaxChildNotional, defaultMaxChildNotional, "单笔上限"); err != nil {
@@ -314,18 +314,18 @@ func nonNegative(raw, fallback, name string) (shared.Decimal, error) {
 // stockCode 是股票内部标的 ID 的格式：代码加交易所后缀，如 600519.XSHG、000001.XSHE、430047.XBSE。
 var stockCode = regexp.MustCompile(`^[0-9A-Z]+\.[A-Z]+$`)
 
-// hourlyCaps 校验每小时上限：键必须是 "*" 或本市场的内部标的 ID（大小写不限，统一转大写后不能重复），值大于 0。
+// hourlyCaps 校验每小时上限：键必须是 "*" 或以 -suffix（标的 ID 后缀 SPOT、SWAP）结尾的内部标的 ID（大小写不限，统一转大写后不能重复），值大于 0。
 // allowStock 为真时（现货那一组，股票也用它）还接受股票代码格式的键。
-func hourlyCaps(raw map[string]string, market, label string, allowStock bool) (map[string]shared.Decimal, error) {
+func hourlyCaps(raw map[string]string, suffix, label string, allowStock bool) (map[string]shared.Decimal, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	caps := make(map[string]shared.Decimal, len(raw))
 	for key, value := range raw {
 		normalized := strings.ToUpper(strings.TrimSpace(key))
-		validKey := normalized == "*" || strings.HasSuffix(normalized, "-"+market) || allowStock && stockCode.MatchString(normalized)
+		validKey := normalized == "*" || strings.HasSuffix(normalized, "-"+suffix) || allowStock && stockCode.MatchString(normalized)
 		if !validKey {
-			hint := "BTC-USDT-" + market
+			hint := "BTC-USDT-" + suffix
 			if allowStock {
 				hint += " 或 600519.XSHG"
 			}

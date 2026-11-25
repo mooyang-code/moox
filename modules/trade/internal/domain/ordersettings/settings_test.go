@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/stretchr/testify/require"
 )
 
@@ -142,6 +143,22 @@ func TestHourlyCapSpotKeysAcceptStockCodes(t *testing.T) {
 		`{"hourly_cap_spot":{"600519.XSHG.X":"1"}}`, `{"hourly_cap_spot":{"600519.":"1"}}`,
 		`{"hourly_cap_swap":{"600519.XSHG":"1"}}`,
 	} {
+		_, err := Parse(raw)
+		require.Error(t, err, raw)
+	}
+}
+
+// 每小时上限的键按标的 ID 后缀（SPOT、SWAP 原文）分组校验，与市场类型的取值无关。
+func TestHourlyCapKeysCheckInstrumentSuffix(t *testing.T) {
+	settings, err := Parse(`{"hourly_cap_spot":{"BTC-USDT-SPOT":"10"},"hourly_cap_swap":{"BTC-USDT-SWAP":"20"}}`)
+	require.NoError(t, err)
+	limit, ok := settings.HourlyCap(string(exchange.MarketTypeSpot), "BTC-USDT-SPOT")
+	require.True(t, ok)
+	require.Equal(t, "10", limit.String())
+	limit, ok = settings.HourlyCap(string(exchange.MarketTypeSwap), "BTC-USDT-SWAP")
+	require.True(t, ok)
+	require.Equal(t, "20", limit.String())
+	for _, raw := range []string{`{"hourly_cap_spot":{"BTC-USDT-SWAP":"1"}}`, `{"hourly_cap_swap":{"BTC-USDT-SPOT":"1"}}`} {
 		_, err := Parse(raw)
 		require.Error(t, err, raw)
 	}

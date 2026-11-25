@@ -412,3 +412,10 @@ func TestResolveInstrumentIDRequiresAMemberOfTheExchange(t *testing.T) {
 	_, err = service.ResolveInstrumentID(context.Background(), "space-1", "logical-1", Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "NOPEUSDT"})
 	require.ErrorIs(t, err, ErrInvalidRequest, "成员的标的表里没有它时不能静默当作平完")
 }
+
+// 归一化分两类：交易所与市场按 Trade 的写法，交易所代码是交易所原文，一律转大写。
+func TestNormalizeKeepsExchangeSymbolUpper(t *testing.T) {
+	key, err := normalize(Key{Exchange: " BINANCE ", MarketType: "SWAP", ExchangeSymbol: " fooUSDT "})
+	require.NoError(t, err)
+	require.Equal(t, Key{Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSwap), ExchangeSymbol: "FOOUSDT"}, key)
+}

@@ -24,7 +24,26 @@ func CanonicalInstrumentID(
 	if RuleFor(market).RawInstrumentID {
 		return base, nil
 	}
-	return base + "-" + quote + "-" + string(market), nil
+	return base + "-" + quote + "-" + InstrumentSuffix(market), nil
+}
+
+// 标的 ID 的市场后缀（BTC-USDT-SPOT、BTC-USDT-SWAP）。它是标的 ID 的一部分（Storage 主键），
+// 与市场类型的取值无关，市场类型怎么写都不影响它。
+const (
+	SuffixSpot = "SPOT"
+	SuffixSwap = "SWAP"
+)
+
+// InstrumentSuffix 返回市场类型对应的标的 ID 后缀；股票这类原样使用代码的市场没有后缀，返回空串。
+func InstrumentSuffix(market MarketType) string {
+	switch market {
+	case MarketTypeSpot:
+		return SuffixSpot
+	case MarketTypeSwap:
+		return SuffixSwap
+	default:
+		return ""
+	}
 }
 
 // ErrInvalidInstrumentID 表示上游传入的标的 ID 无法识别，或与账户市场不一致。
@@ -45,7 +64,7 @@ func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
 		return value, nil
 	case len(parts) == 2 && parts[0] != "" && parts[1] != "":
 		return CanonicalInstrumentID(parts[0], parts[1], market)
-	case len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == string(market):
+	case len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == InstrumentSuffix(market):
 		return value, nil
 	default:
 		return "", fmt.Errorf("%w: %q for market %s", ErrInvalidInstrumentID, raw, market)
@@ -56,9 +75,9 @@ func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
 // 其余（股票）是原始代码。
 func MarketOfInstrumentID(instrumentID string) MarketType {
 	switch {
-	case strings.HasSuffix(instrumentID, "-"+string(MarketTypeSwap)):
+	case strings.HasSuffix(instrumentID, "-"+SuffixSwap):
 		return MarketTypeSwap
-	case strings.HasSuffix(instrumentID, "-"+string(MarketTypeSpot)):
+	case strings.HasSuffix(instrumentID, "-"+SuffixSpot):
 		return MarketTypeSpot
 	default:
 		return MarketTypeStock

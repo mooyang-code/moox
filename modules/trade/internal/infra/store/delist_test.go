@@ -127,3 +127,9 @@ func blockInstrument(t *testing.T, s *Store, record BlockedInstrumentRecord) (cr
 	})
 	return created, err
 }
+
+// 名单的交易所与市场按 Trade 的写法归一，交易所代码一律转大写。
+func TestNormalizeBlockKeySplitsVenueAndSymbol(t *testing.T) {
+	exchangeName, marketType, symbol := normalizeBlockKey(" BINANCE ", "SWAP", " fooUSDT ")
+	require.Equal(t, []string{"BINANCE", "SWAP", "FOOUSDT"}, []string{exchangeName, marketType, symbol})
+}

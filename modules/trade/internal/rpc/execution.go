@@ -408,7 +408,7 @@ func normalizeForMarkets(raw string, markets []string) (string, error) {
 	}
 	for _, market := range markets {
 		if id, err := exchange.NormalizeInstrumentID(raw, exchange.MarketType(market)); err == nil &&
-			strings.HasSuffix(strings.ToUpper(strings.TrimSpace(raw)), "-"+market) {
+			strings.HasSuffix(strings.ToUpper(strings.TrimSpace(raw)), "-"+exchange.InstrumentSuffix(exchange.MarketType(market))) {
 			return id, nil
 		}
 	}

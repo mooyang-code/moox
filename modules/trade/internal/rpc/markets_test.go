@@ -13,12 +13,12 @@ import (
 )
 
 func TestNormalizeForMarkets(t *testing.T) {
-	got, err := normalizeForMarkets("BTC-USDT", []string{"SWAP"})
+	got, err := normalizeForMarkets("BTC-USDT", []string{string(exchange.MarketTypeSwap)})
 	require.NoError(t, err)
 	require.Equal(t, "BTC-USDT-SWAP", got)
 
 	// 开通多个市场时，标的必须带市场后缀，不能猜。
-	both := []string{"SPOT", "SWAP"}
+	both := []string{string(exchange.MarketTypeSpot), string(exchange.MarketTypeSwap)}
 	got, err = normalizeForMarkets("btc-usdt-swap", both)
 	require.NoError(t, err)
 	require.Equal(t, "BTC-USDT-SWAP", got)
@@ -27,7 +27,7 @@ func TestNormalizeForMarkets(t *testing.T) {
 	require.Equal(t, "BTC-USDT-SPOT", got)
 	_, err = normalizeForMarkets("BTC-USDT", both)
 	require.ErrorIs(t, err, exchange.ErrInvalidInstrumentID)
-	_, err = normalizeForMarkets("BTC-USDT-SWAP", []string{"SPOT"})
+	_, err = normalizeForMarkets("BTC-USDT-SWAP", []string{string(exchange.MarketTypeSpot)})
 	require.ErrorIs(t, err, exchange.ErrInvalidInstrumentID)
 	_, err = normalizeForMarkets("BTC-USDT", nil)
 	require.ErrorIs(t, err, exchange.ErrInvalidInstrumentID)
