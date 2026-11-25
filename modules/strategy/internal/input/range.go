@@ -203,14 +203,14 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	// 自身所需的根数 need 不小于 SeriesBars 时没有任何一根可以回放。最新一根已经写完时它本身可以回放，交给下面按覆盖
 	// 判断。
 	if view.SeriesBars > 0 && need > 1 && need >= view.SeriesBars && (boundsErr != nil || !bounds.ToClosed) {
-		return time.Time{}, fmt.Errorf("回放的每一根连同自身需要 %d 根数据（%s），但 View %s 每个序列只保留最近 %d 根、回放又只到最新一根之前，永远无法满足", need, source, view.ViewID, view.SeriesBars)
+		return time.Time{}, fmt.Errorf("回放的每一根连同自身需要 %d 根数据（%s），但 View %s 每个序列只保留最近 %d 根、回放又只到最新一根之前，永远无法满足", need, source, view.DatasetID, view.SeriesBars)
 	}
 	if boundsErr != nil {
-		return time.Time{}, coverageUnusable(view.ViewID, boundsErr, "暂不能回放")
+		return time.Time{}, coverageUnusable(view.DatasetID, boundsErr, "暂不能回放")
 	}
 	coverage := coverageStart(bounds, view, resolved, time.Time{})
 	if coverage.After(bounds.To) {
-		return time.Time{}, fmt.Errorf("View %s 的数据已超出%s内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，日历之内已不能确定还保留着哪些 bar，暂不能回放；请更新日历数据", view.ViewID, loadedSessionMarket(resolved.Calendar).spacedName(), label(bounds.To), bounds.Beyond, view.SeriesBars)
+		return time.Time{}, fmt.Errorf("View %s 的数据已超出%s内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，日历之内已不能确定还保留着哪些 bar，暂不能回放；请更新日历数据", view.DatasetID, loadedSessionMarket(resolved.Calendar).spacedName(), label(bounds.To), bounds.Beyond, view.SeriesBars)
 	}
 	latest, err := FromStorageStart(resolved.Calendar, resolved.Bar, bounds.To)
 	if err != nil {
@@ -224,13 +224,13 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 		limit, last = latest.StorageStart.Add(24*time.Hour), latest.StorageStart
 	}
 	if last.IsZero() {
-		return time.Time{}, fmt.Errorf("View %s 还没有完整的 bar（最新一根 %s 可能还没写完），暂不能回放", view.ViewID, label(latest.StorageStart))
+		return time.Time{}, fmt.Errorf("View %s 还没有完整的 bar（最新一根 %s 可能还没写完），暂不能回放", view.DatasetID, label(latest.StorageStart))
 	}
 	if end.After(limit) {
 		end = limit
 	}
 	if !end.After(start) {
-		return time.Time{}, fmt.Errorf("%w：View %s 最后一根完整的 bar 是 %s", ErrNoCompleteBar, view.ViewID, label(last))
+		return time.Time{}, fmt.Errorf("%w：View %s 最后一根完整的 bar 是 %s", ErrNoCompleteBar, view.DatasetID, label(last))
 	}
 	// 先反向判断历史够不够：从覆盖起点往后推 need−1 根可能越过 A 股内嵌日历的末尾，会被误报成日历需要更新。
 	bound := last
@@ -245,9 +245,9 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	}
 	if bound.IsZero() || coverage.After(bound) {
 		if need > 1 {
-			return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，回放的每一根连同自身需要 %d 根数据（%s），暂不能回放", view.ViewID, label(coverage), label(latest.StorageStart), need, source)
+			return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，回放的每一根连同自身需要 %d 根数据（%s），暂不能回放", view.DatasetID, label(coverage), label(latest.StorageStart), need, source)
 		}
-		return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，还没有可以回放的完整 bar", view.ViewID, label(coverage), label(latest.StorageStart))
+		return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，还没有可以回放的完整 bar", view.DatasetID, label(coverage), label(latest.StorageStart))
 	}
 	earliest := coverage
 	if need > 1 {
@@ -282,7 +282,7 @@ type IndexChangedError struct {
 }
 
 func (e *IndexChangedError) Error() string {
-	return fmt.Sprintf("View %s 的活动索引已换为 %s", e.View.ViewID, e.View.Generation)
+	return fmt.Sprintf("View %s 的活动索引已换为 %s", e.View.DatasetID, e.View.Generation)
 }
 
 // RangeLoader 为回放分段读取 View 的历史行：每段固定活动索引；活动索引换了一代时返回 *IndexChangedError，
@@ -356,7 +356,7 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 		wait := staleBackoff(staleRetries)
 		staleRetries++
 		if time.Now().Add(wait).After(deadline) {
-			return RangeRows{}, &staleError{message: fmt.Sprintf("View %s 在读取期间持续有新的写入，%s内没有读到一致的数据，请稍后重试", l.View.ViewID, durationText(rangeStaleBudget)), raw: err}
+			return RangeRows{}, &staleError{message: fmt.Sprintf("View %s 在读取期间持续有新的写入，%s内没有读到一致的数据，请稍后重试", l.View.DatasetID, durationText(rangeStaleBudget)), raw: err}
 		}
 		if err := l.wait(ctx, wait); err != nil {
 			return RangeRows{}, err
@@ -366,7 +366,7 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 
 // queryRows 读一段原始行。
 func (l *RangeLoader) queryRows(ctx context.Context, start, end time.Time) ([]Row, uint64, error) {
-	return l.Client.QueryRows(ctx, l.SpaceID, Query{ViewID: l.View.ViewID, DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
+	return l.Client.QueryRows(ctx, l.SpaceID, Query{DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
 }
 
 // wait 等待 d，等待前后都确认是否要放弃（Abort）：取消可能就落在等待期间；ctx 结束时返回 ctx 的错误。
@@ -392,13 +392,13 @@ func (l *RangeLoader) abort(ctx context.Context) error {
 // （否则读行用完重试后，一次复核失败就会丢掉已读的行）。
 func (l *RangeLoader) checkGeneration(ctx context.Context) error {
 	generation, err := retryTransport(ctx, l, func() (string, error) {
-		return l.Client.ViewGeneration(ctx, l.SpaceID, l.View.ViewID)
+		return l.Client.ViewGeneration(ctx, l.SpaceID, l.View.DatasetID)
 	})
 	if err != nil || generation == l.View.Generation {
 		return err
 	}
 	view, err := retryTransport(ctx, l, func() (ViewInfo, error) {
-		return l.Client.GetView(ctx, l.SpaceID, l.View.ViewID)
+		return l.Client.GetView(ctx, l.SpaceID, l.View.DatasetID)
 	})
 	if err != nil || view.Generation == l.View.Generation {
 		return err

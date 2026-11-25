@@ -367,121 +367,6 @@ func (FieldValueType) EnumDescriptor() ([]byte, []int) {
 	return file_common_proto_rawDescGZIP(), []int{5}
 }
 
-// DatasetColumnOriginType 表示 DatasetColumn 的来源。
-type DatasetColumnOriginType int32
-
-const (
-	// DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED 表示未指定 DatasetColumn 来源。
-	DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED DatasetColumnOriginType = 0
-	// DATASET_COLUMN_ORIGIN_TYPE_FIELD 表示列来自 Space 内普通字段。
-	DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD DatasetColumnOriginType = 1
-	// DATASET_COLUMN_ORIGIN_TYPE_CUSTOM 表示数据集自己定义的值列：身份就是列名，不带 origin_id；
-	// 生产者信息由写入方放在列属性里，Storage 不解释。
-	DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM DatasetColumnOriginType = 2
-	// DATASET_COLUMN_ORIGIN_TYPE_SYSTEM 表示列来自系统列，例如 subject_id、data_time 或 freq。
-	DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM DatasetColumnOriginType = 3
-)
-
-// Enum value maps for DatasetColumnOriginType.
-var (
-	DatasetColumnOriginType_name = map[int32]string{
-		0: "DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED",
-		1: "DATASET_COLUMN_ORIGIN_TYPE_FIELD",
-		2: "DATASET_COLUMN_ORIGIN_TYPE_CUSTOM",
-		3: "DATASET_COLUMN_ORIGIN_TYPE_SYSTEM",
-	}
-	DatasetColumnOriginType_value = map[string]int32{
-		"DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED": 0,
-		"DATASET_COLUMN_ORIGIN_TYPE_FIELD":       1,
-		"DATASET_COLUMN_ORIGIN_TYPE_CUSTOM":      2,
-		"DATASET_COLUMN_ORIGIN_TYPE_SYSTEM":      3,
-	}
-)
-
-func (x DatasetColumnOriginType) Enum() *DatasetColumnOriginType {
-	p := new(DatasetColumnOriginType)
-	*p = x
-	return p
-}
-
-func (x DatasetColumnOriginType) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (DatasetColumnOriginType) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_proto_enumTypes[6].Descriptor()
-}
-
-func (DatasetColumnOriginType) Type() protoreflect.EnumType {
-	return &file_common_proto_enumTypes[6]
-}
-
-func (x DatasetColumnOriginType) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use DatasetColumnOriginType.Descriptor instead.
-func (DatasetColumnOriginType) EnumDescriptor() ([]byte, []int) {
-	return file_common_proto_rawDescGZIP(), []int{6}
-}
-
-// ColumnOriginType 表示 ViewColumn 或查询结果列的来源。
-type ColumnOriginType int32
-
-const (
-	// COLUMN_ORIGIN_TYPE_UNSPECIFIED 表示未指定列来源。
-	ColumnOriginType_COLUMN_ORIGIN_TYPE_UNSPECIFIED ColumnOriginType = 0
-	// COLUMN_ORIGIN_TYPE_DATASET_COLUMN 表示列来自某个 DatasetColumn。
-	ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN ColumnOriginType = 1
-	// COLUMN_ORIGIN_TYPE_SYSTEM 表示列来自系统列，例如 subject_id、data_time 或 freq。
-	ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM ColumnOriginType = 2
-	// COLUMN_ORIGIN_TYPE_EXPRESSION 表示列来自服务端登记表达式。
-	ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION ColumnOriginType = 3
-)
-
-// Enum value maps for ColumnOriginType.
-var (
-	ColumnOriginType_name = map[int32]string{
-		0: "COLUMN_ORIGIN_TYPE_UNSPECIFIED",
-		1: "COLUMN_ORIGIN_TYPE_DATASET_COLUMN",
-		2: "COLUMN_ORIGIN_TYPE_SYSTEM",
-		3: "COLUMN_ORIGIN_TYPE_EXPRESSION",
-	}
-	ColumnOriginType_value = map[string]int32{
-		"COLUMN_ORIGIN_TYPE_UNSPECIFIED":    0,
-		"COLUMN_ORIGIN_TYPE_DATASET_COLUMN": 1,
-		"COLUMN_ORIGIN_TYPE_SYSTEM":         2,
-		"COLUMN_ORIGIN_TYPE_EXPRESSION":     3,
-	}
-)
-
-func (x ColumnOriginType) Enum() *ColumnOriginType {
-	p := new(ColumnOriginType)
-	*p = x
-	return p
-}
-
-func (x ColumnOriginType) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ColumnOriginType) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_proto_enumTypes[7].Descriptor()
-}
-
-func (ColumnOriginType) Type() protoreflect.EnumType {
-	return &file_common_proto_enumTypes[7]
-}
-
-func (x ColumnOriginType) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ColumnOriginType.Descriptor instead.
-func (ColumnOriginType) EnumDescriptor() ([]byte, []int) {
-	return file_common_proto_rawDescGZIP(), []int{7}
-}
-
 // TimeRange 表示左闭右开时间条件：[start_time, end_time)。
 // start_time / end_time 为空时表示对应方向无界。
 // 对外请求必须使用 RFC3339 / RFC3339Nano 时间格式，例如：
@@ -1202,34 +1087,12 @@ var file_common_proto_rawDesc = []byte{
 	0x49, 0x45, 0x4c, 0x44, 0x5f, 0x56, 0x41, 0x4c, 0x55, 0x45, 0x5f, 0x54, 0x59, 0x50, 0x45, 0x5f,
 	0x4a, 0x53, 0x4f, 0x4e, 0x10, 0x06, 0x12, 0x1a, 0x0a, 0x16, 0x46, 0x49, 0x45, 0x4c, 0x44, 0x5f,
 	0x56, 0x41, 0x4c, 0x55, 0x45, 0x5f, 0x54, 0x59, 0x50, 0x45, 0x5f, 0x42, 0x59, 0x54, 0x45, 0x53,
-	0x10, 0x07, 0x2a, 0xb9, 0x01, 0x0a, 0x17, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x43, 0x6f,
-	0x6c, 0x75, 0x6d, 0x6e, 0x4f, 0x72, 0x69, 0x67, 0x69, 0x6e, 0x54, 0x79, 0x70, 0x65, 0x12, 0x2a,
-	0x0a, 0x26, 0x44, 0x41, 0x54, 0x41, 0x53, 0x45, 0x54, 0x5f, 0x43, 0x4f, 0x4c, 0x55, 0x4d, 0x4e,
-	0x5f, 0x4f, 0x52, 0x49, 0x47, 0x49, 0x4e, 0x5f, 0x54, 0x59, 0x50, 0x45, 0x5f, 0x55, 0x4e, 0x53,
-	0x50, 0x45, 0x43, 0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00, 0x12, 0x24, 0x0a, 0x20, 0x44, 0x41,
-	0x54, 0x41, 0x53, 0x45, 0x54, 0x5f, 0x43, 0x4f, 0x4c, 0x55, 0x4d, 0x4e, 0x5f, 0x4f, 0x52, 0x49,
-	0x47, 0x49, 0x4e, 0x5f, 0x54, 0x59, 0x50, 0x45, 0x5f, 0x46, 0x49, 0x45, 0x4c, 0x44, 0x10, 0x01,
-	0x12, 0x25, 0x0a, 0x21, 0x44, 0x41, 0x54, 0x41, 0x53, 0x45, 0x54, 0x5f, 0x43, 0x4f, 0x4c, 0x55,
-	0x4d, 0x4e, 0x5f, 0x4f, 0x52, 0x49, 0x47, 0x49, 0x4e, 0x5f, 0x54, 0x59, 0x50, 0x45, 0x5f, 0x43,
-	0x55, 0x53, 0x54, 0x4f, 0x4d, 0x10, 0x02, 0x12, 0x25, 0x0a, 0x21, 0x44, 0x41, 0x54, 0x41, 0x53,
-	0x45, 0x54, 0x5f, 0x43, 0x4f, 0x4c, 0x55, 0x4d, 0x4e, 0x5f, 0x4f, 0x52, 0x49, 0x47, 0x49, 0x4e,
-	0x5f, 0x54, 0x59, 0x50, 0x45, 0x5f, 0x53, 0x59, 0x53, 0x54, 0x45, 0x4d, 0x10, 0x03, 0x2a, 0x9f,
-	0x01, 0x0a, 0x10, 0x43, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x4f, 0x72, 0x69, 0x67, 0x69, 0x6e, 0x54,
-	0x79, 0x70, 0x65, 0x12, 0x22, 0x0a, 0x1e, 0x43, 0x4f, 0x4c, 0x55, 0x4d, 0x4e, 0x5f, 0x4f, 0x52,
-	0x49, 0x47, 0x49, 0x4e, 0x5f, 0x54, 0x59, 0x50, 0x45, 0x5f, 0x55, 0x4e, 0x53, 0x50, 0x45, 0x43,
-	0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00, 0x12, 0x25, 0x0a, 0x21, 0x43, 0x4f, 0x4c, 0x55, 0x4d,
-	0x4e, 0x5f, 0x4f, 0x52, 0x49, 0x47, 0x49, 0x4e, 0x5f, 0x54, 0x59, 0x50, 0x45, 0x5f, 0x44, 0x41,
-	0x54, 0x41, 0x53, 0x45, 0x54, 0x5f, 0x43, 0x4f, 0x4c, 0x55, 0x4d, 0x4e, 0x10, 0x01, 0x12, 0x1d,
-	0x0a, 0x19, 0x43, 0x4f, 0x4c, 0x55, 0x4d, 0x4e, 0x5f, 0x4f, 0x52, 0x49, 0x47, 0x49, 0x4e, 0x5f,
-	0x54, 0x59, 0x50, 0x45, 0x5f, 0x53, 0x59, 0x53, 0x54, 0x45, 0x4d, 0x10, 0x02, 0x12, 0x21, 0x0a,
-	0x1d, 0x43, 0x4f, 0x4c, 0x55, 0x4d, 0x4e, 0x5f, 0x4f, 0x52, 0x49, 0x47, 0x49, 0x4e, 0x5f, 0x54,
-	0x59, 0x50, 0x45, 0x5f, 0x45, 0x58, 0x50, 0x52, 0x45, 0x53, 0x53, 0x49, 0x4f, 0x4e, 0x10, 0x03,
-	0x42, 0x49, 0x5a, 0x47, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d,
-	0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
-	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x67, 0x65,
-	0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x33,
+	0x10, 0x07, 0x42, 0x49, 0x5a, 0x47, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d,
+	0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61,
+	0x67, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
+	0x67, 0x65, 0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70,
+	0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1244,35 +1107,33 @@ func file_common_proto_rawDescGZIP() []byte {
 	return file_common_proto_rawDescData
 }
 
-var file_common_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
 var file_common_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_common_proto_goTypes = []interface{}{
-	(SortOrder)(0),               // 0: trpc.moox.storage.SortOrder
-	(NullValue)(0),               // 1: trpc.moox.storage.NullValue
-	(FilterOp)(0),                // 2: trpc.moox.storage.FilterOp
-	(FilterLogical)(0),           // 3: trpc.moox.storage.FilterLogical
-	(DataKind)(0),                // 4: trpc.moox.storage.DataKind
-	(FieldValueType)(0),          // 5: trpc.moox.storage.FieldValueType
-	(DatasetColumnOriginType)(0), // 6: trpc.moox.storage.DatasetColumnOriginType
-	(ColumnOriginType)(0),        // 7: trpc.moox.storage.ColumnOriginType
-	(*TimeRange)(nil),            // 8: trpc.moox.storage.TimeRange
-	(*VersionRange)(nil),         // 9: trpc.moox.storage.VersionRange
-	(*ValueList)(nil),            // 10: trpc.moox.storage.ValueList
-	(*TypedValue)(nil),           // 11: trpc.moox.storage.TypedValue
-	(*SortSpec)(nil),             // 12: trpc.moox.storage.SortSpec
-	(*FilterCond)(nil),           // 13: trpc.moox.storage.FilterCond
-	(*FilterGroup)(nil),          // 14: trpc.moox.storage.FilterGroup
-	(*FilterSpec)(nil),           // 15: trpc.moox.storage.FilterSpec
+	(SortOrder)(0),       // 0: trpc.moox.storage.SortOrder
+	(NullValue)(0),       // 1: trpc.moox.storage.NullValue
+	(FilterOp)(0),        // 2: trpc.moox.storage.FilterOp
+	(FilterLogical)(0),   // 3: trpc.moox.storage.FilterLogical
+	(DataKind)(0),        // 4: trpc.moox.storage.DataKind
+	(FieldValueType)(0),  // 5: trpc.moox.storage.FieldValueType
+	(*TimeRange)(nil),    // 6: trpc.moox.storage.TimeRange
+	(*VersionRange)(nil), // 7: trpc.moox.storage.VersionRange
+	(*ValueList)(nil),    // 8: trpc.moox.storage.ValueList
+	(*TypedValue)(nil),   // 9: trpc.moox.storage.TypedValue
+	(*SortSpec)(nil),     // 10: trpc.moox.storage.SortSpec
+	(*FilterCond)(nil),   // 11: trpc.moox.storage.FilterCond
+	(*FilterGroup)(nil),  // 12: trpc.moox.storage.FilterGroup
+	(*FilterSpec)(nil),   // 13: trpc.moox.storage.FilterSpec
 }
 var file_common_proto_depIdxs = []int32{
-	11, // 0: trpc.moox.storage.ValueList.values:type_name -> trpc.moox.storage.TypedValue
-	10, // 1: trpc.moox.storage.TypedValue.list_value:type_name -> trpc.moox.storage.ValueList
+	9,  // 0: trpc.moox.storage.ValueList.values:type_name -> trpc.moox.storage.TypedValue
+	8,  // 1: trpc.moox.storage.TypedValue.list_value:type_name -> trpc.moox.storage.ValueList
 	1,  // 2: trpc.moox.storage.TypedValue.null_value:type_name -> trpc.moox.storage.NullValue
 	2,  // 3: trpc.moox.storage.FilterCond.op:type_name -> trpc.moox.storage.FilterOp
-	11, // 4: trpc.moox.storage.FilterCond.values:type_name -> trpc.moox.storage.TypedValue
-	13, // 5: trpc.moox.storage.FilterGroup.conds:type_name -> trpc.moox.storage.FilterCond
+	9,  // 4: trpc.moox.storage.FilterCond.values:type_name -> trpc.moox.storage.TypedValue
+	11, // 5: trpc.moox.storage.FilterGroup.conds:type_name -> trpc.moox.storage.FilterCond
 	3,  // 6: trpc.moox.storage.FilterGroup.logical:type_name -> trpc.moox.storage.FilterLogical
-	14, // 7: trpc.moox.storage.FilterSpec.groups:type_name -> trpc.moox.storage.FilterGroup
+	12, // 7: trpc.moox.storage.FilterSpec.groups:type_name -> trpc.moox.storage.FilterGroup
 	3,  // 8: trpc.moox.storage.FilterSpec.group_logical:type_name -> trpc.moox.storage.FilterLogical
 	9,  // [9:9] is the sub-list for method output_type
 	9,  // [9:9] is the sub-list for method input_type
@@ -1400,7 +1261,7 @@ func file_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_common_proto_rawDesc,
-			NumEnums:      8,
+			NumEnums:      6,
 			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,

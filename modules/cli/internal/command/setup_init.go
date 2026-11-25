@@ -13,7 +13,6 @@ import (
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
@@ -383,36 +382,6 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 
 func setupMetadataKey(spaceID, id string) string {
 	return strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(id)
-}
-
-func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seedView, error) {
-	primaryDatasetID := strings.TrimSpace(view.PrimaryDatasetID)
-	if primaryDatasetID == "" {
-		return seedView{}, fmt.Errorf("view %s/%s dataset_id is required", view.SpaceID, view.ViewID)
-	}
-	primary, ok := datasets[setupMetadataKey(view.SpaceID, primaryDatasetID)]
-	if !ok {
-		return seedView{}, fmt.Errorf(
-			"view %s/%s dataset %q must be included in the metadata seed",
-			view.SpaceID,
-			view.ViewID,
-			primaryDatasetID,
-		)
-	}
-	dataKind, err := parseDataKind(primary.DataKind)
-	if err != nil {
-		return seedView{}, fmt.Errorf("view %s/%s dataset: %w", view.SpaceID, view.ViewID, err)
-	}
-	grainKeys := []string{"record_id", "version"}
-	engine := "bleve"
-	if dataKind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		grainKeys = []string{"subject_id", "freq", "data_time", "series_tag"}
-		engine = "duckdb"
-	}
-	view.PrimaryDatasetID = primaryDatasetID
-	view.GrainKeys = grainKeys
-	view.Engine = engine
-	return view, nil
 }
 
 type remoteSetupInitStorage struct {

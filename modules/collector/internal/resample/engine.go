@@ -65,7 +65,7 @@ func NewTask(task domain.CollectionTask) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
+	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID)
 	params.TargetDatasetID = ids.DatasetID
 	if err := ValidateTaskParams(task.SpaceID, params); err != nil {
 		return nil, err

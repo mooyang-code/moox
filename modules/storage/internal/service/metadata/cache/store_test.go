@@ -30,18 +30,6 @@ func (stubMetadataReader) ListSpaces(context.Context, string, string, *pb.Page) 
 		Status:  "active",
 	}}, nil, nil
 }
-func (stubMetadataReader) GetView(context.Context, string, string) (*pb.View, error) {
-	return nil, nil
-}
-func (stubMetadataReader) ListViews(context.Context, string, string, string, *pb.Page) ([]*pb.View, *pb.PageResult, error) {
-	return nil, nil, nil
-}
-func (stubMetadataReader) ListViewsByDataset(context.Context, string, string) ([]*pb.View, error) {
-	return nil, nil
-}
-func (stubMetadataReader) ListViewColumns(context.Context, string, string, *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-	return nil, nil, nil
-}
 func (stubMetadataReader) GetDataSource(context.Context, string, string) (*pb.DataSource, error) {
 	return nil, nil
 }
@@ -64,21 +52,6 @@ func (stubMetadataReader) ListDatasetSubjects(context.Context, string, string, s
 	return nil, nil, nil
 }
 func (stubMetadataReader) SubjectsRevision(context.Context, string) (uint64, error) { return 0, nil }
-func (stubMetadataReader) GetFieldGroup(context.Context, string, string) (*pb.FieldGroup, error) {
-	return nil, nil
-}
-func (stubMetadataReader) ListFieldGroups(context.Context, string, string, *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
-	return nil, nil, nil
-}
-func (stubMetadataReader) GetField(context.Context, string, string) (*pb.Field, error) {
-	return nil, nil
-}
-func (stubMetadataReader) ListFields(context.Context, metadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
-	return nil, nil, nil
-}
-func (stubMetadataReader) CountFieldsByGroup(context.Context, string) (metadata.FieldGroupCounts, error) {
-	return metadata.FieldGroupCounts{ByGroup: map[string]uint64{}}, nil
-}
 func (stubMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, nil, nil
 }

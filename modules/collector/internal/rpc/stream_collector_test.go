@@ -120,7 +120,7 @@ func TestSetIngestModeSwitchesKlineTasksAndRequiresAnOnlineStream(t *testing.T) 
 	service.SetStreamService(stream)
 	for _, id := range []string{"ds1", "ds2"} {
 		require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_" + id, TaskName: id, DataType: domain.DataTypeKline, Ingest: domain.IngestSCF,
-			Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: id, ResultViewID: "view_" + id}))
+			Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: id}))
 	}
 	rsp, err := service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "stream"})
 	require.NoError(t, err)
@@ -168,7 +168,7 @@ func TestIngestModeReadsTheHandoffPeriodFromTheAppliedState(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_ds1", TaskName: "ds1", DataType: domain.DataTypeKline, Ingest: domain.IngestStreaming,
-		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds1", ResultViewID: "view_ds1"}))
+		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds1"}))
 	content := fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDataset{"ds1|1m": {
 		PlanDatasetState: fetchplan.PlanDatasetState{DatasetID: "ds1", Frequency: "1m", Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"},
 		Copies:           []fetchplan.DatasetCopy{{From: 1000, Hash: "h", Count: 1, LatenessS: 15}, {From: 1800, Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"}},

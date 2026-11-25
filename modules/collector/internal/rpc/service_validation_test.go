@@ -49,14 +49,11 @@ func (s validationDatasetSource) ResolveSubjects(context.Context, string, []stri
 type taskResultMetadataFake struct {
 	mu                sync.Mutex
 	datasets          map[string]*storagepb.Dataset
-	views             map[string]*storagepb.View
 	getDatasets       int
-	getViews          int
 	deleteDatasets    int
-	deleteViews       int
 	failDeleteDataset bool
 	failGetDataset    error
-	// indexedTo 是 storage-view 里各 View 已建索引的上界；没有的 View 按 VIEW_NOT_FOUND 回答。
+	// indexedTo 是 storage-view 里各数据集已建索引的上界；没有的按 VIEW_NOT_FOUND 回答。
 	indexedTo map[string]string
 }
 
@@ -65,12 +62,6 @@ func newTaskResultMetadataFake(ids taskresult.IDs, taskID string) *taskResultMet
 		datasets: map[string]*storagepb.Dataset{
 			ids.DatasetID: {
 				SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
-				Attributes: map[string]string{"owner_module": "collector", "collector_task_id": taskID},
-			},
-		},
-		views: map[string]*storagepb.View{
-			ids.ViewID: {
-				SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active",
 				Attributes: map[string]string{"owner_module": "collector", "collector_task_id": taskID},
 			},
 		},
@@ -121,36 +112,6 @@ func (f *taskResultMetadataFake) DeleteDataset(_ context.Context, req *storagepb
 	return &storagepb.DeleteDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *taskResultMetadataFake) GetView(_ context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.getViews++
-	view := f.views[req.GetViewId()]
-	if view == nil {
-		return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
-	}
-	return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
-}
-
-func (f *taskResultMetadataFake) CreateView(_ context.Context, req *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	view := req.GetView()
-	f.views[view.GetViewId()] = view
-	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
-}
-
-func (f *taskResultMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.deleteViews++
-	if _, ok := f.views[req.GetViewId()]; !ok {
-		return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
-	}
-	delete(f.views, req.GetViewId())
-	return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (f *taskResultMetadataFake) UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
@@ -158,7 +119,7 @@ func (f *taskResultMetadataFake) UpsertDatasetColumn(context.Context, *storagepb
 func (f *taskResultMetadataFake) GetViewState(_ context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	indexedTo, ok := f.indexedTo[req.GetViewId()]
+	indexedTo, ok := f.indexedTo[req.GetDatasetId()]
 	if !ok {
 		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
 	}
@@ -216,7 +177,7 @@ func TestNormalizeCollectionTaskGeneratesUUIDTaskIDAndTrimsName(t *testing.T) {
 }
 
 func TestValidateCreateTaskResultIdentityRejectsCallerOwnedResults(t *testing.T) {
-	for _, field := range []string{"target_dataset_id", "result_dataset_id", "result_view_id", "target_view_id"} {
+	for _, field := range []string{"target_dataset_id", "result_dataset_id", "result_id"} {
 		t.Run(field, func(t *testing.T) {
 			require.ErrorContains(t, validateCreateTaskResultIdentity(fmt.Sprintf(`{"%s":"existing"}`, field)), field)
 		})
@@ -235,9 +196,7 @@ func TestAssignGeneratedCollectionTaskResultKeepsInputSourceFields(t *testing.T)
 	assigned, ids, err := assignGeneratedCollectionTaskResult(task, params)
 	require.NoError(t, err)
 	require.NotEmpty(t, ids.DatasetID)
-	require.NotEmpty(t, ids.ViewID)
 	require.Equal(t, ids.DatasetID, assigned.ResultDatasetID)
-	require.Equal(t, ids.ViewID, assigned.ResultViewID)
 
 	assignedParams, err := domain.ParseCollectParams(assigned.CollectParams, "", "", assigned.DataType)
 	require.NoError(t, err)
@@ -253,10 +212,9 @@ func TestAssignGeneratedCollectionTaskResultUsesOneIdentityForEveryResampleFrequ
 
 	assigned, ids, err := assignGeneratedCollectionTaskResult(task, params)
 	require.NoError(t, err)
-	expected := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "kline_resample", "5m")
+	expected := taskresult.ResultIDs(task.SpaceID, task.TaskID)
 	require.Equal(t, expected, ids)
 	require.Equal(t, expected.DatasetID, assigned.ResultDatasetID)
-	require.Equal(t, expected.ViewID, assigned.ResultViewID)
 	require.Equal(t, expected.DatasetID, mustParseCollectParams(t, assigned).TargetDatasetID)
 
 	task.CollectParams = strings.Replace(task.CollectParams, `"5m"`, `"4h"`, 1)
@@ -264,9 +222,7 @@ func TestAssignGeneratedCollectionTaskResultUsesOneIdentityForEveryResampleFrequ
 	require.NoError(t, err)
 	_, otherIDs, err := assignGeneratedCollectionTaskResult(task, params)
 	require.NoError(t, err)
-	require.Equal(t, ids.DatasetID, otherIDs.DatasetID)
-	require.NotEqual(t, ids.ViewID, otherIDs.ViewID)
-	require.Equal(t, "view_task_resample_kline_resample_4h", otherIDs.ViewID)
+	require.Equal(t, ids, otherIDs)
 }
 
 func mustParseCollectParams(t *testing.T, task domain.CollectionTask) *domain.CollectParams {
@@ -281,9 +237,7 @@ func TestCollectionTaskResultIDsIgnoreUserTargetAndFrequency(t *testing.T) {
 		SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample",
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"caller-target","target_frequency":"4h","alignment":"epoch_utc"}`,
 	}
-	ids, err := collectionTaskResultIDs(task)
-	require.NoError(t, err)
-	require.Equal(t, taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "kline_resample", "4h"), ids)
+	require.Equal(t, taskresult.ResultIDs(task.SpaceID, task.TaskID), collectionTaskResultIDs(task))
 }
 
 func TestCanonicalizeResampleTaskStartsInWaitingViewState(t *testing.T) {
@@ -305,9 +259,7 @@ func TestDeleteTaskRetainsResultMetadataWhenRequested(t *testing.T) {
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, 0, metadata.deleteViews)
 	require.Equal(t, 0, metadata.deleteDatasets)
-	require.NotEmpty(t, metadata.views)
 	require.NotEmpty(t, metadata.datasets)
 }
 
@@ -315,7 +267,7 @@ func TestDeleteTaskPhysicallyDeletesOwnedResultAndManagerDeleteIsIdempotent(t *t
 	db := openCollectorTestStore(t)
 	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-delete", TaskName: "delete", Enabled: true}
 	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
-	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+	task.ResultDatasetID = ids.DatasetID
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
 	manager := taskresult.NewManagerWithAPI(metadata)
@@ -324,13 +276,10 @@ func TestDeleteTaskPhysicallyDeletesOwnedResultAndManagerDeleteIsIdempotent(t *t
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID, DeleteResultData: true})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, 1, metadata.deleteViews)
 	require.Equal(t, 1, metadata.deleteDatasets)
-	require.Empty(t, metadata.views)
 	require.Empty(t, metadata.datasets)
 
 	require.NoError(t, manager.Delete(context.Background(), task.SpaceID, ids))
-	require.Equal(t, 2, metadata.deleteViews)
 	require.Equal(t, 2, metadata.deleteDatasets)
 }
 
@@ -338,7 +287,7 @@ func TestDeleteTaskResultFailureLeavesDisabledTaskRetryable(t *testing.T) {
 	db := openCollectorTestStore(t)
 	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-retry", TaskName: "retry", Enabled: true}
 	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
-	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+	task.ResultDatasetID = ids.DatasetID
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
 	metadata.failDeleteDataset = true
@@ -375,7 +324,6 @@ func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T)
 	ctx := context.Background()
 	metadata := &taskResultMetadataFake{
 		datasets: make(map[string]*storagepb.Dataset),
-		views:    make(map[string]*storagepb.View),
 	}
 	const taskCount = 1000
 	for index := 0; index < taskCount; index++ {
@@ -383,12 +331,11 @@ func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T)
 		ids := taskresult.ResultIDs("crypto", taskID)
 		task := domain.CollectionTask{
 			SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true,
-			PrepareState: domain.PrepareStateReady, ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+			PrepareState: domain.PrepareStateReady, ResultDatasetID: ids.DatasetID,
 		}
 		require.NoError(t, db.Tasks().Create(ctx, task))
 		taskMetadata := newTaskResultMetadataFake(ids, taskID)
 		metadata.datasets[ids.DatasetID] = taskMetadata.datasets[ids.DatasetID]
-		metadata.views[ids.ViewID] = taskMetadata.views[ids.ViewID]
 	}
 	service := &Service{
 		taskRepo:      db.Tasks(),
@@ -400,7 +347,6 @@ func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T)
 	require.Equal(t, pb.ErrorCode_SUCCESS, list.GetRetInfo().GetCode())
 	require.Len(t, list.GetTasks(), taskCount)
 	require.Equal(t, 0, metadata.getDatasets)
-	require.Equal(t, 0, metadata.getViews)
 	require.Equal(t, taskresult.ResultStatusUnknown, list.GetTasks()[0].GetResult().GetStatus())
 
 	detail, err := service.GetTaskDetail(ctx, &pb.GetTaskDetailReq{SpaceId: "crypto", TaskId: "task-0000"})
@@ -408,7 +354,6 @@ func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T)
 	require.Equal(t, pb.ErrorCode_SUCCESS, detail.GetRetInfo().GetCode())
 	require.Equal(t, taskresult.ResultStatusReady, detail.GetTask().GetResult().GetStatus())
 	require.Equal(t, 1, metadata.getDatasets)
-	require.Equal(t, 1, metadata.getViews)
 }
 
 func TestGetTaskDetailDistinguishesResultContractFailureFromStorageFailure(t *testing.T) {
@@ -441,7 +386,7 @@ func TestGetTaskDetailDistinguishesResultContractFailureFromStorageFailure(t *te
 				PrepareState: domain.PrepareStateReady,
 			}
 			ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
-			task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+			task.ResultDatasetID = ids.DatasetID
 			require.NoError(t, db.Tasks().Create(context.Background(), task))
 			metadata := newTaskResultMetadataFake(ids, task.TaskID)
 			test.prepare(metadata, ids)
@@ -491,7 +436,7 @@ func TestCreateTaskRejectsInvalidNamesBeforeStorage(t *testing.T) {
 }
 
 func TestCreateTaskRejectsCallerResultIdentityBeforeStorage(t *testing.T) {
-	for _, field := range []string{"target_dataset_id", "result_dataset_id", "result_view_id", "target_view_id"} {
+	for _, field := range []string{"target_dataset_id", "result_dataset_id"} {
 		t.Run(field, func(t *testing.T) {
 			params, err := structpb.NewStruct(map[string]any{field: "existing"})
 			require.NoError(t, err)
@@ -503,22 +448,12 @@ func TestCreateTaskRejectsCallerResultIdentityBeforeStorage(t *testing.T) {
 			require.Contains(t, rsp.GetRetInfo().GetMsg(), field)
 		})
 	}
-
-	rsp, callErr := (&Service{}).CreateTask(context.Background(), &pb.CreateTaskReq{
-		Task: &pb.CollectionTask{
-			TaskName: "new task",
-			Result:   &pb.TaskResult{ViewId: "existing-view"},
-		},
-	})
-	require.NoError(t, callErr)
-	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "result.view_id")
 }
 
 func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
 	db := openCollectorTestStore(t)
 	ctx := context.Background()
-	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}}
 	service := &Service{
 		taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc: acceptingKlineDatasetSource{},
@@ -539,7 +474,7 @@ func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
 		require.NotEmpty(t, taskID)
 		stored, err := db.Tasks().GetByTaskID(ctx, "crypto", taskID)
 		require.NoError(t, err)
-		require.Equal(t, taskresult.ResultIDsForTask("crypto", taskID, "kline", "1m").DatasetID, stored.ResultDatasetID)
+		require.Equal(t, taskresult.ResultIDs("crypto", taskID).DatasetID, stored.ResultDatasetID)
 		require.Equal(t, stored.ResultDatasetID, mustParseCollectParams(t, *stored).TargetDatasetID)
 		require.Equal(t, taskID, metadata.datasets[stored.ResultDatasetID].GetAttributes()["collector_task_id"])
 		datasets = append(datasets, stored.ResultDatasetID)
@@ -556,7 +491,7 @@ func TestUpdateTaskRejectsResultDatasetReplacement(t *testing.T) {
 	existing := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned result", DataType: "kline", Enabled: true,
 		CollectParams:   `{"target_dataset_id":"dataset-original","frequency":"1m"}`,
-		ResultDatasetID: "dataset-original", ResultViewID: "view-original", PrepareState: domain.PrepareStateReady,
+		ResultDatasetID: "dataset-original", PrepareState: domain.PrepareStateReady,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, existing))
 	before, err := db.Tasks().GetByTaskID(ctx, existing.SpaceID, existing.TaskID)
@@ -667,7 +602,7 @@ func TestResolveSubjectTagsResampleInheritsSourceTags(t *testing.T) {
 
 func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	db := openCollectorTestStore(t)
-	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}}
 	params, err := structpb.NewStruct(map[string]any{
 		"provider": "binance", "market_type": "spot", "subject_tags": []any{"binance_spot"}, "frequency": "1m",
 	})
@@ -692,12 +627,10 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	stored, getErr := db.Tasks().GetByTaskID(context.Background(), "crypto", rsp.GetTaskId())
 	require.NoError(t, getErr)
 	require.Equal(t, "Binance 现货 K 线", stored.TaskName)
-	expected := taskresult.ResultIDsForTask("crypto", rsp.GetTaskId(), "kline", "1m")
+	expected := taskresult.ResultIDs("crypto", rsp.GetTaskId())
 	require.Equal(t, expected.DatasetID, stored.ResultDatasetID)
-	require.Equal(t, expected.ViewID, stored.ResultViewID)
 	require.Contains(t, metadata.datasets, expected.DatasetID)
 	datasetCountBeforeDuplicate := len(metadata.datasets)
-	require.Contains(t, metadata.views, expected.ViewID)
 	require.Equal(t, "collector", metadata.datasets[expected.DatasetID].GetAttributes()["owner_module"])
 	require.Equal(t, "raw_collection", metadata.datasets[expected.DatasetID].GetAttributes()["dataset_role"])
 	require.Equal(t, rsp.GetTaskId(), metadata.datasets[expected.DatasetID].GetAttributes()["collector_task_id"])
@@ -724,7 +657,7 @@ func TestUpdateTaskRejectsChangingSubjectTags(t *testing.T) {
 	metadata.datasets[ids.DatasetID].SubjectTags = []string{"old_tag"}
 	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-tags", TaskName: "标签任务", DataType: "kline", CollectParams: fmt.Sprintf(`{"provider":"binance","market_type":"spot","target_dataset_id":%q,"frequency":"1m"}`, ids.DatasetID),
-		Enabled: true, ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+		Enabled: true, ResultDatasetID: ids.DatasetID,
 	}))
 
 	params, err := structpb.NewStruct(map[string]any{
@@ -755,7 +688,7 @@ func TestUpdateTaskRejectsChangingSubjectTags(t *testing.T) {
 
 func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 	db := openCollectorTestStore(t)
-	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}}
 	params, err := structpb.NewStruct(map[string]any{
 		"provider": "binance", "market_type": "spot", "subject_tags": []any{"binance_spot"}, "frequency": "1m",
 	})
@@ -775,7 +708,6 @@ func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 	require.NoError(t, callErr)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 	require.Empty(t, metadata.datasets)
-	require.Empty(t, metadata.views)
 	_, getErr := db.Tasks().GetByTaskName(context.Background(), "crypto", "补偿任务")
 	require.ErrorIs(t, getErr, gorm.ErrRecordNotFound)
 }
@@ -814,13 +746,13 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "original", Description: "before",
 		DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-original","frequency":"1m"}`,
 		Enabled: true, Creator: "creator", PrepareState: domain.PrepareStateReady,
-		ResultDatasetID: "dataset-original", ResultViewID: "view-original",
+		ResultDatasetID: "dataset-original",
 	}))
 	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-2", TaskName: "occupied",
 		DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-occupied","frequency":"1m"}`,
 		Enabled: true, PrepareState: domain.PrepareStateReady,
-		ResultDatasetID: "dataset-occupied", ResultViewID: "view-occupied",
+		ResultDatasetID: "dataset-occupied",
 	}))
 
 	params, err := structpb.NewStruct(map[string]any{
@@ -856,7 +788,6 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 	require.NotContains(t, updated.CollectParams, `"provider"`)
 	require.NotContains(t, updated.CollectParams, `"market_type"`)
 	require.Equal(t, "dataset-original", updated.ResultDatasetID)
-	require.Equal(t, "view-original", updated.ResultViewID)
 	require.Equal(t, "creator", updated.Creator)
 
 	rsp, callErr = service.UpdateTask(context.Background(), &pb.UpdateTaskReq{
@@ -891,7 +822,7 @@ func TestValidateCollectionTaskUpdateAllowsOnlyMutableFields(t *testing.T) {
 	base := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-1", TaskName: "original", DataType: "kline_resample", Enabled: true,
 		CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4h","alignment":"epoch_utc"}`,
-		ResultDatasetID: "target", ResultViewID: "view_target",
+		ResultDatasetID: "target",
 	}
 
 	mutable := base
@@ -908,7 +839,6 @@ func TestValidateCollectionTaskUpdateAllowsOnlyMutableFields(t *testing.T) {
 			task.CollectParams = strings.Replace(task.CollectParams, `"4h"`, `"1h"`, 1)
 		},
 		"result_dataset": func(task *domain.CollectionTask) { task.ResultDatasetID = "other" },
-		"result_view":    func(task *domain.CollectionTask) { task.ResultViewID = "other" },
 	}
 	for name, change := range immutable {
 		t.Run(name, func(t *testing.T) {
@@ -922,7 +852,7 @@ func TestValidateCollectionTaskUpdateAllowsOnlyMutableFields(t *testing.T) {
 func TestValidateCollectionTaskUpdateIgnoresLegacySubjectTags(t *testing.T) {
 	existing := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-legacy-tags", TaskName: "legacy tags", DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["old_tag"],"target_dataset_id":"dataset-result","frequency":"1m"}`,
-		ResultDatasetID: "dataset-result", ResultViewID: "view-result",
+		ResultDatasetID: "dataset-result",
 	}
 	desired := existing
 	desired.CollectParams = `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"1m"}`
@@ -933,7 +863,7 @@ func TestValidateCollectionTaskUpdateIgnoresLegacySubjectTags(t *testing.T) {
 // 每函数标的数与允许迟到是可变的运维属性，序列范围（频率等）仍不可改。
 func TestValidateCollectionTaskUpdateAllowsPlanOptionChanges(t *testing.T) {
 	existing := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "task-handoff", TaskName: "handoff", DataType: "kline", ResultDatasetID: "dataset-result", ResultViewID: "view-result",
+		SpaceID: "crypto", TaskID: "task-handoff", TaskName: "handoff", DataType: "kline", ResultDatasetID: "dataset-result",
 		CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"1m"}`,
 	}
 	desired := existing
@@ -942,15 +872,6 @@ func TestValidateCollectionTaskUpdateAllowsPlanOptionChanges(t *testing.T) {
 
 	desired.CollectParams = `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"5m"}`
 	require.ErrorContains(t, validateCollectionTaskUpdate(existing, desired), "create a new task")
-}
-
-func TestValidateTaskResultIdentityUpdateRejectsViewChanges(t *testing.T) {
-	existing := domain.CollectionTask{ResultViewID: "view-original"}
-	require.ErrorContains(t,
-		validateTaskResultIdentityUpdate(existing, &pb.CollectionTask{Result: &pb.TaskResult{ViewId: "view-other"}}),
-		"create a new task",
-	)
-	require.NoError(t, validateTaskResultIdentityUpdate(existing, &pb.CollectionTask{Result: &pb.TaskResult{ViewId: "view-original"}}))
 }
 
 func TestValidateResampleSourceDoesNotFoldMonthIntoMinute(t *testing.T) {
@@ -1004,7 +925,7 @@ func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T
 	ctx := context.Background()
 	owner := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-owner", TaskName: "owner", DataType: "kline", Enabled: true}
 	ids := taskresult.ResultIDs(owner.SpaceID, owner.TaskID)
-	owner.ResultDatasetID, owner.ResultViewID = ids.DatasetID, ids.ViewID
+	owner.ResultDatasetID = ids.DatasetID
 	require.NoError(t, db.Tasks().Create(ctx, owner))
 	// 手工写入的运行态让另一个任务也指向同一个结果数据集：删除前的保护必须拒绝。
 	other := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-other", TaskName: "other", DataType: "kline", Enabled: true}
@@ -1020,23 +941,10 @@ func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "still referenced by another task")
-	require.Equal(t, 0, metadata.deleteViews)
 	require.Equal(t, 0, metadata.deleteDatasets)
 	stored, err := db.Tasks().GetByTaskID(ctx, owner.SpaceID, owner.TaskID)
 	require.NoError(t, err)
 	require.True(t, stored.Enabled, "preflight rejection must leave the task enabled")
-}
-
-func (f *taskResultMetadataFake) ListViews(_ context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	rsp := &storagepb.ListViewsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}
-	for _, view := range f.views {
-		if view.GetDatasetId() == req.GetDatasetId() {
-			rsp.Views = append(rsp.Views, view)
-		}
-	}
-	return rsp, nil
 }
 
 type tagValidationSource struct {
@@ -1131,7 +1039,7 @@ func TestCreateTaskIngestDefaultsToTheMarketValue(t *testing.T) {
 	ctx := context.Background()
 	create := func(t *testing.T, dataType, ingest string, extra map[string]any) (*Service, *taskResultMetadataFake, *pb.CreateTaskRsp) {
 		t.Helper()
-		metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+		metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}}
 		service := &Service{
 			taskRepo:      openCollectorTestStore(t).Tasks(),
 			resultManager: taskresult.NewManagerWithAPI(metadata),

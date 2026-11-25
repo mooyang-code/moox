@@ -180,7 +180,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	bindings := resolved.AllTaskBindings()
 	replayTasks := make(map[string]store.ReplayTask, len(bindings))
 	for key, task := range bindings {
-		replayTasks[key] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: generations[key]}
+		replayTasks[key] = store.ReplayTask{FactorTaskID: task.FactorTaskID, DatasetID: task.DatasetID, ViewGeneration: generations[key]}
 	}
 	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, Input: inputSource, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), SlippageBps: req.GetSlippageBps(), FundingColumn: fundingColumn, MembersJSON: membersJSON, Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {

@@ -74,10 +74,9 @@ func TestCollectorTaskDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 func TestCollectorResultDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	collectorResultDeleteFlagsValue.SpaceID = "crypto"
 	collectorResultDeleteFlagsValue.DatasetIDs = []string{"d1"}
-	collectorResultDeleteFlagsValue.ViewIDs = []string{"v1"}
 	collectorResultDeleteFlagsValue.Yes = false
 	t.Cleanup(func() {
-		collectorResultDeleteFlagsValue.SpaceID, collectorResultDeleteFlagsValue.DatasetIDs, collectorResultDeleteFlagsValue.ViewIDs = "", nil, nil
+		collectorResultDeleteFlagsValue.SpaceID, collectorResultDeleteFlagsValue.DatasetIDs = "", nil
 	})
 	var out bytes.Buffer
 	collectorResultDeleteCmd.SetOut(&out)
@@ -86,7 +85,6 @@ func TestCollectorResultDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	require.NoError(t, collectorResultDeleteCmd.RunE(collectorResultDeleteCmd, nil))
 	preview := parsePreview(t, out.String())
 	assert.Equal(t, []any{"d1"}, preview["datasets"])
-	assert.Equal(t, []any{"v1"}, preview["views"])
 }
 
 func TestDestructiveCommandsNoLongerHaveLegacyConfirmFlags(t *testing.T) {

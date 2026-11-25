@@ -48,7 +48,7 @@ func (*storageOperationsWire) GetSubject(context.Context, *pb.GetSubjectReq) (*p
 }
 
 func (*storageOperationsWire) ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq) (*pb.ListDatasetColumnsRsp, error) {
-	return &pb.ListDatasetColumnsRsp{RetInfo: &pb.RetInfo{}, Columns: []*pb.DatasetColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD}}}, nil
+	return &pb.ListDatasetColumnsRsp{RetInfo: &pb.RetInfo{}, Columns: []*pb.DatasetColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}}, nil
 }
 
 func (*storageOperationsWire) ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq) (*pb.ListDatasetSubjectsRsp, error) {
@@ -133,7 +133,7 @@ func TestStorageOperationsUseSSHNativeGateway(t *testing.T) {
 	require.NoError(t, os.WriteFile(csv, []byte("time,close\n2026-10-09T00:00:00Z,12.5\n"), 0600))
 	var written map[string]any
 	require.NoError(t, json.Unmarshal(run("import", "--path", csv, "--file", manifest, "--space-id", "crypto", "--dataset-id", "prices", "--subject", "BTC-USDT", "--frequency", "1m",
-		"--time-column", "time", "--target", "storage", "--job-db", filepath.Join(dir, "importer.db")), &written))
+		"--time-column", "time", "--target", "storage", "--wait-view=false", "--job-db", filepath.Join(dir, "importer.db")), &written))
 	require.Equal(t, "imported", written["status"])
 	require.Equal(t, float64(1), written["rows"])
 	require.Equal(t, int32(1), wire.creates.Load())

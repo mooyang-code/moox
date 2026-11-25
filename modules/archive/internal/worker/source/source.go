@@ -54,8 +54,7 @@ type ColumnInfo struct {
 	Name        string            `json:"name"`
 	Type        string            `json:"type"`
 	DisplayName string            `json:"display_name,omitempty"`
-	OriginType  string            `json:"origin_type,omitempty"`
-	OriginID    string            `json:"origin_id,omitempty"`
+	Group       string            `json:"group,omitempty"`
 	Required    bool              `json:"required,omitempty"`
 	Aliases     []string          `json:"aliases,omitempty"`
 	Attributes  map[string]string `json:"attributes,omitempty"`
@@ -75,7 +74,7 @@ func New(gateway gatewayclient.Invoker) *Client {
 
 const columnPageSize = 200
 
-// Columns 返回数据集的值列：来源为字段或因子、状态为启用的列，按列名排序；系统列不导出。
+// Columns 返回数据集里启用的列，按列名排序；数据集的列都是值列（系统列不登记成数据集列）。
 func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]staging.Column, error) {
 	var out []staging.Column
 	var infos []ColumnInfo
@@ -92,11 +91,6 @@ func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]stag
 			if status := column.GetStatus(); status != "" && status != "active" {
 				continue
 			}
-			switch column.GetOriginType() {
-			case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
-			default:
-				continue
-			}
 			typ, ok := columnType(column.GetValueType())
 			if !ok {
 				return nil, fmt.Errorf("dataset %s/%s column %q has unsupported value type %s", spaceID, datasetID, column.GetColumnName(), column.GetValueType())
@@ -104,8 +98,8 @@ func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]stag
 			out = append(out, staging.Column{Name: column.GetColumnName(), Type: typ})
 			attributes := column.GetAttributes()
 			infos = append(infos, ColumnInfo{
-				Name: column.GetColumnName(), Type: typ, DisplayName: attributes["display_name"], OriginType: originName(column.GetOriginType()),
-				OriginID: column.GetOriginId(), Required: column.GetRequired(), Aliases: column.GetAliases(), Attributes: attributes,
+				Name: column.GetColumnName(), Type: typ, DisplayName: column.GetDisplayName(), Group: column.GetGroup(),
+				Required: column.GetRequired(), Aliases: column.GetAliases(), Attributes: attributes,
 			})
 		}
 		if !rsp.GetPageResult().GetHasMore() {
@@ -310,15 +304,4 @@ func Convert(columnType string, value *storagepb.TypedValue) (any, error) {
 		}
 	}
 	return nil, fmt.Errorf("value %T does not match column type %s", value.GetValue(), columnType)
-}
-
-func originName(t storagepb.DatasetColumnOriginType) string {
-	switch t {
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
-		return "field"
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
-		return "custom"
-	default:
-		return ""
-	}
 }

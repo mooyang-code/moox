@@ -34,7 +34,7 @@ func TestCreateSetCreatesActiveResultDataset(t *testing.T) {
 	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close"), paramsColumn()}, meta.createdSpec.Columns, "结果数据集创建时同时注册 __params 列")
 	require.Equal(t, "价格因子", meta.createdSpec.Name, "任务名称直接用作结果数据集的名称")
 	require.Equal(t, storageio.DatasetStatusActive, meta.datasets[resultKey("crypto", set.ResultDatasetID)].Status)
-	require.Equal(t, []string{"create", "ensure_view"}, meta.writeOps, "一次建好结果数据集（建好即启用），再由 factor-mgr 自己建默认 View")
+	require.Equal(t, []string{"create"}, meta.writeOps, "一次建好结果数据集（建好即启用），查询索引由 Storage 随数据集建")
 }
 
 func TestCreateTaskCanonicalizesUppercaseFrequency(t *testing.T) {
@@ -85,11 +85,11 @@ func TestCreateTaskAcceptsStockCN5m(t *testing.T) {
 func TestCreateTaskRetryResumesFromPending(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
-	meta.ensureViewErrs = 1
+	meta.createLostReplies = 1
 	svc := NewService(db, meta)
 
 	_, err := svc.CreateTask(context.Background(), newTask())
-	require.ErrorContains(t, err, "default View")
+	require.ErrorContains(t, err, "reply lost")
 	set, err := db.GetTask(context.Background(), testTaskID())
 	require.NoError(t, err)
 	require.Equal(t, domain.TaskStatusPending, set.Status)
@@ -330,7 +330,7 @@ func TestReaddRejectsInconsistentRetainedColumnMetadata(t *testing.T) {
 	key := resultKey("crypto", testResultDatasetID())
 	for i, col := range meta.columns[key] {
 		if col.ColumnName == "pmean__10" {
-			meta.columns[key][i].Attributes = map[string]string{"display_name": "pmean__10", "column_kind": "output", "factor_id": "pmean",
+			meta.columns[key][i].Attributes = map[string]string{"column_kind": "output", "factor_id": "pmean",
 				"member_key": "pmean__10", "member_kind": "fixed", "output_name": "pmean", "factor_params": `{"window":11}`}
 		}
 	}
@@ -375,10 +375,9 @@ func TestEnableMemberRevalidatesAndAddsColumnsWithoutBackfill(t *testing.T) {
 			output = col
 		}
 	}
-	require.Equal(t, storageio.ColumnOriginCustom, output.OriginType)
-	require.Empty(t, output.OriginID, "自定义列不带 origin_id")
+	require.Equal(t, "momentum", output.DisplayName, "输出列的显示名等于列名")
 	require.Equal(t, map[string]string{
-		"display_name": "momentum", "column_kind": "output", "factor_id": "momentum", "member_key": "momentum", "member_kind": "fixed",
+		"column_kind": "output", "factor_id": "momentum", "member_key": "momentum", "member_kind": "fixed",
 		"output_name": "momentum", "category_id": domain.DefaultCategoryID, "definition_hash": domain.DefinitionHash(domain.MustDefinition("momentum", "momentum", "output: ts_mean(close, 3)\n")),
 		"factor_params": "{}",
 	}, output.Attributes)
@@ -745,7 +744,7 @@ func metadataColumnNames(columns []storageio.ColumnInfo) []string {
 func resultKey(spaceID, datasetID string) string { return spaceID + "/" + datasetID }
 
 func sourceColumn(name string) storageio.ColumnInfo {
-	return storageio.ColumnInfo{ColumnName: name, OriginType: storageio.ColumnOriginField, OriginID: name, ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive, Attributes: map[string]string{"display_name": "收盘价"}}
+	return storageio.ColumnInfo{ColumnName: name, DisplayName: "收盘价", Group: "行情价格", ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive}
 }
 
 type metadataFake struct {
@@ -757,13 +756,11 @@ type metadataFake struct {
 	createdSpec            storageio.ResultDatasetSpec
 	createCalls            int
 	createdDatasets        int
-	ensureViewErrs         int
-	deleteErrs             int
-	getDatasetErr          error
-	writeOps               []string
-	views                  map[string]bool
-	// deletableErr 是 CheckDatasetDeletable 的结果（例如结果数据集还被其他 View 引用）。
-	deletableErr error
+	// createLostReplies 是建好数据集后仍报错的次数（模拟回包丢失），用来验证重试接着做完。
+	createLostReplies int
+	deleteErrs        int
+	getDatasetErr     error
+	writeOps          []string
 }
 
 func newMetadataFake() *metadataFake {
@@ -772,7 +769,7 @@ func newMetadataFake() *metadataFake {
 		Name: "Prices", Description: "Price bars", DataKind: storageio.DataKindTimeSeries, Freq: "1m", Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
 	}
 	cols := []storageio.ColumnInfo{sourceColumn("close"), {
-		ColumnName: "subject_id", OriginType: storageio.ColumnOriginSystem, ValueType: storageio.ColumnTypeString, Status: storageio.ColumnStatusActive,
+		ColumnName: "subject_id", DisplayName: "标的", ValueType: storageio.ColumnTypeString, Status: storageio.ColumnStatusActive,
 	}}
 	return &metadataFake{
 		datasets: map[string]storageio.DatasetInfo{resultKey("crypto", "dataset_prices"): source},
@@ -839,6 +836,10 @@ func (f *metadataFake) CreateResultDataset(_ context.Context, spec storageio.Res
 		}
 		f.columns[key] = append([]storageio.ColumnInfo(nil), spec.Columns...)
 	}
+	if f.createLostReplies > 0 {
+		f.createLostReplies--
+		return errors.New("reply lost")
+	}
 	return nil
 }
 
@@ -874,37 +875,6 @@ func (f *metadataFake) UpsertColumns(_ context.Context, spaceID, datasetID strin
 	}
 	f.columns[key] = merged
 	return nil
-}
-
-// EnsureResultView 只在默认 View 不存在时记一次写入，与 Storage 的“已存在就不动”一致。
-func (f *metadataFake) EnsureResultView(_ context.Context, spaceID, datasetID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.ensureViewErrs > 0 {
-		f.ensureViewErrs--
-		return errors.New("ensure view failed")
-	}
-	if f.views == nil {
-		f.views = map[string]bool{}
-	}
-	if !f.views[resultKey(spaceID, datasetID)] {
-		f.writeOps = append(f.writeOps, "ensure_view")
-		f.views[resultKey(spaceID, datasetID)] = true
-	}
-	return nil
-}
-
-func (f *metadataFake) DeleteResultView(_ context.Context, spaceID, datasetID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.views, resultKey(spaceID, datasetID))
-	return nil
-}
-
-func (f *metadataFake) CheckDatasetDeletable(_ context.Context, spaceID, datasetID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.deletableErr
 }
 
 func (f *metadataFake) DeleteDataset(_ context.Context, spaceID, datasetID string) error {
@@ -1023,18 +993,19 @@ func validateStorageDatasetName(name string) error {
 }
 
 // validateResultColumnContract 检查因子结果列的命名与类型契约（Storage 只校验通用规则，契约由 factor-mgr 自己保证）：
-// 来源都是 custom 且不带 origin_id，输出列名是成员键或 成员键__输出名、类型 double，__params 类型 json。
+// 输出列名是成员键或 成员键__输出名、类型 double，__params 类型 json。
 func validateResultColumnContract(col storageio.ColumnInfo) error {
-	if col.OriginType != storageio.ColumnOriginCustom {
+	attrs := col.Attributes
+	// 从源数据集复制的列不带 column_kind，不归因子列契约管。
+	if attrs["column_kind"] == "" {
 		return nil
 	}
-	attrs := col.Attributes
 	switch attrs["column_kind"] {
 	case "params":
 		if col.ColumnName != "__params" || col.ValueType != storageio.ColumnTypeJSON {
 			return fmt.Errorf("params 列 %q 必须叫 __params 且是 json", col.ColumnName)
 		}
-		if attrs["display_name"] == "" {
+		if col.DisplayName == "" {
 			return fmt.Errorf("__params 需要展示名")
 		}
 		return nil
@@ -1059,14 +1030,11 @@ func validateResultColumnContract(col storageio.ColumnInfo) error {
 	if col.ColumnName != want {
 		return fmt.Errorf("因子列契约要求输出列名是 %q，得到 %q", want, col.ColumnName)
 	}
-	if col.OriginID != "" {
-		return fmt.Errorf("自定义列 %q 不带 origin_id，得到 %q", col.ColumnName, col.OriginID)
-	}
 	if col.ValueType != storageio.ColumnTypeDouble {
 		return fmt.Errorf("因子列契约要求输出列 %q 是 double", col.ColumnName)
 	}
-	if attrs["display_name"] != col.ColumnName {
-		return fmt.Errorf("因子列契约要求输出列 %q 的展示名等于列名，得到 %q", col.ColumnName, attrs["display_name"])
+	if col.DisplayName != col.ColumnName {
+		return fmt.Errorf("因子列契约要求输出列 %q 的展示名等于列名，得到 %q", col.ColumnName, col.DisplayName)
 	}
 	return nil
 }

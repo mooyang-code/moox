@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -27,7 +26,7 @@ import (
 
 // publishFollowMarker 为一条完成标记发布 ViewDataReady。轮到这条标记时，数据集在它之前的行都已写入索引。
 // 标记解不开或事件无法通过契约校验时记日志跳过：原样重试不会成功，不能让这个 View 永远卡住。
-func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *pb.DatasetChange) error {
+func (s *Service) publishFollowMarker(ctx context.Context, ref datasetRef, change *pb.DatasetChange) error {
 	publisher := s.readyPublisherLocked()
 	if publisher == nil {
 		return errors.New("View 就绪事件发布器尚未就绪")
@@ -35,30 +34,30 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *
 	message := &eventpb.EventMessage{}
 	payload := &storageeventpb.DatasetPeriodCompleted{}
 	if err := proto.Unmarshal(change.GetMarker(), message); err != nil {
-		log.Errorf("storage view 跳过无法解析的完成标记 view=%s/%s 序号=%d：%v", ref.spaceID, ref.viewID, change.GetSequence(), err)
+		log.Errorf("storage view 跳过无法解析的完成标记 view=%s/%s 序号=%d：%v", ref.spaceID, ref.datasetID, change.GetSequence(), err)
 		return nil
 	}
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
-		log.Errorf("storage view 跳过无法解析的完成标记 view=%s/%s 序号=%d 事件=%s：%v", ref.spaceID, ref.viewID, change.GetSequence(), message.GetEventId(), err)
+		log.Errorf("storage view 跳过无法解析的完成标记 view=%s/%s 序号=%d 事件=%s：%v", ref.spaceID, ref.datasetID, change.GetSequence(), message.GetEventId(), err)
 		return nil
 	}
-	view, schema := s.viewSnapshot(ref.spaceID, ref.viewID)
-	if view == nil {
-		return fmt.Errorf("View %s/%s 不在目录中", ref.spaceID, ref.viewID)
+	runtime := s.runtimeOf(ref)
+	if runtime == nil {
+		return fmt.Errorf("View %s/%s 不在目录中", ref.spaceID, ref.datasetID)
 	}
-	ready, eventID, ok := followReadyEvent(view, viewConfigID(view.GetViewId(), schema), message, payload)
+	ready, eventID, ok := followReadyEvent(ref, message, payload)
 	if !ok {
-		log.Errorf("storage view 跳过来源不认识的完成标记 view=%s/%s 序号=%d 来源=%q", ref.spaceID, ref.viewID, change.GetSequence(), payload.GetSource())
+		log.Errorf("storage view 跳过来源不认识的完成标记 view=%s/%s 序号=%d 来源=%q", ref.spaceID, ref.datasetID, change.GetSequence(), payload.GetSource())
 		return nil
 	}
-	opts := events.PublishOptions{EventID: eventID, OccurredAt: ready.GetReadyAt().AsTime().UTC(), SpaceID: view.GetSpaceId(), SubjectID: view.GetViewId()}
+	opts := events.PublishOptions{EventID: eventID, OccurredAt: ready.GetReadyAt().AsTime().UTC(), SpaceID: ref.spaceID, SubjectID: ref.datasetID}
 	// 先按契约编码一遍：过不了校验的事件原样重试也不会成功（发布器返回的校验错误不能可靠地区分），记日志跳过。
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
 	}
 	if _, err := registry.Encode(events.ViewDataReady, ready, opts); err != nil {
-		log.Errorf("storage view 跳过无法通过契约校验的就绪事件 %s（%s/%s 第 %d 期）：%v", eventID, view.GetSpaceId(), view.GetViewId(), payload.GetPeriodTime(), err)
+		log.Errorf("storage view 跳过无法通过契约校验的就绪事件 %s（%s/%s 第 %d 期）：%v", eventID, ref.spaceID, ref.datasetID, payload.GetPeriodTime(), err)
 		return nil
 	}
 	publishStart := time.Now()
@@ -69,9 +68,9 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		s.metrics.ObserveReadyPublishRetry(view.GetViewId(), "view_data_ready")
+		s.metrics.ObserveReadyPublishRetry(ref.spaceID, ref.datasetID, "view_data_ready")
 		if permanentReadyPublishError(err) {
-			log.Errorf("storage view 跳过无法发布的就绪事件 %s（%s/%s 第 %d 期）：%v", eventID, view.GetSpaceId(), view.GetViewId(), payload.GetPeriodTime(), err)
+			log.Errorf("storage view 跳过无法发布的就绪事件 %s（%s/%s 第 %d 期）：%v", eventID, ref.spaceID, ref.datasetID, payload.GetPeriodTime(), err)
 			return nil
 		}
 		if errors.Is(err, jetstream.ErrPublishTimeout) || errors.Is(err, jetstream.ErrConnection) || errors.Is(err, jetstream.ErrClosed) {
@@ -84,31 +83,28 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *
 		sinceCommit = time.Since(committedAt)
 	}
 	log.Infof("storage view 周期就绪 view=%s/%s 来源=%s 期=%d 标记提交到发布=%s 发布=%s",
-		view.GetSpaceId(), view.GetViewId(), payload.GetSource(), payload.GetPeriodTime(), sinceCommit.Round(time.Millisecond), time.Since(publishStart).Round(time.Millisecond))
+		ref.spaceID, ref.datasetID, payload.GetSource(), payload.GetPeriodTime(), sinceCommit.Round(time.Millisecond), time.Since(publishStart).Round(time.Millisecond))
 	return nil
 }
 
 // followReadyEvent 由完成标记组装 ViewDataReady 与它的事件 ID（下游按事件 ID 去重）。
-// View 只读一个数据集，账本判定的完成直接就是 View 的就绪，不再查各输入数据集的状态。
-func followReadyEvent(view *pb.View, configID string, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCompleted) (*storageeventpb.ViewDataReady, string, bool) {
+// View 只读一个数据集，账本判定的完成直接就是 View 的就绪；事件的 subject_id 是数据集 ID。
+func followReadyEvent(ref datasetRef, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCompleted) (*storageeventpb.ViewDataReady, string, bool) {
 	ready := &storageeventpb.ViewDataReady{
-		ViewId: view.GetViewId(), ViewConfigId: configID, CompletionEventId: message.GetEventId(),
-		DatasetId: payload.GetDatasetId(), Status: payload.GetStatus(),
+		CompletionEventId: message.GetEventId(), DatasetId: ref.datasetID, Status: payload.GetStatus(),
 		Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 		FailedSubjects: uniqueSortedStrings(payload.GetFailedSubjects()),
 		ReadyAt:        cloneTimestamp(message.GetOccurredAt()),
 	}
 	switch payload.GetSource() {
 	case "ledger":
-		ready.VisibleScope = viewVisibleScope(view, firstNonEmpty(payload.GetSnapshotRef(), "view:"+view.GetViewId()))
 		ready.UniverseSubjectIds = uniqueSortedStrings(payload.GetUniverseSubjectIds())
-		return ready, stableViewEventID("data-ready", message.GetSpaceId(), view.GetViewId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10)), true
+		return ready, stableViewEventID("data-ready", message.GetSpaceId(), ref.datasetID, payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10)), true
 	case "producer":
-		ready.VisibleScope = viewVisibleScope(view, "view:"+view.GetViewId())
 		// 写入方冻结的标的全集，即使 View 过滤了行；明细原样透传。
 		ready.UniverseSubjectIds = append([]string(nil), payload.GetUniverseSubjectIds()...)
 		ready.DetailType, ready.Detail = payload.GetDetailType(), append([]byte(nil), payload.GetDetail()...)
-		return ready, stableViewEventID("data-ready", message.GetEventId(), view.GetViewId()), true
+		return ready, stableViewEventID("data-ready", message.GetEventId(), ref.datasetID), true
 	default:
 		return nil, "", false
 	}
@@ -157,54 +153,10 @@ func (s *Service) SetSeriesBars(bars uint64) {
 	s.mu.Unlock()
 }
 
-// viewSnapshot 返回目录里 View 的副本与活动索引的契约；活动索引取查询路径的无锁副本，不等运行时锁。
-func (s *Service) viewSnapshot(spaceID, viewID string) (*pb.View, viewindex.ViewIndexSchema) {
-	s.mu.RLock()
-	view := s.catalogViews[viewRef{spaceID: spaceID, viewID: viewID}]
-	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
-	s.mu.RUnlock()
-	if view == nil {
-		return nil, viewindex.ViewIndexSchema{}
-	}
-	var schema viewindex.ViewIndexSchema
-	if runtime != nil {
-		if active := runtime.queryState().active; active != "" {
-			s.mu.RLock()
-			schema = s.schemas[active]
-			s.mu.RUnlock()
-		}
-	}
-	return proto.Clone(view).(*pb.View), schema
-}
-
 func (s *Service) readyPublisherLocked() ReadyEventPublisher {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.readyPublisher
-}
-
-func viewVisibleScope(view *pb.View, fallback string) string {
-	if view.GetFreq() != "" {
-		return "view:" + view.GetViewId()
-	}
-	return firstNonEmpty(fallback, "view:"+view.GetViewId())
-}
-
-// viewConfigID 是就绪事件里的 View 配置标识：活动索引的列契约哈希，没有时退回 View ID。
-func viewConfigID(viewID string, schema viewindex.ViewIndexSchema) string {
-	if hash := strings.TrimSpace(schema.SchemaHash); hash != "" {
-		return hash
-	}
-	return viewID
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func stableViewEventID(parts ...string) string {

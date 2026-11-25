@@ -31,12 +31,12 @@ func TestStreamHeartbeatAttention(t *testing.T) {
 		return attn.Active()[attention.KindStreamHeartbeatLost]
 	}
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_ds1", TaskName: "ds1", DataType: domain.DataTypeKline, Ingest: domain.IngestSCF,
-		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds1", ResultViewID: "view_ds1"}))
+		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds1"}))
 	require.NoError(t, db.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: "crypto", InstanceID: "hk-1", Applied: "{}", Status: "{}", HeartbeatAt: now.Add(-181 * time.Second)}))
 	require.Empty(t, refresh(build(now.Add(-time.Hour), now)), "没有推送数据集不判断")
 
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_ds2", TaskName: "ds2", DataType: domain.DataTypeKline, Ingest: domain.IngestStreaming,
-		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds2", ResultViewID: "view_ds2"}))
+		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds2"}))
 	require.Empty(t, refresh(build(now.Add(-time.Minute), now)), "启动未满一个超时不判断")
 	detail := refresh(build(now.Add(-time.Hour), now))
 	require.True(t, strings.HasPrefix(detail, "crypto 最后心跳 "), detail)

@@ -76,10 +76,6 @@ func (s *Store) DeleteSpace(ctx context.Context, spaceID string) error {
 	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
 		return err
 	}
-	// Fields are space-scoped through their group, whose foreign key is RESTRICT.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM t_fields WHERE c_space_id = ?`, spaceID); err != nil {
-		return err
-	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM t_spaces WHERE c_space_id = ?`, spaceID)
 	if err != nil {
 		return err

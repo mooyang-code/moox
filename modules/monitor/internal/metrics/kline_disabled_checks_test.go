@@ -12,8 +12,8 @@ import (
 // 还没成功评估过时第二个返回值是 false。
 func TestKlineFreshnessEvaluatorRecordsRuleDisabledChecks(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
-	disabled := KlineFreshnessRule{Enabled: false, SpaceID: "stockcn", DatasetID: "dataset", ViewID: "view_off", Frequency: "1m", MarketID: "stockcn"}
-	enabled := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view_on", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
+	disabled := KlineFreshnessRule{Enabled: false, SpaceID: "stockcn", DatasetID: "dataset", Frequency: "1m", MarketID: "stockcn"}
+	enabled := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: now.Add(-time.Minute), Subjects: 1, ObservedAt: now}})
 	evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{disabled, enabled}, 20)
 

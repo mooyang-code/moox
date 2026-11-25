@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const stateResolved = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`
+const stateResolved = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a"}}}`
 
 // 规则状态与结果在同一个事务里写入：每个实例只有一行，新结果覆盖它；同一周期重复提交不动它；没有求值的记录不带状态。
 func TestCommitResultWritesStateInSameTransaction(t *testing.T) {
@@ -122,7 +122,7 @@ func TestOpenSessionCarriesStateOnlyWhenSnapshotUnchanged(t *testing.T) {
 	}{
 		{name: "快照没变", hash: testHash, resolved: stateResolved, carried: true},
 		{name: "DSL 变了", hash: otherHash, resolved: stateResolved},
-		{name: "绑定解析变了", hash: testHash, resolved: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}},"factors":{"f":"h2|fixed"}}`},
+		{name: "绑定解析变了", hash: testHash, resolved: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a"}},"factors":{"f":"h2|fixed"}}`},
 		{name: "成员变了", hash: testHash, resolved: stateResolved, member: poolMembersJSON},
 	}
 	for _, tc := range cases {

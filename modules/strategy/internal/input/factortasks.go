@@ -21,13 +21,13 @@ import (
 // ParamDecl 是因子定义声明的一个可调参数。
 type ParamDecl = dsl.ParamDecl
 
-// ViewIDOfTask 由因子任务 ID 推导它的结果数据集的默认 View。
-func ViewIDOfTask(taskID string) (string, error) {
+// DatasetIDOfTask 由因子任务 ID 推导它的结果数据集。
+func DatasetIDOfTask(taskID string) (string, error) {
 	suffix, err := factorname.ParseTaskID(strings.TrimSpace(taskID))
 	if err != nil {
 		return "", err
 	}
-	return factorname.ResultViewID(suffix)
+	return factorname.ResultDatasetID(suffix)
 }
 
 // ParamValue 是一个参数一期的取值：统一值加按标的覆盖。

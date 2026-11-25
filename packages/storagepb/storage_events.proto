@@ -30,12 +30,10 @@ message DatasetPeriodCompleted {
 }
 
 message ViewDataReady {
-  string view_id = 1;
-  string view_config_id = 2;
   string completion_event_id = 3;
+  // dataset_id 是已就绪的数据集，也是事件的 subject_id：每个数据集恰好有一个查询索引。
   string dataset_id = 4;
   string status = 5;
-  string visible_scope = 6;
   string frequency = 7;
   int64 period_time = 8;
   // failed_subjects 原样取自周期完成事件的 failed_subjects；complete 时为空，degraded 时可以为空（写入方整期降级但说不出具体标的）。

@@ -88,11 +88,11 @@ func (f *follower) step() error {
 			return fmt.Errorf("读取索引里的跟随进度：%w", err)
 		}
 		if state.Cursor.StoreID == "" {
-			log.Warnf("storage view %s/%s 的索引没有跟随进度，重建索引", f.key.SpaceID, f.key.ViewID)
+			log.Warnf("storage view %s/%s 的索引没有跟随进度，重建索引", f.key.SpaceID, f.key.DatasetID)
 			return f.rebuild()
 		}
 		f.setLoaded(state, true)
-		log.Infof("storage view %s/%s 开始跟随变更日志：数据集=%s 游标=%d 建成序号=%d", f.key.SpaceID, f.key.ViewID, f.key.DatasetID, state.Cursor.Sequence, state.BuiltSequence)
+		log.Infof("storage view %s/%s 开始跟随变更日志：游标=%d 建成序号=%d", f.key.SpaceID, f.key.DatasetID, state.Cursor.Sequence, state.BuiltSequence)
 	}
 	f.maybePersist()
 	rsp, err := f.read()
@@ -100,7 +100,7 @@ func (f *follower) step() error {
 		return err
 	}
 	if rsp.GetGap() {
-		log.Warnf("storage view %s/%s 跟随变更日志断档（游标 %d 早于日志保留起点，或存储已重建），重建索引", f.key.SpaceID, f.key.ViewID, f.status().State.Cursor.Sequence)
+		log.Warnf("storage view %s/%s 跟随变更日志断档（游标 %d 早于日志保留起点，或存储已重建），重建索引", f.key.SpaceID, f.key.DatasetID, f.status().State.Cursor.Sequence)
 		return f.rebuild()
 	}
 	return f.apply(rsp)
@@ -112,7 +112,7 @@ func (f *follower) rebuild() error {
 		return fmt.Errorf("重建索引：%w", err)
 	}
 	f.setLoaded(state, true)
-	log.Infof("storage view %s/%s 索引已重建：从序号 %d 继续跟随，建成序号=%d", f.key.SpaceID, f.key.ViewID, state.Cursor.Sequence, state.BuiltSequence)
+	log.Infof("storage view %s/%s 索引已重建：从序号 %d 继续跟随，建成序号=%d", f.key.SpaceID, f.key.DatasetID, state.Cursor.Sequence, state.BuiltSequence)
 	return nil
 }
 
@@ -151,7 +151,7 @@ func (f *follower) apply(rsp *pb.ReadDatasetChangesRsp) error {
 					return fmt.Errorf("发布序号 %d 的完成标记：%w", change.GetSequence(), err)
 				}
 			} else {
-				log.Infof("storage view %s/%s 跳过建索引期间的完成标记 序号=%d 建成序号=%d", f.key.SpaceID, f.key.ViewID, change.GetSequence(), built)
+				log.Infof("storage view %s/%s 跳过建索引期间的完成标记 序号=%d 建成序号=%d", f.key.SpaceID, f.key.DatasetID, change.GetSequence(), built)
 			}
 			f.advance(viewindex.ChangeCursor{StoreID: next.StoreID, Sequence: change.GetSequence()}, false)
 			i++
@@ -220,7 +220,7 @@ func (f *follower) maybePersist() {
 		f.mu.Unlock()
 	}
 	if err := f.persist(f.ctx); err != nil {
-		log.Warnf("storage view %s/%s 落盘跟随进度失败，下一轮再试：%v", f.key.SpaceID, f.key.ViewID, err)
+		log.Warnf("storage view %s/%s 落盘跟随进度失败，下一轮再试：%v", f.key.SpaceID, f.key.DatasetID, err)
 	}
 }
 
@@ -246,7 +246,7 @@ func (f *follower) persistOnExit() {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(f.ctx), 10*time.Second)
 	defer cancel()
 	if err := f.persist(ctx); err != nil {
-		log.Warnf("storage view %s/%s 停止时落盘跟随进度失败：%v", f.key.SpaceID, f.key.ViewID, err)
+		log.Warnf("storage view %s/%s 停止时落盘跟随进度失败：%v", f.key.SpaceID, f.key.DatasetID, err)
 	}
 }
 
@@ -360,7 +360,7 @@ func (f *follower) failed(err error) {
 	f.caughtUp = false
 	f.mu.Unlock()
 	if !repeated && !errors.Is(err, context.Canceled) {
-		log.Errorf("storage view %s/%s 跟随变更日志失败，稍后重试：%v", f.key.SpaceID, f.key.ViewID, err)
+		log.Errorf("storage view %s/%s 跟随变更日志失败，稍后重试：%v", f.key.SpaceID, f.key.DatasetID, err)
 	}
 }
 
@@ -370,6 +370,6 @@ func (f *follower) resolved() {
 	f.lastError = ""
 	f.mu.Unlock()
 	if had {
-		log.Infof("storage view %s/%s 跟随变更日志已恢复", f.key.SpaceID, f.key.ViewID)
+		log.Infof("storage view %s/%s 跟随变更日志已恢复", f.key.SpaceID, f.key.DatasetID)
 	}
 }

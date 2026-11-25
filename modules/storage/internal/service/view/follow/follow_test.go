@@ -134,9 +134,9 @@ func headOf(t *testing.T, store *pebble.Store) viewindex.ChangeCursor {
 	return toCursor(head)
 }
 
-func waitApplied(t *testing.T, m *Manager, viewID string) viewindex.ChangeCursor {
+func waitApplied(t *testing.T, m *Manager, datasetID string) viewindex.ChangeCursor {
 	t.Helper()
-	ok, head, current, err := m.WaitApplied(context.Background(), "s", viewID, 5*time.Second)
+	ok, head, current, err := m.WaitApplied(context.Background(), "s", datasetID, 5*time.Second)
 	require.NoError(t, err)
 	require.True(t, ok, "5 秒内没有跟上头部 %v，当前 %v", head, current)
 	return current
@@ -155,8 +155,8 @@ func TestFollowerAppliesInOrderAndStopsAtFailedMarker(t *testing.T) {
 		return ok.(bool)
 	}}
 	m := newManager(t, store, time.Hour)
-	m.Ensure(Key{SpaceID: "s", ViewID: "v", DatasetID: "d"}, target)
-	waitApplied(t, m, "v")
+	m.Ensure(Key{SpaceID: "s", DatasetID: "d"}, target)
+	waitApplied(t, m, "d")
 	events, state, rebuilds := target.snapshot()
 	require.Equal(t, 1, rebuilds, "没有进度的索引先重建")
 	require.Empty(t, events, "重建之前的行与标记不再应用")
@@ -165,14 +165,14 @@ func TestFollowerAppliesInOrderAndStopsAtFailedMarker(t *testing.T) {
 	writeRow(t, store, "other", "X", testBase)
 	writeRow(t, store, "d", "A", testBase.Add(5*time.Minute))
 	writeMarker(t, store, "d", testBase.Add(5*time.Minute))
-	waitApplied(t, m, "v")
+	waitApplied(t, m, "d")
 	events, _, _ = target.snapshot()
 	require.Equal(t, []string{"rows:A", "marker:5"}, events)
 
 	publishOK.Store("ok", false)
 	writeMarker(t, store, "d", testBase.Add(10*time.Minute))
 	writeRow(t, store, "d", "B", testBase.Add(15*time.Minute))
-	ok, _, current, err := m.WaitApplied(context.Background(), "s", "v", time.Second)
+	ok, _, current, err := m.WaitApplied(context.Background(), "s", "d", time.Second)
 	require.NoError(t, err)
 	require.False(t, ok, "标记发布失败时不能跟上头部")
 	require.Equal(t, uint64(5), current.Sequence, "停在发布失败的标记之前")
@@ -180,7 +180,7 @@ func TestFollowerAppliesInOrderAndStopsAtFailedMarker(t *testing.T) {
 	require.Equal(t, []string{"rows:A", "marker:5"}, events, "发布失败期间不往后应用行")
 
 	publishOK.Store("ok", true)
-	waitApplied(t, m, "v")
+	waitApplied(t, m, "d")
 	events, _, _ = target.snapshot()
 	require.Equal(t, []string{"rows:A", "marker:5", "marker:6", "rows:B"}, events)
 }
@@ -191,7 +191,7 @@ func TestIdleFollowerSurvivesChangeLogCleanup(t *testing.T) {
 	store := openStore(t, path)
 	target := &fakeTarget{head: func() viewindex.ChangeCursor { return headOf(t, store) }}
 	m := newManager(t, store, 10*time.Millisecond)
-	m.Ensure(Key{SpaceID: "s", ViewID: "idle", DatasetID: "idle"}, target)
+	m.Ensure(Key{SpaceID: "s", DatasetID: "idle"}, target)
 	waitApplied(t, m, "idle")
 	for i := 0; i < 20; i++ {
 		writeRow(t, store, "busy", "X", testBase.Add(time.Duration(i)*5*time.Minute))
@@ -212,7 +212,7 @@ func TestIdleFollowerSurvivesChangeLogCleanup(t *testing.T) {
 	m.Close()
 
 	restarted := newManager(t, store, time.Hour)
-	restarted.Ensure(Key{SpaceID: "s", ViewID: "idle", DatasetID: "idle"}, target)
+	restarted.Ensure(Key{SpaceID: "s", DatasetID: "idle"}, target)
 	writeRow(t, store, "busy", "X", testBase.Add(time.Hour))
 	waitApplied(t, restarted, "idle")
 	_, state, rebuilds := target.snapshot()
@@ -230,9 +230,9 @@ func TestFollowerRebuildsOnGap(t *testing.T) {
 	target := &fakeTarget{head: func() viewindex.ChangeCursor { return headOf(t, store) }}
 	target.saved = viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: headOf(t, store).StoreID, Sequence: 1}, BuiltSequence: 1}
 	m := newManager(t, store, time.Hour)
-	m.Ensure(Key{SpaceID: "s", ViewID: "v", DatasetID: "d"}, target)
+	m.Ensure(Key{SpaceID: "s", DatasetID: "d"}, target)
 	writeRow(t, store, "d", "NEW", testBase.Add(10*time.Minute))
-	waitApplied(t, m, "v")
+	waitApplied(t, m, "d")
 	events, _, rebuilds := target.snapshot()
 	require.Equal(t, 1, rebuilds)
 	require.NotContains(t, events, "rows:OLD")
@@ -244,10 +244,10 @@ func TestFailingFollowerDoesNotBlockOthers(t *testing.T) {
 	stuck := &fakeTarget{head: func() viewindex.ChangeCursor { return headOf(t, store) }, publishOK: func() bool { return false }}
 	healthy := &fakeTarget{head: func() viewindex.ChangeCursor { return headOf(t, store) }}
 	m := newManager(t, store, time.Hour)
-	m.Ensure(Key{SpaceID: "s", ViewID: "stuck", DatasetID: "a"}, stuck)
-	m.Ensure(Key{SpaceID: "s", ViewID: "healthy", DatasetID: "b"}, healthy)
-	waitApplied(t, m, "stuck")
-	waitApplied(t, m, "healthy")
+	m.Ensure(Key{SpaceID: "s", DatasetID: "a"}, stuck)
+	m.Ensure(Key{SpaceID: "s", DatasetID: "b"}, healthy)
+	waitApplied(t, m, "a")
+	waitApplied(t, m, "b")
 
 	for i := 0; i < 3; i++ {
 		period := testBase.Add(time.Duration(i) * 5 * time.Minute)
@@ -256,10 +256,10 @@ func TestFailingFollowerDoesNotBlockOthers(t *testing.T) {
 		writeRow(t, store, "b", "B", period)
 		writeMarker(t, store, "b", period)
 	}
-	waitApplied(t, m, "healthy")
+	waitApplied(t, m, "b")
 	events, _, _ := healthy.snapshot()
 	require.Equal(t, []string{"rows:B", "marker:4", "rows:B", "marker:8", "rows:B", "marker:12"}, events)
-	ok, _, _, err := m.WaitApplied(context.Background(), "s", "stuck", 200*time.Millisecond)
+	ok, _, _, err := m.WaitApplied(context.Background(), "s", "a", 200*time.Millisecond)
 	require.NoError(t, err)
 	require.False(t, ok, "发布一直失败的 View 停在第一条标记上")
 	events, _, _ = stuck.snapshot()
@@ -302,12 +302,12 @@ func TestWaitAppliedTimeoutDuringScanIsNotAnError(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(m.Close)
 	target := &fakeTarget{head: func() viewindex.ChangeCursor { return headOf(t, store) }}
-	m.Ensure(Key{SpaceID: "s", ViewID: "v", DatasetID: "d"}, target)
-	waitApplied(t, m, "v")
+	m.Ensure(Key{SpaceID: "s", DatasetID: "d"}, target)
+	waitApplied(t, m, "d")
 
 	block.Store("on", true)
 	writeRow(t, store, "d", "A", testBase)
-	ok, _, _, err := m.WaitApplied(context.Background(), "s", "v", 200*time.Millisecond)
+	ok, _, _, err := m.WaitApplied(context.Background(), "s", "d", 200*time.Millisecond)
 	require.NoError(t, err)
 	require.False(t, ok)
 	block.Store("on", false)

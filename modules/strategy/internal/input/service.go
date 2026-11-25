@@ -238,7 +238,7 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 	}
 	generations := make(map[string]string, len(resolved.Tasks))
 	for _, key := range resolved.TaskKeys() {
-		view, err := s.Client.GetView(ctx, spaceID, resolved.Tasks[key].ViewID)
+		view, err := s.Client.GetView(ctx, spaceID, resolved.Tasks[key].DatasetID)
 		if err != nil {
 			return time.Time{}, nil, err
 		}
@@ -247,7 +247,7 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 		}
 		if end, err = ReplayWindow(resolved, program, view, start, end, now); err != nil {
 			if len(resolved.Tasks) > 1 {
-				err = fmt.Errorf("%s 市场的 View %s：%w", key, view.ViewID, err)
+				err = fmt.Errorf("%s 市场的 View %s：%w", key, view.DatasetID, err)
 			}
 			return time.Time{}, nil, err
 		}
@@ -258,7 +258,7 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 		if _, main := generations[key]; main {
 			continue
 		}
-		generation, err := s.Client.ViewGeneration(ctx, spaceID, task.ViewID)
+		generation, err := s.Client.ViewGeneration(ctx, spaceID, task.DatasetID)
 		if err != nil {
 			return time.Time{}, nil, err
 		}
@@ -287,7 +287,7 @@ func (s Service) ComputeReplayWindow(ctx context.Context, spaceID string, resolv
 	}
 	generations := make(map[string]string, len(resolved.Tasks))
 	for key, task := range resolved.AllTaskBindings() {
-		generation, err := s.Client.ViewGeneration(ctx, spaceID, task.ViewID)
+		generation, err := s.Client.ViewGeneration(ctx, spaceID, task.DatasetID)
 		if err != nil {
 			return time.Time{}, nil, 0, err
 		}
@@ -314,11 +314,10 @@ func (s Service) PoolReplayWindow(ctx context.Context, spaceID string, pooled Po
 	views := make(map[string]ViewInfo, len(pooled.Resolved.Tasks))
 	generations := make(map[string]string, len(pooled.Resolved.Tasks))
 	for market, task := range pooled.Resolved.Tasks {
-		view, err := s.Client.GetView(ctx, spaceID, task.ViewID)
+		view, err := s.Client.GetView(ctx, spaceID, task.DatasetID)
 		if err != nil {
 			return time.Time{}, nil, err
 		}
-		view.ViewID = task.ViewID
 		views[market], generations[market] = view, view.Generation
 	}
 	end, err := PoolWindow(ctx, s.Client, spaceID, pooled.Resolved, pooled.Members, pooled.Programs, views, start, end, now, false)
@@ -374,5 +373,5 @@ func (s Service) LoadLatest(ctx context.Context, spaceID string, resolved Resolv
 			return Loaded{}, err
 		}
 	}
-	return last, fmt.Errorf("View %s 最近三个周期都没有数据", strings.Join(resolved.ViewIDs(), "、"))
+	return last, fmt.Errorf("View %s 最近三个周期都没有数据", strings.Join(resolved.DatasetIDs(), "、"))
 }

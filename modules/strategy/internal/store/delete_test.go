@@ -9,7 +9,7 @@ import (
 )
 
 // seedInstanceRows 给一个停用、没有会话的实例在每张带实例 ID 的表里各写一条记录，并写一条它的 View 的年龄探针记录。
-func seedInstanceRows(t *testing.T, repo *Store, instanceID, taskID, viewID string) {
+func seedInstanceRows(t *testing.T, repo *Store, instanceID, taskID, datasetID string) {
 	t.Helper()
 	ctx := context.Background()
 	if err := repo.CreateInstance(ctx, Instance{InstanceID: instanceID, StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": taskID}, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
@@ -30,15 +30,15 @@ func seedInstanceRows(t *testing.T, repo *Store, instanceID, taskID, viewID stri
 			[]any{resultID, at}},
 		{`INSERT INTO t_strategy_states (c_instance_id, c_session_id, c_bar_end_time, c_state_json, c_mtime) VALUES (?, ?, 1, '{}', ?)`,
 			[]any{instanceID, sessionID, at}},
-		{`INSERT INTO t_strategy_ready_events (c_instance_id, c_session_id, c_view_id, c_bar_end_time, c_event_id, c_event_bytes) VALUES (?, ?, ?, 1, 'evt', x'00')`,
-			[]any{instanceID, sessionID, viewID}},
+		{`INSERT INTO t_strategy_ready_events (c_instance_id, c_session_id, c_dataset_id, c_bar_end_time, c_event_id, c_event_bytes) VALUES (?, ?, ?, 1, 'evt', x'00')`,
+			[]any{instanceID, sessionID, datasetID}},
 		{`INSERT INTO t_strategy_replays (c_replay_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_status)
 			VALUES (?, ?, ?, 'name: demo', ?, 'crypto_24x7', 'space', '{}', 1, 2, 'done')`, []any{replayID, instanceID, sessionID, testHash}},
 		{`INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json) VALUES (?, 1, 'ok', '[]', '{}', '{}')`,
 			[]any{replayID}},
 		{`INSERT INTO t_strategy_display_settings (c_instance_id) VALUES (?)`, []any{instanceID}},
-		{`INSERT INTO t_strategy_age_passed (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_market, c_subject_id) VALUES ('space', ?, 'idx', 10, 'spot', 'BTC-USDT')`,
-			[]any{viewID}},
+		{`INSERT INTO t_strategy_age_passed (c_space_id, c_dataset_id, c_index_id, c_min_age_bars, c_market, c_subject_id) VALUES ('space', ?, 'idx', 10, 'spot', 'BTC-USDT')`,
+			[]any{datasetID}},
 	}
 	for _, statement := range statements {
 		if err := repo.db.Exec(statement.sql, statement.args...).Error; err != nil {
@@ -89,8 +89,8 @@ func TestDeleteInstanceRemovesEveryInstanceRow(t *testing.T) {
 	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	seedInstanceRows(t, repo, "inst_del", "ftask_del", "view_factor_del")
-	seedInstanceRows(t, repo, "inst_keep", "ftask_keep", "view_factor_keep")
+	seedInstanceRows(t, repo, "inst_del", "ftask_del", "dataset_factor_del")
+	seedInstanceRows(t, repo, "inst_keep", "ftask_keep", "dataset_factor_keep")
 	tables := tablesWithInstanceID(t, repo)
 	for table, count := range instanceRowCounts(t, repo, tables, "inst_del") {
 		if count == 0 {
@@ -98,7 +98,7 @@ func TestDeleteInstanceRemovesEveryInstanceRow(t *testing.T) {
 		}
 	}
 
-	if err := repo.DeleteInstance(ctx, "inst_del", "space", []string{"view_factor_del"}); err != nil {
+	if err := repo.DeleteInstance(ctx, "inst_del", "space", []string{"dataset_factor_del"}); err != nil {
 		t.Fatal(err)
 	}
 	for table, count := range instanceRowCounts(t, repo, tables, "inst_del") {
@@ -111,10 +111,10 @@ func TestDeleteInstanceRemovesEveryInstanceRow(t *testing.T) {
 			t.Errorf("表 %s 里另一个实例的记录被误删", table)
 		}
 	}
-	if count := countRows(t, repo, `SELECT COUNT(*) FROM t_strategy_age_passed WHERE c_view_id = ?`, "view_factor_del"); count != 0 {
+	if count := countRows(t, repo, `SELECT COUNT(*) FROM t_strategy_age_passed WHERE c_dataset_id = ?`, "dataset_factor_del"); count != 0 {
 		t.Errorf("被删实例 View 的年龄探针记录还剩 %d 条", count)
 	}
-	if count := countRows(t, repo, `SELECT COUNT(*) FROM t_strategy_age_passed WHERE c_view_id = ?`, "view_factor_keep"); count != 1 {
+	if count := countRows(t, repo, `SELECT COUNT(*) FROM t_strategy_age_passed WHERE c_dataset_id = ?`, "dataset_factor_keep"); count != 1 {
 		t.Errorf("另一个实例 View 的年龄探针记录应保留，实际 %d 条", count)
 	}
 	if _, err := repo.GetInstance(ctx, "inst_del"); err != ErrNotFound {

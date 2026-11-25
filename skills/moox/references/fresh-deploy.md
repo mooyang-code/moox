@@ -239,7 +239,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     - 这时删除 `ma_var_5m` 的实例被拒，提示里列出那个不调参的实例；先删引用方，再删 `ma_var_5m` 的实例，预览里这个任务在 `delete_factor_tasks`，删完 `factor task show` 返回不存在、结果数据集一起删掉。
 17. **`__params`**：默认合约任务只有固定成员，结果行的 `__params` 为空：
     ```bash
-    $CLI data view query --space-id crypto --view-id view_factor_swap_1m --column __params --limit 3 \
+    $CLI data view query --space-id crypto --dataset-id dataset_factor_swap_1m --column __params --limit 3 \
       --selectors '[{"space_id":"crypto","dataset_id":"dataset_factor_swap_1m","subject_id":"BTC-USDT","freq":"1m"}]'
     ```
     第 16 步那个调参任务的 `__params` 只有 `ma__var` 一个键，`$CLI factor task params --task-id <5m 任务>` 有 `ma__var` 最近一次提交（`t_factor_member_params` 的一行）。

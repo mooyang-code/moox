@@ -43,14 +43,14 @@ func TestImportWriteThroughput(t *testing.T) {
 	ctx := context.Background()
 
 	doubles := []string{"close", "high", "low", "open", "quote_volume", "volume"}
-	var columns []*pb.ViewColumn
+	var columns []*viewindex.Column
 	for i, name := range doubles {
-		columns = append(columns, &pb.ViewColumn{ColumnName: name, OriginId: name, SortOrder: uint32(i),
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
+		columns = append(columns, &viewindex.Column{ColumnName: name, SortOrder: uint32(i),
+			ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
 	}
-	columns = append(columns, &pb.ViewColumn{ColumnName: "trade_num", OriginId: "trade_num", SortOrder: 99,
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT})
-	schema := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "bench", PrimaryDatasetID: "dataset_kline_5m",
+	columns = append(columns, &viewindex.Column{ColumnName: "trade_num", SortOrder: 99,
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT})
+	schema := viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "dataset_kline_5m",
 		ViewVersion: 1, Engine: "duckdb", Columns: columns}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 
@@ -108,7 +108,7 @@ func TestImportWriteThroughput(t *testing.T) {
 				fields = append(fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i) + float64(j)/10}}})
 			}
 			fields = append(fields, &pb.FieldValue{FieldId: "trade_num", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: int64(i)}}})
-			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("space", schema.PrimaryDatasetID, subject, "5m", at, "tag")}, Fields: fields})
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("space", schema.DatasetID, subject, "5m", at, "tag")}, Fields: fields})
 		}
 		return writes
 	}

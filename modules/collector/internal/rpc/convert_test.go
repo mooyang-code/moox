@@ -37,7 +37,6 @@ func TestToPBTaskRedactsInternalDatasetIDsAndNamesResult(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "币安现货", DataType: "kline",
 		CollectParams: `{"subject_tags":["binance_spot"],"source_dataset_id":"source","target_dataset_id":"target","frequency":"1h"}`,
-		ResultViewID:  "view-1",
 	}
 	pbTask := toPBTask(task)
 	assert.Equal(t, "币安现货 结果", pbTask.GetResult().GetResultName())

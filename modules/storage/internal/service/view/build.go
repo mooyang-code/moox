@@ -11,7 +11,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -62,182 +61,137 @@ func (l *backfillRequestLimiter) wait(ctx context.Context) error {
 // 最后转为活动索引。跟随器从 H_start 接着应用（重放的行是幂等写入），(H_start, H_done] 之间的完成标记只推进游标、不发布。
 // schemaOf 在运行时锁内给出要建的列契约：首次建用元数据里的列，重建沿用已有索引的契约。
 // 调用方持有 buildMu，并决定失败后怎么办（首次建丢弃半成品，重建留着由跟随器接着重建）。
-func (s *Service) buildIndex(ctx context.Context, opts MaintenanceOptions, view *pb.View, schemaOf func(*viewRuntime) (viewindex.ViewIndexSchema, error)) (viewindex.FollowState, error) {
-	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
-	indexID := viewindex.ViewIndexID(ref.spaceID, ref.viewID)
+func (s *Service) buildIndex(ctx context.Context, opts MaintenanceOptions, runtime *viewRuntime, spec *viewSpec, schemaOf func(*viewRuntime) (viewindex.ViewIndexSchema, error)) (viewindex.FollowState, error) {
 	manager := s.followManager()
 	var state viewindex.FollowState
 	if manager != nil {
-		start, err := manager.Head(ctx, view.GetSpaceId(), view.GetDatasetId())
+		start, err := manager.Head(ctx, spec.SpaceID, spec.DatasetID)
 		if err != nil {
 			return viewindex.FollowState{}, err
 		}
 		state.Cursor = start
 	}
-	s.mu.Lock()
-	s.catalogViews[ref] = proto.Clone(view).(*pb.View)
-	s.mu.Unlock()
-	schema, err := s.prepareIndex(ctx, ref, schemaOf)
+	schema, err := s.prepareIndex(ctx, runtime, schemaOf)
 	if err != nil {
-		return viewindex.FollowState{}, fmt.Errorf("准备 View 索引 %q：%w", indexID, err)
+		return viewindex.FollowState{}, fmt.Errorf("准备 View 索引 %q：%w", runtime.indexID, err)
 	}
-	s.nextIndexRevision(indexID)
-	if err := s.backfillInitialIndex(ctx, view, schema, indexID, opts, viewBars(view, opts)); err != nil {
+	runtime.revision.Add(1)
+	if err := s.backfillInitialIndex(ctx, runtime, spec, schema, opts, viewBars(spec, opts)); err != nil {
 		return viewindex.FollowState{}, err
 	}
 	if manager != nil {
-		done, err := manager.Head(ctx, view.GetSpaceId(), view.GetDatasetId())
+		done, err := manager.Head(ctx, spec.SpaceID, spec.DatasetID)
 		if err == nil {
 			state.BuiltSequence = done.Sequence
-			err = s.saveFollowState(ctx, indexID, state)
+			err = s.saveFollowState(ctx, runtime, state)
 		}
 		if err != nil {
 			return viewindex.FollowState{}, fmt.Errorf("记录索引的跟随进度：%w", err)
 		}
 	}
-	if err := s.activateBuiltIndex(view, schema, indexID); err != nil {
+	if err := s.activateBuiltIndex(runtime, spec, schema); err != nil {
 		return viewindex.FollowState{}, err
 	}
 	return state, nil
 }
 
-// buildInitialIndex 为还没有建好索引的 View 建索引（新建、文件被删、删除后同名重建）：列契约取元数据里 View 的列，修订号从头开始。
+// buildInitialIndex 为还没有建好索引的 View 建索引（新数据集、文件被删、删除后同名重建）：列契约取数据集启用的列，修订号从头开始。
 // 半成品不续建：失败或进程退出后，下一轮删掉重建。建索引期间的周期完成不补发就绪事件。
-func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions, view *pb.View) error {
-	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions, runtime *viewRuntime, spec *viewSpec) error {
 	// 残留的跟随器先停掉。要在取 buildMu 之前停：它可能正等着 buildMu 做断档重建。
-	s.followManager().Stop(ref.spaceID, ref.viewID)
+	s.followManager().Stop(spec.SpaceID, spec.DatasetID)
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
-	_, err := s.buildIndex(ctx, opts, view, func(*viewRuntime) (viewindex.ViewIndexSchema, error) {
+	_, err := s.buildIndex(ctx, opts, runtime, spec, func(*viewRuntime) (viewindex.ViewIndexSchema, error) {
 		// 回填单次最多读取 maxLatestPerSeries 行，记录的保留行数不能超过实际回填的行数。
 		schema := viewindex.ViewIndexSchema{
-			SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: initialViewRevision,
-			PrimaryDatasetID: view.GetDatasetId(), Engine: strings.ToLower(strings.TrimSpace(view.GetEngine())),
-			Columns: numberedViewColumns(view.GetColumns()), RowsPerSeries: min(viewBars(view, opts), maxLatestPerSeries),
-			ViewCreatedAt: view.GetCreatedAt(),
+			SpaceID: spec.SpaceID, DatasetID: spec.DatasetID, ViewVersion: initialViewRevision,
+			Engine: spec.engineName(), Columns: spec.Columns, RowsPerSeries: min(viewBars(spec, opts), maxLatestPerSeries),
+			DatasetCreatedAt: spec.CreatedAt,
 		}
 		schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 		return schema, nil
 	})
 	if err != nil {
-		s.discardInitialBuild(ctx, ref, viewindex.ViewIndexID(ref.spaceID, ref.viewID))
+		s.discardInitialBuild(ctx, runtime)
 		return err
 	}
-	s.ensureFollower(ref)
+	s.ensureFollower(runtime.ref)
 	return nil
 }
 
 // rebuildFollowIndex 在断档（View 停机超过日志保留期，或存储已重建）或索引没有跟随进度时由跟随器原地重建索引：
 // 沿用当前索引的列契约（修订号、哈希不变）。重建期间 View 不可读；记录型 View 重建后为空，只跟随之后的写入。
 // 失败后不丢弃：View 留在“等待重建”的状态，由跟随器接着重建。
-func (s *Service) rebuildFollowIndex(ctx context.Context, ref viewRef) (viewindex.FollowState, error) {
+func (s *Service) rebuildFollowIndex(ctx context.Context, ref datasetRef) (viewindex.FollowState, error) {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
 	if s.followManager() == nil {
 		return viewindex.FollowState{}, errors.New("View 没有在跟随变更日志")
 	}
 	s.mu.RLock()
-	catalogView := s.catalogViews[ref]
 	runtime := s.views[ref]
 	opts := s.maintenance
 	if opts.PrimaryRange == nil {
 		opts.PrimaryRange = s.primaryRange
 	}
 	s.mu.RUnlock()
-	if catalogView == nil || runtime == nil {
-		return viewindex.FollowState{}, fmt.Errorf("View %s/%s 不在目录中", ref.spaceID, ref.viewID)
+	if runtime == nil {
+		return viewindex.FollowState{}, fmt.Errorf("View %s/%s 不在目录中", ref.spaceID, ref.datasetID)
 	}
-	view := proto.Clone(catalogView).(*pb.View)
-	return s.buildIndex(ctx, opts, view, func(runtime *viewRuntime) (viewindex.ViewIndexSchema, error) {
-		indexID := runtime.active
-		if indexID == "" {
-			// 上一次重建没有完成：接着用它的索引标识。
-			indexID = runtime.building
+	spec := runtime.queryState().spec
+	return s.buildIndex(ctx, opts, runtime, spec, func(runtime *viewRuntime) (viewindex.ViewIndexSchema, error) {
+		// 当前契约是活动索引或上一次没建完的重建在用的那份。
+		schema := runtime.schema
+		if schema.SchemaHash == "" {
+			return viewindex.ViewIndexSchema{}, fmt.Errorf("View %s/%s 没有可重建的索引", ref.spaceID, ref.datasetID)
 		}
-		s.mu.RLock()
-		schema := s.schemas[indexID]
-		engine := s.engines[s.indexEngine[indexID]]
-		s.mu.RUnlock()
-		if indexID == "" || engine == nil || schema.SchemaHash == "" {
-			return viewindex.ViewIndexSchema{}, fmt.Errorf("View %s/%s 没有可重建的索引", ref.spaceID, ref.viewID)
-		}
-		schema.RowsPerSeries = min(viewBars(view, opts), maxLatestPerSeries)
-		schema.ViewCreatedAt = view.GetCreatedAt()
+		schema.RowsPerSeries = min(viewBars(spec, opts), maxLatestPerSeries)
+		schema.DatasetCreatedAt = spec.CreatedAt
 		return schema, nil
 	})
 }
 
-// numberedViewColumns 按当前顺序给列编号（克隆后修改）：追加校验要求已建列的 sort_order 互不相同，
-// 而没有显式投影的 View 取自数据集的列都没有排序值。
-func numberedViewColumns(columns []*pb.ViewColumn) []*pb.ViewColumn {
-	numbered := make([]*pb.ViewColumn, 0, len(columns))
-	for _, column := range columns {
-		if column == nil {
-			continue
-		}
-		clone := proto.Clone(column).(*pb.ViewColumn)
-		clone.SortOrder = uint32(len(numbered))
-		numbered = append(numbered, clone)
-	}
-	return numbered
-}
-
 // activateBuiltIndex 把建好的索引转为活动索引。持有运行时锁转换，实时写入不会夹在中间。
-func (s *Service) activateBuiltIndex(view *pb.View, schema viewindex.ViewIndexSchema, indexID string) error {
-	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
-	s.mu.RLock()
-	runtime := s.views[ref]
-	s.mu.RUnlock()
-	if runtime == nil {
-		return errViewBuildCancelled
-	}
+func (s *Service) activateBuiltIndex(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIndexSchema) error {
 	runtime.mu.Lock()
-	if runtime.building != indexID {
+	if runtime.building != runtime.indexID {
 		runtime.mu.Unlock()
 		return errViewBuildCancelled
 	}
-	s.attachActiveViewLocked(view, runtime, indexID, schema, schema.Engine)
+	attachActiveLocked(runtime, spec, schema)
 	runtime.mu.Unlock()
-	// 回填的行不走实时事件：建成后补一次水位，否则 Monitor 要等下一次实时写入才能看到这个 View 的输出。
-	s.observeActivatedViewWatermark(view, indexID)
+	// 回填的行不走实时跟随：建成后补一次水位，否则 Monitor 要等下一次实时写入才能看到这个 View 的输出。
+	s.observeActivatedViewWatermark(runtime, spec)
 	return nil
 }
 
 // discardInitialBuild 丢弃建失败的半成品，下一轮重建。
-func (s *Service) discardInitialBuild(ctx context.Context, ref viewRef, indexID string) {
-	s.mu.RLock()
-	runtime := s.views[ref]
-	engine := s.engines[s.indexEngine[indexID]]
-	s.mu.RUnlock()
-	if runtime == nil || engine == nil {
-		return
-	}
+func (s *Service) discardInitialBuild(ctx context.Context, runtime *viewRuntime) {
 	ctx = context.WithoutCancel(ctx)
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.building != indexID {
+	if runtime.building != runtime.indexID {
 		return
 	}
-	release, err := s.indexWriteGate(indexID).lock(ctx)
+	release, err := runtime.gate.lock(ctx)
 	if err != nil {
-		log.Warnf("storage view 删除半成品索引 %q 失败：%v", indexID, err)
+		log.Warnf("storage view 删除半成品索引 %q 失败：%v", runtime.indexID, err)
 		return
 	}
 	defer release()
 	runtime.building = ""
-	s.mu.Lock()
-	s.forgetIndexLocked(indexID)
-	s.mu.Unlock()
-	if err := engine.Remove(ctx, indexID); err != nil {
-		log.Warnf("storage view 删除半成品索引 %q 失败：%v", indexID, err)
+	runtime.schema = viewindex.ViewIndexSchema{}
+	runtime.publishReadStateLocked()
+	if err := runtime.engine.Remove(ctx, runtime.indexID); err != nil {
+		log.Warnf("storage view 删除半成品索引 %q 失败：%v", runtime.indexID, err)
 	}
 }
 
-// backfillInitialIndex 从 Primary 回填时序 View 每个序列最近的 bars 根。记录型 View 和 Bleve 没有可读的 Primary 历史，从空开始。
-func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schema viewindex.ViewIndexSchema, indexID string, opts MaintenanceOptions, bars uint64) error {
-	if bars == 0 || schema.Engine == "bleve" {
-		log.Infof("storage view %s/%s 从空开始：没有 Primary 历史可回填", view.GetSpaceId(), view.GetViewId())
+// backfillInitialIndex 从 Primary 回填时序 View 每个序列最近的 bars 根。记录型 View 没有可读的 Primary 历史，从空开始。
+func (s *Service) backfillInitialIndex(ctx context.Context, runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIndexSchema, opts MaintenanceOptions, bars uint64) error {
+	if bars == 0 || !spec.timeSeries() {
+		log.Infof("storage view %s/%s 从空开始：没有 Primary 历史可回填", spec.SpaceID, spec.DatasetID)
 		return nil
 	}
 	if opts.PrimaryRange == nil {
@@ -247,13 +201,13 @@ func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schem
 	if pageSize <= 0 {
 		pageSize = viewBackfillBatchSize
 	}
-	written, err := s.backfillPrimaryHistory(ctx, view, schema, indexID, pageSize, opts.PrimaryRange, bars, newBackfillRequestLimiter(opts.BackfillRequestInterval))
+	written, err := s.backfillPrimaryHistory(ctx, runtime, spec, schema, pageSize, opts.PrimaryRange, bars, newBackfillRequestLimiter(opts.BackfillRequestInterval))
 	if err != nil {
 		return err
 	}
 	if written == 0 {
 		// 派生输出（例如因子结果）在第一个周期到来之前合法地为空。
-		log.Infof("storage view %s/%s 从空开始：Primary 还没有这个 View 的行", view.GetSpaceId(), view.GetViewId())
+		log.Infof("storage view %s/%s 从空开始：Primary 还没有这个数据集的行", spec.SpaceID, spec.DatasetID)
 	}
 	return nil
 }
@@ -261,11 +215,11 @@ func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schem
 // backfillPrimaryHistory 回填 View 保留的最近行：不指定标的、每个序列取最近 periods 根，
 // 按 next_cursor 逐页读取（每页 pageSize 行，Pebble 再按单页值数上限截断），一次拿到值。
 // 某一页失败（含超时）时整次建索引失败重试，不静默跳过标的。
-func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, schema viewindex.ViewIndexSchema, indexID string, pageSize int, rangeReader TimeSeriesRangeReader, periods uint64, limiter *backfillRequestLimiter) (uint64, error) {
-	spaceID, viewID, frequency := view.GetSpaceId(), view.GetViewId(), view.GetFreq()
-	columns := viewColumnFields(schema.Columns)
+func (s *Service) backfillPrimaryHistory(ctx context.Context, runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIndexSchema, pageSize int, rangeReader TimeSeriesRangeReader, periods uint64, limiter *backfillRequestLimiter) (uint64, error) {
+	spaceID, datasetID, frequency := spec.SpaceID, spec.DatasetID, spec.Freq
+	columns := columnNames(schema.Columns)
 	if len(columns) == 0 {
-		log.Warnf("storage view history backfill has no dataset columns space=%s view=%s", spaceID, viewID)
+		log.Warnf("storage view history backfill has no dataset columns space=%s dataset=%s", spaceID, datasetID)
 		return 0, nil
 	}
 	perSeries := uint32(math.MaxUint32)
@@ -278,12 +232,12 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, sch
 	var written uint64
 	cursor := ""
 	for {
-		if err := s.backfillStillBuilding(spaceID, viewID, indexID); err != nil {
+		if err := backfillStillBuilding(runtime); err != nil {
 			return written, err
 		}
 		pageCtx, cancel := context.WithTimeout(ctx, primaryHistoryPageReadTimeout)
 		rsp, err := readPrimaryTimeSeriesRowsLimited(pageCtx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-			SpaceId: spaceID, DatasetId: view.GetDatasetId(),
+			SpaceId: spaceID, DatasetId: datasetID,
 			ColumnNames: columns, LatestPerSeries: perSeries, Page: &pb.Page{Size: uint32(pageSize), Cursor: cursor},
 		})
 		cancel()
@@ -291,10 +245,10 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, sch
 			if ctx.Err() != nil {
 				return written, ctx.Err()
 			}
-			return written, fmt.Errorf("read Primary history for %s/%s (written=%d): %w", spaceID, view.GetDatasetId(), written, err)
+			return written, fmt.Errorf("read Primary history for %s/%s (written=%d): %w", spaceID, datasetID, written, err)
 		}
 		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return written, fmt.Errorf("read Primary history for %s/%s (written=%d): %w", spaceID, view.GetDatasetId(), written, err)
+			return written, fmt.Errorf("read Primary history for %s/%s (written=%d): %w", spaceID, datasetID, written, err)
 		}
 		writes := make([]viewindex.RowWrite, 0, len(rsp.GetRows()))
 		for _, row := range rsp.GetRows() {
@@ -312,15 +266,11 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, sch
 		}
 		for offset := 0; offset < len(writes); offset += 256 {
 			end := min(offset+256, len(writes))
-			if err := s.backfillStillBuilding(spaceID, viewID, indexID); err != nil {
+			if err := backfillStillBuilding(runtime); err != nil {
 				return written, err
 			}
-			engine, err := s.engineFor(indexID)
-			if err != nil {
-				return written, err
-			}
-			if err := s.writeIndex(ctx, indexID, engine, viewindex.ViewIndexWriteBatch{RowWrites: writes[offset:end], ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
-				return written, fmt.Errorf("write Primary period backfill %q: %w", indexID, err)
+			if err := s.writeIndex(ctx, runtime, viewindex.ViewIndexWriteBatch{RowWrites: writes[offset:end], ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
+				return written, fmt.Errorf("write Primary period backfill %q: %w", runtime.indexID, err)
 			}
 			written += uint64(end - offset)
 		}
@@ -333,94 +283,65 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, sch
 
 var errViewBuildCancelled = errors.New("View 的建索引已被取消")
 
-func (s *Service) backfillStillBuilding(spaceID, viewID, indexID string) error {
-	s.mu.RLock()
-	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
-	s.mu.RUnlock()
-	if runtime == nil {
-		return errViewBuildCancelled
-	}
+func backfillStillBuilding(runtime *viewRuntime) error {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.building != indexID {
+	if runtime.building != runtime.indexID {
 		return errViewBuildCancelled
 	}
 	return nil
 }
 
 // builtSchema 由索引文件记下的契约组出 View 的写入契约。
-func builtSchema(view *pb.View, engineName string, stats viewindex.ViewIndexStats) viewindex.ViewIndexSchema {
+func builtSchema(spec *viewSpec, stats viewindex.ViewIndexStats) viewindex.ViewIndexSchema {
 	return viewindex.ViewIndexSchema{
-		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(), ViewVersion: stats.ViewVersion,
-		Engine: engineName, Columns: stats.Columns, SchemaHash: stats.SchemaHash, RowsPerSeries: stats.RowsPerSeries,
-		ViewCreatedAt: view.GetCreatedAt(),
+		SpaceID: spec.SpaceID, DatasetID: spec.DatasetID, ViewVersion: stats.ViewVersion,
+		Engine: spec.engineName(), Columns: stats.Columns, SchemaHash: stats.SchemaHash, RowsPerSeries: stats.RowsPerSeries,
+		DatasetCreatedAt: spec.CreatedAt,
 	}
 }
 
-// AttachActiveView 按索引文件记下的契约挂接 View 的索引，并起跟随器。
-func (s *Service) AttachActiveView(ctx context.Context, view *pb.View, stats viewindex.ViewIndexStats) error {
-	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
-		return errors.New("view metadata is required")
-	}
-	engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
-	if s.engines[engineName] == nil {
-		return fmt.Errorf("view engine %q is unavailable", engineName)
-	}
-	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
-	schema := builtSchema(view, engineName, stats)
-	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
-	s.mu.Lock()
-	runtime := s.views[viewKey]
-	if runtime == nil {
-		runtime = newViewRuntime()
-		s.views[viewKey] = runtime
-	}
-	s.mu.Unlock()
-	s.attachRuntime(view, runtime, indexID, schema, engineName)
-	// 解锁之后再起跟随器：换数据集时要等旧跟随器退出，它可能正等着运行时锁写入。
-	// 重建没完成时也要起：跟随器会接着重建。
-	s.ensureFollower(viewKey)
-	return nil
+// attachActiveView 按索引文件记下的契约挂接 View 的索引，并起跟随器。
+func (s *Service) attachActiveView(runtime *viewRuntime, spec *viewSpec, stats viewindex.ViewIndexStats) {
+	attachRuntime(runtime, spec, builtSchema(spec, stats))
+	// 解锁之后再起跟随器：它可能正等着运行时锁写入。重建没完成时也要起：跟随器会接着重建。
+	s.ensureFollower(runtime.ref)
 }
 
 // attachRuntime 持有运行时锁挂接活动索引，返回是否挂接了。
-func (s *Service) attachRuntime(view *pb.View, runtime *viewRuntime, indexID string, schema viewindex.ViewIndexSchema, engineName string) bool {
+func attachRuntime(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIndexSchema) bool {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	// 维护在锁外读的索引契约可能早于定时任务刚提交的加列：不能用旧快照把写入契约改回去，只刷新 View 的声明与隐藏列。
+	// 维护在锁外读的索引契约可能早于定时任务刚提交的加列：不能用旧快照把写入契约改回去，只刷新声明与隐藏列。
 	// 加列在运行时锁下提交，这里必须在锁内读当前契约，锁外读到的可能已经过期。
-	s.mu.RLock()
-	attached := s.schemas[indexID]
-	s.mu.RUnlock()
-	if runtime.active == indexID && attached.ViewVersion > schema.ViewVersion {
-		schema = attached
+	if runtime.active == runtime.indexID && runtime.schema.ViewVersion > schema.ViewVersion {
+		schema = runtime.schema
 	}
 	// 断档重建进行中：索引建成前不能挂回去。
 	if runtime.active == "" && runtime.building != "" {
 		return false
 	}
-	s.attachActiveViewLocked(view, runtime, indexID, schema, engineName)
+	attachActiveLocked(runtime, spec, schema)
 	return true
 }
 
-// attachActiveViewLocked 更新内存里的活动索引（调用方持有 runtime.mu）：重启恢复、维护和建索引完成都走这里。
-func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, indexID string, schema viewindex.ViewIndexSchema, engineName string) {
-	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.catalogViews[viewKey] = proto.Clone(view).(*pb.View)
-	s.indexEngine[indexID] = engineName
-	s.schemas[indexID] = schema
-	if runtime.active != indexID {
+// attachActiveLocked 更新内存里的活动索引（调用方持有 runtime.mu）：重启恢复、维护和建索引完成都走这里。
+func attachActiveLocked(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIndexSchema) {
+	if runtime.active != runtime.indexID {
 		runtime.statsIndexID = ""
 		runtime.stats = viewindex.ViewIndexStats{}
 	}
-	runtime.active = indexID
+	runtime.spec = spec
+	runtime.active = runtime.indexID
 	runtime.building = ""
-	runtime.hiddenColumns = make(map[string]struct{}, len(view.GetHiddenColumns()))
-	for _, name := range view.GetHiddenColumns() {
-		runtime.hiddenColumns[name] = struct{}{}
-	}
+	runtime.schema = schema
 	runtime.publishReadStateLocked()
-	s.indexView[indexID] = viewKey
+}
+
+// setSpec 换上维护循环这一轮组出的声明。
+func (r *viewRuntime) setSpec(spec *viewSpec) {
+	r.mu.Lock()
+	r.spec = spec
+	r.publishReadStateLocked()
+	r.mu.Unlock()
 }

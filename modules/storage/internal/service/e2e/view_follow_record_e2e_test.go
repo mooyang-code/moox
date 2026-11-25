@@ -60,9 +60,10 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stop()
-	columns := []*pb.ViewColumn{{SpaceId: readyBenchSpace, ViewId: "notes_view", ColumnName: "title", OriginId: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN}}
-	meta := &followEnvMetadata{views: []*pb.View{{SpaceId: readyBenchSpace, ViewId: "notes_view", DatasetId: "notes", Engine: "bleve", Columns: columns, Status: "active"}}}
+	// 记录型数据集建好后不调任何 View 接口：维护流程为它建 Bleve 索引。
+	meta := &followEnvMetadata{}
+	meta.addDataset(&pb.Dataset{SpaceId: readyBenchSpace, DatasetId: "notes", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active", CreatedAt: followEnvDatasetCreatedAt},
+		&pb.DatasetColumn{SpaceId: readyBenchSpace, DatasetId: "notes", ColumnName: "title", DisplayName: "标题", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"})
 	stopMaintainer, err := view.StartViewMaintainerAsync(ctx, viewservice.MaintenanceOptions{Metadata: meta, PrimaryRange: reader, Interval: 100 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +71,7 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 	defer stopMaintainer()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		rsp, _ := view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, ViewId: "notes_view"})
+		rsp, _ := view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, DatasetId: "notes"})
 		if rsp.GetIndexId() != "" {
 			break
 		}
@@ -90,11 +91,11 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("写入记录：rsp=%v err=%v", rsp, err)
 	}
-	applied, err := view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, ViewId: "notes_view", WaitTimeoutMs: 10000})
+	applied, err := view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, DatasetId: "notes", WaitTimeoutMs: 10000})
 	if err != nil || !applied.GetApplied() {
 		t.Fatalf("等记录型 View 跟上：rsp=%v err=%v", applied, err)
 	}
-	search, err := view.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{SpaceId: readyBenchSpace, ViewId: "notes_view", TextQuery: "note", Page: &pb.Page{Page: 1, Size: 10}})
+	search, err := view.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{SpaceId: readyBenchSpace, DatasetId: "notes", TextQuery: "note", Page: &pb.Page{Page: 1, Size: 10}})
 	if err != nil || search.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(search.GetRows()) != 2 {
 		t.Fatalf("检索记录：rsp=%v err=%v", search, err)
 	}

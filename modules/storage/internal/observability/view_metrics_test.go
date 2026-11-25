@@ -33,7 +33,7 @@ func TestViewMetricsSummarizeSubjectsPerView(t *testing.T) {
 	latest := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	observe := func(subject string, at time.Time) {
 		require.NoError(t, metrics.ObserveViewDatasetOutput(ViewDatasetObservation{
-			SpaceID: "crypto", ViewID: "prices-view", DatasetID: "market-prices", SubjectID: subject, Frequency: "1m", DataTime: at,
+			SpaceID: "crypto", DatasetID: "market-prices", SubjectID: subject, Frequency: "1m", DataTime: at,
 		}))
 	}
 	observe("BTC-USDT", latest)
@@ -42,12 +42,12 @@ func TestViewMetricsSummarizeSubjectsPerView(t *testing.T) {
 	for i := 0; i < ViewLaggingSubjectsReported+5; i++ {
 		observe(fmt.Sprintf("L%02d-USDT", i), latest.Add(-time.Hour+time.Duration(i)*time.Second))
 	}
-	scope := map[string]string{"space_id": "crypto", "view_id": "prices-view", "dataset_id": "market-prices", "freq": "1m"}
+	scope := map[string]string{"space_id": "crypto", "dataset_id": "market-prices", "freq": "1m"}
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_latest_data_time_seconds", scope, float64(latest.Unix()))
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_tracked_since_data_time_seconds", scope, float64(latest.Unix()))
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_subjects", scope, float64(2+ViewLaggingSubjectsReported+5))
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_lagging_subjects", scope, float64(ViewLaggingSubjectsReported+5))
-	oldest := map[string]string{"space_id": "crypto", "view_id": "prices-view", "dataset_id": "market-prices", "freq": "1m", "subject_id": "L00-USDT"}
+	oldest := map[string]string{"space_id": "crypto", "dataset_id": "market-prices", "freq": "1m", "subject_id": "L00-USDT"}
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_lagging_subject_data_time_seconds", oldest, float64(latest.Add(-time.Hour).Unix()))
 
 	families, err := registry.Gather()
@@ -105,13 +105,13 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	metrics.SetOutboxSnapshotAt(3, time.Now().Add(-4*time.Second))
 	arrived := time.Date(2026, 8, 20, 14, 1, 3, 0, time.UTC)
 	metrics.now = func() time.Time { return arrived }
-	metrics.ObserveViewOutputWatermark("crypto", "view_factor_binance_kline_1m", "dataset_factor_binance_kline_1m", "1m", time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC))
+	metrics.ObserveViewOutputWatermark("crypto", "dataset_factor_binance_kline_1m", "1m", time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC))
 	metrics.now = func() time.Time { return arrived.Add(time.Minute) }
-	metrics.ObserveViewOutputWatermark("crypto", "view_factor_binance_kline_1m", "dataset_factor_binance_kline_1m", "1m", time.Date(2026, 8, 20, 13, 0, 0, 0, time.UTC))
-	assert.Equal(t, float64(time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC).Unix()), testutil.ToFloat64(metrics.viewOutputWatermark.WithLabelValues("crypto", "view_factor_binance_kline_1m", "dataset_factor_binance_kline_1m", "1m")))
+	metrics.ObserveViewOutputWatermark("crypto", "dataset_factor_binance_kline_1m", "1m", time.Date(2026, 8, 20, 13, 0, 0, 0, time.UTC))
+	assert.Equal(t, float64(time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC).Unix()), testutil.ToFloat64(metrics.viewOutputWatermark.WithLabelValues("crypto", "dataset_factor_binance_kline_1m", "1m")))
 	// 到达时间只在水位前进时记录：较旧的水位不改动它。
-	assert.Equal(t, float64(arrived.Unix()), testutil.ToFloat64(metrics.viewOutputArrival.WithLabelValues("crypto", "view_factor_binance_kline_1m", "dataset_factor_binance_kline_1m", "1m")))
-	metrics.ObserveReadyPublishRetry("prices-view", "source_period_ready")
+	assert.Equal(t, float64(arrived.Unix()), testutil.ToFloat64(metrics.viewOutputArrival.WithLabelValues("crypto", "dataset_factor_binance_kline_1m", "1m")))
+	metrics.ObserveReadyPublishRetry("crypto", "market-prices", "source_period_ready")
 	metrics.ObserveRestore(true, 250*time.Millisecond)
 
 	snapshot := metrics.Snapshot()
@@ -202,9 +202,9 @@ func TestRetainViewsDropsSeriesOfInactiveViews(t *testing.T) {
 	require.NoError(t, err)
 	at := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
 	for _, view := range []string{"view_keep", "view_gone"} {
-		metrics.ObserveViewOutputWatermark("crypto", view, "dataset_"+view, "1m", at)
+		metrics.ObserveViewOutputWatermark("crypto", "dataset_"+view, "1m", at)
 		require.NoError(t, metrics.ObserveViewDatasetOutput(ViewDatasetObservation{
-			SpaceID: "crypto", ViewID: view, DatasetID: "dataset_" + view, SubjectID: "BTC", Frequency: "1m", SeriesTag: "t", DataTime: at}))
+			SpaceID: "crypto", DatasetID: "dataset_" + view, SubjectID: "BTC", Frequency: "1m", SeriesTag: "t", DataTime: at}))
 	}
 	viewsReported := func() map[string]bool {
 		families, err := registry.Gather()
@@ -216,7 +216,7 @@ func TestRetainViewsDropsSeriesOfInactiveViews(t *testing.T) {
 			}
 			for _, metric := range family.GetMetric() {
 				for _, label := range metric.GetLabel() {
-					if label.GetName() == "view_id" {
+					if label.GetName() == "dataset_id" {
 						seen[label.GetValue()] = true
 					}
 				}
@@ -224,12 +224,12 @@ func TestRetainViewsDropsSeriesOfInactiveViews(t *testing.T) {
 		}
 		return seen
 	}
-	require.Equal(t, map[string]bool{"view_keep": true, "view_gone": true}, viewsReported())
+	require.Equal(t, map[string]bool{"dataset_view_keep": true, "dataset_view_gone": true}, viewsReported())
 
-	metrics.RetainViews(map[ViewKey]struct{}{{SpaceID: "crypto", ViewID: "view_keep"}: {}})
-	require.Equal(t, map[string]bool{"view_keep": true}, viewsReported())
+	metrics.RetainViews(map[ViewKey]struct{}{{SpaceID: "crypto", DatasetID: "dataset_view_keep"}: {}})
+	require.Equal(t, map[string]bool{"dataset_view_keep": true}, viewsReported())
 
 	// 重新出现的 View 照常产出（旧水位记录已清除）。
-	metrics.ObserveViewOutputWatermark("crypto", "view_gone", "dataset_view_gone", "1m", at.Add(-time.Hour))
-	require.True(t, viewsReported()["view_gone"])
+	metrics.ObserveViewOutputWatermark("crypto", "dataset_view_gone", "1m", at.Add(-time.Hour))
+	require.True(t, viewsReported()["dataset_view_gone"])
 }

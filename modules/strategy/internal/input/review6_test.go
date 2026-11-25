@@ -45,7 +45,7 @@ func TestCalendarErrorsNameTheDay(t *testing.T) {
 		t.Fatalf("越过末尾时应报日历的最后一天：%v", err)
 	}
 	client := newFakeClient("spot")
-	probe := NewAgeProbe(client, "space", Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}, 9500, ViewInfo{ViewID: "view_stock"}, "spot", map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
+	probe := NewAgeProbe(client, "space", Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}, 9500, ViewInfo{DatasetID: "view_stock"}, "spot", map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
 	if _, err := probe(context.Background(), []string{"600000.SH"}); err == nil || strings.Contains(err.Error(), "0000-00-00") {
 		t.Fatalf("探针的 config_error 明细不应出现零值日期：%v", err)
 	}
@@ -69,8 +69,8 @@ rules:
 		t.Fatal(err)
 	}
 	for _, seriesBars := range []int{0, 10000} {
-		resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
-		view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 1990, 12, 19), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: seriesBars}
+		resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
+		view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 1990, 12, 19), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: seriesBars}
 		if _, err := ReplayWindow(resolved, program, view, stockDay(t, 2020, 1, 2), stockDay(t, 2020, 6, 1), testNow); err != nil {
 			t.Fatalf("数据从日历首日开始时（每序列 %d 根）回放应可以提交：%v", seriesBars, err)
 		}
@@ -79,8 +79,8 @@ rules:
 
 // A 股覆盖太短：报历史不足，而不是先往后推越过日历末尾、误报成日历需要更新。
 func TestReplayWindowStockShortCoverage(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 120}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 120}
+	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
 	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 9), testNow)
 	if err == nil || !strings.Contains(err.Error(), "需要 120 根数据") || strings.Contains(err.Error(), "更新日历") {
 		t.Fatalf("覆盖太短应说明历史不足：%v", err)
@@ -89,8 +89,8 @@ func TestReplayWindowStockShortCoverage(t *testing.T) {
 
 // 覆盖范围无法使用时说明具体原因：整体超出内嵌日历要提示更新日历，而不是“还没有数据”。
 func TestCoverageBeyondCalendarSaysWhy(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2028, 1, 4), IndexedTo: stockDay(t, 2028, 3, 1), SeriesBars: 5000}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
+	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2028, 1, 4), IndexedTo: stockDay(t, 2028, 3, 1), SeriesBars: 5000}
 	if _, err := CoverageBounds(view, resolved, testNow); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") {
 		t.Fatalf("覆盖整体超出日历应说明原因：%v", err)
 	}
@@ -109,8 +109,8 @@ func TestCoverageBeyondCalendarSaysWhy(t *testing.T) {
 // 次日的日期键（区间仍按“不含结束日”的整日口径）。
 func TestReplayWindowIncludesLastCalendarDay(t *testing.T) {
 	now := time.Date(2028, 1, 10, 0, 0, 0, 0, time.UTC)
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 8), SeriesBars: 5000}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
+	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 8), SeriesBars: 5000}
 	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2027, 12, 1), stockDay(t, 2028, 3, 1), now)
 	if err != nil || !end.Equal(stockDay(t, 2028, 1, 1)) {
 		t.Fatalf("终点应是日历末日次日的日期键：%s err=%v", end, err)
@@ -176,8 +176,8 @@ func TestReplayRangeUsesShanghaiDates(t *testing.T) {
 
 // min_age_bars 等于每序列保留的根数时回放永远没有可用的 bar（可用起点恰是最新一根，而回放只到它之前）。
 func TestReplayWindowRejectsMinAgeEqualToSeriesBars(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 100}
-	view := ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 100}
+	view := ViewInfo{DatasetID: "dataset_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
 		t.Fatalf("N 等于每序列根数应拒绝：%v", err)
 	}
@@ -204,13 +204,13 @@ func (c *scriptedClient) QueryRows(context.Context, string, Query) ([]Row, uint6
 		}
 	}()
 	if c.reads <= c.stale {
-		return nil, 0, &staleError{message: "View view_factor_1h 在读取期间有新的写入", raw: errors.New("active View index revision changed: expected=1 actual=2")}
+		return nil, 0, &staleError{message: "View dataset_factor_1h 在读取期间有新的写入", raw: errors.New("active View index revision changed: expected=1 actual=2")}
 	}
 	return []Row{{SubjectID: "BTC-USDT", DataTime: barStart, Values: map[string]float64{"close": 1}}}, 1, nil
 }
 
-func (c *scriptedClient) GetView(_ context.Context, _, viewID string) (ViewInfo, error) {
-	return ViewInfo{ViewID: viewID, ActiveIndexID: "idx_a", Generation: c.generation}, nil
+func (c *scriptedClient) GetView(_ context.Context, _, datasetID string) (ViewInfo, error) {
+	return ViewInfo{DatasetID: datasetID, ActiveIndexID: "idx_a", Generation: c.generation}, nil
 }
 
 func (c *scriptedClient) ViewGeneration(context.Context, string, string) (string, error) {
@@ -228,7 +228,7 @@ func fastStaleRetries(t *testing.T, budget time.Duration) {
 func TestRangeLoaderRetriesRevisionConflicts(t *testing.T) {
 	fastStaleRetries(t, time.Minute)
 	client := &scriptedClient{fakeClient: newFakeClient("spot"), stale: 6, generation: "idx_a@b1"}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{ViewID: "view_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
 	rows, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
 	if err != nil || client.reads != 7 || len(rows.Bars[barStart.Unix()]) != 1 {
 		t.Fatalf("写入冲突应退避重读直到成功：reads=%d err=%v", client.reads, err)
@@ -239,7 +239,7 @@ func TestRangeLoaderRetriesRevisionConflicts(t *testing.T) {
 func TestRangeLoaderGivesUpAfterBudget(t *testing.T) {
 	fastStaleRetries(t, 20*time.Millisecond)
 	client := &scriptedClient{fakeClient: newFakeClient("spot"), stale: 1 << 30, generation: "idx_a@b1"}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{ViewID: "view_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
 	_, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
 	if err == nil || !errors.Is(err, ErrStale) || !strings.Contains(err.Error(), "持续有新的写入") || strings.Contains(err.Error(), "索引持续变化") || leaksRaw(err) {
 		t.Fatalf("预算用完应给出中文说明：%v", err)
@@ -252,7 +252,7 @@ func TestRangeLoaderGivesUpAfterBudget(t *testing.T) {
 // 两段读取之间重建两次回到同一个槽位（A→B→A）：按槽位名固定的读取会直接成功，读完也要比较代次。
 func TestRangeLoaderDetectsSlotReuse(t *testing.T) {
 	client := &scriptedClient{fakeClient: newFakeClient("spot"), generation: "idx_a@b3"}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{ViewID: "view_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
 	_, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
 	var changed *IndexChangedError
 	if !errors.As(err, &changed) || changed.View.Generation != "idx_a@b3" {

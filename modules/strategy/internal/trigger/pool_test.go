@@ -56,7 +56,7 @@ func newPoolHarness(t *testing.T, poolYaml string, members []input.PoolMember, a
 	if pooled.Pool == nil {
 		t.Fatal("测试需要策略池 DSL")
 	}
-	task := input.TaskBinding{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}
+	task := input.TaskBinding{FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}
 	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": task}, Bar: "1h", Calendar: input.DefaultCalendar,
 		Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{"f": "h1|fixed", "g": "hg|fixed"}, ViewColumns: []string{"close", "m"}}
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
@@ -90,7 +90,7 @@ func newPoolHarness(t *testing.T, poolYaml string, members []input.PoolMember, a
 }
 
 func poolMember(id, factor, contract string) input.PoolMember {
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}},
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}},
 		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: factor, FactorID: factor, DefinitionHash: "h"}},
 		Factors: map[string]string{factor: contract}, ViewColumns: []string{"close", "m"}}
 	return input.PoolMember{ID: id, StrategyID: "s_" + id, DSLHash: dsl.Hash([]byte(poolMemberDSL)), DSLYaml: poolMemberDSL, Resolved: resolved}

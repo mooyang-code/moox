@@ -89,7 +89,7 @@ func startPoolReplay(t *testing.T, repo *store.Store, client input.Client, id, r
 	}
 	tasks := map[string]store.ReplayTask{}
 	for market, task := range pooled.Resolved.Tasks {
-		tasks[market] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: "idx"}
+		tasks[market] = store.ReplayTask{FactorTaskID: task.FactorTaskID, DatasetID: task.DatasetID, ViewGeneration: "idx"}
 	}
 	job := store.Replay{ReplayID: id, DSLYaml: raw, DSLHash: dsl.Hash([]byte(raw)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: tasks,
 		StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), SpotFeeBps: 10, SwapFeeBps: 5,
@@ -459,7 +459,7 @@ func TestPoolReplayRejectsBrokenSnapshot(t *testing.T) {
 			_, pooled := resolvePool(t, client, raw, list)
 			snapshot, _ := pooled.MembersJSON()
 			job := store.Replay{ReplayID: "broken", DSLYaml: raw, DSLHash: dsl.Hash([]byte(raw)), Calendar: "crypto_24x7", SpaceID: "crypto",
-				Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}},
+				Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}},
 				StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(14 * time.Hour), MembersJSON: snapshot, Factors: pooled.Resolved.Factors, CreatedAt: origin}
 			edit(&job)
 			if err := repo.CreateReplay(context.Background(), job); err != nil {
@@ -483,7 +483,7 @@ func TestCreateReplayRejectsInvalidMembersSnapshot(t *testing.T) {
 	repo := openStore(t)
 	for _, raw := range []string{"[]", "{}", "not json"} {
 		job := store.Replay{ReplayID: "bad", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", SpaceID: "crypto",
-			Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}},
+			Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}},
 			StartTime: origin, EndTime: origin.Add(time.Hour), MembersJSON: raw, CreatedAt: origin}
 		if err := repo.CreateReplay(context.Background(), job); err == nil || !strings.Contains(err.Error(), "成员快照") {
 			t.Fatalf("成员快照 %q 应被拒绝：%v", raw, err)

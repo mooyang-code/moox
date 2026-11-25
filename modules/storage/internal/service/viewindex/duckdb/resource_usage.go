@@ -79,13 +79,13 @@ func (m *IndexManager) collectUsage() usageReport {
 	return report
 }
 
-// describeIndex 把索引 ID（十六进制编码）还原成 空间/View，读不出来时原样返回。
+// describeIndex 把索引 ID（十六进制编码）还原成 空间/数据集，读不出来时原样返回。
 func describeIndex(id string) string {
-	ref, err := viewindex.ParseViewIndexID(id)
+	ref, err := viewindex.ParseIndexID(id)
 	if err != nil {
 		return id
 	}
-	return fmt.Sprintf("%s/%s", ref.SpaceID, ref.ViewID)
+	return fmt.Sprintf("%s/%s", ref.SpaceID, ref.DatasetID)
 }
 
 func mib(bytes int64) string { return fmt.Sprintf("%dMB", bytes>>20) }

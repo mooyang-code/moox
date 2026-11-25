@@ -198,7 +198,7 @@ func startComputeReplay(t *testing.T, repo *store.Store, client input.Client, id
 	resolved, _, err := input.Resolve(context.Background(), client, "crypto", []string{"ftask_a"}, strategy)
 	require.NoError(t, err)
 	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", SpaceID: "crypto", Input: store.ReplayInputCompute,
-		Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour),
+		Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour),
 		SpotFeeBps: 10, Factors: resolved.Factors, CreatedAt: origin}
 	require.NoError(t, repo.CreateReplay(context.Background(), job))
 	claimed, found, err := repo.ClaimNextReplay(context.Background(), origin)
@@ -290,8 +290,8 @@ portfolio:
 // f 声明了整型参数 window（5～60，默认 20）。
 type tunedComputeClient struct{ *fakeClient }
 
-func (c tunedComputeClient) GetView(ctx context.Context, spaceID, viewID string) (input.ViewInfo, error) {
-	view, err := c.fakeClient.GetView(ctx, spaceID, viewID)
+func (c tunedComputeClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+	view, err := c.fakeClient.GetView(ctx, spaceID, datasetID)
 	view.Columns = []input.ViewColumn{
 		{Name: "close", Attributes: map[string]string{}},
 		{Name: "m", Attributes: map[string]string{"column_kind": "output", "member_key": "f__var", "factor_id": "f", "member_kind": "var", "output_name": "m"}},
@@ -533,13 +533,13 @@ func TestComputeStepPeriods(t *testing.T) {
 
 // viewEngine 是按 View 已有的行出帧的因子引擎：每期按 OpenReplay 请求的列读任务的 View 同一根的行（series_tag 原样），
 // 上一期的同名列读上一根，年龄是（标的, series_tag）在 View 里最早一行起的根数。引擎与 View 给出相同的
-// 行时，因子现算与 View 来源的回放结果应当一致。views 是任务 → View（为空时都读 viewID）；每个会话 ID 各有自己的状态。
+// 行时，因子现算与 View 来源的回放结果应当一致。views 是任务 → View（为空时都读 datasetID）；每个会话 ID 各有自己的状态。
 type viewEngine struct {
-	client   input.Client
-	viewID   string
-	views    map[string]string
-	columns  []string
-	sessions map[string]*viewSession
+	client    input.Client
+	datasetID string
+	views     map[string]string
+	columns   []string
+	sessions  map[string]*viewSession
 	// opened 是 OpenReplay 用过的会话 ID（按先后）；params 是各会话收到的逐期参数（会话 → 请求参数的期次）。
 	opened []string
 	params map[string][]int64
@@ -548,24 +548,24 @@ type viewEngine struct {
 }
 
 type viewSession struct {
-	viewID  string
-	periods []int64
-	first   map[string]int64
+	datasetID string
+	periods   []int64
+	first     map[string]int64
 }
 
-func (e *viewEngine) query(viewID string, at time.Time, columns []string) []input.Row {
-	view, _ := e.client.GetView(context.Background(), "crypto", viewID)
+func (e *viewEngine) query(datasetID string, at time.Time, columns []string) []input.Row {
+	view, _ := e.client.GetView(context.Background(), "crypto", datasetID)
 	subjects, _ := e.client.ListDatasetSubjects(context.Background(), "crypto", view.DatasetID)
-	rows, _, _ := e.client.QueryRows(context.Background(), "crypto", input.Query{ViewID: viewID, DatasetID: view.DatasetID, Frequency: "1h", Subjects: subjects, Start: at, End: at.Add(time.Nanosecond), Columns: columns})
+	rows, _, _ := e.client.QueryRows(context.Background(), "crypto", input.Query{DatasetID: datasetID, Frequency: "1h", Subjects: subjects, Start: at, End: at.Add(time.Nanosecond), Columns: columns})
 	return rows
 }
 
 func (e *viewEngine) OpenReplay(_ context.Context, req *factorpb.OpenReplayReq, _ ...client.Option) (*factorpb.OpenReplayRsp, error) {
 	from, _ := time.Parse(time.RFC3339, req.GetFrom())
 	to, _ := time.Parse(time.RFC3339, req.GetTo())
-	session := &viewSession{viewID: e.viewID, first: map[string]int64{}}
-	if viewID, ok := e.views[req.GetTaskId()]; ok {
-		session.viewID = viewID
+	session := &viewSession{datasetID: e.datasetID, first: map[string]int64{}}
+	if datasetID, ok := e.views[req.GetTaskId()]; ok {
+		session.datasetID = datasetID
 	}
 	if e.sessions == nil {
 		e.sessions = map[string]*viewSession{}
@@ -576,13 +576,13 @@ func (e *viewEngine) OpenReplay(_ context.Context, req *factorpb.OpenReplayReq, 
 		session.periods = append(session.periods, at.Unix())
 	}
 	for at := origin; at.Before(to); at = at.Add(time.Hour) {
-		for _, row := range e.query(session.viewID, at, []string{"close"}) {
+		for _, row := range e.query(session.datasetID, at, []string{"close"}) {
 			if _, ok := session.first[row.SubjectID+"|"+row.SeriesTag]; !ok {
 				session.first[row.SubjectID+"|"+row.SeriesTag] = at.Unix()
 			}
 		}
 	}
-	view, _ := e.client.GetView(context.Background(), "crypto", session.viewID)
+	view, _ := e.client.GetView(context.Background(), "crypto", session.datasetID)
 	subjects, _ := e.client.ListDatasetSubjects(context.Background(), "crypto", view.DatasetID)
 	ids := make([]string, 0, len(subjects))
 	for _, subject := range subjects {
@@ -608,11 +608,11 @@ func (e *viewEngine) StepReplay(_ context.Context, req *factorpb.StepReplayReq, 
 	for i := start; i < min(start+int(req.GetPeriods()), len(session.periods)); i++ {
 		at := time.Unix(session.periods[i], 0).UTC()
 		previous := map[string]map[string]float64{}
-		for _, row := range e.query(session.viewID, at.Add(-time.Hour), e.columns) {
+		for _, row := range e.query(session.datasetID, at.Add(-time.Hour), e.columns) {
 			previous[row.SubjectID+"|"+row.SeriesTag] = row.Values
 		}
 		period := &factorpb.ReplayPeriod{PeriodTime: at.Unix(), AppliedParams: req.GetParams()}
-		for _, row := range e.query(session.viewID, at, e.columns) {
+		for _, row := range e.query(session.datasetID, at, e.columns) {
 			key := row.SubjectID + "|" + row.SeriesTag
 			period.Rows = append(period.Rows, &factorpb.ReplayRow{SubjectId: row.SubjectID, SeriesTag: row.SeriesTag, Values: row.Values, Previous: previous[key],
 				AgeBars: int32((at.Unix()-session.first[key])/3600 + 1)})
@@ -664,7 +664,7 @@ func TestComputeSourceMatchesViewSourceOnMarkets(t *testing.T) {
 			client := tc.client()
 			views := map[string]string{}
 			for _, task := range tasks {
-				views[task.FactorTaskID] = task.ViewID
+				views[task.FactorTaskID] = task.DatasetID
 			}
 			engine := &viewEngine{client: client, views: views}
 			job := startMarketReplay(t, computeRepo, client, "c1", tc.dsl, tc.hours, tasks, 10, 5)

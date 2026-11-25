@@ -36,8 +36,8 @@ const (
 	// followEnvPrefillBatch 是预填 View 时每次直接写入索引的行数。
 	followEnvPrefillBatch = 20000
 	followEnvSchemaHash   = "follow-env-schema-1"
-	// followEnvViewCreatedAt 是 View 元数据的创建时间（与 SQLite 的 c_ctime 同一格式）。
-	followEnvViewCreatedAt = "2026-11-01 00:00:00"
+	// followEnvDatasetCreatedAt 是数据集元数据的创建时间。
+	followEnvDatasetCreatedAt = "2026-11-01T00:00:00Z"
 )
 
 // followEnv 是一套装配好的 Storage：Primary、跟随变更日志的 View、EventBus。实现 readyBenchEnv。
@@ -47,9 +47,8 @@ type followEnv struct {
 	view    *viewservice.Service
 	clock   atomic.Int64
 	watcher *readyWatcher
-	// metadata 是 View 的元数据：只有 View 的声明，已建状态在索引文件里。
+	// metadata 是 View 读的数据集元数据，已建状态在索引文件里。
 	metadata *followEnvMetadata
-	datasets map[string]string
 	// follow 是启动跟随时的参数，stopFollowing 停掉跟随（模拟 View 停机）。
 	follow        viewservice.FollowOptions
 	stopFollowing func()
@@ -63,37 +62,37 @@ func (e *followEnv) SetPeriodClock(at time.Time) {
 	e.clock.Store(at.UnixNano())
 }
 
-func (e *followEnv) CountViewRows(ctx context.Context, viewID, subject string, start, end time.Time) (uint64, error) {
+func (e *followEnv) CountViewRows(ctx context.Context, datasetID, subject string, start, end time.Time) (uint64, error) {
 	req := &pb.QueryTimeSeriesRowsReq{
-		SpaceId: readyBenchSpace, ViewId: viewID,
+		SpaceId: readyBenchSpace, DatasetId: datasetID,
 		TimeRange: &pb.TimeRange{StartTime: start.UTC().Format(time.RFC3339), EndTime: end.UTC().Format(time.RFC3339)},
 		Page:      &pb.Page{Page: 1, Size: 1}, TotalMode: pb.TotalMode_FORCE_EXACT,
 	}
 	if subject != "" {
-		req.Selectors = []*pb.TimeSeriesSelector{{SpaceId: readyBenchSpace, DatasetId: e.datasets[viewID], SubjectId: subject, Freq: readyBenchFreq}}
+		req.Selectors = []*pb.TimeSeriesSelector{{SpaceId: readyBenchSpace, DatasetId: datasetID, SubjectId: subject, Freq: readyBenchFreq}}
 	}
 	rsp, err := e.view.QueryTimeSeriesRows(ctx, req)
 	if err != nil {
 		return 0, err
 	}
 	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return 0, fmt.Errorf("查询 View %s：%s", viewID, rsp.GetRetInfo().GetMsg())
+		return 0, fmt.Errorf("查询 View %s：%s", datasetID, rsp.GetRetInfo().GetMsg())
 	}
 	return uint64(rsp.GetPageResult().GetTotal()), nil
 }
 
 // WaitApplied 等 View 跟上当前的日志头部。
-func (e *followEnv) WaitApplied(t *testing.T, ctx context.Context, viewID string) {
+func (e *followEnv) WaitApplied(t *testing.T, ctx context.Context, datasetID string) {
 	t.Helper()
 	// 索引建好（GetViewState 能看到）到跟随器登记之间有一小段间隔，这期间服务回答 VIEW_NOT_READY，按契约重试。
 	deadline := time.Now().Add(30 * time.Second)
-	rsp, err := e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, ViewId: viewID, WaitTimeoutMs: 20000})
+	rsp, err := e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, DatasetId: datasetID, WaitTimeoutMs: 20000})
 	for err == nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_VIEW_NOT_READY && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
-		rsp, err = e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, ViewId: viewID, WaitTimeoutMs: 20000})
+		rsp, err = e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, DatasetId: datasetID, WaitTimeoutMs: 20000})
 	}
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || !rsp.GetApplied() {
-		t.Fatalf("等 View %s 跟上变更日志：rsp=%v err=%v", viewID, rsp, err)
+		t.Fatalf("等 View %s 跟上变更日志：rsp=%v err=%v", datasetID, rsp, err)
 	}
 }
 
@@ -116,11 +115,8 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	env := &followEnv{datasets: make(map[string]string)}
+	env := &followEnv{}
 	env.SetPeriodClock(readyBenchBase.Add(-time.Hour))
-	for _, dataset := range datasets {
-		env.datasets[dataset.viewID] = dataset.datasetID
-	}
 
 	// EventBus：内嵌 JetStream，MOOX_STORAGE 与生产一致。
 	server, err := natsserver.NewServer(&natsserver.Options{
@@ -194,11 +190,10 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 	env.root = root
 	env.metadata = &followEnvMetadata{}
 	for _, dataset := range datasets {
-		view := followEnvView(dataset)
 		if opts.prebuilt {
-			prebuildFollowEnvIndex(t, ctx, root, env.store, view, dataset)
+			prebuildFollowEnvIndex(t, ctx, root, env.store, dataset)
 		}
-		env.metadata.views = append(env.metadata.views, view)
+		env.metadata.add(dataset)
 	}
 	env.view, err = viewservice.New(root)
 	if err != nil {
@@ -244,39 +239,43 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 }
 
 // WaitBuilt 等维护流程把 View 的索引建好。
-func (e *followEnv) WaitBuilt(t *testing.T, ctx context.Context, viewID string) *pb.GetViewStateRsp {
+func (e *followEnv) WaitBuilt(t *testing.T, ctx context.Context, datasetID string) *pb.GetViewStateRsp {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		rsp, err := e.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, ViewId: viewID})
+		rsp, err := e.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, DatasetId: datasetID})
 		if err == nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS && rsp.GetIndexId() != "" {
 			return rsp
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("30 秒内 View %s 没有建好索引", viewID)
+	t.Fatalf("30 秒内 View %s 没有建好索引", datasetID)
 	return nil
 }
 
-func followEnvView(dataset readyBenchDataset) *pb.View {
-	columns := make([]*pb.ViewColumn, len(dataset.columns))
+// followEnvColumns 是数据集的列（按建列顺序），也是它查询索引的列。
+func followEnvColumns(dataset readyBenchDataset) []*pb.DatasetColumn {
+	columns := make([]*pb.DatasetColumn, len(dataset.columns))
 	for i, column := range dataset.columns {
-		columns[i] = &pb.ViewColumn{SpaceId: readyBenchSpace, ViewId: dataset.viewID, ColumnName: column.name, OriginId: column.name, ValueType: column.kind,
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, SortOrder: uint32(i)}
+		columns[i] = &pb.DatasetColumn{SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, ColumnName: column.name, DisplayName: column.name, ValueType: column.kind, Status: "active"}
 	}
-	return &pb.View{SpaceId: readyBenchSpace, ViewId: dataset.viewID, DatasetId: dataset.datasetID, Engine: "duckdb", Freq: readyBenchFreq, Columns: columns, Status: "active", CreatedAt: followEnvViewCreatedAt}
+	return columns
 }
 
 // prebuildFollowEnvIndex 在 View 进程启动前直接建好索引、按 prefillBars 写入历史，并把当前日志头部记为跟随起点与建成序号。
-func prebuildFollowEnvIndex(t *testing.T, ctx context.Context, root string, store *pebble.Store, view *pb.View, dataset readyBenchDataset) {
+func prebuildFollowEnvIndex(t *testing.T, ctx context.Context, root string, store *pebble.Store, dataset readyBenchDataset) {
 	t.Helper()
 	manager, err := viewduckdb.OpenIndexManager(viewduckdb.IndexManagerOptions{Root: filepath.Join(root, "duckdb")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
-	schema := viewindex.ViewIndexSchema{SpaceID: readyBenchSpace, ViewID: view.GetViewId(), PrimaryDatasetID: dataset.datasetID, ViewVersion: 1, Engine: "duckdb", SchemaHash: followEnvSchemaHash, Columns: view.GetColumns(), ViewCreatedAt: view.GetCreatedAt()}
+	indexID := viewindex.IndexID(readyBenchSpace, dataset.datasetID)
+	columns := make([]*viewindex.Column, len(dataset.columns))
+	for i, column := range dataset.columns {
+		columns[i] = &viewindex.Column{ColumnName: column.name, ValueType: column.kind, SortOrder: uint32(i)}
+	}
+	schema := viewindex.ViewIndexSchema{SpaceID: readyBenchSpace, DatasetID: dataset.datasetID, ViewVersion: 1, Engine: "duckdb", SchemaHash: followEnvSchemaHash, Columns: columns, DatasetCreatedAt: followEnvDatasetCreatedAt}
 	if err := manager.Prepare(ctx, indexID, schema); err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +287,7 @@ func prebuildFollowEnvIndex(t *testing.T, ctx context.Context, root string, stor
 				return
 			}
 			if err := manager.Write(ctx, indexID, viewindex.ViewIndexWriteBatch{RowWrites: batch, ViewRevision: 1, ViewSchemaHash: followEnvSchemaHash, WriteMode: viewindex.Backfill}); err != nil {
-				t.Fatalf("预填 View %s：%v", view.GetViewId(), err)
+				t.Fatalf("预填 View %s：%v", dataset.datasetID, err)
 			}
 			batch = batch[:0]
 		}
@@ -302,7 +301,7 @@ func prebuildFollowEnvIndex(t *testing.T, ctx context.Context, root string, stor
 			}
 		}
 		flush()
-		t.Logf("预填 View %s：%d 个标的 × %d 根，耗时 %s", view.GetViewId(), len(dataset.subjects), dataset.prefillBars, time.Since(started).Round(time.Millisecond))
+		t.Logf("预填 View %s：%d 个标的 × %d 根，耗时 %s", dataset.datasetID, len(dataset.subjects), dataset.prefillBars, time.Since(started).Round(time.Millisecond))
 	}
 	head, err := store.ChangeCursor()
 	if err != nil {
@@ -322,16 +321,8 @@ type followEnvSnapshot struct {
 func newFollowEnvSnapshot(datasets []readyBenchDataset) *followEnvSnapshot {
 	snapshot := &followEnvSnapshot{datasets: make(map[string]*pb.Dataset), columns: make(map[string][]*pb.DatasetColumn)}
 	for _, dataset := range datasets {
-		snapshot.datasets[dataset.datasetID] = &pb.Dataset{
-			SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Name: dataset.datasetID,
-			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: readyBenchFreq, Status: "active",
-			AllowedLatenessSeconds: uint32(readyBenchLatenessSeconds),
-		}
-		for _, column := range dataset.columns {
-			snapshot.columns[dataset.datasetID] = append(snapshot.columns[dataset.datasetID], &pb.DatasetColumn{
-				SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, ColumnName: column.name, OriginId: column.name, ValueType: column.kind, Status: "active",
-			})
-		}
+		snapshot.datasets[dataset.datasetID] = followEnvDataset(dataset)
+		snapshot.columns[dataset.datasetID] = followEnvColumns(dataset)
 	}
 	return snapshot
 }
@@ -352,23 +343,53 @@ func (s *followEnvSnapshot) ListDatasetColumns(spaceID, datasetID string, _ *pb.
 	return columns, &pb.PageResult{Total: uint32(len(columns))}, nil
 }
 
-// followEnvMetadata 是 View 用到的元数据：只有 View 列表，其余方法不应被调用（调用即 panic）。
-type followEnvMetadata struct {
-	pb.MetadataClientProxy
-	mu    sync.Mutex
-	views []*pb.View
+// followEnvDataset 是压测数据集的元数据。
+func followEnvDataset(dataset readyBenchDataset) *pb.Dataset {
+	return &pb.Dataset{
+		SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Name: dataset.datasetID,
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: readyBenchFreq, Status: "active",
+		AllowedLatenessSeconds: uint32(readyBenchLatenessSeconds), CreatedAt: followEnvDatasetCreatedAt,
+	}
 }
 
-func (m *followEnvMetadata) ListViews(_ context.Context, req *pb.ListViewsReq, _ ...client.Option) (*pb.ListViewsRsp, error) {
+// followEnvMetadata 是 View 读的数据集元数据：数据集与它们的列。
+type followEnvMetadata struct {
+	mu       sync.Mutex
+	datasets []*pb.Dataset
+	columns  []*pb.DatasetColumn
+}
+
+func (m *followEnvMetadata) add(dataset readyBenchDataset) {
+	m.addDataset(followEnvDataset(dataset), followEnvColumns(dataset)...)
+}
+
+func (m *followEnvMetadata) addDataset(dataset *pb.Dataset, columns ...*pb.DatasetColumn) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	views := make([]*pb.View, 0, len(m.views))
+	m.datasets = append(m.datasets, dataset)
+	m.columns = append(m.columns, columns...)
+}
+
+func (m *followEnvMetadata) ListDatasets(_ context.Context, req *pb.ListDatasetsReq, _ ...client.Option) (*pb.ListDatasetsRsp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var datasets []*pb.Dataset
 	if req.GetPage().GetPage() <= 1 {
-		for _, view := range m.views {
-			if req.GetSpaceId() == "" || req.GetSpaceId() == view.GetSpaceId() {
-				views = append(views, proto.Clone(view).(*pb.View))
-			}
+		for _, dataset := range m.datasets {
+			datasets = append(datasets, proto.Clone(dataset).(*pb.Dataset))
 		}
 	}
-	return &pb.ListViewsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, Views: views, PageResult: &pb.PageResult{Total: uint32(len(views))}}, nil
+	return &pb.ListDatasetsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, Datasets: datasets, PageResult: &pb.PageResult{Total: uint32(len(m.datasets))}}, nil
+}
+
+func (m *followEnvMetadata) ListDatasetColumns(_ context.Context, req *pb.ListDatasetColumnsReq, _ ...client.Option) (*pb.ListDatasetColumnsRsp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var columns []*pb.DatasetColumn
+	if req.GetPage().GetPage() <= 1 {
+		for _, column := range m.columns {
+			columns = append(columns, proto.Clone(column).(*pb.DatasetColumn))
+		}
+	}
+	return &pb.ListDatasetColumnsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, Columns: columns, PageResult: &pb.PageResult{Total: uint32(len(m.columns))}}, nil
 }

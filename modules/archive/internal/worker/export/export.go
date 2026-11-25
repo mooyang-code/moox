@@ -326,8 +326,7 @@ type ColumnMeta struct {
 	Type        string            `json:"type"`
 	DisplayName string            `json:"display_name,omitempty"`
 	Description string            `json:"description,omitempty"`
-	OriginType  string            `json:"origin_type,omitempty"`
-	OriginID    string            `json:"origin_id,omitempty"`
+	Group       string            `json:"group,omitempty"`
 	Required    bool              `json:"required,omitempty"`
 	Aliases     []string          `json:"aliases,omitempty"`
 	Attributes  map[string]string `json:"attributes,omitempty"`

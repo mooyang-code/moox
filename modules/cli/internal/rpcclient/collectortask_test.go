@@ -95,7 +95,7 @@ func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 				"enabled":true,
 				"result":{
 					"result_name":"采集结果",
-					"view_id":"view-1",
+					"dataset_id":"dataset-1",
 					"status":"ready",
 					"last_data_time":"2026-09-20T12:00:00Z",
 					"data_kind":"time_series"
@@ -110,7 +110,7 @@ func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "A 股 K 线 1m", tasks[0].TaskName)
-	assert.Equal(t, "view-1", tasks[0].Result.ViewID)
+	assert.Equal(t, "dataset-1", tasks[0].Result.DatasetID)
 	assert.Equal(t, "ready", tasks[0].Result.Status)
 	assert.Equal(t, "2026-09-20T12:00:00Z", tasks[0].Result.LastDataTime)
 	assert.Equal(t, "time_series", tasks[0].Result.DataKind)

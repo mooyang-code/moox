@@ -98,7 +98,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 
 	observed := time.Now().UTC().Truncate(time.Millisecond)
 	dataTime := observed.Add(-time.Minute)
-	labels := `space_id="crypto",view_id="view_crypto_kline_1m",dataset_id="dataset_binance_kline_1m",freq="1m"`
+	labels := `space_id="crypto",dataset_id="dataset_binance_kline_1m",freq="1m"`
 	raw := []byte(fmt.Sprintf("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n"+
 		"moox_storage_view_output_latest_data_time_seconds{%s} %d\n"+
 		"moox_storage_view_output_subjects{%s} 1\n", labels, dataTime.Unix(), labels))
@@ -139,7 +139,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	query := metrics.NewQueryService(messageStore, nil)
 	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
-		ViewID: "view_crypto_kline_1m", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20).Evaluate(ctx, observed)
 	if err != nil || len(reports) != 1 || !reports[0].Success || reports[0].ObservedCount != 1 {
 		t.Fatalf("kline freshness reports=%+v err=%v", reports, err)

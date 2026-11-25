@@ -55,10 +55,10 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
 	daily := []string{"1d"}
 	return []marketdata.FieldSpec{
-		{ID: FieldTotalShares, Name: "总股本", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
-		{ID: FieldFloatShares, Name: "流通股本", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
-		{ID: FieldDividendPerShare, Name: "每股股利", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
-		{ID: FieldIsST, Name: "是否 ST", Type: marketdata.FieldTypeInt, Fill: "prev", Frequencies: daily},
+		{ID: FieldTotalShares, Name: "总股本", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
+		{ID: FieldFloatShares, Name: "流通股本", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
+		{ID: FieldDividendPerShare, Name: "每股股利", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
+		{ID: FieldIsST, Name: "是否 ST", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeInt, Fill: "prev", Frequencies: daily},
 	}
 }
 

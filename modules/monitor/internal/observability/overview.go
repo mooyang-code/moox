@@ -64,9 +64,8 @@ type DatasetFrequencyStatus struct {
 	// DisplayName 是生产者随期望清单上报的展示名称（moox_<模块>_dataset_info 的 name 标签，例如策略实例名），
 	// 没有上报时为空，由调用方退回 Storage 里的数据集名称或数据集 ID。
 	DisplayName string
-	// PrimaryDatasetID links an independent Storage View fact back to the
-	// dataset whose Collector produces its input. It is empty for other
-	// producers and keeps DatasetID available as the View identity.
+	// PrimaryDatasetID 只对 Storage View 填写，等于 View 所属的数据集（每个数据集恰好一个 View），
+	// 用来把 View 的事实连回产出它输入的数据集；其他生产者为空。
 	PrimaryDatasetID         string
 	LastRunAt, LastSuccessAt time.Time
 	// LastPartialAt 是最近一次“按设计只产出部分结果”的运行（数据积累中），见 DatasetReasonWarming。
@@ -458,8 +457,8 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			if err != nil {
 				return nil, fmt.Errorf("view watermark labels for %s: %w", series.SeriesID, err)
 			}
-			viewSpaceID, viewID, freq := labels["space_id"], labels["view_id"], labels["freq"]
-			if viewSpaceID == "" || viewID == "" || freq == "" {
+			viewSpaceID, viewDatasetID, freq := labels["space_id"], labels["dataset_id"], labels["freq"]
+			if viewSpaceID == "" || viewDatasetID == "" || freq == "" {
 				continue
 			}
 			if spaceID != "" && viewSpaceID != spaceID {
@@ -471,11 +470,11 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			}
 			// View 指向的数据集已在 Storage 里被删除（例如删除策略实例连同私有因子结果）：它留下的指标序列不再代表任何在运行的东西，
 			// 不进入概览，也就不会一直显示“数据生产端长时间未更新”。
-			if b.Metrics.DatasetGone(ctx, viewSpaceID, labels["dataset_id"]) {
+			if b.Metrics.DatasetGone(ctx, viewSpaceID, viewDatasetID) {
 				continue
 			}
 			// 生产者已把这个数据集标为不期望产出（因子任务暂停等）：View 水位停在原地是预期的，不检查。
-			scope := datasetScopeKey(viewSpaceID, labels["dataset_id"], freq)
+			scope := datasetScopeKey(viewSpaceID, viewDatasetID, freq)
 			if _, off := disabledScopes[scope]; off {
 				if _, live := liveScopes[scope]; !live {
 					continue
@@ -490,7 +489,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			if err != nil {
 				return nil, err
 			}
-			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, primaryDatasetID: labels["dataset_id"], freq: freq, labels: series.LabelsJSON}
+			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewDatasetID, primaryDatasetID: viewDatasetID, freq: freq, labels: series.LabelsJSON}
 			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, arrival: arrival, reporterStale: viewReporterStale(series, interval, now), reportedAt: latest.ObservedAt.UTC()}
 		}
 	}

@@ -39,7 +39,7 @@ func activeSubjects(ids ...string) []*storagepb.DatasetSubject {
 // 现货小时线：当天新增 2 个对象，第一根完整小时线要到 14:00 收线才有，此前 View 里没有它们。
 func hourlyNewSubjectEvaluation(t *testing.T, now time.Time, viewSubjects int, active []string, firstSeen map[string]time.Time) KlineFreshnessReport {
 	t.Helper()
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute}
 	latest := now.Truncate(time.Hour).Add(-time.Hour)
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 		Freq: "1h", Latest: latest, TrackedSince: now.Add(-6 * time.Hour), Subjects: viewSubjects, ObservedAt: now,
@@ -109,7 +109,7 @@ func TestKlineFreshnessNewSubjectWithDataIsHealthy(t *testing.T) {
 func TestKlineFreshnessGraceStartsFromTheNextWholeBarForMinuteViews(t *testing.T) {
 	now := time.Date(2026, 10, 21, 12, 14, 40, 0, time.UTC)
 	seenAt := time.Date(2026, 10, 21, 12, 13, 31, 0, time.UTC)
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 10 * time.Second}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 10 * time.Second}
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: time.Date(2026, 10, 21, 12, 13, 0, 0, time.UTC), TrackedSince: now.Add(-time.Hour), Subjects: 2, ObservedAt: now}})
 	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("BTC", "ETH", "NEW1")})
 	evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
@@ -125,7 +125,7 @@ func TestKlineFreshnessGraceStartsFromTheNextWholeBarForMinuteViews(t *testing.T
 // 名单被截断时缺失的对象被算进 StaleCount、MissingCount 为 0：宽限也要覆盖这条路径。
 func TestKlineFreshnessGraceAppliesWhenLaggingListIsTruncated(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
 	subjects := activeSubjects("BTC", "NEW1")
 	var lagging []viewSummaryLaggingSample
 	for i := 1; i <= 20; i++ {
@@ -158,7 +158,7 @@ func TestKlineFreshnessGraceAppliesWhenLaggingListIsTruncated(t *testing.T) {
 
 func TestKlineFreshnessFirstSeenFailureGivesNoGrace(t *testing.T) {
 	now := time.Date(2026, 10, 21, 13, 51, 0, 0, time.UTC)
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute}
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Freq: "1h", Latest: now.Truncate(time.Hour).Add(-time.Hour), TrackedSince: now.Add(-6 * time.Hour), Subjects: 1, ObservedAt: now}})
 	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("BTC", "NEW1")})
 	evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
@@ -196,7 +196,7 @@ func TestNewSubjectDeadline(t *testing.T) {
 // 重新上架的对象在 Storage 里还带着下架前的水位，会出现在落后名单里：宽限期内同样不算过期。
 func TestKlineFreshnessRelistedSubjectWithOldWatermarkGetsGrace(t *testing.T) {
 	now := time.Date(2026, 10, 21, 13, 51, 0, 0, time.UTC)
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute}
 	build := func(firstSeen map[string]time.Time) KlineFreshnessReport {
 		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 			Freq: "1h", Latest: now.Truncate(time.Hour).Add(-time.Hour), TrackedSince: now.Add(-48 * time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
@@ -224,7 +224,7 @@ func TestKlineFreshnessRelistedSubjectWithOldWatermarkGetsGrace(t *testing.T) {
 func TestKlineFreshnessRecordsFirstSeenEvenWhenViewIsBehind(t *testing.T) {
 	now := time.Date(2026, 10, 21, 13, 51, 0, 0, time.UTC)
 	rule := KlineFreshnessRule{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute,
 		LatestCompletedPeriod: now.Truncate(time.Hour).Add(-time.Hour), LatestCompletedStatus: "complete",
 	}
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Freq: "1h", Latest: now.Truncate(time.Hour).Add(-2 * time.Hour), TrackedSince: now.Add(-6 * time.Hour), Subjects: 1, ObservedAt: now}})
@@ -248,7 +248,7 @@ func TestKlineFreshnessTruncatedLaggingAllWithinGraceDoesNotCountUnlisted(t *tes
 		return value.UTC()
 	}
 	now := local("13:01:20")
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, Lateness: 5 * time.Minute}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", DatasetID: "dataset", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, Lateness: 5 * time.Minute}
 	ids := make([]string, 0, 203)
 	var lagging []viewSummaryLaggingSample
 	for i := 0; i < 202; i++ {
@@ -286,7 +286,7 @@ func TestKlineFreshnessTruncatedLaggingAllWithinGraceDoesNotCountUnlisted(t *tes
 // A 股数据集收盘后建好、还没有任何输出：等第一根 K 线（次日 09:30 那根收线加允许迟到与采集余量）之前不告警，过了仍没有才报无输出。
 func TestKlineFreshnessNewStockDatasetWaitsForTheFirstBar(t *testing.T) {
 	cst := time.FixedZone("CST", 8*3600)
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", DatasetID: "dataset", ViewID: "view", Frequency: "5m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, Lateness: 90 * time.Second}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", DatasetID: "dataset", Frequency: "5m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, Lateness: 90 * time.Second}
 	created := time.Date(2026, 11, 4, 15, 33, 0, 0, cst)
 	evaluate := func(now time.Time, store *fakeFirstSeenStore) KlineFreshnessReport {
 		query := newViewSummaryQuery(t, nil)

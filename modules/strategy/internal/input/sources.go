@@ -61,21 +61,21 @@ func (r Resolved) SourceNames() []string { return sortedKeys(r.Sources) }
 // 到达即求值，不写到达记录。
 func (r Resolved) Gathers() bool { return len(r.Tasks) > 1 || r.HasSources() }
 
-// ViewRole 说明一个 View 在绑定里的角色：主帧（source 为空、reference 为假）、附加来源（source 是来源名）或参考市场（reference 为真）。
+// RoleOfDataset 说明一个 View 在绑定里的角色：主帧（source 为空、reference 为假）、附加来源（source 是来源名）或参考市场（reference 为真）。
 // key 是主帧、来源与参考市场的任务键（市场）。
-func (r Resolved) ViewRole(viewID string) (key, source string, reference, ok bool) {
-	if key, ok := r.TaskKeyOfView(viewID); ok {
+func (r Resolved) RoleOfDataset(datasetID string) (key, source string, reference, ok bool) {
+	if key, ok := r.TaskKeyOfDataset(datasetID); ok {
 		return key, "", false, true
 	}
 	for _, name := range r.SourceNames() {
 		for key, task := range r.Sources[name].Tasks {
-			if task.ViewID == viewID {
+			if task.DatasetID == datasetID {
 				return key, name, false, true
 			}
 		}
 	}
 	for market, task := range r.References {
-		if task.ViewID == viewID {
+		if task.DatasetID == datasetID {
 			return market, "", true, true
 		}
 	}
@@ -84,7 +84,7 @@ func (r Resolved) ViewRole(viewID string) (key, source string, reference, ok boo
 
 // ExpectedViews 返回主帧收盘于 barEnd 的这一根要等到齐的 View：主帧的全部 View，加上收盘时刻正好也是 barEnd 的来源的 View。
 func (r Resolved) ExpectedViews(barEnd time.Time) ([]string, error) {
-	views := r.ViewIDs()
+	views := r.DatasetIDs()
 	for _, name := range r.SourceNames() {
 		source := r.Sources[name]
 		_, aligned, err := source.Period(barEnd)
@@ -95,22 +95,22 @@ func (r Resolved) ExpectedViews(barEnd time.Time) ([]string, error) {
 			continue
 		}
 		for _, key := range r.TaskKeys() {
-			views = append(views, source.Tasks[key].ViewID)
+			views = append(views, source.Tasks[key].DatasetID)
 		}
 	}
 	return views, nil
 }
 
-// AllViewIDs 返回全部绑定的 View：主帧、附加来源与参考市场（就绪记录的到达查询用）。
-func (r Resolved) AllViewIDs() []string {
-	views := r.ViewIDs()
+// AllDatasetIDs 返回全部绑定的 View：主帧、附加来源与参考市场（就绪记录的到达查询用）。
+func (r Resolved) AllDatasetIDs() []string {
+	views := r.DatasetIDs()
 	for _, name := range r.SourceNames() {
 		for _, key := range r.TaskKeys() {
-			views = append(views, r.Sources[name].Tasks[key].ViewID)
+			views = append(views, r.Sources[name].Tasks[key].DatasetID)
 		}
 	}
 	for _, market := range sortedKeys(r.References) {
-		views = append(views, r.References[market].ViewID)
+		views = append(views, r.References[market].DatasetID)
 	}
 	return views
 }
@@ -255,9 +255,9 @@ func bindReferences(ctx context.Context, client Client, spaceID string, resolved
 			return nil, fmt.Errorf("参考市场 %s 的因子任务 %s 的源数据集是 %s 市场", market, item.taskID, item.market)
 		}
 		if calendarOf(item) != resolved.Calendar {
-			return nil, fmt.Errorf("参考市场的 View %s 的日历是 %s，与主帧的 %s 不一致", item.view.ViewID, calendarOf(item), resolved.Calendar)
+			return nil, fmt.Errorf("参考市场的 View %s 的日历是 %s，与主帧的 %s 不一致", item.view.DatasetID, calendarOf(item), resolved.Calendar)
 		}
-		resolved.References[market] = TaskBinding{ViewID: item.view.ViewID, FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
+		resolved.References[market] = TaskBinding{FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
 		views = append(views, item)
 	}
 	return views, nil
@@ -315,14 +315,14 @@ func bindSources(ctx context.Context, client Client, spaceID string, resolved *R
 				return fmt.Errorf("来源 %s 的 %s 任务 %s 的源数据集是 %s 市场", name, key, item.taskID, item.market)
 			}
 			if calendarOf(item) != resolved.Calendar {
-				return fmt.Errorf("来源 %s 的 View %s 的日历是 %s，与主帧的 %s 不一致", name, item.view.ViewID, calendarOf(item), resolved.Calendar)
+				return fmt.Errorf("来源 %s 的 View %s 的日历是 %s，与主帧的 %s 不一致", name, item.view.DatasetID, calendarOf(item), resolved.Calendar)
 			}
 			for _, column := range item.view.Columns {
 				if identity, isFactor := factorColumnIdentity(column.Attributes); isFactor && identity.Kind == factorname.KindVar {
 					return fmt.Errorf("来源 %s 的因子任务 %s 有可变成员 %s：factor_params 只作用于主帧的任务，来源任务不能有可变成员", name, item.taskID, identity.Member)
 				}
 			}
-			binding.Tasks[key] = TaskBinding{ViewID: item.view.ViewID, FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
+			binding.Tasks[key] = TaskBinding{FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
 			views = append(views, item)
 		}
 		binding.Bar = strings.ToLower(views[0].view.Frequency)
@@ -340,7 +340,7 @@ func bindSources(ctx context.Context, client Client, spaceID string, resolved *R
 			}
 			if len(missing) > 0 {
 				all := viewColumnNames(item)
-				return fmt.Errorf("列 %s 不存在于来源 %s 的 View %s（因子任务 %s）；可用列（该任务的全部列）：%s", strings.Join(missing, "、"), name, item.view.ViewID, item.taskID, strings.Join(all, "、"))
+				return fmt.Errorf("列 %s 不存在于来源 %s 的 View %s（因子任务 %s）；可用列（该任务的全部列）：%s", strings.Join(missing, "、"), name, item.view.DatasetID, item.taskID, strings.Join(all, "、"))
 			}
 			for _, column := range wanted[name] {
 				columnBinding := ColumnBinding{Source: SourceDataset}

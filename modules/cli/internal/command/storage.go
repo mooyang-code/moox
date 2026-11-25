@@ -19,8 +19,8 @@ import (
 var storageCmd = &cobra.Command{
 	Use:     "storage",
 	Aliases: []string{"存储"},
-	Short:   "View 维护",
-	Long: "Storage 的维护命令。维护命令（repair-view、delete-view）" +
+	Short:   "查询索引（View）维护",
+	Long: "Storage 的维护命令。维护命令（repair-view）" +
 		"按 --file（moox.toml）经 SSH 在存储机上执行部署根里的 moox-storage-cli，不需要本机装存储程序。历史数据导入请使用 moox-cli import。",
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
@@ -55,23 +55,11 @@ func storageConfDefaults(root string) map[string]string {
 	}
 }
 
-func storageMetadataDefaults(root string) map[string]string {
-	return map[string]string{
-		"--metadata-db": path.Join(root, "data", "storage-primary", "metadata", "storage_metadata.db"),
-	}
-}
-
 var storageMaintenanceActions = []storageMaintenanceAction{
 	{
 		Action: "repair-view", Aliases: []string{"修复视图", "repair"}, Defaults: storageConfDefaults, DryRun: true,
-		Short: "重建指定 View 的索引（默认只预览，--yes 才执行）",
-		Long:  "停掉 storage-view（systemctl --user disable --now）、删除 View 的索引文件，恢复后（enable --now）从 Primary 重新建索引，元数据不用改。常用参数：--space-id、--view-id、--restart=false。\n记录型 View 重建后为空，只跟随新写入。",
-	},
-	{
-		Action: "delete-view", Defaults: storageMetadataDefaults,
-		Short: "离线删除一个 View 的元数据（不带 --yes 时存储机上的程序会拒绝执行）",
-		Long: "参数：--view <空间/视图 ID>（必填）、--yes。要先停掉 storage-view：moox-cli setup stop --host <存储机> --component storage-view --yes，" +
-			"删完后 moox-cli setup start-component --host <存储机> --component storage-view --yes。物理索引文件由 storage-view 的清理定时器回收。删除前先备份元数据库。",
+		Short: "重建指定数据集的查询索引（默认只预览，--yes 才执行）",
+		Long:  "停掉 storage-view（systemctl --user disable --now）、删除数据集查询索引的文件，恢复后（enable --now）从 Primary 重新建索引，元数据不用改。常用参数：--space-id、--dataset-id、--restart=false。\n记录型数据集的索引重建后为空，只跟随新写入。",
 	},
 }
 

@@ -44,7 +44,7 @@ var metadataSpacesCmd = &cobra.Command{
 var metadataApplyCmd = &cobra.Command{
 	Use:   "apply",
 	Short: "导入元数据种子：缺的建上，已有的核对一致（空间、标签以管理台为准不比对），可重复运行",
-	Long: `按依赖顺序导入元数据种子（空间、数据来源、标签、数据集、字段、列、View）：缺的建上，已有的核对与种子一致，
+	Long: `按依赖顺序导入元数据种子（空间、数据来源、标签、数据集、列；每个数据集的查询索引由 Storage 自动建）：缺的建上，已有的核对与种子一致，
 不一致时报错不改写；空间与标签在管理台可改，已有的以管理台为准不比对。引用是否成立由 Storage 校验。
 
 示例:
@@ -88,10 +88,7 @@ type metadataSeed struct {
 	Subjects       []seedSubject       `yaml:"subjects"`
 	Tags           []seedTag           `yaml:"tags"`
 	Datasets       []seedDataset       `yaml:"datasets"`
-	FieldGroups    []seedFieldGroup    `yaml:"field_groups"`
-	Fields         []seedField         `yaml:"fields"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
-	Views          []seedView          `yaml:"views"`
 }
 
 type seedCommon struct {
@@ -149,51 +146,17 @@ type seedDataset struct {
 	seedCommon   `yaml:",inline"`
 }
 
-type seedField struct {
-	SpaceID            string `yaml:"space_id"`
-	GroupID            string `yaml:"group_id"`
-	FieldID            string `yaml:"field_id"`
-	Name               string `yaml:"name"`
-	Description        string `yaml:"description"`
-	ValueType          string `yaml:"value_type"`
-	Unit               string `yaml:"unit"`
-	ValidationRuleJSON string `yaml:"validation_rule_json"`
-	WriteExample       string `yaml:"write_example"`
-	SortOrder          uint32 `yaml:"sort_order"`
-	seedCommon         `yaml:",inline"`
-}
-
-type seedFieldGroup struct {
-	SpaceID       string `yaml:"space_id"`
-	GroupID       string `yaml:"group_id"`
-	Name          string `yaml:"name"`
-	Description   string `yaml:"description"`
-	ParentGroupID string `yaml:"parent_group_id"`
-	SortOrder     uint32 `yaml:"sort_order"`
-	seedCommon    `yaml:",inline"`
-}
-
 type seedDatasetColumn struct {
-	SpaceID    string   `yaml:"space_id"`
-	DatasetID  string   `yaml:"dataset_id"`
-	ColumnName string   `yaml:"column_name"`
-	OriginType string   `yaml:"origin_type"`
-	OriginID   string   `yaml:"origin_id"`
-	ValueType  string   `yaml:"value_type"`
-	Required   bool     `yaml:"required"`
-	Aliases    []string `yaml:"aliases"`
-	seedCommon `yaml:",inline"`
-}
-
-type seedView struct {
-	SpaceID          string   `yaml:"space_id"`
-	ViewID           string   `yaml:"view_id"`
-	Name             string   `yaml:"name"`
-	Description      string   `yaml:"description"`
-	PrimaryDatasetID string   `yaml:"dataset_id"`
-	GrainKeys        []string `yaml:"grain_keys"`
-	Engine           string   `yaml:"engine"`
-	seedCommon       `yaml:",inline"`
+	SpaceID    string `yaml:"space_id"`
+	DatasetID  string `yaml:"dataset_id"`
+	ColumnName string `yaml:"column_name"`
+	ValueType  string `yaml:"value_type"`
+	// DisplayName、Group 是列的中文显示名与分组（一级），列自描述，不再引用字段目录。
+	DisplayName string   `yaml:"display_name"`
+	Group       string   `yaml:"group"`
+	Required    bool     `yaml:"required"`
+	Aliases     []string `yaml:"aliases"`
+	seedCommon  `yaml:",inline"`
 }
 
 type metadataImportCall struct {

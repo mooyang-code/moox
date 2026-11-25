@@ -98,7 +98,7 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 	first := views[0]
 	for _, item := range views[1:] {
 		if !strings.EqualFold(item.view.Frequency, first.view.Frequency) || calendarOf(item) != calendarOf(first) {
-			return PoolResolved{}, fmt.Errorf("两个 View 的周期或日历不一致：%s 是 %s/%s，%s 是 %s/%s", first.view.ViewID, first.view.Frequency, calendarOf(first), item.view.ViewID, item.view.Frequency, calendarOf(item))
+			return PoolResolved{}, fmt.Errorf("两个 View 的周期或日历不一致：%s 是 %s/%s，%s 是 %s/%s", first.view.DatasetID, first.view.Frequency, calendarOf(first), item.view.DatasetID, item.view.Frequency, calendarOf(item))
 		}
 	}
 	// drift 的漂移起点与锚点要落在这个日历与周期的 bar 起点上（保存时分不出加密与 A 股，到这里才能检查）。
@@ -110,13 +110,13 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 	for _, item := range views {
 		if bars, ok := retentionBars(item.dataset.Retention, calendarOf(first), strings.ToLower(first.view.Frequency)); ok && need > bars {
 			return PoolResolved{}, fmt.Errorf("View %s 的数据集保留 %d 根，策略池预热需要 %d 根（预热 %d 期 + 成员最长回看 %d 根），请调大保留期或缩短轮动、择时的窗口",
-				item.view.ViewID, bars, need, need-poolLookback(members), poolLookback(members))
+				item.view.DatasetID, bars, need, need-poolLookback(members), poolLookback(members))
 		}
 	}
 	// 估值需要 close：账本按收盘价成交与结算。
 	for _, item := range views {
 		if _, ok := item.columns[priceColumn]; !ok {
-			return PoolResolved{}, fmt.Errorf("View %s 没有 %s 列，策略池的成员账本无法估值", item.view.ViewID, priceColumn)
+			return PoolResolved{}, fmt.Errorf("View %s 没有 %s 列，策略池的成员账本无法估值", item.view.DatasetID, priceColumn)
 		}
 	}
 	// 资金费列只在永续的 View 上读：写了 fees.funding_column 就必须绑定永续、且永续的 View 有这一列。
@@ -131,13 +131,13 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 			return PoolResolved{}, fmt.Errorf("策略池的成员不涉及永续，strategy_pool.fees.funding_column 不起作用，请删掉")
 		}
 		if _, ok := views[swapView].columns[column]; !ok {
-			return PoolResolved{}, fmt.Errorf("永续的 View %s 没有资金费列 %s（strategy_pool.fees.funding_column）", views[swapView].view.ViewID, column)
+			return PoolResolved{}, fmt.Errorf("永续的 View %s 没有资金费列 %s（strategy_pool.fees.funding_column）", views[swapView].view.DatasetID, column)
 		}
 	}
 	resolved := Resolved{Market: union, Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{},
 		Bar: strings.ToLower(first.view.Frequency), Calendar: calendarOf(first), ViewColumns: commonColumns(views)}
 	for _, item := range views {
-		resolved.Tasks[item.market] = TaskBinding{ViewID: item.view.ViewID, FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
+		resolved.Tasks[item.market] = TaskBinding{FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
 	}
 	out := PoolResolved{Resolved: resolved}
 	previous := map[string]struct{}{}
@@ -351,7 +351,7 @@ func PoolWindow(ctx context.Context, client Client, spaceID string, resolved Res
 				continue
 			}
 			if err != nil {
-				return time.Time{}, fmt.Errorf("成员 %s 的 %s 市场 View %s：%w", member.ID, market, covered[market].ViewID, err)
+				return time.Time{}, fmt.Errorf("成员 %s 的 %s 市场 View %s：%w", member.ID, market, covered[market].DatasetID, err)
 			}
 			end = next
 		}
@@ -361,7 +361,7 @@ func PoolWindow(ctx context.Context, client Client, spaceID string, resolved Res
 		for market, view := range covered {
 			bounds, err := CoverageBounds(view, resolved, now)
 			if err != nil {
-				return time.Time{}, fmt.Errorf("%s 市场 View %s：%w", market, view.ViewID, err)
+				return time.Time{}, fmt.Errorf("%s 市场 View %s：%w", market, view.DatasetID, err)
 			}
 			if next := bounds.To.Add(time.Nanosecond); next.Before(end) {
 				end = next
@@ -388,11 +388,10 @@ func CheckPoolWarmCoverage(ctx context.Context, client Client, spaceID string, p
 	}
 	views := make(map[string]ViewInfo, len(pooled.Resolved.Tasks))
 	for market, task := range pooled.Resolved.Tasks {
-		view, err := client.GetView(ctx, spaceID, task.ViewID)
+		view, err := client.GetView(ctx, spaceID, task.DatasetID)
 		if err != nil {
 			return err
 		}
-		view.ViewID = task.ViewID
 		views[market] = view
 	}
 	if _, err := PoolWindow(ctx, client, spaceID, pooled.Resolved, pooled.Members, pooled.Programs, views, start, end, now, true); err != nil {

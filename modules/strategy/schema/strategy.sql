@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_def_versions (
 );
 
 -- 实例：定义 + 因子任务（见 t_strategy_instance_tasks）+ 可选组合账户；启用时把解析结果固化在会话里（实例读当前会话，停用后读最近一次会话）。因子任务在创建时写定，不能修改；
--- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。c_session_id 只在启用时非空（启用、停用各是一个事务）。
+-- 读取的是任务结果数据集（由任务 ID 推导）的查询索引。c_session_id 只在启用时非空（启用、停用各是一个事务）。
 -- c_confirmed_at 为空表示试运行：目标只发影子、不下单。没挂账户的实例启用时直接写入；挂了账户的启用后为空，由用户确认实盘时写入；
 -- 停用、修改实例都清空它，重新启用从试运行开始。
 -- 只有已停用的实例能删除，删除时连同它在本库的全部记录
@@ -135,18 +135,18 @@ CREATE INDEX IF NOT EXISTS idx_t_strategy_results_params_pending
 ON t_strategy_results (c_instance_id, c_session_id, c_bar_end_time)
 WHERE c_next_params_json <> '' AND c_params_delivered_at IS NULL AND c_params_error = '';
 
--- 汇合求值用的到达记录：绑定两个因子任务的实例要等两个 View 的就绪事件都到齐才求值；写了附加来源的实例在主帧收盘时刻等于来源
--- 收盘时刻的那一根还要等来源的事件（c_bar_end_time 是主帧的 bar_end）。每个 View 的原始 ViewDataReady 事件
--- 按字节保存（就绪判断要用整条事件）；(实例, 会话, bar_end, View) 唯一，重复投递幂等。c_ctime 是到达时间，按天数清理
+-- 汇合求值用的到达记录：绑定两个因子任务的实例要等两个结果数据集的就绪事件都到齐才求值；写了附加来源的实例在主帧收盘时刻等于来源
+-- 收盘时刻的那一根还要等来源的事件（c_bar_end_time 是主帧的 bar_end）。每个数据集的原始 ViewDataReady 事件
+-- 按字节保存（就绪判断要用整条事件）；(实例, 会话, bar_end, 数据集) 唯一，重复投递幂等。c_ctime 是到达时间，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_ready_events (
     c_instance_id TEXT NOT NULL,
     c_session_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
     c_bar_end_time INTEGER NOT NULL,
     c_event_id TEXT NOT NULL,
     c_event_bytes BLOB NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_instance_id, c_session_id, c_bar_end_time, c_view_id),
+    PRIMARY KEY (c_instance_id, c_session_id, c_bar_end_time, c_dataset_id),
     FOREIGN KEY (c_session_id) REFERENCES t_strategy_sessions (c_session_id)
 );
 
@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_result_items (
 CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_result_items (c_ctime);
 
 -- 回放任务：基于因子任务的研究回放（主帧读结果 View 或因子现算），按天数与每个空间的个数清理；c_tasks_json 是任务键（市场，附加来源为 来源名:市场）→
--- {factor_task_id, view_id, view_generation}：结果 View 由任务推导，view_generation 是提交时校验区间所用的活动索引代次；
+-- {factor_task_id, dataset_id, view_generation}：结果数据集由任务推导，view_generation 是提交时校验区间所用的活动索引代次；
 -- 费率分两列：c_spot_fee_bps 用于现货与股票，c_swap_fee_bps 用于永续；c_slippage_bps 是滑点（成交价在收盘价上按方向加减的比例）；
 -- c_members_json 是策略池回放固化的成员快照（单策略回放为 NULL），c_funding_column 是单策略回放计资金费用的列名（空串表示不计）；
 -- c_input 是主帧的输入来源：view 读结果 View，compute 是“因子现算”（经主机网关调因子引擎现算，附加来源与参考市场仍读 View）
@@ -238,16 +238,16 @@ CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
 );
 
 -- 年龄探针通过的标的：上市时间只会越来越久，通过一次后跨周期、跨重启复用；c_index_id 是 View 的活动索引，索引重建后旧行作废；
--- c_market 是 View 所属的市场
+-- c_market 是数据集所属的市场
 CREATE TABLE IF NOT EXISTS t_strategy_age_passed (
     c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
     c_index_id TEXT NOT NULL,
     c_min_age_bars INTEGER NOT NULL,
     c_market TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_market, c_subject_id)
+    PRIMARY KEY (c_space_id, c_dataset_id, c_index_id, c_min_age_bars, c_market, c_subject_id)
 );
 
 -- 实例的外显设置：只存隐藏的内容（默认全部展示）。只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据，

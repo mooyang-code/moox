@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-type metadataSeedGrainContract struct {
+type metadataSeedContract struct {
 	Datasets []struct {
 		SpaceID    string            `yaml:"space_id"`
 		DatasetID  string            `yaml:"dataset_id"`
@@ -19,51 +19,42 @@ type metadataSeedGrainContract struct {
 		Attributes map[string]string `yaml:"attributes"`
 	} `yaml:"datasets"`
 	DatasetColumns []struct {
-		SpaceID    string `yaml:"space_id"`
-		DatasetID  string `yaml:"dataset_id"`
-		ColumnName string `yaml:"column_name"`
+		SpaceID     string `yaml:"space_id"`
+		DatasetID   string `yaml:"dataset_id"`
+		ColumnName  string `yaml:"column_name"`
+		DisplayName string `yaml:"display_name"`
+		Group       string `yaml:"group"`
 	} `yaml:"dataset_columns"`
-	Views []struct {
-		SpaceID          string   `yaml:"space_id"`
-		ViewID           string   `yaml:"view_id"`
-		PrimaryDatasetID string   `yaml:"dataset_id"`
-		GrainKeys        []string `yaml:"grain_keys"`
-	} `yaml:"views"`
 }
 
-func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
-	wantGrain := []string{"subject_id", "freq", "data_time", "series_tag"}
-	root := filepath.Join("..", "..", "..")
-	seedPaths := []string{filepath.Join(root, "config", "setup", "metadata.yaml")}
-
-	for _, seedPath := range seedPaths {
-		t.Run(filepath.Base(filepath.Dir(seedPath))+"/"+filepath.Base(seedPath), func(t *testing.T) {
-			raw, err := os.ReadFile(seedPath)
-			require.NoError(t, err)
-			var seed metadataSeedGrainContract
-			require.NoError(t, yaml.Unmarshal(raw, &seed))
-
-			kinds := make(map[string]string, len(seed.Datasets))
-			for _, dataset := range seed.Datasets {
-				kinds[dataset.SpaceID+"/"+dataset.DatasetID] = dataset.DataKind
-			}
-			for _, view := range seed.Views {
-				datasetKey := view.SpaceID + "/" + view.PrimaryDatasetID
-				kind, ok := kinds[datasetKey]
-				require.True(t, ok, "%s/%s references missing primary Dataset %s", view.SpaceID, view.ViewID, datasetKey)
-				if kind != "time_series" {
-					continue
-				}
-				require.Equal(t, wantGrain, view.GrainKeys, "%s/%s", view.SpaceID, view.ViewID)
-			}
-		})
+// 种子没有字段目录与 View：列自描述（显示名、分组写在列上），每个数据集的查询索引由 Storage 自动建。
+func TestDefaultSetupSeedColumnsDescribeThemselves(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml"))
+	require.NoError(t, err)
+	var sections map[string]any
+	require.NoError(t, yaml.Unmarshal(raw, &sections))
+	for _, removed := range []string{"field_groups", "fields", "views"} {
+		require.NotContains(t, sections, removed, "种子里不应再有 %s 段", removed)
+	}
+	var seed metadataSeedContract
+	require.NoError(t, yaml.Unmarshal(raw, &seed))
+	datasets := make(map[string]bool, len(seed.Datasets))
+	for _, dataset := range seed.Datasets {
+		datasets[dataset.SpaceID+"/"+dataset.DatasetID] = true
+	}
+	require.NotEmpty(t, seed.DatasetColumns)
+	for _, column := range seed.DatasetColumns {
+		key := column.SpaceID + "/" + column.DatasetID + "/" + column.ColumnName
+		require.True(t, datasets[column.SpaceID+"/"+column.DatasetID], "%s 引用的数据集不在种子里", key)
+		require.NotEmpty(t, column.DisplayName, "%s 缺显示名", key)
+		require.NotEmpty(t, column.Group, "%s 缺分组", key)
 	}
 }
 
 func TestDefaultSetupSeedTimeSeriesDatasetsDeclareCanonicalFreq(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml"))
 	require.NoError(t, err)
-	var seed metadataSeedGrainContract
+	var seed metadataSeedContract
 	require.NoError(t, yaml.Unmarshal(raw, &seed))
 	for _, dataset := range seed.Datasets {
 		if dataset.DataKind == "time_series" {
@@ -76,7 +67,7 @@ func TestDefaultSetupSeedHasNoCollectorDatasetsAndKeepsTheOthers(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
-	var seed metadataSeedGrainContract
+	var seed metadataSeedContract
 	require.NoError(t, yaml.Unmarshal(raw, &seed))
 	indexes := make(map[string]int, len(seed.Datasets))
 	for i, dataset := range seed.Datasets {

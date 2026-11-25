@@ -33,19 +33,14 @@ func TestImportTargetsAndStep(t *testing.T) {
 	require.ErrorContains(t, err, "不支持的频率")
 }
 
-func TestImportFieldsFromColumnsSkipsSystemAndReserved(t *testing.T) {
-	field, custom := pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM
+func TestImportFieldsFromColumnsSkipsDisabledAndReserved(t *testing.T) {
 	columns := []*pb.DatasetColumn{
-		{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", OriginType: field},
-		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", OriginType: field},
-		{ColumnName: "trades", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT, OriginType: custom},
-		{ColumnName: "meta", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON, Status: "active", OriginType: field},
-		// 来源未指定的列与归档 worker 同一口径：不导入。
-		{ColumnName: "unspecified", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
-		{ColumnName: "subject_id", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, OriginType: field},
-		{ColumnName: "sys", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM},
+		{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
+		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
+		{ColumnName: "trades", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT},
+		{ColumnName: "meta", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON, Status: "active"},
+		{ColumnName: "subject_id", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		{ColumnName: "off", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "disabled"},
-		{ColumnName: "gone", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "deleted"},
 	}
 	fields, types, err := importFieldsFromColumns(columns)
 	require.NoError(t, err)

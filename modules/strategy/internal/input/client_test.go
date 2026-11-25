@@ -41,7 +41,7 @@ func double(value float64) *storagepb.TypedValue {
 }
 
 func baseQuery() Query {
-	return Query{ViewID: "view", DatasetID: "ds", Frequency: "1h", Subjects: []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true)}, Start: barStart, End: barStart.Add(time.Nanosecond), Columns: []string{"close"}, ExpectedIndexID: "idx_a"}
+	return Query{DatasetID: "ds", Frequency: "1h", Subjects: []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true)}, Start: barStart, End: barStart.Add(time.Nanosecond), Columns: []string{"close"}, ExpectedIndexID: "idx_a"}
 }
 
 // S11：分页读取中 revision 或 index 变化返回 ErrStale，调用方丢弃已读页面整体重读。
@@ -93,7 +93,7 @@ func TestQueryRowsConcatenatesPagesAndConvertsValues(t *testing.T) {
 	if len(stub.requests[0].GetColumnNames()) != 1 {
 		t.Fatalf("请求头不符：%+v", stub.requests[0])
 	}
-	empty, _, err := rpc.QueryRows(context.Background(), "space", Query{ViewID: "view", ExpectedIndexID: "idx_a"})
+	empty, _, err := rpc.QueryRows(context.Background(), "space", Query{DatasetID: "view", ExpectedIndexID: "idx_a"})
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("没有标的时应直接返回空：%v err=%v", empty, err)
 	}
@@ -108,7 +108,7 @@ func TestQueryRowsMapsMissingColumnToConfigError(t *testing.T) {
 	query.Columns = []string{"close", "m", "ma_20"}
 	_, _, err := client.QueryRows(context.Background(), "space", query)
 	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || skip.Detail != "View view 缺少列 ma_20" {
+	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || skip.Detail != "View ds 缺少列 ma_20" {
 		t.Fatalf("列不存在应记为 config_error，说明里只有中文与列名：%v", err)
 	}
 	if raw := RawCause(err); raw == nil || raw.Error() != `View column "ma_20" is not projected` {

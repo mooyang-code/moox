@@ -141,13 +141,13 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	}
 	// 年龄探针按 View 存：删掉的任务与已经不在的任务清掉它们的 View；保留的任务的 View 还在用，不动。
 	cleared := append(plan.deleteIDs(), plan.Gone...)
-	viewIDs := make([]string, 0, len(cleared))
+	datasetIDs := make([]string, 0, len(cleared))
 	for _, taskID := range cleared {
-		if viewID, err := input.ViewIDOfTask(taskID); err == nil {
-			viewIDs = append(viewIDs, viewID)
+		if datasetID, err := input.DatasetIDOfTask(taskID); err == nil {
+			datasetIDs = append(datasetIDs, datasetID)
 		}
 	}
-	if err := s.Store.DeleteInstance(ctx, instance.InstanceID, instance.SpaceID, viewIDs); err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err := s.Store.DeleteInstance(ctx, instance.InstanceID, instance.SpaceID, datasetIDs); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return incomplete(failure(fmt.Errorf("因子任务已删除，删除实例记录未完成（可以重新执行删除）：%w", err)))
 	}
 	return &strategypb.DeleteStrategyInstanceRsp{RetInfo: success()}, nil

@@ -40,23 +40,21 @@ func (f *fakeGateway) Invoke(_ context.Context, service, method string, req, rsp
 
 func ok() *commonpb.RetInfo { return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS} }
 
-func col(name string, origin storagepb.DatasetColumnOriginType, typ storagepb.FieldValueType, status string) *storagepb.DatasetColumn {
-	return &storagepb.DatasetColumn{ColumnName: name, OriginType: origin, ValueType: typ, Status: status}
+func col(name string, typ storagepb.FieldValueType, status string) *storagepb.DatasetColumn {
+	return &storagepb.DatasetColumn{ColumnName: name, ValueType: typ, Status: status}
 }
 
-func TestColumnsKeepsFieldAndCustomColumnsSortedAndSkipsSystemAndDisabled(t *testing.T) {
-	field, custom, system := storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
+func TestColumnsKeepsActiveColumnsSortedAndSkipsDisabled(t *testing.T) {
 	gw := &fakeGateway{columns: []*storagepb.ListDatasetColumnsRsp{
 		{RetInfo: ok(), PageResult: &commonpb.PageResult{HasMore: true}, Columns: []*storagepb.DatasetColumn{
-			col("volume", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "active"),
-			col("subject_id", system, storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "active"),
-			col("old", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "disabled"),
+			col("volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "active"),
+			col("old", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "disabled"),
 		}},
 		{RetInfo: ok(), Columns: []*storagepb.DatasetColumn{
-			col("close", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, ""),
-			col("zscore", custom, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "active"),
-			col("tag", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "active"),
-			col("n", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "active"),
+			col("close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, ""),
+			col("zscore", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "active"),
+			col("tag", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "active"),
+			col("n", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "active"),
 		}},
 	}}
 	got, err := New(gw).Columns(context.Background(), "crypto", "ds")
@@ -78,12 +76,11 @@ func TestColumnsKeepsFieldAndCustomColumnsSortedAndSkipsSystemAndDisabled(t *tes
 }
 
 func TestColumnsRejectsEmptyUnsupportedAndFailedCalls(t *testing.T) {
-	field := storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
 	empty := &fakeGateway{columns: []*storagepb.ListDatasetColumnsRsp{{RetInfo: ok()}}}
 	if _, err := New(empty).Columns(context.Background(), "crypto", "ds"); err == nil || !strings.Contains(err.Error(), "no value columns") {
 		t.Fatalf("err = %v", err)
 	}
-	weird := &fakeGateway{columns: []*storagepb.ListDatasetColumnsRsp{{RetInfo: ok(), Columns: []*storagepb.DatasetColumn{col("x", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, "active")}}}}
+	weird := &fakeGateway{columns: []*storagepb.ListDatasetColumnsRsp{{RetInfo: ok(), Columns: []*storagepb.DatasetColumn{col("x", storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, "active")}}}}
 	if _, err := New(weird).Columns(context.Background(), "crypto", "ds"); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("err = %v", err)
 	}

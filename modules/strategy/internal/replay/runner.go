@@ -137,7 +137,7 @@ func (r *Runner) Execute(ctx context.Context, job store.Replay) {
 		// 记录里只保存不含服务地址、也不含数据库驱动英文原文的概述，原始错误写日志。
 		friendly, _ := store.FriendlyMessage(err)
 		if errors.Is(err, input.ErrViewNotFound) {
-			friendly = fmt.Sprintf("View %s 已不存在，回放无法继续", strings.Join(replayViewIDs(job), "、"))
+			friendly = fmt.Sprintf("View %s 已不存在，回放无法继续", strings.Join(replayDatasetIDs(job), "、"))
 		}
 		status, message = store.ReplayFailed, friendly
 		r.logf("回放 %s 失败：%v；原始错误：%v", job.ReplayID, err, input.RawCause(err))
@@ -208,12 +208,12 @@ func replayTaskIDs(job store.Replay) map[string]string {
 	return tasks
 }
 
-// replayViewIDs 返回回放读取的结果 View（按任务键先后）。
-func replayViewIDs(job store.Replay) []string {
+// replayDatasetIDs 返回回放读取的结果 View（按任务键先后）。
+func replayDatasetIDs(job store.Replay) []string {
 	ids := make([]string, 0, len(job.Tasks))
 	for _, key := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity} {
 		if task, ok := job.Tasks[key]; ok {
-			ids = append(ids, task.ViewID)
+			ids = append(ids, task.DatasetID)
 		}
 	}
 	return ids
@@ -233,7 +233,7 @@ func checkFundingColumn(views map[string]input.ViewInfo, column string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("永续的 View %s 没有资金费列 %s", view.ViewID, column)
+	return fmt.Errorf("永续的 View %s 没有资金费列 %s", view.DatasetID, column)
 }
 
 // loadMarketViews 读取绑定的每个市场的结果 View（要有 close 列，账本按它估值）与数据集的全部标的绑定（含已停用，回放中都视为活跃）。
@@ -243,7 +243,7 @@ func loadMarketViews(ctx context.Context, client input.Client, spaceID string, r
 	subjects := make(map[string][]input.Subject, len(markets))
 	for _, market := range markets {
 		task := resolved.TaskOf(market)
-		view, err := client.GetView(ctx, spaceID, task.ViewID)
+		view, err := client.GetView(ctx, spaceID, task.DatasetID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -254,7 +254,7 @@ func loadMarketViews(ctx context.Context, client input.Client, spaceID string, r
 			}
 		}
 		if !hasClose {
-			return nil, nil, fmt.Errorf("View %s 没有 close 列，无法估值", task.ViewID)
+			return nil, nil, fmt.Errorf("View %s 没有 close 列，无法估值", task.DatasetID)
 		}
 		bindings, err := client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
 		if err != nil {
@@ -267,7 +267,7 @@ func loadMarketViews(ctx context.Context, client input.Client, spaceID string, r
 			active = append(active, subject)
 		}
 		if len(active) == 0 {
-			return nil, nil, fmt.Errorf("View %s 的数据集没有标的绑定", task.ViewID)
+			return nil, nil, fmt.Errorf("View %s 的数据集没有标的绑定", task.DatasetID)
 		}
 		views[market], subjects[market] = view, active
 	}
@@ -645,13 +645,13 @@ func (r *Runner) recheckView(ctx context.Context, job store.Replay, taskKey stri
 		}
 		// 读取覆盖统计时活动索引又换了槽位：稍等后按最新的 View 重新复查。
 		if attempt >= maxRecheckRereads {
-			return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引，读取新索引的覆盖统计时索引仍在变化：%w；请稍后重新发起回放", task.ViewID, when, err)
+			return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引，读取新索引的覆盖统计时索引仍在变化：%w；请稍后重新发起回放", task.DatasetID, when, err)
 		}
 		if err := pause(ctx, abort, time.Duration(attempt+1)*recheckRereadBackoff); err != nil {
 			return input.ViewInfo{}, time.Time{}, err
 		}
 		if view, err = withTransportRetry(ctx, abort, func() (input.ViewInfo, error) {
-			return r.Client.GetView(ctx, job.SpaceID, task.ViewID)
+			return r.Client.GetView(ctx, job.SpaceID, task.DatasetID)
 		}); err != nil {
 			return input.ViewInfo{}, time.Time{}, err
 		}
@@ -668,7 +668,7 @@ func (r *Runner) recheckView(ctx context.Context, job store.Replay, taskKey stri
 		if view.Generation == task.ViewGeneration {
 			return view, end, nil
 		}
-		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s%s，覆盖范围暂时未知，无法确认回放区间仍然有效；请稍后重新发起回放", task.ViewID, when, changed)
+		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s%s，覆盖范围暂时未知，无法确认回放区间仍然有效；请稍后重新发起回放", task.DatasetID, when, changed)
 	}
 	newEnd, err := input.ReplayWindow(resolved, program, view, start, end, r.now())
 	var early *input.EarlyStartError
@@ -682,10 +682,10 @@ func (r *Runner) recheckView(ctx context.Context, job store.Replay, taskKey stri
 		err = fmt.Errorf("剩余区间从 %s 起，但新索引的活跃序列从 %s 起才有数据%s（新索引的可用起点为 %s）", label(early.First), label(early.Coverage), requirement, label(early.Earliest))
 	}
 	if err != nil {
-		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s%s：%w；请重新发起回放", task.ViewID, when, changed, err)
+		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s%s：%w；请重新发起回放", task.DatasetID, when, changed, err)
 	}
 	if view.Generation != task.ViewGeneration {
-		r.logf("回放 %s：View %s %s重建了索引（→ %s），按新索引复查区间通过", job.ReplayID, task.ViewID, when, view.Generation)
+		r.logf("回放 %s：View %s %s重建了索引（→ %s），按新索引复查区间通过", job.ReplayID, task.DatasetID, when, view.Generation)
 	}
 	return view, newEnd, nil
 }

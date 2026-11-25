@@ -671,7 +671,7 @@ func (r *Runner) columnMetas(spaceID, datasetID string) []export.ColumnMeta {
 	out := make([]export.ColumnMeta, 0, len(infos))
 	for _, info := range infos {
 		out = append(out, export.ColumnMeta{
-			Name: info.Name, Type: info.Type, DisplayName: info.DisplayName, OriginType: info.OriginType, OriginID: info.OriginID,
+			Name: info.Name, Type: info.Type, DisplayName: info.DisplayName, Group: info.Group,
 			Required: info.Required, Aliases: info.Aliases, Attributes: info.Attributes,
 		})
 	}

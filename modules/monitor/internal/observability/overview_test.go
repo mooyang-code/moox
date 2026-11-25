@@ -292,7 +292,7 @@ func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 	now := time.Date(2026, 8, 20, 15, 0, 0, 0, time.UTC)
 	watermark := now.Add(-20 * time.Minute)
 	// 指标目录按规范化（键排序）的标签 JSON 匹配同一身份的序列。
-	labels := `{"freq":"1m","space_id":"crypto","view_id":"view_crypto_kline_1m_factor"}`
+	labels := `{"dataset_id":"dataset_crypto_kline_1m_factor","freq":"1m","space_id":"crypto"}`
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		seedOverviewMetricForInstance(t, db, "factor-view-watermark", "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels, float64(watermark.Unix()), now)
 		seedOverviewMetricForInstance(t, db, "factor-view-arrival", "storage-view", "storage-view@control", "moox_storage_view_output_arrival_timestamp_seconds", labels, float64(watermark.Add(time.Minute+4*time.Second).Unix()), now)
@@ -305,7 +305,7 @@ func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 		t.Fatalf("datasets = %+v", got.Datasets)
 	}
 	row := got.Datasets[0]
-	if row.Producer != "storage_view" || row.DatasetID != "view_crypto_kline_1m_factor" || row.Freq != "1m" || row.Status != "stale" {
+	if row.Producer != "storage_view" || row.DatasetID != "dataset_crypto_kline_1m_factor" || row.Freq != "1m" || row.Status != "stale" {
 		t.Fatalf("storage view status = %+v", row)
 	}
 	// 水位 14:40 那根 14:41 收线，之后的 14:41 那根 14:42 收线，到 15:00 已等待 18 分钟；视图写完的时刻作为到达时间。
@@ -325,7 +325,7 @@ func TestBuilderDoesNotCountBarsClosedAfterTheLastReport(t *testing.T) {
 	// 指标目录按真实时钟判断上报是否中断，所以用当前时间：整分 + 40 秒，上一次上报在整分前 5 秒。
 	minute := time.Now().UTC().Truncate(time.Minute)
 	now, reported := minute.Add(40*time.Second), minute.Add(-5*time.Second)
-	labels := `{"freq":"1m","space_id":"crypto","view_id":"view_crypto_kline_1m"}`
+	labels := `{"dataset_id":"dataset_crypto_kline_1m","freq":"1m","space_id":"crypto"}`
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		seedOverviewMetricForInstance(t, db, "view-watermark", "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels, float64(minute.Add(-2*time.Minute).Unix()), reported)
 	})

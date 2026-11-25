@@ -13,34 +13,22 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 - **换手率有完整历史，股本这一组只有开通以后的值。** 股本、每股股利、是否 ST 来自只有当日值的接口，补历史时这些列是空的（只有最近一个交易日可能写上）；所以市值、市盈率这类因子只能从开通日起用。平日某天没采到，那一天的股本也补不回来（内置的市值、估值因子会沿用最近 20 个交易日里的值）。
 - **沪深 300 里没有 ST 股**，`is_st` 在这个股票池里基本恒为 0。
 
-全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`（`collector kline`、`collector status`、`collector fetch-plan`、`collector task create/delete` 没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`、`metadata field list`）都要写 `--space-id stockcn`；`metadata apply`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
+全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`（`collector kline`、`collector status`、`collector fetch-plan`、`collector task create/delete` 没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`）都要写 `--space-id stockcn`；`metadata apply`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
 
 ## 0. 前提
 
 - stockcn 空间走云函数采集，`moox.toml` 的 `[scf_plan]` 里要有这个空间。
 - 确认 5m 的 A 股采集已经正常（`./bin/moox-cli collector status --space-id stockcn`），再打开日线。
 
-## 1. 确认字段目录里有这些字段
+## 1. 确认可选的附加字段
 
-管理台的字段显示名和分组取自 Storage 的字段目录。全新安装时已随种子导入。先看有没有：
-
-```bash
-./bin/moox-cli metadata field list --space-id stockcn --group-id adjust      # 应有 adj_factor
-./bin/moox-cli metadata field list --space-id stockcn --group-id industry    # 应有 sw_l1、sw_l2、sw_l3
-./bin/moox-cli metadata field list --space-id stockcn --keyword fin_ --page-size 100
-./bin/moox-cli metadata field list --space-id stockcn --group-id trading --page-size 100   # 应有 turnover_rate、total_shares、float_shares、dividend_per_share、is_st
-```
-
-缺的话从种子补导入（写线上元数据，先给用户看预览再执行）：
+可采哪些字段、它们的中文名与分组只在 Collector 的字段规格里登记，管理台新建任务的输出字段清单与数据源页都直接取自它，不需要导入字段目录。先看日线能选哪些附加字段：
 
 ```bash
-./bin/moox-cli metadata apply --seed config/setup/metadata.yaml --spaces stockcn --dry-run   # 只输出计划，不发请求
-./bin/moox-cli metadata apply --seed config/setup/metadata.yaml --spaces stockcn             # 缺的建上，已有的核对一致
+./bin/moox-cli collector data-type show --data-type kline
 ```
 
-- 要带 `--if-not-exists`：不带时会对已有的空间、数据集、字段再发一次新建请求。带了之后标的（subjects）仍会按种子再写一次，它没有“已存在就跳过”的判断。
-- 种子里数据集的列是“有则更新”的写法，会把这些列写回种子里的定义（View 的列由数据集启用的列推出，不在种子里）；用户在管理台改过种子自带数据集的列时先提醒。
-- 字段目录缺这些字段不影响采集和校验（采集按 Collector 自己登记的字段判断），但管理台新建任务的输出字段清单里看不到它们，数据源页的“附加字段来源”只显示字段 ID。
+输出的 `extra_fields` 里 `market_id=stockcn`、`frequencies` 含 `1d` 的条目应有 `adj_factor`、`sw_l1`～`sw_l3`、`fin_*`、`turnover_rate`、`total_shares`、`float_shares`、`dividend_per_share`、`is_st`，每个都带 `display_name` 与 `group`。结果数据集建列时 Collector 把显示名与分组写在列上，管理台按列自己的显示名与分组展示。
 
 ## 2. 打开采集任务
 
@@ -62,8 +50,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 
 内置任务只在任务表为空时自动写入，已有部署里不会自动出现。`task list` 里没有它们时，按下面的顺序做，每一步改线上数据前先给用户看命令：
 
-1. **先导入字段目录**（第 1 步）。字段目录没导入不会让 Collector 启动失败（结果数据集的列由 Collector 自己建，不查字段目录），但管理台上这些列没有显示名和分组，所以放在前面一次做完。
-2. **补写内置任务。** 在控制机上执行（`<控制机>` 是 `moox.toml` 里控制机的主机 ID；路径按默认部署根 `/data/moox`，先 `ls` 确认文件存在）：
+1. **补写内置任务。** 在控制机上执行（`<控制机>` 是 `moox.toml` 里控制机的主机 ID；路径按默认部署根 `/data/moox`，先 `ls` 确认文件存在）：
 
    ```bash
    ./bin/moox-cli host exec --host <控制机> -- /data/moox/bin/moox-collector-cli init \
@@ -72,15 +59,15 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
    ```
 
    - 它只新建库里没有的（空间, 任务 ID），已有任务（包括用户改过、停用的）不动；输出里 `tasks_created` 是补写的个数，`tasks_unchanged` 是已存在的个数。同时会执行一次建表语句（`CREATE TABLE IF NOT EXISTS`，对已有的表没有影响）。
-   - 种子里的其他内置任务如果用户以前删过，也会被补回来（停用状态）。执行前用 `task list` 对一下，补回来又不需要的再用 `collector task delete` 删（默认只预览，`--yes` 才执行；默认连结果数据集和 View 一起删，要保留结果加 `--keep-result`）。
-3. **重启 Collector。** 这样直接写进任务表的任务，Collector 要到启动时才给它建结果数据集和 View：
+   - 种子里的其他内置任务如果用户以前删过，也会被补回来（停用状态）。执行前用 `task list` 对一下，补回来又不需要的再用 `collector task delete` 删（默认只预览，`--yes` 才执行；默认连结果数据集一起删，要保留结果加 `--keep-result`）。
+2. **重启 Collector。** 这样直接写进任务表的任务，Collector 要到启动时才给它建结果数据集（查询索引随之自动建）：
 
    ```bash
    ./bin/moox-cli setup restart --host <控制机> --component collector          # 预览
    ./bin/moox-cli setup restart --host <控制机> --component collector --yes
    ```
 
-4. **启用。** 用 2a 的 `collector task update --enabled=true`。
+3. **启用。** 用 2a 的 `collector task update --enabled=true`。
 
 不要改用 `collector task create` 新建同名任务：新建的任务 ID 是随机的，和内置任务的固定 ID 不同，结果数据集 ID 也就不同，文档、因子配置里按固定 ID 写的地方都对不上。只有需要“字段组合与内置任务不同”的日线任务时才新建（`--output-field` 会替换默认字段，要的字段列全；这个参数可以重复写，每次用逗号分隔）：
 
@@ -265,7 +252,7 @@ portfolio: {max_missing: 0.2}
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `collector task update` 报“输出字段只能减少，不能新增” | 想给已有任务加字段 | 新建采集任务（2b）和因子任务；原来的任务按需停用或删除 |
-| 管理台新建任务时看不到复权、行业、财务、换手率、股本字段 | 字段目录没导入；或标签不是 A 股股票、频率不是 `1d` | 第 1 步补导入；检查标签和频率 |
+| 管理台新建任务时看不到复权、行业、财务、换手率、股本字段 | 标签不是 A 股股票、频率不是 `1d` | 检查标签和频率（第 1 步看 `extra_fields` 的适用范围） |
 | 某天的日线整只股票没有行 | 五个附加来源里有一个当时报错，带附加字段的任务整行不写（纯日线任务不受影响）。其中“选股器的数据还停在某天”表示取数时东方财富还没更新到这个交易日 | 等自动补采（隔一天），或手工 `kline backfill` 那一天 |
 | 某只股票 `adj_factor` 一直为空 | 新浪复权接口对少数标的返回空列表 | 目前没有别的来源；因子里按缺数处理 |
 | 启用或停用日线任务后几分钟了 `collector fetch-plan` 还是未生效 | 计划在等下发确认（云函数操作慢、失败），或数据集在等旧份过窗口 | 看 `collector status` 的等待原因与失败原因 |

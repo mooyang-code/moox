@@ -44,7 +44,7 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 
 // FieldSpecs：后复权因子一旦写下就不再变（前复权每次除权都会改写全部历史），前复权价由因子表达式算。
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
-	return []marketdata.FieldSpec{{ID: FieldAdjFactor, Name: "后复权因子", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: []string{"1d"}}}
+	return []marketdata.FieldSpec{{ID: FieldAdjFactor, Name: "后复权因子", Group: marketdata.GroupAdjust, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: []string{"1d"}}}
 }
 
 type factor struct {

@@ -281,8 +281,8 @@ func TestResolveEquityFollowsSpotLimits(t *testing.T) {
 // A 股 5m 的因子结果 View 能解析：日历继承自源数据集，按交易时段对齐。
 func TestResolveCNStockIntradayView(t *testing.T) {
 	client := newFakeClient("spot")
-	client.views["view_factor_cn_5m"] = ViewInfo{ViewID: "view_factor_cn_5m", DatasetID: "ds_cn_factor", Frequency: "5m", Status: "active", ActiveIndexID: "idx_cn", Columns: []ViewColumn{plainColumn("close")}}
-	client.datasets["ds_cn_factor"] = DatasetInfo{DatasetID: "ds_cn_factor", Status: "active", Frequency: "5m", Retention: "7200h", Attributes: map[string]string{"source_dataset_id": "ds_cn_kline", "dataset_role": "factor_result"}}
+	client.views["dataset_factor_cn_5m"] = ViewInfo{DatasetID: "dataset_factor_cn_5m", Frequency: "5m", Status: "active", ActiveIndexID: "idx_cn", Columns: []ViewColumn{plainColumn("close")}}
+	client.datasets["dataset_factor_cn_5m"] = DatasetInfo{DatasetID: "dataset_factor_cn_5m", Status: "active", Frequency: "5m", Retention: "7200h", Attributes: map[string]string{"source_dataset_id": "ds_cn_kline", "dataset_role": "factor_result"}}
 	client.datasets["ds_cn_kline"] = DatasetInfo{DatasetID: "ds_cn_kline", Status: "active", Frequency: "5m", Retention: "7200h", Alignment: "session", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "equity"}}
 	strategy := parseStrategy(t, "name: cn_5m\nuniverse: {min_age_bars: 9600}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n")
 	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_cn_5m"}, strategy)

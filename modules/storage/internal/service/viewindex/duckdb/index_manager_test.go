@@ -18,7 +18,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 )
 
 func duckRowKey(space, dataset, subject, freq, at, tag string) *pb.RowKey {
@@ -41,10 +40,9 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	}
 	defer func() { _ = manager.Close() }()
 	current := viewindex.ViewIndexSchema{
-		SpaceID: "space", ViewID: "factor-view", PrimaryDatasetID: "dataset_factor_btc_1m",
-		ViewVersion: 1, Engine: "duckdb", Columns: []*pb.ViewColumn{{
-			ColumnName: "close", OriginId: "close",
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		SpaceID: "space", DatasetID: "dataset_factor_btc_1m",
+		ViewVersion: 1, Engine: "duckdb", Columns: []*viewindex.Column{{
+			ColumnName: "close",
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		}},
 	}
@@ -52,7 +50,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	if err := manager.Prepare(ctx, "factor-view-a", current); err != nil {
 		t.Fatal(err)
 	}
-	rowKey := duckRowKey("space", current.PrimaryDatasetID, "BTC-USDT", "1m", "2026-10-04T00:00:00Z", "")
+	rowKey := duckRowKey("space", current.DatasetID, "BTC-USDT", "1m", "2026-10-04T00:00:00Z", "")
 	if err := manager.Write(ctx, "factor-view-a", viewindex.ViewIndexWriteBatch{
 		ViewRevision: 1, ViewSchemaHash: current.SchemaHash, WriteMode: viewindex.LiveWrite,
 		RowWrites: []viewindex.RowWrite{{
@@ -65,12 +63,11 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v2 := proto.Clone(&pb.ViewColumn{ColumnName: "bias_20", OriginId: "bias_20",
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1}).(*pb.ViewColumn)
-	v2.SpaceId, v2.ViewId = current.SpaceID, current.ViewID
+	v2 := &viewindex.Column{ColumnName: "bias_20",
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1}
 	version2 := viewindex.ViewIndexSchema{
-		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
-		ViewVersion: 2, Engine: current.Engine, Columns: append(append([]*pb.ViewColumn(nil), current.Columns...), v2),
+		SpaceID: current.SpaceID, DatasetID: current.DatasetID,
+		ViewVersion: 2, Engine: current.Engine, Columns: append(append([]*viewindex.Column(nil), current.Columns...), v2),
 	}
 	version2.SchemaHash = viewindex.HashViewIndexSchema(version2)
 	if err := manager.ExtendColumns(ctx, "factor-view-a", current, version2); err != nil {
@@ -86,17 +83,16 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = manager.Close() }()
-	v3 := proto.Clone(&pb.ViewColumn{ColumnName: "volume", OriginId: "volume",
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2}).(*pb.ViewColumn)
-	v3.SpaceId, v3.ViewId = current.SpaceID, current.ViewID
+	v3 := &viewindex.Column{ColumnName: "volume",
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2}
 	version3 := viewindex.ViewIndexSchema{
-		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
+		SpaceID: current.SpaceID, DatasetID: current.DatasetID,
 		ViewVersion: 3, Engine: current.Engine,
-		Columns: append(append(append([]*pb.ViewColumn(nil), current.Columns...), v2), v3),
+		Columns: append(append(append([]*viewindex.Column(nil), current.Columns...), v2), v3),
 	}
 	version3.SchemaHash = viewindex.HashViewIndexSchema(version3)
 	restored, err := manager.StatMetadata(ctx, "factor-view-a")
-	if err != nil || restored.ViewVersion != 2 || restored.DatasetID != current.PrimaryDatasetID || len(restored.Columns) != 2 {
+	if err != nil || restored.ViewVersion != 2 || restored.DatasetID != current.DatasetID || len(restored.Columns) != 2 {
 		t.Fatalf("restored contract = %#v err=%v", restored, err)
 	}
 	restoredSchema := version2
@@ -117,7 +113,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	}
 
 	rows, _, err := manager.Query(ctx, "factor-view-a", viewindex.QuerySpec{
-		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: current.PrimaryDatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
+		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: current.DatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
 		Includes:  []string{"bias_20", "volume"},
 	})
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 2 {
@@ -138,10 +134,9 @@ func TestExtendColumnsRejectsCorruptPhysicalContract(t *testing.T) {
 	}
 	defer manager.Close()
 	current := viewindex.ViewIndexSchema{
-		SpaceID: "space", ViewID: "factor-view", PrimaryDatasetID: "dataset_factor_btc_1m",
-		ViewVersion: 1, Engine: "duckdb", Columns: []*pb.ViewColumn{{
-			ColumnName: "close", OriginId: "close",
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		SpaceID: "space", DatasetID: "dataset_factor_btc_1m",
+		ViewVersion: 1, Engine: "duckdb", Columns: []*viewindex.Column{{
+			ColumnName: "close",
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		}},
 	}
@@ -149,14 +144,13 @@ func TestExtendColumnsRejectsCorruptPhysicalContract(t *testing.T) {
 	if err := manager.Prepare(ctx, "factor-view-a", current); err != nil {
 		t.Fatal(err)
 	}
-	bias := &pb.ViewColumn{
-		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "bias_20",
-		OriginId: "bias_20", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1,
+	bias := &viewindex.Column{
+		ColumnName: "bias_20",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1,
 	}
 	intermediate := viewindex.ViewIndexSchema{
-		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
-		ViewVersion: 2, Engine: current.Engine, Columns: append(append([]*pb.ViewColumn(nil), current.Columns...), bias),
+		SpaceID: current.SpaceID, DatasetID: current.DatasetID,
+		ViewVersion: 2, Engine: current.Engine, Columns: append(append([]*viewindex.Column(nil), current.Columns...), bias),
 	}
 	intermediate.SchemaHash = viewindex.HashViewIndexSchema(intermediate)
 	if err := manager.ExtendColumns(ctx, "factor-view-a", current, intermediate); err != nil {
@@ -169,14 +163,13 @@ func TestExtendColumnsRejectsCorruptPhysicalContract(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE view_meta SET schema_hash = 'corrupt' WHERE singleton = 1`); err != nil {
 		t.Fatal(err)
 	}
-	volume := &pb.ViewColumn{
-		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "volume",
-		OriginId: "volume", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2,
+	volume := &viewindex.Column{
+		ColumnName: "volume",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2,
 	}
 	target := viewindex.ViewIndexSchema{
-		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
-		ViewVersion: 3, Engine: current.Engine, Columns: append(append(append([]*pb.ViewColumn(nil), current.Columns...), bias), volume),
+		SpaceID: current.SpaceID, DatasetID: current.DatasetID,
+		ViewVersion: 3, Engine: current.Engine, Columns: append(append(append([]*viewindex.Column(nil), current.Columns...), bias), volume),
 	}
 	target.SchemaHash = viewindex.HashViewIndexSchema(target)
 	if err := manager.ExtendColumns(ctx, "factor-view-a", intermediate, target); !errors.Is(err, viewindex.ErrSchemaExtensionConflict) {
@@ -341,7 +334,7 @@ func TestOpenRejectsInvalidMaxOpenConnections(t *testing.T) {
 
 func TestConcurrentColdOpenDoesNotLeaveManagerLocked(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "duckdb")
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
 	first, err := OpenIndexManager(IndexManagerOptions{Root: root})
 	if err != nil {
 		t.Fatal(err)
@@ -400,9 +393,9 @@ func TestDuckDBSeriesTagSchemaIdentitySelectorsAndUpsert(t *testing.T) {
 	}
 	defer manager.Close()
 	schema := viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1,
+		SpaceID: "s", DatasetID: "prices", ViewVersion: 1,
 		Engine: "duckdb", SchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+		Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 	}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
@@ -526,9 +519,9 @@ func TestBackfillPreservesLiveFieldsAndProvenance(t *testing.T) {
 	}
 	defer manager.Close()
 	schema := viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1,
+		SpaceID: "s", DatasetID: "prices", ViewVersion: 1,
 		Engine: "duckdb", SchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+		Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 	}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
@@ -567,9 +560,9 @@ func TestDuckDBStableTotalOrderAndPagination(t *testing.T) {
 	}
 	defer manager.Close()
 	schema := viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1,
+		SpaceID: "s", DatasetID: "prices", ViewVersion: 1,
 		Engine: "duckdb", SchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+		Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 	}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
@@ -632,7 +625,7 @@ func TestDuckDBAfterCursorIncludesSeriesTag(t *testing.T) {
 	}
 	defer manager.Close()
 	schema := viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1,
+		SpaceID: "s", DatasetID: "prices", ViewVersion: 1,
 		Engine: "duckdb", SchemaHash: "hash",
 	}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
@@ -742,7 +735,7 @@ func TestDuckDBRejectsMalformedSystemSchema(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = db.Exec(`
-				CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL);
+				CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL);
 				INSERT INTO view_meta VALUES (1, 1, 'hash', 'prices', 's', 'now');
 				CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
 				` + tc.ddl)
@@ -768,7 +761,7 @@ func TestOpenIndexManagerAcceptsCurrentSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Prepare(context.Background(), "current", viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices",
+		SpaceID: "s", DatasetID: "prices",
 		ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
 	}); err != nil {
 		t.Fatal(err)
@@ -840,7 +833,7 @@ func TestRemoveDeletesDatabaseAndWAL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Prepare(context.Background(), "retired", viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
+		SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -867,7 +860,7 @@ func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*viewindex.Column{
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 		{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT},
 	}}
@@ -903,7 +896,7 @@ func TestDuckDBCountBySubjectCountsDistinctBarsInRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
 	}
@@ -938,7 +931,7 @@ func TestStatMetadataTracksCoverageWithoutScanningRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
 	}
@@ -968,7 +961,7 @@ func TestDuckDBSeriesCapacityTracksEachSeriesIndependently(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
 	}
@@ -1022,9 +1015,9 @@ func TestDuckDBNanosecondDataTimeIdentityAndRange(t *testing.T) {
 	}
 	defer manager.Close()
 	schema := viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices",
+		SpaceID: "s", DatasetID: "prices",
 		ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+		Columns: []*viewindex.Column{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 	}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
@@ -1154,7 +1147,7 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*viewindex.Column{
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 		{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT},
 		{ColumnName: "symbol", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
@@ -1259,7 +1252,7 @@ func TestDuckDBDuplicateRowKeyUsesLastFieldValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
 	}
@@ -1291,7 +1284,7 @@ func TestDuckDBDuplicatePhysicalRowKeyCollapsesMetadataDifferences(t *testing.T)
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
 	}
@@ -1347,7 +1340,7 @@ func TestDuckDBEquivalentPhysicalTimesCollapseInOneWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
 	}

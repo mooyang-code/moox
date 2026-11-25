@@ -27,7 +27,6 @@ type WriteTarget struct {
 	InstanceID     string     `json:"instance_id"`
 	TaskID         string     `json:"task_id"`
 	DatasetID      string     `json:"dataset_id"`
-	ViewID         string     `json:"view_id,omitempty"`
 	OutputFields   string     `json:"output_fields_json,omitempty"`
 	SeriesIndex    uint32     `json:"series_index"`
 	SeriesHash     string     `json:"series_hash"`

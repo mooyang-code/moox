@@ -13,8 +13,7 @@ import (
 
 // MetadataClient 是策略读取 Storage Metadata 用到的最小方法集合，便于测试替换。
 type MetadataClient interface {
-	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
-	ListViewColumns(context.Context, *storagepb.ListViewColumnsReq, ...client.Option) (*storagepb.ListViewColumnsRsp, error)
+	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
 	GetTag(context.Context, *storagepb.GetTagReq, ...client.Option) (*storagepb.GetTagRsp, error)
 	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
@@ -83,12 +82,8 @@ func invokeGateway[T any](ctx context.Context, gateway gatewayclient.Invoker, ti
 	return response, nil
 }
 
-func (a *gatewayAdapter) GetView(ctx context.Context, request *storagepb.GetViewReq, options ...client.Option) (*storagepb.GetViewRsp, error) {
-	return invokeGateway[storagepb.GetViewRsp](ctx, a.gateway, a.storageTimeout, storageMetadataService, "GetView", request, options)
-}
-
-func (a *gatewayAdapter) ListViewColumns(ctx context.Context, request *storagepb.ListViewColumnsReq, options ...client.Option) (*storagepb.ListViewColumnsRsp, error) {
-	return invokeGateway[storagepb.ListViewColumnsRsp](ctx, a.gateway, a.storageTimeout, storageMetadataService, "ListViewColumns", request, options)
+func (a *gatewayAdapter) ListDatasetColumns(ctx context.Context, request *storagepb.ListDatasetColumnsReq, options ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
+	return invokeGateway[storagepb.ListDatasetColumnsRsp](ctx, a.gateway, a.storageTimeout, storageMetadataService, "ListDatasetColumns", request, options)
 }
 
 func (a *gatewayAdapter) GetDataset(ctx context.Context, request *storagepb.GetDatasetReq, options ...client.Option) (*storagepb.GetDatasetRsp, error) {

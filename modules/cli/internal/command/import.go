@@ -35,9 +35,10 @@ type importOptions struct {
 	DryRun               bool
 	Targets              []string
 	Manifest             string
-	ViewID               string
-	JobDB                string
-	JobID                string
+	// WaitView 为真（默认）时写 Storage 后等该数据集的查询索引（View）跟上导入的写入。
+	WaitView bool
+	JobDB    string
+	JobID    string
 	// TailRows 与 Pack、MinRows 见初始数据导入执行计划：Storage 只写每个文件最后 TailRows 行（且在保留期内）、
 	// 按导入包清单预检、要求每个文件至少 MinRows 行。
 	TailRows int
@@ -88,7 +89,7 @@ func init() {
 	f.BoolVar(&importFlags.DryRun, "dry-run", false, "只校验不写入")
 	f.StringSliceVar(&importFlags.Targets, "target", []string{"storage", "factor"}, "写入目标：storage、factor、archive（可任意组合）")
 	f.StringVar(&importFlags.Manifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
-	f.StringVar(&importFlags.ViewID, "view", "", "可选 View ID；写 Storage 后等该 View 跟上导入的写入")
+	f.BoolVar(&importFlags.WaitView, "wait-view", true, "写 Storage 后等该数据集的查询索引（View）跟上导入的写入；大批量导入不想等时用 --wait-view=false")
 	f.StringVar(&importFlags.JobDB, "job-db", "./importer.db", "断点库路径")
 	f.StringVar(&importFlags.JobID, "job", "", "任务 ID；不写时按请求与文件特征生成，重跑同一请求自动续传")
 	f.IntVar(&importFlags.TailRows, "tail-rows", 0, "Storage 目标每个文件只写最后 N 行，且跳过早于保留期的行；因子机本地目标仍写全量（初始数据导入用，0 表示不限制）")
@@ -177,14 +178,9 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 				return checkArchiveDisk(ctx, gateway, opts.Space, opts.Dataset, check, summary, len(fields))
 			}
 		}
-		if opts.ViewID != "" {
-			if err := checkImportView(ctx, metaClient, opts.Space, opts.ViewID, opts.Dataset); err != nil {
-				return err
-			}
-		}
 		if wantStorage && !opts.DryRun {
 			writer := gatewayStorageDataWriter{Gateway: gateway, SpaceID: opts.Space}
-			targets = append(targets, &importStorageTarget{writer: writer, types: types, view: opts.ViewID, space: opts.Space, dataset: opts.Dataset})
+			targets = append(targets, &importStorageTarget{writer: writer, types: types, waitView: opts.WaitView, space: opts.Space, dataset: opts.Dataset})
 		}
 		if wantArchive && !opts.DryRun {
 			targets = append(targets, &importArchiveTarget{gateway: gateway, file: opts.Manifest, space: opts.Space, dataset: opts.Dataset, types: types})
@@ -323,7 +319,7 @@ func importStep(freq string) (time.Duration, error) {
 	return 0, fmt.Errorf("不支持的频率 %q（支持 1m 5m 15m 30m 1h 4h 1d）", freq)
 }
 
-// importFieldsFromColumns 取数据集的启用字段：来源为字段或自定义（与归档 worker 取列的口径一致，否则归档批次会被拒），
+// importFieldsFromColumns 取数据集的启用列（与归档 worker 取列的口径一致，否则归档批次会被拒），
 // 不含时间、标的、series_tag 等保留列，按名称排序。
 func importFieldsFromColumns(columns []*pb.DatasetColumn) ([]seriesformat.Field, map[string]pb.FieldValueType, error) {
 	byName, err := storageImportColumnMap(columns)
@@ -335,11 +331,6 @@ func importFieldsFromColumns(columns []*pb.DatasetColumn) ([]seriesformat.Field,
 	types := map[string]pb.FieldValueType{}
 	for name, column := range byName {
 		if column.GetStatus() != "" && column.GetStatus() != "active" {
-			continue
-		}
-		switch column.GetOriginType() {
-		case pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
-		default:
 			continue
 		}
 		if _, skip := reserved[name]; skip {
@@ -374,15 +365,15 @@ func importFieldType(t pb.FieldValueType) seriesformat.FieldType {
 	}
 }
 
-// importStorageTarget 把一批行以字段更新（UpsertFields）写进 Storage，写完后可选地等 View 跟上。
+// importStorageTarget 把一批行以字段更新（UpsertFields）写进 Storage，写完后默认等该数据集的 View 跟上。
 type importStorageTarget struct {
-	writer  gatewayStorageDataWriter
-	types   map[string]pb.FieldValueType
-	view    string
-	space   string
-	dataset string
-	written bool
-	subject map[string]struct{}
+	writer   gatewayStorageDataWriter
+	types    map[string]pb.FieldValueType
+	waitView bool
+	space    string
+	dataset  string
+	written  bool
+	subject  map[string]struct{}
 }
 
 func (t *importStorageTarget) Name() string { return "storage" }
@@ -409,24 +400,24 @@ func (t *importStorageTarget) Write(ctx context.Context, c runner.Chunk) error {
 	return nil
 }
 
-// importViewWaitTimeout 是导入结束后等指定 View 跟上写入的总时长；View 正在建索引（VIEW_NOT_READY）时每隔 importViewRetryInterval 再问一次。
+// importViewWaitTimeout 是导入结束后等数据集的 View 跟上写入的总时长；View 正在建索引（VIEW_NOT_READY）时每隔 importViewRetryInterval 再问一次。
 const (
 	importViewWaitTimeout   = 30 * time.Second
 	importViewRetryInterval = 200 * time.Millisecond
 )
 
-// Finish 指定了 View 时等它跟上导入的写入：View 在服务端取当前变更日志头部，扫描到它时导入的行都已可查。
+// Finish 等数据集的 View 跟上导入的写入（--wait-view=false 时不等）：View 在服务端取当前变更日志头部，扫描到它时导入的行都已可查。
 func (t *importStorageTarget) Finish(ctx context.Context) error {
-	if !t.written || t.view == "" {
+	if !t.written || !t.waitView {
 		return nil
 	}
 	deadline := time.Now().Add(importViewWaitTimeout)
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return fmt.Errorf("View %s 在 %s 内没有跟上导入的写入", t.view, importViewWaitTimeout)
+			return fmt.Errorf("数据集 %s 的 View 在 %s 内没有跟上导入的写入（数据已写入 Storage；大批量导入可加 --wait-view=false）", t.dataset, importViewWaitTimeout)
 		}
-		rsp, err := t.writer.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: t.space, ViewId: t.view, WaitTimeoutMs: uint32(max(remaining/time.Millisecond, 1))})
+		rsp, err := t.writer.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: t.space, DatasetId: t.dataset, WaitTimeoutMs: uint32(max(remaining/time.Millisecond, 1))})
 		if err != nil {
 			return fmt.Errorf("等待 View 跟上导入的写入：%w", err)
 		}
@@ -523,28 +514,6 @@ func (c gatewayStorageImportMetadataClient) GetDataset(ctx context.Context, spac
 		return nil, err
 	}
 	return rsp.GetDataset(), nil
-}
-
-func (c gatewayStorageImportMetadataClient) GetView(ctx context.Context, spaceID, viewID string) (*pb.View, error) {
-	rsp := &pb.GetViewRsp{}
-	if err := postStorage(ctx, c.Gateway, metadataServiceName, "GetView", &pb.GetViewReq{SpaceId: spaceID, ViewId: viewID}, rsp); err != nil {
-		return nil, err
-	}
-	return rsp.GetView(), nil
-}
-
-// checkImportView 确认 --view 指定的 View 读的就是导入的数据集：否则等它跟上变更日志也证明不了导入的行已可查。
-func checkImportView(ctx context.Context, meta interface {
-	GetView(context.Context, string, string) (*pb.View, error)
-}, spaceID, viewID, datasetID string) error {
-	view, err := meta.GetView(ctx, spaceID, viewID)
-	if err != nil {
-		return fmt.Errorf("读取 View %s：%w", viewID, err)
-	}
-	if view.GetDatasetId() != datasetID {
-		return fmt.Errorf("View %s 读的是数据集 %q，不是导入的数据集 %q", viewID, view.GetDatasetId(), datasetID)
-	}
-	return nil
 }
 
 func (c gatewayStorageImportMetadataClient) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string) ([]*pb.DatasetColumn, error) {

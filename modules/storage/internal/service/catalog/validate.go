@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 var lowerSnakeIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -35,35 +34,11 @@ func validateDatasetColumnName(name string) error {
 	return validateUserColumnName("dataset column_name", name)
 }
 
-func defaultViewGrainKeys(kind pb.DataKind) []string {
-	if kind == pb.DataKind_DATA_KIND_TIME_SERIES {
-		return []string{"subject_id", "freq", "data_time", "series_tag"}
-	}
-	return []string{"record_id", "version"}
-}
-
-func defaultViewEngine(kind pb.DataKind) string {
-	if kind == pb.DataKind_DATA_KIND_TIME_SERIES {
-		return "duckdb"
-	}
-	return "bleve"
-}
-
 func validateDatasetID(datasetID string) error {
 	if !strings.HasPrefix(datasetID, "dataset_") {
 		return storeerr.Invalidf("dataset_id must start with dataset_")
 	}
 	return validateLowerSnakeID("dataset_id", datasetID, 50)
-}
-
-func validateViewID(viewID string) error {
-	if !strings.HasPrefix(viewID, "view_") {
-		return storeerr.Invalidf("view_id must start with view_")
-	}
-	// Collector View IDs include the complete tag, task type, and frequency.
-	// Tag IDs may be 64 characters, so the View limit must leave room for those
-	// semantic components instead of rejecting otherwise valid tags at create.
-	return validateLowerSnakeID("view_id", viewID, 128)
 }
 
 func validateChineseDisplayName(field string, value string) error {
@@ -83,8 +58,8 @@ func validateChineseDisplayName(field string, value string) error {
 }
 
 // validateColumnDisplayName 要求列带显示名；显示名由建列的模块写入，Storage 不推断、不按业务规则校验。
-func validateColumnDisplayName(field string, attrs map[string]string) error {
-	if strings.TrimSpace(attrs["display_name"]) == "" {
+func validateColumnDisplayName(field string, displayName string) error {
+	if strings.TrimSpace(displayName) == "" {
 		return storeerr.Invalidf("%s is required", field)
 	}
 	return nil
@@ -110,11 +85,4 @@ func validateUserColumnName(field string, name string) error {
 		return storeerr.Invalidf("%s %q is a reserved system column", field, name)
 	}
 	return nil
-}
-
-func viewDatasetID(view *pb.View) string {
-	if view == nil {
-		return ""
-	}
-	return strings.TrimSpace(view.GetDatasetId())
 }

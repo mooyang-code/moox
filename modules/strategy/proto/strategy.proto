@@ -58,7 +58,7 @@ message StrategyResult {
   string dsl_hash = 8;
   repeated InstrumentTarget targets = 9;
   string summary_json = 10;              // |U|、各规则 |E|、|G|、|A|、|M|、各阶段数量、gross、net、换手、现金
-  string input_json = 11;                // view_id、bar_start、事件 ID、各因子 definition_hash
+  string input_json = 11;                // dataset_id、bar_start、事件 ID、各因子 definition_hash
   string publish_status = 12;            // none | pending | sent | cancelled
   string created_at = 13;
   // 这一期算出的下一期可变成员参数（JSON：成员键 → 参数名 → {default, overrides}）；没有可变成员时为空。
@@ -80,10 +80,10 @@ message StrategyResultItem {
   string scale = 9;                      // 乘在输出权重上的仓位系数（weight 已乘过）；规则没写 scale 时为空
 }
 
-// ReplayTask 是研究回放在一个市场读取的因子任务及其结果 View。
+// ReplayTask 是研究回放在一个市场读取的因子任务及其结果数据集。
 message ReplayTask {
   string factor_task_id = 1;
-  string view_id = 2;                    // 因子任务的结果 View
+  string dataset_id = 2;                 // 因子任务的结果数据集
 }
 
 // Replay 是一次基于 View 的研究回放任务。

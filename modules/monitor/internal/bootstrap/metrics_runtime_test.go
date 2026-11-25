@@ -254,7 +254,7 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
 	require.NoError(t, err)
 	now := time.Now().UTC()
-	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
+	labels := `{"space_id":"crypto","dataset_id":"dataset","freq":"1m"}`
 	_, err = store.WithDatabase(manager, func(db *gorm.DB) error {
 		for _, row := range []monmetrics.MetricSeries{
 			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
@@ -279,11 +279,11 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 				Lifecycle: &metricspb.ModuleLifecycle{Stage: stage}}))
 	}
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	builder := &monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}
 	run := buildBusinessFreshnessReporter(builder, repos, evaluator)
-	const id = "kline_freshness:crypto:view:1m"
+	const id = "kline_freshness:crypto:dataset:1m"
 
 	for _, stage := range []string{"paused", "resuming"} {
 		report(stage)

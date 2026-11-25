@@ -62,15 +62,15 @@
 
 ## 存储（Storage）
 
-- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含周期账本、保留期清理，完成事件跟随变更日志转发）；storage-view 管可重建的 View（DuckDB/Bleve）。
+- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含周期账本、保留期清理，完成事件跟随变更日志转发）；storage-view 管可重建的 View：每个数据集恰好一个查询索引（时序 DuckDB、记录 Bleve），随数据集建删，按数据集 ID 寻址。
 - **在哪**：存储机，两个角色同机。数据集建好即可写入，不需要激活。
 - **常用**：
-  - 元数据：`metadata source|subject|tag|dataset|field|field-group|view list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
+  - 元数据：`metadata source|subject|tag|dataset list|show|create|update|delete`（列用 `metadata dataset columns|add-column`）；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
   - 读数据：`data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`。
-  - 维护：`storage repair-view|delete-view`
+  - 维护：`storage repair-view`
     （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）。
 - **其他**：`metadata spaces` 列出一份种子文件里可导入的业务空间。
-- **注意**：新建 View、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重新部署对应主机才生效（`setup deploy --host <主机>`）。
+- **注意**：新建数据集（即新建 View）、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重新部署对应主机才生效（`setup deploy --host <主机>`）。
 - 协议与命名规则：[`protocol.md`](protocol.md)。
 
 ## 因子

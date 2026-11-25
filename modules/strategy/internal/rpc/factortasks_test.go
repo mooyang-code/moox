@@ -26,7 +26,7 @@ func TestInstanceFactorTaskIsRequiredAndShared(t *testing.T) {
 	h.createStrategy("s1", demoDSL)
 	missing := h.createInstance("i1", "s1", "", "", false)
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "factor_tasks")
-	badID := h.createInstance("i1", "s1", "view_a", "", false)
+	badID := h.createInstance("i1", "s1", "dataset_factor_a", "", false)
 	requireFail(t, int32(badID.GetRetInfo().GetCode()), badID.GetRetInfo().GetMsg(), "不合法")
 
 	created := h.createInstance("i1", "s1", "ftask_shared", "", false)
@@ -64,7 +64,7 @@ func TestEnableBindsFactorTaskAndSnapshotsItsView(t *testing.T) {
 	if !instance.GetEnabled() || len(h.resolver.bound) != 1 || h.resolver.bound[0] != "i1@ftask_i1" {
 		t.Fatalf("启用应关联任务：%+v bound=%v", instance, h.resolver.bound)
 	}
-	if !strings.Contains(instance.GetResolvedJson(), `"view_id":"view_factor_i1"`) || !strings.Contains(instance.GetResolvedJson(), `"factor_task_id":"ftask_i1"`) {
+	if !strings.Contains(instance.GetResolvedJson(), `"dataset_id":"dataset_factor_i1"`) || !strings.Contains(instance.GetResolvedJson(), `"factor_task_id":"ftask_i1"`) {
 		t.Fatalf("会话应固化任务与它的结果 View：%s", instance.GetResolvedJson())
 	}
 	again := h.setEnabled("i1", true)
@@ -86,7 +86,7 @@ func TestValidateAndReplayByFactorTask(t *testing.T) {
 	h.resolver.columns = []string{"close", "bias__var"}
 	validated, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: tunedDSL, FactorTasks: map[string]string{"spot": "ftask_x"}})
 	requireOK(t, int32(validated.GetRetInfo().GetCode()), validated.GetRetInfo().GetMsg())
-	if !strings.Contains(validated.GetResolvedJson(), `"factor_task_id":"ftask_x"`) || !strings.Contains(validated.GetResolvedJson(), `"view_id":"view_factor_x"`) {
+	if !strings.Contains(validated.GetResolvedJson(), `"factor_task_id":"ftask_x"`) || !strings.Contains(validated.GetResolvedJson(), `"dataset_id":"dataset_factor_x"`) {
 		t.Fatalf("校验应按任务解析并返回绑定：%s", validated.GetResolvedJson())
 	}
 	if len(h.resolver.bound) != 0 {

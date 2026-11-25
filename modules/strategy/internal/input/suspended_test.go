@@ -45,7 +45,7 @@ func loadAndEvaluate(t *testing.T, client *fakeClient, resolved Resolved, progra
 		var rows []Row
 		for market, values := range bar.values {
 			// 每个市场一个 View：永续的行只在永续 View 里。
-			if (market == dsl.MarketSwap) != (query.ViewID == "view_factor_swap1h") {
+			if (market == dsl.MarketSwap) != (query.DatasetID == "dataset_factor_swap1h") {
 				continue
 			}
 			for id, value := range values {
@@ -111,7 +111,7 @@ func suspendedEquityClient(t *testing.T) (*fakeClient, Resolved, *dsl.Program) {
 	client.tags["binance_equity"] = []string{"A", "B", "C", "D", "E"}
 	client.trading = map[string]map[string]string{"binance_equity": {"E": TradingStatusSuspended}}
 	// E 一直停牌、没持有过：不进全集。
-	client.subjects["ds_factor"] = []Subject{subject("A", true), subject("B", true), subject("C", true), subject("D", true), {SubjectID: "E", SeriesTag: "venue:binance", Suspended: true}}
+	client.subjects["dataset_factor_1h"] = []Subject{subject("A", true), subject("B", true), subject("C", true), subject("D", true), {SubjectID: "E", SeriesTag: "venue:binance", Suspended: true}}
 	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, suspendedEquityDSL))
 	if err != nil {
 		t.Fatal(err)
@@ -124,9 +124,9 @@ func suspendedEquityClient(t *testing.T) (*fakeClient, Resolved, *dsl.Program) {
 
 // setEquitySubject 改一个标的的绑定状态。
 func setEquitySubject(client *fakeClient, id string, active, suspended bool) {
-	for i, item := range client.subjects["ds_factor"] {
+	for i, item := range client.subjects["dataset_factor_1h"] {
 		if item.SubjectID == id {
-			client.subjects["ds_factor"][i].Active, client.subjects["ds_factor"][i].Suspended = active, suspended
+			client.subjects["dataset_factor_1h"][i].Active, client.subjects["dataset_factor_1h"][i].Suspended = active, suspended
 		}
 	}
 }
@@ -243,7 +243,7 @@ portfolio: {max_missing: 1}
 func dualSuspendedClient(t *testing.T, raw string) (*fakeClient, Resolved, *dsl.Program) {
 	t.Helper()
 	client := newDualClient()
-	client.subjects["ds_factor"] = []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true)}
+	client.subjects["dataset_factor_1h"] = []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true)}
 	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, raw))
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +273,7 @@ func TestSuspendedHoldingDualSwapOnly(t *testing.T) {
 	}, engine.State{})
 	requireSuspendedTargets(t, first, map[string]string{"BTC-USDT|swap": "0.5", "SOL-USDT|spot": "0.5"})
 
-	setBinding(client, "ds_factor_swap", "BTC-USDT", true)
+	setBinding(client, "dataset_factor_swap1h", "BTC-USDT", true)
 	second := suspendedBar{
 		at:     barStart.Add(time.Hour),
 		values: map[string]map[string]float64{"spot": {"BTC-USDT": 100, "ETH-USDT": 2, "SOL-USDT": 3}, "swap": {"ETH-USDT": 1, "DOGE-USDT": 5}},
@@ -291,7 +291,7 @@ func TestSuspendedHoldingDualSwapOnly(t *testing.T) {
 		t.Fatalf("BTC 的明细应是 suspended_hold：%s", reason)
 	}
 
-	setBinding(client, "ds_factor_swap", "BTC-USDT", false)
+	setBinding(client, "dataset_factor_swap1h", "BTC-USDT", false)
 	_, delisted := loadAndEvaluate(t, client, resolved, program, second, decision.State)
 	if _, held := targetsOf(delisted)["BTC-USDT|swap"]; held {
 		t.Fatalf("下架的永续持仓应清零：%v", targetsOf(delisted))
@@ -328,7 +328,7 @@ portfolio: {max_missing: 1}
 		t.Fatalf("第一根应在永续做空 BTC：%v", targetsOf(first))
 	}
 
-	setBinding(client, "ds_factor_swap", "BTC-USDT", true)
+	setBinding(client, "dataset_factor_swap1h", "BTC-USDT", true)
 	_, decision := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 		at:     barStart.Add(time.Hour),
 		values: map[string]map[string]float64{"spot": {"BTC-USDT": 0, "ETH-USDT": 2, "SOL-USDT": 3}, "swap": {"ETH-USDT": 1, "DOGE-USDT": 5}},
@@ -363,7 +363,7 @@ portfolio: {max_missing: 1}
 	}
 	t.Run("只停永续", func(t *testing.T) {
 		client, resolved, program, state := first(t)
-		setBinding(client, "ds_factor_swap", "BTC-USDT", true)
+		setBinding(client, "dataset_factor_swap1h", "BTC-USDT", true)
 		_, decision := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 			at:     barStart.Add(time.Hour),
 			values: map[string]map[string]float64{"spot": {"BTC-USDT": 1, "ETH-USDT": 2, "SOL-USDT": 9}, "swap": {"ETH-USDT": 1, "DOGE-USDT": 9}},
@@ -380,8 +380,8 @@ portfolio: {max_missing: 1}
 	})
 	t.Run("两边都停", func(t *testing.T) {
 		client, resolved, program, state := first(t)
-		setBinding(client, "ds_factor", "BTC-USDT", true)
-		setBinding(client, "ds_factor_swap", "BTC-USDT", true)
+		setBinding(client, "dataset_factor_1h", "BTC-USDT", true)
+		setBinding(client, "dataset_factor_swap1h", "BTC-USDT", true)
 		_, decision := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 			at:     barStart.Add(time.Hour),
 			values: map[string]map[string]float64{"spot": {"ETH-USDT": 2, "SOL-USDT": 9}, "swap": {"ETH-USDT": 1, "DOGE-USDT": 9}},

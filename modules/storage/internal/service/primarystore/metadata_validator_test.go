@@ -37,7 +37,7 @@ func (r *pagedMetadataReader) ListDatasetColumns(_ context.Context, _, _ string,
 func TestMetadataValidatorReadsAllDatasetColumnPages(t *testing.T) {
 	columns := make([]*pb.DatasetColumn, 1001)
 	for i := range columns {
-		columns[i] = &pb.DatasetColumn{ColumnName: fmt.Sprintf("field_%04d", i), OriginId: fmt.Sprintf("field_%04d", i), ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}
+		columns[i] = &pb.DatasetColumn{ColumnName: fmt.Sprintf("field_%04d", i), ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}
 	}
 	validator := NewMetadataValidator(&pagedMetadataReader{columns: columns})
 	err := validator.ValidateRow(context.Background(), &pb.RowFieldUpsert{
@@ -54,8 +54,8 @@ func TestMetadataValidatorReadsAllDatasetColumnPages(t *testing.T) {
 
 func TestMetadataValidatorAcceptsExplicitNullForRegisteredDoubleColumn(t *testing.T) {
 	validator := NewMetadataValidator(&pagedMetadataReader{columns: []*pb.DatasetColumn{{
-		ColumnName: "value", OriginId: "value",
-		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
+		ColumnName: "value",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
 	}}})
 	err := validator.ValidateRow(context.Background(), validatorRow("value", pb.NullValue_NULL_VALUE_NULL))
 	if err != nil {
@@ -73,8 +73,8 @@ func TestMetadataValidatorRejectsExplicitNullForUnknownColumn(t *testing.T) {
 
 func TestMetadataValidatorRejectsUnspecifiedNull(t *testing.T) {
 	validator := NewMetadataValidator(&pagedMetadataReader{columns: []*pb.DatasetColumn{{
-		ColumnName: "value", OriginId: "value",
-		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
+		ColumnName: "value",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
 	}}})
 	err := validator.ValidateRow(context.Background(), validatorRow("value", pb.NullValue_NULL_VALUE_UNSPECIFIED))
 	if err == nil {
@@ -120,7 +120,7 @@ func (validatorSnapshot) GetDataset(string, string) (*pb.Dataset, bool) {
 }
 
 func (validatorSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return []*pb.DatasetColumn{{ColumnName: "value", OriginId: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}}, &pb.PageResult{Page: 1, Size: 1000}, nil
+	return []*pb.DatasetColumn{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}}, &pb.PageResult{Page: 1, Size: 1000}, nil
 }
 
 func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
@@ -159,7 +159,7 @@ func (timeSeriesMetadataReader) GetDataset(context.Context, string, string) (*pb
 }
 
 func (timeSeriesMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return []*pb.DatasetColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}, &pb.PageResult{}, nil
+	return []*pb.DatasetColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}, &pb.PageResult{}, nil
 }
 
 func TestMetadataValidatorRejectsRowFreqOtherThanTheDatasetFreq(t *testing.T) {
@@ -198,7 +198,7 @@ func (r *countingMetadataReader) ListDatasetColumns(context.Context, string, str
 	if r.columnsErr != nil {
 		return nil, nil, r.columnsErr
 	}
-	return []*pb.DatasetColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}, &pb.PageResult{}, nil
+	return []*pb.DatasetColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}, &pb.PageResult{}, nil
 }
 
 func barsRow(freq string) *pb.RowFieldUpsert {
@@ -251,5 +251,16 @@ func TestMetadataValidatorBatchLooksUpEachDatasetOnceAndKeepsErrors(t *testing.T
 	got := batch.ValidateRow(context.Background(), barsRow("5m"))
 	if want == nil || got == nil || want.Error() != got.Error() {
 		t.Fatalf("错误应与逐行校验相同：逐行 %v，请求内 %v", want, got)
+	}
+}
+
+// 写入只认列名；停用的列不再接受写入。
+func TestMetadataValidatorRejectsDisabledColumn(t *testing.T) {
+	validator := NewMetadataValidator(&pagedMetadataReader{columns: []*pb.DatasetColumn{{
+		ColumnName: "value", DisplayName: "值",
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "disabled",
+	}}})
+	if err := validator.ValidateRow(context.Background(), validatorRow("value", pb.NullValue_NULL_VALUE_NULL)); err == nil {
+		t.Fatal("停用的列被接受写入")
 	}
 }

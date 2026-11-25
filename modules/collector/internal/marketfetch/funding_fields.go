@@ -14,7 +14,7 @@ import (
 // 只支持 1h、1d：1m～30m 收盘时结算记录可能还没公布；1w、1M 推送不支持，一次要取的数据也太多。
 // fill=zero：没有结算的根写的是 0，因子引擎读列时没有这个属性就沿用上一根，会重复计费。
 func FundingFieldSpecs() []marketdata.FieldSpec {
-	return []marketdata.FieldSpec{{ID: domain.FieldFundingRate, Name: "资金费率", Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}}
+	return []marketdata.FieldSpec{{ID: domain.FieldFundingRate, Name: "资金费率", Group: marketdata.GroupDerivatives, Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}}
 }
 
 // FetchFields 返回 [Start, End) 内每根 K 线的资金费率之和（本根没有结算为 0）。

@@ -22,7 +22,7 @@ func (h *harness) rebindStock() {
 	if err := h.repo.DisableInstance(ctx, "i1", h.session, bar0); err != nil {
 		h.t.Fatal(err)
 	}
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
 	raw, _ := json.Marshal(resolved)
 	session := "session-stock"
 	if err := h.repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(rankDSL)), ResolvedJSON: string(raw), CreatedAt: bar0}, rankDSL); err != nil {
@@ -40,7 +40,7 @@ func TestHandleLogsUnmappablePeriods(t *testing.T) {
 	h.handler.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
 	deliver := func(day time.Time) error {
 		message := &eventpb.EventMessage{EventId: "event-" + day.Format("0102"), EventName: "event.storage.view.data_ready", SpaceId: "space"}
-		payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1d", PeriodTime: day.Unix(), Status: "complete", UniverseSubjectIds: []string{"A"}}
+		payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: day.Unix(), Status: "complete", UniverseSubjectIds: []string{"A"}}
 		return h.handler.Handle(context.Background(), message, payload)
 	}
 	// 国庆假期不是交易日：无法确定周期边界。

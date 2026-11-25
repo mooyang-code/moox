@@ -17,10 +17,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// MetadataClient 是 storage-view 读 View 声明用的元数据接口：View 的列由数据集列推出，随 View 一起返回；
+// MetadataClient 是 storage-view 读数据集声明用的元数据接口：每个数据集恰好有一个 View，列等于数据集启用的列；
 // 已建好的索引状态只在索引文件里，不写回元数据。
 type MetadataClient interface {
-	ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error)
+	ListDatasets(context.Context, *pb.ListDatasetsReq, ...client.Option) (*pb.ListDatasetsRsp, error)
+	ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error)
 }
 
 type FieldReader interface {
@@ -53,6 +54,9 @@ const viewBackfillBatchSize = 10000
 
 // initialViewRevision 是索引建成时的修订号，之后每次加列加 1。
 const initialViewRevision uint64 = 1
+
+// metadataPageSize 是维护循环列出数据集与列时每页的条数。
+const metadataPageSize = 500
 
 // Coverage scans are intentionally decoupled from the cheap physical
 // contract check. A large DuckDB View must not be COUNT/MIN/MAX-scanned on
@@ -122,51 +126,28 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 	return opts, nil
 }
 
-// observeViewFileSize 更新超过文件大小告警线的 View：只告警，不动数据。
-func (s *Service) observeViewFileSize(view *pb.View, indexID string, stats viewindex.ViewIndexStats, opts MaintenanceOptions) {
-	if view == nil {
-		return
-	}
-	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+// observeViewFileSize 更新索引文件是否超过告警线：只告警，不动数据。
+func (s *Service) observeViewFileSize(runtime *viewRuntime, stats viewindex.ViewIndexStats, opts MaintenanceOptions) {
 	exceeded := stats.Exists && opts.MaxViewFileBytes > 0 && stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes)
-	s.fileOverLimitMu.Lock()
-	if s.fileOverLimit == nil {
-		s.fileOverLimit = make(map[viewRef]struct{})
-	}
-	_, wasExceeded := s.fileOverLimit[ref]
-	if exceeded {
-		s.fileOverLimit[ref] = struct{}{}
-	} else {
-		delete(s.fileOverLimit, ref)
-	}
-	over := s.fileOverLimitViewsLocked()
-	s.fileOverLimitMu.Unlock()
-	s.metrics.SetViewFilesOverLimit(over)
+	wasExceeded := runtime.fileOverLimit.Swap(exceeded)
+	s.reportFilesOverLimit()
 	if exceeded && !wasExceeded {
-		log.Warnf("storage view 索引文件超过告警线 space=%s view=%s index=%s 文件=%d 告警线=%d", view.GetSpaceId(), view.GetViewId(), indexID, stats.PhysicalBytes, opts.MaxViewFileBytes)
+		log.Warnf("storage view 索引文件超过告警线 space=%s dataset=%s index=%s 文件=%d 告警线=%d", runtime.ref.spaceID, runtime.ref.datasetID, runtime.indexID, stats.PhysicalBytes, opts.MaxViewFileBytes)
 	}
 }
 
-// retainFileOverLimit 去掉已删除或停用的 View。
-func (s *Service) retainFileOverLimit(active map[observability.ViewKey]struct{}) {
-	s.fileOverLimitMu.Lock()
-	for ref := range s.fileOverLimit {
-		if _, ok := active[observability.ViewKey{SpaceID: ref.spaceID, ViewID: ref.viewID}]; !ok {
-			delete(s.fileOverLimit, ref)
+// reportFilesOverLimit 按当前挂着的 View 上报索引文件超过告警线的清单（空间/数据集）；摘掉的 View 随运行时一起消失。
+func (s *Service) reportFilesOverLimit() {
+	s.mu.RLock()
+	over := make([]string, 0)
+	for ref, runtime := range s.views {
+		if runtime.fileOverLimit.Load() {
+			over = append(over, ref.spaceID+"/"+ref.datasetID)
 		}
 	}
-	over := s.fileOverLimitViewsLocked()
-	s.fileOverLimitMu.Unlock()
+	s.mu.RUnlock()
+	sort.Strings(over)
 	s.metrics.SetViewFilesOverLimit(over)
-}
-
-// fileOverLimitViewsLocked 列出索引文件超过告警线的 View（空间/View）；调用方持有 fileOverLimitMu。
-func (s *Service) fileOverLimitViewsLocked() []string {
-	out := make([]string, 0, len(s.fileOverLimit))
-	for ref := range s.fileOverLimit {
-		out = append(out, ref.spaceID+"/"+ref.viewID)
-	}
-	return out
 }
 
 func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts MaintenanceOptions) func() {
@@ -190,8 +171,72 @@ func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts Maintenance
 	return func() { cancel(); <-done }
 }
 
+// listViewSpecs 列出元数据里全部数据集（含停用的）的 View 声明，按维护先后排好。先列数据集再列列：
+// 数据集与它建时带的列在同一事务里写入，之后列出的列一定包含已列出数据集建时的列。分页信息不完整时返回错误，不能断定已经列全。
+func listViewSpecs(ctx context.Context, metadata MetadataClient) ([]*viewSpec, error) {
+	var datasets []*pb.Dataset
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadata.ListDatasets(ctx, &pb.ListDatasetsReq{Page: &pb.Page{Page: pageNo, Size: metadataPageSize}})
+		if err != nil {
+			return nil, err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		datasets = append(datasets, rsp.GetDatasets()...)
+		done, err := lastPage(rsp.GetPageResult(), len(rsp.GetDatasets()), "数据集")
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			break
+		}
+	}
+	columns := make(map[datasetRef][]*pb.DatasetColumn)
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadata.ListDatasetColumns(ctx, &pb.ListDatasetColumnsReq{Page: &pb.Page{Page: pageNo, Size: metadataPageSize}})
+		if err != nil {
+			return nil, err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, column := range rsp.GetColumns() {
+			ref := datasetRef{spaceID: column.GetSpaceId(), datasetID: column.GetDatasetId()}
+			columns[ref] = append(columns[ref], column)
+		}
+		done, err := lastPage(rsp.GetPageResult(), len(rsp.GetColumns()), "数据集列")
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			break
+		}
+	}
+	specs := make([]*viewSpec, 0, len(datasets))
+	for _, dataset := range datasets {
+		if dataset.GetSpaceId() == "" || dataset.GetDatasetId() == "" {
+			continue
+		}
+		specs = append(specs, newViewSpec(dataset, columns[datasetRef{spaceID: dataset.GetSpaceId(), datasetID: dataset.GetDatasetId()}]))
+	}
+	sortSpecsForMaintenance(specs)
+	return specs, nil
+}
+
+// lastPage 报告这一页是不是最后一页；分页信息缺失或自相矛盾时返回错误。
+func lastPage(page *pb.PageResult, items int, what string) (bool, error) {
+	if page == nil {
+		return false, fmt.Errorf("列出%s没有返回分页信息", what)
+	}
+	if page.GetHasMore() && items == 0 {
+		return false, fmt.Errorf("列出%s时这一页为空却说还有下一页", what)
+	}
+	return !page.GetHasMore(), nil
+}
+
 // RestoreActiveViews 在启动时清掉孤立的索引文件，再挂接已经建好的索引文件；不建新索引，可以在连 EventBus 之前运行，不拖住实时流。
-// 没有文件、没建完（没记下跟随进度）或不属于它（删除后同 ID 重建）的 View 不挂接，由维护流程重新建。
+// 没有文件、没建完（没记下跟随进度）或不属于它（删除后同 ID 重建）的数据集不挂接，由维护流程重新建。
 func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOptions) error {
 	if opts.Metadata == nil {
 		return errors.New("metadata client is required")
@@ -201,43 +246,36 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 	s.maintenance = opts
 	s.mu.Unlock()
 	s.setMetadataClient(opts.Metadata)
-	// 先清掉没有对应 View 的索引文件，再挂接。
-	s.removeOrphanIndexes(ctx, opts.Metadata)
-	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+	specs, err := listViewSpecs(ctx, opts.Metadata)
+	if err != nil {
+		return err
+	}
+	// 先清掉没有对应数据集的索引文件，再挂接。
+	s.removeOrphanIndexes(ctx, specs)
+	for _, spec := range specs {
+		if spec.Status != "active" {
+			continue
+		}
+		engine := s.engines[spec.engineName()]
+		if engine == nil {
+			return fmt.Errorf("view engine %q is unavailable", spec.engineName())
+		}
+		stats, err := restoreIndexStats(ctx, engine, viewindex.IndexID(spec.SpaceID, spec.DatasetID))
+		if err != nil {
+			// 一个索引读不出来不能让整个进程起不来：这个数据集不挂接，由维护流程处理，其他照常恢复。
+			log.Errorf("storage view 启动时读取索引失败，跳过挂接 space=%s dataset=%s：%v", spec.SpaceID, spec.DatasetID, err)
+			continue
+		}
+		if !indexBuiltFor(spec, stats) {
+			continue
+		}
+		runtime, err := s.ensureRuntime(ctx, spec)
 		if err != nil {
 			return err
 		}
-		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return err
-		}
-		sortViewsForMaintenance(rsp.GetViews())
-		for _, view := range rsp.GetViews() {
-			if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
-				continue
-			}
-			engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
-			engine := s.engines[engineName]
-			if engine == nil {
-				return fmt.Errorf("view engine %q is unavailable", engineName)
-			}
-			stats, err := restoreIndexStats(ctx, engine, viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId()))
-			if err != nil {
-				// 一个索引读不出来不能让整个进程起不来：这个 View 不挂接，由维护流程处理，其他 View 照常恢复。
-				log.Errorf("storage view 启动时读取索引失败，跳过挂接 space=%s view=%s：%v", view.GetSpaceId(), view.GetViewId(), err)
-				continue
-			}
-			if !indexBuiltFor(view, stats) {
-				continue
-			}
-			if err := s.AttachActiveView(ctx, view, stats); err != nil {
-				return err
-			}
-		}
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
-			return nil
-		}
+		s.attachActiveView(runtime, spec, stats)
 	}
+	return nil
 }
 
 func restoreIndexStats(ctx context.Context, engine viewindex.Engine, indexID string) (viewindex.ViewIndexStats, error) {
@@ -247,193 +285,120 @@ func restoreIndexStats(ctx context.Context, engine viewindex.Engine, indexID str
 	return engine.Stat(ctx, indexID)
 }
 
-// indexOwnedBy 报告索引文件是否属于这个 View：文件存在、数据集与 View 的创建时间都和元数据一致。
-// 索引标识只由空间与 View 决定，删除后按同样 ID 重建的 View（数据集 ID 也可能相同）靠创建时间认出旧索引。
-func indexOwnedBy(view *pb.View, stats viewindex.ViewIndexStats) bool {
-	return stats.Exists && stats.DatasetID == view.GetDatasetId() && stats.ViewCreatedAt == view.GetCreatedAt()
+// indexOwnedBy 报告索引文件是否属于这个数据集：文件存在、数据集 ID 与数据集的创建时间都和元数据一致。
+// 索引标识只由空间与数据集决定，删除后按同样 ID 重建的数据集靠创建时间认出旧索引，不会挂上旧索引、读到旧行。
+func indexOwnedBy(spec *viewSpec, stats viewindex.ViewIndexStats) bool {
+	return stats.Exists && stats.DatasetID == spec.DatasetID && stats.DatasetCreatedAt == spec.CreatedAt
 }
 
-// indexBuiltFor 报告索引文件是否是这个 View 建好的索引：属于这个 View，且记下了跟随进度
+// indexBuiltFor 报告索引文件是否是这个数据集建好的索引：属于这个数据集，且记下了跟随进度
 // （建索引的最后一步才记，没记的是半成品）。
-func indexBuiltFor(view *pb.View, stats viewindex.ViewIndexStats) bool {
-	return indexOwnedBy(view, stats) && stats.Follow.Cursor.StoreID != ""
+func indexBuiltFor(spec *viewSpec, stats viewindex.ViewIndexStats) bool {
+	return indexOwnedBy(spec, stats) && stats.Follow.Cursor.StoreID != ""
 }
 
 func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) error {
+	specs, err := listViewSpecs(ctx, opts.Metadata)
+	if err != nil {
+		return err
+	}
 	var firstErr error
-	activeViews := make(map[observability.ViewKey]struct{})
-	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
-		if err != nil {
-			return err
-		}
-		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return err
-		}
-		for _, view := range rsp.GetViews() {
-			if view != nil && view.GetSpaceId() != "" && view.GetViewId() != "" {
-				activeViews[observability.ViewKey{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId()}] = struct{}{}
-			}
-		}
-		// 冷启动时先建业务 K 线 View：所有 View 这一轮都会处理，顺序只避免大的派生 View 先占住 Primary。
-		sortViewsForMaintenance(rsp.GetViews())
-		for _, view := range rsp.GetViews() {
-			// 停服时不再处理剩下的 View，也不为每个 View 各记一条“上下文已取消”。
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := s.maintainView(ctx, opts, view); err != nil {
-				if view != nil && ctx.Err() == nil {
-					log.Errorf("storage view maintenance %s/%s failed: %v", view.GetSpaceId(), view.GetViewId(), err)
-				}
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-		}
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
-			s.retainFileOverLimit(activeViews)
-			// 完整列出了活动 View：删除或停用的 View 不再导出输出水位等指标序列，否则它们会一直带着冻结的水位上报，
-			// Monitor 永远认为它迟到。
-			s.metrics.RetainViews(activeViews)
-			// 已删除或停用的 View 停掉跟随器。
-			s.followManager().Retain(func(spaceID, viewID string) bool {
-				_, ok := activeViews[observability.ViewKey{SpaceID: spaceID, ViewID: viewID}]
-				return ok
-			})
-			s.forgetDeletedViews(ctx, opts.Metadata)
-			return firstErr
+	active := make(map[observability.ViewKey]struct{})
+	existing := make(map[datasetRef]struct{}, len(specs))
+	for _, spec := range specs {
+		existing[spec.ref()] = struct{}{}
+		if spec.Status == "active" {
+			active[observability.ViewKey{SpaceID: spec.SpaceID, DatasetID: spec.DatasetID}] = struct{}{}
 		}
 	}
+	// 冷启动时先建业务 K 线 View：所有 View 这一轮都会处理，顺序只避免大的派生 View 先占住 Primary。
+	for _, spec := range specs {
+		if spec.Status != "active" {
+			continue
+		}
+		// 停服时不再处理剩下的 View，也不为每个 View 各记一条“上下文已取消”。
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.maintainView(ctx, opts, spec); err != nil {
+			if ctx.Err() == nil {
+				log.Errorf("storage view maintenance %s/%s failed: %v", spec.SpaceID, spec.DatasetID, err)
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	// 完整列出了数据集：停用或删除的数据集不再导出输出水位等指标序列，否则它们会一直带着冻结的水位上报，
+	// Monitor 永远认为它迟到。
+	s.metrics.RetainViews(active)
+	s.detachInactiveViews(ctx, active, existing)
+	s.reportFilesOverLimit()
+	return firstErr
 }
 
-// forgetDeletedViews 摘掉元数据里已经不存在的 View（停用的不算）：清掉运行时里的活动索引并从目录里去掉，
-// GetViewState 随之返回 VIEW_NOT_FOUND，索引文件当场删除。列出元数据失败时这一轮不动。
-func (s *Service) forgetDeletedViews(ctx context.Context, metadata MetadataClient) {
-	existing := make(map[viewRef]struct{})
-	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{Page: &pb.Page{Page: pageNo, Size: 100}})
-		if err == nil {
-			err = requireSuccess(rsp.GetRetInfo())
-		}
-		if err != nil {
-			log.Warnf("storage view 列出全部 View 失败，这一轮不回收已删除的 View：%v", err)
-			return
-		}
-		for _, view := range rsp.GetViews() {
-			existing[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}] = struct{}{}
-		}
-		// 分页信息不完整时不能断定已经列全，这一轮不摘。
-		page := rsp.GetPageResult()
-		if page == nil {
-			log.Warnf("storage view 列出全部 View 没有分页信息，这一轮不回收已删除的 View")
-			return
-		}
-		if !page.GetHasMore() {
-			break
-		}
-		if len(rsp.GetViews()) == 0 {
-			log.Warnf("storage view 列出全部 View 时第 %d 页为空却说还有下一页，这一轮不回收已删除的 View", pageNo)
-			return
-		}
-	}
+// detachInactiveViews 摘掉不再活动的 View：数据集停用时停跟随、不可查，索引文件保留，重新启用后挂回、不重建；
+// 数据集已删除时同时删除索引文件，GetViewState 随之返回 VIEW_NOT_FOUND。
+func (s *Service) detachInactiveViews(ctx context.Context, active map[observability.ViewKey]struct{}, existing map[datasetRef]struct{}) {
 	s.mu.RLock()
-	removed := make(map[viewRef]*viewRuntime)
+	var inactive []*viewRuntime
 	for ref, runtime := range s.views {
-		if _, ok := existing[ref]; !ok {
-			removed[ref] = runtime
+		if _, ok := active[observability.ViewKey{SpaceID: ref.spaceID, DatasetID: ref.datasetID}]; !ok {
+			inactive = append(inactive, runtime)
 		}
 	}
 	s.mu.RUnlock()
-	for ref, runtime := range removed {
-		s.followManager().Stop(ref.spaceID, ref.viewID)
-		indexID := viewindex.ViewIndexID(ref.spaceID, ref.viewID)
-		runtime.mu.Lock()
-		runtime.clearActiveLocked()
-		runtime.building = ""
-		s.mu.Lock()
-		// 只有确实摘掉了这个运行时才删文件：映射里已经换成别的运行时（同名 View 重新建过）时，文件属于新的那个。
-		var engine viewindex.Engine
-		if s.views[ref] == runtime {
-			engine = s.engines[s.indexEngine[indexID]]
-			delete(s.views, ref)
-			delete(s.catalogViews, ref)
-			s.forgetIndexLocked(indexID)
+	for _, runtime := range inactive {
+		_, stillExists := existing[runtime.ref]
+		s.detachView(ctx, runtime, !stillExists)
+		if stillExists {
+			log.Infof("storage view 数据集已停用，View 摘掉、索引保留 space=%s dataset=%s", runtime.ref.spaceID, runtime.ref.datasetID)
+		} else {
+			log.Infof("storage view 数据集已删除，View 摘掉并删除索引 space=%s dataset=%s", runtime.ref.spaceID, runtime.ref.datasetID)
 		}
-		s.mu.Unlock()
-		// View 已经从目录里去掉，新的查询找不到它；跟随器已停，这里再拿索引写锁，等正在进行的写入、加列、删除最旧数据结束后
-		// 关闭并删除文件（引擎关闭时等已经开始的查询跑完）。删不掉只记日志，文件留到下次启动时按孤立文件清理。
-		s.removeDetachedIndex(ctx, engine, indexID)
-		runtime.mu.Unlock()
-		log.Infof("storage view 已删除的 View 不再挂接 space=%s view=%s", ref.spaceID, ref.viewID)
 	}
 }
 
-// removeDetachedIndex 删除刚摘除的 View 的索引文件。调用方持有运行时锁，View 已不在目录里。
-func (s *Service) removeDetachedIndex(ctx context.Context, engine viewindex.Engine, indexID string) {
-	if engine == nil {
-		return
-	}
-	// 停服时也要删完：这一步不跟着请求取消。
-	ctx = context.WithoutCancel(ctx)
-	release, err := s.indexWriteGate(indexID).lock(ctx)
-	if err == nil {
-		err = engine.Remove(ctx, indexID)
-		release()
-	}
-	if err != nil {
-		log.Errorf("storage view 删除已摘除 View 的索引文件失败，留到下次启动清理 index_id=%s：%v", indexID, err)
-	}
-}
-
-// sortViewsForMaintenance 按 maintenance_priority（越小越先）排维护顺序，相同时按空间与 View ID。
-func sortViewsForMaintenance(views []*pb.View) {
-	sort.SliceStable(views, func(i, j int) bool {
-		left, right := views[i], views[j]
-		if left.GetMaintenancePriority() != right.GetMaintenancePriority() {
-			return left.GetMaintenancePriority() < right.GetMaintenancePriority()
+// sortSpecsForMaintenance 按数据集的 maintenance_priority（越小越先）排维护顺序，相同时按空间与数据集 ID。
+func sortSpecsForMaintenance(specs []*viewSpec) {
+	sort.SliceStable(specs, func(i, j int) bool {
+		left, right := specs[i], specs[j]
+		if left.MaintenancePriority != right.MaintenancePriority {
+			return left.MaintenancePriority < right.MaintenancePriority
 		}
-		if left.GetSpaceId() != right.GetSpaceId() {
-			return left.GetSpaceId() < right.GetSpaceId()
+		if left.SpaceID != right.SpaceID {
+			return left.SpaceID < right.SpaceID
 		}
-		return left.GetViewId() < right.GetViewId()
+		return left.DatasetID < right.DatasetID
 	})
 }
 
-// maintainView 处理一个 View：没有建好的索引时建索引；有索引时挂接并刷新覆盖统计。加列由每分钟的定时任务处理。
-func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, view *pb.View) error {
-	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
+// maintainView 处理一个活动数据集的 View：没有建好的索引时建索引；有索引时挂接并刷新覆盖统计。加列由每分钟的定时任务处理。
+func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, spec *viewSpec) error {
+	runtime, err := s.ensureRuntime(ctx, spec)
+	if err != nil {
+		return err
+	}
+	if runtime.needsRebuild() {
+		// 原地重建由跟随器做（期间文件可能暂时不存在），不在这里另建；跟随器被停过时重新起它，接着重建。
+		runtime.setSpec(spec)
+		s.ensureFollower(runtime.ref)
 		return nil
 	}
-	if opts.Metadata != nil {
-		s.setMetadataClient(opts.Metadata)
-	}
-	active, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
-	if runtime != nil && runtime.needsRebuild() {
-		// 原地重建由跟随器做（期间文件可能暂时不存在），不在这里另建；跟随器被停过（View 停用后再启用）时重新起它，接着重建。
-		s.ensureFollower(viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()})
-		return nil
-	}
-	engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
-	engine := s.engines[engineName]
-	if engine == nil {
-		return fmt.Errorf("view engine %q is unavailable", engineName)
-	}
-	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
+	active := runtime.queryState().active
 	// 维护每轮都会跑：DuckDB 的完整 Stat 要对全表做 COUNT/MIN/MAX，这里只做元数据级的检查，文件大小也在其中。
-	stats, metadataOnly, err := maintainIndexStats(ctx, engine, indexID)
+	stats, metadataOnly, err := maintainIndexStats(ctx, runtime.engine, runtime.indexID)
 	if err != nil {
 		return err
 	}
 	// 本进程刚建好、还没有跟随器记进度的索引（没起跟随时）同样算建好。
-	if !indexBuiltFor(view, stats) && !(active == indexID && indexOwnedBy(view, stats)) {
-		return s.buildInitialIndex(ctx, opts, view)
+	if !indexBuiltFor(spec, stats) && !(active == runtime.indexID && indexOwnedBy(spec, stats)) {
+		return s.buildInitialIndex(ctx, opts, runtime, spec)
 	}
-	s.observeViewFileSize(view, indexID, stats, opts)
+	s.observeViewFileSize(runtime, stats, opts)
 	// 元数据级统计不含覆盖字段：保留上一次完整统计，不能用空值覆盖，否则 TotalMode=NONE 的查询会丢掉完整性信息。
 	if metadataOnly {
-		if cached, ok := cachedActiveIndexStats(runtime, indexID); ok {
+		if cached, ok := cachedActiveIndexStats(runtime, runtime.indexID); ok {
 			if stats.EntryCount == 0 {
 				stats.EntryCount = cached.EntryCount
 			}
@@ -446,31 +411,27 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, vie
 		}
 		if shouldRefreshCoverage(runtime) {
 			coverageCtx, cancel := context.WithTimeout(ctx, coverageStatTimeout)
-			fullStats, fullErr := engine.Stat(coverageCtx, indexID)
+			fullStats, fullErr := runtime.engine.Stat(coverageCtx, runtime.indexID)
 			cancel()
 			markCoverageRefresh(runtime)
 			if fullErr == nil && fullStats.Exists {
 				stats = fullStats
 				metadataOnly = false
 			} else if fullErr != nil {
-				log.Warnf("storage view coverage refresh deferred space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), fullErr)
+				log.Warnf("storage view coverage refresh deferred space=%s dataset=%s: %v", spec.SpaceID, spec.DatasetID, fullErr)
 			}
 		}
 	}
-	if err := s.AttachActiveView(ctx, view, stats); err != nil {
-		return err
-	}
-	_, runtime = s.activeIndex(view.GetSpaceId(), view.GetViewId())
+	s.attachActiveView(runtime, spec, stats)
 	if !metadataOnly || stats.IndexedFrom != "" || stats.IndexedTo != "" || stats.EntryCount != 0 {
-		s.cacheActiveIndexStats(runtime, indexID, stats)
+		s.cacheActiveIndexStats(runtime, runtime.indexID, stats)
 	}
 	return nil
 }
 
-// viewBars returns the number of bars a View keeps per series: the policy's
-// bars for a time-series View, zero for a record View that keeps every row.
-func viewBars(view *pb.View, opts MaintenanceOptions) uint64 {
-	if view.GetFreq() == "" {
+// viewBars 返回 View 每个序列保留的根数：时序数据集取策略里的根数，记录型数据集保留全部、返回 0。
+func viewBars(spec *viewSpec, opts MaintenanceOptions) uint64 {
+	if !spec.timeSeries() {
 		return 0
 	}
 	if opts.Bars > 0 {
@@ -492,41 +453,29 @@ func shouldRefreshCoverage(runtime *viewRuntime) bool {
 	if runtime == nil {
 		return true
 	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	return runtime.statsRefreshedAt.IsZero() || time.Since(runtime.statsRefreshedAt) >= coverageRefreshInterval
+	last := runtime.statsRefreshedAt.Load()
+	return last == 0 || time.Since(time.Unix(0, last)) >= coverageRefreshInterval
 }
 
 func markCoverageRefresh(runtime *viewRuntime) {
-	if runtime == nil {
-		return
+	if runtime != nil {
+		runtime.statsRefreshedAt.Store(time.Now().UnixNano())
 	}
-	runtime.mu.Lock()
-	runtime.statsRefreshedAt = time.Now().UTC()
-	runtime.mu.Unlock()
 }
 
 // observeActivatedViewWatermark 按刚建成的索引刷新新鲜度指标。查询有界且尽力而为：指标探测失败不影响建索引。
-func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
-	if s == nil || s.metrics == nil || view == nil || strings.TrimSpace(indexID) == "" {
-		return
-	}
-	if view.GetFreq() == "" || strings.TrimSpace(view.GetDatasetId()) == "" {
-		return
-	}
-	engine, err := s.engineFor(indexID)
-	if err != nil {
-		log.Infof("storage view activation metric probe skipped space=%s view=%s index=%s: %v", view.GetSpaceId(), view.GetViewId(), indexID, err)
+func (s *Service) observeActivatedViewWatermark(runtime *viewRuntime, spec *viewSpec) {
+	if s == nil || s.metrics == nil || !spec.timeSeries() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rows, _, err := engine.Query(ctx, indexID, viewindex.QuerySpec{
+	rows, _, err := runtime.engine.Query(ctx, runtime.indexID, viewindex.QuerySpec{
 		Sorts: []*pb.SortSpec{{FieldName: "data_time", Desc: true}},
 		Order: pb.SortOrder_SORT_ORDER_DESC, Limit: 5000, TotalMode: pb.TotalMode_NONE,
 	})
 	if err != nil {
-		log.Warnf("storage view activation metric probe failed space=%s view=%s index=%s: %v", view.GetSpaceId(), view.GetViewId(), indexID, err)
+		log.Warnf("storage view activation metric probe failed space=%s dataset=%s index=%s: %v", spec.SpaceID, spec.DatasetID, runtime.indexID, err)
 		return
 	}
 	keys := make([]*pb.RowFieldUpsert, 0, len(rows))
@@ -535,7 +484,7 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 			keys = append(keys, &pb.RowFieldUpsert{Key: row.GetKey()})
 		}
 	}
-	s.observeViewWatermark(indexID, view.GetDatasetId(), keys, true)
+	s.observeViewWatermark(spec, keys)
 }
 
 func requireSuccess(ret *pb.RetInfo) error {
@@ -546,4 +495,22 @@ func requireSuccess(ret *pb.RetInfo) error {
 		return errors.New(ret.GetMsg())
 	}
 	return nil
+}
+
+// columnNames 按顺序列出索引各列的列名（去重）：回读 Primary 也按列名取值。
+func columnNames(columns []*viewindex.Column) []string {
+	seen := make(map[string]struct{}, len(columns))
+	names := make([]string, 0, len(columns))
+	for _, column := range columns {
+		name := strings.TrimSpace(column.GetColumnName())
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
 }

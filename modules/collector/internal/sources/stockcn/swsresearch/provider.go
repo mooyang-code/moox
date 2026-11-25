@@ -98,7 +98,7 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 // FieldSpecs：申万只发布行业代码，不发布中文名。
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
 	spec := func(id, name string) marketdata.FieldSpec {
-		return marketdata.FieldSpec{ID: id, Name: name, Type: marketdata.FieldTypeInt, Fill: "prev", Frequencies: []string{"1d"}}
+		return marketdata.FieldSpec{ID: id, Name: name, Group: marketdata.GroupIndustry, Type: marketdata.FieldTypeInt, Fill: "prev", Frequencies: []string{"1d"}}
 	}
 	return []marketdata.FieldSpec{spec(FieldSWLevel1, "申万一级行业"), spec(FieldSWLevel2, "申万二级行业"), spec(FieldSWLevel3, "申万三级行业")}
 }

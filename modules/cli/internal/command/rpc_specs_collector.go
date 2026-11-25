@@ -22,7 +22,7 @@ func init() {
 				strFlag("name", "task.task_name", "任务名称"), strFlag("description", "task.description", "说明"), boolFlag("enabled", "task.enabled", "启用状态（--enabled=false 停用）")}},
 		rpcSpec{Path: []string{"collector", "task", "disable"}, Destructive: true, Short: "停用采集任务（默认只预览，--yes 才执行）", Service: collectMgr, Method: "DisableTask", SpaceField: "space_id",
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},
-		rpcSpec{Path: []string{"collector", "task", "inventory"}, Short: "查看采集结果清单（任务拥有的结果数据集与 View）", Service: collectMgr, Method: "GetTaskResultInventory", SpaceField: "space_id", Page: rpcPageSize,
+		rpcSpec{Path: []string{"collector", "task", "inventory"}, Short: "查看采集结果清单（任务拥有的结果数据集）", Service: collectMgr, Method: "GetTaskResultInventory", SpaceField: "space_id", Page: rpcPageSize,
 			Flags: []rpcFlag{strFlag("snapshot-id", "snapshot_id", "指定清单快照 ID")}},
 
 		rpcSpec{Path: []string{"collector", "data-type", "list"}, Short: "列出采集数据类型", Service: collectMgr, Method: "GetDataTypeConfigs", NoSpace: true},

@@ -17,10 +17,6 @@ type Metadata interface {
 	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
 	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
-	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
-	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
-	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
-	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 	ResolveSubjects(context.Context, *storagepb.ResolveSubjectsReq, ...client.Option) (*storagepb.ResolveSubjectsRsp, error)
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
@@ -40,7 +36,7 @@ type Primary interface {
 	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
 }
 
-// View 是 Collector 用到的 DataView 方法：建合成目标时等 View 的列建好，任务结果读 View 的覆盖范围。
+// View 是 Collector 用到的 DataView 方法：建合成目标时等查询索引的列建好，任务结果读查询索引的覆盖范围。
 type View interface {
 	GetViewState(context.Context, *storagepb.GetViewStateReq, ...client.Option) (*storagepb.GetViewStateRsp, error)
 }
@@ -86,22 +82,6 @@ func (c *Client) UpdateDataset(ctx context.Context, request *storagepb.UpdateDat
 
 func (c *Client) DeleteDataset(ctx context.Context, request *storagepb.DeleteDatasetReq, options ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
 	return invoke[storagepb.DeleteDatasetRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "DeleteDataset", request, options)
-}
-
-func (c *Client) GetView(ctx context.Context, request *storagepb.GetViewReq, options ...client.Option) (*storagepb.GetViewRsp, error) {
-	return invoke[storagepb.GetViewRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "GetView", request, options)
-}
-
-func (c *Client) CreateView(ctx context.Context, request *storagepb.CreateViewReq, options ...client.Option) (*storagepb.CreateViewRsp, error) {
-	return invoke[storagepb.CreateViewRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "CreateView", request, options)
-}
-
-func (c *Client) DeleteView(ctx context.Context, request *storagepb.DeleteViewReq, options ...client.Option) (*storagepb.DeleteViewRsp, error) {
-	return invoke[storagepb.DeleteViewRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "DeleteView", request, options)
-}
-
-func (c *Client) ListViews(ctx context.Context, request *storagepb.ListViewsReq, options ...client.Option) (*storagepb.ListViewsRsp, error) {
-	return invoke[storagepb.ListViewsRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ListViews", request, options)
 }
 
 func (c *Client) UpsertDatasetColumn(ctx context.Context, request *storagepb.UpsertDatasetColumnReq, options ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {

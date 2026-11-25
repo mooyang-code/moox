@@ -42,7 +42,7 @@ func (h *Handler) checkPoolReady(ctx context.Context, p *period) (mergedReadines
 				out.Members[member.ID] = mergedReadiness{Reason: input.SkipConfigError, Detail: err.Error()}
 				continue
 			}
-			_, record, found, err := h.Store.AdjacentRecord(ctx, p.instance.InstanceID, member.Resolved.ViewIDs(), bar, calendar, previousEnd, member.Resolved.PreviousFactors, rt.sessionID)
+			_, record, found, err := h.Store.AdjacentRecord(ctx, p.instance.InstanceID, member.Resolved.DatasetIDs(), bar, calendar, previousEnd, member.Resolved.PreviousFactors, rt.sessionID)
 			if err != nil {
 				return mergedReadiness{}, err
 			}
