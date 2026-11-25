@@ -165,7 +165,7 @@ func (r *CreatePaperSimulationReq) Validate() error {
 		return fmt.Errorf("swap paper simulation requires CROSS margin_mode")
 	}
 	if hasSwap && !strings.EqualFold(strings.TrimSpace(r.SettlementAsset), "USDT") {
-		return fmt.Errorf("SWAP paper simulation requires USDT settlement_asset")
+		return fmt.Errorf("swap 模拟盘的结算资产必须是 USDT")
 	}
 	return nil
 }

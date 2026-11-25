@@ -96,7 +96,7 @@ func normalize(key Key) (Key, error) {
 	key.ExchangeSymbol = store.NormalizeExchangeSymbol(key.ExchangeSymbol)
 	if key.Exchange == "" || key.ExchangeSymbol == "" ||
 		(key.MarketType != string(exchange.MarketTypeSpot) && key.MarketType != string(exchange.MarketTypeSwap)) {
-		return Key{}, fmt.Errorf("%w: 需要交易所、市场（SPOT 或 SWAP）和交易所代码", ErrInvalidRequest)
+		return Key{}, fmt.Errorf("%w: 需要交易所、市场（spot 或 swap）和交易所代码", ErrInvalidRequest)
 	}
 	return key, nil
 }

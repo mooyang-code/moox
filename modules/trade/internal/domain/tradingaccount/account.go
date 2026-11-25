@@ -131,7 +131,7 @@ func (a Account) validateMarkets() error {
 		return invalidAccount(err.Error())
 	}
 	if !slices.Equal(normalized, a.Markets) {
-		return invalidAccount("已开通的市场必须去重并按 SPOT、SWAP、STOCK 的顺序排列")
+		return invalidAccount("已开通的市场必须去重并按 spot、swap、equity 的顺序排列")
 	}
 	environment := a.Environment
 	if a.Live != nil {
