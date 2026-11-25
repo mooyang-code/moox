@@ -170,17 +170,17 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 	}
 	// start、end 是 Unix 秒（数据坐标），都要为正且 end 晚于 start。
 	if start, end := payload.GetStart(), payload.GetEnd(); start <= 0 || end <= start {
-		return fmt.Errorf("collector kline backfilled range is invalid")
+		return fmt.Errorf("K 线补写事件的 start、end 必须是正的 Unix 秒且 end 晚于 start")
 	}
 	if payload.GetConfirmedAt() <= 0 {
-		return fmt.Errorf("collector kline backfilled confirmed_at must be a positive unix millisecond")
+		return fmt.Errorf("K 线补写事件的 confirmed_at 必须是正的 Unix 毫秒")
 	}
 	for _, absent := range payload.GetAbsent() {
 		if !validRequiredToken(absent.GetSubjectId()) {
 			return fmt.Errorf("collector kline backfilled absent subject_id %q is invalid", absent.GetSubjectId())
 		}
 		if from, to := absent.GetStart(), absent.GetEnd(); from <= 0 || to <= from {
-			return fmt.Errorf("collector kline backfilled absent range is invalid")
+			return fmt.Errorf("K 线补写事件 absent 的 start、end 必须是正的 Unix 秒且 end 晚于 start")
 		}
 	}
 	switch payload.GetOrigin() {
@@ -203,7 +203,7 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 		return fmt.Errorf("%s status %q is invalid", label, status)
 	}
 	if at <= 0 {
-		return fmt.Errorf("%s timestamp must be a positive unix millisecond", label)
+		return fmt.Errorf("%s 的时刻必须是正的 Unix 毫秒", label)
 	}
 	return nil
 }
@@ -254,10 +254,10 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 		return fmt.Errorf("trade target weight session_started_at must be positive")
 	}
 	if payload.GetBarEndTime() <= 0 {
-		return fmt.Errorf("trade target weight bar_end_time must be a positive unix millisecond")
+		return fmt.Errorf("目标权重事件的 bar_end_time 必须是正的 Unix 毫秒")
 	}
 	if payload.GetValidUntil() <= payload.GetBarEndTime() {
-		return fmt.Errorf("trade target weight valid_until must be after bar_end_time")
+		return fmt.Errorf("目标权重事件的 valid_until 必须晚于 bar_end_time")
 	}
 	type instrumentKey struct{ instrumentID, marketType string }
 	seenInstruments := make(map[instrumentKey]struct{}, len(payload.GetTargets()))

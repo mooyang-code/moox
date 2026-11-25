@@ -100,7 +100,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.Logi
 		return WeightConversion{}, fmt.Errorf("%w: target weight request is incomplete", ErrPermanent)
 	}
 	if request.GetValidUntil() <= request.GetBarEndTime() {
-		return WeightConversion{}, fmt.Errorf("%w: valid_until must be after bar_end_time", ErrPermanent)
+		return WeightConversion{}, fmt.Errorf("%w: valid_until 必须晚于 bar_end_time", ErrPermanent)
 	}
 	requestHash, weightsJSON, orderedWeights, err := canonicalWeights(request)
 	if err != nil {

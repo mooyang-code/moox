@@ -2,7 +2,7 @@
 # proto 时间字段写法检查（3H 字段清单 1.2 节）：禁 Timestamp、禁 string 的 _at、毫秒字段注释不得写秒、名字不带单位后缀。
 # 规则①（禁 Timestamp）对全部 proto 生效；规则②～④只对 STRICT 范围生效：
 #   - 默认只查已改完的 E 组事件 proto（STRICT_FILES）；
-#   - --all 或 MOOX_PROTO_TIME_SCOPE=all 对全部 proto 生效。R、T 组改完后把 DEFAULT_SCOPE 改成 all，并删掉 STRICT_FILES。
+#   - --all 或 MOOX_PROTO_TIME_SCOPE=all 对全部 proto 生效。其余 proto 的时刻字段改完后把 DEFAULT_SCOPE 改成 all，并删掉 STRICT_FILES。
 # 用法：check-proto-time-fields.sh [--all] [proto 文件...]（给了文件就只查这些文件，且全部按 strict 查，供契约测试用）。
 set -euo pipefail
 

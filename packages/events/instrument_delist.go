@@ -62,10 +62,10 @@ func validateInstrumentDelistScheduled(message *eventpb.EventMessage, value prot
 		return fmt.Errorf("instrument delist scheduled instrument does not match subject_id")
 	}
 	if payload.GetDelistAt() <= 0 {
-		return fmt.Errorf("instrument delist scheduled delist_at must be a positive unix millisecond")
+		return fmt.Errorf("下架事件的 delist_at 必须是正的 Unix 毫秒")
 	}
 	if payload.GetFirstSeenAt() <= 0 {
-		return fmt.Errorf("instrument delist scheduled first_seen_at must be a positive unix millisecond")
+		return fmt.Errorf("下架事件的 first_seen_at 必须是正的 Unix 毫秒")
 	}
 	switch payload.GetSource() {
 	case DelistSourceBinanceSpotSchedule, DelistSourceBinanceSwapExchangeInfo, DelistSourceOKXSwapInstruments, DelistSourceManual:

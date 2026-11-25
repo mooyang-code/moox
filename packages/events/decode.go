@@ -50,7 +50,7 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 		return message, nil, fmt.Errorf("event_id %q does not match NATS message id %q", message.GetEventId(), messageID)
 	}
 	if message.GetOccurredAt() <= 0 {
-		return message, nil, fmt.Errorf("event message occurred_at must be a positive unix millisecond")
+		return message, nil, fmt.Errorf("事件信封的 occurred_at 必须是正的 Unix 毫秒")
 	}
 	if len(message.GetPayload()) == 0 {
 		return message, nil, fmt.Errorf("event message payload is required")

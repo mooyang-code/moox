@@ -49,7 +49,7 @@ func lifecycleFromReport(report *metricspb.ModuleLifecycle) *LifecycleStatus {
 	return out
 }
 
-// millisText 把上报里的毫秒时刻转成 Monitor 接口现用的 RFC3339 文本（Monitor 接口的时刻字段由 3H R4 组统一改毫秒）；0 是空串。
+// millisText 把上报里的毫秒时刻转成 Monitor 接口现用的 RFC3339 文本（Monitor 接口的这几个字段目前仍是文本）；0 是空串。
 func millisText(ms int64) string {
 	if ms <= 0 {
 		return ""
