@@ -7,6 +7,7 @@ import type {
   HostRoutesResponse
 } from "@/api/admin/types";
 import type { HealthComponent, HealthOverview, HealthStatus } from "@/api/monitor";
+import { toInstantMs } from "@/utils/time-zone";
 
 export interface DeploymentRow {
   key: string;
@@ -63,10 +64,10 @@ export function componentPorts(component?: CatalogComponent) {
 export function gatewayLabel(snapshot?: HostRoutesResponse) {
   if (!snapshot) return "状态未知";
   const status = snapshot.gateway_status;
-  if (!status?.last_seen_at) return "从未上报";
-  const seen = Date.parse(status.last_seen_at);
-  const observed = Date.parse(snapshot.compiled_at);
-  if (!Number.isFinite(seen) || !Number.isFinite(observed)) return "状态未知";
+  const seen = toInstantMs(status?.last_seen_at);
+  if (seen === null) return "从未上报";
+  const observed = toInstantMs(snapshot.compiled_at);
+  if (observed === null) return "状态未知";
   return observed - seen > 120000 ? "离线" : "在线";
 }
 // 已应用快照最多落后期望快照一次拉取（约 5 秒），所以“待同步”只在刚改完拓扑时短暂出现。

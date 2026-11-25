@@ -10,7 +10,7 @@ import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
 import { pendingItems, stateOf } from "@/views/strategy/attention-model";
 import { sortInstancesForResults } from "@/views/strategy/results/results-model";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
-import { formatInstant, marketTime } from "@/utils/time-zone";
+import { formatInstant, marketTime, toInstantMs } from "@/utils/time-zone";
 
 /** 首页统一的状态色：正常、需要关注、异常、无观测。 */
 export type Tone = "ok" | "warn" | "bad" | "idle";
@@ -430,8 +430,8 @@ export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: n
     .filter(item => !isNoChange(item))
     .map((item, index) => ({
       key: String(item.id ?? index),
-      when: marketTime(toMillis(item.created_at), zone, nowMs),
-      whenTitle: fullTime(item.created_at, zone),
+      when: marketTime(toInstantMs(item.created_at), zone, nowMs),
+      whenTitle: formatInstant(item.created_at, zone),
       category: ACTIVITY_CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
       title: compactTitle(prettifyIds(item.title || "", names)),
       tone: item.level === "error" ? "bad" : item.level === "warning" ? "warn" : "idle"

@@ -54,7 +54,7 @@ message SftpFileItem {
   string name = 2;
   string mode = 3;
   int64 size = 4;
-  string mod_time = 5;
+  int64 modified_at = 5;  // 修改时刻（Unix 毫秒）
   string type = 6;  // d | f
 }
 

@@ -62,8 +62,8 @@ message RelaySessionStatus {
   string host_id = 1;
   bool online = 2;
   string instance_id = 3;
-  // RFC3339，离线时为空。
-  string connected_at = 4;
+  // Unix 毫秒，离线时为 0。
+  int64 connected_at = 4;
   int64 reconnects = 5;
   int32 streams = 6;
 }

@@ -438,13 +438,13 @@ func TestFailedStatusWritePreservesLastStatus(t *testing.T) {
 // control 网关拉取时带上反向连接会话，经主机状态查询原样返回；非法会话拒绝。
 func TestControlPullCarriesRelaySessions(t *testing.T) {
 	f := newControlFixture(t)
-	sessions := []*pb.RelaySessionStatus{{HostId: "home", Online: true, InstanceId: "abc", ConnectedAt: "2026-10-18T01:00:00Z", Reconnects: 2, Streams: 1}}
+	sessions := []*pb.RelaySessionStatus{{HostId: "home", Online: true, InstanceId: "abc", ConnectedAt: 1792285200000, Reconnects: 2, Streams: 1}}
 	require.Equal(t, pb.ErrorCode_SUCCESS, f.pull(t, "control", "", sessions).GetRetInfo().GetCode())
 	var status sysdeploy.HostGatewayStatus
 	require.NoError(t, f.db.Where("c_host_id = ?", "control").First(&status).Error)
 	require.Contains(t, status.RelaySessions, `"host_id":"home"`)
 	for _, bad := range [][]*pb.RelaySessionStatus{
-		{{HostId: "home"}, {HostId: "home"}}, {{HostId: "bad/id"}}, {{HostId: "home", ConnectedAt: "yesterday"}}, {{HostId: "home", Reconnects: -1}},
+		{{HostId: "home"}, {HostId: "home"}}, {{HostId: "bad/id"}}, {{HostId: "home", ConnectedAt: -1}}, {{HostId: "home", Reconnects: -1}},
 	} {
 		require.Equal(t, pb.ErrorCode_INVALID_PARAM, f.pull(t, "control", "", bad).GetRetInfo().GetCode())
 	}

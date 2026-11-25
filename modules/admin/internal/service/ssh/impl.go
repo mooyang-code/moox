@@ -116,12 +116,11 @@ func (s *ServiceImpl) SftpList(ctx context.Context, sessionID string, dirPath st
 	var fileList []map[string]interface{}
 	for _, file := range files {
 		fileInfo := map[string]interface{}{
-			"path": path.Join(dirPath, file.Name()),
-			"name": file.Name(),
-			"mode": file.Mode().String(),
-			"size": file.Size(),
-			// 带时区的 UTC 时间：按服务进程时区格式化、又不带时区的字符串，前端无法正确换算
-			"mod_time": file.ModTime().UTC().Format(time.RFC3339),
+			"path":        path.Join(dirPath, file.Name()),
+			"name":        file.Name(),
+			"mode":        file.Mode().String(),
+			"size":        file.Size(),
+			"modified_at": file.ModTime().UnixMilli(),
 		}
 		if file.IsDir() {
 			fileInfo["type"] = "d"

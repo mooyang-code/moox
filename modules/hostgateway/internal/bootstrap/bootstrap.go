@@ -377,7 +377,7 @@ func relayStatusProto(items []relay.Status) []*pb.RelaySessionStatus {
 	for _, item := range items {
 		status := &pb.RelaySessionStatus{HostId: item.HostID, Online: item.Online, InstanceId: item.InstanceID, Reconnects: item.Reconnects, Streams: int32(item.Streams)}
 		if item.Online {
-			status.ConnectedAt = item.ConnectedAt.UTC().Format(time.RFC3339Nano)
+			status.ConnectedAt = item.ConnectedAt.UnixMilli()
 		}
 		result = append(result, status)
 	}

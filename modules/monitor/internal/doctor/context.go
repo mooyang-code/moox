@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
@@ -109,7 +108,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 				ComponentID: component.ComponentID, ServiceName: component.ServiceName, NodeID: deployed.GetHostId(),
 				Expected: hosts[deployed.GetHostId()] && deployed.GetStatus() == "enabled", DeploymentStatus: deployed.GetStatus(),
 				Transport: string(component.Transport), FunctionalObservability: string(component.FunctionalObservability),
-				DeploymentCreatedAt: parseTimestamp(deployed.GetCreatedAt()),
+				DeploymentCreatedAt: millisTime(deployed.GetCreatedAt()),
 			})
 		}
 		if !found {
@@ -458,9 +457,12 @@ func stringSelection(values []string) map[string]bool {
 	return out
 }
 
-func parseTimestamp(value string) time.Time {
-	parsed, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
-	return parsed
+// millisTime 把 Unix 毫秒换成时刻，0 为零时间。
+func millisTime(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
 }
 
 func observationAge(now, observedAt time.Time) int64 {

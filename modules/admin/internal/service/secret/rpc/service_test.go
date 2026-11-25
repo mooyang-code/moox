@@ -55,13 +55,13 @@ func TestCloudIsValidSecretCategory(t *testing.T) {
 	assert.True(t, validCategories["cloud"])
 }
 
-func TestFormatTimeHelpers(t *testing.T) {
-	assert.Equal(t, "", formatTime(time.Time{}))
-	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
-	assert.Equal(t, "2024-01-02T03:04:05Z", formatTime(now))
-	// 带其他时区的时间也换成 UTC，并带上 Z
+func TestUnixMilli(t *testing.T) {
+	assert.Zero(t, unixMilli(time.Time{}))
+	at := time.Date(2024, 1, 2, 3, 4, 5, 6_000_000, time.UTC)
+	assert.Equal(t, at.UnixMilli(), unixMilli(at))
+	// 时区不影响毫秒值
 	shanghai := time.FixedZone("UTC+8", 8*3600)
-	assert.Equal(t, "2024-01-02T03:04:05Z", formatTime(time.Date(2024, 1, 2, 11, 4, 5, 0, shanghai)))
+	assert.Equal(t, at.UnixMilli(), unixMilli(at.In(shanghai)))
 }
 
 func TestSecretModelConversions(t *testing.T) {

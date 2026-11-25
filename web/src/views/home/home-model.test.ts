@@ -262,7 +262,7 @@ describe("home data rows", () => {
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 1 个",
-          created_at: new Date(NOW - 3600_000).toISOString()
+          created_at: String(NOW - 3600_000)
         }
       ],
       names,
@@ -512,14 +512,14 @@ describe("home tiles", () => {
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 0 个、移除 0 个标的，将于 2026-10-12 13:00 生效",
-          created_at: new Date(NOW - 3600_000).toISOString()
+          created_at: String(NOW - 3600_000)
         },
         {
           id: 2,
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 1 个、移除 0 个标的，将于 2026-10-13 09:00 生效",
-          created_at: new Date(NOW - 7200_000).toISOString()
+          created_at: String(NOW - 7200_000)
         }
       ],
       names,

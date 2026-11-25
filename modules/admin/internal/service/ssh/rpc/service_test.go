@@ -120,7 +120,7 @@ func TestParsePathsPB_AbsolutePath_ShouldBuildBreadcrumbs(t *testing.T) {
 func TestSftpListResultToPB_MapPayload_ShouldConvert(t *testing.T) {
 	data := map[string]interface{}{
 		"files": []map[string]interface{}{
-			{"path": "/tmp/a", "name": "a", "mode": "drwx", "size": int64(10), "mod_time": "now", "type": "d"},
+			{"path": "/tmp/a", "name": "a", "mode": "drwx", "size": int64(10), "modified_at": int64(1700000000123), "type": "d"},
 		},
 		"file_count": 0,
 		"dir_count":  1,
@@ -129,6 +129,17 @@ func TestSftpListResultToPB_MapPayload_ShouldConvert(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Len(t, rsp.GetFiles(), 1)
 	assert.Equal(t, "a", rsp.GetFiles()[0].GetName())
+	assert.Equal(t, int64(1700000000123), rsp.GetFiles()[0].GetModifiedAt())
+}
+
+// 修改时刻不是 int64 毫秒（比如还是旧的文本写法）时报错，不能留成 0。
+func TestSftpListResultToPB_ModifiedAtNotMillis_ShouldFail(t *testing.T) {
+	data := map[string]interface{}{
+		"files": []map[string]interface{}{{"path": "/tmp/a", "name": "a", "modified_at": "2026-11-24T00:00:00Z", "type": "f"}},
+	}
+	rsp := sftpListResultToPB(data, "/tmp")
+	assert.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	assert.Empty(t, rsp.GetFiles())
 }
 
 func TestNewMockSSHService_GoomApply_ShouldNotPanic(t *testing.T) {

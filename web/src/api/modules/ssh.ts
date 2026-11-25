@@ -8,7 +8,8 @@ export interface SftpFileItem {
   name: string;
   mode: string;
   size: number;
-  mod_time: string;
+  /** 修改时刻：Unix 毫秒的数字字符串 */
+  modified_at: string;
   type: "d" | "f";
 }
 

@@ -69,7 +69,7 @@ func (s *ServiceImpl) ListHosts(ctx context.Context, req *pb.ListDeploymentHosts
 	response.PageResult = page
 	hosts = hosts[start:end]
 	for _, h := range hosts {
-		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Label: h.Label, SshPort: int32(h.SSHPort), SshUser: h.SSHUser, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: servicecatalog.ReachabilityName(h.Reachability), ExternalEntry: h.ExternalEntry, Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
+		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Label: h.Label, SshPort: int32(h.SSHPort), SshUser: h.SSHUser, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: servicecatalog.ReachabilityName(h.Reachability), ExternalEntry: h.ExternalEntry, Description: h.Description, CreatedAt: h.CreatedAt.UnixMilli(), UpdatedAt: h.UpdatedAt.UnixMilli()})
 	}
 	return response, nil
 }
@@ -91,7 +91,7 @@ func (s *ServiceImpl) ListDeployments(ctx context.Context, req *pb.ListDeploymen
 	response.PageResult = page
 	deployments = deployments[start:end]
 	for _, p := range deployments {
-		response.Deployments = append(response.Deployments, &pb.ComponentDeployment{HostId: p.HostID, ComponentId: p.ComponentID, Status: p.Status, CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339Nano)})
+		response.Deployments = append(response.Deployments, &pb.ComponentDeployment{HostId: p.HostID, ComponentId: p.ComponentID, Status: p.Status, CreatedAt: p.CreatedAt.UnixMilli(), UpdatedAt: p.UpdatedAt.UnixMilli()})
 	}
 	return response, nil
 }
@@ -110,7 +110,7 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
 	snapshot, err := dao.Snapshot(ctx)
-	compiledAt := time.Now().UTC().Format(time.RFC3339Nano)
+	compiledAt := time.Now().UnixMilli()
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
@@ -161,13 +161,10 @@ func (s *ServiceImpl) SyncTopology(ctx context.Context, req *pb.SyncTopologyReq)
 }
 
 func statusToProto(status *HostGatewayStatus) *pb.HostGatewayRuntimeStatus {
-	format := func(t *time.Time) string {
-		if t == nil {
-			return ""
-		}
-		return t.UTC().Format(time.RFC3339Nano)
+	result := &pb.HostGatewayRuntimeStatus{ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash}
+	if status.LastSeenAt != nil {
+		result.LastSeenAt = status.LastSeenAt.UnixMilli()
 	}
-	result := &pb.HostGatewayRuntimeStatus{ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash, LastSeenAt: format(status.LastSeenAt)}
 	if status.RelaySessions != "" {
 		// 写入时已校验；读不出时宁可不展示，也不让整个状态查询失败。
 		_ = json.Unmarshal([]byte(status.RelaySessions), &result.RelaySessions)
