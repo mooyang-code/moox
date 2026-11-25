@@ -69,7 +69,7 @@ func init() {
 		rpcSpec{Path: []string{"strategy", "replay", "start"}, Short: "开始一次策略历史回放（支持现货、永续与混合市场）", Service: strategyMgr, Method: "StartReplay",
 			Flags: []rpcFlag{strFlag("strategy-id", "strategy_id", "策略 ID"), fileFlag("dsl-file", "dsl_yaml", "不落库的策略 DSL 文件", false),
 				mapFlag("factor-task", "factor_tasks", "读取的因子计算任务，写成 市场=任务 ID，可重复：现货、永续策略各给一个（spot=…、swap=…，混合市场两个都要给），股票策略 equity=…；参考市场的任务按市场给，附加来源写 来源名:市场=任务 ID；从实例发起时可省略（读实例关联的任务）"),
-				timeFlag("from", "start_time", "起点（RFC3339）", true), timeFlag("to", "end_time", "终点（RFC3339）", true),
+				instantFlag("from", "start_time", "起点（RFC3339）", true), instantFlag("to", "end_time", "终点（RFC3339）", true),
 				{Name: "spot-fee-bps", Field: "spot_fee_bps", Kind: rpcFloat, Usage: "现货与股票的单边费率（基点）"}, {Name: "swap-fee-bps", Field: "swap_fee_bps", Kind: rpcFloat, Usage: "永续的单边费率（基点）"},
 				{Name: "slippage-bps", Field: "slippage_bps", Kind: rpcFloat, Usage: "滑点（基点，0～200）：成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮；不写为 0"},
 				strFlag("funding-column", "funding_column", "永续持仓按 View 里的这一列结算资金费（本根累计的资金费率，例如 funding_rate）；不写不计，策略池写在池 DSL 的 fees.funding_column"),

@@ -27,9 +27,9 @@ func TestEngineStatusRoundTripsReadinessAndLifecycle(t *testing.T) {
 	status := domain.EngineStatus{Ready: false, NotReadyReason: "lease conflict",
 		Lifecycle: domain.EngineLifecycle{Stage: "resuming", PausedSince: since, PauseKind: "manual", PauseReason: "排查",
 			Catchup: &lifecycle.Catchup{Since: since, Target: since.Add(time.Hour), Done: 3, Total: 4, BlockedBy: "任务 t1", Unfillable: 1, Message: "等待"}}}
-	got, err := EngineStatusFromPB(EngineStatusToPB(status))
-	if err != nil {
-		t.Fatal(err)
+	got := EngineStatusFromPB(EngineStatusToPB(status))
+	if !got.Lifecycle.PausedSince.Equal(since) {
+		t.Fatalf("paused_since = %v, want %v", got.Lifecycle.PausedSince, since)
 	}
 	if got.Ready != status.Ready || got.NotReadyReason != status.NotReadyReason || got.Lifecycle.PauseKind != "manual" || got.Lifecycle.PauseReason != "排查" {
 		t.Fatalf("status = %+v", got)

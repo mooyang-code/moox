@@ -17,18 +17,12 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
-func parseTime(raw, field string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Time{}, fmt.Errorf("%s 不能为空", field)
+// instantOf 读请求里的 Unix 毫秒时刻；0 或负数报错。
+func instantOf(ms int64, field string) (time.Time, error) {
+	if ms <= 0 {
+		return time.Time{}, fmt.Errorf("%s 必须是正的 Unix 毫秒时刻", field)
 	}
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04", "2006-01-02 15:04:05", "2006-01-02"} {
-		if at, err := time.Parse(layout, raw); err == nil {
-			// 回放区间按毫秒落库：先截到毫秒，返回的根数与首末根才与执行时一致。
-			return at.UTC().Truncate(time.Millisecond), nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("%s 的格式无法识别：%s", field, raw)
+	return time.UnixMilli(ms).UTC(), nil
 }
 
 func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayReq) (*strategypb.StartReplayRsp, error) {
@@ -62,11 +56,11 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
-	start, err := parseTime(req.GetStartTime(), "start_time")
+	start, err := instantOf(req.GetStartTime(), "start_time")
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
-	end, err := parseTime(req.GetEndTime(), "end_time")
+	end, err := instantOf(req.GetEndTime(), "end_time")
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -193,7 +187,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	return &strategypb.StartReplayRsp{RetInfo: success(), Replay: replayProto(created), BarCount: int32(len(bars)), FirstBarEnd: formatTime(bars[0].BarEnd), LastBarEnd: formatTime(bars[len(bars)-1].BarEnd)}, nil
+	return &strategypb.StartReplayRsp{RetInfo: success(), Replay: replayProto(created), BarCount: int32(len(bars)), FirstBarEnd: millis(bars[0].BarEnd), LastBarEnd: millis(bars[len(bars)-1].BarEnd)}, nil
 }
 
 // replayInputOf 确定回放主帧的输入来源：不写按 view；声明了 factor_params 的策略必须用 compute（可变成员的参数随策略逐期变化，

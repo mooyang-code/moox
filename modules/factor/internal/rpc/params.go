@@ -16,7 +16,7 @@ import (
 
 func categoryToPB(category domain.FactorCategory) *factorpb.FactorCategory {
 	return &factorpb.FactorCategory{CategoryId: category.CategoryID, Name: category.Name, SortOrder: int32(category.SortOrder),
-		CreatedAt: factorwire.FormatTime(category.CreatedAt), UpdatedAt: factorwire.FormatTime(category.UpdatedAt)}
+		CreatedAt: factorwire.Millis(category.CreatedAt), UpdatedAt: factorwire.Millis(category.UpdatedAt)}
 }
 
 func (s *Service) ListFactorCategories(ctx context.Context, _ *factorpb.ListFactorCategoriesReq) (*factorpb.ListFactorCategoriesRsp, error) {

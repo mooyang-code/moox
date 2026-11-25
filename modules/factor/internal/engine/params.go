@@ -31,11 +31,7 @@ func (c *ManagerClient) GetTaskParams(ctx context.Context, taskID string) ([]fac
 	}
 	out := make([]factorwire.MemberParamState, 0, len(rsp.GetMembers()))
 	for _, member := range rsp.GetMembers() {
-		state, err := factorwire.MemberParamStateFromPB(member)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, state)
+		out = append(out, factorwire.MemberParamStateFromPB(member))
 	}
 	return out, nil
 }

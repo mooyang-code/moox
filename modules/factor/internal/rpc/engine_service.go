@@ -82,11 +82,7 @@ func (s *EngineService) EngineHeartbeat(ctx context.Context, req *factorpb.Engin
 	if strings.TrimSpace(id.EngineID) == "" {
 		return &factorpb.EngineHeartbeatRsp{RetInfo: invalid(fmt.Errorf("engine.engine_id is required"))}, nil
 	}
-	status, err := factorwire.EngineStatusFromPB(req.GetStatus())
-	if err != nil {
-		return &factorpb.EngineHeartbeatRsp{RetInfo: invalid(err)}, nil
-	}
-	ttl, err := s.hub.Heartbeat(ctx, id, status)
+	ttl, err := s.hub.Heartbeat(ctx, id, factorwire.EngineStatusFromPB(req.GetStatus()))
 	if err != nil {
 		return &factorpb.EngineHeartbeatRsp{RetInfo: engineError(err)}, nil
 	}
