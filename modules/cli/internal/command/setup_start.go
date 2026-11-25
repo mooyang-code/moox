@@ -37,10 +37,13 @@ var spaceExamples = map[string]spaceExample{
 
 const (
 	// streamSpace 是走 collector-stream（WS 推送）的空间；其他空间只能走云函数。
-	streamSpace           = "crypto"
-	setupStartStreamWait  = 90 * time.Second
-	setupStartPlanWait    = 90 * time.Second
-	setupStartSubjectWait = 60 * time.Second
+	streamSpace          = "crypto"
+	setupStartStreamWait = 90 * time.Second
+	setupStartPlanWait   = 90 * time.Second
+	// setupStartSubjectWait 是启用任务时等标签同步出标的的时限。全新安装时 Collector 起来后的首轮巡检把所有空间的标签依次
+	// 同步一遍并一直持有同步锁（单个标签最多用满 fetch_timeout 150 秒，标普 500 翻东方财富列表要一两分钟，实测首轮约 2.5 分钟），
+	// 期间立即同步只拿到“正忙”，所以按首轮巡检的耗时留足 5 分钟。
+	setupStartSubjectWait = 5 * time.Minute
 	setupStartPollDefault = 3 * time.Second
 )
 
@@ -85,7 +88,7 @@ func newSetupStartCommand(deps setupDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略",
-		Long: "crypto 走 collector-stream 和出口代理，其他空间要配 [scf_plan]。默认因子任务取自 config/setup/factor-tasks.yaml 里这个空间的任务，" +
+		Long: "crypto 走 collector-stream 和出口代理，其他空间要配 [scf_plan]。任务绑定的标签还没有标的时先立即同步再启用，Collector 正在同步别的标签时排队，最多等 5 分钟。默认因子任务取自 config/setup/factor-tasks.yaml 里这个空间的任务，" +
 			"只建不改：线上已有且内容不同时逐项列出差异、不写入（自己的任务用 moox-cli factor task apply --file 导入）。重复运行不会重复创建。没有因子机时跳过因子和默认策略。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -185,7 +188,7 @@ func runSetupStartSteps(ctx context.Context, deps setupDeps, client setupStartCl
 			summary.Notes = append(summary.Notes, fmt.Sprintf("任务 %s（%s）需手动启用：moox-cli collector task update --space-id %s --task-id %s --enabled=true", task.TaskName, task.TaskID, spaceID, task.TaskID))
 			continue
 		}
-		if err := setupStartEnableTask(ctx, client, spaceID, task, poll); err != nil {
+		if err := setupStartEnableTask(ctx, client, spaceID, task, poll, setupStartSubjectWait); err != nil {
 			return summary, err
 		}
 		summary.TasksEnabled++
@@ -218,16 +221,27 @@ func runSetupStartSteps(ctx context.Context, deps setupDeps, client setupStartCl
 // errSubjectSyncBusy 表示 Collector 正在跑别的标的同步，稍后重试即可。
 var errSubjectSyncBusy = errors.New("collector 正在同步标的")
 
-// setupStartEnableTask 启用任务。全新部署时任务绑定的自动标签可能还没同步过（如 A 股的沪深 300 成分标签要到次日 08:40
-// 才定时同步），控制面会以“没有有效标的”拒绝启用：这时立即同步任务绑定的标签再重试；标的刚同步完、标签暂时解析不出成员也等一会儿再试。
-// 其他错误原样返回。
-func setupStartEnableTask(ctx context.Context, client setupStartClient, spaceID string, task rpcclient.CollectionTaskSummary, poll time.Duration) error {
-	deadline := time.Now().Add(setupStartSubjectWait)
-	synced := false
+// setupStartEnableTask 启用任务。全新部署时任务绑定的自动标签可能还没同步成功过（Collector 首轮巡检时出口代理还没起来、
+// 来源临时出错），控制面会以“没有有效标的”拒绝启用：这时立即同步任务绑定的标签再重试；Collector 正在巡检别的标签时排队等，
+// 标的刚同步完、标签暂时解析不出成员也等一会儿再试，最多等 wait。其他错误原样返回。
+func setupStartEnableTask(ctx context.Context, client setupStartClient, spaceID string, task rpcclient.CollectionTaskSummary, poll, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	synced, waiting := false, false
 	for {
 		err := client.EnableTask(ctx, spaceID, task.TaskID)
-		if err == nil || !strings.Contains(err.Error(), "没有有效标的") || !time.Now().Before(deadline) {
+		if err == nil || !strings.Contains(err.Error(), "没有有效标的") {
 			return err
+		}
+		tags := strings.Join(task.TagIDs, "、")
+		if !time.Now().Before(deadline) {
+			if !synced {
+				return fmt.Errorf("任务 %s 等了 %s，Collector 一直在同步别的标签，没轮到标签 %s（%w）：用 moox-cli collector subjects status --space-id %s 看同步进度，这一轮结束后重跑 setup start", task.TaskID, waitText(wait), tags, err, spaceID)
+			}
+			return fmt.Errorf("任务 %s 的标签 %s 已同步，%s 内仍解析不出有效标的（%w）：用 moox-cli metadata tag show --space-id %s 核对标签成员后重跑 setup start", task.TaskID, tags, waitText(wait), err, spaceID)
+		}
+		if !waiting {
+			waiting = true
+			fmt.Fprintf(os.Stderr, "任务 %s 的标签 %s 还没有有效标的：立即同步标签后再启用；Collector 正在做别的同步时排队等（全新安装的首轮标签同步要几分钟），最多等 %s\n", task.TaskID, tags, waitText(wait))
 		}
 		if !synced {
 			done, syncErr := setupStartSyncTags(ctx, client, spaceID, task.TagIDs)
@@ -242,6 +256,14 @@ func setupStartEnableTask(ctx context.Context, client setupStartClient, spaceID 
 		case <-time.After(poll):
 		}
 	}
+}
+
+// waitText 把等待时限写成提示里的中文：整分钟写“N 分钟”，其余（测试里的毫秒级）原样。
+func waitText(wait time.Duration) string {
+	if wait >= time.Minute && wait%time.Minute == 0 {
+		return fmt.Sprintf("%d 分钟", int(wait/time.Minute))
+	}
+	return wait.String()
 }
 
 // setupStartSyncTags 逐个同步任务绑定的标签：Collector 正忙时返回 false 让调用方稍后再来；同步成功但没有成员时报错。

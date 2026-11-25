@@ -41,7 +41,7 @@ func usIndexTestdata(t *testing.T, parts ...string) []byte {
 type usFakeWeb struct {
 	ndx       []byte
 	csv       []byte
-	hideCode  string // 不放进 clist 的成分代码（模拟新上市、东方财富还没有）
+	hideCodes map[string]bool // 不放进 clist 的成分代码（模拟新上市、东方财富还没有）
 	clistReqs int
 }
 
@@ -53,7 +53,7 @@ func (w *usFakeWeb) clistRows() map[string][]string {
 	rows := map[string][]string{"m:105": {"SUPN_", "AAPL42"}, "m:106": {"XFLHr"}, "m:107": {"SPY"}}
 	for _, record := range records[1:] {
 		code := record[0]
-		if code == w.hideCode || strings.ReplaceAll(code, ".", "_") == w.hideCode {
+		if w.hideCodes[code] {
 			continue
 		}
 		switch {
@@ -207,16 +207,36 @@ func TestTagSyncAppliesSPXConstituentsFromDatahub(t *testing.T) {
 	require.Equal(t, "BRK.B", code)
 }
 
-// 有一只成分在东方财富列表里对不上交易所：同步失败，不应用快照，标签保留旧成员；错误里写出对不上的代码。
-func TestTagSyncKeepsSPXMembersWhenExchangeUnmatched(t *testing.T) {
+// 少数成分在东方财富列表里对不上交易所（新调入、东方财富还没有）：跳过它们，其余照常应用；带点的代码同样按原写法跳过。
+func TestTagSyncSkipsSPXMembersWhenFewExchangesUnmatched(t *testing.T) {
 	web := newUSWeb(t)
-	web.hideCode = "OKTA"
+	web.hideCodes = map[string]bool{"OKTA": true, "BF.B": true}
+	_, indexes := usIndexListers(t, web)
+	storage := &hkTagStorage{tags: []*pb.Tag{usTag("us_spx", "datahub", "SPX")}, subjects: map[string]*pb.Subject{}, members: map[string][]string{"us_spx": {"AAPL.XNAS", "OKTA.XNAS"}}}
+	result := syncUSTag(t, indexes, storage)
+	require.Equal(t, subjectsync.TagResult{SpaceID: "stockus", TagID: "us_spx", Status: subjectsync.StatusSuccess, Subjects: 501}, result)
+	require.Len(t, storage.members["us_spx"], 501)
+	require.Contains(t, storage.members["us_spx"], "AAPL.XNAS")
+	require.NotContains(t, storage.members["us_spx"], "OKTA.XNAS", "快照是权威的：这次对不上的旧成员移出标签")
+	require.NotContains(t, storage.members["us_spx"], "BF.B.XNYS")
+	require.Contains(t, storage.members["us_spx"], "BRK.B.XNYS")
+}
+
+// 对不上的超过名单的一成（东方财富列表整体异常）：同步失败，不应用快照，标签保留旧成员；错误里写出对不上的代码。
+func TestTagSyncKeepsSPXMembersWhenTooManyExchangesUnmatched(t *testing.T) {
+	web := newUSWeb(t)
+	records, err := csv.NewReader(strings.NewReader(string(web.csv))).ReadAll()
+	require.NoError(t, err)
+	web.hideCodes = map[string]bool{}
+	for _, record := range records[1:52] {
+		web.hideCodes[record[0]] = true
+	}
 	_, indexes := usIndexListers(t, web)
 	storage := &hkTagStorage{tags: []*pb.Tag{usTag("us_spx", "datahub", "SPX")}, subjects: map[string]*pb.Subject{}, members: map[string][]string{"us_spx": {"AAPL.XNAS"}}}
 	result := syncUSTag(t, indexes, storage)
 	require.Equal(t, subjectsync.StatusFailed, result.Status)
-	require.Contains(t, result.Message, "对不上交易所")
-	require.Contains(t, result.Message, "OKTA")
+	require.Contains(t, result.Message, "51/503 只成分在东方财富美股列表里对不上交易所")
+	require.Contains(t, result.Message, records[1][0])
 	require.Equal(t, []string{"AAPL.XNAS"}, storage.members["us_spx"])
 	require.Empty(t, storage.subjects)
 }
