@@ -9,8 +9,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// rowScanner 抽象 sql.Row 和 sql.Rows 的扫描能力。
-
 func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetName() == "" {
 		return nil, storeerr.Invalidf("space_id and name are required")
@@ -140,7 +138,7 @@ func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.
 }
 
 func (s *Store) GetDataSource(ctx context.Context, spaceID string, dataSourceID string) (*pb.DataSource, error) {
-	return getMessage(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, []any{spaceID, dataSourceID}, func() *pb.DataSource { return &pb.DataSource{} })
+	return scanMessageWithSQLTimestamps(s.queryDB(ctx).QueryRowContext(ctx, `SELECT c_item_json, c_ctime, c_mtime FROM t_data_sources WHERE c_space_id = ? AND c_data_source_id = ?`, spaceID, dataSourceID), newDataSource)
 }
 
 func (s *Store) DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error {
@@ -160,14 +158,35 @@ func (s *Store) DeleteDataSource(ctx context.Context, spaceID string, dataSource
 
 func (s *Store) ListDataSources(ctx context.Context, spaceID string, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
 	keyword = strings.TrimSpace(keyword)
+	pageNo, size, offset := normalizePage(page)
 	const where = `
 		FROM t_data_sources
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR instr(lower(c_data_source_id), lower(?)) > 0 OR instr(lower(c_name), lower(?)) > 0)`
 	args := []any{spaceID, spaceID, keyword, keyword, keyword}
-	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_item_json `+where+` ORDER BY c_space_id, c_data_source_id`,
-		`SELECT COUNT(1) `+where,
-		args, page, func() *pb.DataSource { return &pb.DataSource{} },
-	)
+	db := s.queryDB(ctx)
+	rows, err := db.QueryContext(ctx, `SELECT c_item_json, c_ctime, c_mtime `+where+` ORDER BY c_space_id, c_data_source_id LIMIT ? OFFSET ?`, append(append([]any{}, args...), size, offset)...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var items []*pb.DataSource
+	for rows.Next() {
+		// created_at、updated_at 按库里的 c_ctime、c_mtime 回填。
+		item, err := scanMessageWithSQLTimestamps(rows, newDataSource)
+		if err != nil {
+			return nil, nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	total, err := countRows(ctx, db, `SELECT COUNT(1) `+where, args)
+	if err != nil {
+		return nil, nil, err
+	}
+	return items, &pb.PageResult{Page: pageNo, Size: size, Total: total, HasMore: uint64(offset)+uint64(len(items)) < uint64(total)}, nil
 }
+
+func newDataSource() *pb.DataSource { return &pb.DataSource{} }

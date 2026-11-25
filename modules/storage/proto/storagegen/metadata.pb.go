@@ -36,7 +36,7 @@ type Space struct {
 	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	// owner 是空间拥有者，可以是用户、团队或系统任务。
 	Owner string `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`
-	// status 取值 active、disabled 或 deleted。
+	// status 取值 active 或 disabled。
 	Status string `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
 	// created_at 是创建时刻，Unix 毫秒。
 	CreatedAt int64 `protobuf:"varint,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
@@ -164,7 +164,7 @@ type DataSource struct {
 	DataSourceId string `protobuf:"bytes,2,opt,name=data_source_id,json=dataSourceId,proto3" json:"data_source_id,omitempty"`
 	// name 是数据来源名称，通常用于管理台展示。
 	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	// status 取值 active、disabled 或 deleted。
+	// status 取值 active 或 disabled。
 	Status string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
 	// created_at 是创建时刻，Unix 毫秒。
 	CreatedAt int64 `protobuf:"varint,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
@@ -2723,7 +2723,7 @@ type UpsertTagReq struct {
 
 	Tag        *Tag `protobuf:"bytes,2,opt,name=tag,proto3" json:"tag,omitempty"`
 	CreateOnly bool `protobuf:"varint,3,opt,name=create_only,json=createOnly,proto3" json:"create_only,omitempty"`
-	// seed 标记种子导入（setup init、metadata import/apply）：新建标签（含 create_only）时保留 tag.builtin。
+	// seed 标记种子导入（setup init、metadata apply）：新建标签（含 create_only）时保留 tag.builtin。
 	// 不带它新建的标签一律不是内置标签；已有标签的 builtin 无论带不带都不改。
 	Seed bool `protobuf:"varint,4,opt,name=seed,proto3" json:"seed,omitempty"`
 }

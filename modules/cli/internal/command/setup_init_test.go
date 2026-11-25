@@ -67,13 +67,12 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, bundle.SpaceIDs)
 	require.NotEmpty(t, bundle.Calls)
-	// 种子只剩 A 股财务两个数据集、没有 View：行情数据集由采集任务派生，主机快照改存 Monitor。
+	// 种子只剩 A 股财务两个数据集：行情数据集由采集任务派生，主机快照改存 Monitor。
 	resources := map[string]int{}
 	for _, call := range bundle.Calls {
 		resources[call.Resource]++
 	}
 	require.Equal(t, 2, resources["datasets"])
-	require.Zero(t, resources["views"])
 }
 
 func TestSetupInitRunsStagesInOrder(t *testing.T) {

@@ -40,9 +40,6 @@ func loadMetadataSeed(path string) (metadataSeed, error) {
 	if len(raw) > maxMetadataSeedBytes {
 		return metadataSeed{}, fmt.Errorf("metadata seed exceeds %d bytes", maxMetadataSeedBytes)
 	}
-	if err := rejectRemovedMetadataSeedSections(raw); err != nil {
-		return metadataSeed{}, fmt.Errorf("metadata seed %s: %w", path, err)
-	}
 	var seed metadataSeed
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
@@ -53,27 +50,6 @@ func loadMetadataSeed(path string) (metadataSeed, error) {
 		return metadataSeed{}, fmt.Errorf("metadata seed must contain exactly one YAML document")
 	}
 	return seed, nil
-}
-
-// removedMetadataSeedSections 是种子里已删除的段落：字段目录与 View 已并入数据集列与数据集。
-var removedMetadataSeedSections = map[string]string{
-	"field_groups": "field_groups 段已删除：字段分组改写在 dataset_columns 每列的 group 上",
-	"fields":       "fields 段已删除：列自描述，显示名写在 dataset_columns 每列的 display_name 上；采集字段只在 Collector 字段规格里登记",
-	"views":        "views 段已删除：每个数据集恰好有一个查询索引，随数据集自动建删",
-}
-
-// rejectRemovedMetadataSeedSections 对已删除的段落给出明确的中文错误，而不是笼统的“未知字段”。
-func rejectRemovedMetadataSeedSections(raw []byte) error {
-	var top map[string]yaml.Node
-	if err := yaml.Unmarshal(raw, &top); err != nil {
-		return nil // 交给严格解码报出原始错误
-	}
-	for _, key := range []string{"field_groups", "fields", "views"} {
-		if _, ok := top[key]; ok {
-			return errors.New(removedMetadataSeedSections[key])
-		}
-	}
-	return nil
 }
 
 func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {

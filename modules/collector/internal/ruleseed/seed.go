@@ -134,7 +134,7 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 	if err != nil {
 		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 	}
-	resultIDs := taskresult.ResultIDs(spaceID, taskID)
+	resultIDs := taskresult.ResultIDs(taskID)
 	collectParams["target_dataset_id"] = resultIDs.DatasetID
 	rawParams, err = json.Marshal(collectParams)
 	if err != nil {

@@ -79,6 +79,33 @@ func TestUpsertSpaceReadsDefaultTimestampAsMillis(t *testing.T) {
 	}
 }
 
+// 数据来源的 created_at、updated_at 按库列回填：写入、单查、列表三处都不是 0。
+func TestDataSourceReadsTimestampsFromColumns(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	before := time.Now().Add(-2 * time.Second).UnixMilli()
+	if _, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Space"}); err != nil {
+		t.Fatal(err)
+	}
+	upserted, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: "source", Name: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetDataSource(ctx, "space", "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, _, err := store.ListDataSources(ctx, "space", "", nil)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("ListDataSources = %v, %v", listed, err)
+	}
+	for name, item := range map[string]*pb.DataSource{"UpsertDataSource": upserted, "GetDataSource": got, "ListDataSources": listed[0]} {
+		if item.GetCreatedAt() < before || item.GetUpdatedAt() < before {
+			t.Fatalf("%s 读回 %d/%d，应不早于 %d", name, item.GetCreatedAt(), item.GetUpdatedAt(), before)
+		}
+	}
+}
+
 func TestSetTimestampFieldByKind(t *testing.T) {
 	const text = "2026-11-24 08:30:15"
 	want := time.Date(2026, time.November, 24, 8, 30, 15, 0, time.UTC).UnixMilli()

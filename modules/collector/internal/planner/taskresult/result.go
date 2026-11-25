@@ -31,7 +31,7 @@ type IDs struct {
 	DatasetID string
 }
 
-func resultIDs(_ string, taskID string) IDs {
+func resultIDs(taskID string) IDs {
 	return IDs{DatasetID: "dataset_" + resultSlug(taskID)}
 }
 
@@ -68,15 +68,15 @@ func resultSlug(taskID string) string {
 	return slug
 }
 
-// ResultIDs returns the stable metadata identities for a task result.
-func ResultIDs(spaceID, taskID string) IDs { return resultIDs(spaceID, taskID) }
+// ResultIDs 返回任务结果在 Storage 的稳定身份，只由任务 ID 推出。
+func ResultIDs(taskID string) IDs { return resultIDs(taskID) }
 
 // PersistedResultIDs 优先取任务行里已提交的结果数据集 ID，首次提交前退回由任务推出的 ID。
-func PersistedResultIDs(spaceID, taskID, datasetID string) IDs {
+func PersistedResultIDs(taskID, datasetID string) IDs {
 	if strings.TrimSpace(datasetID) != "" {
 		return IDs{DatasetID: strings.TrimSpace(datasetID)}
 	}
-	return resultIDs(spaceID, taskID)
+	return resultIDs(taskID)
 }
 
 type metadataAPI interface {
@@ -277,7 +277,7 @@ type Inspection struct {
 // are returned as errors so callers cannot mistake another task's result for
 // this task's result.
 func (m *Manager) Inspect(ctx context.Context, spaceID, taskID string) (Inspection, error) {
-	return m.InspectIDs(ctx, spaceID, taskID, resultIDs(spaceID, taskID))
+	return m.InspectIDs(ctx, spaceID, taskID, resultIDs(taskID))
 }
 
 // InspectIDs inspects an explicitly persisted result identity while keeping
@@ -432,7 +432,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if spaceID == "" || taskID == "" {
 		return IDs{}, fmt.Errorf("space_id and task_id are required")
 	}
-	ids := resultIDs(spaceID, taskID)
+	ids := resultIDs(taskID)
 	kind := storagepb.DataKind_DATA_KIND_TIME_SERIES
 	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
 		kind = storagepb.DataKind_DATA_KIND_RECORD
@@ -640,7 +640,7 @@ func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datas
 // for callers that have not yet committed the owning task row. Existing
 // task-owned resources are never removed by that action.
 func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataType, marketType string, cfg Config) (IDs, func(context.Context) error, error) {
-	ids := resultIDs(spaceID, taskID)
+	ids := resultIDs(taskID)
 	datasetExists, err := m.resultDatasetExists(ctx, spaceID, taskID, ids)
 	if err != nil {
 		return IDs{}, nil, err
@@ -947,7 +947,7 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	if strings.TrimSpace(taskID) == "" {
 		return fmt.Errorf("task_id is required")
 	}
-	if ids.DatasetID != resultIDs(spaceID, taskID).DatasetID {
+	if ids.DatasetID != resultIDs(taskID).DatasetID {
 		return fmt.Errorf("result Dataset identity is not the deterministic result of task %s", taskID)
 	}
 	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: ids.DatasetID})

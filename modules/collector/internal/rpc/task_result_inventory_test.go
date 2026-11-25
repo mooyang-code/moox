@@ -33,9 +33,9 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
 	now := time.Date(2026, 10, 3, 10, 5, 0, 0, time.UTC)
-	activeIDs := taskresult.ResultIDs("crypto", "task-active")
-	resampleIDs := taskresult.ResultIDs("crypto", "task-resample")
-	disabledIDs := taskresult.ResultIDs("crypto", "task-disabled")
+	activeIDs := taskresult.ResultIDs("task-active")
+	resampleIDs := taskresult.ResultIDs("task-resample")
+	disabledIDs := taskresult.ResultIDs("task-disabled")
 	tasks := []domain.CollectionTask{
 		{SpaceID: "crypto", TaskID: "task-active", TaskName: "active", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m","output_fields":["open","high"]}`, ResultDatasetID: activeIDs.DatasetID},
 		{SpaceID: "crypto", TaskID: "task-resample", TaskName: "resample", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"derived","target_frequency":"5m","alignment":"epoch_utc"}`, ResultDatasetID: resampleIDs.DatasetID},
@@ -109,7 +109,7 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
-	ids := taskresult.ResultIDs("crypto", "task-owned")
+	ids := taskresult.ResultIDs("task-owned")
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m"}`,
@@ -136,7 +136,7 @@ func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(
 	require.Zero(t, metadata.getDatasets, "full snapshot capacity must be rejected before Storage metadata inspection")
 
 	// Exhausting one Space's allowance cannot block another Space.
-	stockIDs := taskresult.ResultIDs("stockcn", "task-stock")
+	stockIDs := taskresult.ResultIDs("task-stock")
 	stockTask := domain.CollectionTask{
 		SpaceID: "stockcn", TaskID: "task-stock", TaskName: "stock", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"tdx","market_type":"stock","market_id":"stockcn","frequency":"1d"}`,
@@ -153,7 +153,7 @@ func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(
 func TestGetTaskResultInventoryRejectsUnownedResultsAndMismatchedSnapshot(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
-	ids := taskresult.ResultIDs("crypto", "task-owned")
+	ids := taskresult.ResultIDs("task-owned")
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m"}`,
@@ -277,7 +277,7 @@ func newTaskResultInventoryConcurrentService(t *testing.T, taskCount int, delay 
 	expected := make([]string, 0, taskCount)
 	for index := 0; index < taskCount; index++ {
 		taskID := fmt.Sprintf("task-%03d", index)
-		ids := taskresult.ResultIDs("crypto", taskID)
+		ids := taskresult.ResultIDs(taskID)
 		task := domain.CollectionTask{
 			SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true,
 			PrepareState:    domain.PrepareStateReady,

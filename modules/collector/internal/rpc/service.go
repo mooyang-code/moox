@@ -908,7 +908,7 @@ func assignGeneratedCollectionTaskResult(task domain.CollectionTask, params *dom
 	if params == nil {
 		return task, taskresult.IDs{}, fmt.Errorf("collect params are required")
 	}
-	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	ids := taskresult.ResultIDs(task.TaskID)
 	task.ResultDatasetID = ids.DatasetID
 	task.CollectParams = setTaskResultDatasetID(task.CollectParams, ids.DatasetID)
 	return task, ids, nil
@@ -940,7 +940,7 @@ func validateTaskResultConfigUpdate(config *pb.ResultConfig) error {
 }
 
 func collectionTaskResultIDs(task domain.CollectionTask) taskresult.IDs {
-	return taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID)
+	return taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
 }
 
 func setTaskResultDatasetID(raw, datasetID string) string {

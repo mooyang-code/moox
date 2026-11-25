@@ -213,7 +213,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				// provisioned by resample.Preparer after it has resolved the source
 				// Dataset. The generic result manager must not claim that Dataset as a
 				// raw collection result.
-				ids = collectorresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID)
+				ids = collectorresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
 			} else {
 				if len(task.TagIDs) == 0 {
 					return fmt.Errorf("task %s/%s has no bound tags", task.SpaceID, task.TaskID)

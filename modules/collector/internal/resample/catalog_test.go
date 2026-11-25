@@ -194,7 +194,7 @@ func TestPrepareTargetWaitsUntilDatasetColumnsAreIndexed(t *testing.T) {
 
 	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
 	require.Zero(t, metadata.buildingPolls, "索引建好之前一直在等")
-	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
+	ids := taskresult.ResultIDs(rule.TaskID)
 	declared := metadata.datasetColumns[ids.DatasetID]
 	require.Len(t, declared, 7)
 
@@ -208,14 +208,14 @@ func TestPrepareTargetCompensatesCreatedDatasetAfterLaterFailure(t *testing.T) {
 
 	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
-	require.Equal(t, taskresult.ResultIDs(rule.SpaceID, rule.TaskID).DatasetID, params.TargetDatasetID)
+	require.Equal(t, taskresult.ResultIDs(rule.TaskID).DatasetID, params.TargetDatasetID)
 	require.Empty(t, metadata.datasets)
 	require.Equal(t, []string{"dataset"}, metadata.deleteOrder)
 }
 
 func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_state")
-	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
+	ids := taskresult.ResultIDs(rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID,
 		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Alignment: params.Alignment,
@@ -337,6 +337,6 @@ func TestPrepareTargetInheritsSourceDataSourceForChainedResample(t *testing.T) {
 	source := storagesource.DatasetInfo{Attributes: map[string]string{"dataset_role": "kline_resample_result", "source_data_source_id": "binance"}}
 
 	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
-	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
+	ids := taskresult.ResultIDs(rule.TaskID)
 	require.Equal(t, "binance", metadata.datasets[ids.DatasetID].GetAttributes()["source_data_source_id"])
 }
