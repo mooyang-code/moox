@@ -107,6 +107,7 @@ export interface DataSource {
   data_source_id: string;
   name: string;
   status: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   /** 业务含义放在属性里，Storage 原样保存。 */
@@ -119,6 +120,7 @@ export interface Subject {
   name: string;
   timezone?: string;
   status: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
@@ -136,6 +138,7 @@ export interface Tag {
   builtin?: boolean;
   active_count?: number;
   inactive_count?: number;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   /** 市场类型与同步配置放在属性里：market_type、sync.source、sync.cron、sync.timezone。 */
@@ -146,6 +149,7 @@ export interface TagMember {
   space_id: string;
   tag_id?: string;
   status?: TagMemberStatus;
+  /** 失效时刻：Unix 毫秒（数字字符串），在册成员为 "0"。 */
   inactive_at?: string;
   subject: Subject;
   tag_ids?: string[];
@@ -179,6 +183,7 @@ export interface Dataset {
   allowed_lateness_seconds?: number;
   /** 查询索引维护的先后：越小越先，0（缺省）最先。 */
   maintenance_priority?: number;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
@@ -197,6 +202,7 @@ export interface DatasetColumn {
   aliases?: string[];
   /** active 或 disabled：disabled 的列读取时隐藏，数据保留。 */
   status: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;

@@ -10,11 +10,12 @@ export interface CloudAccount {
   app_id: string;
   cos_region: string;
   cos_bucket: string;
-  create_time?: string;
-  modify_time?: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
+  created_at?: string;
+  updated_at?: string;
 }
 
-export type CloudAccountInput = Omit<CloudAccount, "create_time" | "modify_time">;
+export type CloudAccountInput = Omit<CloudAccount, "created_at" | "updated_at">;
 
 export const getCloudAccountList = async (): Promise<CloudAccount[]> => {
   const rsp = await call<Record<string, never>, { accounts?: CloudAccount[] }>("collector", "ListCloudAccounts", {});

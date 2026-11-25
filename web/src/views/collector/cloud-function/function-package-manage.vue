@@ -58,7 +58,7 @@
             </template>
           </a-table-column>
           <a-table-column title="上传时间" :width="190">
-            <template #cell="{ record }">{{ formatInstant(record.create_time, "UTC") }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.created_at, "UTC") }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="80" align="center" fixed="right">
             <template #cell="{ record }">

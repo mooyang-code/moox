@@ -13,7 +13,7 @@
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="创建人">{{ task.creator || "-" }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ formatInstant(task.create_time, displayZone) }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatInstant(task.created_at, displayZone) }}</a-descriptions-item>
         </a-descriptions>
       </section>
       <section class="detail-section">

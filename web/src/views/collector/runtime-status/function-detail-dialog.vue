@@ -34,7 +34,7 @@
           <span>{{ group.label }}</span>
           <span class="muted"
             >{{ group.total }} 个标的<template v-if="group.effectiveFrom">
-              · {{ timeText(group.effectiveFrom) }} 起生效</template
+              · {{ formatInstant(group.effectiveFrom, displayZone) }} 起生效</template
             ></span
           >
         </div>
@@ -56,7 +56,6 @@ import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 
 const displayZone = useDisplayZone();
-const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const props = defineProps<{ fn: CollectorFunctionStatus | null; datasetNames: Map<string, string> }>();
 const emit = defineEmits<{ (event: "close"): void }>();

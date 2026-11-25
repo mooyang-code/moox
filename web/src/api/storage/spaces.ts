@@ -18,6 +18,7 @@ export interface Space {
   /** active、disabled：停用后 Collector 不再采它。 */
   status: string;
   attributes?: Record<string, string>;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
 }
