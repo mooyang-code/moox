@@ -6,7 +6,7 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/archive/proto/archivegen;archivepb";
 
-// 时间字段统一为 RFC3339（UTC）字符串；空串表示没有。
+// 墙钟时刻（创建、开始、心跳、过期等）是 Unix 毫秒，0 表示没有；分区范围、数据时间、回补起点是 data_time 口径的 RFC3339 文本，空串表示没有。
 
 // ArchiveRun 是一次跟随、整段重读、补拉区间或导入的执行。
 message ArchiveRun {

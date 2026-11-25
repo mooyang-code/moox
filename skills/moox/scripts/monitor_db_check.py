@@ -70,7 +70,7 @@ def main():
     if not rows:
         print("没有。")
     for space, check_id, severity, triggered, status, reason, failure, checked in rows:
-        current = reason if status == "down" else f"已通过、等待恢复确认（最近失败：{failure}）"
+        current = reason if status in ("down", "degraded") else f"已通过、等待恢复确认（最近失败：{failure}）"
         print(f"- {space}/{check_id} [{severity}] 触发于 {ago(triggered, now)}；最近一次检查：{current}（{ago(checked, now)}）")
 
     section("检查概况（按种类 / 最近结果）")
