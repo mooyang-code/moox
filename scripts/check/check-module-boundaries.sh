@@ -101,7 +101,7 @@ if [[ -d packages ]]; then
     text="${rest#*:}"
 
     violations+=("${file}:${line}: root package go.mod must not depend on business modules (${text})")
-  done < <(rg -n "${IMPORT_PREFIX}[^[:space:]]+" packages/*/go.mod 2>/dev/null || true)
+  done < <(rg -n "${IMPORT_PREFIX}[^[:space:]]+" packages/go.mod 2>/dev/null || true)
 fi
 
 if (( ${#violations[@]} > 0 )); then

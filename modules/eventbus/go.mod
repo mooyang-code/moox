@@ -4,13 +4,7 @@ go 1.27.3
 
 require (
 	github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
 	github.com/stretchr/testify v1.12.1
@@ -44,11 +38,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/molecule-man/go-brrr v1.3.0 // indirect
-	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
@@ -85,28 +74,4 @@ require (
 
 replace github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen => ./proto/eventbusgen
 
-replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
-
-replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
-
-replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
-
-replace github.com/mooyang-code/moox/packages/events => ../../packages/events
-
-replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
-
-replace github.com/mooyang-code/moox/packages/report => ../../packages/report
-
-replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
-
-replace github.com/mooyang-code/moox/packages/security => ../../packages/security
-
-replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
-
-replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter
-
-replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
-
-replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
-
-replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
+replace github.com/mooyang-code/moox/packages => ../../packages

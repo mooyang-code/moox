@@ -25,37 +25,7 @@ use (
 	./modules/strategy/proto/strategygen
 	./modules/trade
 	./modules/trade/proto/tradegen
-	./packages/barclock
-	./packages/cloudprovider
-	./packages/clsreporter
-	./packages/cnstock
-	./packages/commonpb
-	./packages/doctor
-	./packages/events
-	./packages/factorexpr
-	./packages/factorudf
-	./packages/factorname
-	./packages/frequency
-	./packages/gatewayauth
-	./packages/gatewayclient
-	./packages/healthz
-	./packages/hostmetricpb
-	./packages/hostpolicy
-	./packages/jetstream
-	./packages/lifecycle
-	./packages/marketcalendar
-	./packages/metricspb
-	./packages/netguard
-	./packages/notification
-	./packages/report
-	./packages/security
-	./packages/seriesset
-	./packages/servicecatalog
-	./packages/storagepb
-	./packages/storagepolicy
-	./packages/timerjob
-	./packages/tradeeventpb
-	./packages/wirecompress
+	./packages
 	./tools/zstddict
 )
 
