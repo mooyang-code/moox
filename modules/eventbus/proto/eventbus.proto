@@ -62,8 +62,9 @@ message StreamInfo {
   string storage = 4;
   uint64 messages = 5;
   uint64 bytes = 6;
-  string first_time = 7;
-  string last_time = 8;
+  // 流里最早、最晚一条消息的写入时刻（Unix 毫秒），空流为 0。
+  int64 first_time = 7;
+  int64 last_time = 8;
 }
 
 message ConsumerInfo {
@@ -73,7 +74,7 @@ message ConsumerInfo {
   uint64 pending = 4;
   uint64 ack_pending = 5;
   uint64 redelivered = 6;
-  string last_delivered_at = 7;
+  int64 last_delivered_at = 7;  // 最近一次投递的时刻（Unix 毫秒），没投递过为 0
 }
 
 message Overview {

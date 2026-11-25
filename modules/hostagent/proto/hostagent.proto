@@ -12,9 +12,10 @@ message GetStatusRsp {
   string version = 2;
   string hostname = 3;
   string boot_id = 4;
-  string last_collect_at = 5;
-  // 最近一次把快照成功报给 Monitor（随拉取主机策略那次调用）的时间。
-  string last_report_at = 6;
+  // 最近一次采集完成的时刻（Unix 毫秒），没采集过为 0。
+  int64 last_collect_at = 5;
+  // 最近一次把快照成功报给 Monitor（随拉取主机策略那次调用）的时刻（Unix 毫秒），没报过为 0。
+  int64 last_report_at = 6;
   string last_error = 7;
   uint64 collected = 8;
   uint64 reported = 9;
@@ -23,7 +24,8 @@ message GetStatusRsp {
   HostSnapshot latest = 12;
 }
 message GetSnapshotReq {}
-message GetSnapshotRsp { HostSnapshot snapshot = 1; string collected_at = 2; }
+// collected_at 是这份快照采集完成的时刻（Unix 毫秒），没采集过为 0。
+message GetSnapshotRsp { HostSnapshot snapshot = 1; int64 collected_at = 2; }
 message RunOnceReq {}
 // RunOnce 立即采集一次，并随拉取主机策略报给 Monitor。
 message RunOnceRsp { string report_id = 1; bool reported = 2; string report_error = 3; HostSnapshot snapshot = 4; }

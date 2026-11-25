@@ -132,7 +132,7 @@ func TestAgent_GetSnapshot_ShouldReturnLatestSnapshot(t *testing.T) {
 	rsp, err := a.GetSnapshot(context.Background(), &hostagentpb.GetSnapshotReq{})
 	require.NoError(t, err)
 	assert.NotNil(t, rsp.GetSnapshot())
-	assert.NotEmpty(t, rsp.GetCollectedAt())
+	assert.Equal(t, now.UnixMilli(), rsp.GetCollectedAt())
 }
 
 func TestTruncate_ShouldCapLongStrings(t *testing.T) {
@@ -273,7 +273,7 @@ func TestHostAgentNativeRPCPreservesSnapshot(t *testing.T) {
 		require.Equal(t, agent.hostname, status.GetHostname())
 		snapshot, err := proxy.GetSnapshot(t.Context(), &hostagentpb.GetSnapshotReq{})
 		require.NoError(t, err)
-		require.Equal(t, agent.lastCollect.Format(time.RFC3339Nano), snapshot.GetCollectedAt())
+		require.Equal(t, agent.lastCollect.UnixMilli(), snapshot.GetCollectedAt())
 		require.Equal(t, agent.latest.GetCpu().GetLogicalCores(), snapshot.GetSnapshot().GetCpu().GetLogicalCores())
 	}
 }
