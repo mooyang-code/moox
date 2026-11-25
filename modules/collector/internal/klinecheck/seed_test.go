@@ -135,6 +135,47 @@ func TestSeedWaitsForTheEffectivePointBeforeBuildingJobs(t *testing.T) {
 	require.Empty(t, invoker.events)
 }
 
+// 补齐与实时采集严格衔接：生效点前最后一根要过了截止时间（收盘 + lateness）才拼作业，否则检查把它当作未到期排除，
+// 补齐止于它之前、实时采集又从生效点起，这一根没人补（线上港股 06:45 那根）。
+func TestSeedWaitsForTheLastBarBeforeTheEffectivePointToBeDue(t *testing.T) {
+	b, invoker, rows, _ := seedFixture(t, -10*time.Minute)
+	ctx := context.Background()
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	seed := seedOf(t, b)
+	first, ok, err := b.firstSegment(ctx, "crypto", seed)
+	require.NoError(t, err)
+	require.True(t, ok)
+	lateness := time.Duration(first.LatenessS) * time.Second
+	require.Positive(t, lateness, "夹具的计划段带 lateness")
+	rows.mu.Lock()
+	rows.missing["BTC-USDT"][seed.EffectiveFrom.Add(-time.Minute).Unix()] = true
+	rows.mu.Unlock()
+
+	at := func(offset time.Duration) {
+		moment := seed.EffectiveFrom.Add(offset)
+		b.Now = func() time.Time { return moment }
+		b.Checker.Now = b.Now
+		require.NoError(t, b.SeedTick(ctx, "crypto"))
+		b.Wait()
+	}
+	at(lateness / 3)
+	seed = seedOf(t, b)
+	require.Equal(t, store.SeedPreparing, seed.Status, "最后一根还没过截止时间，不拼作业")
+	require.Empty(t, seed.JobIDs)
+
+	at(lateness + 5*time.Second)
+	seed = seedOf(t, b)
+	require.Equal(t, store.SeedRunning, seed.Status)
+	require.Len(t, seed.JobIDs, 1)
+	_, chunks, err := b.Store.GetJob(ctx, seed.JobIDs[0])
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, seed.EffectiveFrom.Add(-time.Minute), chunks[0].From.UTC(), "生效点前最后一根在补齐范围里")
+	require.Equal(t, seed.EffectiveFrom, chunks[0].To.UTC())
+	require.Empty(t, invoker.events)
+}
+
 // 记录建好后、生效点之前数据集又停止采集（时间线里没有这一段）：记 done 放行，不一直停在 preparing 挡着下游。
 func TestSeedOfStoppedDatasetIsReleased(t *testing.T) {
 	b, invoker, _, _ := seedFixture(t, 2*time.Hour)

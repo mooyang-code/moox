@@ -210,11 +210,18 @@ func (b *Backfiller) beginSeed(ctx context.Context, spaceID, datasetID, frequenc
 		return err
 	}
 	// 第一行时间线在 Storage 确认登记时写，生效点还在未来（提前量几分钟）：记录先建好、下游先不生效，
-	// 作业等到生效点之后再拼（advanceSeeds 接着做），补齐范围才能一直补到生效点，不在生效点前留几分钟的空洞。
-	if !now.Before(effective) {
+	// 作业等到可以拼的时刻再拼（见 seedReadyAt，没到时由 advanceSeeds 接着做）。
+	if !now.Before(seedReadyAt(frequency, effective, first)) {
 		b.prepareAsync(spaceID, seed, first)
 	}
 	return nil
+}
+
+// seedReadyAt 是可以拼补齐作业的时刻：生效点之前最后一根 K 线过了截止时间（收盘 + 计划段的 lateness）。
+// 补齐范围是 [目标起点, 生效点)，实时采集从生效点起；早于这个时刻拼，检查按截止时间把最后一根当作还没到期排除，
+// 补齐止于它之前，这一根两边都不管、巡检也不看（2026-11-25 港股 lateness 90 秒，06:50 生效、06:50:10 拼作业，06:45 那根全缺）。
+func seedReadyAt(frequency marketdata.Frequency, effective time.Time, first Segment) time.Time {
+	return alignUp(frequency, effective).Add(time.Duration(first.LatenessS) * time.Second)
 }
 
 // prepareAsync 在后台拼补齐作业；同一个补齐在本进程里只拼一份。
@@ -319,10 +326,8 @@ func (b *Backfiller) prepareSeed(ctx context.Context, spaceID string, seed store
 		return err
 	}
 	seed.JobIDs, seed.Note = nil, ""
+	// 补到生效点为止（含生效点前最后一根）：只在 seedReadyAt 之后拼，这一根已过截止时间，检查不会把它排除。
 	to := seed.EffectiveFrom
-	if limit := alignDown(frequency, b.now()); limit.Before(to) {
-		to = limit
-	}
 	subjects := uniqueSorted(first.Subjects)
 	// 根数按交易日历数，与检查的预检同一套数法（tradingBars），批次才过得了预检。
 	bars, sessions, err := b.Checker.tradingBars(spaceID, frequency, seed.Frequency, seed.TargetFrom, to)
@@ -438,19 +443,18 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 		key := seedKey(spaceID, seed.DatasetID, seed.Frequency)
 		switch seed.Status {
 		case store.SeedPreparing:
-			// 本进程没有在拼它（进程重启过，或生效点刚到）：重新拼。
+			// 本进程没有在拼它（进程重启过，或到了可以拼的时刻）：重新拼。
 			b.mu.Lock()
 			busy := b.seedPreparing[key]
 			b.mu.Unlock()
-			if !busy && !now.Before(seed.EffectiveFrom) {
-				first, ok, err := b.firstSegment(ctx, spaceID, seed)
-				if err != nil {
-					return err
-				}
-				if ok {
-					b.prepareAsync(spaceID, seed, first)
-					continue
-				}
+			if busy || now.Before(seed.EffectiveFrom) {
+				continue
+			}
+			first, ok, err := b.firstSegment(ctx, spaceID, seed)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				// 时间线里已经没有这个数据集（生效点之前又停止了采集）：没有可补的标的，记 done 放行，不让记录一直挡着下游。
 				if err := b.cancelJobs(ctx, seed.JobIDs); err != nil {
 					return err
@@ -459,6 +463,14 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 				if _, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedPreparing); err != nil {
 					return err
 				}
+				continue
+			}
+			frequency, err := marketdata.ParseFrequency(seed.Frequency)
+			if err != nil {
+				return err
+			}
+			if !now.Before(seedReadyAt(frequency, seed.EffectiveFrom, first)) {
+				b.prepareAsync(spaceID, seed, first)
 			}
 		case store.SeedRunning:
 			counts, err := b.Store.ChunkStatusCountsOf(ctx, seed.JobIDs)
