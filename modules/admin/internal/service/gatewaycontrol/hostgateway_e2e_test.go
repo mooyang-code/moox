@@ -79,8 +79,9 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		require.NoError(t, f.keys.SetIdentity(ctx, identity, publicKey("identity/"+identity)))
 	}
 
-	opened, err := net.Listen("tcp", "127.0.0.1:11112")
+	listened, err := net.Listen("tcp", "127.0.0.1:11112")
 	require.NoError(t, err)
+	opened := &trackedListener{Listener: listened}
 	controlService := server.New(server.WithServiceName(servicecatalog.GatewayControlPath), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithListener(opened), server.WithAddress(opened.Addr().String()), ServerOption())
 	require.NoError(t, Register(controlService, f.service))
 	go func() { _ = controlService.Serve() }()
@@ -337,7 +338,10 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	// Keep control's business route active, but stop the actual Admin control
 	// listener. Both gateways retain their previously authenticated snapshots.
 	// storage 的客户端跨主机经 control 网关调到 PrimaryStore：验签与路由都靠 control 网关手里的快照。
+	// tRPC 服务关闭只关监听，已建立的连接还会再处理一个请求才断：网关连接池里留着的连接会让关闭后的下一次拉取照样成功，
+	// 最近一次成功同步就晚于这里，94 秒等不到降级。一并断开已接受的连接，才和 Admin 进程退出一样，从此刻起拉取全部失败。
 	require.NoError(t, controlService.Close(nil))
+	opened.closeAccepted()
 	require.Equal(t, http.StatusOK, e2eHealth(t, configs["control"].Server.HealthAddr))
 	before := backendCalls.Load()
 	result, err := clients["storage"].Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
@@ -450,6 +454,33 @@ func (p *gatewayExecutable) stop(t *testing.T) {
 		_ = p.cmd.Process.Kill()
 		<-p.done
 		t.Errorf("gateway %s failed to stop", p.host)
+	}
+}
+
+// trackedListener 记下 Admin 监听接受过的连接，停 Admin 时由 closeAccepted 一并断开。
+type trackedListener struct {
+	net.Listener
+	mu       sync.Mutex
+	accepted []net.Conn
+}
+
+func (l *trackedListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.mu.Lock()
+		l.accepted = append(l.accepted, c)
+		l.mu.Unlock()
+	}
+	return c, err
+}
+
+func (l *trackedListener) closeAccepted() {
+	l.mu.Lock()
+	accepted := l.accepted
+	l.accepted = nil
+	l.mu.Unlock()
+	for _, c := range accepted {
+		_ = c.Close()
 	}
 }
 
