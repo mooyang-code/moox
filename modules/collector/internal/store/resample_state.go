@@ -658,11 +658,12 @@ func (r *ResampleStateRepository) CleanupNotices(ctx context.Context, before tim
 		return 0, err
 	}
 	var total int64
-	result := r.db.WithContext(ctx).Where("c_ctime < ?", before.UTC()).Delete(&backfillNoticeRow{})
+	// c_ctime 按写入进程的本地时区存成文本，和 UnsealedNoticesBefore 一样用 datetime() 归一到 UTC 再比。
+	result := r.db.WithContext(ctx).Where("datetime(c_ctime) < datetime(?)", before.UTC()).Delete(&backfillNoticeRow{})
 	if result.Error != nil {
 		return 0, result.Error
 	}
 	total += result.RowsAffected
-	result = r.db.WithContext(ctx).Where("c_published <> ? AND c_ctime < ?", OutboxPending, before.UTC()).Delete(&eventOutboxRow{})
+	result = r.db.WithContext(ctx).Where("c_published <> ? AND datetime(c_ctime) < datetime(?)", OutboxPending, before.UTC()).Delete(&eventOutboxRow{})
 	return total + result.RowsAffected, result.Error
 }
