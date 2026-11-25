@@ -47,8 +47,8 @@ func TestNoticePublisherMergesNoticesIntoOneEventPerGroup(t *testing.T) {
 	}
 	merged := byJob["job-1"]
 	require.Equal(t, []string{"BTC", "ETH"}, merged.GetSubjectIds())
-	require.Equal(t, start, merged.GetStart().AsTime())
-	require.Equal(t, start.Add(2*time.Hour), merged.GetEnd().AsTime(), "区间取并集")
+	require.Equal(t, start.Unix(), merged.GetStart())
+	require.Equal(t, start.Add(2*time.Hour).Unix(), merged.GetEnd(), "区间取并集")
 	require.Equal(t, "auto", merged.GetOrigin())
 	require.Equal(t, "resample", byJob["job-3"].GetOrigin())
 
@@ -116,8 +116,8 @@ func TestNoticePublisherCarriesSourceAbsencesOfBackfills(t *testing.T) {
 		require.Equal(t, "ETH", other.GetSubjectId(), "这批没有补写的标的的确认缺失也带上")
 		absent := value.GetAbsent()[0]
 		require.Equal(t, "BTC", absent.GetSubjectId())
-		require.Equal(t, start, absent.GetStart().AsTime(), "截到事件范围内")
-		require.Equal(t, start.Add(10*time.Minute), absent.GetEnd().AsTime())
+		require.Equal(t, start.Unix(), absent.GetStart(), "截到事件范围内")
+		require.Equal(t, start.Add(10*time.Minute).Unix(), absent.GetEnd())
 	}
 }
 
@@ -169,6 +169,6 @@ func TestNoticePublisherKeepsOnlyTheLatestAbsencesBeyondTheLimit(t *testing.T) {
 	require.NoError(t, err)
 	absent := decodePayload(t, registry, message).GetAbsent()
 	require.Len(t, absent, 2)
-	require.Equal(t, start.Add(30*time.Minute), absent[0].GetStart().AsTime())
-	require.Equal(t, start.Add(20*time.Minute), absent[1].GetStart().AsTime())
+	require.Equal(t, start.Add(30*time.Minute).Unix(), absent[0].GetStart())
+	require.Equal(t, start.Add(20*time.Minute).Unix(), absent[1].GetStart())
 }

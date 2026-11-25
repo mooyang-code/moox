@@ -155,10 +155,10 @@ func upsertMetricService(tx *gorm.DB, report *metricspb.MetricReport, seenAt tim
 	// 管理端代报的外部程序（因子引擎、归档 worker）各记一行：时间取管理端最近一次接受它心跳的时间，
 	// 主机留空，由概览按组件名对到它唯一的部署上。从没心跳过的不记，按“从未上报”处理。
 	for _, delegated := range report.GetDelegated() {
-		if delegated.GetServiceName() == "" || delegated.GetLastHeartbeatUnix() <= 0 {
+		if delegated.GetServiceName() == "" || delegated.GetLastHeartbeatAt() <= 0 {
 			continue
 		}
-		heartbeat := time.Unix(delegated.GetLastHeartbeatUnix(), 0).UTC()
+		heartbeat := time.UnixMilli(delegated.GetLastHeartbeatAt()).UTC()
 		if heartbeat.After(seenAt) {
 			heartbeat = seenAt
 		}

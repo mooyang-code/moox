@@ -51,7 +51,7 @@ func reportedSystem(t *testing.T, reports ...moduleReport) *pb.HealthSystem {
 			continue
 		}
 		if r.id == "factor-engine" {
-			delegated = append(delegated, &metricspb.DelegatedReport{ServiceName: r.id, InstanceId: "engine@mac", BootId: "engine-boot", LastHeartbeatUnix: now.Unix(),
+			delegated = append(delegated, &metricspb.DelegatedReport{ServiceName: r.id, InstanceId: "engine@mac", BootId: "engine-boot", LastHeartbeatAt: now.UnixMilli(),
 				Ready: proto.Bool(r.notReady == ""), NotReadyReason: r.notReady, Lifecycle: r.lifecycle})
 			continue
 		}

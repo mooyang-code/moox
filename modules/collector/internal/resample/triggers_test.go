@@ -52,7 +52,7 @@ func TestBackfillTriggerSubmitsSourceBackfillJobWithSettleDelay(t *testing.T) {
 		Now: func() time.Time { return utc("2026-10-21T12:00:00Z") },
 	}
 	payload := &storagepb.CollectorKlineBackfilled{
-		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: timestamppb.New(utc("2026-10-21T10:03:00Z")), End: timestamppb.New(utc("2026-10-21T10:20:00Z")),
+		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: utc("2026-10-21T10:03:00Z").Unix(), End: utc("2026-10-21T10:20:00Z").Unix(),
 		Origin: "auto", ConfirmedAt: timestamppb.New(confirmed),
 	}
 	for i := 0; i < 2; i++ { // 重复投递不重复建作业

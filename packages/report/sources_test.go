@@ -20,7 +20,7 @@ func TestHandleCarriesReadinessLifecycleAndDelegates(t *testing.T) {
 		return &metricspb.ModuleLifecycle{Stage: "paused", PauseKind: "system", PausedSince: "2026-11-15T01:00:00Z"}
 	})
 	h.SetDelegates(func(context.Context) []*metricspb.DelegatedReport {
-		return []*metricspb.DelegatedReport{{ServiceName: "factor-engine", InstanceId: "engine@mac", LastHeartbeatUnix: 1}}
+		return []*metricspb.DelegatedReport{{ServiceName: "factor-engine", InstanceId: "engine@mac", LastHeartbeatAt: 1}}
 	})
 
 	require.NoError(t, h.Handle(t.Context()))

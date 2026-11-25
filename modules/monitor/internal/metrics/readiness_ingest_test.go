@@ -31,7 +31,7 @@ func TestIngestRecordsReadinessLifecycleDelegatesAndBoots(t *testing.T) {
 			Ready: proto.Bool(ready), NotReadyReason: map[bool]string{false: "数据库不可用"}[ready],
 			Lifecycle: &metricspb.ModuleLifecycle{Stage: stage},
 			Delegated: []*metricspb.DelegatedReport{
-				{ServiceName: "factor-engine", InstanceId: "engine@mac", BootId: "engine-1", LastHeartbeatUnix: at.Add(-5 * time.Second).Unix(), Ready: proto.Bool(true)},
+				{ServiceName: "factor-engine", InstanceId: "engine@mac", BootId: "engine-1", LastHeartbeatAt: at.Add(-5 * time.Second).UnixMilli(), Ready: proto.Bool(true)},
 				{ServiceName: "archive-worker", InstanceId: "worker@mac"},
 			},
 		}, nil)

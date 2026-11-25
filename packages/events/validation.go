@@ -169,8 +169,8 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 			return fmt.Errorf("collector kline backfilled subject_id %q is invalid", subject)
 		}
 	}
-	start, end := payload.GetStart(), payload.GetEnd()
-	if start == nil || end == nil || start.CheckValid() != nil || end.CheckValid() != nil || !end.AsTime().After(start.AsTime()) {
+	// start、end 是 Unix 秒（数据坐标），都要为正且 end 晚于 start。
+	if start, end := payload.GetStart(), payload.GetEnd(); start <= 0 || end <= start {
 		return fmt.Errorf("collector kline backfilled range is invalid")
 	}
 	if payload.GetConfirmedAt() == nil || payload.GetConfirmedAt().CheckValid() != nil {
@@ -180,8 +180,7 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 		if !validRequiredToken(absent.GetSubjectId()) {
 			return fmt.Errorf("collector kline backfilled absent subject_id %q is invalid", absent.GetSubjectId())
 		}
-		from, to := absent.GetStart(), absent.GetEnd()
-		if from == nil || to == nil || from.CheckValid() != nil || to.CheckValid() != nil || !to.AsTime().After(from.AsTime()) {
+		if from, to := absent.GetStart(), absent.GetEnd(); from <= 0 || to <= from {
 			return fmt.Errorf("collector kline backfilled absent range is invalid")
 		}
 	}

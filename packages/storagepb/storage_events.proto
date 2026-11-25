@@ -55,9 +55,9 @@ message CollectorKlineBackfilled {
   string dataset_id = 1;
   string frequency = 2;
   repeated string subject_ids = 3;
-  // start is inclusive and end is exclusive.
-  google.protobuf.Timestamp start = 4;
-  google.protobuf.Timestamp end = 5;
+  // start 含、end 不含，都是 K 线开始时间（Unix 秒，数据坐标）。
+  int64 start = 4;
+  int64 end = 5;
   string origin = 6;
   string job_id = 7;
   google.protobuf.Timestamp confirmed_at = 9;
@@ -68,9 +68,9 @@ message CollectorKlineBackfilled {
 // CollectorKlineAbsent 是补采确认行情源没有 K 线的一段：标的在 [start, end) 没有行情。
 message CollectorKlineAbsent {
   string subject_id = 1;
-  // start 含、end 不含，是 K 线开始时间。
-  google.protobuf.Timestamp start = 3;
-  google.protobuf.Timestamp end = 4;
+  // start 含、end 不含，是 K 线开始时间（Unix 秒，数据坐标）。
+  int64 start = 3;
+  int64 end = 4;
 }
 
 // InstrumentDelistScheduled 宣告一个标的即将下架，由 Collector 的下架检测发布，只带元数据。

@@ -73,8 +73,8 @@ message DelegatedReport {
   string instance_id = 2;
   string boot_id = 3;
   string service_version = 4;
-  // last_heartbeat_unix 是管理端最近一次接受它心跳的时间（Unix 秒）；Monitor 按它判断是否停止上报。
-  int64 last_heartbeat_unix = 5;
+  // last_heartbeat_at 是管理端最近一次接受它心跳的时刻（Unix 毫秒）；Monitor 按它判断是否停止上报。
+  int64 last_heartbeat_at = 5;
   optional bool ready = 6;
   string not_ready_reason = 7;
   ModuleLifecycle lifecycle = 8;

@@ -225,7 +225,7 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	start := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC", "ETH"},
-		Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)),
+		Start: start.Unix(), End: start.Add(time.Hour).Unix(),
 		Origin: "auto", JobId: "job-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
 	}
 	raw, err := registry.MarshalMessage(CollectorKlineBackfilled, payload, PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
@@ -236,12 +236,20 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, subject, "moox.event.collector.kline.backfilled.v1.")
 	require.Equal(t, "MOOX_COLLECTOR", CollectorKlineBackfilled.Stream())
+	decoded := new(storagepb.CollectorKlineBackfilled)
+	require.NoError(t, proto.Unmarshal(message.GetPayload(), decoded))
+	require.Equal(t, int64(1792576800), decoded.GetStart(), "start 是 Unix 秒")
+	require.Equal(t, start.Add(time.Hour).Unix(), decoded.GetEnd())
 
 	for name, mutate := range map[string]func(*storagepb.CollectorKlineBackfilled){
 		"dataset mismatch": func(p *storagepb.CollectorKlineBackfilled) { p.DatasetId = "other" },
 		"no subjects":      func(p *storagepb.CollectorKlineBackfilled) { p.SubjectIds = nil },
 		"empty range":      func(p *storagepb.CollectorKlineBackfilled) { p.End = p.Start },
-		"bad origin":       func(p *storagepb.CollectorKlineBackfilled) { p.Origin = "other" },
+		"zero start":       func(p *storagepb.CollectorKlineBackfilled) { p.Start = 0 },
+		"bad absent range": func(p *storagepb.CollectorKlineBackfilled) {
+			p.Absent = []*storagepb.CollectorKlineAbsent{{SubjectId: "BTC", Start: p.End, End: p.Start}}
+		},
+		"bad origin": func(p *storagepb.CollectorKlineBackfilled) { p.Origin = "other" },
 	} {
 		broken := proto.Clone(payload).(*storagepb.CollectorKlineBackfilled)
 		mutate(broken)
