@@ -26,7 +26,7 @@ for scenario in \
   external-entry-cross-host-forward-acl-and-origin-caller-rules \
   new-caller-next-snapshot-without-restart \
   deployment-withdrawal-and-automatic-target-switch \
-  normal-restart-and-live-instance-conflict \
+  normal-restart \
   offline-routing-90-second-readiness-and-cache-restart; do
   grep -Fq -- "SCENARIO PASS ${scenario}" "${LOG}"
 done
