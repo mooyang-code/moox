@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -132,6 +133,47 @@ func TestSeedWaitsForTheEffectivePointBeforeBuildingJobs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 	require.Equal(t, seed.EffectiveFrom, chunks[0].To.UTC(), "补到生效点为止")
+	require.Empty(t, invoker.events)
+}
+
+// 补齐与实时采集严格衔接：生效点前最后一根要过了截止时间（收盘 + lateness）才拼作业，否则检查把它当作未到期排除，
+// 补齐止于它之前、实时采集又从生效点起，这一根没人补（线上港股 06:45 那根）。
+func TestSeedWaitsForTheLastBarBeforeTheEffectivePointToBeDue(t *testing.T) {
+	b, invoker, rows, _ := seedFixture(t, -10*time.Minute)
+	ctx := context.Background()
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	seed := seedOf(t, b)
+	first, ok, err := b.firstSegment(ctx, "crypto", seed)
+	require.NoError(t, err)
+	require.True(t, ok)
+	lateness := time.Duration(first.LatenessS) * time.Second
+	require.Positive(t, lateness, "夹具的计划段带 lateness")
+	rows.mu.Lock()
+	rows.missing["BTC-USDT"][seed.EffectiveFrom.Add(-time.Minute).Unix()] = true
+	rows.mu.Unlock()
+
+	at := func(offset time.Duration) {
+		moment := seed.EffectiveFrom.Add(offset)
+		b.Now = func() time.Time { return moment }
+		b.Checker.Now = b.Now
+		require.NoError(t, b.SeedTick(ctx, "crypto"))
+		b.Wait()
+	}
+	at(lateness / 3)
+	seed = seedOf(t, b)
+	require.Equal(t, store.SeedPreparing, seed.Status, "最后一根还没过截止时间，不拼作业")
+	require.Empty(t, seed.JobIDs)
+
+	at(lateness + 5*time.Second)
+	seed = seedOf(t, b)
+	require.Equal(t, store.SeedRunning, seed.Status)
+	require.Len(t, seed.JobIDs, 1)
+	_, chunks, err := b.Store.GetJob(ctx, seed.JobIDs[0])
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, seed.EffectiveFrom.Add(-time.Minute), chunks[0].From.UTC(), "生效点前最后一根在补齐范围里")
+	require.Equal(t, seed.EffectiveFrom, chunks[0].To.UTC())
 	require.Empty(t, invoker.events)
 }
 
@@ -558,4 +600,69 @@ func TestSeedChunksSkipFullRegions(t *testing.T) {
 	require.NoError(t, b.Tick(ctx, "crypto"))
 	b.Wait()
 	require.Equal(t, []string{"ap-tokyo"}, provider.regionsUsed, "占满的新加坡被跳过")
+}
+
+// 行情源回看有上限时，补齐深度不超过“回看上限 − 1 天”：上限按执行时刻算，目标起点不能压在上限上。
+func TestSeedDepthStaysInsideTheSourceLookback(t *testing.T) {
+	b, _, _, _ := seedFixture(t, 2*time.Hour)
+	b.Seed.Depth = func(context.Context, string, string, string) (time.Duration, error) { return 30 * 24 * time.Hour, nil }
+	b.Seed.Lookback = func(market marketfetch.PlanMarket, frequency string) (time.Duration, bool, error) {
+		require.Equal(t, "crypto", market.MarketID)
+		require.Equal(t, "1m", frequency)
+		return 3 * 24 * time.Hour, true, nil
+	}
+	require.NoError(t, b.SeedTick(context.Background(), "crypto"))
+	b.Wait()
+	seed := seedOf(t, b)
+	require.Equal(t, seed.EffectiveFrom.Add(-2*24*time.Hour), seed.TargetFrom, "回看 3 天，留 1 天余量")
+
+	// 回看不到 1 天余量：不补。
+	b2, _, _, _ := seedFixture(t, 2*time.Hour)
+	b2.Seed.Lookback = func(marketfetch.PlanMarket, string) (time.Duration, bool, error) { return 12 * time.Hour, true, nil }
+	require.NoError(t, b2.SeedTick(context.Background(), "crypto"))
+	b2.Wait()
+	require.Equal(t, store.SeedDone, seedOf(t, b2).Status)
+}
+
+// 补齐跑得久、回看窗口在执行时已经越过分块起点：越界的部分截掉不补，整块越界的按成功结束、不调用执行端，都不算失败分块。
+func TestSeedChunksBeyondTheSourceLookbackAreTrimmed(t *testing.T) {
+	b, invoker, rows, base := seedFixture(t, 2*time.Hour, 25, 16, 15, 14, 13, 12, 5)
+	ctx := context.Background()
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	seed := seedOf(t, b)
+	require.Equal(t, store.SeedRunning, seed.Status)
+	views, err := b.SeedViews(ctx, "crypto", true)
+	require.NoError(t, err)
+	require.Equal(t, 3, views[0].TotalChunks)
+
+	// 拼完作业之后回看窗口的起点移到生效点前 14 分钟（含 seedWindowMargin）。
+	window := base.Add(-14 * time.Minute)
+	lookback := b.now().Sub(window) + seedWindowMargin
+	b.Seed.Lookback = func(marketfetch.PlanMarket, string) (time.Duration, bool, error) { return lookback, true, nil }
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	b.Wait()
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+
+	require.Len(t, invoker.events, 2, "整块越界的那块不调用执行端")
+	starts := map[string]bool{}
+	for _, event := range invoker.events {
+		item := event["data"].(map[string]any)["items"].([]any)[0].(map[string]any)
+		starts[item["start_time"].(string)] = true
+	}
+	require.True(t, starts[window.Format(time.RFC3339)], "跨窗口的那块从窗口起点取")
+	seed = seedOf(t, b)
+	require.Equal(t, store.SeedDone, seed.Status)
+	require.Empty(t, seed.Note, "没有失败分块")
+	views, err = b.SeedViews(ctx, "crypto", false)
+	require.NoError(t, err)
+	require.Zero(t, views[0].FailedChunks)
+	rows.mu.Lock()
+	defer rows.mu.Unlock()
+	for _, minute := range []int{25, 16, 15} {
+		require.True(t, rows.missing["BTC-USDT"][base.Add(-time.Duration(minute)*time.Minute).Unix()], "回看够不着的 %d 分钟前那根不补", minute)
+	}
+	require.False(t, rows.missing["BTC-USDT"][base.Add(-14*time.Minute).Unix()])
+	require.False(t, rows.missing["BTC-USDT"][base.Add(-5*time.Minute).Unix()])
 }

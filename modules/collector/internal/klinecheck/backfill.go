@@ -155,11 +155,13 @@ type Backfiller struct {
 	// refetchedDay 是每个空间最近一次已提交收市后整天重取的那天（范围起点），只在内存里，防止同一轮里重复提交。
 	refetchedDay map[string]time.Time
 	workers      sync.WaitGroup
-	// seedPreparing 是本进程里正在拼作业的补齐（键为 空间|数据集|频率），seedSamples 是各补齐最近的完成分块数采样，用来估计剩余时间。
+	// seedPreparing 是本进程里正在拼作业的补齐（键为 空间|数据集|频率），seedSamples 是各补齐最近的完成分块数采样，用来估计剩余时间；
+	// seedFailures 是各补齐连续拼作业失败的次数（只在内存里，进程重启从零算）。
 	seedPreparing map[string]bool
 	// seedBusy 是各（空间、市场、地域）补采函数正在跑的补齐分块数。
-	seedBusy    map[string]int
-	seedSamples map[string][]seedSample
+	seedBusy     map[string]int
+	seedSamples  map[string][]seedSample
+	seedFailures map[string]int
 	// seedLimiter、seedLocalLimiter 是补齐写 Storage 的速率限制（按根数计令牌），首次用到时按 Seed 参数创建。
 	seedLimiter      *rate.Limiter
 	seedLocalLimiter *rate.Limiter
@@ -580,6 +582,21 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 	if err != nil {
 		fail(err)
 		return
+	}
+	// 历史补齐的分块：行情源的回看上限按执行时刻往回算，早于“此刻 − 回看上限”的部分已经取不到（补齐跑得久，
+	// 失败分块在全部结束后才重试），截掉不补；整块都早于它时按成功结束、不调用执行端，不算失败。
+	// 不记行情源缺失：来源本来有这些数据，只是回看够不着了，记了以后手动补采也会把它们扣掉。
+	if seed {
+		if start, ok := b.seedWindowStart(ctx, plan.Market, chunk.Frequency); ok && chunk.From.Before(start) {
+			if !start.Before(chunk.To) {
+				note := fmt.Sprintf("早于行情源回看范围（%s 之前），不补", start.Format(time.RFC3339))
+				if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, 0, note); err != nil {
+					log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, err)
+				}
+				return true
+			}
+			chunk.From = start
+		}
 	}
 	release := func(reason error) {
 		// 执行端暂时不可用（补采函数还在创建或升级、本地执行端离线）：不算执行失败，分块退回待认领并退回这次尝试。

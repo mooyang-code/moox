@@ -660,7 +660,7 @@ message HistorySeed {
   string space_id = 1;
   string dataset_id = 2;
   string frequency = 3;
-  // status 取值 running（补齐中）、done、skipped（用户手动放行）。
+  // status 取值 running（补齐中）、done、skipped（用户手动放行）、failed（拼作业连续失败，已放行下游、历史没补）。
   string status = 4;
   // target_from 是补齐的目标起点（RFC3339）；effective_from 是补齐起算的采集计划生效点。
   string target_from = 5;

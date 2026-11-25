@@ -323,6 +323,7 @@ describe("历史补齐", () => {
     expect(seedStatusText("running")).toBe("补齐中");
     expect(seedStatusText("done")).toBe("已完成");
     expect(seedStatusText("skipped")).toBe("已手动放行");
+    expect(seedStatusText("failed")).toBe("补齐失败，已放行");
     expect(seedEtaText(0)).toBe("估算中");
     expect(seedEtaText(undefined)).toBe("估算中");
     expect(seedEtaText(20)).toBe("约 1 分钟");

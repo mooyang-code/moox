@@ -125,12 +125,7 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 		return nil, err
 	}
 	extendEarliestSegments(timeline, request.From)
-	type job struct {
-		key      string
-		segment  Segment
-		subjects []string
-	}
-	var jobs []job
+	var jobs []checkJob
 	var wanted map[string]bool
 	if len(request.Subjects) > 0 {
 		wanted = make(map[string]bool, len(request.Subjects))
@@ -164,33 +159,12 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 				selected = append(selected, subject)
 			}
 			for from := 0; from < len(selected); from += batch {
-				jobs = append(jobs, job{key: key, segment: segment, subjects: selected[from:min(from+batch, len(selected))]})
+				jobs = append(jobs, checkJob{key: key, segment: segment, subjects: selected[from:min(from+batch, len(selected))]})
 			}
 		}
 	}
-	var points int64
-	for _, item := range jobs {
-		_, frequencyName, _ := strings.Cut(item.key, "|")
-		frequency, err := marketdata.ParseFrequency(frequencyName)
-		if err != nil {
-			continue
-		}
-		from, to := request.From.UTC(), request.To.UTC()
-		if request.IncludeOpenBar {
-			from = alignDown(frequency, from)
-		}
-		if from.Unix() < item.segment.From {
-			from = time.Unix(item.segment.From, 0).UTC()
-		}
-		if item.segment.To > 0 && to.Unix() > item.segment.To {
-			to = time.Unix(item.segment.To, 0).UTC()
-		}
-		if to.After(from) {
-			points += int64(barCount(frequency, alignUp(frequency, from), to)) * int64(len(item.subjects))
-		}
-	}
-	if points > MaxCheckPoints {
-		return nil, fmt.Errorf("%w: the range covers about %d bars, above the limit %d; narrow the time range or the subject set", errTooManyChunks, points, MaxCheckPoints)
+	if err := c.checkPoints(request, jobs); err != nil {
+		return nil, err
 	}
 	result := &Result{}
 	var mu sync.Mutex
@@ -243,6 +217,67 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 		return a.From.Before(b.From)
 	})
 	return result, nil
+}
+
+// checkJob 是检查的一个单位：同一数据集、同一计划段内的一批标的。
+type checkJob struct {
+	key      string
+	segment  Segment
+	subjects []string
+}
+
+// checkPoints 是检查的预检：展开的（标的 × 应有 K 线）总数不能超过 MaxCheckPoints。先按墙上时间估，超了再按交易日历数
+// （交易时段市场只有交易桶应有 K 线；与历史补齐定批大小同一套数法，见 tradingBars），同一数据集同一段区间只数一次。
+// 区间与 checkSubjects 相同（裁到计划段内，起点向上对齐），但不看截止时间。
+func (c *Checker) checkPoints(request Request, jobs []checkJob) error {
+	type span struct {
+		key      string
+		from, to int64
+	}
+	spans := map[span]int64{}
+	var wall int64
+	for _, item := range jobs {
+		_, frequencyName, _ := strings.Cut(item.key, "|")
+		frequency, err := marketdata.ParseFrequency(frequencyName)
+		if err != nil {
+			continue
+		}
+		from, to := request.From.UTC(), request.To.UTC()
+		if request.IncludeOpenBar {
+			from = alignDown(frequency, from)
+		}
+		if from.Unix() < item.segment.From {
+			from = time.Unix(item.segment.From, 0).UTC()
+		}
+		if item.segment.To > 0 && to.Unix() > item.segment.To {
+			to = time.Unix(item.segment.To, 0).UTC()
+		}
+		if from = alignUp(frequency, from); !to.After(from) {
+			continue
+		}
+		wall += int64(barCount(frequency, from, to)) * int64(len(item.subjects))
+		spans[span{key: item.key, from: from.Unix(), to: to.Unix()}] += int64(len(item.subjects))
+	}
+	if wall <= MaxCheckPoints {
+		return nil
+	}
+	var points int64
+	for item, subjects := range spans {
+		_, frequencyName, _ := strings.Cut(item.key, "|")
+		frequency, err := marketdata.ParseFrequency(frequencyName)
+		if err != nil {
+			return err
+		}
+		bars, _, err := c.tradingBars(request.SpaceID, frequency, frequencyName, time.Unix(item.from, 0).UTC(), time.Unix(item.to, 0).UTC())
+		if err != nil {
+			return err
+		}
+		points += int64(bars) * subjects
+	}
+	if points > MaxCheckPoints {
+		return fmt.Errorf("%w: the range covers about %d bars, above the limit %d; narrow the time range or the subject set", errTooManyChunks, points, MaxCheckPoints)
+	}
+	return nil
 }
 
 // extendEarliestSegments 把每个数据集最早一段的起点前移到 from，让检查与补采能覆盖早于时间线起点（最早的采集计划生效点）的数据：
@@ -326,6 +361,30 @@ func (c *Checker) expectedBars(spaceID string, frequency marketdata.Frequency, f
 		bars = append(bars, t)
 	}
 	return bars, nil
+}
+
+// tradingBars 数 [from, to) 内应有的 K 线根数与连续段数（休市区间把它们隔开）：有日历时只数交易桶，与 expectedBars
+// 同一套过滤，但不看截止时间。检查的预检（checkPoints）与历史补齐的批大小（prepareSeed）都按它估算根数，两边口径一致：
+// 按全天 24 小时数，A 股 5m 一天 288 根、实际只有 48 根，批次会永远过不了预检。
+func (c *Checker) tradingBars(spaceID string, frequency marketdata.Frequency, frequencyName string, from, to time.Time) (bars, sessions int, err error) {
+	var last time.Time
+	for t := alignUp(frequency, from); t.Before(to); t = frequency.BarEnd(t) {
+		if c.Calendar != nil {
+			trading, err := c.Calendar(spaceID, frequencyName, t)
+			if err != nil {
+				return 0, 0, fmt.Errorf("trading calendar at %s: %w", t.Format(time.RFC3339), err)
+			}
+			if !trading {
+				continue
+			}
+		}
+		if bars == 0 || !t.Equal(frequency.BarEnd(last)) {
+			sessions++
+		}
+		bars++
+		last = t
+	}
+	return bars, sessions, nil
 }
 
 // checkSubjects 检查同一数据集、同一计划段内的一批标的：应有的 K 线对它们相同，只读一次 Storage，再逐标的求缺口。
