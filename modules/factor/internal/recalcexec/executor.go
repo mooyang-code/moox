@@ -23,8 +23,10 @@ type Runner interface {
 	Run(context.Context, pipeline.Plan) (pipeline.Outcome, error)
 }
 
-// SetLocker serializes recalc chunks with live periods of the same set.
+// SetLocker 提供一个任务的两把锁（setlock.Locks）：补算锁让写历史周期的后台路径（补算作业、缺口恢复、失效重算）彼此串行；
+// 任务锁与实时周期、连续水位追赶共用，后台路径只在写到水位之后的周期时才取（见 Executor.lock）。
 type SetLocker interface {
+	LockRecalcContext(context.Context, string) (func(), error)
 	LockContext(context.Context, string) (func(), error)
 }
 
@@ -84,6 +86,7 @@ type config struct {
 	chunkRetries int
 	retryBackoff time.Duration
 	locks        SetLocker
+	committed    func(taskID string) (time.Time, bool)
 }
 
 type Option func(*config)
@@ -100,7 +103,7 @@ func WithChunkRetry(attempts int, backoff time.Duration) Option {
 // WithParamReader 设置已有行 __params 的读取方；没有设置时所有期次都按成员自己的参数计算，也不记录按默认参数新补的期次。
 func WithParamReader(reader ParamReader) Option { return func(cfg *config) { cfg.params = reader } }
 
-// WithGate 设置生命周期门禁：每个分块真正写结果之前（已持有任务锁）检查，任务不允许写结果时返回 ErrGated。
+// WithGate 设置生命周期门禁：每个分块真正写结果之前（已取得 lock 要的锁）检查，任务不允许写结果时返回 ErrGated。
 // 补算、缺口恢复、失效重算都经过这个执行器，所以暂停、恢复追赶期间这些后台路径不会越过门禁写结果。
 func WithGate(gate func(taskID string) bool) Option { return func(cfg *config) { cfg.gate = gate } }
 
@@ -110,6 +113,12 @@ func WithWriteScope(begin func(ctx context.Context, taskID string) (func(), bool
 	return func(cfg *config) { cfg.begin = begin }
 }
 func WithLocks(locks SetLocker) Option { return func(cfg *config) { cfg.locks = locks } }
+
+// WithWatermark 设置连续水位的来源：committed 返回任务已经连续算完的最后一期（轴上，引擎的 Continuity 给出）。
+// 实时周期与追赶只写水位之后的周期，所以只写水位以内周期的运行不取任务锁、不挡实时；没有设置或任务还没有水位时一律取任务锁。
+func WithWatermark(committed func(taskID string) (time.Time, bool)) Option {
+	return func(cfg *config) { cfg.committed = committed }
+}
 
 // WithHistory 设置历史截面标的的来源（数据层）：有 cross_section_history: observed 成员时，分块按“标的 + 历史截面标的”
 // 估算内存并收窄，分块的计划带上同一份名单，管线的内存预检与选块用的序列数一致。
@@ -126,6 +135,7 @@ type Executor struct {
 	begin        func(ctx context.Context, taskID string) (func(), bool)
 	runner       Runner
 	locks        SetLocker
+	committed    func(taskID string) (time.Time, bool)
 	chunkPeriods int
 	memoryBudget int64
 	chunkRetries int
@@ -146,7 +156,7 @@ func NewExecutor(runner Runner, options ...Option) *Executor {
 		cfg.chunkRetries = 1
 	}
 	return &Executor{
-		params: cfg.params, history: cfg.history, gate: cfg.gate, begin: cfg.begin, runner: runner, locks: cfg.locks,
+		params: cfg.params, history: cfg.history, gate: cfg.gate, begin: cfg.begin, runner: runner, locks: cfg.locks, committed: cfg.committed,
 		chunkPeriods: cfg.chunkPeriods, memoryBudget: cfg.memoryBudget, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
 	}
 }
@@ -192,19 +202,6 @@ func (e *Executor) Run(ctx context.Context, window Window, source SelectionSourc
 	}
 }
 
-// RunChunk computes one explicit range with a fixed selection.
-func (e *Executor) RunChunk(ctx context.Context, selection Selection, start, end time.Time) (pipeline.Outcome, error) {
-	if e == nil || e.runner == nil {
-		return pipeline.Outcome{}, errors.New("factor recalc runner is required")
-	}
-	unlock, err := e.lock(ctx, selection.Set.TaskID)
-	if err != nil {
-		return pipeline.Outcome{}, err
-	}
-	defer unlock()
-	return e.runSegments(ctx, selection, start, end)
-}
-
 // runSegments 把 [start, end) 按参数段依次计算，合并各段的结果。
 func (e *Executor) runSegments(ctx context.Context, selection Selection, start, end time.Time) (pipeline.Outcome, error) {
 	duration, err := e.duration(selection.Set)
@@ -248,7 +245,7 @@ func (e *Executor) readParams(ctx context.Context, selection Selection, start, e
 	return newParamRows(rows), nil
 }
 
-// RunChunkWith 先取任务锁，再在锁内调用 source 重新取得任务、因子、标的与源列，运行一个显式区间，并在仍持有锁时调用
+// RunChunkWith 先取锁（见 lock），再在锁内调用 source 重新取得任务、因子、标的与源列，运行一个显式区间，并在仍持有锁时调用
 // after（可为 nil）。恢复用它在锁内重读待办、写入并确认，锁释放之后发生的新失效不会被这次确认移除。
 // source 返回空标的集合时不运行。
 func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, start, end time.Time, after func(Selection, pipeline.Outcome, error)) (pipeline.Outcome, error) {
@@ -263,7 +260,7 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	unlock, err := e.lock(ctx, probe.Set.TaskID)
+	unlock, err := e.lock(ctx, probe.Set, end)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -326,7 +323,12 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if len(selection.Subjects) == 0 {
 		return windowEnd, pipeline.Outcome{}, true, nil
 	}
-	unlock, err := e.lock(ctx, selection.Set.TaskID)
+	// 本块最远到 limit（内存预算只会让它更短）：按它决定要不要取任务锁，锁在登记在途、重读选择之前取齐。
+	limit, err := e.chunkLimit(selection.Set, start, windowEnd)
+	if err != nil {
+		return time.Time{}, pipeline.Outcome{}, false, err
+	}
+	unlock, err := e.lock(ctx, selection.Set, limit)
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
@@ -352,7 +354,7 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	// 分块大小按锁内重读的选择计算：等锁期间标的或成员可能变化，内存预算要按实际要算的范围收窄。
 	// observed 成员：历史截面标的按本块的区间列出，选块与管线的内存预检用同一份名单。先不计历史标的选出一块，按它的区间
 	// 列出历史标的再收窄；收窄后的区间更短，历史标的只会更少，所以再列一次之后一定装得下。
-	chunkEnd, err := e.chunkEnd(selection, start, windowEnd, 0)
+	chunkEnd, err := e.chunkEnd(selection, start, limit, 0)
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
@@ -448,15 +450,61 @@ func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time, his
 	return end, nil
 }
 
-func (e *Executor) lock(ctx context.Context, taskID string) (func(), error) {
+// chunkLimit 是从 start 起一块最远的终点：配置的分块周期数，不超过窗口终点。
+func (e *Executor) chunkLimit(set domain.FactorTask, start, windowEnd time.Time) (time.Time, error) {
+	duration, err := e.duration(set)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if int64(e.chunkPeriods) > math.MaxInt64/int64(duration) {
+		return time.Time{}, errors.New("recalc chunk duration overflows")
+	}
+	end := start.Add(time.Duration(e.chunkPeriods) * duration)
+	if end.After(windowEnd) {
+		end = windowEnd
+	}
+	return end, nil
+}
+
+// lock 按顺序取写结果要的锁。先取任务的补算锁：补算作业、缺口恢复、失效重算彼此串行，读了修正前数据的补算块不会盖掉失效重算刚写的新值。
+// 要写的周期（终点 end 之前）里最后一期晚于连续水位、或任务还没有水位时，再取任务锁与实时周期、追赶串行：它们只写水位之后的周期，
+// 可变成员 __params 的先读后写不能和它们交错。只写水位以内周期的运行不取任务锁，补算块算得再久也不挡实时。
+func (e *Executor) lock(ctx context.Context, set domain.FactorTask, end time.Time) (func(), error) {
 	if e.locks == nil {
 		return func() {}, nil
 	}
-	unlock, err := e.locks.LockContext(ctx, taskID)
+	unlockRecalc, err := e.locks.LockRecalcContext(ctx, set.TaskID)
 	if err != nil {
-		return nil, fmt.Errorf("lock factor task %s: %w", taskID, err)
+		return nil, fmt.Errorf("取因子任务 %s 的补算锁：%w", set.TaskID, err)
 	}
-	return unlock, nil
+	if e.withinWatermark(set, end) {
+		return unlockRecalc, nil
+	}
+	unlockTask, err := e.locks.LockContext(ctx, set.TaskID)
+	if err != nil {
+		unlockRecalc()
+		return nil, fmt.Errorf("取因子任务 %s 的任务锁：%w", set.TaskID, err)
+	}
+	return func() {
+		unlockTask()
+		unlockRecalc()
+	}, nil
+}
+
+// withinWatermark 报告终点 end 之前的最后一期是否不晚于任务的连续水位。水位只前进，这些周期实时与追赶都不会再写。
+func (e *Executor) withinWatermark(set domain.FactorTask, end time.Time) bool {
+	if e.committed == nil {
+		return false
+	}
+	committed, ok := e.committed(set.TaskID)
+	if !ok || committed.IsZero() {
+		return false
+	}
+	duration, err := e.duration(set)
+	if err != nil {
+		return false
+	}
+	return !end.Add(-duration).After(committed)
 }
 
 // paramRows 是已有行的 __params，按期次和标的整理：期次 → 标的 → 成员键 → 参数名 → 取值。

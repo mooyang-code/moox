@@ -225,7 +225,7 @@ type GapConfig struct {
 	// GiveUpAfter 是超过多久仍补不上就记 gave_up 并告警，交给人工。
 	GiveUpAfter time.Duration `yaml:"give_up_after"`
 	// MaxGroupsPerSweep 与 MaxSpan 限制一轮恢复的工作量：一轮最多运行 MaxGroupsPerSweep 批（恢复区间相同的时序分组合并成一批），
-	// 每个组一次最多处理 MaxSpan 个周期，避免长时间占住任务锁。
+	// 每个组一次最多处理 MaxSpan 个周期，避免一次运行占住锁太久。
 	MaxGroupsPerSweep int `yaml:"max_groups_per_sweep"`
 	MaxSpan           int `yaml:"max_span"`
 }
