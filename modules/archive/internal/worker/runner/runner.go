@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
@@ -76,6 +77,10 @@ type Runner struct {
 	ReadAttempts int
 	// Remote 是对象存储客户端；nil 表示没有配置对象存储（不上传，读回时也不取回）。
 	Remote *objectstore.Client
+
+	// mu 保护 pending：读了一半的变更日志页，键为 "space/dataset"（见 follow.go 的 pendingPage）。
+	mu      sync.Mutex
+	pending map[string]pendingPage
 }
 
 // errStopped 表示运行被取消。
@@ -120,6 +125,8 @@ type runState struct {
 	cancelNote string
 	// roundStart 是 follow、manual 这一轮读取预算的起点。
 	roundStart time.Time
+	// page 是读了一半的变更日志页（上一轮留下的或本轮读到的）；nil 表示没有。
+	page *pendingPage
 }
 
 func (r *Runner) now() time.Time {
@@ -234,6 +241,7 @@ func (s *runState) runRange(ctx context.Context, out *Outcome) error {
 
 // settle 导出、上传、定稿到期的分区；整段重读进行中只处理结束不晚于重读进度的分区（还没重读完的分区不导出，
 // 否则一个分区会随每段重读被反复导出、读回，并在暂存保留期已过时定稿成只有半段数据的分区）。
+// 变更日志一页读了一半时，同理跳过正在读的那个分区（见 reading）。
 func (s *runState) settle(ctx context.Context, out *Outcome) error {
 	until, _, rescanning, err := s.r.Staging.Rescan(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
@@ -503,14 +511,14 @@ func (s *runState) closeAt(p staging.PartitionState) (time.Time, error) {
 }
 
 // exportDue 导出所有到时间且需要导出的分区：运行开始 ≥ 分区收盘时间 + 允许迟到。
-// until 非零时只处理结束不晚于它的分区（整段重读进行中用，见 settle）。
+// until 非零时只处理结束不晚于它的分区（整段重读进行中用，见 settle）；变更日志正在读的分区跳过（见 reading）。
 func (s *runState) exportDue(ctx context.Context, out *Outcome, until time.Time) error {
 	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return err
 	}
 	for _, p := range parts {
-		if !until.IsZero() && p.End.After(until) {
+		if (!until.IsZero() && p.End.After(until)) || s.reading(p.Key) {
 			continue
 		}
 		if !p.NeedsExport() && !s.exportedFileMissing(p) {
@@ -545,7 +553,7 @@ func (s *runState) exportDue(ctx context.Context, out *Outcome, until time.Time)
 
 // finalize 定稿满足条件的分区：运行开始 ≥ 分区收盘时间 + 允许迟到 + 暂存保留期，且没有待导出的变化。
 // 定稿前确认文件还在且 sha256 与记录一致（不一致就报错，运行失败）。每个分区一个事务。
-// until 非零时只处理结束不晚于它的分区（同 exportDue）。
+// until 非零时只处理结束不晚于它的分区，变更日志正在读的分区跳过（同 exportDue）。
 func (s *runState) finalize(ctx context.Context, out *Outcome, until time.Time) error {
 	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
@@ -553,7 +561,7 @@ func (s *runState) finalize(ctx context.Context, out *Outcome, until time.Time) 
 	}
 	var keys []string
 	for _, p := range parts {
-		if !until.IsZero() && p.End.After(until) {
+		if (!until.IsZero() && p.End.After(until)) || s.reading(p.Key) {
 			continue
 		}
 		if p.Status == staging.StatusFinal || p.NeedsExport() || p.ExportedAt.IsZero() {

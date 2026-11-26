@@ -280,6 +280,46 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndStorageLimit(t *testing.T) {
 	}
 }
 
+// 两个数据集各有一大段变更要读、每轮 follow 都读满预算：一轮结束交还名额后，先领到的是其余任务早就排着的 follow，
+// 长任务下一分钟才生成的 follow 排在它们后面，其余任务不会被饿死。
+func TestClaimRunsServesQueuedFollowsBeforeTheNextRoundOfALongFollow(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, name := range []string{"long1", "long2", "short1", "short2"} {
+		if _, err := s.CreateTask(ctx, task("crypto", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.CreateFollowRuns(ctx, t0); err != nil || n != 4 {
+		t.Fatalf("follow = %d err=%v", n, err)
+	}
+	claim := func(now time.Time, busy int) []Claimed {
+		t.Helper()
+		claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 4, MaxStorageRuns: 2, BusyStorageRuns: busy, Now: now, LeaseTTL: 10 * time.Minute})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return claimed
+	}
+	long := claim(t0, 0)
+	if len(long) != 2 || long[0].Task.DatasetID != "long1" || long[1].Task.DatasetID != "long2" {
+		t.Fatalf("claimed = %+v", long)
+	}
+	for i, c := range long {
+		// 一轮读满预算后结束；下一分钟触发器给它生成新的 follow。
+		if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateFollowRuns(ctx, t0.Add(time.Minute+time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		got := claim(t0.Add(time.Minute+time.Duration(i)*time.Second), 1)
+		if want := []string{"short1", "short2"}[i]; len(got) != 1 || got[0].Task.DatasetID != want {
+			t.Fatalf("第 %d 个交还的名额应给 %s: %+v", i+1, want, got)
+		}
+	}
+}
+
 // 导入不读 Storage：读 Storage 的名额已满时照样领取，也不占名额。
 func TestClaimRunsLetsImportBypassStorageLimit(t *testing.T) {
 	s := openTest(t)
@@ -761,14 +801,14 @@ func TestExpireLeasesFailsLostRunsAndCleanupHonorsRetention(t *testing.T) {
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
 	c := mustClaim(t, s, t0)
-	if n, err := s.ExpireLeases(ctx, t0.Add(9*time.Minute)); err != nil || n != 0 {
+	if n, err := s.ExpireLeases(ctx, t0.Add(9*time.Minute), false); err != nil || n != 0 {
 		t.Fatalf("租约未过期: n=%d err=%v", n, err)
 	}
-	if n, err := s.ExpireLeases(ctx, t0.Add(11*time.Minute)); err != nil || n != 1 {
+	if n, err := s.ExpireLeases(ctx, t0.Add(11*time.Minute), false); err != nil || n != 1 {
 		t.Fatalf("租约过期: n=%d err=%v", n, err)
 	}
 	run, _ := s.GetRun(ctx, c.Run.RunID)
-	if run.Status != RunFailed || run.Message != "worker 失联" {
+	if run.Status != RunFailed || run.Message != LeaseExpiredWorkerOffline {
 		t.Fatalf("run = %+v", run)
 	}
 	// 清理：成功的 follow 保留 24 小时，失败与取消的 follow 7 天，其余运行（含失败的 manual）用 other（90 天）。

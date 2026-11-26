@@ -32,12 +32,17 @@ func (s *Service) Trigger(ctx context.Context) error {
 // Maintain 是维护定时器（每分钟一次）：回收过期租约；每小时刷新各任务的保留期与数据集元数据、清理运行记录；每天回收空闲页。
 func (s *Service) Maintain(ctx context.Context) error {
 	now := s.clock()
-	expired, err := s.store.ExpireLeases(ctx, now)
+	worker, ok, err := s.store.GetWorker(ctx)
 	if err != nil {
-		return fmt.Errorf("expire archive leases: %w", err)
+		return fmt.Errorf("读取归档 worker 状态失败: %w", err)
+	}
+	online := ok && workerOnline(worker, now)
+	expired, err := s.store.ExpireLeases(ctx, now, online)
+	if err != nil {
+		return fmt.Errorf("回收过期的运行租约失败: %w", err)
 	}
 	if expired > 0 {
-		log.WarnContextf(ctx, "archive maintain: %d runs lost their worker", expired)
+		log.WarnContextf(ctx, "归档维护：%d 个运行的租约已过期，记为失败（worker 在线：%v）", expired, online)
 	}
 	s.mu.Lock()
 	doRefresh := now.Sub(s.lastRefresh) >= datasetRefreshEvery

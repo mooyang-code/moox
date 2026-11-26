@@ -303,7 +303,7 @@ func TestCursorAdvancesPageByPage(t *testing.T) {
 	}
 }
 
-func TestChangeLogBacklogIsSpreadOverRoundsWithAtLeastOnePagePerRound(t *testing.T) {
+func TestChangeLogBacklogIsSpreadOverRoundsWithAtLeastOneSegmentPerRound(t *testing.T) {
 	e := newEnv(t)
 	firstFollow(t, e)
 	base := changeCursor(t, e)
@@ -316,13 +316,13 @@ func TestChangeLogBacklogIsSpreadOverRoundsWithAtLeastOnePagePerRound(t *testing
 	if got := changeCursor(t, e); got != base+3 {
 		t.Fatalf("每页 25 秒，一轮读 3 页: %d", got)
 	}
-	// 领到时已过第 55 秒：第一页仍照常处理，之后不再继续。
+	// 领到时已过第 55 秒：仍照常读一段（这一页只有一段），之后不再继续。
 	e.src.onRead = nil
 	e.pace.allowed = minuteWindow
 	e.now = time.Date(2026, 10, 17, 1, 20, 56, 0, time.UTC)
 	e.run(2000, nil, nil)
 	if got := changeCursor(t, e); got != base+4 {
-		t.Fatalf("第一页不受预算限制: %d", got)
+		t.Fatalf("每轮至少读一段: %d", got)
 	}
 	// 一轮先读日志，剩余预算再整段重读。
 	e.pace.allowed = nil
@@ -338,6 +338,125 @@ func TestChangeLogBacklogIsSpreadOverRoundsWithAtLeastOnePagePerRound(t *testing
 	}
 	if got := changeCursor(t, e); got != base+5 {
 		t.Fatalf("cursor = %d", got)
+	}
+}
+
+// longPage 准备一页很大的变更日志：150 个标的（超过 selector 上限，读全部标的）在 10-16 改写了 00:00～05:59，
+// 切成 6 段（每段 1 小时）；只有 S000 有行（每段 60 行，一次读完）。每读一段时钟走 25 秒，一轮读 3 段就用完预算。
+// 返回这一页之前的位点。
+func longPage(t *testing.T, e *env) uint64 {
+	t.Helper()
+	d0 := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	if out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = d0.Format(time.RFC3339) }, nil); out.Status != "succeeded" {
+		t.Fatalf("首次运行: %+v", out)
+	}
+	base := changeCursor(t, e)
+	var spans []source.ChangeSpan
+	for i := 0; i < 150; i++ {
+		spans = append(spans, span(fmt.Sprintf("S%03d", i), d0, d0.Add(6*time.Hour-time.Minute)))
+	}
+	e.src.changeLog = append(e.src.changeLog, spans)
+	e.src.rows = rows("S000", d0, 360, 1)
+	e.src.requests = nil
+	e.src.onRead = func(source.Range) { e.now = e.now.Add(25 * time.Second) }
+	e.now = e.now.Add(time.Minute)
+	return base
+}
+
+func requestStarts(reqs []source.Range) []string {
+	var out []string
+	for _, req := range reqs {
+		out = append(out, req.Start.Format("15:04"))
+	}
+	return out
+}
+
+// 一页日志很大时不再整页读完才结束：每轮读到预算用完就停在段的边界、交还读 Storage 的名额，下一轮从下一段接着读，
+// 不再取这一页、不重读已读的段；整页读完才推进位点。读了一半的分区在两轮之间不导出，读完才导出一次。
+func TestLongChangePageIsSpreadOverRoundsAndResumedFromTheNextSegment(t *testing.T) {
+	e := newEnv(t)
+	base := longPage(t, e)
+	calls := e.src.changeCalls
+	out := e.run(2000, nil, nil)
+	if out.Status != "succeeded" || strings.Join(requestStarts(e.src.requests), ",") != "00:00,01:00,02:00" || e.src.requests[0].Subjects != nil {
+		t.Fatalf("第一轮读 3 段（预算 + 一段之内结束）: %v out=%+v", requestStarts(e.src.requests), out)
+	}
+	if changeCursor(t, e) != base || e.src.changeCalls != calls+1 || !strings.Contains(out.Message, "还剩 3 段") {
+		t.Fatalf("整页读完之前位点不动: cursor=%d changeCalls %d→%d msg=%q", changeCursor(t, e), calls, e.src.changeCalls, out.Message)
+	}
+	if p := partitionState(t, e, "2026-10-16"); p.FilePath != "" || p.ExportCount != 0 {
+		t.Fatalf("读了一半的分区不导出: %+v", p)
+	}
+	e.src.requests = nil
+	e.now = e.now.Add(time.Minute)
+	out = e.run(2000, nil, nil)
+	if out.Status != "succeeded" || strings.Join(requestStarts(e.src.requests), ",") != "03:00,04:00,05:00" || e.src.changeCalls != calls+1 {
+		t.Fatalf("第二轮从下一段接着读、不再取这一页: %v changeCalls=%d out=%+v", requestStarts(e.src.requests), e.src.changeCalls, out)
+	}
+	if changeCursor(t, e) != base+1 || strings.Contains(out.Message, "还剩") {
+		t.Fatalf("整页读完推进位点: cursor=%d msg=%q", changeCursor(t, e), out.Message)
+	}
+	if p := report(out, "2026-10-16"); p.GetRowCount() != 360 || p.GetExportCount() != 1 {
+		t.Fatalf("读完后导出一次，不漏不重: %v", p)
+	}
+}
+
+// 读到一半失败：已读的段不重读，下一轮从失败的那段接着读；worker 重启（内存里的进度没了）就从位点重读整页，结果一样。
+func TestHalfReadPageResumesAfterAFailureAndIsReadAgainAfterARestart(t *testing.T) {
+	e := newEnv(t)
+	base := longPage(t, e)
+	e.src.failFrom = time.Date(2026, 10, 16, 1, 0, 0, 0, time.UTC)
+	if out := e.run(2000, nil, nil); out.Status != "failed" || changeCursor(t, e) != base {
+		t.Fatalf("第二段失败，位点不动: %+v", out)
+	}
+	e.src.failFrom, e.src.requests = time.Time{}, nil
+	calls := e.src.changeCalls
+	e.now = e.now.Add(time.Minute)
+	if out := e.run(2000, nil, nil); out.Status != "succeeded" || strings.Join(requestStarts(e.src.requests), ",") != "01:00,02:00,03:00" || e.src.changeCalls != calls {
+		t.Fatalf("从失败的那段接着读: %v changeCalls %d→%d", requestStarts(e.src.requests), calls, e.src.changeCalls)
+	}
+	e.r = nil // worker 重启
+	e.src.requests = nil
+	e.now = e.now.Add(time.Minute)
+	if out := e.run(2000, nil, nil); out.Status != "succeeded" || requestStarts(e.src.requests)[0] != "00:00" || e.src.changeCalls != calls+1 {
+		t.Fatalf("重启后从位点重读整页: %v", requestStarts(e.src.requests))
+	}
+	var out *Outcome
+	for i := 0; i < 5 && changeCursor(t, e) == base; i++ {
+		e.now = e.now.Add(time.Minute)
+		out = e.run(2000, nil, nil)
+	}
+	if changeCursor(t, e) != base+1 || report(out, "2026-10-16").GetRowCount() != 360 {
+		t.Fatalf("重读整页不重不漏: cursor=%d %v", changeCursor(t, e), report(out, "2026-10-16"))
+	}
+}
+
+// manual 重建基线时，读了一半的页作废：位点回到日志头部，剩下的改动由整段重读覆盖。
+func TestManualDropsTheHalfReadPage(t *testing.T) {
+	e := newEnv(t)
+	longPage(t, e)
+	e.run(2000, nil, nil)
+	if len(e.r.pending) != 1 {
+		t.Fatalf("应记下读了一半的页: %v", e.r.pending)
+	}
+	e.now = e.now.Add(time.Minute)
+	out := e.run(2000, func(a *archivepb.RunAssignment) { a.Kind = "manual" }, nil)
+	if out.Status != "succeeded" || len(e.r.pending) != 0 || changeCursor(t, e) != uint64(len(e.src.changeLog)) || strings.Contains(out.Message, "还剩") {
+		t.Fatalf("manual 后不再接着读那一页: pending=%v cursor=%d out=%+v", e.r.pending, changeCursor(t, e), out)
+	}
+	last := report(out, "2026-10-16")
+	for i := 0; i < 20; i++ {
+		if _, _, ok := rescanState(t, e); !ok {
+			break
+		}
+		e.now = e.now.Add(time.Minute)
+		out = e.run(2000, nil, nil)
+		if got := report(out, "2026-10-16"); got != nil {
+			last = got
+		}
+	}
+	if _, _, ok := rescanState(t, e); ok || last.GetExportCount() == 0 || last.GetRowCount() != 360 {
+		t.Fatalf("整段重读读完后导出整天的行，不漏不重: %v", last)
 	}
 }
 
