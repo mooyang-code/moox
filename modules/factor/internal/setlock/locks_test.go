@@ -42,6 +42,26 @@ func TestLocksServeWaitersInArrivalOrder(t *testing.T) {
 	require.Equal(t, "live", <-order)
 }
 
+func TestRecalcLockDoesNotBlockTaskLock(t *testing.T) {
+	locks := New()
+	unlockRecalc, err := locks.LockRecalcContext(context.Background(), "ftask_prices_1m")
+	require.NoError(t, err)
+	defer unlockRecalc()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	unlockTask, err := locks.LockContext(ctx, "ftask_prices_1m")
+	require.NoError(t, err, "补算锁不能挡住同名的任务锁")
+	unlockTask()
+
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, err = locks.LockRecalcContext(ctx, "ftask_prices_1m")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	_, err = locks.LockRecalcContext(context.Background(), " ")
+	require.Error(t, err)
+}
+
 func TestFactorLockKeysDoNotCollideWithTaskKeys(t *testing.T) {
 	locks := New()
 	unlockFactor, err := locks.LockFactorContext(context.Background(), "ftask_prices_1m")

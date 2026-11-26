@@ -160,10 +160,12 @@ func TestExecutorPassesOutcomeToReport(t *testing.T) {
 	require.Equal(t, "degraded: failed_subjects=1", DegradedNote(records[0].outcome))
 }
 
-func TestExecutorHoldsTaskLockPerChunk(t *testing.T) {
+// 没有水位来源时每块都先取补算锁、再取任务锁（与实时串行），块之间释放。
+func TestExecutorHoldsBothLocksPerChunkWithoutWatermark(t *testing.T) {
 	locks := &countingLocks{}
 	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
-		require.True(t, locks.held, "chunk must run under the set lock")
+		require.True(t, locks.isHeld(recalcKey), "分块必须在补算锁内运行")
+		require.True(t, locks.isHeld(taskKey), "没有水位时分块也要持有任务锁")
 		return pipeline.Outcome{Status: "complete"}, nil
 	}}
 	executor := NewExecutor(runner, WithChunkPeriods(2), WithLocks(locks))
@@ -171,19 +173,50 @@ func TestExecutorHoldsTaskLockPerChunk(t *testing.T) {
 
 	require.NoError(t, executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC")), recordProgress(&records, 0)))
 
-	require.Equal(t, []string{"ftask_bars_1m", "ftask_bars_1m", "ftask_bars_1m"}, locks.setIDs)
-	require.False(t, locks.held)
+	require.Equal(t, []string{recalcKey, taskKey, recalcKey, taskKey, recalcKey, taskKey}, locks.keys)
+	require.False(t, locks.isHeld(recalcKey))
+	require.False(t, locks.isHeld(taskKey))
 }
 
+const (
+	taskKey   = "ftask_bars_1m"
+	recalcKey = "recalc:ftask_bars_1m"
+)
+
+// countingLocks 按键记录取锁顺序与当前是否持有（补算锁的键带 "recalc:" 前缀，与 setlock 一致）。
 type countingLocks struct {
-	setIDs []string
-	held   bool
+	mu   sync.Mutex
+	keys []string
+	held map[string]bool
+}
+
+func (l *countingLocks) LockRecalcContext(_ context.Context, taskID string) (func(), error) {
+	return l.lock("recalc:" + taskID), nil
 }
 
 func (l *countingLocks) LockContext(_ context.Context, taskID string) (func(), error) {
-	l.setIDs = append(l.setIDs, taskID)
-	l.held = true
-	return func() { l.held = false }, nil
+	return l.lock(taskID), nil
+}
+
+func (l *countingLocks) lock(key string) func() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.held == nil {
+		l.held = map[string]bool{}
+	}
+	l.keys = append(l.keys, key)
+	l.held[key] = true
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.held[key] = false
+	}
+}
+
+func (l *countingLocks) isHeld(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.held[key]
 }
 
 type recordingRunner struct {
@@ -281,7 +314,7 @@ func TestRecalcDoesNotReportMarker(t *testing.T) {
 	executor := NewExecutor(runner)
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 
-	_, err := executor.RunChunk(context.Background(), pipelineSelection(testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3)), period, period.Add(time.Minute))
+	_, err := executor.RunChunkWith(context.Background(), fixedSource(pipelineSelection(testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3))), period, period.Add(time.Minute), nil)
 
 	require.NoError(t, err)
 	require.Equal(t, 0, storage.markerCalls)
@@ -331,11 +364,11 @@ func testRecalcFactor(id, status string, lookback int) recalcMember {
 		fmt.Sprintf("output: ts_mean(close, %d)\n", lookback))}
 }
 
-// RunChunkWith：先取任务锁再在锁内重读选择；after 在仍持有锁时调用；FillOnly 传到计划里并且不写 carry 列。
+// RunChunkWith：先取锁再在锁内重读选择；after 在仍持有锁时调用；FillOnly 传到计划里并且不写 carry 列。
 func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 	locks := &countingLocks{}
 	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
-		require.True(t, locks.held, "运行必须在任务锁内")
+		require.True(t, locks.isHeld(recalcKey) && locks.isHeld(taskKey), "没有水位时运行必须在补算锁与任务锁内")
 		return pipeline.Outcome{Status: "complete", Items: map[pipeline.ItemKey]pipeline.ItemStatus{{Member: "f", Subject: "BTC"}: pipeline.ItemWritten}}, nil
 	}}
 	executor := NewExecutor(runner, WithLocks(locks))
@@ -344,7 +377,7 @@ func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 		calls++
 		selection := executorSelection("BTC")
 		selection.FillOnly = true
-		if locks.held {
+		if locks.isHeld(recalcKey) {
 			selection.Columns = []string{"close", "reloaded-under-lock"}
 		}
 		return selection, nil
@@ -353,21 +386,21 @@ func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 	start := testWindow(1).Start
 
 	outcome, err := executor.RunChunkWith(context.Background(), source, start, start.Add(2*time.Minute), func(selection Selection, outcome pipeline.Outcome, runErr error) {
-		afterHeld = locks.held
+		afterHeld = locks.isHeld(recalcKey) && locks.isHeld(taskKey)
 		require.NoError(t, runErr)
 		require.Equal(t, []string{"close", "reloaded-under-lock"}, selection.Columns)
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, 2, calls, "锁外探测一次，锁内重读一次")
-	require.True(t, afterHeld, "after 在持有任务锁时调用")
+	require.True(t, afterHeld, "after 在持有锁时调用")
 	require.Equal(t, pipeline.ItemWritten, outcome.Items[pipeline.ItemKey{Member: "f", Subject: "BTC"}])
 	plans := runner.snapshot()
 	require.Len(t, plans, 1)
 	require.True(t, plans[0].FillOnly)
 	require.False(t, plans[0].WriteCarry, "只填充不写 carry 列")
 	require.Equal(t, []string{"close", "reloaded-under-lock"}, plans[0].CarryColumns, "源列仍读取（计算输入需要）")
-	require.False(t, locks.held)
+	require.False(t, locks.isHeld(recalcKey) || locks.isHeld(taskKey))
 }
 
 // 预热跳过的恢复：只填充同时写 carry 列（那一期实时路径没有写任何行）。

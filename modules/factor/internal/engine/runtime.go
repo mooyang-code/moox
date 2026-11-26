@@ -234,6 +234,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks),
+		recalcexec.WithWatermark(committedThrough{r.continuity}.CommittedThrough),
 		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)), recalcexec.WithHistory(r.data))

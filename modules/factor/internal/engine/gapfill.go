@@ -45,7 +45,7 @@ type gapFiller struct {
 	now      func() time.Time
 	// onGaveUp 在条目被记为 gave_up 时调用（指标用，可为 nil）。
 	onGaveUp func(entries int)
-	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil），在任务锁内。引擎据此把补齐的最新一期记入运行摘要。
+	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil），在补算执行器的锁内。引擎据此把补齐的最新一期记入运行摘要。
 	onRepaired func(taskID string, period RepairedPeriod)
 	// kick 让恢复循环立刻做一轮（预热完成、记入预热中跳过的项时），为 nil 时只按 SweepInterval 轮询。
 	kick <-chan struct{}
@@ -167,7 +167,7 @@ func (g *gapFiller) readyTasks() map[string]bool {
 
 // maxFillSubjects 是一次时序恢复最多合并的标的数。恢复区间相同的标的（同一期整体预热跳过、同一段采集中断造成的空洞）
 // 合并成一次只填充重算，不逐个标的各跑一遍：重启后一期约 500 个标的整体预热跳过时，逐个跑要几百次运行、几十分钟才恢复完。
-// 上限避免一次运行占住任务锁太久。
+// 上限避免一次运行占住锁太久（补算作业、失效重算要等它；写到水位之后的周期时实时也要等）。
 const maxFillSubjects = 100
 
 // fillBatch 是一次恢复运行：截面因子是一个 (任务, 周期)；时序因子是同一任务里恢复区间相同的若干标的。
@@ -278,7 +278,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 		batches = batches[:g.cfg.MaxGroupsPerSweep]
 	}
 	for _, batch := range batches {
-		// 租约在一轮中途丢失时不再启动新的写入：另一个引擎已经接手，两个进程的任务锁互不约束。
+		// 租约在一轮中途丢失时不再启动新的写入：另一个引擎已经接手，两个进程的锁互不约束。
 		if ctx.Err() != nil || (g.active != nil && !g.active()) {
 			return
 		}
@@ -342,7 +342,7 @@ func memberIsCross(set domain.EngineTask, alias string) bool {
 	return false
 }
 
-// refresh 在任务锁内按最新的任务与账本重读一组待办：丢掉已终结的，定义哈希与当前不同的记为 cancelled（definition_changed），
+// refresh 在补算执行器的锁内按最新的任务与账本重读一组待办：丢掉已终结的，定义哈希与当前不同的记为 cancelled（definition_changed），
 // 成员已不在任务里的记为 cancelled（factor_removed）。返回仍可恢复的待办与对应的成员。
 func (g *gapFiller) refresh(taskID string, entries []gapledger.Entry, cross bool) (domain.EngineTask, SetLookup, []gapledger.Entry, []domain.MemberDef) {
 	set, lookup := g.sets.SetByID(taskID)
@@ -446,9 +446,9 @@ type fillRun struct {
 
 func (g *gapFiller) fillRun(ctx context.Context, taskID string, pending func() []gapledger.Entry, run fillRun) error {
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
-		// 在任务锁内重读：用最新的待办（含最新的 skipID）与最新的任务、因子定义。
+		// 在补算执行器的锁内重读：用最新的待办（含最新的 skipID）与最新的任务、因子定义。
 		if g.active != nil && !g.active() {
-			return recalcexec.Selection{}, nil // 取得任务锁后租约已丢失：不运行
+			return recalcexec.Selection{}, nil // 取得锁后租约已丢失：不运行
 		}
 		current, lookup, use, members := g.refresh(taskID, pending(), false)
 		if lookup != SetFound || len(use) == 0 {
@@ -689,7 +689,7 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entrie
 	return err
 }
 
-// confirm 在任务锁内确认：Selection 里的因子、区间内、逐项结果为 written 的待办追加 repaired。
+// confirm 在补算执行器的锁内确认：Selection 里的因子、区间内、逐项结果为 written 的待办追加 repaired。
 // gap 与 failed 保持待恢复，下一轮再试。
 func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Selection, outcome pipeline.Outcome, start, end time.Time) {
 	selected := make(map[string]struct{}, len(selection.Members))

@@ -199,7 +199,7 @@ const (
 	SetGone
 )
 
-// SetByID 按任务 ID 取快照里的任务（含因子）。空洞恢复用它在任务锁内重新取得最新的任务与因子定义。
+// SetByID 按任务 ID 取快照里的任务（含因子）。空洞恢复用它在补算执行器的锁内重新取得最新的任务与因子定义。
 func (c *CatalogCache) SetByID(taskID string) (domain.EngineTask, SetLookup) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

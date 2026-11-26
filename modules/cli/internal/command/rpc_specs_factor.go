@@ -58,7 +58,7 @@ func init() {
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},
 		rpcSpec{Path: []string{"factor", "task", "disable"}, Destructive: true, Short: "停用计算任务（默认只预览，--yes 才执行）", Service: factorMgr, Method: "SetFactorTaskStatus", Fixed: map[string]any{"status": "disabled"},
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},
-		rpcSpec{Path: []string{"factor", "task", "delete"}, Short: "删除计算任务（--purge 连结果一起删，不可恢复；默认只预览，--yes 才执行）", Service: factorMgr, Method: "DeleteFactorTask", Destructive: true,
+		rpcSpec{Path: []string{"factor", "task", "delete"}, Short: "删除计算任务（先 factor task disable 停用任务，再逐个 factor member disable、factor member remove 移除全部成员才能删；已关联策略实例的不能删，随实例删除；--purge 连结果一起删，不可恢复；默认只预览，--yes 才执行）", Service: factorMgr, Method: "DeleteFactorTask", Destructive: true,
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID"), boolFlag("purge", "purge", "连同结果数据一起删除")}},
 		rpcSpec{Path: []string{"factor", "task", "params"}, Short: "查看计算任务各成员当前的参数", Service: factorMgr, Method: "GetFactorParams",
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},

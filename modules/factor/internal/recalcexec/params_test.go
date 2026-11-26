@@ -60,7 +60,7 @@ func TestRunChunkSplitsByRowParams(t *testing.T) {
 	}}
 	executor := NewExecutor(runner, WithChunkPeriods(100), WithParamReader(reader))
 
-	outcome, err := executor.RunChunk(context.Background(), selection, window.Start, window.End)
+	outcome, err := executor.RunChunkWith(context.Background(), fixedSource(selection), window.Start, window.End, nil)
 	require.NoError(t, err)
 
 	type segment struct {
@@ -120,7 +120,7 @@ func TestRunChunkWithoutParamReaderComputesOneSegment(t *testing.T) {
 	selection, key := paramSelection(t, "BTC")
 	runner := &recordingRunner{}
 	executor := NewExecutor(runner, WithChunkPeriods(100))
-	outcome, err := executor.RunChunk(context.Background(), selection, window.Start, window.End)
+	outcome, err := executor.RunChunkWith(context.Background(), fixedSource(selection), window.Start, window.End, nil)
 	require.NoError(t, err)
 	require.Len(t, runner.snapshot(), 1)
 	require.Empty(t, outcome.DefaultFilled[key])
