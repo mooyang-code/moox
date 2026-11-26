@@ -18,14 +18,12 @@ import (
 
 type fakeFunctions struct{}
 
-func (fakeFunctions) EnsureBackfillFunction(context.Context, string) (string, error) {
-	return "moox-fetch-plan-backfill-crypto-spot-nanjing", nil
-}
+func (fakeFunctions) BackfillRegion(string) (string, bool) { return "ap-nanjing", true }
 
 func (fakeFunctions) BackfillRegions(string) []string { return nil }
 
-func (f fakeFunctions) EnsureBackfillFunctionIn(ctx context.Context, market, _ string) (string, error) {
-	return f.EnsureBackfillFunction(ctx, market)
+func (fakeFunctions) EnsureBackfillFunctionIn(context.Context, string, string) (string, error) {
+	return "moox-fetch-plan-backfill-crypto-spot-nanjing", nil
 }
 
 // healingInvoker 记录调用，并在成功时把请求覆盖的缺失 K 线补上。
@@ -584,14 +582,12 @@ func (failingInvoker) Invoke(context.Context, string, string, map[string]any) (m
 
 type noFunctions struct{}
 
-func (noFunctions) EnsureBackfillFunction(context.Context, string) (string, error) {
-	return "", errors.New("the backfill function must not be created")
-}
+func (noFunctions) BackfillRegion(string) (string, bool) { return "ap-nanjing", true }
 
 func (noFunctions) BackfillRegions(string) []string { return nil }
 
-func (f noFunctions) EnsureBackfillFunctionIn(ctx context.Context, market, _ string) (string, error) {
-	return f.EnsureBackfillFunction(ctx, market)
+func (noFunctions) EnsureBackfillFunctionIn(context.Context, string, string) (string, error) {
+	return "", errors.New("the backfill function must not be created")
 }
 
 // 数据集的采集方式是 stream：从推送项解析市场与交易所符号，调本地执行端，不建补采函数。

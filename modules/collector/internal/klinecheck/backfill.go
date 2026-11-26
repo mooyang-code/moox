@@ -103,10 +103,11 @@ type RouteSource interface {
 	BackfillRoute(ctx context.Context, spaceID, datasetID, frequency string) (plan *marketfetch.Plan, found bool, err error)
 }
 
-// FunctionProvider 保证补采函数存在并返回函数名。
+// FunctionProvider 给出补采函数的地域，并保证函数存在、返回函数名。
 type FunctionProvider interface {
-	EnsureBackfillFunction(ctx context.Context, marketType string) (string, error)
-	// BackfillRegions 是市场补采函数可用的地域（没有配云函数地域时为空）；EnsureBackfillFunctionIn 保证指定地域的补采函数存在。
+	// BackfillRegion 是市场平时补采（补缺口、强制重拉）用的地域，市场没有配云函数地域时 ok 为假。
+	BackfillRegion(marketType string) (string, bool)
+	// BackfillRegions 是市场补采函数可用的全部地域（没有配云函数地域时为空）；EnsureBackfillFunctionIn 保证指定地域的补采函数存在。
 	// 历史补齐把分块按地域轮流派发：地域不同出口地址不同，按出口 IP 限频的行情源能分摊开。
 	BackfillRegions(marketType string) []string
 	EnsureBackfillFunctionIn(ctx context.Context, marketType, region string) (string, error)
@@ -131,6 +132,8 @@ type Backfiller struct {
 	// Executor 返回数据集的补采执行端（scf 或 local），为空时按 scf；Local 是本地执行端（collector-stream 里的 MarketFetchExecutor）。
 	Executor func(ctx context.Context, spaceID, datasetID string) (string, error)
 	Local    Invoker
+	// FunctionConcurrency 是空间每个补采函数的预留并发（平台对超过它的同步调用直接拒绝），为空或返回值不大于 0 用 DefaultMaxInFlight。
+	FunctionConcurrency func(spaceID string) int
 	// FlushNotices 在补采作业结束后调用：把分块成功时记下的补写通知封存成 event.collector.kline.backfilled
 	// （因子据此立即推进连续水位并补算，合成据此重算）。失败只记日志，通知留在库里，由维护轮（合成开启时还有合成的定时器）再封存。
 	FlushNotices func(ctx context.Context) error
@@ -158,8 +161,8 @@ type Backfiller struct {
 	// seedPreparing 是本进程里正在拼作业的补齐（键为 空间|数据集|频率），seedSamples 是各补齐最近的完成分块数采样，用来估计剩余时间；
 	// seedFailures 是各补齐连续拼作业失败的次数（只在内存里，进程重启从零算）。
 	seedPreparing map[string]bool
-	// seedBusy 是各（空间、市场、地域）补采函数正在跑的补齐分块数。
-	seedBusy     map[string]int
+	// functionBusy 是各补采函数（键为 空间|市场|地域）正在跑的分块数，补齐、补缺口、强制重拉的分块共用。
+	functionBusy map[string]int
 	seedSamples  map[string][]seedSample
 	seedFailures map[string]int
 	// seedLimiter、seedLocalLimiter 是补齐写 Storage 的速率限制（按根数计令牌），首次用到时按 Seed 参数创建。
@@ -186,6 +189,49 @@ func (b *Backfiller) maxInFlight(ctx context.Context, spaceID string) int {
 		return b.MaxInFlight
 	}
 	return DefaultMaxInFlight
+}
+
+func functionKey(spaceID, marketType, region string) string {
+	return spaceID + "|" + marketType + "|" + region
+}
+
+// functionLimit 是一个补采函数同时能放的分块数：函数的预留并发，没配用 DefaultMaxInFlight。
+func (b *Backfiller) functionLimit(spaceID string) int {
+	if b.FunctionConcurrency != nil {
+		if n := b.FunctionConcurrency(spaceID); n > 0 {
+			return n
+		}
+	}
+	return DefaultMaxInFlight
+}
+
+// SeedFunctionLimit 是历史补齐的分块在一个补采函数上最多占的并发：预留并发减 1，至少给补缺口、强制重拉留 1 个。
+// 预留并发为 1 时也给 1：给 0 的话补齐一块都跑不了、下游一直不生效，这时两类分块轮流占用，补缺口可能要等一块补齐分块跑完。
+func SeedFunctionLimit(reserved int) int {
+	return max(reserved-1, 1)
+}
+
+// acquireFunction 占一个补采函数的并发名额：同一个函数的分块共用一个计数，limit 是这个分块最多能把计数占到多少
+// （补齐用 SeedFunctionLimit，其余用预留并发），到了就返回 false；releaseFunction 归还。
+func (b *Backfiller) acquireFunction(key string, limit int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.functionBusy == nil {
+		b.functionBusy = map[string]int{}
+	}
+	if b.functionBusy[key] >= limit {
+		return false
+	}
+	b.functionBusy[key]++
+	return true
+}
+
+func (b *Backfiller) releaseFunction(key string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.functionBusy[key] > 0 {
+		b.functionBusy[key]--
+	}
 }
 
 // Wait 等待所有异步分块结束（进程退出时调用）。
@@ -407,7 +453,8 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return err
 	}
-	// 历史补齐的作业单独排在最后、单独分名额：它量大、不急，实时缺口的补采不能因它排队。
+	// 历史补齐的作业排在最后、按自己的上限（seedSlots）认领：它量大、不急，实时缺口的补采不能因它排队。
+	// 认领只管空间里同时执行的分块数；调用补采函数前，同一个函数上的各类分块还共用一份并发名额（见 runChunk）。
 	seedJobs, err := b.seedJobIDs(ctx, spaceID)
 	if err != nil {
 		return err
@@ -561,7 +608,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 }
 
 // runChunk 调用补采函数执行一个分块，随后复查该块的缺口。force 表示分块属于强制重拉作业：函数报失败时退回重试
-// （见下文），而不是直接记失败。seed 表示分块属于历史补齐作业：按地域轮流派发、按根数限速。
+// （见下文），而不是直接记失败。seed 表示分块属于历史补齐作业：按地域轮流派发、按根数限速，在补采函数上少占一个并发。
 func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk, force, seed bool) (finished bool) {
 	fail := func(err error) {
 		finished = true
@@ -639,37 +686,44 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 			fail(fmt.Errorf("no backfill function provider for space %s", spaceID))
 			return
 		}
-		if len(seedRegions) > 0 {
-			// 平台对超过预留并发的同步调用直接拒绝（concurrency exceeded reserved quota），不排队：每个地域的函数同时只放预留并发个分块，
-			// 按分块号轮流的起点依次找没满、建得出来的地域，都满了或都建不出来就退回，下一轮再来。
-			var picked string
-			var ensureErr error
-			for _, region := range seedRegions {
-				key := seedRegionKey(spaceID, plan.Market.MarketType, region)
-				if !b.acquireSeedRegion(key, b.seedRegionLimit(spaceID)) {
-					continue
-				}
-				if functionName, ensureErr = provider.EnsureBackfillFunctionIn(ctx, plan.Market.MarketType, region); ensureErr == nil {
-					picked = key
-					break
-				}
-				b.releaseSeedRegion(key)
-			}
-			if picked == "" {
-				if ensureErr == nil {
-					ensureErr = errors.New("各地域的补采函数并发都已占满")
-				}
-				release(ensureErr)
+		// 平台对超过函数预留并发的同步调用直接拒绝（concurrency exceeded reserved quota），不排队：同一个补采函数上的分块
+		// （补齐、补缺口、强制重拉）共用一个进程内计数，补齐最多占到预留并发 − 1，给实时缺口的补采留名额（2026-11-25 美股补齐
+		// 占满南京补采函数的 5 个并发，补缺口的分块全部被拒）。补齐按分块号轮流的起点依次找没满、建得出来的地域，
+		// 其余分块只用市场的补采地域；都满了或都建不出来就退回，下一轮再来。
+		regions := seedRegions
+		if len(regions) == 0 {
+			region, ok := provider.BackfillRegion(plan.Market.MarketType)
+			if !ok {
+				release(fmt.Errorf("no SCF region is configured for market %s", plan.Market.MarketType))
 				return
 			}
-			defer b.releaseSeedRegion(picked)
-		} else {
-			functionName, err = provider.EnsureBackfillFunction(ctx, plan.Market.MarketType)
+			regions = []string{region}
 		}
-		if err != nil {
-			release(err)
+		limit := b.functionLimit(spaceID)
+		if seed {
+			limit = SeedFunctionLimit(limit)
+		}
+		var picked string
+		var ensureErr error
+		for _, region := range regions {
+			key := functionKey(spaceID, plan.Market.MarketType, region)
+			if !b.acquireFunction(key, limit) {
+				continue
+			}
+			if functionName, ensureErr = provider.EnsureBackfillFunctionIn(ctx, plan.Market.MarketType, region); ensureErr == nil {
+				picked = key
+				break
+			}
+			b.releaseFunction(key)
+		}
+		if picked == "" {
+			if ensureErr == nil {
+				ensureErr = errors.New("补采函数的并发名额已占满")
+			}
+			release(ensureErr)
 			return
 		}
+		defer b.releaseFunction(picked)
 	}
 	chunkBars := b.chunkBars(spaceID, chunk)
 	if seed {

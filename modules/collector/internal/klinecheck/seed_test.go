@@ -299,8 +299,9 @@ func TestSkipSeedsCancelsJobsAndReleases(t *testing.T) {
 	require.Zero(t, again)
 }
 
-// 补齐分块单独分名额：补齐的名额用完时，补缺口的作业不受影响。
-func TestSeedChunksUseTheirOwnSlots(t *testing.T) {
+// 认领时补齐按自己的上限（Seed.Slots）：补齐的认领上限用完时，补缺口的作业照常认领。
+// 调用补采函数前两类分块还共用函数的并发名额，见 function_slots_test.go。
+func TestSeedChunksClaimWithinTheirOwnLimit(t *testing.T) {
 	b, invoker, rows, base := seedFixture(t, 2*time.Hour, 5, 12, 20)
 	b.MaxInFlight = 5
 	b.Seed.Slots = func(context.Context, string) int { return 1 }
@@ -490,11 +491,11 @@ type regionFunctions struct {
 
 func (f *regionFunctions) BackfillRegions(string) []string { return f.regions }
 
-func (f *regionFunctions) EnsureBackfillFunction(context.Context, string) (string, error) {
+func (f *regionFunctions) BackfillRegion(string) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.defaultCalls++
-	return "moox-fetch-plan-backfill-crypto-spot-nanjing", nil
+	return "ap-nanjing", true
 }
 
 func (f *regionFunctions) EnsureBackfillFunctionIn(_ context.Context, _, region string) (string, error) {
@@ -567,32 +568,14 @@ func mustFrequency(t *testing.T, name string) marketdata.Frequency {
 
 func (s Segment) fromTime() time.Time { return time.Unix(s.From, 0).UTC() }
 
-// 每个地域的补采函数同时只放预留并发个分块（平台超过就拒绝）：占满的地域跳过换下一个，都满了分块退回。
-func TestSeedRegionConcurrencyCap(t *testing.T) {
-	b := &Backfiller{Seed: SeedOptions{RegionConcurrency: func(string) int { return 2 }}}
-	key := seedRegionKey("crypto", "spot", "ap-singapore")
-	require.Equal(t, 2, b.seedRegionLimit("crypto"))
-	require.True(t, b.acquireSeedRegion(key, 2))
-	require.True(t, b.acquireSeedRegion(key, 2))
-	require.False(t, b.acquireSeedRegion(key, 2), "占满了")
-	require.True(t, b.acquireSeedRegion(seedRegionKey("crypto", "swap", "ap-singapore"), 2), "同地域不同市场是另一个函数")
-	b.releaseSeedRegion(key)
-	require.True(t, b.acquireSeedRegion(key, 2), "归还后可以再占")
-	b.releaseSeedRegion(key)
-	b.releaseSeedRegion(key)
-	b.releaseSeedRegion(key)
-	require.Zero(t, b.seedBusy[key], "归还不会减成负数")
-	require.Equal(t, DefaultMaxInFlight, (&Backfiller{}).seedRegionLimit("crypto"), "没配用默认值")
-}
-
 // 分块执行：一个地域占满时用另一个地域，不把调用打到超过预留并发的函数上。
 func TestSeedChunksSkipFullRegions(t *testing.T) {
 	b, _, _, _ := seedFixture(t, 2*time.Hour, 5)
-	b.Seed.RegionConcurrency = func(string) int { return 1 }
+	b.FunctionConcurrency = func(string) int { return 1 }
 	provider := &regionFunctions{regions: []string{"ap-singapore", "ap-tokyo"}}
 	b.Functions = func(string) FunctionProvider { return provider }
 	// 新加坡已经被别的分块占满。
-	require.True(t, b.acquireSeedRegion(seedRegionKey("crypto", "spot", "ap-singapore"), 1))
+	require.True(t, b.acquireFunction(functionKey("crypto", "spot", "ap-singapore"), 1))
 	b.Refill = false
 	ctx := context.Background()
 	require.NoError(t, b.SeedTick(ctx, "crypto"))

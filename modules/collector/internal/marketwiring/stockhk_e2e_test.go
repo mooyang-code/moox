@@ -201,14 +201,12 @@ func (i *hkFunctionInvoker) Invoke(ctx context.Context, _, functionName string, 
 
 type hkBackfillFunctions struct{}
 
-func (hkBackfillFunctions) EnsureBackfillFunction(context.Context, string) (string, error) {
-	return "moox-fetch-plan-backfill-stockhk-equity-nanjing", nil
-}
+func (hkBackfillFunctions) BackfillRegion(string) (string, bool) { return "ap-nanjing", true }
 
 func (hkBackfillFunctions) BackfillRegions(string) []string { return nil }
 
-func (f hkBackfillFunctions) EnsureBackfillFunctionIn(ctx context.Context, market, _ string) (string, error) {
-	return f.EnsureBackfillFunction(ctx, market)
+func (hkBackfillFunctions) EnsureBackfillFunctionIn(context.Context, string, string) (string, error) {
+	return "moox-fetch-plan-backfill-stockhk-equity-nanjing", nil
 }
 
 // 收市后整天重取，从“到点提交”到“行被覆盖”走一遍：

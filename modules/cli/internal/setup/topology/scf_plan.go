@@ -24,7 +24,7 @@ type SCFPlan struct {
 	// SymbolsPerFunction 是每个函数负责的标的数，默认 50；按空间可覆盖。
 	SymbolsPerFunction int `toml:"symbols_per_function"`
 	// BackfillReservedConcurrency 是补采函数的最大并发实例数（平台的函数级预留并发），默认 5；
-	// 历史补齐的并发是 地域数 × 它，要补得更快可以调到 10，前提是账号的预留并发总额够用。
+	// 补齐与补缺口共用，历史补齐的并发是 地域数 ×（它 − 1），留 1 个给实时缺口的补采；要补得更快可以调到 10，前提是账号的预留并发总额够用。
 	BackfillReservedConcurrency int `toml:"backfill_reserved_concurrency"`
 	// Regions 是函数所在地域的网络。vpc 方式（默认）要求地域内有一台标了 external_entry、配置了 private_address 的主机；
 	// public 方式用于没有 MooX 主机的地域，函数不绑 VPC，经公网连 entry_host 的外部入口。

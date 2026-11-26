@@ -136,6 +136,12 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			}
 			return nil
 		},
+		FunctionConcurrency: func(spaceID string) int {
+			if reconciler := reconcilers.Get(spaceID); reconciler != nil {
+				return reconciler.BackfillReservedConcurrency()
+			}
+			return 0
+		},
 		Executor: backfillExecutor(dbm.Tasks(), markets.DefaultIngest),
 		Local:    &fetchplan.LocalExecutorClient{Gateway: process.gateway},
 		Seed:     historySeedOptions(cfg, source, reconcilers),
