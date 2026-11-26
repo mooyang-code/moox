@@ -18,6 +18,9 @@ const (
 	quietWaitLimit = 2 * time.Minute
 	// rescanSegment 是低于 1d 的数据集一段的数据时间（整段重读与日志里读全部标的的范围共用，不跨分区）；1d 及以上一段是一个分区。
 	rescanSegment = time.Hour
+	// selectorSegmentRows 是日志里带 selector 的范围一段最多的行数（标的数 × K 线根数），与 crypto 1m 读全部标的一小时一段
+	// （约 500 × 60）差不多大：100 个标的的 1m 日分区切成 5 段，单标的补一整天仍是一段。
+	selectorSegmentRows = 30000
 )
 
 // rescanOpenEnd 是整段重读最后一段的终点：最后一段不设上界，晚于重建基线时刻的行也一并读到，不依赖“数据时间不晚于写入时刻”。
@@ -159,13 +162,13 @@ func (s *runState) followChanges(ctx context.Context, out *Outcome, cursor sourc
 	}
 }
 
-// changeSegments 把一页日志整理出的读取范围切成段：读全部标的的按整段重读同样的粒度切（segmentEnd：低于 1d 最多 1 小时，不跨分区），
-// 带 selector 的（不超过 100 个标的）一个分区一段——单标的补一长段时不把请求数放大。
+// changeSegments 把一页日志整理出的读取范围切成段，都不跨分区：读全部标的的按整段重读同样的粒度切（segmentEnd：低于 1d 最多 1 小时）；
+// 带 selector 的（不超过 100 个标的）按“标的数 × K 线根数 ≤ selectorSegmentRows”切，标的少时一个分区一段，单标的补一长段时不把请求数放大。
 func (s *runState) changeSegments(reads []changeRead) []changeRead {
 	var out []changeRead
 	for _, read := range reads {
 		if read.Subjects != nil {
-			out = append(out, read)
+			out = append(out, s.selectorSegments(read)...)
 			continue
 		}
 		for from := read.Start; from.Before(read.End); {
@@ -176,6 +179,26 @@ func (s *runState) changeSegments(reads []changeRead) []changeRead {
 			out = append(out, changeRead{Key: read.Key, Start: from, End: end})
 			from = end
 		}
+	}
+	return out
+}
+
+// selectorSegments 把一个分区里带 selector 的范围按每段最多 selectorSegmentRows 行（标的数 × K 线根数）切段。
+func (s *runState) selectorSegments(read changeRead) []changeRead {
+	bars := int64(max(1, selectorSegmentRows/len(read.Subjects)))
+	if int64(read.End.Sub(read.Start)/s.span) < bars {
+		// 整段不超过上限：一段读完（先比根数再乘，月分区、长周期时也不会溢出）。
+		return []changeRead{read}
+	}
+	step := time.Duration(bars) * s.span
+	var out []changeRead
+	for from := read.Start; from.Before(read.End); {
+		end := from.Add(step)
+		if end.After(read.End) {
+			end = read.End
+		}
+		out = append(out, changeRead{Key: read.Key, Start: from, End: end, Subjects: read.Subjects})
+		from = end
 	}
 	return out
 }

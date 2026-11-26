@@ -431,6 +431,82 @@ func TestHalfReadPageResumesAfterAFailureAndIsReadAgainAfterARestart(t *testing.
 	}
 }
 
+// 带 selector 的范围按“标的数 × K 线根数 ≤ selectorSegmentRows”切段：标的多时一个 1m 日分区切成多段、每段不超过上限，
+// 段首尾相接覆盖整个范围、不跨分区；单标的补一整天仍是一段；读全部标的的仍按小时切。
+func TestSelectorReadsAreCutByRowsAndStayInThePartition(t *testing.T) {
+	s := &runState{unit: "day", loc: time.UTC, span: time.Minute}
+	day := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	subjects := func(n int) []string {
+		var out []string
+		for i := 0; i < n; i++ {
+			out = append(out, fmt.Sprintf("S%03d", i))
+		}
+		return out
+	}
+	whole := changeRead{Key: "2026-10-16", Start: day, End: day.AddDate(0, 0, 1)}
+	for _, tc := range []struct {
+		subjects, want int
+	}{{1, 1}, {20, 1}, {21, 2}, {100, 5}} {
+		read := whole
+		read.Subjects = subjects(tc.subjects)
+		segs := s.changeSegments([]changeRead{read})
+		if len(segs) != tc.want {
+			t.Fatalf("%d 个标的: %d 段，want %d", tc.subjects, len(segs), tc.want)
+		}
+		for i, seg := range segs {
+			if rowsIn := int(seg.End.Sub(seg.Start)/time.Minute) * len(seg.Subjects); rowsIn > selectorSegmentRows || seg.Key != read.Key || len(seg.Subjects) != tc.subjects {
+				t.Fatalf("%d 个标的第 %d 段 %v～%v 约 %d 行，超过上限或换了分区、标的", tc.subjects, i, seg.Start, seg.End, rowsIn)
+			}
+			if (i == 0 && !seg.Start.Equal(whole.Start)) || (i > 0 && !seg.Start.Equal(segs[i-1].End)) {
+				t.Fatalf("%d 个标的第 %d 段没有接上: %v", tc.subjects, i, segs)
+			}
+		}
+		if !segs[len(segs)-1].End.Equal(whole.End) {
+			t.Fatalf("%d 个标的的段应覆盖到分区结束: %v", tc.subjects, segs)
+		}
+	}
+	if segs := s.changeSegments([]changeRead{whole}); len(segs) != 24 {
+		t.Fatalf("读全部标的按小时切: %d 段", len(segs))
+	}
+	month := &runState{unit: "month", loc: time.UTC, span: 30 * 24 * time.Hour}
+	if segs := month.changeSegments([]changeRead{{Key: "2026-10", Start: day, End: day.AddDate(0, 1, 0), Subjects: []string{"BTC"}}}); len(segs) != 1 {
+		t.Fatalf("长周期单标的一段: %v", segs)
+	}
+}
+
+// 100 个标的各改写了一整天：按段读、段之间看预算，分到多轮读完，行不重不漏。
+func TestManySubjectsRewrittenForADayAreReadInSegments(t *testing.T) {
+	e := newEnv(t)
+	d0 := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = d0.Format(time.RFC3339) }, nil)
+	var spans []source.ChangeSpan
+	for i := 0; i < 100; i++ {
+		spans = append(spans, span(fmt.Sprintf("S%03d", i), d0, d0.Add(24*time.Hour-time.Minute)))
+	}
+	e.src.changeLog = append(e.src.changeLog, spans)
+	e.src.rows = append(rows("S000", d0, 1440, 1), rows("S099", d0, 1440, 2)...)
+	e.src.requests = nil
+	e.src.onRead = func(source.Range) { e.now = e.now.Add(25 * time.Second) }
+	var last *archivepb.PartitionReport
+	for i := 0; i < 5 && len(e.src.requests) < 5; i++ {
+		e.now = e.now.Add(time.Minute)
+		if got := report(e.run(2000, nil, nil), "2026-10-16"); got != nil {
+			last = got
+		}
+	}
+	if len(e.src.requests) != 5 {
+		t.Fatalf("100 个标的的一天应读 5 段: %v", requestStarts(e.src.requests))
+	}
+	for _, req := range e.src.requests {
+		if len(req.Subjects) != 100 {
+			t.Fatalf("每段带全部 100 个 selector: %+v", req)
+		}
+	}
+	if last.GetRowCount() != 2880 || last.GetExportCount() != 1 {
+		t.Fatalf("不重不漏，读完导出一次: %v", last)
+	}
+}
+
 // manual 重建基线时，读了一半的页作废：位点回到日志头部，剩下的改动由整段重读覆盖。
 func TestManualDropsTheHalfReadPage(t *testing.T) {
 	e := newEnv(t)
