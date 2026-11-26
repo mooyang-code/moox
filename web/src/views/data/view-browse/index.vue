@@ -151,7 +151,7 @@ const props = withDefaults(
     emptyDescription?: string;
     emptyRowsDescription?: string;
     autoRefreshIntervalMs?: number;
-    /** 要浏览的数据集（每个数据集恰好有一个查询索引）；多个时按页签切换。 */
+    /** 要浏览的数据集（每个数据集恰好有一个查询索引）；多个时按页签切换。切空间后由调用方换成新空间的数据集或重新挂载本组件。 */
     datasetIds?: string[];
     activeDatasetId?: string;
     refreshKey?: number;
@@ -767,10 +767,15 @@ usePolling(pollRows, props.autoRefreshIntervalMs || 60_000, () => (props.autoRef
 onBeforeUnmount(() => {
   invalidateKline();
 });
+// 数据集 ID 属于调用方所在的空间：切空间时只清掉旧空间的内容，不拿旧 ID 去新空间读（取不到行会报错）。
+// 调用方换上新空间的数据集 ID（上面的 datasetIds 监听）或重新挂载本组件时再读取。
 watch(selectedSpaceId, () => {
+  metaLoadSequence += 1;
+  metaLoading.value = false;
+  metaError.value = "";
+  datasets.value = [];
   activeDatasetKey.value = "";
   clearViewState();
-  loadMeta();
 });
 </script>
 

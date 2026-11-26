@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   queryTimeSeries: vi.fn(),
   queryRecords: vi.fn(),
   viewState: vi.fn(),
-  messageError: vi.fn()
+  messageError: vi.fn(),
+  selectedSpaceId: undefined as { value: string } | undefined
 }));
 
 vi.mock("./composables/view-browse-catalog", () => ({ loadTargetedDatasets: mocks.catalog }));
@@ -20,9 +21,18 @@ vi.mock("@/api/storage/view", async importOriginal => ({
   queryTimeSeriesRows: mocks.queryTimeSeries,
   searchRecordRows: mocks.queryRecords
 }));
-vi.mock("@/store/modules/space", () => ({
-  useSpaceStore: () => ({ selectedSpaceId: "crypto", requireSpaceId: () => "crypto" })
-}));
+vi.mock("@/store/modules/space", async () => {
+  const { ref } = await import("vue");
+  mocks.selectedSpaceId = ref("crypto");
+  return {
+    useSpaceStore: () => ({
+      get selectedSpaceId() {
+        return mocks.selectedSpaceId?.value || "";
+      },
+      requireSpaceId: () => mocks.selectedSpaceId?.value || ""
+    })
+  };
+});
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: mocks.messageError }, Modal: { confirm: vi.fn() } }));
 
 import { RequestError } from "@/api/http";
@@ -333,6 +343,56 @@ describe("View 索引状态", () => {
     expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(3);
     expect(mocks.messageError).not.toHaveBeenCalled();
     warn.mockRestore();
+    wrapper.unmount();
+  });
+});
+
+describe("切换空间", () => {
+  beforeEach(() => {
+    if (mocks.selectedSpaceId) mocks.selectedSpaceId.value = "crypto";
+    mocks.catalog
+      .mockReset()
+      .mockImplementation((spaceId: string, ids: string[]) =>
+        Promise.resolve(ids.map(dataset_id => ({ space_id: spaceId, dataset_id, data_kind: "DATA_KIND_TIME_SERIES" })))
+      );
+    mocks.columns.mockReset().mockResolvedValue([]);
+    mocks.queryTimeSeries.mockReset().mockResolvedValue({ rows: [{ key: { subject_id: "BTC", freq: "1m" } }] });
+    mocks.viewState.mockReset().mockResolvedValue({ index_id: "index-a", columns: [] });
+    mocks.messageError.mockReset();
+  });
+
+  it("只清掉旧空间的内容，不拿调用方旧空间的数据集 ID 去新空间读；换上新 ID 后按新空间读取", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(rowKeys(wrapper)).toBe("BTC");
+
+    mocks.selectedSpaceId!.value = "stockcn";
+    await flushPromises();
+    expect(mocks.catalog).not.toHaveBeenCalledWith("stockcn", ["dataset-known"]);
+    expect(mocks.messageError).not.toHaveBeenCalled();
+    expect((wrapper.vm as unknown as { datasets: unknown[] }).datasets).toHaveLength(0);
+    expect(rowKeys(wrapper)).toBe("");
+
+    await wrapper.setProps({ datasetIds: ["dataset-cn"], activeDatasetId: "dataset-cn" });
+    await flushPromises();
+    expect(mocks.catalog).toHaveBeenLastCalledWith("stockcn", ["dataset-cn"]);
+    expect(mocks.queryTimeSeries.mock.lastCall?.[0]).toMatchObject({ space_id: "stockcn", dataset_id: "dataset-cn" });
+    expect(mocks.messageError).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("切空间时作废在途的元数据读取，迟到的旧空间结果不落到页面上", async () => {
+    const pending = deferred<{ space_id: string; dataset_id: string; data_kind: string }[]>();
+    mocks.catalog.mockReturnValueOnce(pending.promise);
+    const wrapper = mountPage();
+    mocks.selectedSpaceId!.value = "stockcn";
+    await flushPromises();
+    pending.resolve([{ space_id: "crypto", dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]);
+    await flushPromises();
+
+    expect((wrapper.vm as unknown as { datasets: unknown[]; metaLoading: boolean }).datasets).toHaveLength(0);
+    expect((wrapper.vm as unknown as { metaLoading: boolean }).metaLoading).toBe(false);
+    expect(mocks.queryTimeSeries).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 });
