@@ -382,7 +382,11 @@ onDeactivated(() => {
 watch(
   selectedSpaceId,
   () => {
-    if (!pageActive) return;
+    // 停用期间只记下要重读：结果浏览切空间时已清空，切走又切回原空间也要在激活时重新读取。
+    if (!pageActive) {
+      loadedSpaceId = "";
+      return;
+    }
     void load();
   },
   { immediate: true }
