@@ -531,7 +531,7 @@ func TestMaintainRecoversLostLeases(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
-	// 领取后 worker 失联：租约过期，运行被标为失败，任务健康提示失败。
+	// 领取后 worker 失联（心跳也停了）：租约过期，运行被标为失败，任务健康提示失败。
 	h.heartbeat("w1")
 	claimed := h.pull(1)
 	if len(claimed) != 1 {
@@ -542,12 +542,33 @@ func TestMaintainRecoversLostLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed, _ := h.mgr.GetArchiveRun(ctx, &archivepb.GetArchiveRunReq{RunId: claimed[0].GetRunId()})
-	if failed.GetRun().GetStatus() != "failed" || failed.GetRun().GetMessage() != "worker 失联" {
+	if failed.GetRun().GetStatus() != "failed" || failed.GetRun().GetMessage() != store.LeaseExpiredWorkerOffline {
 		t.Fatalf("run = %v", failed.GetRun())
 	}
 	list, _ := h.mgr.ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{})
 	if list.GetTasks()[0].GetHealth() != HealthWarning || !strings.Contains(list.GetTasks()[0].GetHealthReason(), "最近一次运行失败") {
 		t.Fatalf("task health = %s %s", list.GetTasks()[0].GetHealth(), list.GetTasks()[0].GetHealthReason())
+	}
+}
+
+// 领取的响应没送到 worker：mgr 已记开始，worker 照常心跳却不知道这条运行，租约过期时不能说成“worker 失联”。
+func TestMaintainTellsALostClaimFromALostWorker(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	h.heartbeat("w1")
+	claimed := h.pull(1)
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %v", claimed)
+	}
+	h.now = h.now.Add(11 * time.Minute)
+	h.heartbeat("w1") // worker 一直在心跳，心跳里没有这条运行
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	failed, _ := h.mgr.GetArchiveRun(ctx, &archivepb.GetArchiveRunReq{RunId: claimed[0].GetRunId()})
+	if failed.GetRun().GetStatus() != "failed" || failed.GetRun().GetMessage() != store.LeaseExpiredWorkerOnline {
+		t.Fatalf("run = %v", failed.GetRun())
 	}
 }
 

@@ -365,10 +365,21 @@ WHERE c_run_id = ?`, fmtTime(now.Add(ttl)), stats.SubjectsTotal, stats.SubjectsD
 	return canceled, err
 }
 
-// ExpireLeases 把租约已过期的运行标为失败（worker 失联），返回处理的条数。
-func (s *Store) ExpireLeases(ctx context.Context, now time.Time) (int, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'failed', c_finished_at = ?, c_message = 'worker 失联'
-WHERE c_status = 'running' AND c_lease_until IS NOT NULL AND c_lease_until < ?`, fmtTime(now), fmtTime(now))
+// 租约过期的失败原因。worker 还在心跳却没续租，多半是领取的响应没送到 worker（mgr 已记开始、worker 不知道这条运行），
+// 或 worker 重启后丢了这条运行；心跳也停了才是失联。
+const (
+	LeaseExpiredWorkerOffline = "worker 失联：租约到期时 worker 已停止心跳"
+	LeaseExpiredWorkerOnline  = "租约到期时 worker 仍在心跳，但没有续租这条运行：领取的响应可能没送到 worker（网络超时），或 worker 重启后丢了这条运行"
+)
+
+// ExpireLeases 把租约已过期的运行标为失败，返回处理的条数；workerOnline 是 worker 此刻是否在线，决定失败原因。
+func (s *Store) ExpireLeases(ctx context.Context, now time.Time, workerOnline bool) (int, error) {
+	message := LeaseExpiredWorkerOffline
+	if workerOnline {
+		message = LeaseExpiredWorkerOnline
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'failed', c_finished_at = ?, c_message = ?
+WHERE c_status = 'running' AND c_lease_until IS NOT NULL AND c_lease_until < ?`, fmtTime(now), message, fmtTime(now))
 	if err != nil {
 		return 0, err
 	}

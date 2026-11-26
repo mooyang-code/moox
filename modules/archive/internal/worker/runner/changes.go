@@ -11,7 +11,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// changeRead 是一页变更日志在一个分区里要重读的范围：时间并集 [Start, End) 与涉及的标的。
+// changeRead 是一页变更日志在一个分区里要重读的范围：时间并集 [Start, End) 与涉及的标的；切段之后是其中一段（Key 不变）。
 // Subjects 为 nil 表示读这段时间里的全部标的（标的数超过 selector 上限，或日志条目没带标的）。
 type changeRead struct {
 	Key        string
@@ -112,7 +112,10 @@ func (s *runState) groupChanges(spans []source.ChangeSpan, bound time.Time) []ch
 // rebase 重建基线：取日志头部位点 H，在一个事务里写位点 = H、整段重读进度 = [S, 取到 H 之后的时刻)。
 // 先落位点再读数据：H 之后的写入由之后的日志读取覆盖，之前的由整段重读覆盖。gap 为真表示位点断档（日志已清理或存储重建）。
 // 无法补齐的区间：位点断档或暂存库丢失（mgr 有最近成功时间）时是 [最近成功, R)；真正的首次运行是 [回补起点, R)。
+// 读了一半的变更日志页随之作废：它的条目都在新位点 H 之前，由整段重读覆盖。
 func (s *runState) rebase(ctx context.Context, out *Outcome, gap bool) error {
+	s.page = nil
+	s.r.keepPage(s.pageKey(), nil)
 	_, _, hadCursor, err := s.r.Staging.ChangeCursor(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return err

@@ -161,6 +161,8 @@ type env struct {
 	format string
 	// remote 是对象存储客户端；nil 表示没有配置对象存储。
 	remote *objectstore.Client
+	// r 是各次运行共用的 Runner（和 worker 进程一样，读了一半的变更日志页记在它的内存里）；置 nil 模拟 worker 重启。
+	r *Runner
 }
 
 func newEnv(t *testing.T) *env {
@@ -174,8 +176,15 @@ func newEnv(t *testing.T) *env {
 	return &env{t: t, root: root, store: store, src: &fakeSource{}, pace: &noPacer{}, now: time.Date(2026, 10, 17, 1, 4, 43, 0, time.UTC), format: export.FormatCSV}
 }
 
+// runner 返回 env 共用的 Runner，每次按 env 的当前设置重填各字段。
 func (e *env) runner(pageRows int) *Runner {
-	return &Runner{Source: e.src, Staging: e.store, Files: export.Files{Root: e.root, Format: e.format}, Pace: e.pace, PageRows: pageRows, Now: func() time.Time { return e.now }, ReadAttempts: 3, Remote: e.remote}
+	if e.r == nil {
+		e.r = &Runner{}
+	}
+	r := e.r
+	r.Source, r.Staging, r.Files, r.Pace, r.PageRows = e.src, e.store, export.Files{Root: e.root, Format: e.format}, e.pace, pageRows
+	r.Now, r.ReadAttempts, r.Remote = func() time.Time { return e.now }, 3, e.remote
+	return r
 }
 
 func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
