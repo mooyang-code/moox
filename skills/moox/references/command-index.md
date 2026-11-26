@@ -149,7 +149,7 @@
 | `factor status` | 因子运行状态（各任务的预热、排队、暂停与计算前检查；单个任务的检查看 factor task status） |
 | `factor task apply` | 按因子任务文件新建因子定义、任务与成员（只建不改；线上已有且内容不同时逐项列出差异，一项都不写） |
 | `factor task create` | 创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写成因子任务文件后用 factor task apply |
-| `factor task delete` | 删除计算任务（--purge 连结果一起删，不可恢复；默认只预览，--yes 才执行） |
+| `factor task delete` | 删除计算任务（先 factor task disable 停用任务，再逐个 factor member disable、factor member remove 移除全部成员才能删；已关联策略实例的不能删，随实例删除；--purge 连结果一起删，不可恢复；默认只预览，--yes 才执行） |
 | `factor task disable` | 停用计算任务（默认只预览，--yes 才执行） |
 | `factor task enable` | 启用计算任务 |
 | `factor task list` | 列出因子计算任务 |
