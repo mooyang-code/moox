@@ -154,7 +154,7 @@ min_level = "warn"
 enabled = false
 # memory_mb = 128               # 每个函数内存，默认 128
 # symbols_per_function = 50     # 每个函数负责的标的数，默认 50
-# backfill_reserved_concurrency = 5  # 补采函数的最大并发实例数，默认 5；首次接入的历史补齐并发是 地域数 × 它，要更快可调到 10（账号预留并发总额够用时）
+# backfill_reserved_concurrency = 5  # 补采函数的最大并发实例数，默认 5，补齐与补缺口共用；首次接入的历史补齐并发是 地域数 ×（它 − 1），留 1 个给实时缺口的补采，要更快可调到 10（账号预留并发总额够用时）
 
 # [scf_plan.cloud_account]
 # account_id = "tencent-scf"

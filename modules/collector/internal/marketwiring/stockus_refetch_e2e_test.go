@@ -64,14 +64,12 @@ func usRefetchCases() []usRefetchCase {
 // usBackfillFunctions 给补采分块一个函数名，调用交给真实的处理器。
 type usBackfillFunctions struct{}
 
-func (usBackfillFunctions) EnsureBackfillFunction(context.Context, string) (string, error) {
-	return "moox-fetch-plan-backfill-stockus-equity-nanjing", nil
-}
+func (usBackfillFunctions) BackfillRegion(string) (string, bool) { return "ap-nanjing", true }
 
 func (usBackfillFunctions) BackfillRegions(string) []string { return nil }
 
-func (f usBackfillFunctions) EnsureBackfillFunctionIn(ctx context.Context, market, _ string) (string, error) {
-	return f.EnsureBackfillFunction(ctx, market)
+func (usBackfillFunctions) EnsureBackfillFunctionIn(context.Context, string, string) (string, error) {
+	return "moox-fetch-plan-backfill-stockus-equity-nanjing", nil
 }
 
 // usRefetchHarness 装好一个美股空间的补采环境：采集计划（真实生成逻辑）、假 Storage、真实的处理器和补采器。

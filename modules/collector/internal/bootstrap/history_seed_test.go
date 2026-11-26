@@ -89,7 +89,7 @@ func TestHistorySeedRegionsOnlyUseDirectEntries(t *testing.T) {
 	require.Equal(t, []string{"ap-singapore", "ap-tokyo"}, options.Regions("crypto", "spot"), "香港的入口是海外机，不算")
 	require.Empty(t, options.Regions("crypto", "swap"), "只配了香港：没有直达地域，补齐走本地执行端")
 	require.Empty(t, options.Regions("stockus", "equity"), "没有对账器的空间没有地域")
-	require.Equal(t, 2*fetchplan.DefaultBackfillReservedConcurrency, options.Slots(context.Background(), "crypto"), "名额取各市场最大的“直达地域数 × 预留并发”")
+	require.Equal(t, 2*(fetchplan.DefaultBackfillReservedConcurrency-1), options.Slots(context.Background(), "crypto"), "名额取各市场最大的“直达地域数 ×（预留并发 − 1）”，每个函数留 1 个给补缺口")
 }
 
 // 没有云函数地域的空间（没有对账器、或市场没配地域）不返回补齐并发，走空间的补采并发上限。

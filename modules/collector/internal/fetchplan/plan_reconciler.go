@@ -1575,7 +1575,7 @@ func (r *PlanReconciler) BackfillRegions(marketType string) []string {
 }
 
 // DefaultBackfillReservedConcurrency 是补采函数默认的最大并发实例数，由平台的函数级预留并发硬性限制；
-// 可用 scf_plan.backfill_reserved_concurrency 调大（历史补齐的并发是 地域数 × 它；账号的预留并发总额不够时不要调大，建函数会报配额超限）。
+// 可用 scf_plan.backfill_reserved_concurrency 调大（历史补齐的并发是 地域数 ×（它 − 1），留 1 个给实时缺口的补采；账号的预留并发总额不够时不要调大，建函数会报配额超限）。
 const DefaultBackfillReservedConcurrency = 5
 
 // BackfillReservedConcurrency 是本空间补采函数的最大并发实例数。

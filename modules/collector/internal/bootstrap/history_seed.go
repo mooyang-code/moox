@@ -27,7 +27,7 @@ type datasetReader interface {
 
 // historySeedOptions 按配置装配历史补齐：深度取 min(保留期 − 1 天, max_depth)，行情源的回看上限按行情源目录的声明
 // （Lookback，补齐另减 1 天余量）；
-// 分块并发是各市场补采函数里最大的“地域数 × 预留并发”，没有云函数地域的市场（crypto 默认）走本地执行端，用空间的补采并发上限。
+// 分块并发是各市场补采函数里最大的“地域数 ×（预留并发 − 1）”，没有云函数地域的市场（crypto 默认）走本地执行端，用空间的补采并发上限。
 func historySeedOptions(cfg *Config, datasets datasetReader, reconcilers *fetchplan.Reconcilers) klinecheck.SeedOptions {
 	seed := cfg.HistorySeed
 	options := klinecheck.SeedOptions{
@@ -70,22 +70,17 @@ func historySeedOptions(cfg *Config, datasets datasetReader, reconcilers *fetchp
 		}
 		return direct
 	}
-	options.RegionConcurrency = func(spaceID string) int {
-		if reconciler := reconcilers.Get(spaceID); reconciler != nil {
-			return reconciler.BackfillReservedConcurrency()
-		}
-		return 0
-	}
 	options.Slots = func(ctx context.Context, spaceID string) int {
 		reconciler := reconcilers.Get(spaceID)
 		if reconciler == nil {
 			return 0
 		}
-		// 取各市场里最大的一个：同一时刻的分块多半来自同一个数据集（同一个市场），名额超过它的补采函数并发上限，
-		// 多出的调用会被平台拒绝或排队，占着名额却没有进展。
+		// 取各市场里最大的一个：同一时刻的分块多半来自同一个数据集（同一个市场），认领超过它在补采函数上能占的并发，
+		// 多出的分块拿不到函数名额，认领后马上退回。每个函数补齐只占预留并发 − 1，留 1 个给实时缺口的补采。
+		perFunction := klinecheck.SeedFunctionLimit(reconciler.BackfillReservedConcurrency())
 		slots := 0
 		for market := range cfg.SCFMarkets[strings.ToLower(spaceID)] {
-			slots = max(slots, len(options.Regions(spaceID, market))*reconciler.BackfillReservedConcurrency())
+			slots = max(slots, len(options.Regions(spaceID, market))*perFunction)
 		}
 		return slots
 	}
