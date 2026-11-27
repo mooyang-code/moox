@@ -675,10 +675,11 @@ func TestSeedMultiJobRetryWaitsUntilAllFailedJobsFinishAtomically(t *testing.T) 
 	require.Equal(t, store.SeedRunning, seed.Status)
 	require.Len(t, seed.JobIDs, 2, "2 个标的应拆成 2 个补齐作业")
 
-	// 让两个作业的分块全部跑完并失败；只给第 1 个作业写回 failed，模拟 Tick 尚未收尾第 2 个作业的竞态窗口。
+	// 让两个作业的分块全部跑完并失败；只给第 1 个作业写回 failed、第 2 个保持 running，模拟 Tick 尚未收尾第 2 个作业的竞态窗口。
 	require.NoError(t, b.Tick(ctx, "crypto"))
 	b.Wait()
 	require.NoError(t, b.Store.SetJobStatus(ctx, seed.JobIDs[0], store.BackfillFailed, "1 chunks failed"))
+	require.NoError(t, b.Store.SetJobStatus(ctx, seed.JobIDs[1], store.BackfillRunning, ""))
 	status1, err := b.Status(ctx, seed.JobIDs[1])
 	require.NoError(t, err)
 	require.Equal(t, store.BackfillRunning, status1.Job.Status, "第 2 个作业仍为 running")

@@ -511,23 +511,24 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	return nil
 }
 
-// claimAndLaunch 从单个作业认领至多 limit 个分块并异步执行；返回实际认领的分块数。
-func (b *Backfiller) claimAndLaunch(ctx context.Context, spaceID string, job store.BackfillJob, limit int, isSeed bool) error {
-	_, err := b.claimAndLaunchCount(ctx, spaceID, job, limit, isSeed)
-	return err
-}
-
-func (b *Backfiller) claimAndLaunchCount(ctx context.Context, spaceID string, job store.BackfillJob, limit int, isSeed bool) (int, error) {
+// claimChunksFromJob 从单个作业认领至多 limit 个分块并将作业置为 running，但不立即启动协程；
+// 这样调用方可在完成本轮收尾（settleJob）后再统一启动协程，避免刚启动的协程与同一轮的 SQLite 读/写竞争。
+func (b *Backfiller) claimChunksFromJob(ctx context.Context, job store.BackfillJob, limit int) ([]store.BackfillChunk, error) {
 	latestEnd := b.now().Add(chunkInvokeLimit + chunkSafetyMargin)
 	claimed, err := b.Store.ClaimChunks(ctx, job.JobID, limit, latestEnd)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if len(claimed) > 0 {
 		if err := b.Store.SetJobStatus(ctx, job.JobID, store.BackfillRunning, ""); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
+	return claimed, nil
+}
+
+// launchChunks 为认领到的分块启动异步执行协程。
+func (b *Backfiller) launchChunks(spaceID string, job store.BackfillJob, claimed []store.BackfillChunk, isSeed bool) {
 	force := job.Kind == store.BackfillKindForce
 	for _, chunk := range claimed {
 		b.workers.Add(1)
@@ -543,7 +544,15 @@ func (b *Backfiller) claimAndLaunchCount(ctx context.Context, spaceID string, jo
 			}
 		}()
 	}
-	return len(claimed), nil
+}
+
+func (b *Backfiller) claimAndLaunch(ctx context.Context, spaceID string, job store.BackfillJob, limit int, isSeed bool) error {
+	claimed, err := b.claimChunksFromJob(ctx, job, limit)
+	if err != nil {
+		return err
+	}
+	b.launchChunks(spaceID, job, claimed, isSeed)
+	return nil
 }
 
 // settleJob 在作业全部分块结束时更新作业状态、推进水位并封存补写通知。
@@ -579,6 +588,11 @@ type seedDatasetGroup struct {
 // tickSeedJobs 按数据集均衡分配补齐名额：始终把空闲名额分给当前在途分块最少、仍有待执行分块的数据集，
 // 并发补齐同一空间的多个数据集（例如币安现货 1m 与合约 1m）时不会互相饿死。
 func (b *Backfiller) tickSeedJobs(ctx context.Context, spaceID string, seedJobs []store.BackfillJob, inFlightByJob map[string]int, seedInFlight int) error {
+	type pendingLaunch struct {
+		job    store.BackfillJob
+		chunks []store.BackfillChunk
+	}
+	var toLaunch []pendingLaunch
 	free := b.seedSlots(ctx, spaceID) - seedInFlight
 	if free > 0 {
 		byKey := make(map[string]*seedDatasetGroup)
@@ -629,11 +643,17 @@ func (b *Backfiller) tickSeedJobs(ctx context.Context, spaceID string, seedJobs 
 				need := quota
 				for need > 0 && group.nextJobIdx < len(group.jobs) {
 					job := group.jobs[group.nextJobIdx]
-					claimed, err := b.claimAndLaunchCount(ctx, spaceID, job, need, true)
+					claimed, err := b.claimChunksFromJob(ctx, job, need)
 					if err != nil {
+						for _, item := range toLaunch {
+							b.launchChunks(spaceID, item.job, item.chunks, true)
+						}
 						return err
 					}
-					need -= claimed
+					if len(claimed) > 0 {
+						toLaunch = append(toLaunch, pendingLaunch{job: job, chunks: claimed})
+					}
+					need -= len(claimed)
 					if need > 0 {
 						group.nextJobIdx++
 					}
@@ -646,12 +666,17 @@ func (b *Backfiller) tickSeedJobs(ctx context.Context, spaceID string, seedJobs 
 			}
 		}
 	}
+	var settleErr error
 	for _, job := range seedJobs {
 		if err := b.settleJob(ctx, job); err != nil {
-			return err
+			settleErr = err
+			break
 		}
 	}
-	return nil
+	for _, item := range toLaunch {
+		b.launchChunks(spaceID, item.job, item.chunks, true)
+	}
+	return settleErr
 }
 
 func (b *Backfiller) baseContext() context.Context {
