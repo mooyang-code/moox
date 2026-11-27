@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -279,6 +281,27 @@ func setupFirewallTargets(manifest *topology.Config) ([]setupFirewallTarget, err
 			add(host, []cloudtencent.CreateFirewallRulesOptions{
 				{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX service gateway native"},
 			})
+		}
+	}
+	// 公网地域的 SCF 函数经公网连 entry_host 的外部入口（11004），自动为这些入口主机放行 11004；
+	// 仅走 VPC 的地域经私网访问，不需要对公网放行。
+	if manifest.SCFEnabled() {
+		regions := make([]string, 0, len(manifest.SCFPlan.Regions))
+		for region := range manifest.SCFPlan.Regions {
+			regions = append(regions, region)
+		}
+		sort.Strings(regions)
+		for _, region := range regions {
+			netCfg := manifest.SCFPlan.Regions[region]
+			if !strings.EqualFold(strings.TrimSpace(netCfg.Network), topology.SCFNetworkPublic) {
+				continue
+			}
+			host := manifest.HostByID(netCfg.EntryHost)
+			if setupconfigHostConfigured(host) && host.ExternalEntry {
+				add(host, []cloudtencent.CreateFirewallRulesOptions{
+					{Protocol: "TCP", Ports: strconv.Itoa(servicecatalog.HostGatewayExternalPort), CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX external entry gateway"},
+				})
+			}
 		}
 	}
 	return targets, nil

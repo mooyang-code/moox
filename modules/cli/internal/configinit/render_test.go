@@ -291,7 +291,10 @@ func TestSameAddressIsExplained(t *testing.T) {
 }
 
 func TestRenderLeavesEverythingAfterTheTopologyUntouched(t *testing.T) {
-	_, got := renderWith(t, sampleRequest(), nil)
+	request := sampleRequest()
+	// 不配海外机且存储机无 VPC 时不追加 [scf_plan]，拓扑之后的段落应与示例逐字一致。
+	request.Servers.Overseas = nil
+	_, got := renderWith(t, request, nil)
 	marker := "\n[egress_proxy]\n"
 	want := exampleTemplate
 	gotAt, wantAt := strings.Index(got, marker), strings.Index(want, marker)
@@ -445,7 +448,8 @@ func TestEveryGeneratedTopologyHasAnExternalEntry(t *testing.T) {
 	}
 }
 
-// 存储服务器是带私有网络的云服务器：按第一步密钥的 AppId 与存储服务器的 VPC、子网、私网 IP 生成 A 股云函数的 [scf_plan]。
+// 存储服务器是带私有网络的云服务器且配了海外机：按第一步密钥的 AppId 与存储服务器的 VPC、子网、私网 IP 生成 A 股（VPC）
+// 以及 crypto（首尔、东京公网地域直写存储机 11004）的 [scf_plan]。
 func TestRenderPlansStockCNCloudFunctionsInTheStorageVPC(t *testing.T) {
 	cloud := newFakeCloud()
 	cloud.instances["198.51.100.11"] = Instance{Kind: "cvm", KindName: "云服务器", Region: "ap-nanjing", RegionName: "南京", Name: "storage",
@@ -467,7 +471,20 @@ func TestRenderPlansStockCNCloudFunctionsInTheStorageVPC(t *testing.T) {
 	if region.VPCID != "vpc-abc" || region.SubnetID != "subnet-def" || region.EntryHost != "storage" {
 		t.Fatalf("地域网络 = %+v", region)
 	}
-	if len(manifest.SCFPlan.Spaces) != 1 || manifest.SCFPlan.Spaces[0].SpaceID != "stockcn" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-nanjing"}) {
+	for _, r := range []string{"ap-seoul", "ap-tokyo"} {
+		pub := manifest.SCFPlan.Regions[r]
+		if pub.Network != topology.SCFNetworkPublic || pub.EntryHost != "storage" || pub.VPCID != "" || pub.SubnetID != "" {
+			t.Fatalf("crypto 公网地域 %s = %+v", r, pub)
+		}
+	}
+	spaceByID := map[string]topology.SCFPlanSpace{}
+	for _, sp := range manifest.SCFPlan.Spaces {
+		spaceByID[sp.SpaceID] = sp
+	}
+	if len(spaceByID) != 2 ||
+		!slices.Equal(spaceByID["stockcn"].Markets["equity"], []string{"ap-nanjing"}) ||
+		!slices.Equal(spaceByID["crypto"].Markets["spot"], []string{"ap-seoul", "ap-tokyo"}) ||
+		!slices.Equal(spaceByID["crypto"].Markets["swap"], []string{"ap-seoul", "ap-tokyo"}) {
 		t.Fatalf("空间 = %+v", manifest.SCFPlan.Spaces)
 	}
 	if !strings.Contains(string(raw), `private_address = "10.0.0.5"`) {
@@ -475,16 +492,31 @@ func TestRenderPlansStockCNCloudFunctionsInTheStorageVPC(t *testing.T) {
 	}
 }
 
-// 存储服务器是轻量应用服务器（识别不到可绑定的 VPC）：不生成 [scf_plan]，保持关闭。
+// 存储服务器是轻量应用服务器（识别不到可绑定的 VPC）：
+// - 配了海外机时，自动为 crypto 生成首尔、东京公网地域（直写存储机 11004，不需要 VPC 或私网地址），不生成 stockcn；
+// - 没配海外机时，不生成 [scf_plan]，保持关闭。
 func TestRenderLeavesCloudFunctionsOffWithoutStorageVPC(t *testing.T) {
-	if render(t, sampleRequest()).SCFEnabled() {
-		t.Fatal("没有 VPC 时不应打开 [scf_plan]")
+	manifest, raw := renderWith(t, sampleRequest(), nil)
+	if !manifest.SCFEnabled() {
+		t.Fatal("配了海外机时应自动打开 [scf_plan] 为 crypto 配海外公网地域")
+	}
+	if len(manifest.SCFPlan.Spaces) != 1 || manifest.SCFPlan.Spaces[0].SpaceID != "crypto" {
+		t.Fatalf("无 VPC 时只应生成 crypto 空间: %+v", manifest.SCFPlan.Spaces)
+	}
+	if strings.Contains(raw, "private_address = ") {
+		t.Fatal("无 VPC 空间时不应写入 private_address")
+	}
+
+	noOverseas := sampleRequest()
+	noOverseas.Servers.Overseas = nil
+	if render(t, noOverseas).SCFEnabled() {
+		t.Fatal("没有 VPC 且没配海外机时不应打开 [scf_plan]")
 	}
 }
 
 func ptr[T any](value T) *T { return &value }
 
-// 只给存储服务器写私网地址；管理台与存储同地域却不在同一个 VPC、或拿不到 AppId 时不生成云函数计划，也不写私网地址。
+// 只给存储服务器写私网地址；管理台与存储同地域却不在同一个 VPC 时不生成 stockcn 也不写私网地址；拿不到 AppId 时不生成任何云函数计划。
 func TestRenderCloudFunctionPlanGuards(t *testing.T) {
 	storageCVM := Instance{Kind: "cvm", KindName: "云服务器", Region: "ap-nanjing", Name: "storage", VpcID: "vpc-abc", SubnetID: "subnet-def", PrivateIP: "10.0.0.5"}
 	renderCloud := func(cloud *fakeCloud) (renderedManifest, string) {
@@ -507,8 +539,13 @@ func TestRenderCloudFunctionPlanGuards(t *testing.T) {
 	sameRegion.instances["198.51.100.11"] = storageCVM
 	sameRegion.instances["198.51.100.10"] = Instance{Kind: "lighthouse", Region: "ap-nanjing", Name: "control", PrivateIP: "10.9.0.2"}
 	manifest, raw = renderCloud(sameRegion)
-	if manifest.SCFEnabled() || strings.Contains(raw, "private_address = ") {
-		t.Fatal("管理台与存储同地域但不在同一 VPC 时不生成计划、不写私网地址")
+	if strings.Contains(raw, "private_address = ") {
+		t.Fatal("管理台与存储同地域但不在同一 VPC 时不能写私网地址")
+	}
+	for _, sp := range manifest.SCFPlan.Spaces {
+		if sp.SpaceID == "stockcn" {
+			t.Fatal("管理台与存储同地域但不在同一 VPC 时不生成 stockcn 计划")
+		}
 	}
 
 	noAppID := newFakeCloud()
@@ -519,7 +556,7 @@ func TestRenderCloudFunctionPlanGuards(t *testing.T) {
 	}
 }
 
-// 入口主机优先选存储服务器（同地域走内网）；存储服务器是轻量服务器没有可用 VPC 时，退而选海外服务器的外部入口。
+// 入口主机优先选存储服务器（同地域走内网）；存储服务器是轻量服务器没有可用 VPC 时，stockcn 退而选海外服务器的外部入口，crypto 仍走公网直连存储机。
 func TestRenderPrefersStorageRegionForCloudFunctions(t *testing.T) {
 	plan := func(cloud *fakeCloud) renderedManifest {
 		rendered, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
@@ -528,19 +565,30 @@ func TestRenderPrefersStorageRegionForCloudFunctions(t *testing.T) {
 		}
 		return parseRendered(t, rendered)
 	}
+	spaceMarkets := func(m renderedManifest, spaceID string) map[string][]string {
+		for _, sp := range m.SCFPlan.Spaces {
+			if sp.SpaceID == spaceID {
+				return sp.Markets
+			}
+		}
+		return nil
+	}
 	both := newFakeCloud()
 	both.instances["198.51.100.11"] = Instance{Kind: "cvm", Region: "ap-nanjing", Name: "storage", VpcID: "vpc-nj", SubnetID: "subnet-nj", PrivateIP: "10.0.0.5"}
 	both.instances["198.51.100.12"] = Instance{Kind: "cvm", Region: "ap-hongkong", Name: "hk", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIP: "172.19.0.5"}
 	manifest := plan(both)
-	if got := manifest.SCFPlan.Spaces[0].Markets["equity"]; !slices.Equal(got, []string{"ap-nanjing"}) || manifest.SCFPlan.Regions["ap-nanjing"].EntryHost != "storage" {
+	if got := spaceMarkets(manifest, "stockcn")["equity"]; !slices.Equal(got, []string{"ap-nanjing"}) || manifest.SCFPlan.Regions["ap-nanjing"].EntryHost != "storage" {
 		t.Fatalf("存储服务器可用时应选它所在地域：%v", got)
 	}
 
 	fallback := newFakeCloud() // 存储服务器是轻量服务器（没有 VPC）
 	fallback.instances["198.51.100.12"] = Instance{Kind: "cvm", Region: "ap-hongkong", Name: "hk", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIP: "172.19.0.5"}
 	manifest = plan(fallback)
-	if !manifest.SCFEnabled() || manifest.SCFPlan.Regions["ap-hongkong"].EntryHost != "overseas" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-hongkong"}) {
+	if !manifest.SCFEnabled() || manifest.SCFPlan.Regions["ap-hongkong"].EntryHost != "overseas" || !slices.Equal(spaceMarkets(manifest, "stockcn")["equity"], []string{"ap-hongkong"}) {
 		t.Fatalf("存储服务器不可用时应退到海外服务器：%+v", manifest.SCFPlan)
+	}
+	if !slices.Equal(spaceMarkets(manifest, "crypto")["spot"], []string{"ap-seoul", "ap-tokyo"}) || manifest.SCFPlan.Regions["ap-seoul"].EntryHost != "storage" {
+		t.Fatalf("crypto 仍应走公网直连存储机：%+v", manifest.SCFPlan)
 	}
 }
 

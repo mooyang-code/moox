@@ -782,3 +782,89 @@ func TestSeedOutOfLookbackChunkDoesNotWriteBackfillNotice(t *testing.T) {
 	require.Len(t, notices, 1, "越界空分块不得写 backfill_notices，只有真实补写的 1 块有通知")
 	require.Equal(t, base.Add(-5*time.Minute).UTC(), notices[0].Start.UTC())
 }
+
+// 同一空间多个数据集并发历史补齐时，补齐名额按最少在途数均衡分配给各数据集，避免先建作业的数据集饿死另一个；
+// 某数据集待认领分块耗尽时，多余名额自动转给仍有待认领分块的数据集。
+func TestSeedDistributesSlotsFairlyAcrossDatasets(t *testing.T) {
+	b, _, _, base := seedFixture(t, 2*time.Hour)
+	ctx := context.Background()
+	b.Refill = false
+	b.Seed.Slots = func(context.Context, string) int { return 4 }
+
+	// 阻塞式 Invoker：每次调用进入后发信号并等待放行，确保核对在途分布时不会提前结束。
+	entered := make(chan string, 16)
+	release := make(chan struct{})
+	b.Invoker = &funcInvoker{fn: func(_ context.Context, _ string, _ string, event map[string]any) (marketfetch.InvocationResult, error) {
+		data := event["data"].(map[string]any)
+		entered <- data["dataset_id"].(string)
+		<-release
+		return marketfetch.InvocationResult{Result: map[string]any{"success": true}}, nil
+	}}
+	// 为 ds_a、ds_b 提供有效时间线，保证 chunkPlan 通过。
+	b.Checker.Timeline = staticTimeline{
+		makeTimelineEntry("crypto", "ds_a", base.Unix(), map[string]string{"BTC-USDT": "BTCUSDT"}),
+		makeTimelineEntry("crypto", "ds_b", base.Unix(), map[string]string{"BTC-USDT": "BTCUSDT"}),
+	}
+
+	makeChunks := func(jobID, datasetID string, n int) []store.BackfillChunk {
+		chunks := make([]store.BackfillChunk, 0, n)
+		for i := range n {
+			from := base.Add(-time.Duration(n-i) * time.Minute)
+			chunks = append(chunks, store.BackfillChunk{
+				DatasetID: datasetID, Frequency: "1m", SubjectID: "BTC-USDT",
+				From: from, To: from.Add(time.Minute),
+				ChunkID: chunkID(jobID, datasetID, "1m", "BTC-USDT", from),
+			})
+		}
+		return chunks
+	}
+	// ds_a 建在前面且有 6 块，ds_b 建在后面且有 3 块；名额 4 个时第一轮应各分 2 块。
+	require.NoError(t, b.Store.CreateJob(ctx, store.BackfillJob{
+		JobID: "seed-a", SpaceID: "crypto", Source: store.BackfillSourceSeed, Kind: store.BackfillKindGap,
+		DatasetID: "ds_a", Frequency: "1m", From: base.Add(-10 * time.Minute), To: base,
+	}, makeChunks("seed-a", "ds_a", 6)))
+	require.NoError(t, b.Store.CreateJob(ctx, store.BackfillJob{
+		JobID: "seed-b", SpaceID: "crypto", Source: store.BackfillSourceSeed, Kind: store.BackfillKindGap,
+		DatasetID: "ds_b", Frequency: "1m", From: base.Add(-10 * time.Minute), To: base,
+	}, makeChunks("seed-b", "ds_b", 3)))
+
+	waitEntered := func(n int) map[string]int {
+		seen := map[string]int{}
+		for range n {
+			select {
+			case ds := <-entered:
+				seen[ds]++
+			case <-time.After(5 * time.Second):
+				t.Fatalf("等待 %d 个分块进入执行超时，已收到 %v", n, seen)
+			}
+		}
+		return seen
+	}
+
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	require.Equal(t, map[string]int{"ds_a": 2, "ds_b": 2}, waitEntered(4), "第一轮 4 个名额应在两个数据集之间均分")
+
+	inFlight, err := b.Store.InFlightChunksByJob(ctx, []string{"seed-a", "seed-b"})
+	require.NoError(t, err)
+	require.Equal(t, 2, inFlight["seed-a"])
+	require.Equal(t, 2, inFlight["seed-b"])
+
+	close(release)
+	b.Wait()
+
+	// 第二轮：ds_b 只剩 1 块，ds_a 还剩 4 块；4 个名额应分给 ds_b 1 块、ds_a 3 块（多余名额自动转给 ds_a）。
+	release = make(chan struct{})
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	require.Equal(t, map[string]int{"ds_a": 3, "ds_b": 1}, waitEntered(4), "ds_b 余量不足时多余名额应自动转给 ds_a")
+
+	close(release)
+	b.Wait()
+}
+
+type funcInvoker struct {
+	fn func(ctx context.Context, spaceID, functionName string, event map[string]any) (marketfetch.InvocationResult, error)
+}
+
+func (f *funcInvoker) Invoke(ctx context.Context, spaceID, functionName string, event map[string]any) (marketfetch.InvocationResult, error) {
+	return f.fn(ctx, spaceID, functionName, event)
+}

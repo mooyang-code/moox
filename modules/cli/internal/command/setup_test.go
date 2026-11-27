@@ -278,6 +278,44 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	assert.Nil(t, ports("storage"))
 }
 
+// 配置了公网地域的 SCF 时，自动为对应的外部入口主机放行 11004；仅 VPC 地域不放行 11004。
+func TestSetupFirewallTargetsOpenExternalEntryForPublicSCFRegions(t *testing.T) {
+	manifest := &topology.Config{
+		HostCatalog: map[string]topology.HostDefinition{
+			"control":  {Address: "203.0.113.8", Region: "ap-guangzhou"},
+			"storage":  {Address: "203.0.113.10", Region: "ap-nanjing", ExternalEntry: true},
+			"overseas": {Address: "203.0.113.12", Region: "ap-hongkong", ExternalEntry: true},
+		},
+		EventBus:    topology.EventBus{Port: 4222},
+		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary", "eventbus"}, "overseas": {"trade"}},
+		SCFPlan: topology.SCFPlan{
+			Enabled: true,
+			Regions: map[string]topology.SCFPlanRegion{
+				"ap-nanjing":  {Network: topology.SCFNetworkVPC, VPCID: "vpc-1", SubnetID: "subnet-1", EntryHost: "storage"},
+				"ap-hongkong": {Network: topology.SCFNetworkVPC, VPCID: "vpc-2", SubnetID: "subnet-2", EntryHost: "overseas"},
+				"ap-seoul":    {Network: topology.SCFNetworkPublic, EntryHost: "storage"},
+				"ap-tokyo":    {Network: topology.SCFNetworkPublic, EntryHost: "storage"},
+			},
+		},
+	}
+	targets := mustFirewallTargets(t, manifest)
+	ports := func(name string) []string {
+		for _, target := range targets {
+			if target.Host.Name != name {
+				continue
+			}
+			got := make([]string, 0, len(target.Rules))
+			for _, rule := range target.Rules {
+				got = append(got, rule.Ports)
+			}
+			return got
+		}
+		return nil
+	}
+	assert.Contains(t, ports("storage"), "11004", "公网 SCF 地域的入口主机应自动放行 11004")
+	assert.NotContains(t, ports("overseas"), "11004", "仅被 VPC 地域引用的入口主机不对公网放行 11004")
+}
+
 func mustFirewallTargets(t *testing.T, manifest *topology.Config) []setupFirewallTarget {
 	t.Helper()
 	targets, err := setupFirewallTargets(manifest)

@@ -346,18 +346,30 @@ func (r *BackfillRepository) InFlightChunks(ctx context.Context, spaceID string)
 	return int(count), err
 }
 
-// InFlightChunksOf 返回这些作业正在占用名额的分块数（running 且未超过最迟结束时间）。
-func (r *BackfillRepository) InFlightChunksOf(ctx context.Context, jobIDs []string) (int, error) {
+// InFlightChunksByJob 返回每个作业正在占用名额的分块数（running 且未超过最迟结束时间）。
+func (r *BackfillRepository) InFlightChunksByJob(ctx context.Context, jobIDs []string) (map[string]int, error) {
 	if err := r.ready(); err != nil {
-		return 0, err
+		return nil, err
 	}
+	out := make(map[string]int, len(jobIDs))
 	if len(jobIDs) == 0 {
-		return 0, nil
+		return out, nil
 	}
-	var count int64
-	err := r.db.WithContext(ctx).Model(&backfillChunkRow{}).
-		Where("c_job_id IN ? AND c_status = ? AND c_latest_end_at >= ?", jobIDs, BackfillRunning, nowUnixMilli()).Count(&count).Error
-	return int(count), err
+	type countRow struct {
+		JobID string `gorm:"column:c_job_id"`
+		Count int    `gorm:"column:n"`
+	}
+	var rows []countRow
+	if err := r.db.WithContext(ctx).Model(&backfillChunkRow{}).
+		Select("c_job_id, COUNT(*) AS n").
+		Where("c_job_id IN ? AND c_status = ? AND c_latest_end_at >= ?", jobIDs, BackfillRunning, nowUnixMilli()).
+		Group("c_job_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.JobID] = row.Count
+	}
+	return out, nil
 }
 
 // ErrChunkLost 表示分块已被重新认领或取消，当前尝试不再拥有它。

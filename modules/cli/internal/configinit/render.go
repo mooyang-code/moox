@@ -153,25 +153,41 @@ const (
 	scfCredentialSecretID = "tencent-default"
 )
 
-// renderSCFPlan 生成 A 股（stockcn）定时采集云函数的 [scf_plan] 子表：A 股只能走云函数。函数绑定入口主机所在地域的 VPC 与子网，
-// 经入口主机的私网地址访问它的外部入口（主机网关的 11004）。入口主机优先选存储服务器：函数与 Storage 同地域，写入全程走内网，不经公网转发；
-// 存储服务器不满足条件时，退而选其他开了外部入口且有可用 VPC 的主机（如海外服务器），由它的网关转到 Storage。
+// cryptoSeedSCFRegions 是 config init 为 crypto 首次接入历史补齐默认生成的海外公网云函数地域：
+// 实测首尔与东京均可直连币安现货/合约 REST（无 451 地域拦截），且经公网直写大陆存储机 11004 零超时丢包；
+// 补齐并发为 2 × (5 - 1) = 8，足以打满 10000 行/秒的全局补齐写速上限。
+var cryptoSeedSCFRegions = []string{"ap-seoul", "ap-tokyo"}
+
+// renderSCFPlan 生成 [scf_plan] 子表：
+// 1. A 股（stockcn）：函数绑定入口主机所在地域的 VPC 与子网，经入口主机的私网地址访问外部入口（11004），优先选存储机；
+// 2. 加密货币（crypto）：配了海外机且存储机开着外部入口时，默认配首尔、东京公网地域直写存储机 11004，加速首次接入历史补齐（不经海外机带宽）。
 // 代码包放在管理台所在地域、按 AppId 命名的 COS 桶（首次上传时自动创建）。
-// 没有可用的入口主机或拿不到 AppId 时返回 nil，[scf_plan] 保持关闭，A 股要以后补配。
+// 拿不到 AppId、管理台地域不支持 SCF，或两类空间都不满足条件时返回 nil，[scf_plan] 保持关闭。
 func renderSCFPlan(request *Request) []string {
 	if request.appID == "" || !tencent.IsSCFRegion(request.region) {
 		return nil
 	}
-	entry := scfEntryHost(request.hosts)
-	if entry == nil {
+	stockEntry := scfEntryHost(request.hosts)
+	storageEntry := storageExternalEntryHost(request.hosts)
+	hasOverseas := slices.ContainsFunc(request.hosts, func(h Host) bool {
+		return slices.Contains(h.Components, "collector-stream")
+	})
+	var cryptoRegions []string
+	if hasOverseas && storageEntry != nil {
+		for _, region := range cryptoSeedSCFRegions {
+			if stockEntry != nil && stockEntry.Region == region && stockEntry.ID != storageEntry.ID {
+				continue
+			}
+			cryptoRegions = append(cryptoRegions, region)
+		}
+	}
+	if stockEntry == nil && len(cryptoRegions) == 0 {
 		return nil
 	}
-	// 只有生成云函数计划时才给入口主机写私网地址（函数经它的外部入口进来），其他主机一律不写。
-	entry.renderPrivateAddress = true
 	bucket := "moox-scf-" + strings.TrimPrefix(request.region, "ap-") + "-" + request.appID
-	return []string{
+	lines := []string{
 		"",
-		"# A 股定时采集云函数（由 config init 按第一步的密钥与入口主机的私有网络生成；入口优先选存储服务器，同地域走内网）。",
+		"# 云函数采集与历史补齐计划（由 config init 按第一步密钥与主机拓扑自动生成）。",
 		"[scf_plan.cloud_account]",
 		"account_id = " + tomlString(scfAccountID),
 		"account_name = " + tomlString(scfAccountName),
@@ -180,17 +196,67 @@ func renderSCFPlan(request *Request) []string {
 		"cos_region = " + tomlString(request.region),
 		"cos_bucket = " + tomlString(bucket),
 		"",
-		"[scf_plan.regions." + entry.Region + "]",
-		"vpc_id = " + tomlString(entry.VpcID),
-		"subnet_id = " + tomlString(entry.SubnetID),
-		"entry_host = " + tomlString(entry.ID),
-		"",
-		"[[scf_plan.spaces]]",
-		`space_id = "stockcn"`,
-		"[scf_plan.spaces.markets]",
-		"equity = [" + tomlString(entry.Region) + "]",
-		"",
 	}
+	declared := map[string]bool{}
+	if stockEntry != nil {
+		// 只有生成 A 股 VPC 云函数计划时才给入口主机写私网地址（函数经它的外部入口进来），其他主机一律不写。
+		stockEntry.renderPrivateAddress = true
+		lines = append(lines,
+			"[scf_plan.regions."+stockEntry.Region+"]",
+			"vpc_id = "+tomlString(stockEntry.VpcID),
+			"subnet_id = "+tomlString(stockEntry.SubnetID),
+			"entry_host = "+tomlString(stockEntry.ID),
+			"",
+		)
+		declared[stockEntry.Region] = true
+	}
+	for _, region := range cryptoRegions {
+		if declared[region] {
+			continue
+		}
+		lines = append(lines,
+			"[scf_plan.regions."+region+"]",
+			`network = "public"`,
+			"entry_host = "+tomlString(storageEntry.ID),
+			"",
+		)
+		declared[region] = true
+	}
+	if len(cryptoRegions) > 0 {
+		quoted := make([]string, len(cryptoRegions))
+		for i, region := range cryptoRegions {
+			quoted[i] = tomlString(region)
+		}
+		list := "[" + strings.Join(quoted, ", ") + "]"
+		lines = append(lines,
+			"[[scf_plan.spaces]]",
+			`space_id = "crypto"`,
+			"[scf_plan.spaces.markets]",
+			"spot = "+list,
+			"swap = "+list,
+			"",
+		)
+	}
+	if stockEntry != nil {
+		lines = append(lines,
+			"[[scf_plan.spaces]]",
+			`space_id = "stockcn"`,
+			"[scf_plan.spaces.markets]",
+			"equity = ["+tomlString(stockEntry.Region)+"]",
+			"",
+		)
+	}
+	return lines
+}
+
+// storageExternalEntryHost 返回部署了 storage-primary 且开启了外部入口（11004）的主机；公网地域 SCF 函数经公网直写该主机。
+func storageExternalEntryHost(hosts []Host) *Host {
+	for i := range hosts {
+		if slices.Contains(hosts[i].Components, "storage-primary") && hosts[i].ExternalEntry {
+			return &hosts[i]
+		}
+	}
+	return nil
 }
 
 // scfEntryHost 选云函数的入口主机：先看存储服务器，再按顺序看其他开了外部入口的主机，取第一台可用的。可用指：

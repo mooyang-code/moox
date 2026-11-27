@@ -96,7 +96,7 @@ type BackfillStore interface {
 	CreateHistorySeed(context.Context, store.HistorySeed) (bool, error)
 	UpdateHistorySeed(context.Context, store.HistorySeed, ...string) (bool, error)
 	RetryHistorySeed(context.Context, string, string, string, []string) (bool, error)
-	InFlightChunksOf(context.Context, []string) (int, error)
+	InFlightChunksByJob(context.Context, []string) (map[string]int, error)
 }
 
 // RouteSource 由当前的采集任务给出补采数据集（某个频率）用的来源、拉取参数与输出字段，由 *fetchplan.BackfillRoutes 实现。
@@ -170,8 +170,9 @@ type Backfiller struct {
 	// seedLimiter、seedLocalLimiter 是补齐写 Storage 的速率限制（按根数计令牌），首次用到时按 Seed 参数创建。
 	seedLimiter      *rate.Limiter
 	seedLocalLimiter *rate.Limiter
-	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
-	tickMu sync.Mutex
+	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限；seedRound 在多个补齐数据集在途数相同时轮流打破平局。
+	tickMu    sync.Mutex
+	seedRound int
 	// timelines 按空间增量缓存只读 Timeline，避免每次分块执行都全表反序列化大 JSON。
 	timelines timelineCache
 }
@@ -461,87 +462,193 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return err
 	}
-	// 历史补齐的作业排在最后、按自己的上限（seedSlots）认领：直接按作业来源 c_source == 'seed' 识别，无需反查补齐记录表。
-	// 认领只管空间里同时执行的分块数；调用补采函数前，同一个函数上的各类分块还共用一份并发名额（见 runChunk）。
+	// 补缺口（rank 0）与强制重拉（rank 1）排在前面、共用空间补采名额；历史补齐（source == seed）排在最后、
+	// 按自己的上限（seedSlots）在各补齐数据集之间按最少在途数均衡分配名额，避免多个数据集同时补齐时先建作业的
+	// 数据集长期占满名额、饿死后一个数据集并把它的预计剩余时间拉成几十天。
+	var regularJobs, seedJobs []store.BackfillJob
 	var seedIDList []string
 	for _, job := range jobs {
 		if job.Source == store.BackfillSourceSeed {
+			seedJobs = append(seedJobs, job)
 			seedIDList = append(seedIDList, job.JobID)
+		} else {
+			regularJobs = append(regularJobs, job)
 		}
 	}
 	// 强制重拉的作业排在补缺口之后：它重写的是已有的行，不急；行情源不可用时它的分块每块都失败、退回重试，
 	// 排在前面会每轮占满名额，补缺口的作业只能捡空档（2026-11-23 港股收市后整天重取拖慢了自动补采）。
-	rank := func(job store.BackfillJob) int {
-		switch {
-		case job.Source == store.BackfillSourceSeed:
-			return 2
-		case job.Kind == store.BackfillKindForce:
-			return 1
-		}
-		return 0
+	sort.SliceStable(regularJobs, func(i, j int) bool {
+		return (regularJobs[i].Kind == store.BackfillKindForce) == false && regularJobs[j].Kind == store.BackfillKindForce
+	})
+	seedInFlightByJob, err := b.Store.InFlightChunksByJob(ctx, seedIDList)
+	if err != nil {
+		return err
 	}
-	sort.SliceStable(jobs, func(i, j int) bool { return rank(jobs[i]) < rank(jobs[j]) })
-	for _, job := range jobs {
-		isSeed := job.Source == store.BackfillSourceSeed
+	seedInFlight := 0
+	for _, n := range seedInFlightByJob {
+		seedInFlight += n
+	}
+	for _, job := range regularJobs {
 		inFlight, err := b.Store.InFlightChunks(ctx, spaceID)
 		if err != nil {
 			return err
 		}
-		limit := b.maxInFlight(ctx, spaceID)
-		if len(seedIDList) > 0 {
-			seedInFlight, err := b.Store.InFlightChunksOf(ctx, seedIDList)
-			if err != nil {
+		nonSeedInFlight := max(inFlight-seedInFlight, 0)
+		if free := b.maxInFlight(ctx, spaceID) - nonSeedInFlight; free > 0 {
+			if err := b.claimAndLaunch(ctx, spaceID, job, free, false); err != nil {
 				return err
 			}
-			if isSeed {
-				inFlight, limit = seedInFlight, b.seedSlots(ctx, spaceID)
-			} else {
-				inFlight -= seedInFlight
-			}
 		}
-		if free := limit - inFlight; free > 0 {
-			latestEnd := b.now().Add(chunkInvokeLimit + chunkSafetyMargin)
-			claimed, err := b.Store.ClaimChunks(ctx, job.JobID, free, latestEnd)
-			if err != nil {
-				return err
-			}
-			if len(claimed) > 0 {
-				if err := b.Store.SetJobStatus(ctx, job.JobID, store.BackfillRunning, ""); err != nil {
-					return err
-				}
-			}
-			for _, chunk := range claimed {
-				b.workers.Add(1)
-				go func() {
-					defer b.workers.Done()
-					// 分块执行完（成功或失败）后立刻补位认领下一块，不等下一次定时调度：
-					// 否则吞吐被限制为每次调度一批（每分钟约 5 块），大窗口要排很久。
-					// 退回名额、结果不明的分块不触发补位，避免函数未就绪时空转。
-					if b.runChunk(b.baseContext(), spaceID, chunk, job.Kind == store.BackfillKindForce, isSeed) && b.Refill {
-						if err := b.Tick(b.baseContext(), spaceID); err != nil {
-							log.WarnContextf(b.baseContext(), "collector backfill refill failed space=%s: %v", spaceID, err)
-						}
-					}
-				}()
-			}
-		}
-		counts, err := b.Store.ChunkStatusCounts(ctx, job.JobID)
-		if err != nil {
+		if err := b.settleJob(ctx, job); err != nil {
 			return err
 		}
-		if counts[store.BackfillPending] == 0 && counts[store.BackfillRunning] == 0 {
-			status, message := store.BackfillSucceeded, ""
-			if counts[store.BackfillFailed] > 0 {
-				status, message = store.BackfillFailed, fmt.Sprintf("%d chunks failed", counts[store.BackfillFailed])
+	}
+	if len(seedJobs) > 0 {
+		if err := b.tickSeedJobs(ctx, spaceID, seedJobs, seedInFlightByJob, seedInFlight); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// claimAndLaunch 从单个作业认领至多 limit 个分块并异步执行；返回实际认领的分块数。
+func (b *Backfiller) claimAndLaunch(ctx context.Context, spaceID string, job store.BackfillJob, limit int, isSeed bool) error {
+	_, err := b.claimAndLaunchCount(ctx, spaceID, job, limit, isSeed)
+	return err
+}
+
+func (b *Backfiller) claimAndLaunchCount(ctx context.Context, spaceID string, job store.BackfillJob, limit int, isSeed bool) (int, error) {
+	latestEnd := b.now().Add(chunkInvokeLimit + chunkSafetyMargin)
+	claimed, err := b.Store.ClaimChunks(ctx, job.JobID, limit, latestEnd)
+	if err != nil {
+		return 0, err
+	}
+	if len(claimed) > 0 {
+		if err := b.Store.SetJobStatus(ctx, job.JobID, store.BackfillRunning, ""); err != nil {
+			return 0, err
+		}
+	}
+	force := job.Kind == store.BackfillKindForce
+	for _, chunk := range claimed {
+		b.workers.Add(1)
+		go func() {
+			defer b.workers.Done()
+			// 分块执行完（成功或失败）后立刻补位认领下一块，不等下一次定时调度：
+			// 否则吞吐被限制为每次调度一批（每分钟约 5 块），大窗口要排很久。
+			// 退回名额、结果不明的分块不触发补位，避免函数未就绪时空转。
+			if b.runChunk(b.baseContext(), spaceID, chunk, force, isSeed) && b.Refill {
+				if err := b.Tick(b.baseContext(), spaceID); err != nil {
+					log.WarnContextf(b.baseContext(), "collector backfill refill failed space=%s: %v", spaceID, err)
+				}
 			}
-			if err := b.Store.SetJobStatus(ctx, job.JobID, status, message); err != nil {
-				return err
+		}()
+	}
+	return len(claimed), nil
+}
+
+// settleJob 在作业全部分块结束时更新作业状态、推进水位并封存补写通知。
+func (b *Backfiller) settleJob(ctx context.Context, job store.BackfillJob) error {
+	counts, err := b.Store.ChunkStatusCounts(ctx, job.JobID)
+	if err != nil {
+		return err
+	}
+	if counts[store.BackfillPending] == 0 && counts[store.BackfillRunning] == 0 {
+		status, message := store.BackfillSucceeded, ""
+		if counts[store.BackfillFailed] > 0 {
+			status, message = store.BackfillFailed, fmt.Sprintf("%d chunks failed", counts[store.BackfillFailed])
+		}
+		if err := b.Store.SetJobStatus(ctx, job.JobID, status, message); err != nil {
+			return err
+		}
+		if status == store.BackfillSucceeded {
+			b.advanceWatermark(ctx, job)
+		}
+		// 失败的作业里已成功的分块也记了补写通知，一并发出。
+		b.flushNotices(ctx, job.JobID)
+	}
+	return nil
+}
+
+type seedDatasetGroup struct {
+	key        string
+	jobs       []store.BackfillJob
+	inFlight   int
+	nextJobIdx int
+}
+
+// tickSeedJobs 按数据集均衡分配补齐名额：始终把空闲名额分给当前在途分块最少、仍有待执行分块的数据集，
+// 并发补齐同一空间的多个数据集（例如币安现货 1m 与合约 1m）时不会互相饿死。
+func (b *Backfiller) tickSeedJobs(ctx context.Context, spaceID string, seedJobs []store.BackfillJob, inFlightByJob map[string]int, seedInFlight int) error {
+	free := b.seedSlots(ctx, spaceID) - seedInFlight
+	if free > 0 {
+		byKey := make(map[string]*seedDatasetGroup)
+		groups := make([]*seedDatasetGroup, 0, len(seedJobs))
+		for _, job := range seedJobs {
+			key := DatasetKey(job.DatasetID, job.Frequency)
+			group := byKey[key]
+			if group == nil {
+				group = &seedDatasetGroup{key: key}
+				byKey[key] = group
+				groups = append(groups, group)
 			}
-			if status == store.BackfillSucceeded {
-				b.advanceWatermark(ctx, job)
+			group.jobs = append(group.jobs, job)
+			group.inFlight += inFlightByJob[job.JobID]
+		}
+		for free > 0 {
+			quotas := make([]int, len(groups))
+			assigned := 0
+			for free > 0 {
+				picked := -1
+				for step := range len(groups) {
+					idx := (b.seedRound + step) % len(groups)
+					group := groups[idx]
+					if group.nextJobIdx >= len(group.jobs) {
+						continue
+					}
+					if picked < 0 || group.inFlight < groups[picked].inFlight {
+						picked = idx
+					}
+				}
+				if picked < 0 {
+					break
+				}
+				quotas[picked]++
+				groups[picked].inFlight++
+				b.seedRound = (picked + 1) % len(groups)
+				free--
+				assigned++
 			}
-			// 失败的作业里已成功的分块也记了补写通知，一并发出。
-			b.flushNotices(ctx, job.JobID)
+			if assigned == 0 {
+				break
+			}
+			for i, quota := range quotas {
+				if quota == 0 {
+					continue
+				}
+				group := groups[i]
+				need := quota
+				for need > 0 && group.nextJobIdx < len(group.jobs) {
+					job := group.jobs[group.nextJobIdx]
+					claimed, err := b.claimAndLaunchCount(ctx, spaceID, job, need, true)
+					if err != nil {
+						return err
+					}
+					need -= claimed
+					if need > 0 {
+						group.nextJobIdx++
+					}
+				}
+				if need > 0 {
+					// 该数据集当前已无待认领分块，把未用掉的名额退回给其他还有余量的数据集。
+					group.inFlight -= need
+					free += need
+				}
+			}
+		}
+	}
+	for _, job := range seedJobs {
+		if err := b.settleJob(ctx, job); err != nil {
+			return err
 		}
 	}
 	return nil
