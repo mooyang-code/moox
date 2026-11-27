@@ -5,7 +5,7 @@ const (
 	secretWriteReason       = "密钥的新建、修改、启停与删除由用户在管理台“系统设置 › 密钥管理”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
 	sshReason               = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
 	authReason              = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
-	cloudAccountWriteReason = "云账号的新建与修改在管理台“数据采集 › 采集任务”的“运行状态”页签里“函数”区的“云账号”对话框做（初始账号由 setup init 登记）；密钥本身在“系统设置 › 密钥管理”"
+	cloudAccountWriteReason = "云账号的新建与修改在管理台“数据采集 › 采集运行”的“运行状态”页签里“函数”区的“云账号”对话框做（初始账号由 setup init 登记）；密钥本身在“系统设置 › 密钥管理”"
 )
 
 // handWrittenCoverage 记录不是规格表生成、而是手写实现的命令各自覆盖了管理台的哪些接口（接口 → 命令路径）。

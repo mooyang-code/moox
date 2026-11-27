@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page collector-task-management-page" :class="{ 'collector-task-management-page--fill': fillHeight }">
     <div class="moox-inner">
-      <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="采集任务" @change="onTabChange" />
+      <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="采集运行" @change="onTabChange" />
 
       <section class="task-management-content" :class="{ 'task-management-content--fill': fillHeight }">
         <keep-alive>
@@ -36,12 +36,14 @@ const route = useRoute();
 const router = useRouter();
 // 当前 Tab 只由 URL 决定：点击时只改 URL，不先切换本地状态，避免新 Tab 在跳转完成前
 // 按旧 query 写回 URL 而取消这次跳转。
-// 从菜单进来（地址里没有任何参数）时默认看“运行状态”；带参数的链接（任务详情、筛选、别的页签）照原样打开。
-// 在 setup 里同步决定，首次渲染就是运行状态，不会先挂载“采集任务”页签白发请求；地址写回后以地址为准。
+// 从菜单进来（地址里没有任何参数）时默认看“采集结果”；带参数的链接（任务详情、筛选、别的页签）照原样打开。
+// 在 setup 里同步决定，首次渲染就是采集结果，不会先挂载“采集任务”页签白发请求；地址写回后以地址为准。
 // 只在进入页面时判断一次：之后在“采集任务”页签里清空筛选，地址也会变成没有参数，不能把用户切走。
-const landingTab = ref<CollectorTaskTab | null>(Object.keys(route.query).length ? null : "status");
+const landingTab = ref<CollectorTaskTab | null>(Object.keys(route.query).length ? null : "results");
 if (landingTab.value) {
-  void router.replace({ path: "/collector/tasks", query: { tab: landingTab.value } }).finally(() => (landingTab.value = null));
+  void Promise.resolve(router.replace({ path: "/collector/tasks", query: { tab: landingTab.value } })).finally(
+    () => (landingTab.value = null)
+  );
 }
 const activeTab = computed<CollectorTaskTab>(() => landingTab.value ?? normalizeTab(route.query.tab));
 

@@ -54,7 +54,7 @@
 - 云函数由 Collector 的对账器按采集计划自动建、自动修，不需要手工创建或部署：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，落后的函数自动升级）、
   `list`（现场读回计划里的函数与期望比对，`--drift` 只看不一致的；计划外的同前缀函数单列，定时器已被停掉）、`delete`（按名字或前缀删函数，默认只预览；`--namespace`、`--region` 只删这个命名空间、地域里的，删旧命名空间里的同名副本时必带，否则在用的同名函数也会被删；计划里的函数删掉后下一轮重建）、
   `probe-egress`（取各采集函数此刻的公网出口 IP）。
-- 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台“数据采集 › 采集任务”的“运行状态”页签里的“云账号”对话框，初始账号由 `setup init` 登记。
+- 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台“数据采集 › 采集运行”的“运行状态”页签里的“云账号”对话框，初始账号由 `setup init` 登记。
   换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `setup inspect-scf` 查出来再到腾讯云控制台手工删。
 - 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
 - **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `attention:collector:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。

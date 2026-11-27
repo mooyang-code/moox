@@ -9,7 +9,7 @@ const collectMgr = "trpc.moox.collector.CollectMgr"
 func init() {
 	rpcGroupShort["collector data-type"] = "采集数据类型配置"
 	rpcGroupShort["collector delist"] = "标的下架：手工登记（自动发现由 Collector 的下架检测负责）"
-	rpcGroupShort["collector account"] = "云账号（只登记密钥 ID 与 COS 桶；新建与修改在管理台“数据采集 › 采集任务”的“运行状态”页签里的“云账号”对话框）"
+	rpcGroupShort["collector account"] = "云账号（只登记密钥 ID 与 COS 桶；新建与修改在管理台“数据采集 › 采集运行”的“运行状态”页签里的“云账号”对话框）"
 	rpcGroupShort["collector package"] = "云函数代码包（上传用 collector function upload）"
 
 	registerRPCSpecs(

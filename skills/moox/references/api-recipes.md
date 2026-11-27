@@ -24,10 +24,10 @@
 | 数据采集 › 数据源 | 数据来源 | `metadata source list|show|create|update|delete` |
 | 数据采集 › 数据对象 | 标的、标签与成员 | `metadata subject list|show|upsert|resolve`、`metadata tag list|show|upsert|delete|list-members|member-status`、`metadata tag members|clone` |
 | 数据集与列（没有单独的页面；每个数据集恰好一个查询索引 View，随数据集建删） | 数据集、列 | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`；可采字段的中文名与分组看 `collector data-type show` |
-| 数据采集 › 采集任务（“采集结果”页签看数据；导入没有页面） | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`、`import` |
-| 数据采集 › 采集任务 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
-| 数据采集 › 采集任务（“运行状态”“补采”页签） | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |
-| 数据采集 › 采集任务（“运行状态”页签里的云账号、代码包、云上状态） | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress` |
+| 数据采集 › 采集运行（“采集结果”页签看数据；导入没有页面） | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`、`import` |
+| 数据采集 › 采集运行 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
+| 数据采集 › 采集运行（“运行状态”“补采”页签） | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |
+| 数据采集 › 采集运行（“运行状态”页签里的云账号、代码包、云上状态） | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress` |
 | 因子计算 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
 | 因子计算 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params|status|apply`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
 | 策略管理 | 定义、实例、结果、回放 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable|confirm|delete`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy display get|set` |

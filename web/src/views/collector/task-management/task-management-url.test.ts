@@ -28,7 +28,7 @@ function setup(query: Record<string, string>) {
   return mount(TaskManagement, { global: { plugins: [ArcoVue] } });
 }
 
-describe("采集任务的页签容器", () => {
+describe("采集运行的页签容器", () => {
   it("切页签只改 tab，别的页签的参数原样保留", async () => {
     const wrapper = setup({ keyword: "btc", page: "2", detail: "t1" });
     (wrapper.vm as unknown as { onTabChange(value: string): void }).onTabChange("results");
@@ -44,15 +44,18 @@ describe("采集任务的页签容器", () => {
     expect(ctx.route.query).toEqual({ tab: "results" });
   });
 
-  it("从菜单进来（地址没有参数）默认看运行状态，首次渲染就不挂载采集任务页签；带参数的链接照原样打开", async () => {
+  it("从菜单进来（地址没有参数）默认看采集结果，首次渲染就不挂载采集任务页签；带参数的链接照原样打开", async () => {
     const wrapper = setup({});
-    // 地址还没写回时就已经是运行状态
-    expect(wrapper.text()).toContain("status");
+    // 地址还没写回时就已经是采集结果
+    expect(wrapper.text()).toContain("results");
     expect(wrapper.text()).not.toContain("tasks");
     await flushPromises();
-    expect(ctx.route.query).toEqual({ tab: "status" });
+    expect(ctx.route.query).toEqual({ tab: "results" });
     setup({ detail: "t1" });
     await flushPromises();
     expect(ctx.route.query).toEqual({ detail: "t1" });
+    setup({ tab: "tasks" });
+    await flushPromises();
+    expect(ctx.route.query).toEqual({ tab: "tasks" });
   });
 });

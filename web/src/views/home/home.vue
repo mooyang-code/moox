@@ -443,7 +443,7 @@ const quickLinks: { label: string; icon: string; target: HomeTarget }[] = [
 
 const inventory = computed(() => [
   { label: "数据源", value: counts.sources, path: "/data/sources" },
-  { label: "采集任务", value: counts.rules, path: "/collector/tasks" },
+  { label: "采集任务", value: counts.rules, path: "/collector/tasks?tab=tasks" },
   { label: "采集结果", value: counts.datasets, path: "/collector/tasks?tab=results" },
   { label: "因子", value: counts.factors, path: "/factor/definitions" },
   { label: "计算任务", value: counts.factorTasks, path: "/factor/tasks" },

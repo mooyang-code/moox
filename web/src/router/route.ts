@@ -41,12 +41,6 @@ export const layoutRoutes = [
     meta: { title: "数据采集", svgIcon: "functions" },
     children: [
       {
-        path: "/collector/tasks",
-        name: "collector-tasks",
-        component: () => import("@/views/collector/task-management/index.vue"),
-        meta: { title: "采集任务" }
-      },
-      {
         path: "/data/sources",
         name: "data-sources",
         component: () => import("@/views/data/sources/index.vue"),
@@ -57,6 +51,12 @@ export const layoutRoutes = [
         name: "data-subjects",
         component: () => import("@/views/data/subjects/index.vue"),
         meta: { title: "数据对象" }
+      },
+      {
+        path: "/collector/tasks",
+        name: "collector-tasks",
+        component: () => import("@/views/collector/task-management/index.vue"),
+        meta: { title: "采集运行" }
       }
     ]
   },

@@ -206,8 +206,8 @@ test("data collection owns base assets and has no top-level data assets menu", a
   await page.goto("/#/data/subjects");
   await expect(page.getByLabel("数据对象")).toBeVisible();
   await page.goto("/#/collector/tasks");
-  await expect(page.getByLabel("采集任务")).toBeVisible();
-  await page.goto("/#/collector/tasks?tab=results");
+  await expect(page.getByLabel("采集运行")).toBeVisible();
+  await expect(page).toHaveURL(/tab=results/);
   await expect(page.getByText("采集结果", { exact: true })).toBeVisible();
 });
 
@@ -241,7 +241,7 @@ test("data sources hosts field definitions tab with sidebar groups and provider 
 
 test("runtime status hosts cloud accounts and code packages, not an executors tab", async ({ page }) => {
   await page.goto("/#/collector/tasks?tab=executors");
-  await expect(page.getByLabel("采集任务")).toBeVisible();
+  await expect(page.getByLabel("采集运行")).toBeVisible();
   await expect(page.getByText("执行器", { exact: true })).toHaveCount(0);
   await page.goto("/#/collector/tasks?tab=status");
   await expect(page.getByRole("button", { name: "云账号", exact: true })).toBeVisible();

@@ -11,7 +11,7 @@ describe("collector task management workbench", () => {
     const positions = ["采集任务", "采集结果", "运行状态", "补采"].map(label => normalized.indexOf(`label:"${label}"`));
 
     expect(source).toContain("PageTitleTabs");
-    expect(source).toContain('aria-label="采集任务"');
+    expect(source).toContain('aria-label="采集运行"');
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
     expect(normalized).not.toContain('label:"执行器"');
