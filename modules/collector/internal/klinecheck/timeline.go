@@ -5,6 +5,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -52,6 +53,14 @@ type TimelineSource interface {
 	ListBySpace(ctx context.Context, spaceID string) ([]store.SeriesTimelineEntry, error)
 }
 
+// incrementalTimelineSource 是支持按 c_id 轻量探测与增量读取的时间线存储（生产 *store.SeriesTimelineRepository 实现）。
+type incrementalTimelineSource interface {
+	TimelineSource
+	TimelineStats(ctx context.Context, spaceID string) (count, minID, maxID int64, err error)
+	ListBySpaceWithBounds(ctx context.Context, spaceID string) (entries []store.SeriesTimelineEntry, minID, maxID int64, err error)
+	ListBySpaceAfter(ctx context.Context, spaceID string, afterID int64) (entries []store.SeriesTimelineEntry, lastID int64, err error)
+}
+
 // BuildTimeline 把标的时间线表的行（按写入先后）整理成每个数据集各段时间应有的标的。
 // 一行非空序列结束上一段并开始新的一段；一行空序列只结束上一段（从这一刻起不再采集）。
 //
@@ -61,14 +70,117 @@ type TimelineSource interface {
 func BuildTimeline(entries []store.SeriesTimelineEntry) Timeline {
 	timeline := Timeline{}
 	for _, entry := range entries {
-		key := DatasetKey(entry.DatasetID, entry.Frequency)
-		closeSegment(timeline, key, entry.EffectiveFrom)
-		if len(entry.Series) == 0 {
-			continue
-		}
-		timeline[key] = append(timeline[key], Segment{From: entry.EffectiveFrom, Subjects: segmentSubjects(entry.Series), Symbols: entry.Symbols, LatenessS: entry.LatenessS, OutputFields: entry.OutputFields})
+		applyTimelineEntry(timeline, entry)
 	}
 	return timeline
+}
+
+func applyTimelineEntry(timeline Timeline, entry store.SeriesTimelineEntry) {
+	key := DatasetKey(entry.DatasetID, entry.Frequency)
+	closeSegment(timeline, key, entry.EffectiveFrom)
+	if len(entry.Series) == 0 {
+		return
+	}
+	timeline[key] = append(timeline[key], Segment{From: entry.EffectiveFrom, Subjects: segmentSubjects(entry.Series), Symbols: entry.Symbols, LatenessS: entry.LatenessS, OutputFields: entry.OutputFields})
+}
+
+// cloneTimeline 复制时间线的 map 和各键的 Segment 切片，确保调用方修改（如 extendEarliestSegments）或增量构建不影响已发布的只读缓存。
+func cloneTimeline(src Timeline) Timeline {
+	out := make(Timeline, len(src))
+	for key, segments := range src {
+		copied := make([]Segment, len(segments))
+		copy(copied, segments)
+		out[key] = copied
+	}
+	return out
+}
+
+type spaceTimelineCache struct {
+	mu       sync.Mutex
+	loaded   bool
+	count    int64
+	minID    int64
+	maxID    int64
+	timeline Timeline
+}
+
+// timelineCache 按空间在内存中增量缓存只读 Timeline，避免每次分块执行都全表反序列化大 JSON。
+// 每次调用先查轻量 (count, min_id, max_id) 统计：
+//   - 三者未变时直接命中内存缓存（零 JSON 反序列化）；
+//   - 仅追加新行时（count 增加量等于增量行数且 min_id 不变）只解码 c_id > max_id 的增量行并构造新不可变快照；
+//   - 发生覆盖删行或整空间清空重登记时自动回退全量重建，绝不残留已删旧行。
+type timelineCache struct {
+	mu     sync.Mutex
+	spaces map[string]*spaceTimelineCache
+}
+
+func (c *timelineCache) spaceEntry(spaceID string) *spaceTimelineCache {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.spaces == nil {
+		c.spaces = map[string]*spaceTimelineCache{}
+	}
+	entry := c.spaces[spaceID]
+	if entry == nil {
+		entry = &spaceTimelineCache{}
+		c.spaces[spaceID] = entry
+	}
+	return entry
+}
+
+// Load 返回该空间最新的只读 Timeline。调用方不得原地修改返回的 Timeline 或其切片元素（需修改时请先调用 cloneTimeline）。
+func (c *timelineCache) Load(ctx context.Context, source TimelineSource, spaceID string) (Timeline, error) {
+	if c == nil {
+		return loadTimeline(ctx, source, spaceID)
+	}
+	inc, ok := source.(incrementalTimelineSource)
+	if !ok {
+		return loadTimeline(ctx, source, spaceID)
+	}
+	key := strings.TrimSpace(spaceID)
+	entry := c.spaceEntry(key)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	count, minID, maxID, err := inc.TimelineStats(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		if !entry.loaded || entry.count != 0 {
+			entry.loaded, entry.count, entry.minID, entry.maxID, entry.timeline = true, 0, 0, 0, Timeline{}
+		}
+		return entry.timeline, nil
+	}
+	if entry.loaded && entry.count == count && entry.minID == minID && entry.maxID == maxID {
+		return entry.timeline, nil
+	}
+	// 尝试增量拉取：只有当 c_id <= entry.maxID 的旧行一行未删（min_id 不变且增量行数恰好补足 count）时才走增量路径。
+	if entry.loaded && entry.count > 0 && minID == entry.minID && maxID > entry.maxID && count > entry.count {
+		delta, lastID, deltaErr := inc.ListBySpaceAfter(ctx, key, entry.maxID)
+		if deltaErr != nil {
+			return nil, deltaErr
+		}
+		if len(delta) > 0 && entry.count+int64(len(delta)) == count && lastID == maxID {
+			next := cloneTimeline(entry.timeline)
+			for _, item := range delta {
+				applyTimelineEntry(next, item)
+			}
+			entry.count, entry.maxID, entry.timeline = count, maxID, next
+			return next, nil
+		}
+	}
+	// 冷启动、同生效点覆盖删旧行、或整空间清库重登记：全量重建，并以读回行的真实首尾 ID 作为缓存水位。
+	rows, gotMinID, gotMaxID, err := inc.ListBySpaceWithBounds(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	next := BuildTimeline(rows)
+	entry.loaded = true
+	entry.count = int64(len(rows))
+	entry.minID, entry.maxID = gotMinID, gotMaxID
+	entry.timeline = next
+	return next, nil
 }
 
 // loadTimeline 读出空间的时间线行并整理成时间线。

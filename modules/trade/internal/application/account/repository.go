@@ -177,6 +177,13 @@ func accountRecord(value tradingaccount.Account) store.TradingAccountRecord {
 	return record
 }
 
+func liveEnvironment(value tradingaccount.Account) exchange.AccountEnvironment {
+	if value.Live != nil {
+		return value.Live.Environment
+	}
+	return value.Environment
+}
+
 func credentialSecret(value tradingaccount.Account) string {
 	if value.Live != nil {
 		return value.Live.CredentialSecretID

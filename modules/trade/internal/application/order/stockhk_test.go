@@ -160,6 +160,6 @@ func TestHKPaperFundsDoNotLockTodayBuys(t *testing.T) {
 		ReservedAsset: "00005.XHKG", ReservedQuantity: shared.MustDecimal("400"),
 	}
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
-		return checkPaperFunds(tx, validation, shared.Zero(), validation.ReservedQuantity, "", "")
+		return checkPaperFunds(tx, validation, shared.Zero(), validation.ReservedQuantity, "", "", time.Now())
 	}))
 }

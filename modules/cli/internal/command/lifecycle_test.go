@@ -114,3 +114,45 @@ func TestLifecycleHasOnlyModuleCommands(t *testing.T) {
 	}
 	require.Nil(t, importCmd.Flags().Lookup("engine"))
 }
+
+// 单模块 lifecycle pause 默认只预览不发暂停请求，加 --yes 才执行；预览阶段同样校验模块存在与部署状态。
+func TestLifecyclePauseOnlyPreviewsWithoutYes(t *testing.T) {
+	gateway := newLifecycleGateway()
+	ctrl := gateway.add(t, "trade", lifecycle.Hooks{})
+	gateway.use(t)
+
+	pause, _, err := lifecycleCmd.Find([]string{"pause"})
+	require.NoError(t, err)
+	require.NotNil(t, pause.Flags().Lookup("yes"), "lifecycle pause 必须提供 --yes 确认参数")
+
+	saved := lifecycleFlags
+	t.Cleanup(func() { lifecycleFlags = saved })
+
+	var out, errOut bytes.Buffer
+	pause.SetOut(&out)
+	pause.SetErr(&errOut)
+	pause.SetContext(context.Background())
+
+	lifecycleFlags = lifecycleOptions{Module: "trade", Reason: "维护", ExpiresIn: 2 * time.Hour, Yes: false}
+	require.NoError(t, pause.RunE(pause, nil))
+	preview := parsePreview(t, out.String())
+	require.Equal(t, "lifecycle_pause", preview["action"])
+	require.Equal(t, "trade", preview["module"])
+	require.Equal(t, "manual", preview["pause_kind"])
+	require.Equal(t, "维护", preview["reason"])
+	require.Equal(t, "2h0m0s", preview["for"])
+	require.Empty(t, gateway.snapshot(), "没有 --yes 不能发出暂停请求")
+	require.True(t, ctrl.Running())
+
+	out.Reset()
+	lifecycleFlags.Yes = true
+	require.NoError(t, pause.RunE(pause, nil))
+	require.Equal(t, []string{"trade:pause"}, gateway.snapshot())
+	require.True(t, ctrl.Halted())
+	require.Contains(t, out.String(), "模块 trade：暂停")
+
+	lifecycleFlags = lifecycleOptions{Module: "strategy", Yes: false}
+	require.ErrorContains(t, pause.RunE(pause, nil), "没有部署")
+	lifecycleFlags = lifecycleOptions{Module: "monitor", Yes: false}
+	require.ErrorContains(t, pause.RunE(pause, nil), "未知的模块")
+}

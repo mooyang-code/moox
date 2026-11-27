@@ -88,6 +88,9 @@ func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 	if err != nil {
 		return err
 	}
+	if err := ValidateOutputFields(spaceID, params.OutputFields); err != nil {
+		return err
+	}
 	if alignment := strings.TrimSpace(params.Alignment); alignment != "" && alignment != market.Alignment {
 		return fmt.Errorf("alignment must be %s for market %s", market.Alignment, market.ID)
 	}

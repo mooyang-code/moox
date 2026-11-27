@@ -157,6 +157,16 @@ type PauseResult struct {
 	Warnings []string
 }
 
+// PauseOrder 返回按系统暂停顺序（下游到上游）排列的已配置模块名，供执行与预览共用。
+func (o *Orchestrator) PauseOrder() []string {
+	ordered := o.ordered(pauseOrder)
+	names := make([]string, 0, len(ordered))
+	for _, m := range ordered {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
 // Pause 系统暂停：下游到上游逐个暂停。某个模块失败就停在那里（不回滚已暂停的部分，暂停无损），返回已暂停的模块与错误；
 // 重复执行幂等。
 func (o *Orchestrator) Pause(ctx context.Context, reason string) (PauseResult, error) {

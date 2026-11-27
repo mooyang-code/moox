@@ -311,3 +311,62 @@ func TestIsPermanentWriteError(t *testing.T) {
 		t.Fatal("可重试的错误不应判为确定性错误")
 	}
 }
+
+// 结果进入 sent 或 cancelled 终态后，c_event_data 必须置为 NULL 释放空间（覆盖替代取消、投递前取消、sent 与 rejected 取消全部路径）。
+func TestTerminalPublishStatusClearsEventDataToNull(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	account := "acct-1"
+	seedEnabledInstance(t, repo, "i1", "session-1", &account)
+
+	assertEventDataNull := func(resultID string, wantStatus PublishStatus) {
+		t.Helper()
+		got, err := repo.GetResult(ctx, resultID)
+		if err != nil {
+			t.Fatalf("GetResult(%s) 失败：%v", resultID, err)
+		}
+		if got.PublishStatus != wantStatus {
+			t.Fatalf("结果 %s 状态=%s，期望 %s", resultID, got.PublishStatus, wantStatus)
+		}
+		if got.EventData != nil {
+			t.Fatalf("结果 %s 进入终态 %s 后 EventData 应为 nil，实际长度=%d", resultID, wantStatus, len(got.EventData))
+		}
+		var isNull int
+		if err := repo.db.Raw(`SELECT CASE WHEN c_event_data IS NULL THEN 1 ELSE 0 END FROM t_strategy_results WHERE c_result_id = ?`, resultID).Scan(&isNull).Error; err != nil {
+			t.Fatal(err)
+		}
+		if isNull != 1 {
+			t.Fatalf("结果 %s 在数据库里的 c_event_data 应为 NULL", resultID)
+		}
+	}
+
+	// 1. 新 ok 结果替代旧 pending（sqlCancelSupersededResults）→ cancelled 且 c_event_data IS NULL。
+	mustCommit(t, repo, okResult("r1", "i1", "session-1", 1, PublishPending), nil, testNow)
+	mustCommit(t, repo, okResult("r2", "i1", "session-1", 2, PublishPending), nil, testNow)
+	assertEventDataNull("r1", PublishCancelled)
+
+	// 2. pending → sent（sqlTransitionPublishStatus）→ sent 且 c_event_data IS NULL。
+	if err := repo.TransitionPublishStatus(ctx, "r2", PublishPending, PublishSent); err != nil {
+		t.Fatal(err)
+	}
+	assertEventDataNull("r2", PublishSent)
+
+	// 3. pending → cancelled（永久发布错误，sqlTransitionPublishStatus）→ cancelled 且 c_event_data IS NULL。
+	mustCommit(t, repo, okResult("r3", "i1", "session-1", 3, PublishPending), nil, testNow)
+	if err := repo.TransitionPublishStatus(ctx, "r3", PublishPending, PublishCancelled); err != nil {
+		t.Fatal(err)
+	}
+	assertEventDataNull("r3", PublishCancelled)
+	// cancelled → sent（并发发布已发出）同样保持 c_event_data IS NULL。
+	if err := repo.TransitionPublishStatus(ctx, "r3", PublishCancelled, PublishSent); err != nil {
+		t.Fatal(err)
+	}
+	assertEventDataNull("r3", PublishSent)
+
+	// 4. PreparePendingResult 发现过期取消（sqlCancelPendingResult）→ cancelled 且 c_event_data IS NULL。
+	mustCommit(t, repo, okResult("r4", "i1", "session-1", 4, PublishPending), nil, testNow)
+	if _, valid, err := repo.PreparePendingResult(ctx, "r4", testNow.Add(24*time.Hour)); err != nil || valid {
+		t.Fatalf("过期结果应被取消：valid=%v err=%v", valid, err)
+	}
+	assertEventDataNull("r4", PublishCancelled)
+}

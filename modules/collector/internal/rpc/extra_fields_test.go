@@ -162,5 +162,100 @@ func TestGetDataTypeConfigWithFieldsListsExtraFields(t *testing.T) {
 	rsp, err = service.GetDataTypeConfigWithFields(context.Background(), &pb.GetDataTypeConfigWithFieldsReq{DataType: "kline_resample"})
 	require.NoError(t, err)
 	require.Empty(t, rsp.GetDetail().GetExtraFields(), "重采样没有附加字段")
-	require.Empty(t, rsp.GetDetail().GetBaseOutputFields(), "重采样的字段表是固定的")
+	resampleBase := rsp.GetDetail().GetBaseOutputFields()
+	require.NotEmpty(t, resampleBase, "重采样必须返回可合成的基础输出字段供管理台选择")
+	resampleIDs := make([]string, 0, len(resampleBase))
+	for _, field := range resampleBase {
+		require.NotEmpty(t, field.GetDisplayName(), field.GetFieldId())
+		require.NotEmpty(t, field.GetGroup(), field.GetFieldId())
+		require.NotEmpty(t, field.GetValueType(), field.GetFieldId())
+		resampleIDs = append(resampleIDs, field.GetFieldId())
+	}
+	require.Equal(t, []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num", "amount"}, resampleIDs)
+	require.NotContains(t, resampleIDs, "close_time", "重采样基础字段不含原始采集元信息列")
+	require.NotContains(t, resampleIDs, "amount_quality")
+	require.NotContains(t, resampleIDs, "funding_rate")
+}
+
+// UpdateTask 更新重采样任务时必须校验重采样参数与输出字段，防止写入 close_time 或跨市场字段把任务打进 error。
+func TestUpdateTaskValidatesResampleParamsAndOutputFields(t *testing.T) {
+	ctx := context.Background()
+	db := openCollectorTestStore(t)
+
+	cryptoIDs := taskresult.ResultIDs("resample-crypto")
+	stockIDs := taskresult.ResultIDs("resample-stock")
+	cryptoCollectParams := `{"provider":"moox","market_type":"spot","source_dataset_id":"dataset_src_crypto","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"` + cryptoIDs.DatasetID + `","target_frequency":"5m","alignment":"epoch_utc"}`
+	stockCollectParams := `{"provider":"moox","market_type":"equity","source_dataset_id":"dataset_src_stock","source_frequency":"1m","source_series_tag":"default","target_dataset_id":"` + stockIDs.DatasetID + `","target_frequency":"5m","alignment":"session"}`
+
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "resample-crypto", TaskName: "crypto 5m", DataType: "kline_resample",
+		TagIDs: []string{"binance_spot"}, CollectParams: cryptoCollectParams,
+		Enabled: true, PrepareState: domain.PrepareStateReady, ResultDatasetID: cryptoIDs.DatasetID,
+	}))
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
+		SpaceID: "stockcn", TaskID: "resample-stock", TaskName: "stockcn 5m", DataType: "kline_resample",
+		TagIDs: []string{"stockcn_all"}, CollectParams: stockCollectParams,
+		Enabled: true, PrepareState: domain.PrepareStateReady, ResultDatasetID: stockIDs.DatasetID,
+	}))
+
+	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{
+		cryptoIDs.DatasetID: newTaskResultMetadataFake(cryptoIDs, "resample-crypto").datasets[cryptoIDs.DatasetID],
+		stockIDs.DatasetID:  newTaskResultMetadataFake(stockIDs, "resample-stock").datasets[stockIDs.DatasetID],
+	}}
+	service := &Service{
+		persistence:   db,
+		taskRepo:      db.Tasks(),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
+		datasetSrc: validationDatasetSource{
+			"dataset_src_crypto": storagesource.DatasetInfo{
+				DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m",
+				SubjectTags: []string{"binance_spot"}, Attributes: map[string]string{"market_type": "spot"},
+			},
+			"dataset_src_stock": storagesource.DatasetInfo{
+				DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m",
+				SubjectTags: []string{"stockcn_all"}, Attributes: map[string]string{"market_type": "equity"},
+			},
+		},
+	}
+
+	updateResample := func(spaceID, taskID, taskName, marketType, sourceDataset, seriesTag, alignment string, outputFields []any) *pb.UpdateTaskRsp {
+		body := map[string]any{
+			"provider": "moox", "market_type": marketType,
+			"source_dataset_id": sourceDataset, "source_frequency": "1m", "source_series_tag": seriesTag,
+			"target_frequency": "5m", "alignment": alignment, "output_fields": outputFields,
+		}
+		params, err := structpb.NewStruct(body)
+		require.NoError(t, err)
+		rsp, err := service.UpdateTask(ctx, &pb.UpdateTaskReq{
+			SpaceId: spaceID, TaskId: taskID,
+			Task: &pb.CollectionTask{SpaceId: spaceID, TaskId: taskID, TaskName: taskName, DataType: "kline_resample", CollectParams: params},
+		})
+		require.NoError(t, err)
+		return rsp
+	}
+
+	// crypto 合成任务拒绝 close_time、A 股专属字段 amount 与 funding_rate。
+	for _, bad := range []string{"close_time", "amount", "funding_rate"} {
+		rsp := updateResample("crypto", "resample-crypto", "crypto 5m", "spot", "dataset_src_crypto", "venue:binance", "epoch_utc", []any{"close", bad})
+		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "crypto 应拒绝 %s", bad)
+		require.Contains(t, rsp.GetRetInfo().GetMsg(), bad)
+	}
+	// stockcn 合成任务拒绝 close_time 与 crypto 专属字段 quote_volume / trade_num。
+	for _, bad := range []string{"close_time", "quote_volume", "trade_num"} {
+		rsp := updateResample("stockcn", "resample-stock", "stockcn 5m", "equity", "dataset_src_stock", "default", "session", []any{"close", bad})
+		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "stockcn 应拒绝 %s", bad)
+		require.Contains(t, rsp.GetRetInfo().GetMsg(), bad)
+	}
+
+	// 被拒绝的更新不能修改数据库记录，也不能破坏 PrepareStateReady。
+	storedCrypto, err := db.Tasks().GetByTaskID(ctx, "crypto", "resample-crypto")
+	require.NoError(t, err)
+	require.Equal(t, domain.PrepareStateReady, storedCrypto.PrepareState)
+	require.NotContains(t, storedCrypto.CollectParams, "close_time")
+
+	// 合法缩减到当前市场可合成字段子集时更新成功。
+	rsp := updateResample("crypto", "resample-crypto", "crypto 5m", "spot", "dataset_src_crypto", "venue:binance", "epoch_utc", []any{"open", "close", "quote_volume"})
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	rsp = updateResample("stockcn", "resample-stock", "stockcn 5m", "equity", "dataset_src_stock", "default", "session", []any{"open", "close", "amount"})
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 }

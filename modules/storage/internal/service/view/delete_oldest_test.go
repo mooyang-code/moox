@@ -24,6 +24,8 @@ type oldestDeleterEngine struct {
 	gotMaxSerie  int
 	finishKeep   uint64
 	failDeleteAt int
+	failFinish   bool
+	notOddRev    int
 }
 
 func (e *oldestDeleterEngine) PlanOldestRows(_ context.Context, _ string, keep uint64, maxSeries, maxRows int) ([]viewindex.OldestRowsCut, error) {
@@ -39,6 +41,9 @@ func (e *oldestDeleterEngine) PlanOldestRows(_ context.Context, _ string, keep u
 
 func (e *oldestDeleterEngine) DeleteOldestRows(_ context.Context, indexID string, cuts []viewindex.OldestRowsCut) (uint64, error) {
 	e.deletes++
+	if e.svc.runtimeOf(marketRef).revision.Load()&1 == 0 {
+		e.notOddRev++
+	}
 	if e.failDeleteAt > 0 && e.deletes == e.failDeleteAt {
 		return 0, errors.New("模拟删除失败")
 	}
@@ -56,8 +61,14 @@ func (e *oldestDeleterEngine) DeleteOldestRows(_ context.Context, indexID string
 func (e *oldestDeleterEngine) FinishOldestRowsDelete(_ context.Context, indexID string, keep uint64) (string, error) {
 	e.refreshes++
 	e.finishKeep = keep
+	if e.svc.runtimeOf(marketRef).revision.Load()&1 == 0 {
+		e.notOddRev++
+	}
 	if len(e.svc.runtimeOf(marketRef).gate.token) != 0 {
 		e.unlocked++
+	}
+	if e.failFinish {
+		return "", errors.New("模拟收尾失败")
 	}
 	return "2026-10-30T00:05:00.000000000Z", nil
 }
@@ -72,15 +83,23 @@ func deleteOldestTestService(backlog uint64) (*Service, *oldestDeleterEngine) {
 
 func TestDeleteOldestRoundDeletesInBatchesUnderWriteLockUpToRoundCap(t *testing.T) {
 	svc, engine := deleteOldestTestService(1_000_000)
+	beforeRevision := svc.runtimeOf(marketRef).revision.Load()
 	svc.deleteOldestRound(context.Background(), 3)
 
 	// 每批 3 行、每轮上限 3 × deleteOldestRoundRowsFactor 行。
 	if engine.deletes != deleteOldestRoundRowsFactor || engine.backlog != 1_000_000-3*deleteOldestRoundRowsFactor {
 		t.Fatalf("一轮删了 %d 批、剩 %d 行，应在 %d 行的上限处停下", engine.deletes, engine.backlog, 3*deleteOldestRoundRowsFactor)
 	}
-	// 每批删除和收尾都推进修订号，分页读取才能发现读取期间数据变了。
-	if got := svc.runtimeOf(marketRef).revision.Load(); got != uint64(engine.deletes+1) {
-		t.Fatalf("修订号推进了 %d 次，应为 %d 批删除加 1 次收尾", got, engine.deletes+1)
+	// 每批删除和收尾采用 Seqlock 前后各加 1（合计 +2），结束时恢复偶数，分页读取才能在任意交错下发现变更。
+	afterRevision := svc.runtimeOf(marketRef).revision.Load()
+	if afterRevision&1 != 0 {
+		t.Fatalf("删除结束后修订号应恢复为偶数，实际=%d", afterRevision)
+	}
+	if got, want := afterRevision-beforeRevision, 2*uint64(engine.deletes+1); got != want {
+		t.Fatalf("修订号推进了 %d，应为 %d（%d 批删除加 1 次收尾，每次 +2）", got, want, engine.deletes+1)
+	}
+	if engine.notOddRev != 0 {
+		t.Fatalf("有 %d 次引擎修改期间修订号未置为奇数", engine.notOddRev)
 	}
 	if engine.finishKeep != 10000 {
 		t.Fatalf("收尾时的保留根数=%d，应为 10000", engine.finishKeep)
@@ -143,6 +162,27 @@ func TestDeleteOldestRoundFinishesDeletedRowsWhenALaterBatchFails(t *testing.T) 
 	}
 	if len(svc.runtimeOf(marketRef).gate.token) != 1 {
 		t.Fatal("失败后写锁没有释放")
+	}
+	if rev := svc.runtimeOf(marketRef).revision.Load(); rev&1 != 0 {
+		t.Fatalf("删除批次失败后修订号应恢复偶数，实际=%d", rev)
+	}
+	if engine.notOddRev != 0 {
+		t.Fatalf("失败场景下有 %d 次引擎修改期间修订号未置为奇数", engine.notOddRev)
+	}
+
+	// 收尾失败同样不能让 revision 卡在奇数状态。
+	svc2, engine2 := deleteOldestTestService(10)
+	engine2.failFinish = true
+	if _, err := svc2.deleteOldestFromIndex(context.Background(), deleteOldestTarget{
+		runtime: svc2.runtimeOf(marketRef), indexID: marketIndexID, deleter: engine2,
+	}, 10000, 3); err == nil {
+		t.Fatal("期望收尾返回模拟错误")
+	}
+	if rev := svc2.runtimeOf(marketRef).revision.Load(); rev&1 != 0 {
+		t.Fatalf("收尾失败后修订号应恢复偶数，实际=%d", rev)
+	}
+	if engine2.notOddRev != 0 {
+		t.Fatalf("收尾失败场景下有 %d 次引擎修改期间修订号未置为奇数", engine2.notOddRev)
 	}
 }
 

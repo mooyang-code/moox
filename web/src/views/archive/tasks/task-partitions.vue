@@ -123,6 +123,7 @@ import {
   type ArchivePartition,
   type ArchiveTask
 } from "@/api/archive";
+import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { formatBytes } from "@/api/modules/host-monitor";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -234,7 +235,7 @@ async function download(partition: ArchivePartition) {
         fallbackName: `${props.task.dir_name || datasetId.value}_${key}.csv.gz`
       },
       (received, total) => {
-        if (total > 0 && key in downloading.value)
+        if (total > 0 && controllers.get(key) === controller)
           downloading.value = { ...downloading.value, [key]: Math.floor((received / total) * 100) };
       },
       controller.signal
@@ -242,11 +243,13 @@ async function download(partition: ArchivePartition) {
     if (controller.signal.aborted) return;
     saveBlob(blob, fileName);
   } catch (cause) {
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || cause instanceof AuthSessionExpiredError) return;
     Message.error(`下载 ${key} 失败：${cause instanceof Error && cause.message ? cause.message : "请稍后重试"}`);
   } finally {
-    if (controllers.get(key) === controller) controllers.delete(key);
-    downloading.value = Object.fromEntries(Object.entries(downloading.value).filter(([item]) => item !== key));
+    if (controllers.get(key) === controller) {
+      controllers.delete(key);
+      downloading.value = Object.fromEntries(Object.entries(downloading.value).filter(([item]) => item !== key));
+    }
   }
 }
 </script>

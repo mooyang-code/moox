@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
+	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -84,6 +85,8 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	require.NoError(t, err)
 	require.NotEqual(t, first.GetSnapshotId(), concurrent.GetSnapshotId())
 
+	// 翻页期间高频跳变的 ViewLastDataTime 向前推进时，第 2 页必须正常返回，不得误报 CONFLICT。
+	metadata.indexedTo[activeIDs.DatasetID] = now.Format(time.RFC3339)
 	second, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
 		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 2}, SnapshotId: first.GetSnapshotId(),
 	})
@@ -94,21 +97,36 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	require.False(t, second.GetEntries()[0].GetEnabled())
 	require.False(t, second.GetEntries()[0].GetOwnershipVerified(), "停用任务不检查结果归属")
 	require.Equal(t, "pending", second.GetEntries()[0].GetResultStatus())
-	service.inventorySnapshotMu.Lock()
-	_, firstSnapshotRetained := service.inventorySnapshots[first.GetSnapshotId()]
-	service.inventorySnapshotMu.Unlock()
-	require.False(t, firstSnapshotRetained, "final page should release the snapshot slot")
+	require.Equal(t, first.GetSnapshotId(), second.GetSnapshotId(), "无状态翻页保持与首页相同的 snapshot_id")
+	require.Equal(t, first.GetObservedAt(), second.GetObservedAt(), "无状态翻页保持与首页相同的 observed_at")
+
+	// 篡改 snapshot_id 中的 observedMs（即使仍在 TTL 窗口内）必须因摘要不匹配返回 CONFLICT。
+	parsed, ok := parseTaskResultInventoryToken(first.GetSnapshotId())
+	require.True(t, ok)
+	tamperedObserved := formatTaskResultInventoryToken(parsed.observedMs-1000, parsed.pageSize, parsed.nonce, parsed.digest)
+	tamperedRsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
+		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 2}, SnapshotId: tamperedObserved,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_CONFLICT, tamperedRsp.GetRetInfo().GetCode(), "篡改 observedMs 必须被摘要校验拦截")
 
 	// Deletion is expressed by absence from a new complete snapshot, not by
 	// synthesizing a tombstone that could outlive the authoritative task row.
 	require.NoError(t, db.Tasks().DeleteByTaskID(ctx, "crypto", "task-disabled"))
+	stalePage, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
+		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 2}, SnapshotId: first.GetSnapshotId(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_CONFLICT, stalePage.GetRetInfo().GetCode(), "翻页期间任务被删除必须拒绝旧 snapshot_id，防止混拼两代清单")
+
 	updated, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 2}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, updated.GetRetInfo().GetCode())
 	require.Equal(t, uint32(2), updated.GetPage().GetTotal())
 }
 
-func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(t *testing.T) {
+// GetTaskResultInventory 改为无状态返回：无进程内快照容量上限，非法/过期/错误页大小的 snapshot_id 在元数据扇出前即拒绝。
+func TestGetTaskResultInventoryStatelessRejectsInvalidOrExpiredTokenBeforeFanout(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
 	ids := taskresult.ResultIDs("task-owned")
@@ -120,36 +138,97 @@ func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(
 	require.NoError(t, db.Tasks().Create(ctx, task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
 	service := &Service{
-		persistence:        db,
-		taskRepo:           db.Tasks(),
-		resultManager:      taskresult.NewManagerWithAPI(metadata),
-		inventorySnapshots: make(map[string]*taskResultInventorySnapshot, maxTaskResultInventorySnapshotsTotal),
-	}
-	for index := 0; index < maxTaskResultInventorySnapshotsPerSpace; index++ {
-		id := fmt.Sprintf("snapshot-%d", index)
-		service.inventorySnapshots[id] = &taskResultInventorySnapshot{
-			id: id, spaceID: "crypto", pageSize: 10, observed: time.Now().UTC(), expiresAt: time.Now().UTC().Add(time.Minute),
-		}
+		persistence:   db,
+		taskRepo:      db.Tasks(),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 	}
 
-	response, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10}})
+	// 格式非法的 token 在访问 Storage 之前直接返回 CONFLICT。
+	bad, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
+		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 10}, SnapshotId: "not-a-valid-token",
+	})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_CONFLICT, response.GetRetInfo().GetCode())
-	require.Zero(t, metadata.getDatasets, "full snapshot capacity must be rejected before Storage metadata inspection")
+	require.Equal(t, pb.ErrorCode_CONFLICT, bad.GetRetInfo().GetCode())
+	require.Zero(t, metadata.getDatasets)
 
-	// Exhausting one Space's allowance cannot block another Space.
-	stockIDs := taskresult.ResultIDs("task-stock")
-	stockTask := domain.CollectionTask{
-		SpaceID: "stockcn", TaskID: "task-stock", TaskName: "stock", DataType: "kline", Enabled: true,
-		PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"tdx","market_type":"stock","market_id":"stockcn","frequency":"1d"}`,
-		ResultDatasetID: stockIDs.DatasetID,
-	}
-	require.NoError(t, db.Tasks().Create(ctx, stockTask))
-	response, err = service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockcn", Page: &commonpb.Page{Page: 1, Size: 10}})
+	// 过期的 token 在访问 Storage 之前直接返回 CONFLICT。
+	expiredMs := time.Now().UTC().Add(-taskResultInventorySnapshotTTL - time.Second).UnixMilli()
+	expiredToken := formatTaskResultInventoryToken(expiredMs, 10, "nonce", "0123456789abcdef0123456789abcdef")
+	expired, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
+		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 10}, SnapshotId: expiredToken,
+	})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
-	require.Len(t, response.GetEntries(), 1)
-	require.Equal(t, "stockcn", response.GetEntries()[0].GetSpaceId())
+	require.Equal(t, pb.ErrorCode_CONFLICT, expired.GetRetInfo().GetCode())
+	require.Zero(t, metadata.getDatasets)
+
+	// page size 与 token 中记录的不一致直接返回 INVALID_PARAM。
+	first, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
+		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, first.GetRetInfo().GetCode())
+	beforeCalls := metadata.getDatasets
+	mismatchedSize, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
+		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 5}, SnapshotId: first.GetSnapshotId(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, mismatchedSize.GetRetInfo().GetCode())
+	require.Equal(t, beforeCalls, metadata.getDatasets)
+}
+
+// AllowedLatenessSeconds 优先采用 Storage 数据集上真实生效的值；Storage 未设置或任务未就绪时，
+// 重采样默认用 TargetLatenessSeconds（120s），普通 K 线用任务参数或市场默认值。
+func TestGetTaskResultInventoryUsesEffectiveStorageLateness(t *testing.T) {
+	ctx := context.Background()
+	db := openCollectorTestStore(t)
+	klineIDs := taskresult.ResultIDs("task-kline")
+	resampleReadyIDs := taskresult.ResultIDs("task-resample-ready")
+	resamplePendingIDs := taskresult.ResultIDs("task-resample-pending")
+	for _, task := range []domain.CollectionTask{
+		{
+			SpaceID: "crypto", TaskID: "task-kline", TaskName: "kline", DataType: "kline", Enabled: true,
+			PrepareState:    domain.PrepareStateReady,
+			CollectParams:   `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m","allowed_lateness_seconds":30}`,
+			ResultDatasetID: klineIDs.DatasetID,
+		},
+		{
+			SpaceID: "crypto", TaskID: "task-resample-ready", TaskName: "resample ready", DataType: "kline_resample", Enabled: true,
+			PrepareState:    domain.PrepareStateReady,
+			CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"` + resampleReadyIDs.DatasetID + `","target_frequency":"5m","alignment":"epoch_utc"}`,
+			ResultDatasetID: resampleReadyIDs.DatasetID,
+		},
+		{
+			SpaceID: "crypto", TaskID: "task-resample-pending", TaskName: "resample pending", DataType: "kline_resample", Enabled: true,
+			PrepareState:    domain.PrepareStateWaitingView,
+			CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"` + resamplePendingIDs.DatasetID + `","target_frequency":"15m","alignment":"epoch_utc"}`,
+			ResultDatasetID: resamplePendingIDs.DatasetID,
+		},
+	} {
+		require.NoError(t, db.Tasks().Create(ctx, task))
+	}
+
+	klineDS := newTaskResultMetadataFake(klineIDs, "task-kline").datasets[klineIDs.DatasetID]
+	klineDS.AllowedLatenessSeconds = 45 // Storage 上真实生效的值与 collect_params(30) 不同
+	resampleDS := newTaskResultMetadataFake(resampleReadyIDs, "task-resample-ready").datasets[resampleReadyIDs.DatasetID]
+	resampleDS.AllowedLatenessSeconds = collectorresample.TargetLatenessSeconds
+	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{
+		klineIDs.DatasetID:         klineDS,
+		resampleReadyIDs.DatasetID: resampleDS,
+	}}
+	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
+
+	rsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
+		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	byTask := map[string]*pb.TaskResultInventoryEntry{}
+	for _, entry := range rsp.GetEntries() {
+		byTask[entry.GetTaskId()] = entry
+	}
+	require.EqualValues(t, 45, byTask["task-kline"].GetAllowedLatenessSeconds(), "必须采用 Storage 真实生效的 AllowedLatenessSeconds")
+	require.EqualValues(t, collectorresample.TargetLatenessSeconds, byTask["task-resample-ready"].GetAllowedLatenessSeconds())
+	require.EqualValues(t, collectorresample.TargetLatenessSeconds, byTask["task-resample-pending"].GetAllowedLatenessSeconds(), "未就绪的重采样任务兜底也应为 TargetLatenessSeconds 而非市场 15s")
 }
 
 func TestGetTaskResultInventoryRejectsUnownedResultsAndMismatchedSnapshot(t *testing.T) {
@@ -169,7 +248,6 @@ func TestGetTaskResultInventoryRejectsUnownedResultsAndMismatchedSnapshot(t *tes
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())
 	require.Empty(t, response.GetEntries())
-	require.Empty(t, service.inventorySnapshotBuilds, "failed snapshot build must release its reserved slot")
 
 	response, err = service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 10}, SnapshotId: "unknown"})
 	require.NoError(t, err)
@@ -263,10 +341,6 @@ func TestGetTaskResultInventoryMetadataFanoutCancelsOnRequestDeadline(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("inventory build did not stop after request cancellation")
 	}
-	service.inventorySnapshotMu.Lock()
-	remainingBuilds := service.inventorySnapshotBuilds["crypto"]
-	service.inventorySnapshotMu.Unlock()
-	require.Zero(t, remainingBuilds, "canceled snapshot must release its per-Space build reservation")
 	require.LessOrEqual(t, metadata.requestCount(), taskResultInventoryMetadataConcurrency,
 		"request cancellation must prevent an unbounded tail of metadata calls")
 }
@@ -376,14 +450,17 @@ func (f *taskResultInventoryConcurrentMetadataFake) requestCount() int {
 func TestTaskResultRejectsUnregisteredMarket(t *testing.T) {
 	_, _, _, err := taskResultMarketCalendar("no_such_space")
 	require.Error(t, err)
-	_, err = allowedLatenessSeconds(nil, "no_such_space")
+	_, err = allowedLatenessSeconds("kline", nil, "no_such_space")
 	require.Error(t, err)
-	seconds, err := allowedLatenessSeconds(nil, "stockcn")
+	seconds, err := allowedLatenessSeconds("kline", nil, "stockcn")
 	require.NoError(t, err)
 	require.Equal(t, 90, seconds)
-	seconds, err = allowedLatenessSeconds(nil, "crypto")
+	seconds, err = allowedLatenessSeconds("kline", nil, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, 15, seconds)
+	seconds, err = allowedLatenessSeconds("kline_resample", nil, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, collectorresample.TargetLatenessSeconds, seconds)
 }
 
 // 清单带上数据集的历史补齐状态：补齐中的标 history_seeding，已结束的带结束时刻，没有补齐记录的都不带；

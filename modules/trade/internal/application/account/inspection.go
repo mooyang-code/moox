@@ -123,7 +123,7 @@ func (s *Service) inspectForSave(ctx context.Context, value tradingaccount.Accou
 	if s.Inspector == nil {
 		return tradingaccount.Account{}, ErrServiceNotConfigured
 	}
-	credential, readOnly, err := s.loadCredential(ctx, value.Exchange, value.CredentialSecretID)
+	credential, readOnly, err := s.loadCredential(ctx, value.Exchange, credentialSecret(value))
 	if err != nil {
 		return tradingaccount.Account{}, err
 	}
@@ -131,7 +131,7 @@ func (s *Service) inspectForSave(ctx context.Context, value tradingaccount.Accou
 		return tradingaccount.Account{}, ErrReadOnlyCredential
 	}
 	inspection, err := s.inspect(ctx, value.Exchange, exchange.InspectRequest{
-		Environment: value.Environment, Credential: credential, Markets: value.Markets,
+		Environment: liveEnvironment(value), Credential: credential, Markets: value.Markets,
 	})
 	if err != nil {
 		return tradingaccount.Account{}, err
@@ -191,14 +191,15 @@ func (s *Service) reinspect(ctx context.Context, accountID string, countFailure 
 	if current.ExecutionMode != exchange.ExecutionModeLive {
 		return ReinspectResult{}, fmt.Errorf("%w：只有实盘账户需要检测", tradingaccount.ErrInvalidAccount)
 	}
-	credential, _, err := s.loadCredential(ctx, current.Exchange, current.CredentialSecretID)
+	secretID := credentialSecret(current)
+	credential, _, err := s.loadCredential(ctx, current.Exchange, secretID)
 	if err != nil {
 		return ReinspectResult{}, err
 	}
 	previous, _ := exchange.ParseInspection(current.InspectionJSON)
 	result := ReinspectResult{PreviousMode: current.AccountMode}
 	inspection, err := s.inspect(ctx, current.Exchange, exchange.InspectRequest{
-		Environment: current.Environment, Credential: credential, Markets: current.Markets,
+		Environment: liveEnvironment(current), Credential: credential, Markets: current.Markets,
 	})
 	if err != nil {
 		if !errors.Is(err, ErrInspectionUnavailable) {
@@ -211,7 +212,7 @@ func (s *Service) reinspect(ctx context.Context, accountID string, countFailure 
 			if encodeErr != nil {
 				return ReinspectResult{}, encodeErr
 			}
-			if writeErr := s.Store.SetInspection(ctx, accountID, current.CredentialSecretID, current.AccountMode, encoded); writeErr != nil {
+			if writeErr := s.Store.SetInspection(ctx, accountID, secretID, current.AccountMode, encoded); writeErr != nil {
 				return ReinspectResult{}, staleInspection(writeErr)
 			}
 		}
@@ -228,7 +229,7 @@ func (s *Service) reinspect(ctx context.Context, accountID string, countFailure 
 		if err != nil {
 			return ReinspectResult{}, err
 		}
-		if err := s.Store.SetInspection(ctx, accountID, current.CredentialSecretID, current.AccountMode, encoded); err != nil {
+		if err := s.Store.SetInspection(ctx, accountID, secretID, current.AccountMode, encoded); err != nil {
 			return ReinspectResult{}, staleInspection(err)
 		}
 		result.Inspection = previous
@@ -245,7 +246,7 @@ func (s *Service) reinspect(ctx context.Context, accountID string, countFailure 
 	if err != nil {
 		return ReinspectResult{}, err
 	}
-	if err := s.Store.SetInspection(ctx, accountID, current.CredentialSecretID, inspection.AccountMode, encoded); err != nil {
+	if err := s.Store.SetInspection(ctx, accountID, secretID, inspection.AccountMode, encoded); err != nil {
 		return ReinspectResult{}, staleInspection(err)
 	}
 	result.Inspection = inspection

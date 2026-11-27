@@ -71,10 +71,11 @@ func (s *Service) extendViewSchema(ctx context.Context, spec *viewSpec) (uint64,
 	if !ok {
 		return 0, nil
 	}
+	endWrite := runtime.beginEngineWrite()
+	defer endWrite()
 	if err := extender.ExtendColumns(ctx, runtime.indexID, current, next); err != nil {
 		return 0, fmt.Errorf("原地加列：%w", err)
 	}
-	runtime.revision.Add(1)
 	runtime.schema = next
 	runtime.publishReadStateLocked()
 	return next.ViewVersion, nil

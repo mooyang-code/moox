@@ -134,8 +134,3 @@ func (s *Snapshots) Load() (*snapshot.View, error) {
 	}
 	return snapshot.Build(s.hostID, raw)
 }
-
-func (s *Snapshots) Check() error {
-	_, err := s.Load()
-	return err
-}

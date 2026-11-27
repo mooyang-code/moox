@@ -34,7 +34,7 @@
       </a-table-column>
       <a-table-column title="写入时间" :width="170">
         <template #cell="{ record }">
-          <span class="tx-muted tx-nowrap"><TimeText :value="record.instrument.blocked_at" :zone="displayZone" /></span>
+          <span class="tx-muted tx-nowrap"><TimeText :value="record.instrument.blocked_at" zone="UTC" /></span>
         </template>
       </a-table-column>
       <a-table-column title="操作" :width="90" :fixed="isNarrow ? undefined : 'right'">
@@ -49,8 +49,10 @@
   <ConfirmDialog
     v-model:visible="confirmVisible"
     :title="pending ? `解除「${pending.exchange_symbol}」的买入禁止` : ''"
-    env="paper"
-    combo-name=""
+    :env="confirmEnv"
+    :combo-name="pending?.exchange_symbol ?? ''"
+    name-label="标的代码"
+    :danger="confirmEnv === 'prod'"
     :need-reason="false"
     confirm-text="解除"
     :submit="runUnblock"
@@ -69,15 +71,12 @@ import TimeText from "@/components/time-text/index.vue";
 import { exchangeLabel, unblockInstrument } from "@/api/trade";
 import type { BlockedInstrument } from "@/api/trade";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
-import { useDisplayZone } from "@/hooks/useDisplayZone";
+import type { Environment } from "@/components/trade-confirm/environment";
 import { marketLabel } from "./shared/markets";
 import { scopeLabel } from "../blocked/delist-utils";
 
 const props = defineProps<{ rows: BlockedInstrument[]; loading: boolean }>();
 const emit = defineEmits<{ changed: []; locate: [delistId: string] }>();
-
-// 交易页的时间按当前空间登记的时区显示
-const displayZone = useDisplayZone();
 
 // 各列宽度之和：窄屏时表格横向滚动，每一列都保持自己的宽度
 const LIST_WIDTH = 190 + 100 + 90 + 320 + 200 + 170 + 90;
@@ -95,6 +94,8 @@ const items = computed(() =>
 
 const confirmVisible = ref(false);
 const pending = ref<BlockedInstrument | null>(null);
+// 仅明确标记为演练（PAPER_ONLY）的条目走模拟盘确认；ALL 或其他可能影响实盘的条目走生产级高危确认
+const confirmEnv = computed<Environment>(() => (pending.value?.scope === "PAPER_ONLY" ? "paper" : "prod"));
 
 function askUnblock(instrument: BlockedInstrument) {
   pending.value = instrument;

@@ -1,6 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import type { ArchivePartition } from "@/api/archive";
 
 const api = vi.hoisted(() => ({
@@ -149,6 +150,63 @@ describe("分区下载", () => {
     expect(seen.signal?.aborted).toBe(true);
     expect(api.saveBlob).not.toHaveBeenCalled();
     expect(api.error).not.toHaveBeenCalled();
+  });
+
+  it("下载遇到会话失效（AuthSessionExpiredError）时不弹多余错误提示", async () => {
+    api.downloadArchivePartition.mockRejectedValueOnce(new AuthSessionExpiredError());
+    const [ready] = await mountPartitions([partition()]);
+    await ready.trigger("click");
+    await flushPromises();
+    expect(api.saveBlob).not.toHaveBeenCalled();
+    expect(api.error).not.toHaveBeenCalled();
+  });
+
+  it("旧下载迟到的进度与 finally 不覆盖同一分区新发起的下载状态", async () => {
+    let rejectOld!: (reason?: unknown) => void;
+    let oldProgress: ((received: number, total: number) => void) | undefined;
+    let resolveNew!: (value: { blob: Blob; fileName: string }) => void;
+    let newProgress: ((received: number, total: number) => void) | undefined;
+
+    api.downloadArchivePartition
+      .mockImplementationOnce(
+        (_req: unknown, progress: (received: number, total: number) => void) =>
+          new Promise((_resolve, reject) => {
+            oldProgress = progress;
+            rejectOld = reject;
+          })
+      )
+      .mockImplementationOnce(
+        (_req: unknown, progress: (received: number, total: number) => void) =>
+          new Promise(resolve => {
+            newProgress = progress;
+            resolveNew = resolve;
+          })
+      );
+
+    const [ready] = await mountPartitions([partition()]);
+    const findAction = () => wrapper.findAll("button").find(btn => btn.text() === "下载" || btn.text().endsWith("取消"))!;
+    // 启动旧下载并在迟到结束前取消（模拟旧下载先结束按钮恢复后，立刻发起了第二次下载，随后旧下载 promise 才 settle）
+    await ready.trigger("click");
+    await flushPromises();
+    // 取消第一次下载后先模拟旧 promise 尚未 settle、用户通过重挂载前无法重入，因此让旧下载被 reject 后校验新下载不受延迟回调污染
+    await findAction().trigger("click");
+    // 立刻模拟旧 promise 在 finally 之外再推一次进度不会影响新下载
+    rejectOld(new DOMException("aborted", "AbortError"));
+    await flushPromises();
+
+    // 发起新下载，随后旧回调再触发也不应改写新进度
+    await findAction().trigger("click");
+    await flushPromises();
+    newProgress?.(25, 100);
+    await flushPromises();
+    oldProgress?.(99, 100);
+    await flushPromises();
+    expect(findAction().text()).toBe("25% · 取消");
+
+    const freshBlob = new Blob(["ok"]);
+    resolveNew({ blob: freshBlob, fileName: "fresh.csv.gz" });
+    await flushPromises();
+    expect(api.saveBlob).toHaveBeenCalledWith(freshBlob, "fresh.csv.gz");
   });
 });
 

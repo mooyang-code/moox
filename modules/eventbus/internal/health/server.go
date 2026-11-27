@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -12,16 +13,55 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
+const metricsScrapeTimeout = 2 * time.Second
+
+var (
+	connectionsDesc = prometheus.NewDesc(
+		"moox_eventbus_connections",
+		"Active NATS client connections.",
+		nil, nil,
+	)
+	publishAdvisoriesDesc = prometheus.NewDesc(
+		"moox_eventbus_publish_advisories_total",
+		"JetStream publish/API advisories observed by EventBus.",
+		nil, nil,
+	)
+	streamMessagesDesc = prometheus.NewDesc(
+		"moox_eventbus_stream_messages",
+		"Messages currently stored in an EventBus JetStream stream.",
+		[]string{"stream"}, nil,
+	)
+	streamBytesDesc = prometheus.NewDesc(
+		"moox_eventbus_stream_bytes",
+		"Bytes currently stored in an EventBus JetStream stream.",
+		[]string{"stream"}, nil,
+	)
+	consumerPendingDesc = prometheus.NewDesc(
+		"moox_eventbus_consumer_pending",
+		"Pending undelivered messages for an EventBus JetStream consumer.",
+		[]string{"stream", "consumer"}, nil,
+	)
+	consumerRedeliveredDesc = prometheus.NewDesc(
+		"moox_eventbus_consumer_redelivered",
+		"Redelivered messages currently tracked for an EventBus JetStream consumer.",
+		[]string{"stream", "consumer"}, nil,
+	)
+)
+
 type Server struct {
-	broker   *broker.Server
-	registry *registry.Registry
-	ready    atomic.Bool
-	conn     *nats.Conn
-	advisory atomic.Uint64
-	sub      *nats.Subscription
+	broker      *broker.Server
+	registry    *registry.Registry
+	ready       atomic.Bool
+	conn        *nats.Conn
+	advisory    atomic.Uint64
+	sub         *nats.Subscription
+	metricsOnce sync.Once
+	metricsReg  *prometheus.Registry
 }
 
 func New(b *broker.Server, r *registry.Registry, conn ...*nats.Conn) *Server {
@@ -31,15 +71,35 @@ func New(b *broker.Server, r *registry.Registry, conn ...*nats.Conn) *Server {
 	}
 	return s
 }
+
 func (s *Server) SetReady(value bool) {
 	if s != nil {
 		s.ready.Store(value)
 	}
 }
+
 func (s *Server) Ready() bool { return s != nil && s.ready.Load() }
 
+// metricsRegistry 返回本实例独享的 Prometheus 注册器（惰性初始化以兼容零值 &Server{} 构造），
+// 不注册到全局 DefaultRegisterer，避免 30s 心跳上报反复遍历 JetStream 或多实例相互干扰。
+func (s *Server) metricsRegistry() *prometheus.Registry {
+	if s == nil {
+		return nil
+	}
+	s.metricsOnce.Do(func() {
+		reg := prometheus.NewRegistry()
+		reg.MustRegister(s)
+		s.metricsReg = reg
+	})
+	return s.metricsReg
+}
+
 func (s *Server) Handler() http.Handler {
-	return healthz.StandardMux(s.snapshot, http.HandlerFunc(s.metrics))
+	gatherers := prometheus.Gatherers{prometheus.DefaultGatherer}
+	if reg := s.metricsRegistry(); reg != nil {
+		gatherers = prometheus.Gatherers{reg, prometheus.DefaultGatherer}
+	}
+	return healthz.StandardMux(s.snapshot, promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{}))
 }
 
 // Readiness 是 /readyz 用的同一个就绪判断，随指标上报带给 Monitor。
@@ -80,27 +140,45 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+// Describe 实现 prometheus.Collector。
+func (*Server) Describe(ch chan<- *prometheus.Desc) {
+	ch <- connectionsDesc
+	ch <- publishAdvisoriesDesc
+	ch <- streamMessagesDesc
+	ch <- streamBytesDesc
+	ch <- consumerPendingDesc
+	ch <- consumerRedeliveredDesc
+}
+
+// Collect 实现 prometheus.Collector。
+func (s *Server) Collect(ch chan<- prometheus.Metric) {
+	if s == nil {
+		return
+	}
 	connections := uint32(0)
 	if s.broker != nil {
 		connections = s.broker.Connections()
 	}
-	fmt.Fprintf(w, "# HELP moox_eventbus_connections Active NATS client connections.\n# TYPE moox_eventbus_connections gauge\nmoox_eventbus_connections %d\n", connections)
-	fmt.Fprintf(w, "# HELP moox_eventbus_publish_advisories_total JetStream publish/API advisories observed by EventBus.\n# TYPE moox_eventbus_publish_advisories_total counter\nmoox_eventbus_publish_advisories_total %d\n", s.advisory.Load())
+	ch <- prometheus.MustNewConstMetric(connectionsDesc, prometheus.GaugeValue, float64(connections))
+	ch <- prometheus.MustNewConstMetric(publishAdvisoriesDesc, prometheus.CounterValue, float64(s.advisory.Load()))
 	if s.registry == nil || s.registry.JS() == nil {
 		return
 	}
-	for info := range s.registry.JS().StreamsInfo() {
+	ctx, cancel := context.WithTimeout(context.Background(), metricsScrapeTimeout)
+	defer cancel()
+	js := s.registry.JS()
+	for info := range js.StreamsInfo(nats.Context(ctx)) {
 		if info == nil {
 			continue
 		}
-		fmt.Fprintf(w, "moox_eventbus_stream_messages{stream=%q} %d\nmoox_eventbus_stream_bytes{stream=%q} %d\n", info.Config.Name, info.State.Msgs, info.Config.Name, info.State.Bytes)
-		for consumer := range s.registry.JS().Consumers(info.Config.Name) {
+		ch <- prometheus.MustNewConstMetric(streamMessagesDesc, prometheus.GaugeValue, float64(info.State.Msgs), info.Config.Name)
+		ch <- prometheus.MustNewConstMetric(streamBytesDesc, prometheus.GaugeValue, float64(info.State.Bytes), info.Config.Name)
+		for consumer := range js.Consumers(info.Config.Name, nats.Context(ctx)) {
 			if consumer == nil {
 				continue
 			}
-			fmt.Fprintf(w, "moox_eventbus_consumer_pending{stream=%q,consumer=%q} %d\nmoox_eventbus_consumer_redelivered{stream=%q,consumer=%q} %d\n", info.Config.Name, consumer.Name, consumer.NumPending, info.Config.Name, consumer.Name, consumer.NumRedelivered)
+			ch <- prometheus.MustNewConstMetric(consumerPendingDesc, prometheus.GaugeValue, float64(consumer.NumPending), info.Config.Name, consumer.Name)
+			ch <- prometheus.MustNewConstMetric(consumerRedeliveredDesc, prometheus.GaugeValue, float64(consumer.NumRedelivered), info.Config.Name, consumer.Name)
 		}
 	}
 }

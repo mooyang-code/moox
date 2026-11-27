@@ -106,6 +106,7 @@ func decodeParamExpr(node *yaml.Node, path string) (ParamExpr, error) {
 // validateFactorParams 校验参数输出：成员键必须是可变成员的合法成员键，参数名合法，表达式是合法的数值表达式。
 // 成员是否在关联的任务里、参数名是否属于该因子、取值范围由启用时对照因子定义检查。
 func validateFactorParams(s *Strategy) error {
+	sources := s.sourceSet()
 	for _, output := range s.FactorParamOutputs() {
 		path := "factor_params." + output.Member + "." + output.Name
 		parsed, err := factorname.ParseMemberKey(output.Member)
@@ -121,11 +122,11 @@ func validateFactorParams(s *Strategy) error {
 		if strings.TrimSpace(output.Expr.Default) == "" {
 			return fmt.Errorf("%s 缺少 default", path)
 		}
-		if _, err := Analyze(output.Expr.Default, StageScore); err != nil {
+		if _, err := analyzeIn(output.Expr.Default, StageScore, sources); err != nil {
 			return fmt.Errorf("%s.default 无效：%w", path, err)
 		}
 		if output.Expr.PerSubject != "" {
-			if _, err := Analyze(output.Expr.PerSubject, StageScore); err != nil {
+			if _, err := analyzeIn(output.Expr.PerSubject, StageScore, sources); err != nil {
 				return fmt.Errorf("%s.per_subject 无效：%w", path, err)
 			}
 		}
@@ -171,16 +172,17 @@ func (p CompiledParam) PreviousColumns() []string {
 
 func compileParams(strategy Strategy, available map[string]struct{}) ([]CompiledParam, error) {
 	outputs := strategy.FactorParamOutputs()
+	sources := strategy.sourceSet()
 	compiled := make([]CompiledParam, 0, len(outputs))
 	for _, output := range outputs {
 		path := "factor_params." + output.Member + "." + output.Name
 		param := CompiledParam{Member: output.Member, Name: output.Name}
 		var err error
-		if param.Default, err = CompileExpression(output.Expr.Default, StageScore, available); err != nil {
+		if param.Default, err = compileExpressionIn(output.Expr.Default, StageScore, available, sources); err != nil {
 			return nil, fmt.Errorf("%s.default 无效：%w", path, err)
 		}
 		if output.Expr.PerSubject != "" {
-			if param.PerSubject, err = CompileExpression(output.Expr.PerSubject, StageScore, available); err != nil {
+			if param.PerSubject, err = compileExpressionIn(output.Expr.PerSubject, StageScore, available, sources); err != nil {
 				return nil, fmt.Errorf("%s.per_subject 无效：%w", path, err)
 			}
 		}
@@ -191,12 +193,13 @@ func compileParams(strategy Strategy, available map[string]struct{}) ([]Compiled
 
 // referencedParamExprColumns 返回参数表达式引用的列（当期与上一根的并集）。
 func referencedParamExprColumns(strategy Strategy, set map[string]struct{}) error {
+	sources := strategy.sourceSet()
 	for _, output := range strategy.FactorParamOutputs() {
 		for _, source := range []string{output.Expr.Default, output.Expr.PerSubject} {
 			if source == "" {
 				continue
 			}
-			expression, err := Analyze(source, StageScore)
+			expression, err := analyzeIn(source, StageScore, sources)
 			if err != nil {
 				return fmt.Errorf("factor_params.%s.%s 无效：%w", output.Member, output.Name, err)
 			}

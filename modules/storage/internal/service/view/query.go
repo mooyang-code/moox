@@ -2,8 +2,6 @@ package view
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -33,11 +31,10 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if expected := strings.TrimSpace(pin.GetIndexId()); expected != "" && expected != indexID {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index changed: expected=%s actual=%s", expected, indexID))}, nil
 	}
-	startRevision, revisionErr := readIndexRevision(ctx, runtime, indexID)
-	if revisionErr != nil {
-		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(revisionErr), revisionErr)}, nil
+	startRevision := readIndexRevision(runtime, indexID)
+	if startRevision&1 != 0 {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index write in progress: revision=%d", startRevision))}, nil
 	}
-	startRevisionAt := time.Now()
 	if expected := pin.GetRevision(); expected != 0 && expected != startRevision {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index revision changed: expected=%d actual=%d", expected, startRevision))}, nil
 	}
@@ -65,15 +62,11 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
 	}
 	engineDone := time.Now()
-	currentRevision, revisionErr := readIndexRevision(ctx, runtime, indexID)
+	currentRevision := readIndexRevision(runtime, indexID)
 	if elapsed := time.Since(queryStarted); elapsed > time.Second {
-		log.Warnf("storage view slow query space=%s dataset=%s index=%s total=%s resolve=%s start_revision=%s prepare=%s engine=%s end_revision=%s",
+		log.Warnf("storage view slow query space=%s dataset=%s index=%s total=%s resolve=%s prepare=%s engine=%s",
 			req.GetSpaceId(), req.GetDatasetId(), indexID, elapsed.Round(time.Millisecond), resolvedAt.Sub(queryStarted).Round(time.Millisecond),
-			startRevisionAt.Sub(resolvedAt).Round(time.Millisecond), engineStarted.Sub(startRevisionAt).Round(time.Millisecond),
-			engineDone.Sub(engineStarted).Round(time.Millisecond), time.Since(engineDone).Round(time.Millisecond))
-	}
-	if revisionErr != nil {
-		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(revisionErr), revisionErr)}, nil
+			engineStarted.Sub(resolvedAt).Round(time.Millisecond), engineDone.Sub(engineStarted).Round(time.Millisecond))
 	}
 	if currentRevision != startRevision {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index was updated during query: start=%d current=%d", startRevision, currentRevision))}, nil
@@ -127,22 +120,13 @@ func (s *Service) retainedRowsPerSeries(stats viewindex.ViewIndexStats, hasStats
 	return configured
 }
 
-// readIndexRevision 返回活动索引的版本号：引擎能读索引元数据时取它的最后修改时间，否则用内存里的修订号。
-func readIndexRevision(ctx context.Context, runtime *viewRuntime, indexID string) (uint64, error) {
+// readIndexRevision 返回活动索引的内存 Seqlock 修订号（偶数稳定，奇数表示引擎写入进行中），
+// 避免查询热路径重复执行 DuckDB 元数据 SQL 与文件 stat，并在读写并发时零漏检地捕获撕裂读。
+func readIndexRevision(runtime *viewRuntime, indexID string) uint64 {
 	if runtime == nil || indexID == "" {
-		return 0, nil
+		return 0
 	}
-	if reader, ok := runtime.engine.(viewindex.MetadataStatReader); ok {
-		stats, err := reader.StatMetadata(ctx, indexID)
-		if err != nil {
-			return 0, err
-		}
-		if stats.UpdatedAt != "" {
-			sum := sha256.Sum256([]byte(stats.UpdatedAt))
-			return binary.BigEndian.Uint64(sum[:8]), nil
-		}
-	}
-	return runtime.revision.Load(), nil
+	return runtime.revision.Load()
 }
 
 // SearchRecordRows pushes full-text, structured filters, sorting, and paging

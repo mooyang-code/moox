@@ -418,18 +418,19 @@ func secretPBToModel(s *pb.Secret) *model.Secret {
 }
 
 // maskSecretValue 对秘钥值进行脱敏处理。
+// 按 Unicode 码点（[]rune）计数与切片，避免多字节 UTF-8 字符被按字节截断破坏编码。
 // 使用 • (U+2022 BULLET) 作为遮盖字符，避免与真实秘钥中的 * 混淆。
 // 规则：
 //
 //	≤4 字符:  全部遮盖
 //	5~8 字符: 保留前2+后2，中间遮盖
-//	9~16 字符: 保留前4+后4，中间遮盖
-//	>16 字符:  保留前4+后4，中间遮盖
+//	>8 字符:  保留前4+后4，中间遮盖
 func maskSecretValue(value string) string {
 	if value == "" {
 		return ""
 	}
-	n := len(value)
+	runes := []rune(value)
+	n := len(runes)
 	if n <= 4 {
 		return strings.Repeat(maskChar, n)
 	}
@@ -437,10 +438,7 @@ func maskSecretValue(value string) string {
 	if n > 8 {
 		prefix, suffix = 4, 4
 	}
-	if n <= prefix+suffix {
-		return strings.Repeat(maskChar, n)
-	}
-	return value[:prefix] + strings.Repeat(maskChar, n-prefix-suffix) + value[n-suffix:]
+	return string(runes[:prefix]) + strings.Repeat(maskChar, n-prefix-suffix) + string(runes[n-suffix:])
 }
 
 // unixMilli 把时刻换成 Unix 毫秒，零时间给 0。

@@ -123,9 +123,16 @@ func tlsTestConfig(t *testing.T, certFile, keyFile, caFile string) *config.Confi
 	t.Helper()
 	c, err := config.Load("../../config/app.yaml")
 	require.NoError(t, err)
+	dir := t.TempDir()
+	usersPath := filepath.Join(dir, "users.yaml")
+	usersContent := "users:\n  - username: tester\n    password: secret\n    permissions:\n      publish:\n        allow: [\"moox.>\"]\n      subscribe:\n        allow: [\"moox.>\"]\n"
+	require.NoError(t, os.WriteFile(usersPath, []byte(usersContent), 0o600))
+	credPath := filepath.Join(dir, "internal-admin.yaml")
+	require.NoError(t, os.WriteFile(credPath, []byte("username: tester\npassword: secret\n"), 0o600))
 	c.Broker.Host, c.Broker.Port, c.Broker.StoreDir = "127.0.0.1", freePort(t), t.TempDir()
 	c.Broker.TLS = config.TLSConfig{Enabled: true, CertFile: certFile, KeyFile: keyFile, CAFile: caFile}
-	c.Broker.Auth = config.AuthConfig{Enabled: true, Username: "tester", Password: "secret"}
+	c.Broker.Auth = config.AuthConfig{Enabled: true, UsersFile: usersPath}
+	c.InternalClient.CredentialFile = credPath
 	return c
 }
 

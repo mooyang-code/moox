@@ -80,15 +80,11 @@ func New(cfg *config.Config) (*Server, error) {
 		opts.ClientAdvertise = cfg.Broker.ClientAdvertise
 	}
 	if cfg.Broker.Auth.Enabled {
-		if cfg.Broker.Auth.UsersFile != "" {
-			users, err := loadUsersFile(cfg.Broker.Auth.UsersFile)
-			if err != nil {
-				return nil, err
-			}
-			opts.Users = users
-		} else {
-			opts.Username, opts.Password = cfg.Broker.Auth.Username, cfg.Broker.Auth.Password
+		users, err := loadUsersFile(cfg.Broker.Auth.UsersFile)
+		if err != nil {
+			return nil, err
 		}
+		opts.Users = users
 	}
 	if cfg.Broker.TLS.Enabled {
 		opts.TLS, opts.TLSCert, opts.TLSKey, opts.TLSCaCert = true, cfg.Broker.TLS.CertFile, cfg.Broker.TLS.KeyFile, cfg.Broker.TLS.CAFile

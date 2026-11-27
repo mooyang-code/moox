@@ -57,28 +57,25 @@ type RealtimeInventory interface {
 // Service implements the independent CollectMgr RPC service.
 type Service struct {
 	pb.UnimplementedCollectMgr
-	persistence             *store.Store
-	taskRepo                *store.TaskRepository
-	datasetSrc              datasetSource
-	inventory               RealtimeInventory
-	resultManager           *taskresult.Manager
-	inventorySnapshotMu     sync.Mutex
-	inventorySnapshots      map[string]*taskResultInventorySnapshot
-	inventorySnapshotBuilds map[string]int
-	createTaskMu            ctxMutex
-	taskMutationLocks       keyedTaskLocker
-	subjectSyncer           SubjectSyncer
-	tradingStatus           TradingStatusRunner
-	fieldOffers             marketdata.FieldOffers
-	checkKlineFrequency     KlineFrequencyChecker
-	klineOps                KlineOps
-	fetchPlanControl        FetchPlanControl
-	sourceIDResolver        marketfetch.SourceIDResolver
-	stream                  *StreamService
-	activity                activityLogger
-	delistRegistrar         DelistRegistrar
-	cloud                   CloudDeps
-	life                    *lifecycle.Controller
+	persistence         *store.Store
+	taskRepo            *store.TaskRepository
+	datasetSrc          datasetSource
+	inventory           RealtimeInventory
+	resultManager       *taskresult.Manager
+	createTaskMu        ctxMutex
+	taskMutationLocks   keyedTaskLocker
+	subjectSyncer       SubjectSyncer
+	tradingStatus       TradingStatusRunner
+	fieldOffers         marketdata.FieldOffers
+	checkKlineFrequency KlineFrequencyChecker
+	klineOps            KlineOps
+	fetchPlanControl    FetchPlanControl
+	sourceIDResolver    marketfetch.SourceIDResolver
+	stream              *StreamService
+	activity            activityLogger
+	delistRegistrar     DelistRegistrar
+	cloud               CloudDeps
+	life                *lifecycle.Controller
 }
 
 // ctxMutex 是可响应 context 取消的互斥锁：等待者超时或被取消后立即返回，而不是一直排队。
@@ -580,15 +577,21 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if err := validateCollectionTaskUpdate(*existing, task); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		if strings.TrimSpace(requestedParams.TargetDatasetID) == "" {
+			requestedParams.TargetDatasetID = task.ResultDatasetID
+		}
+		if err := collectorresample.ValidateTaskParams(task.SpaceID, requestedParams); err != nil {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+	}
 	task, err = canonicalizeCollectionTask(task)
 	if err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if strings.EqualFold(existing.DataType, "kline_resample") {
 		task.Creator = existing.Creator
-		// Preparation state is asynchronous runtime state and remains owned by
-		// the resample preparer. Enabled tasks in ready/error/waiting states are
-		// periodically reconciled there, including after being re-enabled.
+		// 准备状态属于异步运行态，由 resample.Preparer 负责推进（仅处理非 ready 状态）。
 		task.PrepareState = existing.PrepareState
 		task.LastError = existing.LastError
 	}
@@ -796,16 +799,30 @@ func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDa
 	}, nil
 }
 
-// baseOutputFieldOptions 列出 K 线任务可选的基础输出字段（与建结果数据集列用同一份定义）；其他任务类型没有。
+// baseOutputFieldOptions 列出任务可选的基础输出字段（与建结果数据集列用同一份定义）：
+// kline 返回全部 K 线基础字段；kline_resample 返回可合成的 K 线基础字段；其他任务类型没有。
 func baseOutputFieldOptions(dataType string) []*pb.OutputFieldOption {
-	if !strings.EqualFold(strings.TrimSpace(dataType), "kline") {
+	switch strings.ToLower(strings.TrimSpace(dataType)) {
+	case "kline":
+		options := make([]*pb.OutputFieldOption, 0, len(taskresult.KlineOutputFields))
+		for _, field := range taskresult.KlineOutputFields {
+			options = append(options, &pb.OutputFieldOption{FieldId: field.Name, DisplayName: field.DisplayName, Group: field.Group, ValueType: taskresult.ValueTypeName(field.Kind)})
+		}
+		return options
+	case "kline_resample":
+		names := collectorresample.AllOutputFieldNames()
+		options := make([]*pb.OutputFieldOption, 0, len(names))
+		for _, name := range names {
+			field, ok := taskresult.KlineOutputField(name)
+			if !ok {
+				continue
+			}
+			options = append(options, &pb.OutputFieldOption{FieldId: field.Name, DisplayName: field.DisplayName, Group: field.Group, ValueType: taskresult.ValueTypeName(field.Kind)})
+		}
+		return options
+	default:
 		return nil
 	}
-	options := make([]*pb.OutputFieldOption, 0, len(taskresult.KlineOutputFields))
-	for _, field := range taskresult.KlineOutputFields {
-		options = append(options, &pb.OutputFieldOption{FieldId: field.Name, DisplayName: field.DisplayName, Group: field.Group, ValueType: taskresult.ValueTypeName(field.Kind)})
-	}
-	return options
 }
 
 // extraFieldOptions 列出 K 线任务可选的附加字段及其适用范围；其他任务类型没有。

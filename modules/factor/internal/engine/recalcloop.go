@@ -112,27 +112,29 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 		}
 		return true, nil
 	}
-	err = l.runJob(ctx, &job, axis)
+	err = l.runJob(ctx, &job, axis, &realProgress)
 	switch {
 	case errors.Is(err, recalcexec.ErrGated):
 		// 任务被暂停（或在恢复追赶）：不报失败，归还作业，放行后重新领取并从已上报的进度续跑；
 		// 按没有任务处理，等一个轮询间隔再领取。
 		log.InfoContextf(ctx, "factor_recalc_gated job_id=%s task_id=%s", job.JobID, job.Set.Set.TaskID)
-		l.giveBack(ctx, axis, job)
+		l.giveBack(ctx, job.JobID, realProgress)
 		return false, nil
 	case err == nil:
 		log.InfoContextf(ctx, "factor_recalc_done job_id=%s", job.JobID)
 	case ctx.Err() != nil:
 		// 引擎停止（排在上报失败之前：停止时正在上报的分块也会因上下文取消而失败）：归还作业。
 		// 归还失败作业仍是运行中，重启后的引擎领取时同样先拿到它，从已上报的进度续跑。
-		l.giveBack(ctx, axis, job)
+		l.giveBack(ctx, job.JobID, realProgress)
 	case errors.Is(err, ErrLeaseConflict), errors.Is(err, errReportFailed):
 		// 作业在管理端仍是运行中，下一次领取会立刻拿回它：按没有作业处理，等一个轮询间隔再领，不连续重试。
 		log.WarnContextf(ctx, "factor_recalc_abandoned job_id=%s error=%v", job.JobID, err)
 		return false, nil
 	default:
 		log.ErrorContextf(ctx, "factor_recalc_failed job_id=%s error=%v", job.JobID, err)
-		if _, reportErr := l.report(ctx, axis, job, job.Window.Progress, jobStatusFailed, err.Error(), nil); reportErr != nil {
+		// 直接回传已确认的真实时间进度（未推进任何分块时即领取时的原始 Progress），
+		// 不再走 EndToAxis → FromAxisEnd 往返，避免股票日历在开盘时刻倒退到上一交易日收盘而触发 ErrConflict。
+		if _, reportErr := l.client.ReportRecalcProgress(ctx, job.JobID, realProgress, jobStatusFailed, err.Error(), nil); reportErr != nil {
 			log.ErrorContextf(ctx, "factor_recalc_report_failed job_id=%s error=%v", job.JobID, reportErr)
 		}
 	}
@@ -163,31 +165,33 @@ func jobToAxis(job *PulledJob) (periodclock.Axis, error) {
 	return axis, nil
 }
 
-// report 上报作业进度（引擎对外接口的出参）：进度与按默认参数新补的期次换回真实时间。进度是排他终点，换成最后一根已算完的
-// K 线的收盘时刻（与领取时的 EndToAxis 对称），不取下一根的起点：日历最后一根之后没有下一根。
-func (l *recalcLoop) report(ctx context.Context, axis periodclock.Axis, job PulledJob, progress time.Time, status, errText string, filled map[string][]domain.TimeRange) (string, error) {
-	// 零值表示还没有任何进度（第一个分块之前就失败）：原样上报。
+// report 上报已推进的分块进度（引擎对外接口的出参）：进度与按默认参数新补的期次换回真实时间。进度是排他终点，换成最后一根已算完的
+// K 线的收盘时刻（与领取时的 EndToAxis 对称），不取下一根的起点：日历最后一根之后没有下一根。返回管理端当前状态与实际报出的真实时间进度。
+func (l *recalcLoop) report(ctx context.Context, axis periodclock.Axis, job PulledJob, progress time.Time, status, errText string, filled map[string][]domain.TimeRange) (string, time.Time, error) {
+	// 零值表示还没有任何进度：原样上报。
 	var realProgress time.Time
 	if !progress.IsZero() {
 		var err error
 		if realProgress, err = axis.FromAxisEnd(progress); err != nil {
-			return "", err
+			return "", time.Time{}, err
 		}
 	}
 	realFilled, err := convertRanges(filled, axis.FromAxis)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
-	return l.client.ReportRecalcProgress(ctx, job.JobID, realProgress, status, errText, realFilled)
+	current, err := l.client.ReportRecalcProgress(ctx, job.JobID, realProgress, status, errText, realFilled)
+	return current, realProgress, err
 }
 
 // giveBack 把放弃的作业归还给管理端（回到待领取、进度保留），让排在后面的作业先跑。
+// 直接回传已确认的真实时间进度（未推进分块时即领取时的原始 Progress），避免未推进分块走轴往返在股票日历下倒退或越界。
 // 归还失败只记日志：作业仍是运行中，下一次领取照旧拿回它。
-func (l *recalcLoop) giveBack(ctx context.Context, axis periodclock.Axis, job PulledJob) {
+func (l *recalcLoop) giveBack(ctx context.Context, jobID string, realProgress time.Time) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), giveBackTimeout)
 	defer cancel()
-	if _, err := l.report(ctx, axis, job, job.Window.Progress, jobStatusAccepted, "", nil); err != nil {
-		log.WarnContextf(ctx, "factor_recalc_give_back_failed job_id=%s error=%v", job.JobID, err)
+	if _, err := l.client.ReportRecalcProgress(ctx, jobID, realProgress, jobStatusAccepted, "", nil); err != nil {
+		log.WarnContextf(ctx, "factor_recalc_give_back_failed job_id=%s error=%v", jobID, err)
 	}
 }
 
@@ -213,9 +217,9 @@ func convertRanges(ranges map[string][]domain.TimeRange, convert func(time.Time)
 	return out, nil
 }
 
-// runJob advances job.Window.Progress as chunks are reported, so a failure
-// report carries the progress the manager already holds.
-func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodclock.Axis) error {
+// runJob advances job.Window.Progress and realProgress as chunks are reported,
+// so a failure or giveBack report always carries the exact real-time progress the manager already holds.
+func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodclock.Axis, realProgress *time.Time) error {
 	set := job.Set
 	// 补算作业自带定义，领取时现场编译（设计 8）。
 	set.Members = CompileMembers(set.Members)
@@ -254,11 +258,12 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodcloc
 			filled[key] = domain.MergeTimeRanges(filled[key], int64(step/time.Second))
 			changed = filled
 		}
-		current, err := l.report(ctx, axis, *job, progress, status, lastNote, changed)
+		current, reportedProgress, err := l.report(ctx, axis, *job, progress, status, lastNote, changed)
 		if err != nil {
 			return true, fmt.Errorf("%w: %w", errReportFailed, err)
 		}
 		job.Window.Progress = progress
+		*realProgress = reportedProgress
 		if l.active != nil && !l.active() {
 			// 另一个引擎登记了：停在这个分块边界，作业留在运行中，由登记的引擎领取后续跑。
 			return true, nil

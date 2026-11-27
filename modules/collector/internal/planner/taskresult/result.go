@@ -452,7 +452,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	derived := map[string]string{}
 	alignment := ""
 	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		if derived, alignment, err = sessionAttributes(spaceID); err != nil {
+		if derived, alignment, err = SessionAttributes(spaceID); err != nil {
 			return IDs{}, err
 		}
 	}
@@ -1022,9 +1022,14 @@ func retInfoDatasetDelete(resp *storagepb.DeleteDatasetRsp) *storagepb.RetInfo {
 	return resp.GetRetInfo()
 }
 
-// sessionAttributes 返回交易时段市场时序结果数据集的 calendar 属性与 alignment（stockcn 为 cn_stock、session），取自 barclock 的市场登记。
+// IsDatasetNotFound 报告 Storage 元数据错误码是否表示数据集不存在。
+func IsDatasetNotFound(code storagepb.ErrorCode) bool {
+	return code == storagepb.ErrorCode_DATASET_NOT_FOUND || code == storagepb.ErrorCode_NOT_FOUND
+}
+
+// SessionAttributes 返回交易时段市场时序结果数据集的 calendar 属性与 alignment（stockcn 为 cn_stock、session），取自 barclock 的市场登记。
 // 连续交易的市场（crypto）都不写：策略缺省按 crypto_24x7。市场未登记时报错，不当成连续交易。
-func sessionAttributes(spaceID string) (map[string]string, string, error) {
+func SessionAttributes(spaceID string) (map[string]string, string, error) {
 	market, err := barclock.MarketFor(spaceID)
 	if err != nil {
 		return nil, "", err

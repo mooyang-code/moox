@@ -131,3 +131,36 @@ func TestReregisterAppliedPlanDeletesTheSpaceTimeline(t *testing.T) {
 	require.Len(t, kept, 1)
 	require.Equal(t, `{"v":"cleared"}`, plansOf(t, plans, "crypto")[0].Plan)
 }
+
+// TimelineStats 与 ListBySpaceAfter / ListBySpaceWithBounds 按 c_id 精确反映写入、增量追加与清空重登记。
+func TestSeriesTimelineStatsAndIncrementalQuery(t *testing.T) {
+	ctx := context.Background()
+	db := openPlanTestStore(t)
+	plans, timeline := db.FetchPlans(), db.SeriesTimeline()
+
+	count, minID, maxID, err := timeline.TimelineStats(ctx, "crypto")
+	require.NoError(t, err)
+	require.Zero(t, count)
+	require.Zero(t, minID)
+	require.Zero(t, maxID)
+
+	rec, err := plans.Create(ctx, "crypto", `{"v":1}`, "{}", timelineEntry("crypto", "a", 100, "BTC-USDT"))
+	require.NoError(t, err)
+	count, minID, maxID, err = timeline.TimelineStats(ctx, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+	require.Positive(t, minID)
+	require.Equal(t, minID, maxID)
+
+	require.NoError(t, plans.Update(ctx, rec.ID, FetchPlanApplied, "{}", "", timelineEntry("crypto", "a", 200, "BTC-USDT", "ETH-USDT")))
+	delta, lastID, err := timeline.ListBySpaceAfter(ctx, "crypto", maxID)
+	require.NoError(t, err)
+	require.Equal(t, []SeriesTimelineEntry{timelineEntry("crypto", "a", 200, "BTC-USDT", "ETH-USDT")}, delta)
+	require.Greater(t, lastID, maxID)
+
+	all, gotMin, gotMax, err := timeline.ListBySpaceWithBounds(ctx, "crypto")
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+	require.Equal(t, minID, gotMin)
+	require.Equal(t, lastID, gotMax)
+}

@@ -163,8 +163,8 @@ const (
 	sqlSelectLatestOKResult = sqlSelectResults + ` WHERE r.c_instance_id = ? AND r.c_session_id = ? AND r.c_status = 'ok' ORDER BY r.c_bar_end_time DESC LIMIT 1`
 	// sqlSelectResultAtBar 读取本会话某个周期的记录。
 	sqlSelectResultAtBar = sqlSelectResults + ` WHERE r.c_instance_id = ? AND r.c_session_id = ? AND r.c_bar_end_time = ?`
-	// sqlCancelSupersededResults 把本会话更早周期的待投递结果标记为 cancelled。
-	sqlCancelSupersededResults = `UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`
+	// sqlCancelSupersededResults 把本会话更早周期的待投递结果标记为 cancelled 并清空事件字节。
+	sqlCancelSupersededResults = `UPDATE t_strategy_results SET c_publish_status = 'cancelled', c_event_data = NULL WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`
 	// sqlSelectLatestMark、sqlSelectLatestOKMark 读取实例（不分会话）最近处理的一条与最近一条 ok 的会话、周期、写入时间与跳过原因。
 	sqlSelectLatestMark   = `SELECT c_session_id, c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
 	sqlSelectLatestOKMark = `SELECT c_session_id, c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? AND c_status = 'ok' ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
@@ -186,10 +186,10 @@ const (
 	sqlListPendingResults = sqlSelectResults + ` WHERE r.c_publish_status = 'pending' ORDER BY r.c_ctime, r.c_result_id LIMIT ?`
 	// sqlSelectPendingResultByID 读取一条仍待投递的结果。
 	sqlSelectPendingResultByID = sqlSelectResults + ` WHERE r.c_result_id = ? AND r.c_publish_status = 'pending'`
-	// sqlCancelPendingResult 把一条待投递结果标记为 cancelled。
-	sqlCancelPendingResult = `UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_result_id = ? AND c_publish_status = 'pending'`
-	// sqlTransitionPublishStatus 比较交换推进投递状态。
-	sqlTransitionPublishStatus = `UPDATE t_strategy_results SET c_publish_status = ? WHERE c_result_id = ? AND c_publish_status = ?`
+	// sqlCancelPendingResult 把一条待投递结果标记为 cancelled 并清空事件字节。
+	sqlCancelPendingResult = `UPDATE t_strategy_results SET c_publish_status = 'cancelled', c_event_data = NULL WHERE c_result_id = ? AND c_publish_status = 'pending'`
+	// sqlTransitionPublishStatus 比较交换推进投递状态到终态（sent/cancelled）并清空事件字节。
+	sqlTransitionPublishStatus = `UPDATE t_strategy_results SET c_publish_status = ?, c_event_data = NULL WHERE c_result_id = ? AND c_publish_status = ?`
 	// sqlCountPendingOutbox 统计带事件数据的待投递结果。
 	sqlCountPendingOutbox = `SELECT COUNT(*) FROM t_strategy_results WHERE c_publish_status = 'pending' AND c_event_data IS NOT NULL`
 	// sqlSelectOldestPendingOutbox 读取最早一条带事件数据的待投递结果的创建时间。

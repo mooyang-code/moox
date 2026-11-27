@@ -44,7 +44,7 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 	var available shared.Decimal
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var err error
-		available, err = availableReservationFunds(tx, validation, adjustment)
+		available, err = availableReservationFunds(tx, validation, adjustment, s.now())
 		return err
 	})
 	if err != nil {
@@ -120,13 +120,13 @@ func minCapacity(a, b shared.Decimal) shared.Decimal {
 	return b
 }
 
-func availableReservationFunds(tx *store.Tx, validation Validation, adjustment shared.Decimal) (shared.Decimal, error) {
+func availableReservationFunds(tx *store.Tx, validation Validation, adjustment shared.Decimal, now time.Time) (shared.Decimal, error) {
 	if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
 		balances, err := tx.GetPaperBalanceSnapshot(validation.Account.SpaceID, validation.Account.ID)
 		if err != nil {
 			return shared.Zero(), err
 		}
-		t1, err := paperT1Locked(tx, validation)
+		t1, err := paperT1Locked(tx, validation, now)
 		if err != nil {
 			return shared.Zero(), err
 		}
@@ -145,12 +145,12 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 }
 
 // paperT1Locked 是模拟盘卖单当天还不能卖的数量：T+1 的场所（A 股）当日买入的部分。买单和其他场所（港股 T+0、加密货币）返回 0。
-func paperT1Locked(tx *store.Tx, validation Validation) (shared.Decimal, error) {
+func paperT1Locked(tx *store.Tx, validation Validation, now time.Time) (shared.Decimal, error) {
 	instrument := validation.Instrument
 	if !exchange.RuleAt(validation.Account.Exchange, instrument.MarketType).T1 || validation.ReservedAsset == "" || validation.ReservedAsset != instrument.BaseAsset {
 		return shared.Zero(), nil
 	}
-	bought, err := tx.PaperT1Bought(validation.Account.SpaceID, validation.Account.ID, exchange.T1Since(time.Now()).UnixMilli())
+	bought, err := tx.PaperT1Bought(validation.Account.SpaceID, validation.Account.ID, exchange.T1Since(now).UnixMilli())
 	if err != nil {
 		return shared.Zero(), err
 	}

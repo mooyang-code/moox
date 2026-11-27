@@ -123,7 +123,7 @@ func TestDelistUnblockBeatsDeadline(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-unblock", "BTC-USDT-SWAP")
-	command.DeadlineAt = fixture.now.Add(time.Hour).UnixMilli()
+	command.DeadlineAt = fixture.now.Add(10 * time.Minute).UnixMilli()
 	fixture.orders.nextID = "child-open"
 	fixture.orders.leaveOpen = map[string]bool{"child-open": true}
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
@@ -131,7 +131,7 @@ func TestDelistUnblockBeatsDeadline(t *testing.T) {
 
 	_, err = storetest.UnblockInstrument(fixture.store, "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
-	fixture.now = fixture.now.Add(2 * time.Hour)
+	fixture.now = fixture.now.Add(15 * time.Minute)
 
 	// 撤单还没确认：等撤单确认，不因为过了截止时间就压成 PARTIAL。
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)

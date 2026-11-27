@@ -1,3 +1,4 @@
+import { ref } from "vue";
 import { defineStore } from "pinia";
 
 /**
@@ -32,13 +33,14 @@ export const routesConfigStore = () => {
     currentRoute.value = data;
   }
   /**
-   * 删除tabs页的指定路由
+   * 删除tabs页的指定路由；固定页或不存在时不删除并返回 false
    * @param {string} key 路由name
    */
-  function removeTabsList(key: string) {
+  function removeTabsList(key: string): boolean {
     const index = tabsList.value.findIndex((item: Menu.MenuOptions) => item.name === key);
-    if (index === -1 || tabsList.value[index].meta.affix) return;
+    if (index === -1 || tabsList.value[index].meta?.affix) return false;
     tabsList.value.splice(index, 1);
+    return true;
   }
   /** 退出登录时清空标签页 */
   function clearTabs() {

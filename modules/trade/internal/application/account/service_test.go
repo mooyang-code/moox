@@ -70,9 +70,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		{
 			name: "missing credential secret ID",
 			mutate: func(value *tradingaccount.Account) {
-				value.ExecutionMode = exchange.ExecutionModeLive
-				value.Environment = exchange.AccountEnvironmentTestnet
-				value.CredentialSecretID = ""
+				setLive(value, exchange.AccountEnvironmentTestnet, "")
 			},
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
@@ -88,8 +86,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		{
 			name: "wrong credential category",
 			mutate: func(value *tradingaccount.Account) {
-				value.ExecutionMode = exchange.ExecutionModeLive
-				value.Environment = exchange.AccountEnvironmentTestnet
+				setLive(value, exchange.AccountEnvironmentTestnet, "secret-1")
 			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "cloud",
@@ -100,8 +97,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		{
 			name: "wrong credential Exchange",
 			mutate: func(value *tradingaccount.Account) {
-				value.ExecutionMode = exchange.ExecutionModeLive
-				value.Environment = exchange.AccountEnvironmentTestnet
+				setLive(value, exchange.AccountEnvironmentTestnet, "secret-1")
 			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "exchange",
@@ -112,8 +108,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		{
 			name: "inactive credential",
 			mutate: func(value *tradingaccount.Account) {
-				value.ExecutionMode = exchange.ExecutionModeLive
-				value.Environment = exchange.AccountEnvironmentTestnet
+				setLive(value, exchange.AccountEnvironmentTestnet, "secret-1")
 			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "exchange",
@@ -174,8 +169,7 @@ func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
 
 	live := paper
 	live.ID = "account-live"
-	live.ExecutionMode = exchange.ExecutionModeLive
-	live.Environment = exchange.AccountEnvironmentTestnet
+	setLive(&live, exchange.AccountEnvironmentTestnet, "secret-1")
 	secrets := &fakeSecrets{
 		secret: validSecret(),
 	}
@@ -196,8 +190,7 @@ func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
 func TestCreateProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentProduction
+	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	secrets := &fakeSecrets{
 		secret: validSecret(),
 	}
@@ -218,8 +211,7 @@ func TestCreateProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.
 func TestCreateProductionAccountWhenLiveTradingIsEnabled(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentProduction
+	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	service := Service{
 		Inspector:          okInspector,
 		Store:              store,
@@ -253,9 +245,7 @@ func TestCreatePaperAccountDoesNotRequireSecretSource(t *testing.T) {
 func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 	store := newMemoryStore()
 	before := validSwapAccount()
-	before.ExecutionMode = exchange.ExecutionModeLive
-	before.Environment = exchange.AccountEnvironmentTestnet
-	before.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
+	setLive(&before, exchange.AccountEnvironmentTestnet, "secret-1")
 	store.accounts[before.ID] = before
 	service := Service{Store: store, Secrets: &fakeSecrets{secret: validSecret()}, Inspector: okInspector}
 	name := "renamed"
@@ -283,8 +273,7 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 func TestUpdateEnablingProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentProduction
+	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	value.Status = exchange.AccountStatusDisabled
 	store.accounts[value.ID] = value
 	status := exchange.AccountStatusEnabled
@@ -310,8 +299,7 @@ func TestUpdateEnablingProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *
 func TestUpdateDisablingProductionAccountIsAllowedWhileLiveTradingIsDisabled(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentProduction
+	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	value.Status = exchange.AccountStatusEnabled
 	store.accounts[value.ID] = value
 	status := exchange.AccountStatusDisabled
@@ -396,8 +384,7 @@ func TestExecutionEligibilityRejectsMissingSessionState(t *testing.T) {
 func TestExecutionEligibilityRejectsProductionWhenLiveTradingDisabled(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentProduction
+	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	value.Ready = true
 	store.accounts[value.ID] = value
 	service := Service{Store: store, SessionState: fakeSessionState{ready: true}}
@@ -416,9 +403,7 @@ func TestExecutionEligibilityRejectsProductionWhenLiveTradingDisabled(t *testing
 func TestSetLeverageAndPauseUseCommandSpecificWrites(t *testing.T) {
 	store := newMemoryStore()
 	value := validSwapAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentTestnet
-	value.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
+	setLive(&value, exchange.AccountEnvironmentTestnet, "secret-1")
 	store.accounts[value.ID] = value
 	service := Service{Store: store}
 
@@ -436,6 +421,14 @@ func TestSetLeverageAndPauseUseCommandSpecificWrites(t *testing.T) {
 	}
 }
 
+func setLive(value *tradingaccount.Account, env exchange.AccountEnvironment, secretID string) {
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = env
+	value.CredentialSecretID = secretID
+	value.Paper = nil
+	value.Live = &tradingaccount.LiveConfig{Environment: env, CredentialSecretID: secretID}
+}
+
 func validAccount() tradingaccount.Account {
 	return tradingaccount.Account{
 		ID:                 "account-1",
@@ -446,8 +439,15 @@ func validAccount() tradingaccount.Account {
 		ExecutionMode:      exchange.ExecutionModePaper,
 		Environment:        exchange.AccountEnvironmentPaper,
 		CredentialSecretID: "secret-1",
-		SettlementAsset:    "USDT",
-		Status:             exchange.AccountStatusEnabled,
+		Paper: &tradingaccount.PaperConfig{
+			InitialBalance:     shared.MustDecimal("100000"),
+			MakerFeeRate:       shared.Zero(),
+			TakerFeeRate:       shared.Zero(),
+			SlippageBPS:        shared.Zero(),
+			OrderRetentionDays: tradingaccount.DefaultOrderRetentionDays,
+		},
+		SettlementAsset: "USDT",
+		Status:          exchange.AccountStatusEnabled,
 	}
 }
 
@@ -612,10 +612,7 @@ func (f fakeSessionState) Invalidate(string)                    {}
 // 实盘账户的凭据同时存在于外层字段与 Live 配置里，落库读取 Live 的值：更换凭据必须两处一起更新。
 func TestApplyUpdateReplacesLiveCredentialUsedByPersistence(t *testing.T) {
 	value := validAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentTestnet
-	value.CredentialSecretID = "secret-a"
-	value.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-a"}
+	setLive(&value, exchange.AccountEnvironmentTestnet, "secret-a")
 	next := "secret-b"
 	applyUpdate(&value, UpdateCommand{CredentialSecretID: &next})
 	if got := credentialSecret(value); got != "secret-b" {
@@ -629,11 +626,8 @@ func liveCredentialAccount(id string, name exchange.Exchange, market exchange.Ma
 		value = validSwapAccount()
 	}
 	value.ID, value.Name, value.Exchange = id, id, name
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentTestnet
-	value.CredentialSecretID = "secret-1"
+	setLive(&value, exchange.AccountEnvironmentTestnet, "secret-1")
 	value.Status = exchange.AccountStatusEnabled
-	value.Paper = nil
 	return value
 }
 
@@ -657,11 +651,11 @@ func TestRejectDuplicateCredentialIsUnconditional(t *testing.T) {
 	// 不同密钥、账户自身、不同环境都不算重复。
 	binance := store.accounts["binance-spot"]
 	other := liveCredentialAccount("binance-other", exchange.ExchangeBinance, exchange.MarketTypeSpot)
-	other.CredentialSecretID = "secret-2"
+	setLive(&other, exchange.AccountEnvironmentTestnet, "secret-2")
 	require.NoError(t, service.rejectDuplicateCredential(ctx, other))
 	require.NoError(t, service.rejectDuplicateCredential(ctx, binance))
 	production := liveCredentialAccount("binance-production", exchange.ExchangeBinance, exchange.MarketTypeSpot)
-	production.Environment = exchange.AccountEnvironmentProduction
+	setLive(&production, exchange.AccountEnvironmentProduction, "secret-1")
 	require.NoError(t, service.rejectDuplicateCredential(ctx, production))
 
 	// 停用的账户不占用密钥，重新启用时才检查。
@@ -685,8 +679,7 @@ func TestCreateAcceptsMultiMarketAccount(t *testing.T) {
 func TestUpdateRejectsDisablingAccountStillInLogicalAccount(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentProduction
+	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	value.Status = exchange.AccountStatusEnabled
 	store.accounts[value.ID] = value
 	store.memberships = map[string]string{value.ID: "组合一"}

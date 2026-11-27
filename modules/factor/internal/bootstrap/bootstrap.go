@@ -112,11 +112,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 		return nil, fmt.Errorf("create udf preview runtime: %w", err)
 	}
 	runtime.udfRuntimes = append(runtime.udfRuntimes, previewRuntime)
-	catalogService := catalog.NewService(db, storage,
-		catalog.WithReadyRecorder(hub.SetResultReady),
-		catalog.WithUDFVerifier(catalog.UDFVerifier{Runtime: verifyRuntime, Conformance: factorudf.ConformanceOptions{Timeout: udfVerifyTimeout}}),
-		catalog.WithRefSubjectSource(storage),
-	)
+	catalogService := newCatalogService(db, storage, hub.SetResultReady, verifyRuntime)
 	fetchModule := func(ctx context.Context, hash string) ([]byte, error) {
 		_, wasm, err := catalogService.UdfModule(ctx, hash)
 		return wasm, err
@@ -145,6 +141,21 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.health.SetReady(true)
 	return runtime, nil
+}
+
+type catalogStorage interface {
+	storageio.Metadata
+	catalog.SubjectSource
+}
+
+// newCatalogService 装配 factor-mgr 的目录服务，统一注入结果就绪回调、自定义算子复核与标的来源校验。
+func newCatalogService(db *store.Store, storage catalogStorage, recordReady func(taskID string, ready bool), verifyRuntime *factorudf.Runtime) *catalog.Service {
+	return catalog.NewService(db, storage,
+		catalog.WithReadyRecorder(recordReady),
+		catalog.WithUDFVerifier(catalog.UDFVerifier{Runtime: verifyRuntime, Conformance: factorudf.ConformanceOptions{Timeout: udfVerifyTimeout}}),
+		catalog.WithSubjectSource(storage),
+		catalog.WithRefSubjectSource(storage),
+	)
 }
 
 func (r *Runtime) Close() error {

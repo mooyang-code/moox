@@ -14,9 +14,7 @@ import (
 
 func liveProductionAccount() tradingaccount.Account {
 	value := validAccount()
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentProduction
-	value.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironmentProduction, CredentialSecretID: "secret-1"}
+	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	return value
 }
 
@@ -347,4 +345,29 @@ func TestInspectionFailureTextHasNoRawRequestOrBody(t *testing.T) {
 	require.ErrorIs(t, err, ErrInspectionUnavailable)
 	require.NotContains(t, err.Error(), "signature")
 	require.NotContains(t, err.Error(), "secret-body")
+}
+
+// 仅填写 Live 配置、外层旧投影字段为空时，Reinspect 仍应正确读取 Live 的环境与密钥并写回检测结果。
+func TestReinspectUsesLiveConfigWhenLegacyProjectionFieldsEmpty(t *testing.T) {
+	memory := newMemoryStore()
+	value := liveProductionAccount()
+	value.Environment = exchange.AccountEnvironmentUnspecified
+	value.CredentialSecretID = ""
+	memory.accounts[value.ID] = value
+
+	inspector := &fakeInspector{}
+	service := inspectingService(memory, inspector, validSecret())
+	result, err := service.Reinspect(context.Background(), value.ID)
+	require.NoError(t, err)
+	require.Len(t, inspector.calls, 1)
+	require.Equal(t, exchange.AccountEnvironmentProduction, inspector.calls[0].Environment)
+	require.Equal(t, exchange.AccountModeBinanceStandard, result.Inspection.AccountMode)
+	require.NotEmpty(t, memory.accounts[value.ID].InspectionJSON)
+
+	// 不可达时累加失败次数同样用 Live.CredentialSecretID 写回，不误报密钥冲突。
+	failing := inspectingService(memory, &fakeInspector{err: errors.Join(exchange.ErrInspectionInconclusive, errors.New("timeout"))}, validSecret())
+	inconclusive, err := failing.Reinspect(context.Background(), value.ID)
+	require.NoError(t, err)
+	require.True(t, inconclusive.Inconclusive)
+	require.Equal(t, 1, inconclusive.Inspection.ConsecutiveFailures)
 }

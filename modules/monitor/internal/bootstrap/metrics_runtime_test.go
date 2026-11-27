@@ -46,7 +46,8 @@ func TestReporterExpectationUsesStableDeploymentIdentity(t *testing.T) {
 	result, ok := latestResult(t, repos, "mooxsys", id)
 	require.True(t, ok)
 	require.False(t, result.Success, "登记了部署就要求上报：从没上报过按停止上报处理")
-	require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: now.UnixMilli()}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}))
+	_, err = messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "factor-mgr-1", OccurredAt: now.UnixMilli()}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}, nil)
+	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
 	result, _ = latestResult(t, repos, "mooxsys", id)
 	require.True(t, result.Success, "the first report resolves the same check identity")
@@ -273,9 +274,10 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "collector", Status: "enabled"}},
 	}))
 	report := func(stage string) {
-		require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: now.UnixMilli()},
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "collector-" + stage, OccurredAt: now.UnixMilli()},
 			&metricspb.MetricReport{ServiceName: "collector", NodeId: "control", InstanceId: "collector@control", BootId: "boot-1",
-				Lifecycle: &metricspb.ModuleLifecycle{Stage: stage}}))
+				Lifecycle: &metricspb.ModuleLifecycle{Stage: stage}}, nil)
+		require.NoError(t, err)
 	}
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,

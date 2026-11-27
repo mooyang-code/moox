@@ -80,6 +80,7 @@ type lifecycleOptions struct {
 	ManualRelease bool
 	// ExpiresIn 用于 pause：这么久之后自动恢复（0 表示不自动恢复）。
 	ExpiresIn time.Duration
+	Yes       bool
 }
 
 var lifecycleFlags lifecycleOptions
@@ -90,8 +91,8 @@ var lifecycleCmd = &cobra.Command{
 	Long: `查看和控制一个模块的生命周期。模块只有三种状态：运行、暂停、恢复追赶。
 
   moox-cli lifecycle status                      查看状态（暂停详情、追赶进度）
-  moox-cli lifecycle pause  [--reason 原因] [--pause-kind manual|system] [--for 2h]
-                                                 暂停（默认手动暂停：只有用户 resume 才恢复；--for 到点自动恢复）
+  moox-cli lifecycle pause  [--reason 原因] [--pause-kind manual|system] [--for 2h] [--yes]
+                                                 暂停（默认只预览，--yes 才执行；默认手动暂停：只有用户 resume 才恢复；--for 到点自动恢复）
   moox-cli lifecycle resume [--pause-kind system] [--manual-release]
                                                  恢复：先进入恢复追赶（补齐暂停期间缺失的数据，不计算、不下单），追平后自动放行回到运行；
                                                  --manual-release 追平后停在待放行，等 release（系统级恢复用）；
@@ -129,11 +130,23 @@ func init() {
 			return runLifecycleCatchup(cmd.Context(), lifecycleFlags, cmd.OutOrStdout())
 		},
 	})
+	pause := &cobra.Command{
+		Use:   string(lifecycle.CmdPause),
+		Short: "暂停：不再计算新周期、不下单（默认只预览，--yes 才执行；--for 可设定自动恢复）",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !lifecycleFlags.Yes {
+				return previewLifecyclePause(cmd, lifecycleFlags)
+			}
+			return runLifecycleCommand(cmd.Context(), lifecycleFlags, lifecycle.CmdPause, cmd.OutOrStdout())
+		},
+	}
+	pause.Flags().BoolVar(&lifecycleFlags.Yes, "yes", false, "确认暂停；不加只预览将要暂停的模块")
+	lifecycleCmd.AddCommand(pause)
 	for _, item := range []struct {
 		name  lifecycle.Command
 		short string
 	}{
-		{lifecycle.CmdPause, "暂停：不再计算新周期、不下单（--for 可设定自动恢复）"},
 		{lifecycle.CmdResume, "恢复：先追赶暂停期间的周期，追平后放行"},
 		{lifecycle.CmdRelease, "放行：追赶已追平的模块回到运行"},
 	} {
@@ -145,6 +158,27 @@ func init() {
 			},
 		})
 	}
+}
+
+// previewLifecyclePause 只列出将要暂停的模块和参数（校验模块已部署），不发出暂停请求。
+func previewLifecyclePause(cmd *cobra.Command, o lifecycleOptions) error {
+	pauseKind := o.PauseKind
+	if pauseKind == "" {
+		pauseKind = string(lifecycle.PauseManual)
+	}
+	return withLifecycle(cmd.Context(), o, func(remote *lifecycle.Remote) error {
+		details := map[string]any{
+			"action":     "lifecycle_pause",
+			"module":     o.Module,
+			"service":    remote.Service,
+			"pause_kind": pauseKind,
+			"reason":     o.Reason,
+		}
+		if o.ExpiresIn > 0 {
+			details["for"] = o.ExpiresIn.String()
+		}
+		return writePreview(cmd, details)
+	})
 }
 
 // withLifecycle 打开操作员网关，把模块的生命周期客户端交给 fn；模块没有部署时报错。

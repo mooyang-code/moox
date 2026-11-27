@@ -207,4 +207,13 @@ func TestFinishChunkRecordsNoticeInSameTransaction(t *testing.T) {
 	require.ErrorIs(t, mgr.Backfill().FinishChunk(ctx, id, 1, BackfillSucceeded, 12, ""), ErrChunkLost)
 	left, _ := mgr.Resample().UnsealedNotices(ctx, 10)
 	require.Len(t, left, 1)
+
+	// FinishChunkWithoutNotice 更新分块成功状态但不写入 backfill_notices（例如越界空分块跳过）。
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_kline_backfill_chunks (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from, c_to, c_chunk_id, c_status, c_attempts) VALUES ('job', 'dataset_src', '5m', 'ETH', ?, ?, 'chunk-skip', 'running', 1)`, start, start.Add(time.Hour)).Error)
+	var skipID int64
+	require.NoError(t, mgr.db.Raw(`SELECT c_id FROM t_collector_kline_backfill_chunks WHERE c_chunk_id = 'chunk-skip'`).Scan(&skipID).Error)
+	require.NoError(t, mgr.Backfill().FinishChunkWithoutNotice(ctx, skipID, 1, BackfillSucceeded, 0, "早于回看上限，不补"))
+	left, err = mgr.Resample().UnsealedNotices(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, left, 1, "FinishChunkWithoutNotice 不得写入补写通知")
 }

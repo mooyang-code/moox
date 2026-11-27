@@ -2,8 +2,8 @@
   <div class="menu_fold">
     <a-button size="mini" type="text" class="menu_fold_icon" id="system-collapsed" @click="onCollapsed">
       <template #icon>
-        <icon-menu-fold :size="18" v-if="!collapsed" />
-        <icon-menu-unfold :size="18" v-if="collapsed" />
+        <icon-menu-fold :size="18" v-if="!isFolded" />
+        <icon-menu-unfold :size="18" v-if="isFolded" />
       </template>
     </a-button>
   </div>
@@ -12,24 +12,31 @@
 </template>
 
 <script setup lang="ts">
+import { computed, watch } from "vue";
 import DrawerAside from "@/layout/components/drawer-aside/index.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
-const themeStore = useThemeConfig();
-const { collapsed } = storeToRefs(themeStore);
-const { isPc } = useDevicesSize();
-// 刷新时，PC窗口展开菜单，移动端收起菜单
-collapsed.value = isPc.value ? false : true;
 
-// 折叠
+const themeStore = useThemeConfig();
+const { collapsed, drawerVisible } = storeToRefs(themeStore);
+const { isPc } = useDevicesSize();
+
+// 桌面端反映持久化的侧栏折叠态；窄屏/移动端反映临时导航抽屉是否收起
+const isFolded = computed(() => (isPc.value ? collapsed.value : !drawerVisible.value));
+
+// 桌面端只修改持久化 collapsed，移动端只切换临时 drawerVisible，互不污染
 const onCollapsed = () => {
-  themeStore.setCollapsed(!collapsed.value);
+  if (isPc.value) {
+    themeStore.setCollapsed(!collapsed.value);
+  } else {
+    themeStore.setDrawerVisible(!drawerVisible.value);
+  }
 };
 
-// 监听屏幕尺寸变化，PC端自动展开菜单，移动端自动收起
-watch(isPc, (newV: boolean) => {
-  collapsed.value = newV ? false : true;
+// 跨断点切换仅收起移动端临时抽屉，绝不改写桌面端持久化 collapsed
+watch(isPc, () => {
+  themeStore.setDrawerVisible(false);
 });
 </script>
 

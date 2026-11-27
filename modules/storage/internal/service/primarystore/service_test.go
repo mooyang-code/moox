@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,8 +129,8 @@ func (periodAuthorizationSnapshot) ListDatasetColumns(string, string, *pb.Page) 
 	return nil, &pb.PageResult{}, nil
 }
 
-func TestCommitTimeSeriesBatchWriteAuthorization(t *testing.T) {
-	runPeriodAuthorizationCases(t, "commit", func(svc *Service, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
+func TestCommitTimeSeriesBatchValidatesPeriodDataset(t *testing.T) {
+	runPeriodValidationCases(t, "commit", func(svc *Service, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
 		row := &pb.RowFieldUpsert{Key: &pb.RowKey{
 			SpaceId: exp.GetSpaceId(), DatasetId: exp.GetDatasetId(),
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: exp.GetFrequency(), DataTime: "2026-09-30T00:00:00Z"}},
@@ -144,7 +145,21 @@ func TestCommitTimeSeriesBatchWriteAuthorization(t *testing.T) {
 	})
 }
 
-func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Service, *pb.DatasetPeriodExpectation) *pb.RetInfo) {
+func TestRegisterSeriesSnapshotValidatesPeriodDataset(t *testing.T) {
+	runPeriodValidationCases(t, "register", func(svc *Service, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
+		rsp, err := svc.RegisterSeriesSnapshot(context.Background(), &pb.PrimaryRegisterSeriesSnapshotReq{
+			SpaceId: exp.GetSpaceId(), DatasetId: exp.GetDatasetId(), Frequency: exp.GetFrequency(),
+			EffectiveFrom: 3600,
+			Series:        []*pb.SeriesSnapshotEntry{{SubjectId: "BTC-USDT"}},
+		})
+		if err != nil {
+			t.Fatalf("RegisterSeriesSnapshot error: %v", err)
+		}
+		return rsp.GetRetInfo()
+	})
+}
+
+func runPeriodValidationCases(t *testing.T, method string, invoke func(*Service, *pb.DatasetPeriodExpectation) *pb.RetInfo) {
 	t.Helper()
 	validDataset := func() *pb.Dataset {
 		return &pb.Dataset{
@@ -167,20 +182,25 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 		{name: "any role: Factor-owned Dataset", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
 		{name: "any role: missing Dataset owner", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"dataset_role": "raw_collection"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
 		{name: "any role: wrong Dataset role", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "snapshot Dataset identity mismatch", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "record Dataset kind", dataset: withAttrs(pb.DataKind_DATA_KIND_RECORD, "1h", nil), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "invalid declared frequency", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "forever", nil), includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "frequency alias is not canonical", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "unknown Dataset", dataset: validDataset(), includeDataset: false, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "missing metadata snapshot", dataset: validDataset(), includeDataset: true, includeSnapshot: false, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "snapshot Dataset identity mismatch", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_INNER_ERR},
+		{name: "record Dataset kind", dataset: withAttrs(pb.DataKind_DATA_KIND_RECORD, "1h", nil), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_INVALID_PARAM},
+		{name: "invalid declared frequency", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "forever", nil), includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_INVALID_PARAM},
+		{name: "frequency alias is not canonical", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_INVALID_PARAM},
+		{name: "frequency does not match declaration", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "5m", wantCode: pb.ErrorCode_INVALID_PARAM},
+		{name: "unknown Dataset", dataset: validDataset(), includeDataset: false, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NOT_FOUND},
+		{name: "missing metadata snapshot", dataset: validDataset(), includeDataset: true, includeSnapshot: false, frequency: "1h", wantCode: pb.ErrorCode_INNER_ERR},
 	}
 	for _, tc := range tests {
 		t.Run(method+"/"+tc.name, func(t *testing.T) {
-			var commits, snapshotCalls int
+			var writes, snapshotCalls int
 			store := newHookStore(t)
 			store.commit = func(context.Context, pebble.DatasetPeriodExpectation, []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error) {
-				commits++
+				writes++
 				return pebble.DatasetPeriodResult{Status: "waiting"}, nil
+			}
+			store.registerSnapshot = func(context.Context, string, string, string, []seriesset.Series, int64) (pebble.RegisterSnapshotResult, error) {
+				writes++
+				return pebble.RegisterSnapshotResult{SeriesHash: "hash", ExpectedCount: 1}, nil
 			}
 			svc, err := New(Options{
 				Store: store,
@@ -202,9 +222,9 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 			require.Equal(t, tc.wantCode, rsp.GetCode(), "ret_info=%v", rsp)
 			require.Equal(t, 1, snapshotCalls, "unexpected request metadata snapshot access")
 			if tc.wantCode == pb.ErrorCode_SUCCESS {
-				require.Equal(t, 1, commits)
+				require.Equal(t, 1, writes)
 			} else {
-				require.Zero(t, commits, "unauthorized period RPC reached the Store")
+				require.Zero(t, writes, "invalid period RPC reached the Store")
 			}
 		})
 	}

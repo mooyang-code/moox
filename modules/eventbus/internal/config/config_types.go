@@ -28,8 +28,6 @@ type BrokerConfig struct {
 
 type AuthConfig struct {
 	Enabled   bool   `yaml:"enabled"`
-	Username  string `yaml:"username"`
-	Password  string `yaml:"password"`
 	UsersFile string `yaml:"users_file"`
 }
 

@@ -79,6 +79,7 @@ type BackfillStore interface {
 	ClaimChunks(context.Context, string, int, time.Time) ([]store.BackfillChunk, error)
 	InFlightChunks(context.Context, string) (int, error)
 	FinishChunk(context.Context, int64, int, string, int, string) error
+	FinishChunkWithoutNotice(context.Context, int64, int, string, int, string) error
 	RequeueChunk(context.Context, int64, int, string, string) error
 	RenewChunk(context.Context, int64, int, time.Time) error
 	ReleaseChunk(context.Context, int64, int) error
@@ -94,6 +95,7 @@ type BackfillStore interface {
 	HistorySeedOf(context.Context, string, string, string) (store.HistorySeed, bool, error)
 	CreateHistorySeed(context.Context, store.HistorySeed) (bool, error)
 	UpdateHistorySeed(context.Context, store.HistorySeed, ...string) (bool, error)
+	RetryHistorySeed(context.Context, string, string, string, []string) (bool, error)
 	InFlightChunksOf(context.Context, []string) (int, error)
 }
 
@@ -170,6 +172,12 @@ type Backfiller struct {
 	seedLocalLimiter *rate.Limiter
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
+	// timelines 按空间增量缓存只读 Timeline，避免每次分块执行都全表反序列化大 JSON。
+	timelines timelineCache
+}
+
+func (b *Backfiller) loadTimeline(ctx context.Context, spaceID string) (Timeline, error) {
+	return b.timelines.Load(ctx, b.Checker.Timeline, spaceID)
 }
 
 func (b *Backfiller) now() time.Time {
@@ -561,7 +569,7 @@ func (b *Backfiller) chunkPlan(ctx context.Context, spaceID string, chunk store.
 	if !found {
 		return nil, fmt.Errorf("数据集 %s（%s）没有对应的采集任务（任务已删除），不能补采", chunk.DatasetID, chunk.Frequency)
 	}
-	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
+	timeline, err := b.loadTimeline(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -637,7 +645,8 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		if start, ok := b.seedWindowStart(ctx, plan.Market, chunk.Frequency); ok && chunk.From.Before(start) {
 			if !start.Before(chunk.To) {
 				note := fmt.Sprintf("早于行情源回看范围（%s 之前），不补", start.Format(time.RFC3339))
-				if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, 0, note); err != nil {
+				// 整块早于回看上限未执行写入，只更新分块状态，不写 backfill_notices 避免误触发下游重算。
+				if err := b.Store.FinishChunkWithoutNotice(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, 0, note); err != nil {
 					log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, err)
 				}
 				return true
@@ -915,7 +924,7 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 			return nil // 上一次自动作业还没结束，不叠加
 		}
 	}
-	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
+	timeline, err := b.loadTimeline(ctx, spaceID)
 	if err != nil {
 		return err
 	}

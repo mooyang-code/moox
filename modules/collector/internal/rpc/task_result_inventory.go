@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/barclock"
@@ -19,27 +21,22 @@ import (
 )
 
 const (
-	maxTaskResultInventoryEntries           = 1000
-	maxTaskResultInventoryPage              = 100
-	maxTaskResultInventorySnapshotsPerSpace = 8
-	maxTaskResultInventorySnapshotsTotal    = 64
-	maxTaskResultInventoryBuilds            = 8
-	taskResultInventoryMetadataConcurrency  = 16
-	taskResultInventorySnapshotTTL          = 2 * time.Minute
+	maxTaskResultInventoryEntries          = 1000
+	maxTaskResultInventoryPage             = 100
+	taskResultInventoryMetadataConcurrency = 16
+	taskResultInventorySnapshotTTL         = 2 * time.Minute
 )
 
-type taskResultInventorySnapshot struct {
-	id        string
-	spaceID   string
-	pageSize  int
-	observed  time.Time
-	expiresAt time.Time
-	entries   []*pb.TaskResultInventoryEntry
+type taskResultInventoryToken struct {
+	observedMs int64
+	pageSize   int
+	nonce      string
+	digest     string
 }
 
-// GetTaskResultInventory returns a bounded, ownership-checked task-result
-// snapshot. Page one creates the snapshot; later pages must carry its ID, so
-// a task deletion or result change cannot silently mix two inventories.
+// GetTaskResultInventory 无状态返回当前空间的任务结果清单。
+// 首页请求生成自描述的 snapshot_id（含观察时刻、页大小与清单内容指纹）；后续翻页带回该 snapshot_id，
+// 服务端无状态重算内容指纹并校验一致，既不占用进程内快照缓存，又能防止翻页期间静默混拼两代清单。
 func (s *Service) GetTaskResultInventory(ctx context.Context, req *pb.GetTaskResultInventoryReq) (*pb.GetTaskResultInventoryRsp, error) {
 	if req == nil {
 		return taskResultInventoryError(pb.ErrorCode_INVALID_PARAM, "request is required"), nil
@@ -61,125 +58,104 @@ func (s *Service) GetTaskResultInventory(ctx context.Context, req *pb.GetTaskRes
 		return taskResultInventoryError(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("page size must be between 1 and %d", maxTaskResultInventoryPage)), nil
 	}
 
+	now := time.Now().UTC()
+	observed := now
 	snapshotID := strings.TrimSpace(req.GetSnapshotId())
-	var snapshot *taskResultInventorySnapshot
-	if snapshotID == "" {
-		s.inventorySnapshotMu.Lock()
-		s.pruneTaskResultInventorySnapshotsLocked(time.Now().UTC())
-		if !s.reserveTaskResultInventoryBuildLocked(spaceID) {
-			s.inventorySnapshotMu.Unlock()
-			return taskResultInventoryError(pb.ErrorCode_CONFLICT, "task-result inventory snapshot capacity is full for this Space or process"), nil
-		}
-		s.inventorySnapshotMu.Unlock()
-
-		built, err := s.buildTaskResultInventorySnapshot(ctx, spaceID, size)
-		if err != nil {
-			s.inventorySnapshotMu.Lock()
-			s.releaseTaskResultInventoryBuildLocked(spaceID)
-			s.inventorySnapshotMu.Unlock()
-			log.ErrorContextf(ctx, "[Collector] build task-result inventory failed: %v", err)
-			return taskResultInventoryError(pb.ErrorCode_INNER_ERR, err.Error()), nil
-		}
-		s.inventorySnapshotMu.Lock()
-		s.pruneTaskResultInventorySnapshotsLocked(time.Now().UTC())
-		s.releaseTaskResultInventoryBuildLocked(spaceID)
-		if s.inventorySnapshots == nil {
-			s.inventorySnapshots = make(map[string]*taskResultInventorySnapshot)
-		}
-		s.inventorySnapshots[built.id] = built
-		snapshot = built
-		s.inventorySnapshotMu.Unlock()
-	} else {
-		s.inventorySnapshotMu.Lock()
-		s.pruneTaskResultInventorySnapshotsLocked(time.Now().UTC())
-		cached := s.inventorySnapshots[snapshotID]
-		if cached != nil && cached.id == snapshotID && cached.spaceID == spaceID && time.Now().UTC().Before(cached.expiresAt) {
-			snapshot = cached
-		}
-		s.inventorySnapshotMu.Unlock()
-		if snapshot == nil {
+	var token taskResultInventoryToken
+	if snapshotID != "" {
+		parsed, ok := parseTaskResultInventoryToken(snapshotID)
+		if !ok {
 			return taskResultInventoryError(pb.ErrorCode_CONFLICT, "task-result inventory snapshot expired or does not match"), nil
 		}
-		if snapshot.pageSize != size {
+		if parsed.pageSize != size {
 			return taskResultInventoryError(pb.ErrorCode_INVALID_PARAM, "page size must match the inventory snapshot"), nil
 		}
+		tokenObserved := time.UnixMilli(parsed.observedMs).UTC()
+		if !now.Before(tokenObserved.Add(taskResultInventorySnapshotTTL)) || tokenObserved.After(now.Add(time.Minute)) {
+			return taskResultInventoryError(pb.ErrorCode_CONFLICT, "task-result inventory snapshot expired or does not match"), nil
+		}
+		token = parsed
+		observed = tokenObserved
+	}
+
+	allEntries, err := s.collectTaskResultInventoryEntries(ctx, spaceID, observed)
+	if err != nil {
+		log.ErrorContextf(ctx, "[Collector] build task-result inventory failed: %v", err)
+		return taskResultInventoryError(pb.ErrorCode_INNER_ERR, err.Error()), nil
+	}
+	observedMs := unixMillis(observed)
+	digest := taskResultInventoryDigest(spaceID, size, observedMs, allEntries)
+	if snapshotID != "" {
+		if token.digest != digest {
+			return taskResultInventoryError(pb.ErrorCode_CONFLICT, "task-result inventory snapshot expired or does not match"), nil
+		}
+	} else {
+		snapshotID = formatTaskResultInventoryToken(observedMs, size, xid.New().String(), digest)
 	}
 
 	start := (page - 1) * size
-	if start > len(snapshot.entries) {
-		start = len(snapshot.entries)
+	if start > len(allEntries) {
+		start = len(allEntries)
 	}
 	end := start + size
-	if end > len(snapshot.entries) {
-		end = len(snapshot.entries)
+	if end > len(allEntries) {
+		end = len(allEntries)
 	}
-	entries := append([]*pb.TaskResultInventoryEntry(nil), snapshot.entries[start:end]...)
-	if end == len(snapshot.entries) {
-		s.inventorySnapshotMu.Lock()
-		if s.inventorySnapshots[snapshot.id] == snapshot {
-			delete(s.inventorySnapshots, snapshot.id)
-		}
-		s.inventorySnapshotMu.Unlock()
-	}
+	entries := append([]*pb.TaskResultInventoryEntry(nil), allEntries[start:end]...)
 	return &pb.GetTaskResultInventoryRsp{
-		RetInfo: retOK(), Entries: entries, SnapshotId: snapshot.id,
-		ObservedAt: unixMillis(snapshot.observed),
-		Page:       pageResult(page, size, int64(len(snapshot.entries))),
+		RetInfo: retOK(), Entries: entries, SnapshotId: snapshotID,
+		ObservedAt: observedMs,
+		Page:       pageResult(page, size, int64(len(allEntries))),
 	}, nil
 }
 
-func (s *Service) reserveTaskResultInventoryBuildLocked(spaceID string) bool {
-	spaceID = strings.TrimSpace(spaceID)
-	if spaceID == "" {
-		return false
-	}
-	spaceSnapshots, totalBuilds, spaceBuilds := 0, 0, 0
-	for _, snapshot := range s.inventorySnapshots {
-		if snapshot == nil {
-			continue
-		}
-		if snapshot.spaceID == spaceID {
-			spaceSnapshots++
-		}
-	}
-	for id, builds := range s.inventorySnapshotBuilds {
-		totalBuilds += builds
-		if id == spaceID {
-			spaceBuilds = builds
-		}
-	}
-	if spaceSnapshots+spaceBuilds >= maxTaskResultInventorySnapshotsPerSpace ||
-		len(s.inventorySnapshots)+totalBuilds >= maxTaskResultInventorySnapshotsTotal ||
-		totalBuilds >= maxTaskResultInventoryBuilds {
-		return false
-	}
-	if s.inventorySnapshotBuilds == nil {
-		s.inventorySnapshotBuilds = make(map[string]int)
-	}
-	s.inventorySnapshotBuilds[spaceID]++
-	return true
+func formatTaskResultInventoryToken(observedMs int64, pageSize int, nonce, digest string) string {
+	return fmt.Sprintf("%d.%d.%s.%s", observedMs, pageSize, nonce, digest)
 }
 
-func (s *Service) releaseTaskResultInventoryBuildLocked(spaceID string) {
-	if s == nil || s.inventorySnapshotBuilds == nil {
-		return
+func parseTaskResultInventoryToken(raw string) (taskResultInventoryToken, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), ".")
+	if len(parts) != 4 {
+		return taskResultInventoryToken{}, false
 	}
-	if s.inventorySnapshotBuilds[spaceID] <= 1 {
-		delete(s.inventorySnapshotBuilds, spaceID)
-		return
+	observedMs, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || observedMs <= 0 {
+		return taskResultInventoryToken{}, false
 	}
-	s.inventorySnapshotBuilds[spaceID]--
+	pageSize, err := strconv.Atoi(parts[1])
+	if err != nil || pageSize < 1 || pageSize > maxTaskResultInventoryPage {
+		return taskResultInventoryToken{}, false
+	}
+	if parts[2] == "" || len(parts[3]) != 32 {
+		return taskResultInventoryToken{}, false
+	}
+	if _, err := hex.DecodeString(parts[3]); err != nil {
+		return taskResultInventoryToken{}, false
+	}
+	return taskResultInventoryToken{
+		observedMs: observedMs,
+		pageSize:   pageSize,
+		nonce:      parts[2],
+		digest:     parts[3],
+	}, true
 }
 
-func (s *Service) pruneTaskResultInventorySnapshotsLocked(now time.Time) {
-	for id, snapshot := range s.inventorySnapshots {
-		if snapshot == nil || !now.Before(snapshot.expiresAt) {
-			delete(s.inventorySnapshots, id)
-		}
+// taskResultInventoryDigest 计算空间清单的分页拓扑与稳定配置摘要（纳入 observedMs、剔除高频跳变的 ViewLastDataTime），
+// 既避免翻页期间正常数据写入误触发 CONFLICT，又防止篡改 observedMs 或混拼增删后的两代清单。
+func taskResultInventoryDigest(spaceID string, pageSize int, observedMs int64, entries []*pb.TaskResultInventoryEntry) string {
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%d\x00%d\n", spaceID, pageSize, observedMs, len(entries))
+	for _, entry := range entries {
+		_, _ = fmt.Fprintf(hash, "%s\x00%s\x00%s\x00%t\x00%t\x00%s\x00%d\n",
+			entry.GetTaskId(), entry.GetDatasetId(), entry.GetFrequency(),
+			entry.GetEnabled(), entry.GetOwnershipVerified(), entry.GetResultStatus(),
+			entry.GetAllowedLatenessSeconds(),
+		)
 	}
+	return hex.EncodeToString(hash.Sum(nil)[:16])
 }
 
-func (s *Service) buildTaskResultInventorySnapshot(ctx context.Context, spaceID string, pageSize int) (*taskResultInventorySnapshot, error) {
+func (s *Service) collectTaskResultInventoryEntries(ctx context.Context, spaceID string, observed time.Time) ([]*pb.TaskResultInventoryEntry, error) {
 	if s == nil || s.taskRepo == nil || s.persistence == nil {
 		return nil, fmt.Errorf("task-result inventory dependencies are not initialized")
 	}
@@ -187,17 +163,12 @@ func (s *Service) buildTaskResultInventorySnapshot(ctx context.Context, spaceID 
 	if err != nil {
 		return nil, err
 	}
-	observed := time.Now().UTC()
 	entries, err := s.buildTaskResultInventoryEntries(ctx, tasks, observed)
 	if err != nil {
 		return nil, err
 	}
 	s.applyHistorySeeds(ctx, spaceID, entries)
-	checksum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", observed.Format(time.RFC3339Nano), len(entries), xid.New().String())))
-	return &taskResultInventorySnapshot{
-		id: hex.EncodeToString(checksum[:]), spaceID: spaceID, pageSize: pageSize, observed: observed,
-		expiresAt: observed.Add(taskResultInventorySnapshotTTL), entries: entries,
-	}, nil
+	return entries, nil
 }
 
 // applyHistorySeeds 把结果数据集的历史补齐状态写进清单：补齐按时间升序写历史行，storage-view 按标的记的最新一根
@@ -306,7 +277,7 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 	if err != nil {
 		return nil, err
 	}
-	latenessSeconds, err := allowedLatenessSeconds(params, task.SpaceID)
+	latenessSeconds, err := allowedLatenessSeconds(task.DataType, params, task.SpaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -337,13 +308,21 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 	entry.ResultStatus = inspection.Status
 	entry.OwnershipVerified = inspection.Dataset != nil
 	entry.ViewLastDataTime = strings.TrimSpace(inspection.LastDataTime)
+	// 优先采用 Storage 数据集上真实生效的 allowed_lateness_seconds（如重采样目标的 120s 或同步生效的自定义迟到时间）。
+	if effective := inspection.Dataset.GetAllowedLatenessSeconds(); effective > 0 {
+		entry.AllowedLatenessSeconds = int32(effective)
+	}
 	return entry, nil
 }
 
-// allowedLatenessSeconds 返回任务结果数据集的允许迟到时间：任务参数优先，否则取市场 market.yaml 里的默认值；市场未登记时报错。
-func allowedLatenessSeconds(params *domain.CollectParams, spaceID string) (int, error) {
+// allowedLatenessSeconds 返回任务结果数据集的兜底允许迟到时间（在 Storage 数据集尚未创建或未设置时使用）：
+// 任务参数优先；重采样任务默认取 TargetLatenessSeconds（与建表写入一致）；其余任务取市场 market.yaml 默认值；市场未登记时报错。
+func allowedLatenessSeconds(dataType string, params *domain.CollectParams, spaceID string) (int, error) {
 	if params != nil && params.AllowedLatenessSeconds > 0 {
 		return params.AllowedLatenessSeconds, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(dataType), "kline_resample") {
+		return collectorresample.TargetLatenessSeconds, nil
 	}
 	market, err := markets.ConfigFor(spaceID)
 	if err != nil {

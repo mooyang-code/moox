@@ -86,25 +86,35 @@ func (a Account) Validate() error {
 	if err := a.validateMarkets(); err != nil {
 		return err
 	}
-	if a.Live == nil && a.ExecutionMode == exchange.ExecutionModeLive && a.Environment.ValidLive() && a.CredentialSecretID != "" {
-		a.Live = &LiveConfig{Environment: a.Environment, CredentialSecretID: a.CredentialSecretID}
-	}
-	if a.Paper == nil && a.ExecutionMode == exchange.ExecutionModePaper && a.Environment == exchange.AccountEnvironmentPaper {
-		a.Paper = &PaperConfig{InitialBalance: shared.MustDecimal("1"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(), OrderRetentionDays: DefaultOrderRetentionDays}
-	}
 	if (a.Live == nil) == (a.Paper == nil) {
 		return invalidAccount("实盘配置与模拟配置必须且只能有一个")
 	}
-	if a.ExecutionMode == exchange.ExecutionModeLive {
+	switch a.ExecutionMode {
+	case exchange.ExecutionModeLive:
 		if a.Live == nil || !a.Live.Environment.ValidLive() || blank(a.Live.CredentialSecretID) {
 			return invalidAccount("实盘账户必须带环境和密钥")
 		}
-	} else if a.Paper == nil && a.Environment == exchange.AccountEnvironmentPaper {
-		a.Paper = &PaperConfig{InitialBalance: shared.MustDecimal("1"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(), OrderRetentionDays: DefaultOrderRetentionDays}
-	} else if a.Paper == nil {
-		return invalidAccount("模拟账户必须带模拟配置")
-	} else if a.Paper.InitialBalance.Cmp(shared.Zero()) <= 0 || a.Paper.MakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.TakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.MustDecimal("10000")) >= 0 || !ValidOrderRetentionDays(a.Paper.OrderRetentionDays) {
-		return invalidAccount("模拟配置不合法：初始资金要大于 0，费率不能为负，滑点在 0～10000 基点之间，订单保留天数在允许范围内")
+		if a.Environment != exchange.AccountEnvironmentUnspecified && a.Environment != a.Live.Environment {
+			return invalidAccount("实盘账户的环境与实盘配置不一致")
+		}
+		if !blank(a.CredentialSecretID) && strings.TrimSpace(a.CredentialSecretID) != strings.TrimSpace(a.Live.CredentialSecretID) {
+			return invalidAccount("实盘账户的密钥与实盘配置不一致")
+		}
+	case exchange.ExecutionModePaper:
+		if a.Paper == nil {
+			return invalidAccount("模拟账户必须带模拟配置")
+		}
+		if a.Environment != exchange.AccountEnvironmentUnspecified && a.Environment != exchange.AccountEnvironmentPaper {
+			return invalidAccount("模拟账户环境必须为 PAPER")
+		}
+		if a.Paper.InitialBalance.Cmp(shared.Zero()) <= 0 ||
+			a.Paper.MakerFeeRate.Cmp(shared.Zero()) < 0 ||
+			a.Paper.TakerFeeRate.Cmp(shared.Zero()) < 0 ||
+			a.Paper.SlippageBPS.Cmp(shared.Zero()) < 0 ||
+			a.Paper.SlippageBPS.Cmp(shared.MustDecimal("10000")) >= 0 ||
+			!ValidOrderRetentionDays(a.Paper.OrderRetentionDays) {
+			return invalidAccount("模拟配置不合法：初始资金要大于 0，费率不能为负，滑点在 0～10000 基点之间，订单保留天数在允许范围内")
+		}
 	}
 	switch {
 	case !a.HasLeverageMarket():

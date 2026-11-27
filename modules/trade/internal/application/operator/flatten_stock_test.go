@@ -129,6 +129,33 @@ func TestManualOrderRejectedOutsideAShareSession(t *testing.T) {
 	require.Empty(t, fixture.orders.specs)
 }
 
+// A 股清仓的交易时段判断必须使用注入时钟 s.Now，而不是 time.Now()。
+func TestFlattenStockUsesInjectedClockForSessionCheck(t *testing.T) {
+	fixture := stockFlattenFixture(t, "100", "100")
+	session, err := ashare.NewSession()
+	require.NoError(t, err)
+	catalog := stockSessionCatalog{exchange.ExchangeAShare: {
+		Exchange: exchange.ExchangeAShare, Session: session, SessionHours: "A 股 09:30-11:30、13:00-14:57",
+	}}
+
+	service := fixture.service()
+	service.Exchanges = catalog
+	service.Now = func() time.Time { return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) } // 12:00 午休
+	res, err := service.FlattenLogicalAccount(context.Background(), FlattenCommand{
+		SpaceID: "space-1", ActionID: "flatten-closed", LogicalAccountID: "logical-1", Reason: "清仓",
+	})
+	require.NoError(t, err)
+	require.Empty(t, fixture.orders.specs, "午休时段不应下单")
+	require.Contains(t, res.Accounts[0].Error, "不在交易时段")
+
+	service.Now = func() time.Time { return time.Date(2026, 11, 6, 2, 0, 0, 0, time.UTC) } // 10:00 交易时段内
+	_, err = service.FlattenLogicalAccount(context.Background(), FlattenCommand{
+		SpaceID: "space-1", ActionID: "flatten-closed", LogicalAccountID: "logical-1", Reason: "清仓",
+	})
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1, "交易时段内应正常下单")
+}
+
 func flattenStockAction(t *testing.T, fixture *operatorFixture) (FlattenAccountResult, string) {
 	t.Helper()
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), FlattenCommand{

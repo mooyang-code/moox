@@ -52,15 +52,48 @@ func addTestMember(t *testing.T, s *Store, taskID, factorID, status string) {
 	}
 }
 
-func TestCreateFactorsRollsBackCatalogImportOnConflict(t *testing.T) {
+func TestImportCatalogRollsBackCategoriesAndFactorsOnConflict(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	_, err := s.UpsertCategory(ctx, domain.FactorCategory{CategoryID: "trend", Name: "原趋势", SortOrder: 50})
+	require.NoError(t, err)
+
 	factor := testFactorDef("factor_close")
-	err := s.CreateFactors(ctx, []domain.FactorDef{factor, factor})
+	err = s.ImportCatalog(ctx,
+		[]domain.FactorCategory{
+			{CategoryID: "fresh_cat", Name: "新分类"},
+			{CategoryID: "trend", Name: "被改名"},
+		},
+		[]domain.FactorDef{factor, factor},
+	)
 	require.ErrorIs(t, err, ErrConflict)
 	_, err = s.GetFactor(ctx, factor.FactorID)
 	require.Error(t, err)
+
+	categories, err := s.ListCategories(ctx)
+	require.NoError(t, err)
+	byID := map[string]domain.FactorCategory{}
+	for _, cat := range categories {
+		byID[cat.CategoryID] = cat
+	}
+	require.NotContains(t, byID, "fresh_cat", "事务回滚后新分类不应落库")
+	require.Equal(t, "原趋势", byID["trend"].Name, "事务回滚后已有分类名称不应改变")
+	require.Equal(t, 50, byID["trend"].SortOrder, "已有分类排序顺序应保持不变")
+
+	// 成功导入时保留已有分类的 sort_order，只更新名称。
+	require.NoError(t, s.ImportCatalog(ctx,
+		[]domain.FactorCategory{{CategoryID: "trend", Name: "新趋势"}},
+		[]domain.FactorDef{factor},
+	))
+	categories, err = s.ListCategories(ctx)
+	require.NoError(t, err)
+	for _, cat := range categories {
+		if cat.CategoryID == "trend" {
+			require.Equal(t, "新趋势", cat.Name)
+			require.Equal(t, 50, cat.SortOrder, "导入因子库不能覆盖已有分类的 sort_order")
+		}
+	}
 }
 
 // 同一个源数据集与频率可以有多个任务；任务 ID、结果数据集与空间内的名称仍各自唯一。

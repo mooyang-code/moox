@@ -2,11 +2,16 @@ package klinecheck
 
 import (
 	"context"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -176,4 +181,144 @@ func TestScansFollowTheReregisteredPeriod(t *testing.T) {
 	mark, err = repo.Watermark(ctx, "crypto", "ds", "1m")
 	require.NoError(t, err)
 	require.True(t, mark.Equal(restart.Add(autoScanWindow)), "从新生效周期起追赶一个窗口，实际水位 %s", mark)
+}
+
+type countingIncrementalTimeline struct {
+	repo       *store.SeriesTimelineRepository
+	statsCalls atomic.Int32
+	fullCalls  atomic.Int32
+	afterCalls atomic.Int32
+}
+
+func (c *countingIncrementalTimeline) ListBySpace(ctx context.Context, spaceID string) ([]store.SeriesTimelineEntry, error) {
+	c.fullCalls.Add(1)
+	return c.repo.ListBySpace(ctx, spaceID)
+}
+
+func (c *countingIncrementalTimeline) TimelineStats(ctx context.Context, spaceID string) (int64, int64, int64, error) {
+	c.statsCalls.Add(1)
+	return c.repo.TimelineStats(ctx, spaceID)
+}
+
+func (c *countingIncrementalTimeline) ListBySpaceWithBounds(ctx context.Context, spaceID string) ([]store.SeriesTimelineEntry, int64, int64, error) {
+	c.fullCalls.Add(1)
+	return c.repo.ListBySpaceWithBounds(ctx, spaceID)
+}
+
+func (c *countingIncrementalTimeline) ListBySpaceAfter(ctx context.Context, spaceID string, afterID int64) ([]store.SeriesTimelineEntry, int64, error) {
+	c.afterCalls.Add(1)
+	return c.repo.ListBySpaceAfter(ctx, spaceID, afterID)
+}
+
+func makeTimelineEntry(space, dataset string, from int64, symbols map[string]string) store.SeriesTimelineEntry {
+	entry := store.SeriesTimelineEntry{SpaceID: space, DatasetID: dataset, Frequency: "1m", EffectiveFrom: from, LatenessS: 15, Symbols: symbols}
+	for subject := range symbols {
+		entry.Series = append(entry.Series, seriesset.Series{SubjectID: subject})
+	}
+	if len(entry.Series) > 0 {
+		entry.SeriesHash = "hash"
+	}
+	return entry
+}
+
+// Timeline 内存缓存按 (count, min_id, max_id) 命中、按 c_id 增量更新，在同生效点覆盖删旧行、清库重登记与并发读写下均保持准确无竞态。
+func TestTimelineCacheHitsIncrementallyUpdatesAndInvalidatesOnReset(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = db.Close() })
+
+	plans := db.FetchPlans()
+	src := &countingIncrementalTimeline{repo: db.SeriesTimeline()}
+	var cache timelineCache
+
+	// 1. 空表直接命中空缓存，不触发全量查询。
+	empty, err := cache.Load(ctx, src, "crypto")
+	require.NoError(t, err)
+	require.Empty(t, empty)
+	require.Zero(t, src.fullCalls.Load())
+
+	// 2. 写入首行后首次冷启动全量加载，之后重复读取全部命中内存缓存（零 JSON 解码）。
+	rec, err := plans.Create(ctx, "crypto", `{"v":1}`, "{}", makeTimelineEntry("crypto", "ds", 100, map[string]string{"BTC-USDT": "BTCUSDT"}))
+	require.NoError(t, err)
+	tl, err := cache.Load(ctx, src, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), src.fullCalls.Load())
+	sym, ok := tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(100, 0).UTC())
+	require.True(t, ok)
+	require.Equal(t, "BTCUSDT", sym)
+
+	for range 5 {
+		again, loadErr := cache.Load(ctx, src, "crypto")
+		require.NoError(t, loadErr)
+		require.Equal(t, tl, again)
+	}
+	require.Equal(t, int32(1), src.fullCalls.Load(), "未变化时不得重复全量加载")
+	require.Zero(t, src.afterCalls.Load(), "未变化时不得触发增量查询")
+
+	// 3. 纯追加新行：只走 ListBySpaceAfter 增量解码，不重扫全表。
+	require.NoError(t, plans.Update(ctx, rec.ID, store.FetchPlanApplying, "{}", "", makeTimelineEntry("crypto", "ds", 200, map[string]string{"BTC-USDT": "BTCNEW"})))
+	tl, err = cache.Load(ctx, src, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), src.fullCalls.Load(), "纯追加应走增量路径，不走全量")
+	require.Equal(t, int32(1), src.afterCalls.Load())
+	require.Len(t, tl["ds|1m"], 2)
+	sym, ok = tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(150, 0).UTC())
+	require.True(t, ok)
+	require.Equal(t, "BTCUSDT", sym)
+	sym, ok = tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(200, 0).UTC())
+	require.True(t, ok)
+	require.Equal(t, "BTCNEW", sym)
+
+	// 4. 同生效点覆盖（先删旧行再插更大 c_id 的新行）：自动识别旧行删除并全量重建，不留零长度幽灵段。
+	require.NoError(t, plans.Update(ctx, rec.ID, store.FetchPlanApplied, "{}", "", makeTimelineEntry("crypto", "ds", 200, map[string]string{"BTC-USDT": "BTCV3"})))
+	tl, err = cache.Load(ctx, src, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, int32(2), src.fullCalls.Load(), "同生效点覆盖删旧行必须自动触发全量重建")
+	require.Len(t, tl["ds|1m"], 2, "不残留零长度幽灵段")
+	sym, ok = tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(200, 0).UTC())
+	require.True(t, ok)
+	require.Equal(t, "BTCV3", sym)
+
+	// 5. 重新登记清库（删光全空间行）：缓存自动清空；随后重新写入更大 c_id 的新行也不残留清库前的旧段。
+	require.NoError(t, plans.ReregisterAppliedPlan(ctx, rec.ID, `{"v":"reset"}`))
+	tl, err = cache.Load(ctx, src, "crypto")
+	require.NoError(t, err)
+	require.Empty(t, tl, "清库后时间线必须为空")
+
+	rec2, err := plans.Create(ctx, "crypto", `{"v":2}`, "{}", makeTimelineEntry("crypto", "ds", 500, map[string]string{"ETH-USDT": "ETHUSDT"}))
+	require.NoError(t, err)
+	require.NoError(t, plans.Update(ctx, rec2.ID, store.FetchPlanApplied, "{}", ""))
+	tl, err = cache.Load(ctx, src, "crypto")
+	require.NoError(t, err)
+	require.Len(t, tl["ds|1m"], 1)
+	require.Equal(t, int64(500), tl["ds|1m"][0].From)
+	_, ok = tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(500, 0).UTC())
+	require.False(t, ok, "清库前的旧标的绝不能残留")
+
+	// 6. 并发读取 + 并发追加 + Checker.Check 克隆修改（用于 -race 竞态验证）。
+	checker := &Checker{Timeline: src, Rows: &fakeRows{missing: map[string]map[int64]bool{"ETH-USDT": {}}}, Now: func() time.Time { return time.Unix(1000, 0).UTC() }}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 10 {
+				got, loadErr := cache.Load(ctx, src, "crypto")
+				require.NoError(t, loadErr)
+				_, _ = got.SymbolAt("ds|1m", "ETH-USDT", time.Unix(600, 0).UTC())
+				_, checkErr := checker.Check(ctx, Request{SpaceID: "crypto", From: time.Unix(400, 0).UTC(), To: time.Unix(600, 0).UTC()})
+				require.NoError(t, checkErr)
+			}
+		}()
+	}
+	rec3, err := plans.Create(ctx, "crypto", `{"v":3}`, "{}", makeTimelineEntry("crypto", "ds", 700, map[string]string{"ETH-USDT": "ETHV2"}))
+	require.NoError(t, err)
+	require.NoError(t, plans.Update(ctx, rec3.ID, store.FetchPlanApplied, "{}", ""))
+	wg.Wait()
+
+	finalTL, err := cache.Load(ctx, src, "crypto")
+	require.NoError(t, err)
+	require.Len(t, finalTL["ds|1m"], 2)
 }

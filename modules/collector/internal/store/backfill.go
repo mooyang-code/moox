@@ -364,6 +364,15 @@ func ownedResult(result *gorm.DB) error {
 // FinishChunk 记录分块的结果；分块已不属于该次尝试时返回 ErrChunkLost。
 // 分块成功时在同一事务里记录补写通知（数据集、标的、时间段、来源），供合成与因子按事件重算。
 func (r *BackfillRepository) FinishChunk(ctx context.Context, id int64, attempt int, status string, rows int, lastError string) error {
+	return r.finishChunk(ctx, id, attempt, status, rows, lastError, status == BackfillSucceeded)
+}
+
+// FinishChunkWithoutNotice 记录分块结果但不写补写通知（用于整块早于回看上限被跳过等未发生写入的场景）。
+func (r *BackfillRepository) FinishChunkWithoutNotice(ctx context.Context, id int64, attempt int, status string, rows int, lastError string) error {
+	return r.finishChunk(ctx, id, attempt, status, rows, lastError, false)
+}
+
+func (r *BackfillRepository) finishChunk(ctx context.Context, id int64, attempt int, status string, rows int, lastError string, recordNotice bool) error {
 	if err := r.ready(); err != nil {
 		return err
 	}
@@ -373,7 +382,7 @@ func (r *BackfillRepository) FinishChunk(ctx context.Context, id int64, attempt 
 		if err := ownedResult(update); err != nil {
 			return err
 		}
-		if status != BackfillSucceeded {
+		if !recordNotice {
 			return nil
 		}
 		var chunk backfillChunkRow

@@ -415,10 +415,7 @@ func (s *Service) createManualAction(
 	if takeover && s.Syncer == nil {
 		return store.OperatorActionRecord{}, ErrServiceConfig
 	}
-	expected.CreatedAt = time.Now().UTC()
-	if s.Now != nil {
-		expected.CreatedAt = s.Now().UTC()
-	}
+	expected.CreatedAt = s.clock().UTC()
 	deadline := command.DeadlineAt
 	if deadline == 0 {
 		deadline = s.manualDeadlineFrom(expected.CreatedAt)
@@ -509,11 +506,7 @@ func (s *Service) actionOlderThan(action store.OperatorActionRecord, age time.Du
 	if action.CreatedAt.IsZero() {
 		return false
 	}
-	now := time.Now()
-	if s.Now != nil {
-		now = s.Now()
-	}
-	return now.Sub(action.CreatedAt) >= age
+	return s.clock().Sub(action.CreatedAt) >= age
 }
 
 // checkManualSession 拒绝不在交易时段的手动下单（A 股）：模拟撮合时段外不撮合，实盘券商也不收，直接说清楚时段。
@@ -525,11 +518,7 @@ func (s *Service) checkManualSession(ctx context.Context, tradingAccountID strin
 		}
 		return err
 	}
-	now := time.Now()
-	if s.Now != nil {
-		now = s.Now()
-	}
-	if ok, _ := execution.CanOrder(s.Exchanges, account.Exchange, now); ok {
+	if ok, _ := execution.CanOrder(s.Exchanges, account.Exchange, s.clock()); ok {
 		return nil
 	}
 	message := "不在交易时段"
@@ -548,11 +537,7 @@ func (s *Service) manualDeadlineFrom(created time.Time) int64 {
 }
 
 func (s *Service) manualExpired(progress manualOrderActionResult) bool {
-	now := time.Now()
-	if s.Now != nil {
-		now = s.Now()
-	}
-	return now.UnixMilli() >= progress.DeadlineAt
+	return s.clock().UnixMilli() >= progress.DeadlineAt
 }
 
 func (s *Service) saveManualProgress(ctx context.Context, action *store.OperatorActionRecord, progress manualOrderActionResult) error {
@@ -729,11 +714,7 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 			return s.failManualAction(ctx, action, errors.New(manualDeadlineText), nil)
 		}
 		if callErr == nil {
-			now := time.Now()
-			if s.Now != nil {
-				now = s.Now()
-			}
-			submitCtx, cancel := context.WithTimeout(ctx, time.UnixMilli(progress.DeadlineAt).Sub(now))
+			submitCtx, cancel := context.WithTimeout(ctx, time.UnixMilli(progress.DeadlineAt).Sub(s.clock()))
 			_, callErr = s.Orders.Submit(submitCtx, action.SpaceID, child.OrderID)
 			cancel()
 		}

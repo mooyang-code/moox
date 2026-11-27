@@ -31,7 +31,7 @@ func TestValidateRepairViewRequiresConfirmation(t *testing.T) {
 	}
 }
 
-func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
+func TestPurgeRepairViewIndexesRemovesIndexWALAndTempDir(t *testing.T) {
 	root := t.TempDir()
 	duckRoot := filepath.Join(root, "duckdb")
 	if err := os.MkdirAll(duckRoot, 0o755); err != nil {
@@ -43,15 +43,24 @@ func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	tmpDir := filepath.Join(duckRoot, id+".duckdb.tmp")
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "duckdb_temp_storage_S32K-0.tmp"), []byte("spill"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	removed, err := purgeRepairViewIndexes(root, "duckdb", id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(removed) != 2 {
-		t.Fatalf("removed paths = %v, want index and WAL", removed)
+	if len(removed) != 3 {
+		t.Fatalf("removed paths = %v, want index, WAL and .duckdb.tmp", removed)
 	}
-	if _, err := os.Stat(filepath.Join(duckRoot, id+".duckdb")); !os.IsNotExist(err) {
-		t.Fatalf("index still exists, stat err=%v", err)
+	for _, name := range []string{id + ".duckdb", id + ".duckdb.wal", id + ".duckdb.tmp"} {
+		if _, err := os.Stat(filepath.Join(duckRoot, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists, stat err=%v", name, err)
+		}
 	}
 }
 

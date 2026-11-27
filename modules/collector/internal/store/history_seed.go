@@ -175,3 +175,72 @@ func (r *BackfillRepository) UpdateHistorySeed(ctx context.Context, seed History
 	result := query.Updates(map[string]any{"c_status": row.Status, "c_job_ids": row.JobIDs, "c_retried": row.Retried, "c_note": row.Note, "c_finished_at": row.FinishedAt, "c_mtime": time.Now().UTC()})
 	return result.RowsAffected > 0, result.Error
 }
+
+// RetryHistorySeed 在单个事务内原子重试补齐下全部已失败的作业，并把补齐记录标记为已重试（c_retried = 1）。
+// 若补齐记录不再处于 running 或已重试过，直接返回 false, nil；
+// 若任一待重试作业尚未被 Tick 结束（仍为 pending 或 running），整个事务回滚并返回 ErrJobNotRetryable，
+// 避免多作业场景下部分作业被提前重试、随后又因未置 c_retried 而反复重试。
+func (r *BackfillRepository) RetryHistorySeed(ctx context.Context, spaceID, datasetID, frequency string, failedJobIDs []string) (bool, error) {
+	if err := r.ready(); err != nil {
+		return false, err
+	}
+	uniqueIDs := make([]string, 0, len(failedJobIDs))
+	seen := make(map[string]struct{}, len(failedJobIDs))
+	for _, id := range failedJobIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	var retried bool
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var seed historySeedRow
+		find := tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Limit(1).Find(&seed)
+		if find.Error != nil {
+			return find.Error
+		}
+		if find.RowsAffected == 0 || seed.Status != SeedRunning || seed.Retried {
+			return nil
+		}
+		var toRetry []string
+		if len(uniqueIDs) > 0 {
+			var jobs []backfillJobRow
+			if err := tx.Where("c_job_id IN ?", uniqueIDs).Find(&jobs).Error; err != nil {
+				return err
+			}
+			for _, job := range jobs {
+				switch job.Status {
+				case BackfillPending, BackfillRunning:
+					return ErrJobNotRetryable
+				case BackfillFailed:
+					toRetry = append(toRetry, job.JobID)
+				}
+			}
+		}
+		now := time.Now().UTC()
+		if len(toRetry) > 0 {
+			if err := tx.Model(&backfillJobRow{}).Where("c_job_id IN ? AND c_status = ?", toRetry, BackfillFailed).
+				Updates(map[string]any{"c_status": BackfillPending, "c_last_error": "", "c_mtime": now}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&backfillChunkRow{}).Where("c_job_id IN ? AND c_status = ?", toRetry, BackfillFailed).
+				Updates(map[string]any{"c_status": BackfillPending, "c_attempts": 0, "c_missing": "", "c_last_error": "", "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": now}).Error; err != nil {
+				return err
+			}
+		}
+		updated := tx.Model(&historySeedRow{}).
+			Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_status = ? AND c_retried = ?", spaceID, datasetID, frequency, SeedRunning, false).
+			Updates(map[string]any{"c_retried": true, "c_mtime": now})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		retried = updated.RowsAffected > 0
+		return nil
+	})
+	return retried, err
+}

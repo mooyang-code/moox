@@ -3,13 +3,13 @@
     <a-tabs
       :editable="true"
       :hide-content="true"
-      :active-key="currentRoute.name"
+      :active-key="currentRoute?.name"
       size="medium"
       type="line"
       @tab-click="onTabs"
       @delete="onDelete"
     >
-      <a-tab-pane v-for="item of tabsList" :key="item.name" :title="item.meta.title" :closable="!item.meta.affix" />
+      <a-tab-pane v-for="item of tabsList" :key="item.name" :title="item.meta?.title" :closable="!item.meta?.affix" />
     </a-tabs>
     <div class="tabs_setting">
       <a-space>
@@ -49,6 +49,7 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, ref } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
@@ -79,10 +80,11 @@ const onTabs = (key: string) => {
 
 // 删除当前标签页并跳转到最后一个标签页
 const onDelete = (key: string) => {
-  routerStore.removeTabsList(key);
-  if (tabsList.value.length == 0) return;
-  if (currentRoute.value.name != key) return;
-  routerPush(tabsList.value.at(-1));
+  if (!routerStore.removeTabsList(key)) return;
+  if (tabsList.value.length === 0) return;
+  if (currentRoute.value?.name !== key) return;
+  const last = tabsList.value.at(-1);
+  if (last) routerPush(last);
 };
 
 // 刷新当前页
@@ -100,48 +102,41 @@ const refresh = () => {
 
 // 关闭当前
 const closeCurrent = () => {
+  if (!currentRoute.value?.name || currentRoute.value.meta?.affix) return;
   onDelete(currentRoute.value.name);
 };
 
 // 关闭右侧&关闭左侧
 const closeSides = (type: string) => {
-  // 获得当前index
-  let currentIndex = tabsList.value.findIndex((item: Menu.MenuOptions) => item.name === currentRoute.value.name);
+  // 获得当前index；当前处于未进入标签栏的隐藏路由时不做侧边关闭
+  const currentIndex = tabsList.value.findIndex((item: Menu.MenuOptions) => item.name === currentRoute.value?.name);
+  if (currentIndex === -1) return;
   // 过滤出两侧可关闭的 affix: false 表示可关闭
-  let rightList = tabsList.value.filter((item: Menu.MenuOptions, index: number) => {
-    if (type == "right") {
-      if (index > currentIndex && !item.meta.affix) return item;
-    } else {
-      if (index < currentIndex && !item.meta.affix) return item;
-    }
-  });
-  // 返回可关闭名称
-  let rightNames = rightList.map((item: Menu.MenuOptions) => item.name);
-  // 删除右侧
-  tabsList.value = tabsList.value.filter((item: Menu.MenuOptions) => !rightNames.includes(item.name));
+  const removeNames = tabsList.value
+    .filter((item: Menu.MenuOptions, index: number) => {
+      if (item.meta?.affix) return false;
+      return type === "right" ? index > currentIndex : index < currentIndex;
+    })
+    .map((item: Menu.MenuOptions) => item.name);
+  tabsList.value = tabsList.value.filter((item: Menu.MenuOptions) => !removeNames.includes(item.name));
 };
 
 // 关闭其它&关闭全部
 const closeOther = (type: string) => {
+  const currentName = currentRoute.value?.name;
   // 过滤出可关闭项 affix: false 表示可关闭
-  let list = tabsList.value.filter((item: Menu.MenuOptions) => {
-    if (type == "other") {
-      if (item.name != currentRoute.value.name && !item.meta.affix) {
-        return item;
-      }
-    } else {
-      if (!item.meta.affix) {
-        return item;
-      }
-    }
-  });
-  // 返回可关闭名称
-  let rightNames = list.map((item: Menu.MenuOptions) => item.name);
+  const removeNames = tabsList.value
+    .filter((item: Menu.MenuOptions) => {
+      if (item.meta?.affix) return false;
+      return type === "other" ? item.name !== currentName : true;
+    })
+    .map((item: Menu.MenuOptions) => item.name);
   // 删除可关闭项
-  tabsList.value = tabsList.value.filter((item: Menu.MenuOptions) => !rightNames.includes(item.name));
-  // 关闭全部，若当前被关闭则跳转最后一个
-  if (tabsList.value.length != 0 && !currentRoute.value.meta.affix && type == "all") {
-    routerPush(tabsList.value.at(-1));
+  tabsList.value = tabsList.value.filter((item: Menu.MenuOptions) => !removeNames.includes(item.name));
+  // 关闭全部，若当前不在固定页上（含直接打开隐藏路由导致 currentRoute 为空）则跳转最后一个剩余标签页
+  const last = tabsList.value.at(-1);
+  if (type === "all" && last && !currentRoute.value?.meta?.affix) {
+    routerPush(last);
   }
 };
 </script>

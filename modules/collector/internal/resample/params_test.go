@@ -75,3 +75,16 @@ func TestValidateTaskParamsStockSessionMarketRejectsPeriodsThatDoNotDivideSessio
 func TestValidateTaskParamsRejectsMarketsWithoutCalendar(t *testing.T) {
 	require.ErrorContains(t, ValidateTaskParams("stockjp", parseResampleParams(t, "1m", "5m", "")), "没有登记交易日历")
 }
+
+// 重采样只允许选择当前市场可合成的输出字段：拒绝 close_time、跨市场字段与未知字段。
+func TestValidateTaskParamsRejectsUnsupportedOutputFields(t *testing.T) {
+	require.NoError(t, ValidateTaskParams("crypto", parseResampleParams(t, "1m", "5m", `,"output_fields":["open","close","quote_volume","trade_num"]`)))
+	require.NoError(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "5m", `,"output_fields":["open","close","volume","amount"]`)))
+
+	require.ErrorContains(t, ValidateTaskParams("crypto", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","close_time"]`)), "close_time")
+	require.ErrorContains(t, ValidateTaskParams("crypto", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","amount"]`)), "amount")
+	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","close_time"]`)), "close_time")
+	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","quote_volume"]`)), "quote_volume")
+	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","trade_num"]`)), "trade_num")
+	require.ErrorContains(t, ValidateTaskParams("crypto", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","unknown_col"]`)), "unknown_col")
+}

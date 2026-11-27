@@ -3,11 +3,8 @@ package health
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,36 +23,44 @@ type routeState struct {
 	ready    bool
 }
 
-type requestKey struct {
-	service string
-	method  string
-	status  int
-}
-
-type durationKey struct{ service, method string }
-type durationValue struct {
-	count uint64
-	sum   float64
-}
-type storageCheck struct{ check func() error }
+var (
+	routesCurrentDesc = prometheus.NewDesc(
+		"host_gateway_routes_current",
+		"Number of routes currently active in the host gateway.",
+		nil, nil,
+	)
+	routeInfoDesc = prometheus.NewDesc(
+		"host_gateway_route_info",
+		"Current route snapshot metadata for the host gateway.",
+		[]string{"route_hash"}, nil,
+	)
+	routeLastSyncDesc = prometheus.NewDesc(
+		"host_gateway_route_last_sync_timestamp_seconds",
+		"Unix timestamp of the last successful control plane route sync.",
+		nil, nil,
+	)
+	routeSyncStaleDesc = prometheus.NewDesc(
+		"host_gateway_route_sync_stale",
+		"Whether host gateway route synchronization is stale (1) or fresh (0).",
+		nil, nil,
+	)
+)
 
 type State struct {
 	routes             atomic.Pointer[routeState]
-	storage            atomic.Pointer[storageCheck]
-	syncErrors         atomic.Uint64
-	validationFailures atomic.Uint64
-	authFailures       atomic.Uint64
-	replayFailures     atomic.Uint64
-	connectionFailures atomic.Uint64
-	timeoutFailures    atomic.Uint64
 	lastSyncUnix       atomic.Int64
 	staleAfterSeconds  atomic.Int64
 	clockMu            sync.RWMutex
 	clock              func() time.Time
 	startedAt          time.Time
-	mu                 sync.Mutex
-	requests           map[requestKey]uint64
-	durations          map[durationKey]durationValue
+	registry           *prometheus.Registry
+	syncErrors         prometheus.Counter
+	validationFailures prometheus.Counter
+	authFailures       prometheus.Counter
+	replayFailures     prometheus.Counter
+	upstreamFailures   *prometheus.CounterVec
+	requests           *prometheus.CounterVec
+	durations          *prometheus.SummaryVec
 }
 
 func NewState() *State {
@@ -63,8 +68,54 @@ func NewState() *State {
 	if value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("MOOX_GATEWAY_ROUTE_SYNC_STALE_AFTER_SECONDS")), 10, 64); err == nil && value > 0 {
 		staleAfter = value
 	}
-	state := &State{requests: make(map[requestKey]uint64), durations: make(map[durationKey]durationValue), clock: time.Now, startedAt: time.Now().UTC()}
+	registry := prometheus.NewRegistry()
+	state := &State{
+		clock:     time.Now,
+		startedAt: time.Now().UTC(),
+		registry:  registry,
+		syncErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "host_gateway_route_sync_errors_total",
+			Help: "Total control plane route synchronization errors.",
+		}),
+		validationFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "host_gateway_route_validation_failures_total",
+			Help: "Total route snapshot validation failures.",
+		}),
+		authFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "host_gateway_auth_failures_total",
+			Help: "Total authentication and authorization failures at the host gateway.",
+		}),
+		replayFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "host_gateway_replay_failures_total",
+			Help: "Total replay protection failures at the host gateway.",
+		}),
+		upstreamFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "host_gateway_upstream_failures_total",
+			Help: "Total upstream forwarding failures by failure type.",
+		}, []string{"type"}),
+		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "host_gateway_requests_total",
+			Help: "Total requests handled by the host gateway.",
+		}, []string{"service", "method", "status"}),
+		durations: prometheus.NewSummaryVec(prometheus.SummaryOpts{
+			Name: "host_gateway_request_duration_seconds",
+			Help: "Request handling duration in seconds at the host gateway.",
+		}, []string{"service", "method"}),
+	}
 	state.staleAfterSeconds.Store(staleAfter)
+	// 预初始化已知的上游失败类型，确保尚未发生故障时指标也存在。
+	state.upstreamFailures.WithLabelValues("connection")
+	state.upstreamFailures.WithLabelValues("timeout")
+	registry.MustRegister(
+		state.syncErrors,
+		state.validationFailures,
+		state.authFailures,
+		state.replayFailures,
+		state.upstreamFailures,
+		state.requests,
+		state.durations,
+		routeCollector{state: state},
+	)
 	return state
 }
 
@@ -92,14 +143,6 @@ func (state *State) ApplyRoutes(hash string, count int, disabled bool) {
 	state.routes.Store(&routeState{hash: hash, count: count, disabled: disabled, ready: true})
 }
 
-func (state *State) SetStorageCheck(check func() error) {
-	if check == nil {
-		state.storage.Store(nil)
-		return
-	}
-	state.storage.Store(&storageCheck{check: check})
-}
-
 func (state *State) Disabled() bool {
 	current := state.routes.Load()
 	return current != nil && current.disabled
@@ -119,13 +162,8 @@ func (state *State) Ready() bool {
 	return lastSync > 0 && now >= lastSync && now-lastSync <= staleAfter
 }
 
-// Readiness 是 /readyz 用的就绪判断，也随指标上报带给 Monitor：本地状态存储可用，并且路由快照在时限内同步过。
+// Readiness 是 /readyz 用的就绪判断，也随指标上报带给 Monitor：路由快照已应用且在时限内同步过。
 func (state *State) Readiness(context.Context) (bool, string) {
-	if check := state.storage.Load(); check != nil {
-		if err := check.check(); err != nil {
-			return false, "网关本地状态存储不可用：" + err.Error()
-		}
-	}
 	if current := state.routes.Load(); current == nil || !current.ready {
 		return false, "还没有应用路由快照"
 	}
@@ -133,6 +171,18 @@ func (state *State) Readiness(context.Context) (bool, string) {
 		return false, "路由快照同步已过期"
 	}
 	return true, ""
+}
+
+// Snapshot 返回 /healthz 与 /readyz 使用的标准健康快照。
+func (state *State) Snapshot(ctx context.Context) healthz.Response {
+	ready, reason := state.Readiness(ctx)
+	payload := healthz.Base("host_gateway", "", "", "", state.startedAt, ready)
+	if !ready {
+		payload.Reason = reason
+	}
+	hash, count := state.Current()
+	payload.Details = map[string]any{"route_hash": hash, "route_count": count, "disabled": state.Disabled()}
+	return payload
 }
 
 func (state *State) now() time.Time {
@@ -153,10 +203,10 @@ func (state *State) Current() (string, int) {
 	return current.hash, current.count
 }
 
-func (state *State) RouteSyncFailed()       { state.syncErrors.Add(1) }
-func (state *State) RouteValidationFailed() { state.validationFailures.Add(1) }
-func (state *State) AuthFailed()            { state.authFailures.Add(1) }
-func (state *State) ReplayFailed()          { state.replayFailures.Add(1) }
+func (state *State) RouteSyncFailed()       { state.syncErrors.Inc() }
+func (state *State) RouteValidationFailed() { state.validationFailures.Inc() }
+func (state *State) AuthFailed()            { state.authFailures.Inc() }
+func (state *State) ReplayFailed()          { state.replayFailures.Inc() }
 
 func (state *State) RouteSyncSucceeded(at time.Time) {
 	state.lastSyncUnix.Store(at.Unix())
@@ -164,124 +214,43 @@ func (state *State) RouteSyncSucceeded(at time.Time) {
 
 func (state *State) UpstreamFailed(kind string) {
 	switch kind {
-	case "timeout":
-		state.timeoutFailures.Add(1)
-	case "connection":
-		state.connectionFailures.Add(1)
+	case "timeout", "connection":
+		state.upstreamFailures.WithLabelValues(kind).Inc()
 	}
 }
 
 func (state *State) ObserveRequest(service, method string, status int, elapsed time.Duration) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.requests[requestKey{service: service, method: method, status: status}]++
-	key := durationKey{service: service, method: method}
-	value := state.durations[key]
-	value.count++
-	value.sum += elapsed.Seconds()
-	state.durations[key] = value
+	state.requests.WithLabelValues(service, method, strconv.Itoa(status)).Inc()
+	state.durations.WithLabelValues(service, method).Observe(elapsed.Seconds())
 }
 
 func (state *State) Handler() http.Handler {
-	mux := http.NewServeMux()
-	prometheusHandler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{DisableCompression: true})
-	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
-		if check := state.storage.Load(); check != nil && check.check() != nil {
-			state.writeHealth(response, false)
-			return
-		}
-		state.writeHealth(response, true)
-	})
-	mux.HandleFunc("GET /readyz", func(response http.ResponseWriter, request *http.Request) {
-		ready, _ := state.Readiness(request.Context())
-		state.writeHealth(response, ready)
-	})
-	mux.HandleFunc("GET /metrics", func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		state.writeMetrics(response)
-		prometheusHandler.ServeHTTP(response, request)
-	})
-	return mux
-}
-
-func (state *State) writeHealth(response http.ResponseWriter, ready bool) {
-	payload := healthz.Base("host_gateway", "", "", "", state.startedAt, ready)
-	hash, count := state.Current()
-	payload.Details = map[string]any{"route_hash": hash, "route_count": count, "disabled": state.Disabled()}
-	response.Header().Set("Content-Type", "application/json")
-	code := http.StatusOK
-	if !ready {
-		code = http.StatusServiceUnavailable
+	gatherers := prometheus.Gatherers{prometheus.DefaultGatherer}
+	if state.registry != nil {
+		gatherers = prometheus.Gatherers{state.registry, prometheus.DefaultGatherer}
 	}
-	response.WriteHeader(code)
-	_ = json.NewEncoder(response).Encode(payload)
+	return healthz.StandardMux(state.Snapshot, promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{DisableCompression: true}))
 }
 
-func (state *State) writeMetrics(response http.ResponseWriter) {
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_sync_errors_total counter\nhost_gateway_route_sync_errors_total %d\n", state.syncErrors.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_validation_failures_total counter\nhost_gateway_route_validation_failures_total %d\n", state.validationFailures.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_auth_failures_total counter\nhost_gateway_auth_failures_total %d\n", state.authFailures.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_replay_failures_total counter\nhost_gateway_replay_failures_total %d\n", state.replayFailures.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_upstream_failures_total counter\nhost_gateway_upstream_failures_total{type=\"connection\"} %d\nhost_gateway_upstream_failures_total{type=\"timeout\"} %d\n", state.connectionFailures.Load(), state.timeoutFailures.Load())
-	hash, count := state.Current()
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_routes_current gauge\nhost_gateway_routes_current %d\n", count)
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_info gauge\nhost_gateway_route_info{route_hash=\"%s\"} 1\n", escapeLabel(hash))
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_last_sync_timestamp_seconds gauge\nhost_gateway_route_last_sync_timestamp_seconds %d\n", state.lastSyncUnix.Load())
-	stale := 1
-	if state.Ready() {
+type routeCollector struct {
+	state *State
+}
+
+func (routeCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- routesCurrentDesc
+	ch <- routeInfoDesc
+	ch <- routeLastSyncDesc
+	ch <- routeSyncStaleDesc
+}
+
+func (c routeCollector) Collect(ch chan<- prometheus.Metric) {
+	hash, count := c.state.Current()
+	ch <- prometheus.MustNewConstMetric(routesCurrentDesc, prometheus.GaugeValue, float64(count))
+	ch <- prometheus.MustNewConstMetric(routeInfoDesc, prometheus.GaugeValue, 1, hash)
+	ch <- prometheus.MustNewConstMetric(routeLastSyncDesc, prometheus.GaugeValue, float64(c.state.lastSyncUnix.Load()))
+	stale := 1.0
+	if c.state.Ready() {
 		stale = 0
 	}
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_sync_stale gauge\nhost_gateway_route_sync_stale %d\n", stale)
-
-	state.mu.Lock()
-	requestKeys := make([]requestKey, 0, len(state.requests))
-	for key := range state.requests {
-		requestKeys = append(requestKeys, key)
-	}
-	sort.Slice(requestKeys, func(i, j int) bool {
-		left, right := requestKeys[i], requestKeys[j]
-		if left.service != right.service {
-			return left.service < right.service
-		}
-		if left.method != right.method {
-			return left.method < right.method
-		}
-		return left.status < right.status
-	})
-	durationKeys := make([]durationKey, 0, len(state.durations))
-	for key := range state.durations {
-		durationKeys = append(durationKeys, key)
-	}
-	sort.Slice(durationKeys, func(i, j int) bool {
-		if durationKeys[i].service != durationKeys[j].service {
-			return durationKeys[i].service < durationKeys[j].service
-		}
-		return durationKeys[i].method < durationKeys[j].method
-	})
-	requests := make(map[requestKey]uint64, len(state.requests))
-	for key, value := range state.requests {
-		requests[key] = value
-	}
-	durations := make(map[durationKey]durationValue, len(state.durations))
-	for key, value := range state.durations {
-		durations[key] = value
-	}
-	state.mu.Unlock()
-
-	_, _ = fmt.Fprintln(response, "# TYPE host_gateway_requests_total counter")
-	for _, key := range requestKeys {
-		_, _ = fmt.Fprintf(response, "host_gateway_requests_total{service=\"%s\",method=\"%s\",status=\"%d\"} %d\n", escapeLabel(key.service), escapeLabel(key.method), key.status, requests[key])
-	}
-	_, _ = fmt.Fprintln(response, "# TYPE host_gateway_request_duration_seconds summary")
-	for _, key := range durationKeys {
-		labels := fmt.Sprintf("service=\"%s\",method=\"%s\"", escapeLabel(key.service), escapeLabel(key.method))
-		value := durations[key]
-		_, _ = fmt.Fprintf(response, "host_gateway_request_duration_seconds_sum{%s} %s\nhost_gateway_request_duration_seconds_count{%s} %d\n", labels, strconv.FormatFloat(value.sum, 'g', -1, 64), labels, value.count)
-	}
-}
-
-func escapeLabel(value string) string {
-	value = strings.ReplaceAll(value, "\\", "\\\\")
-	value = strings.ReplaceAll(value, "\n", "\\n")
-	return strings.ReplaceAll(value, "\"", "\\\"")
+	ch <- prometheus.MustNewConstMetric(routeSyncStaleDesc, prometheus.GaugeValue, stale)
 }

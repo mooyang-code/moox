@@ -53,13 +53,68 @@ func NewSeriesTimelineRepository(db *gorm.DB) *SeriesTimelineRepository {
 
 // ListBySpace 按写入先后返回该空间的全部时间线行。
 func (r *SeriesTimelineRepository) ListBySpace(ctx context.Context, spaceID string) ([]SeriesTimelineEntry, error) {
+	entries, _, _, err := r.ListBySpaceWithBounds(ctx, spaceID)
+	return entries, err
+}
+
+// ListBySpaceWithBounds 按写入先后返回该空间的全部时间线行及其首尾 c_id（空表时首尾均为 0）。
+func (r *SeriesTimelineRepository) ListBySpaceWithBounds(ctx context.Context, spaceID string) (entries []SeriesTimelineEntry, minID, maxID int64, err error) {
 	if r == nil || r.db == nil {
-		return nil, fmt.Errorf("series timeline repository is not initialized")
+		return nil, 0, 0, fmt.Errorf("series timeline repository is not initialized")
 	}
 	var rows []seriesTimelineRow
 	if err := r.db.WithContext(ctx).Where("c_space_id = ?", strings.TrimSpace(spaceID)).Order("c_id ASC").Find(&rows).Error; err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
+	entries, err = decodeSeriesTimelineRows(rows)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if len(rows) > 0 {
+		minID, maxID = rows[0].ID, rows[len(rows)-1].ID
+	}
+	return entries, minID, maxID, nil
+}
+
+// TimelineStats 轻量查询空间时间线表的行数与首尾自增 ID，不读取大 JSON 列，用于内存缓存命中与删除检测。
+func (r *SeriesTimelineRepository) TimelineStats(ctx context.Context, spaceID string) (count, minID, maxID int64, err error) {
+	if r == nil || r.db == nil {
+		return 0, 0, 0, fmt.Errorf("series timeline repository is not initialized")
+	}
+	var stats struct {
+		Count int64 `gorm:"column:row_count"`
+		MinID int64 `gorm:"column:min_id"`
+		MaxID int64 `gorm:"column:max_id"`
+	}
+	err = r.db.WithContext(ctx).
+		Raw(`SELECT COUNT(*) AS row_count, COALESCE(MIN(c_id), 0) AS min_id, COALESCE(MAX(c_id), 0) AS max_id FROM t_collector_series_timeline WHERE c_space_id = ?`, strings.TrimSpace(spaceID)).
+		Scan(&stats).Error
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return stats.Count, stats.MinID, stats.MaxID, nil
+}
+
+// ListBySpaceAfter 按写入先后返回该空间 c_id 大于 afterID 的增量时间线行以及最后一条行的 c_id。
+func (r *SeriesTimelineRepository) ListBySpaceAfter(ctx context.Context, spaceID string, afterID int64) (entries []SeriesTimelineEntry, lastID int64, err error) {
+	if r == nil || r.db == nil {
+		return nil, 0, fmt.Errorf("series timeline repository is not initialized")
+	}
+	var rows []seriesTimelineRow
+	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_id > ?", strings.TrimSpace(spaceID), afterID).Order("c_id ASC").Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	entries, err = decodeSeriesTimelineRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(rows) > 0 {
+		lastID = rows[len(rows)-1].ID
+	}
+	return entries, lastID, nil
+}
+
+func decodeSeriesTimelineRows(rows []seriesTimelineRow) ([]SeriesTimelineEntry, error) {
 	entries := make([]SeriesTimelineEntry, 0, len(rows))
 	for _, row := range rows {
 		entry := SeriesTimelineEntry{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, EffectiveFrom: row.EffectiveFrom, SeriesHash: row.SeriesHash, LatenessS: row.LatenessS}

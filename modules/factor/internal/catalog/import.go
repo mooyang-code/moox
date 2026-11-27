@@ -14,7 +14,7 @@ import (
 )
 
 // ImportCatalog 一次导入一个因子库目录（各文件按调用方给的顺序解析）：任一因子已存在、解析或编译失败时整批拒绝，
-// 定义在一个事务里写入；带 category_name 的分类先建立或更新。锁顺序与单个创建相同：自定义算子锁 → 定义锁（升序）。
+// 分类与定义在同一个事务里原子写入（已有分类只更新名称、保留既有 sort_order）。锁顺序与单个创建相同：自定义算子锁 → 定义锁（升序）。
 func (s *Service) ImportCatalog(ctx context.Context, files []factorlib.File) ([]domain.FactorDef, error) {
 	entries, err := factorlib.ParseFiles(files)
 	if err != nil {
@@ -62,15 +62,14 @@ func (s *Service) ImportCatalog(ctx context.Context, files []factorlib.File) ([]
 		}
 		prepared = append(prepared, factor)
 	}
+	categories := make([]domain.FactorCategory, 0, len(entries))
 	for _, entry := range entries {
 		if entry.CategoryID == "" || entry.CategoryName == "" {
 			continue
 		}
-		if _, err := s.db.UpsertCategory(ctx, domain.FactorCategory{CategoryID: entry.CategoryID, Name: entry.CategoryName}); err != nil {
-			return nil, fmt.Errorf("因子 %s 的分类 %s：%w", entry.FactorID, entry.CategoryID, err)
-		}
+		categories = append(categories, domain.FactorCategory{CategoryID: entry.CategoryID, Name: entry.CategoryName})
 	}
-	if err := s.db.CreateFactors(ctx, prepared); err != nil {
+	if err := s.db.ImportCatalog(ctx, categories, prepared); err != nil {
 		return nil, err
 	}
 	out := make([]domain.FactorDef, 0, len(prepared))

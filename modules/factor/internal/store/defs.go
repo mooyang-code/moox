@@ -31,12 +31,27 @@ func (s *Store) CreateFactor(ctx context.Context, def domain.FactorDef) error {
 	})
 }
 
-// CreateFactors inserts one catalog import atomically.
-func (s *Store) CreateFactors(ctx context.Context, defs []domain.FactorDef) error {
+// ImportCatalog 在同一个事务里原子写入一批分类与因子定义：
+// 已有分类只更新名称与修改时间，保留人工调整的 sort_order；任一分类校验或因子写入失败时整体回滚。
+func (s *Store) ImportCatalog(ctx context.Context, categories []domain.FactorCategory, defs []domain.FactorDef) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		for _, category := range categories {
+			category.CategoryID = strings.TrimSpace(category.CategoryID)
+			category.Name = strings.TrimSpace(category.Name)
+			if err := domain.ValidateCategory(category); err != nil {
+				return fmt.Errorf("分类 %q：%w", category.CategoryID, err)
+			}
+			if err := tx.Exec(`
+				INSERT INTO t_factor_categories (c_category_id, c_name, c_sort_order, c_ctime, c_mtime) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT (c_category_id) DO UPDATE SET c_name = excluded.c_name, c_mtime = excluded.c_mtime
+			`, category.CategoryID, category.Name, category.SortOrder, now, now).Error; err != nil {
+				return fmt.Errorf("upsert category %q: %w", category.CategoryID, err)
+			}
+		}
 		for _, def := range defs {
 			if err := insertFactor(tx, def); err != nil {
 				return fmt.Errorf("insert factor %q: %w", def.FactorID, err)

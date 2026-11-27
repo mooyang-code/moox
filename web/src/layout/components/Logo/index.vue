@@ -1,17 +1,28 @@
 <template>
   <div class="logo_head">
-    <div class="logo_box" :class="collapsed && 'padding-unset'">
+    <div class="logo_box" :class="isCollapsed && 'padding-unset'">
       <SvgIcon name="moox-logo" :size="30" />
-      <span class="logo_title" v-if="!collapsed">{{ title }}</span>
+      <span class="logo_title" v-if="!isCollapsed">{{ title }}</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
+
+const props = withDefaults(
+  defineProps<{
+    /** 显式覆盖折叠态（例如移动端抽屉固定以展开态渲染，不读取桌面端 collapsed） */
+    collapsed?: boolean;
+  }>(),
+  { collapsed: undefined }
+);
+
 const themeStore = useThemeConfig();
-const { collapsed } = storeToRefs(themeStore);
+const { collapsed: storeCollapsed } = storeToRefs(themeStore);
+const isCollapsed = computed(() => props.collapsed ?? storeCollapsed.value);
 
 // 全局title
 const title = import.meta.env.VITE_GLOB_APP_TITLE + " 量化平台";

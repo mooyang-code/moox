@@ -8,17 +8,17 @@ import (
 	"trpc.group/trpc-go/trpc-filter/masking"
 )
 
-func TestMaskingFilterRedactsNormalSecretResponses(t *testing.T) {
+func TestMaskingFilterDoesNotOverwriteBulletMaskedSecret(t *testing.T) {
 	filter := masking.ServerFilter()
+	want := "abcd••••wxyz"
 	rsp, err := filter(context.Background(), nil, func(context.Context, interface{}) (interface{}, error) {
-		return &GetSecretRsp{Secret: &Secret{SecretValue: "plain-sensitive-value"}}, nil
+		return &GetSecretRsp{Secret: &Secret{SecretValue: want}}, nil
 	})
 	if err != nil {
 		t.Fatalf("filter error = %v", err)
 	}
-	got := rsp.(*GetSecretRsp).GetSecret().GetSecretValue()
-	if got == "plain-sensitive-value" || got == "" {
-		t.Fatalf("secret was not safely masked: %q", got)
+	if got := rsp.(*GetSecretRsp).GetSecret().GetSecretValue(); got != want {
+		t.Fatalf("secret masking value was overwritten: got %q, want %q", got, want)
 	}
 }
 

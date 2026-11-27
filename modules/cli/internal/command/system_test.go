@@ -153,3 +153,54 @@ func TestSystemSkipsUndeployedModulesAndTimesOut(t *testing.T) {
 	require.ErrorContains(t, runSystemStatus(ctx, systemOptions{}, &out), "没有可操作的模块")
 	require.ErrorContains(t, runSystemResume(ctx, systemOptions{ReleasePartial: true}, &out), "--release-partial 会在超时后放行")
 }
+
+// system pause 预览列出的模块顺序必须与真实执行顺序一致（策略 → Trade → 因子引擎 → 采集）。
+func TestSystemPausePreviewMatchesExecutionOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		deployed []string
+		want     []string
+	}{
+		{
+			name:     "全模块按策略先于Trade的顺序预览和执行",
+			deployed: systemAll,
+			want:     []string{"strategy", "trade", "factor-engine", "collector"},
+		},
+		{
+			name:     "未部署模块跳过且顺序一致",
+			deployed: []string{"collector", "strategy", "trade"},
+			want:     []string{"strategy", "trade", "collector"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSystemFixture(t, tc.deployed...)
+			pause, _, err := systemCmd.Find([]string{"pause"})
+			require.NoError(t, err)
+			var out, errOut bytes.Buffer
+			pause.SetOut(&out)
+			pause.SetErr(&errOut)
+			pause.SetContext(context.Background())
+
+			require.NoError(t, previewSystemPause(pause, systemOptions{Reason: "维护"}))
+			preview := parsePreview(t, out.String())
+			require.Equal(t, "system_pause", preview["action"])
+			require.Empty(t, f.gateway.snapshot(), "预览不能发出暂停请求")
+
+			rawModules, ok := preview["modules"].([]any)
+			require.True(t, ok)
+			gotPreview := make([]string, len(rawModules))
+			for i, item := range rawModules {
+				gotPreview[i] = item.(string)
+			}
+			require.Equal(t, tc.want, gotPreview)
+
+			out.Reset()
+			require.NoError(t, runSystemPause(context.Background(), systemOptions{Reason: "维护"}, &out))
+			wantCalls := make([]string, len(tc.want))
+			for i, name := range tc.want {
+				wantCalls[i] = name + ":pause"
+			}
+			require.Equal(t, wantCalls, f.gateway.snapshot(), "预览顺序必须与真实执行顺序完全一致")
+		})
+	}
+}

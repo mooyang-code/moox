@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
+import { setSessionExpiredListener } from "@/api/admin/space-client";
 
 import { ArchiveRawError, dispositionFileName, downloadArchivePartition, fetchArchiveRecentRows } from "./raw";
 
@@ -6,8 +8,13 @@ const fetchMock = vi.fn();
 beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
+  window.location.hash = "#/archive/tasks";
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  setSessionExpiredListener(null);
+  window.location.hash = "#/";
+  vi.unstubAllGlobals();
+});
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -92,12 +99,25 @@ describe("归档裸 HTTP", () => {
     ).rejects.toThrow("下载不完整：连接中断，请重试");
   });
 
-  it("401（会话失效）提示重新登录；其他错误兼容 ret_info.msg", async () => {
+  it("401（会话失效）清登录态并跳登录页，抛 AuthSessionExpiredError；其他错误兼容 ret_info.msg", async () => {
+    const cleared = vi.fn();
+    setSessionExpiredListener(cleared);
+
     fetchMock.mockResolvedValueOnce(json(401, { ret_info: { code: 4, msg: "登录已失效，请重新登录" } }));
-    await expect(fetchArchiveRecentRows({ space: "s", dataset: "d", subject: "x" })).rejects.toMatchObject({
-      message: "登录已失效，请重新登录后再试",
-      status: 401
-    });
+    await expect(fetchArchiveRecentRows({ space: "s", dataset: "d", subject: "x" })).rejects.toSatisfy(
+      (err: unknown) => err instanceof AuthSessionExpiredError && err.message === "登录已失效，请重新登录后再试"
+    );
+    expect(cleared).toHaveBeenCalledTimes(1);
+    expect(window.location.hash).toBe(`#/login?redirect=${encodeURIComponent("/archive/tasks")}`);
+
+    window.location.hash = "#/archive/tasks?tab=partitions";
+    fetchMock.mockResolvedValueOnce(json(401, { ret_info: { code: 4, msg: "登录已失效，请重新登录" } }));
+    await expect(
+      downloadArchivePartition({ space: "s", dataset: "d", partition: "2026-11-07", fallbackName: "f" })
+    ).rejects.toBeInstanceOf(AuthSessionExpiredError);
+    expect(cleared).toHaveBeenCalledTimes(2);
+    expect(window.location.hash).toBe(`#/login?redirect=${encodeURIComponent("/archive/tasks?tab=partitions")}`);
+
     fetchMock.mockResolvedValueOnce(json(500, { ret_info: { code: 500, msg: "读取主机拓扑失败" } }));
     await expect(fetchArchiveRecentRows({ space: "s", dataset: "d", subject: "x" })).rejects.toThrow("读取主机拓扑失败");
   });
@@ -105,5 +125,31 @@ describe("归档裸 HTTP", () => {
   it("Content-Disposition 取不到文件名时为空", () => {
     expect(dispositionFileName(null)).toBe("");
     expect(dispositionFileName("attachment")).toBe("");
+  });
+
+  it("下载：signal 在进入流读取前已处于 aborted 时，finally 会取消响应流", async () => {
+    let cancelCalled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(ctrl) {
+        ctrl.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel() {
+        cancelCalled = true;
+      }
+    });
+    const controller = new AbortController();
+    fetchMock.mockImplementationOnce(async () => {
+      controller.abort();
+      return new Response(stream, { status: 200, headers: { "Content-Length": "3" } });
+    });
+
+    await expect(
+      downloadArchivePartition(
+        { space: "s", dataset: "d", partition: "2026-11-07", fallbackName: "f" },
+        undefined,
+        controller.signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(cancelCalled).toBe(true);
   });
 });

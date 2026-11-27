@@ -52,14 +52,22 @@ func TestTrialInstanceSendsOnlyShadowTargetsUntilConfirmed(t *testing.T) {
 	}
 	h.handler.Gate = func(string) Mode { return ModeLive }
 
-	h.run(1, 2)
-	if !h.shadowAt(1) || !h.shadowAt(2) {
+	h.run(1, 1)
+	if !h.shadowAt(1) {
+		t.Fatal("没确认实盘的实例只能发影子目标")
+	}
+	h.run(2, 2)
+	if !h.shadowAt(2) {
 		t.Fatal("没确认实盘的实例只能发影子目标")
 	}
 
 	h.confirm()
-	h.run(3, 4)
-	if h.shadowAt(3) || h.shadowAt(4) {
+	h.run(3, 3)
+	if h.shadowAt(3) {
+		t.Fatal("确认实盘之后的目标应是正式目标")
+	}
+	h.run(4, 4)
+	if h.shadowAt(4) {
 		t.Fatal("确认实盘之后的目标应是正式目标")
 	}
 }

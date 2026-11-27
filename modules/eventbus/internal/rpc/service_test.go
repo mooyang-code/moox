@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -161,4 +162,24 @@ func nativeManagement(t *testing.T, service *Service) eventbuspb.EventBusMgrClie
 		}
 	})
 	return eventbuspb.NewEventBusMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithProtocol("trpc"), client.WithNetwork("tcp"), client.WithTimeout(3*time.Second), client.WithTransport(transport.NewClientTransport()), client.WithDisableConnectionPool())
+}
+
+func TestSanitizePreservesSlashAndRedactsSecrets(t *testing.T) {
+	if got := sanitize(errors.New("stream/consumer not found")); got != "stream/consumer not found" {
+		t.Fatalf("sanitize erased slash error: %q", got)
+	}
+	ret := retErr(errors.New("stream/consumer not found"))
+	if ret.GetCode() != commonpb.ErrorCode_NOT_FOUND || ret.GetMsg() != "stream/consumer not found" {
+		t.Fatalf("retErr with slash = %+v", ret)
+	}
+	for _, sensitive := range []string{
+		"bad password for broker",
+		"secret token invalid",
+		"credential file unreadable",
+		"store_dir permission denied",
+	} {
+		if got := sanitize(errors.New(sensitive)); got != "eventbus operation failed" {
+			t.Fatalf("sanitize(%q) = %q, want redacted", sensitive, got)
+		}
+	}
 }

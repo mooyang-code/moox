@@ -6,6 +6,8 @@ import { createMemoryHistory, createRouter } from "vue-router";
 const api = vi.hoisted(() => ({
   loadInstances: vi.fn(),
   clearInstances: vi.fn(),
+  listLogicalAccounts: vi.fn(),
+  getCollectorStatus: vi.fn(),
   store: null as any,
   space: null as any,
   warning: vi.fn(),
@@ -13,6 +15,8 @@ const api = vi.hoisted(() => ({
   enableOpen: vi.fn()
 }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() }, Modal: { warning: api.warning } }));
+vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts }));
+vi.mock("@/api/collector/runtime-status", () => ({ getCollectorStatus: api.getCollectorStatus }));
 vi.mock("@/views/strategy/components/instance-toggle", () => ({ confirmInstanceToggle: api.confirmToggle }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => api.store }));
@@ -81,6 +85,8 @@ describe("strategy running page", () => {
   beforeEach(() => {
     api.loadInstances.mockReset().mockResolvedValue(undefined);
     api.clearInstances.mockReset();
+    api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [] });
+    api.getCollectorStatus.mockReset().mockResolvedValue({ history_seeds: [] });
     api.warning.mockReset();
     api.confirmToggle.mockReset();
     api.space = reactive({ selectedSpaceId: "crypto" });
@@ -247,5 +253,92 @@ describe("strategy running page", () => {
   it("clears instances left over from another space when the page mounts", async () => {
     await setup({});
     expect(api.clearInstances).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes logicalNames when switching spaces and drops stale responses", async () => {
+    let resolveCrypto!: (value: unknown) => void;
+    api.listLogicalAccounts
+      .mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            resolveCrypto = resolve;
+          })
+      )
+      .mockResolvedValueOnce({ logical_accounts: [{ logical_account_id: "la-hk", name: "港股组合" }] });
+
+    const { wrapper } = await setup({});
+    const vm = wrapper.vm as unknown as { logicalNames: Record<string, string> };
+    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(1);
+    expect(vm.logicalNames).toEqual({});
+
+    // 切空间时立刻发起新空间的组合名读取，旧空间迟到的响应不能覆盖新空间结果
+    api.space.selectedSpaceId = "hk";
+    await nextTick();
+    await flushPromises();
+    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(2);
+    expect(vm.logicalNames).toEqual({ "la-hk": "港股组合" });
+
+    resolveCrypto({ logical_accounts: [{ logical_account_id: "la-crypto", name: "币圈组合" }] });
+    await flushPromises();
+    expect(vm.logicalNames).toEqual({ "la-hk": "港股组合" });
+
+    // 切到下一个空间但加载失败时，应清空旧空间名称而不残留
+    api.listLogicalAccounts.mockRejectedValueOnce(new Error("trade unavailable"));
+    api.space.selectedSpaceId = "us";
+    await nextTick();
+    await flushPromises();
+    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(3);
+    expect(vm.logicalNames).toEqual({});
+    wrapper.unmount();
+  });
+
+  it("waits for space initialization before loading logicalNames", async () => {
+    api.space.selectedSpaceId = "";
+    api.listLogicalAccounts.mockResolvedValueOnce({ logical_accounts: [{ logical_account_id: "la-1", name: "实盘一号" }] });
+    const { wrapper } = await setup({});
+    const vm = wrapper.vm as unknown as { logicalNames: Record<string, string> };
+    expect(api.listLogicalAccounts).not.toHaveBeenCalled();
+
+    api.space.selectedSpaceId = "crypto";
+    await nextTick();
+    await flushPromises();
+    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(1);
+    expect(vm.logicalNames).toEqual({ "la-1": "实盘一号" });
+    wrapper.unmount();
+  });
+
+  it("clears instances, logicalNames and invalidates in-flight space switch when selectedSpaceId becomes empty", async () => {
+    api.listLogicalAccounts.mockResolvedValue({ logical_accounts: [{ logical_account_id: "la-1", name: "币圈组合" }] });
+    const { router, wrapper } = await setup({ page: "2" });
+    const vm = wrapper.vm as unknown as { logicalNames: Record<string, string> };
+    expect(vm.logicalNames).toEqual({ "la-1": "币圈组合" });
+
+    api.loadInstances.mockClear();
+    api.listLogicalAccounts.mockClear();
+    api.clearInstances.mockClear();
+
+    // 模拟切空间触发的路由 replace 挂起期间，空间被清空为 ""
+    let finishReplace!: () => void;
+    const originalReplace = router.replace.bind(router);
+    vi.spyOn(router, "replace").mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finishReplace = () => resolve(originalReplace({ name: "strategy-tasks", query: {} }));
+        }) as ReturnType<typeof router.replace>
+    );
+
+    api.space.selectedSpaceId = "hk";
+    await nextTick();
+    api.space.selectedSpaceId = "";
+    await nextTick();
+    expect(api.clearInstances).toHaveBeenCalledTimes(2);
+    expect(vm.logicalNames).toEqual({});
+
+    finishReplace();
+    await flushPromises();
+    // 原先挂起的 hk 切换因 spaceGeneration 递增而退出，不再发任何读取请求
+    expect(api.loadInstances).not.toHaveBeenCalled();
+    expect(api.listLogicalAccounts).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 });

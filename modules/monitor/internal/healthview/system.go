@@ -53,10 +53,16 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	var modules []module
 	// silent 是停止上报（或从未上报）的模块，notReady 是上报了未就绪的模块，都是“模块：说明”。
 	var silent, notReady []string
+	var pausableModules int
 	counted := 0
 	for _, c := range components {
 		if c.GetStatus() == "disabled" {
 			continue
+		}
+		// 系统暂停动作覆盖所有已启用的采集、因子引擎、策略、Trade 部署（含崩溃停报或未上报生命周期的），
+		// 避免部分模块停报后仅凭其余已暂停模块误判为整系统 "paused"。
+		if systemPausable[c.GetComponentId()] {
+			pausableModules++
 		}
 		name := firstNonEmpty(c.GetName(), c.GetComponentId())
 		issue := false
@@ -91,15 +97,11 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	if len(modules) == 0 {
 		out.Phase = "unknown"
 	}
-	var pausedModules, pausableModules, resuming, caughtUp int
+	var pausedModules, resuming, caughtUp int
 	for _, m := range modules {
 		l := m.l
-		// 系统暂停动作只覆盖采集、因子引擎、策略、Trade：「全部暂停」按它们来判断，
-		// 因子管理、Monitor 这类不参与系统暂停的模块不能让系统永远停在「部分暂停」。
+		// 「全部暂停」按已启用的系统可暂停模块总数判断，不参与系统暂停的模块（因子管理、Monitor 等）不计入。
 		pausable := systemPausable[m.id]
-		if pausable {
-			pausableModules++
-		}
 		switch l.Stage {
 		case "paused":
 			if pausable {

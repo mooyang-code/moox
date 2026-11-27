@@ -25,14 +25,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("broker.store_dir %q is unsafe", c.Broker.StoreDir)
 	}
 	if c.Broker.Auth.Enabled {
-		if strings.TrimSpace(c.Broker.Auth.UsersFile) == "" && (strings.TrimSpace(c.Broker.Auth.Username) == "" || c.Broker.Auth.Password == "") {
-			return fmt.Errorf("broker.auth requires users_file or username/password")
+		if strings.TrimSpace(c.Broker.Auth.UsersFile) == "" {
+			return fmt.Errorf("broker.auth requires users_file")
 		}
-		if c.Broker.Auth.UsersFile != "" && (c.Broker.Auth.Username != "" || c.Broker.Auth.Password != "") {
-			return fmt.Errorf("broker.auth users_file cannot be combined with single username/password")
-		}
-		if c.Broker.Auth.UsersFile != "" && strings.TrimSpace(c.InternalClient.CredentialFile) == "" {
-			return fmt.Errorf("internal_client.credential_file is required when broker.auth.users_file is enabled")
+		if strings.TrimSpace(c.InternalClient.CredentialFile) == "" {
+			return fmt.Errorf("internal_client.credential_file is required when broker.auth is enabled")
 		}
 	}
 	if c.Broker.TLS.Enabled && (strings.TrimSpace(c.Broker.TLS.CertFile) == "" || strings.TrimSpace(c.Broker.TLS.KeyFile) == "") {

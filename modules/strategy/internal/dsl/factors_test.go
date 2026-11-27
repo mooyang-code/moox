@@ -134,3 +134,75 @@ func TestParamsFunctionRejectsBadCalls(t *testing.T) {
 		}
 	}
 }
+
+// 声明了 sources 的策略可以在 factor_params（default 与 per_subject）中引用 来源名.列名，
+// Parse、ReferencedColumns、Compile 均应识别并纳入 SourceColumns；未声明的来源应被拒绝。
+func TestFactorParamsCanReferenceDeclaredSources(t *testing.T) {
+	t.Parallel()
+	const srcDSL = `name: tuned_with_source
+bar: 1h
+sources:
+  daily:
+    bar: 1d
+factor_params:
+  bias__var:
+    window:
+      default: "daily.regime * 20"
+      per_subject: "10 + rank(daily.vol) * 20"
+rules:
+  - id: r
+    type: rank
+    score: bias__var
+    select: {top: 1}
+    weight: 1
+`
+	strategy, err := Parse([]byte(srcDSL))
+	if err != nil {
+		t.Fatalf("Parse() 出错：%v", err)
+	}
+	columns, err := ReferencedColumns(strategy)
+	if err != nil {
+		t.Fatalf("ReferencedColumns() 出错：%v", err)
+	}
+	wantCols := []string{"bias__var", "daily.regime", "daily.vol"}
+	if !reflect.DeepEqual(columns, wantCols) {
+		t.Fatalf("ReferencedColumns = %v，期望 %v", columns, wantCols)
+	}
+	program, err := Compile(strategy, []string{"bias__var", "daily.regime", "daily.vol"})
+	if err != nil {
+		t.Fatalf("Compile() 出错：%v", err)
+	}
+	if !reflect.DeepEqual(program.Columns, wantCols) {
+		t.Fatalf("program.Columns = %v，期望 %v", program.Columns, wantCols)
+	}
+	if !reflect.DeepEqual(program.SourceColumns, map[string][]string{"daily": {"regime", "vol"}}) {
+		t.Fatalf("program.SourceColumns = %v", program.SourceColumns)
+	}
+	// 编译出的参数表达式能用 来源名.列名 环境求值。
+	if got, err := program.Params[0].Default.Run(map[string]any{
+		"daily": map[string]float64{"regime": 1.5}, "bias__var": 0.0, "daily.regime": 1.5, "daily.vol": 0.0,
+		"bars": []map[string]float64{}, "score": 0.0, "instrument_id": "",
+	}); err != nil || got != 30.0 {
+		t.Fatalf("default 表达式求值 = %v, %v，期望 30", got, err)
+	}
+
+	// 未声明来源名时仍应拒绝。
+	const badDSL = `name: bad_source
+bar: 1h
+sources:
+  daily:
+    bar: 1d
+factor_params:
+  bias__var:
+    window: "weekly.regime * 20"
+rules:
+  - id: r
+    type: rank
+    score: bias__var + daily.vol
+    select: {top: 1}
+    weight: 1
+`
+	if _, err := Parse([]byte(badDSL)); err == nil || !strings.Contains(err.Error(), "weekly") {
+		t.Fatalf("引用未声明来源应被拒绝：%v", err)
+	}
+}

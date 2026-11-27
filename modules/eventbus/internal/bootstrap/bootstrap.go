@@ -99,6 +99,8 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	hs.SetReady(true)
 	if s != nil {
 		if err := hs.Register(s.Service("trpc.moox.eventbus.Health")); err != nil {
+			hs.SetReady(false)
+			_ = hs.Shutdown(trpc.BackgroundContext())
 			nc.Close()
 			_ = b.Shutdown(trpc.BackgroundContext())
 			return nil, err
@@ -131,20 +133,17 @@ func registerMetricsReporter(s *server.Server, readiness func(context.Context) (
 
 func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn, error) {
 	opts := []nats.Option{nats.Name("moox-eventbus-control"), nats.RetryOnFailedConnect(true), nats.MaxReconnects(-1), nats.ReconnectBufSize(-1), nats.Timeout(5 * time.Second)}
-	username, password, caFile := cfg.Broker.Auth.Username, cfg.Broker.Auth.Password, cfg.Broker.TLS.CAFile
+	caFile := cfg.Broker.TLS.CAFile
 	if cfg.InternalClient.CredentialFile != "" {
 		credentials, err := readInternalCredentials(cfg.InternalClient.CredentialFile)
 		if err != nil {
 			return nil, err
 		}
-		username, password = credentials.Username, credentials.Password
+		opts = append(opts, nats.UserInfo(credentials.Username, credentials.Password))
 		// 角色文件里写了根证书位置就用它；没写时用 broker 自己的 ca_file（部署时两者都是 MooX CA 根证书）。
 		if credentials.CAFile != "" {
 			caFile = credentials.CAFile
 		}
-	}
-	if username != "" || password != "" {
-		opts = append(opts, nats.UserInfo(username, password))
 	}
 	if cfg.Broker.TLS.Enabled {
 		if caFile != "" {

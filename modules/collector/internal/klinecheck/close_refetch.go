@@ -33,7 +33,7 @@ func (b *Backfiller) RefetchAfterClose(ctx context.Context, spaceID string) erro
 	if done {
 		return nil
 	}
-	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
+	timeline, err := b.loadTimeline(ctx, spaceID)
 	if err != nil {
 		return err
 	}

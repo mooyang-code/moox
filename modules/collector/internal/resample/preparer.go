@@ -31,8 +31,9 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 	if limit <= 0 {
 		limit = 50
 	}
+	// 只准备尚未就绪（pending / waiting_view / error）的重采样任务；已 Ready 任务目标数据集与列均已就绪，不再每分钟重复打元数据与视图 RPC。
 	tasks, err := p.Tasks.ListResampleByPrepareStates(ctx, []domain.CollectionTaskPrepareState{
-		domain.PrepareStatePending, domain.PrepareStateWaitingView, domain.PrepareStateError, domain.PrepareStateReady,
+		domain.PrepareStatePending, domain.PrepareStateWaitingView, domain.PrepareStateError,
 	}, limit)
 	if err != nil {
 		return err

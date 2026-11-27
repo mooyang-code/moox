@@ -52,8 +52,7 @@ func (r *MetricMessageStore) IsDuplicate(ctx context.Context, messageID string) 
 	return count > 0, err
 }
 
-// CommitIngest atomically records dedupe/catalog/latest state. Storage history
-// is deliberately written before this method and is independently idempotent.
+// CommitIngest atomically records dedupe, service heartbeat/catalog, and latest metric state in one transaction.
 func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.EventMessage, report *metricspb.MetricReport, samples []Sample) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("metrics store is not initialized")
@@ -119,19 +118,6 @@ func (r *MetricMessageStore) recordSeriesLimit(service string, dropped []dropped
 		seriesDropped.WithLabelValues(item.service).Add(float64(item.count))
 		r.diag.recordDropped(item.service, item.metric, item.count, now)
 	}
-}
-
-// TouchService 在写 Storage 历史之前记录上报方仍然在线。Storage 不可用时只延迟指标历史，
-// 不会让上报方看起来已停止上报。last_seen 取报告的产生时间且只向前推进，
-// 重投递的旧报告不会让已停止的上报方显得仍在线。
-func (r *MetricMessageStore) TouchService(ctx context.Context, msg *eventpb.EventMessage, report *metricspb.MetricReport) error {
-	if r == nil || r.db == nil {
-		return errors.New("metrics store is not initialized")
-	}
-	if msg == nil || report == nil {
-		return errors.New("metric report is required")
-	}
-	return upsertMetricService(r.db.WithContext(ctx), report, reportSeenAt(msg, time.Now().UTC()))
 }
 
 func reportSeenAt(msg *eventpb.EventMessage, receivedAt time.Time) time.Time {

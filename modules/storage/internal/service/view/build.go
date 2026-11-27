@@ -75,7 +75,7 @@ func (s *Service) buildIndex(ctx context.Context, opts MaintenanceOptions, runti
 	if err != nil {
 		return viewindex.FollowState{}, fmt.Errorf("准备 View 索引 %q：%w", runtime.indexID, err)
 	}
-	runtime.revision.Add(1)
+	runtime.bumpRevision()
 	if err := s.backfillInitialIndex(ctx, runtime, spec, schema, opts, viewBars(spec, opts)); err != nil {
 		return viewindex.FollowState{}, err
 	}
@@ -328,6 +328,7 @@ func attachRuntime(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIn
 // attachActiveLocked 更新内存里的活动索引（调用方持有 runtime.mu）：重启恢复、维护和建索引完成都走这里。
 func attachActiveLocked(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIndexSchema) {
 	if runtime.active != runtime.indexID {
+		runtime.bumpRevision()
 		runtime.statsIndexID = ""
 		runtime.stats = viewindex.ViewIndexStats{}
 	}

@@ -131,7 +131,7 @@ func requireNoError(t *testing.T, err error) {
 	}
 }
 
-func TestTouchServiceRecordsProducerBeforeCommitAndNeverMovesBackwards(t *testing.T) {
+func TestCommitIngestRecordsProducerLastSeenAndNeverMovesBackwards(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	requireNoError(t, err)
 	defer mgr.Close()
@@ -151,15 +151,22 @@ func TestTouchServiceRecordsProducerBeforeCommitAndNeverMovesBackwards(t *testin
 		return service.LastSeenAt.UTC()
 	}
 
-	// 报告到达但历史尚未写入（例如 Storage 不可用）时，上报方已记为在线。
 	recent := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Millisecond)
-	requireNoError(t, r.TouchService(context.Background(), &eventpb.EventMessage{EventId: "m1", OccurredAt: recent.UnixMilli()}, report))
+	dup, err := r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m1", OccurredAt: recent.UnixMilli()}, report, nil)
+	requireNoError(t, err)
+	if dup {
+		t.Fatal("first commit unexpectedly marked duplicate")
+	}
 	if got := lastSeen(); !got.Equal(recent) {
 		t.Fatalf("last_seen_at=%s, want the report time %s", got, recent)
 	}
 
-	// 重投递的旧报告不能把 last_seen 往回拨。
-	requireNoError(t, r.TouchService(context.Background(), &eventpb.EventMessage{EventId: "m0", OccurredAt: recent.Add(-time.Hour).UnixMilli()}, report))
+	// 重投递或迟到的旧报告不能把 last_seen 往回拨。
+	dup, err = r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m0", OccurredAt: recent.Add(-time.Hour).UnixMilli()}, report, nil)
+	requireNoError(t, err)
+	if dup {
+		t.Fatal("distinct older event unexpectedly marked duplicate")
+	}
 	if got := lastSeen(); !got.Equal(recent) {
 		t.Fatalf("an older report moved last_seen_at back to %s", got)
 	}

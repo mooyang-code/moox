@@ -54,10 +54,11 @@ func TestBuildAlertsReportCollectsEveryUnhealthySource(t *testing.T) {
 	overview.Summary = &monitorpb.HealthSummary{AlertCount: 1}
 	overview.Alerts = []*monitorpb.HealthAlert{{
 		Id: "a1", Severity: "critical", Title: "数据集 view_b", Reason: "数据生产端长时间未更新", RawError: "producer stale",
-		TriggeredAt: time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC).UnixMilli(), Object: &monitorpb.HealthObject{Type: "dataset", DatasetId: "view_b", Freq: "1h"},
+		TriggeredAt: time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC).UnixMilli(),
+		Object:      &monitorpb.HealthObject{Type: "dataset", SpaceId: "crypto", Producer: "storage_view", DatasetId: "view_b", Freq: "1h"},
 	}}
 	stage.Datasets = append(stage.Datasets,
-		&monitorpb.HealthDataset{Producer: "storage_view", DatasetId: "view_b", Freq: "1h", Status: "degraded", Reason: "数据生产端长时间未更新"},
+		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_view", DatasetId: "view_b", Freq: "1h", Status: "degraded", Reason: "数据生产端长时间未更新"},
 		&monitorpb.HealthDataset{Producer: "factor", DatasetId: "factor_c", Freq: "1m", Status: "degraded", Reason: "warming"},
 		&monitorpb.HealthDataset{Producer: "collector", DatasetId: "ds_d", Freq: "1m", Status: "degraded", Reason: "success stale"},
 	)
@@ -133,4 +134,34 @@ func TestRenderAlertsFormats(t *testing.T) {
 
 	_, err = RenderAlerts(report, "yaml")
 	require.Error(t, err)
+}
+
+// 去重键包含 space_id 与 producer：不同空间或不同 producer 的同名数据集异常不会被错误合并。
+func TestBuildAlertsReportDedupIncludesSpaceIDAndProducer(t *testing.T) {
+	overview, stage := healthyOverview()
+	overview.Summary = &monitorpb.HealthSummary{AlertCount: 1}
+	overview.Alerts = []*monitorpb.HealthAlert{{
+		Id: "a1", Severity: "critical", Title: "crypto view kline_1m", Reason: "数据生产端长时间未更新",
+		Object: &monitorpb.HealthObject{Type: "dataset", SpaceId: "crypto", Producer: "storage_view", DatasetId: "kline_1m", Freq: "1m"},
+	}}
+	stage.Datasets = append(stage.Datasets,
+		// 同一 space_id + producer + dataset_id + freq：应去重。
+		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_view", DatasetId: "kline_1m", Freq: "1m", Status: "stale", Reason: "重复"},
+		// 不同 space_id：不能被合并。
+		&monitorpb.HealthDataset{SpaceId: "ashare", Producer: "storage_view", DatasetId: "kline_1m", Freq: "1m", Status: "degraded", Reason: "另一空间异常"},
+		// 同一 space_id、不同 producer：不能被合并。
+		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_primary", DatasetId: "kline_1m", Freq: "1m", Status: "degraded", Reason: "主存异常"},
+	)
+
+	report := BuildAlertsReport(overview)
+	var datasetItems []AlertItem
+	for _, item := range report.Items {
+		if item.Source == AlertSourceDataset {
+			datasetItems = append(datasetItems, item)
+		}
+	}
+	require.Len(t, datasetItems, 2, "不同空间与不同 producer 的异常必须各自保留")
+	require.Equal(t, []string{"ashare/kline_1m/1m", "crypto/kline_1m/1m"}, []string{datasetItems[0].Object, datasetItems[1].Object})
+	require.Contains(t, datasetItems[0].Title, "storage_view")
+	require.Contains(t, datasetItems[1].Title, "storage_primary")
 }

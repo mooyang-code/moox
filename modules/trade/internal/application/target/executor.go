@@ -1314,10 +1314,7 @@ func (e *Executor) checkTargetExecutable(
 		target.BarEndTime <= 0 || target.ValidUntil <= target.BarEndTime {
 		return ErrInvalidTarget
 	}
-	now := time.Now().UTC()
-	if e.Now != nil {
-		now = e.Now().UTC()
-	}
+	now := e.now().UTC()
 	if !now.Before(time.UnixMilli(target.ValidUntil).UTC()) {
 		return ErrTargetExpired
 	}

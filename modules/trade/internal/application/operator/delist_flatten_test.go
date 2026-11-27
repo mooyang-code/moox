@@ -96,14 +96,16 @@ func TestDelistFlattenRetriesAfterAnUnfilledIOCOrder(t *testing.T) {
 // ageOrders 把本动作已有子单的创建时间往前拨：模拟它们是上一轮执行留下的。
 func ageOrders(t *testing.T, fixture *operatorFixture, actionID string) {
 	t.Helper()
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_ctime = datetime('now', '-10 minutes') WHERE c_owner_id = ?`, actionID).Error)
+	earlier := fixture.now.UTC().Add(-10 * time.Minute).Format("2006-01-02 15:04:05")
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_ctime = ? WHERE c_owner_id = ?`, earlier, actionID).Error)
 }
 
 // currentRoundOrders 把本动作已有子单的创建时间往后拨几秒：订单创建时间只精确到秒，起点也取到秒，
 // 同一秒内的子单算上一轮留下的；测试里要让它们算这一轮的。
 func currentRoundOrders(t *testing.T, fixture *operatorFixture, actionID string) {
 	t.Helper()
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_ctime = datetime('now', '+5 seconds') WHERE c_owner_id = ?`, actionID).Error)
+	later := fixture.now.UTC().Add(5 * time.Second).Format("2006-01-02 15:04:05")
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_ctime = ? WHERE c_owner_id = ?`, later, actionID).Error)
 }
 
 // 被交易所拒绝：这一轮停下（PARTIAL）；同一个动作号重试会重新来过——起点之前的被拒子单不计，会再下单。
@@ -180,25 +182,38 @@ func TestDelistFlattenUnfilledStreakCapsThenResetsOnRetry(t *testing.T) {
 	require.Len(t, fixture.orders.specs, 1, "同号重试重新来过，起点之前的子单不计")
 }
 
-// 两笔 IOC 之间至少隔一段时间：上一笔刚结束就先不下，不算终结。
+// 两笔 IOC 之间至少隔一段时间：上一笔刚结束就先不下，不算终结；推进注入时钟超过间隔后再下。
 func TestDelistFlattenPacesConsecutiveIOCOrders(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
+	fixture.now = time.Date(2026, 1, 15, 8, 0, 0, 0, time.UTC)
 	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-pace", "BTC-USDT-SWAP")
 	fixture.orders.nextID = ""
 	service := fixture.service()
 	service.DelistAttemptInterval = time.Minute
-	_, err := service.FlattenLogicalAccount(context.Background(), command)
+	first, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1)
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-pace'`).Error)
+	require.Equal(t, fixture.now.Truncate(time.Second).UnixMilli(), first.AttemptStartedAt, "轮次起点必须使用注入时钟")
+	require.NoError(t, fixture.store.DBForTest().Exec(
+		`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_exchange_symbol = 'BTCUSDT', c_finished_at = ? WHERE c_owner_id = 'delist-pace'`,
+		fixture.now.UnixMilli(),
+	).Error)
 	fixture.orders.nextID = "child-paced"
 
+	// 推进注入时钟 30 秒（小于 1 分钟间隔）：仍被间隔挡住，不下单。
+	fixture.now = fixture.now.Add(30 * time.Second)
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1, "离上一笔结束太近，这一轮不再下")
 	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status, "不算终结，下一轮继续")
+
+	// 推进注入时钟超过 1 分钟间隔：放行下第二笔。
+	fixture.now = fixture.now.Add(31 * time.Second)
+	_, err = service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 2, "注入时钟越过间隔后应继续下单")
 }
 
 // 解除禁止就停：撤掉本动作的订单，记 COMPLETED 并带“已解除禁止”标记，不下单、不记 PARTIAL。
@@ -418,6 +433,7 @@ func TestDelistFlattenWaitsOutTheIntervalWithoutSpinningSyncs(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	fixture.block(t, "swap", "BTCUSDT")
 	service := fixture.service()
+	service.Now = time.Now
 	service.FlattenMaxAttempts = 1000
 	service.FlattenRetryInterval = 10 * time.Millisecond
 	service.FlattenTimeout = 4 * time.Second
@@ -485,6 +501,7 @@ func TestDelistFlattenDoesNotPlaceAfterTheUnblockDuringTheIntervalSleep(t *testi
 	fixture := newMixedFlattenFixture(t)
 	fixture.block(t, "swap", "BTCUSDT")
 	service := fixture.service()
+	service.Now = time.Now
 	service.FlattenMaxAttempts = 1000
 	service.FlattenRetryInterval = 10 * time.Millisecond
 	service.DelistAttemptInterval = 800 * time.Millisecond
@@ -508,6 +525,7 @@ func TestDelistFlattenEndsTheRoundWhenTheWakeUpLeavesNoRoomToPlace(t *testing.T)
 	fixture := newMixedFlattenFixture(t)
 	fixture.block(t, "swap", "BTCUSDT")
 	service := fixture.service()
+	service.Now = time.Now
 	service.FlattenMaxAttempts = 1000
 	service.FlattenRetryInterval = 10 * time.Millisecond
 	service.FlattenTimeout = 1500 * time.Millisecond

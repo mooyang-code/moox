@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // fillDataset 让只关心行的测试请求带上顶层数据集：空着时取第一行的 space_id、dataset_id。
@@ -44,13 +45,14 @@ func openTestStore(t *testing.T) *pebble.Store {
 // hookStore 在真实 Pebble 库上按需替换个别方法，用于注入失败或记录调用。
 type hookStore struct {
 	*pebble.Store
-	upsert       func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error
-	readRows     func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error)
-	readSeries   func(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
-	countSeries  func(ctx context.Context, req *pb.CountTimeSeriesRowsReq) ([]*pb.SubjectRowCount, error)
-	readChanges  func(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error)
-	commit       func(ctx context.Context, exp pebble.DatasetPeriodExpectation, items []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error)
-	appendMarker func(ctx context.Context, raw []byte) (string, error)
+	upsert           func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error
+	readRows         func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error)
+	readSeries       func(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
+	countSeries      func(ctx context.Context, req *pb.CountTimeSeriesRowsReq) ([]*pb.SubjectRowCount, error)
+	readChanges      func(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error)
+	registerSnapshot func(ctx context.Context, spaceID, datasetID, frequency string, series []seriesset.Series, effectiveFrom int64) (pebble.RegisterSnapshotResult, error)
+	commit           func(ctx context.Context, exp pebble.DatasetPeriodExpectation, items []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error)
+	appendMarker     func(ctx context.Context, raw []byte) (string, error)
 }
 
 func (s *hookStore) UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
@@ -86,6 +88,13 @@ func (s *hookStore) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetC
 		return s.readChanges(ctx, req)
 	}
 	return s.Store.ReadDatasetChanges(ctx, req)
+}
+
+func (s *hookStore) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, frequency string, series []seriesset.Series, effectiveFrom int64) (pebble.RegisterSnapshotResult, error) {
+	if s.registerSnapshot != nil {
+		return s.registerSnapshot(ctx, spaceID, datasetID, frequency, series, effectiveFrom)
+	}
+	return s.Store.RegisterSeriesSnapshot(ctx, spaceID, datasetID, frequency, series, effectiveFrom)
 }
 
 func (s *hookStore) CommitTimeSeriesBatch(ctx context.Context, exp pebble.DatasetPeriodExpectation, items []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error) {

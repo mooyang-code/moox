@@ -121,7 +121,8 @@ type viewRuntime struct {
 	indexID string
 	engine  viewindex.Engine
 	gate    *indexWriteGate
-	// revision 在每次成功写入索引后加一，分页读取方据此发现读取期间的原地修正与删除。
+	// revision 采用 Seqlock 偶稳奇写协议：偶数表示当前无引擎写入，奇数表示持有 gate 的引擎修改正在进行；
+	// 引擎修改前后各加 1（进入置奇、退出置偶），仅受 mu 保护的索引切换路径加 2，分页读取方据此避免撕裂读。
 	revision atomic.Uint64
 	// fileOverLimit 是索引文件超过告警线：文件大小检查不能排在写索引后面。
 	fileOverLimit    atomic.Bool
@@ -151,12 +152,45 @@ type runtimeReadState struct {
 	hiddenColumns map[string]struct{}
 }
 
+// lastInitialRevision 保证同一进程内先后新建的 viewRuntime 也拿到严格递增的非零偶数初始修订号；
+// 以当前 Unix 纳秒向上取偶为底则保证跨进程重启单调递增、永不为 0（Pin.Revision == 0 表示跳过校验），
+// 且满足 Seqlock 的“偶稳奇写”不变式。
+var lastInitialRevision atomic.Uint64
+
+func nextInitialRevision() uint64 {
+	now := uint64(max(time.Now().UnixNano(), 2))
+	now = (now + 1) &^ 1
+	for {
+		prev := lastInitialRevision.Load()
+		next := max(now, prev+2)
+		if lastInitialRevision.CompareAndSwap(prev, next) {
+			return next
+		}
+	}
+}
+
 // newViewRuntime 创建运行时并立即发布一份查询路径副本：没有发布过副本的运行时在读取 active 时要等运行时锁。
+// revision 以非零偶数且跨进程重启单调递增的基数初始化，避免重启后首次写入前多页翻页跳过版本校验。
 func newViewRuntime(spec *viewSpec, engine viewindex.Engine) *viewRuntime {
 	ref := spec.ref()
 	runtime := &viewRuntime{ref: ref, indexID: viewindex.IndexID(ref.spaceID, ref.datasetID), engine: engine, gate: newIndexWriteGate(), spec: spec}
+	runtime.revision.Store(nextInitialRevision())
 	runtime.publishReadStateLocked()
 	return runtime
+}
+
+// beginEngineWrite 标记一次受 gate 保护的引擎修改开始（将偶数 revision 推为奇数），
+// 调用方必须在释放 gate 之前执行返回的收尾函数（即使修改失败也要恢复偶数，防止永久卡在奇数状态）。
+func (r *viewRuntime) beginEngineWrite() func() {
+	r.revision.Add(1)
+	return func() {
+		r.revision.Add(1)
+	}
+}
+
+// bumpRevision 推进仅受 mu 保护的索引切换修订号（步长 2），与 gate 下的奇偶不变式完全正交。
+func (r *viewRuntime) bumpRevision() {
+	r.revision.Add(2)
 }
 
 // needsRebuild 报告 View 是否要原地重建或正在重建（断档、重建中途失败或退出、活动索引文件不见了）：此时元数据仍说
@@ -183,8 +217,11 @@ func (r *viewRuntime) publishReadStateLocked() {
 	r.readState.Store(&runtimeReadState{active: r.active, schema: r.schema, spec: r.spec, statsIndexID: r.statsIndexID, stats: r.stats, hiddenColumns: hidden})
 }
 
-// clearActiveLocked 清空活动索引及其统计缓存（调用方持有 mu）。
+// clearActiveLocked 清空活动索引及其统计缓存（调用方持有 mu）；若原先存在活动索引则递增修订号，让在途查询感知切换。
 func (r *viewRuntime) clearActiveLocked() {
+	if r.active != "" {
+		r.bumpRevision()
+	}
 	r.active = ""
 	r.statsIndexID = ""
 	r.stats = viewindex.ViewIndexStats{}
@@ -305,11 +342,9 @@ func (s *Service) writeIndex(ctx context.Context, runtime *viewRuntime, batch vi
 	if batch.RowWrites = s.dropExpiredWrites(runtime.indexID, batch.RowWrites); len(batch.RowWrites) == 0 {
 		return nil
 	}
-	if err := runtime.engine.Write(ctx, runtime.indexID, batch); err != nil {
-		return err
-	}
-	runtime.revision.Add(1)
-	return nil
+	endWrite := runtime.beginEngineWrite()
+	defer endWrite()
+	return runtime.engine.Write(ctx, runtime.indexID, batch)
 }
 
 func (s *Service) HasEngine(name string) bool {
@@ -330,6 +365,9 @@ func (s *Service) prepareIndex(ctx context.Context, runtime *viewRuntime, schema
 	schema, err := schemaOf(runtime)
 	if err != nil {
 		return viewindex.ViewIndexSchema{}, err
+	}
+	if runtime.active != "" {
+		runtime.bumpRevision()
 	}
 	runtime.active = ""
 	runtime.statsIndexID = ""

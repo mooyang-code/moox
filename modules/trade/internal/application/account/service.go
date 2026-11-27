@@ -108,7 +108,7 @@ func (s *Service) Create(
 		return tradingaccount.Account{}, err
 	}
 	if value.ExecutionMode == exchange.ExecutionModeLive &&
-		value.Environment == exchange.AccountEnvironmentProduction &&
+		liveEnvironment(value) == exchange.AccountEnvironmentProduction &&
 		!s.LiveTradingEnabled {
 		return tradingaccount.Account{}, ErrLiveTradingDisabled
 	}
@@ -179,7 +179,7 @@ func (s *Service) Update(
 	if current.Status != exchange.AccountStatusEnabled &&
 		projected.Status == exchange.AccountStatusEnabled &&
 		projected.ExecutionMode == exchange.ExecutionModeLive &&
-		projected.Environment == exchange.AccountEnvironmentProduction &&
+		liveEnvironment(projected) == exchange.AccountEnvironmentProduction &&
 		!s.LiveTradingEnabled {
 		return tradingaccount.Account{}, ErrLiveTradingDisabled
 	}
@@ -219,8 +219,8 @@ func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingac
 	}
 	for _, other := range accounts {
 		if other.ID != value.ID && other.ExecutionMode == exchange.ExecutionModeLive &&
-			other.Exchange == value.Exchange && other.Environment == value.Environment &&
-			other.CredentialSecretID == value.CredentialSecretID {
+			other.Exchange == value.Exchange && liveEnvironment(other) == liveEnvironment(value) &&
+			credentialSecret(other) == credentialSecret(value) {
 			return fmt.Errorf("%w: 账户“%s”已在使用这把密钥，一把密钥只能对应一个执行账户", tradingaccount.ErrInvalidAccount, other.Name)
 		}
 	}
@@ -291,7 +291,7 @@ func (s *Service) ExecutionEligibility(
 	if err := current.ExecutionEligibility(); err != nil {
 		return tradingaccount.Account{}, err
 	}
-	if current.Environment == exchange.AccountEnvironmentProduction &&
+	if liveEnvironment(current) == exchange.AccountEnvironmentProduction &&
 		!s.LiveTradingEnabled {
 		return tradingaccount.Account{}, ErrLiveTradingDisabled
 	}
@@ -308,11 +308,12 @@ func (s *Service) validateCredential(
 	if s.Secrets == nil {
 		return ErrServiceNotConfigured
 	}
-	secret, err := s.Secrets.GetExchangeSecret(ctx, value.CredentialSecretID)
+	secretID := credentialSecret(value)
+	secret, err := s.Secrets.GetExchangeSecret(ctx, secretID)
 	if err != nil {
 		return err
 	}
-	if secret.SecretID != value.CredentialSecretID ||
+	if secret.SecretID != secretID ||
 		secret.Category != "exchange" ||
 		secret.Exchange != value.Exchange ||
 		secret.Status != "active" {

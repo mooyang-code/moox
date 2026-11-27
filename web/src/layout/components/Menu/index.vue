@@ -1,8 +1,8 @@
 <template>
   <a-menu
-    breakpoint="xl"
+    :breakpoint="props.collapsed === undefined ? 'xl' : undefined"
     :mode="'vertical'"
-    :collapsed="collapsed"
+    :collapsed="isCollapsed"
     :auto-scroll-into-view="true"
     accordion
     v-model:open-keys="openKeys"
@@ -22,10 +22,19 @@ import { useRoute, useRouter } from "vue-router";
 import { layoutRoutes } from "@/router/route";
 import { buildMenuTree, resolveOpenKeys, resolveSelectedKeys } from "@/layout/components/Menu/menu-selected";
 
+const props = withDefaults(
+  defineProps<{
+    /** 显式覆盖折叠态（例如移动端抽屉固定以展开态渲染，不读取桌面端 collapsed） */
+    collapsed?: boolean;
+  }>(),
+  { collapsed: undefined }
+);
+
 const router = useRouter();
 const route = useRoute();
 const themeStore = useThemeConfig();
-const { collapsed } = storeToRefs(themeStore);
+const { collapsed: storeCollapsed } = storeToRefs(themeStore);
+const isCollapsed = computed(() => props.collapsed ?? storeCollapsed.value);
 
 // 计算菜单选中的keys
 const selectedKeys = computed(() => resolveSelectedKeys(route));

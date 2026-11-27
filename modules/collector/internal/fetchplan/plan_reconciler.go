@@ -1661,33 +1661,39 @@ func (r *PlanReconciler) EnsureBackfillFunctionIn(ctx context.Context, marketTyp
 	r.backfillRefs[name] = ref
 	r.readMu.Unlock()
 	r.backfillMu.Lock()
-	defer r.backfillMu.Unlock()
 	// 持有补采锁之后才读取目标代码包：在锁外读取，较早读到旧包的调用等到锁后会把已升级的函数降回旧版本。
 	pkg := r.packageID()
-	ready := func() bool { return pkg != "" && r.backfillReady[name] == pkg+"|"+fingerprint }
-	settle := func(op *functionOp) error {
+	ready := func(currentPkg string) bool {
+		return currentPkg != "" && r.backfillReady[name] == currentPkg+"|"+fingerprint
+	}
+	settleLocked := func(op *functionOp) error {
 		if op.err != nil {
 			return fmt.Errorf("ensure backfill function %s: %w", name, op.err)
 		}
 		r.markBackfillReady(name, op.packageID+"|"+fingerprint)
 		return nil
 	}
-	if ready() {
+	if ready(pkg) {
+		r.backfillMu.Unlock()
 		return name, nil
 	}
 	if op := r.ops().take(refKey(ref), key); op != nil {
-		if err := settle(op); err != nil {
+		if err := settleLocked(op); err != nil {
+			r.backfillMu.Unlock()
 			return "", err
 		}
-		if ready() {
+		if ready(pkg) {
+			r.backfillMu.Unlock()
 			return name, nil
 		}
 	}
 	if r.ops().busy(refKey(ref)) {
+		r.backfillMu.Unlock()
 		return "", fmt.Errorf("backfill function %s: %w", name, errBackfillFunctionPending)
 	}
 	spec, err := r.backfillSpec(ref, access)
 	if err != nil {
+		r.backfillMu.Unlock()
 		return "", err
 	}
 	op, err := r.ops().start(refKey(ref), key, false, func(ctx context.Context, op *functionOp) error {
@@ -1698,14 +1704,29 @@ func (r *PlanReconciler) EnsureBackfillFunctionIn(ctx context.Context, marketTyp
 		return r.Cloud.Ensure(ctx, spec)
 	})
 	if err != nil {
+		r.backfillMu.Unlock()
 		return "", fmt.Errorf("backfill function %s: %w", name, err)
 	}
+	r.backfillMu.Unlock()
+
+	// 在锁外等待云端操作完成（最长约 50s），避免阻塞其他地域/市场的补采调用及删除清理。
 	r.ops().wait(ctx, []*functionOp{op}, r.roundWait(ctx))
+
+	r.backfillMu.Lock()
+	defer r.backfillMu.Unlock()
 	done := r.ops().take(refKey(ref), key)
 	if done == nil {
+		if op.finished() && op.err != nil {
+			return "", fmt.Errorf("ensure backfill function %s: %w", name, op.err)
+		}
+		// 等待结束与重新加锁之间可能已被其他并发调用取走并标记就绪；
+		// 仅在缓存已确认匹配最新代码包与指纹时返回就绪，防止误报中途已被删除的函数。
+		if ready(r.packageID()) {
+			return name, nil
+		}
 		return "", fmt.Errorf("backfill function %s: %w", name, errBackfillFunctionPending)
 	}
-	if err := settle(done); err != nil {
+	if err := settleLocked(done); err != nil {
 		return "", err
 	}
 	return name, nil

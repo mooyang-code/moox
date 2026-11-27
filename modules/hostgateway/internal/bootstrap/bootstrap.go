@@ -198,7 +198,6 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err != nil {
 		return err
 	}
-	health.SetStorageCheck(cache.Check)
 	serviceOptions := router.ServiceOptions{State: runtime.State(), Replay: replay, Metrics: health}
 	// 外部入口：只有配置了 external_addr 的主机才开（部署按主机登记的 external_entry 渲染）。
 	if cfg.Server.ExternalAddr != "" {

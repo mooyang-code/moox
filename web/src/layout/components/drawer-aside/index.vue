@@ -5,14 +5,14 @@
     placement="left"
     :header="false"
     :footer="false"
-    :visible="!collapsed"
+    :visible="drawerVisible"
     @cancel="handleCancel"
     unmount-on-close
   >
     <div class="aside">
-      <Logo />
+      <Logo :collapsed="false" />
       <a-layout-sider class="layout_side" :width="220">
-        <a-scrollbar style="height: 100%; overflow: auto" outer-class="scrollbar"><Menu /></a-scrollbar>
+        <a-scrollbar style="height: 100%; overflow: auto" outer-class="scrollbar"><Menu :collapsed="false" /></a-scrollbar>
       </a-layout-sider>
     </div>
   </a-drawer>
@@ -24,10 +24,10 @@ import Menu from "@/layout/components/Menu/index.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
 const themeStore = useThemeConfig();
-const { collapsed } = storeToRefs(themeStore);
+const { drawerVisible } = storeToRefs(themeStore);
 
 const handleCancel = () => {
-  collapsed.value = true;
+  themeStore.setDrawerVisible(false);
 };
 </script>
 
@@ -55,26 +55,6 @@ const handleCancel = () => {
 :deep(.arco-layout-sider-light) {
   border-right: $border-1 solid $color-border-2;
   box-shadow: unset;
-}
-
-// 解决折叠菜单的icon不居中问题
-:deep(.arco-menu-vertical.arco-menu-collapsed) {
-  // 消除icon的自带padding值，并且让元素居中
-  .arco-menu-has-icon {
-    justify-content: center;
-    padding: 0;
-  }
-
-  // 消除icon的自带margin-right值，并且设置icon的padding值以保留icon空隙
-  .arco-menu-icon {
-    padding: 10px 0;
-    margin-right: 0;
-  }
-
-  // 消除title占位
-  .arco-menu-title {
-    display: none;
-  }
 }
 
 // 去掉sider背景

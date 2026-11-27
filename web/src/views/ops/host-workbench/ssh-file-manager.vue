@@ -36,6 +36,7 @@
             </a-button>
           </template>
         </a-upload>
+        <a-button v-if="uploadingCount > 0" status="warning" @click="cancelUploads">取消上传</a-button>
         <a-button @click="refresh">
           <template #icon><icon-refresh /></template>
           刷新
@@ -92,12 +93,18 @@
             {{ formatInstant(record.modified_at, "UTC") }}
           </template>
         </a-table-column>
-        <a-table-column title="操作" :width="80">
+        <a-table-column title="操作" :width="160">
           <template #cell="{ record }">
             <a-space :size="4">
-              <a-button v-if="record.type === 'f'" type="text" size="small" @click.stop="downloadFile(record)">
-                <template #icon><icon-download /></template>
-                下载
+              <a-button
+                v-if="record.type === 'f'"
+                type="text"
+                size="small"
+                :title="isDownloading(record) ? '点击取消下载' : undefined"
+                @click.stop="isDownloading(record) ? cancelDownload(record) : downloadFile(record)"
+              >
+                <template v-if="!isDownloading(record)" #icon><icon-download /></template>
+                {{ downloadLabel(record) }}
               </a-button>
               <a-popconfirm
                 :content="deleteConfirmText(record, hostLabel)"
@@ -136,10 +143,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, onBeforeUnmount, watch } from "vue";
 import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { sftpList, sftpMkdir, sftpDelete, getSftpDownloadUrl, getSftpUploadUrl, type SftpFileItem } from "@/api/modules/ssh";
+import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
+import { sftpList, sftpMkdir, sftpDelete, sftpDownload, sftpUpload, type SftpFileItem } from "@/api/modules/ssh";
+import { saveBlob } from "@/utils/download";
 import { deleteConfirmText, mkdirTitle } from "./file-actions";
 // 主机文件和空间无关，修改时间按 UTC 显示（后端返回 RFC3339）
 import { formatInstant } from "@/utils/time-zone";
@@ -199,6 +208,7 @@ const loadDir = async (path: string) => {
     currentDir.value = res.current_dir || "/";
     pathInput.value = res.current_dir || "/";
   } catch (error) {
+    if (error instanceof AuthSessionExpiredError) return;
     console.error("加载目录失败:", error);
     Message.error("加载目录失败");
   } finally {
@@ -263,7 +273,7 @@ const onMkdirConfirm = async () => {
     if (token === mkdirToken) mkdirModalVisible.value = false;
     if (sessionId === resolvedSessionId.value) refresh();
   } catch (error) {
-    if (token !== mkdirToken) return;
+    if (token !== mkdirToken || error instanceof AuthSessionExpiredError) return;
     console.error("创建目录失败:", error);
     Message.error("创建目录失败");
   } finally {
@@ -271,48 +281,117 @@ const onMkdirConfirm = async () => {
   }
 };
 
-// ---------- 上传回调 ----------
+// ---------- 上传回调与取消 ----------
+const uploadControllers = new Set<AbortController>();
+const uploadingCount = ref(0);
+
+const cancelUploads = () => {
+  for (const controller of [...uploadControllers]) controller.abort();
+  uploadControllers.clear();
+  uploadingCount.value = 0;
+};
+
 const onUploadSuccess = () => {
   Message.success("文件上传成功");
   refresh();
 };
 
-const onUploadError = () => {
-  Message.error("文件上传失败");
+const onUploadError = (fileItem?: { response?: unknown }) => {
+  const detail = fileItem?.response instanceof Error ? fileItem.response.message : "";
+  Message.error(detail ? `文件上传失败：${detail}` : "文件上传失败");
 };
 
-const uploadFile = async (option: {
+// Arco customRequest 必须同步返回 { abort } 句柄，不能是 async 函数
+const uploadFile = (option: {
   fileItem: { file?: File };
-  onSuccess: (response: unknown) => void;
-  onError: (error: Error) => void;
+  onSuccess: (response?: unknown) => void;
+  onError: (response?: unknown) => void;
 }) => {
   // 上传开始时固定会话与目标目录：上传期间用户可能进入了别的目录，不能改传到后来浏览的目录
   const sessionId = resolvedSessionId.value;
   const targetPath = uploadFormData.value.path;
-  try {
-    const url = getSftpUploadUrl(sessionId);
-    const formData = new FormData();
-    formData.append("path", targetPath);
-    formData.append("file", option.fileItem.file!);
-    const response = await fetch(url, { method: "POST", body: formData, credentials: "same-origin" });
-    if (!response.ok) throw new Error(`upload failed: ${response.status}`);
-    option.onSuccess(await response.json());
-  } catch (error) {
-    option.onError(error as Error);
+  const file = option.fileItem.file;
+  const controller = new AbortController();
+  if (!file) {
+    option.onError(new Error("未选择上传文件"));
+    return { abort: () => controller.abort() };
   }
-  return { abort: () => undefined };
+  uploadControllers.add(controller);
+  uploadingCount.value = uploadControllers.size;
+
+  void (async () => {
+    try {
+      const result = await sftpUpload(sessionId, targetPath, file, controller.signal);
+      if (controller.signal.aborted) return;
+      option.onSuccess(result);
+    } catch (error) {
+      if (controller.signal.aborted || error instanceof AuthSessionExpiredError) return;
+      option.onError(error instanceof Error ? error : new Error("文件上传失败"));
+    } finally {
+      uploadControllers.delete(controller);
+      uploadingCount.value = uploadControllers.size;
+    }
+  })();
+
+  return { abort: () => controller.abort() };
 };
 
-// ---------- 下载 ----------
-const downloadFile = (record: SftpFileItem) => {
-  const url = getSftpDownloadUrl(resolvedSessionId.value, record.path);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = record.name;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+// ---------- 下载与取消 ----------
+const downloading = ref<Record<string, number>>({});
+const downloadControllers = new Map<string, AbortController>();
+
+const isDownloading = (record: SftpFileItem) => record.path in downloading.value;
+
+const downloadLabel = (record: SftpFileItem) => {
+  const progress = downloading.value[record.path];
+  if (progress === undefined) return "下载";
+  return progress >= 0 ? `${progress}% · 取消` : "下载中 · 取消";
 };
+
+const cancelDownload = (record: SftpFileItem) => {
+  downloadControllers.get(record.path)?.abort();
+};
+
+const downloadFile = async (record: SftpFileItem) => {
+  const key = record.path;
+  if (!key || isDownloading(record)) return;
+  const sessionId = resolvedSessionId.value;
+  const controller = new AbortController();
+  downloadControllers.set(key, controller);
+  downloading.value = { ...downloading.value, [key]: -1 };
+  try {
+    const { blob, fileName } = await sftpDownload(
+      sessionId,
+      key,
+      record.name,
+      (received, total) => {
+        if (total > 0 && downloadControllers.get(key) === controller) {
+          downloading.value = { ...downloading.value, [key]: Math.floor((received / total) * 100) };
+        }
+      },
+      controller.signal
+    );
+    if (controller.signal.aborted) return;
+    saveBlob(blob, fileName);
+  } catch (error) {
+    if (controller.signal.aborted || error instanceof AuthSessionExpiredError) return;
+    Message.error(`下载 ${record.name} 失败：${error instanceof Error && error.message ? error.message : "请稍后重试"}`);
+  } finally {
+    if (downloadControllers.get(key) === controller) {
+      downloadControllers.delete(key);
+      downloading.value = Object.fromEntries(Object.entries(downloading.value).filter(([item]) => item !== key));
+    }
+  }
+};
+
+const abortAllTransfers = () => {
+  cancelUploads();
+  for (const controller of downloadControllers.values()) controller.abort();
+  downloadControllers.clear();
+  downloading.value = {};
+};
+
+onBeforeUnmount(abortAllTransfers);
 
 // ---------- 删除 ----------
 const deleteItem = async (record: SftpFileItem) => {
@@ -321,15 +400,17 @@ const deleteItem = async (record: SftpFileItem) => {
     Message.success("删除成功");
     refresh();
   } catch (error) {
+    if (error instanceof AuthSessionExpiredError) return;
     Message.error(`删除失败：${error instanceof Error && error.message ? error.message : "未知原因"}`);
   }
 };
 
 // ---------- 初始化 & 监听 ----------
-// 当 sessionId 变化时（包括首次传入），重新加载默认目录
+// 当 sessionId 变化时（包括首次传入），中止旧会话传输并重新加载默认目录
 watch(
   resolvedSessionId,
   id => {
+    abortAllTransfers();
     if (id) {
       currentDir.value = DEFAULT_SFTP_DIR;
       pathInput.value = DEFAULT_SFTP_DIR;
@@ -338,6 +419,8 @@ watch(
   },
   { immediate: true }
 );
+
+defineExpose({ uploadFile, cancelUploads, cancelDownload, downloadFile });
 </script>
 
 <style lang="scss" scoped>

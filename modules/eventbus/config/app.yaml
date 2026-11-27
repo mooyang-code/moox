@@ -9,8 +9,6 @@ broker:
   max_payload_bytes: 8388608
   auth:
     enabled: false
-    username: ""
-    password: ""
     users_file: ""
   tls:
     enabled: false

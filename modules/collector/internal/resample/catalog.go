@@ -15,8 +15,8 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var ErrTargetViewNotReady = errors.New("target View is not ready")
@@ -24,6 +24,7 @@ var ErrTargetViewNotReady = errors.New("target View is not ready")
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
 	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
+	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 }
@@ -61,6 +62,43 @@ func fieldsFor(tradeCount bool) []klineField {
 		klineField{"amount", false})
 }
 
+// AllOutputFieldNames 按 K 线基础字段顺序返回重采样可输出的所有基础字段名（供管理台任务表单展示）。
+func AllOutputFieldNames() []string {
+	return []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num", "amount"}
+}
+
+// ValidateOutputFields 校验重采样任务指定的输出字段是否均属于该市场可合成的字段集合。
+func ValidateOutputFields(spaceID string, outputFields []string) error {
+	if len(outputFields) == 0 {
+		return nil
+	}
+	// 保留对资金费率的明确提示，源数据集带这一列不影响合成，但不能显式要求输出它。
+	if domain.HasOutputField(outputFields, domain.FieldFundingRate) {
+		return fmt.Errorf("重采样不能合成输出字段 %s，请从输出字段里去掉它", domain.FieldFundingRate)
+	}
+	tradeCount, err := hasTradeCount(spaceID)
+	if err != nil {
+		return err
+	}
+	allowed := fieldsFor(tradeCount)
+	allowedSet := make(map[string]struct{}, len(allowed))
+	allowedNames := make([]string, 0, len(allowed))
+	for _, field := range allowed {
+		allowedSet[field.name] = struct{}{}
+		allowedNames = append(allowedNames, field.name)
+	}
+	for _, raw := range outputFields {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			continue
+		}
+		if _, ok := allowedSet[name]; !ok {
+			return fmt.Errorf("重采样不能合成输出字段 %s（当前市场可选：%s）", name, strings.Join(allowedNames, "、"))
+		}
+	}
+	return nil
+}
+
 // PrepareTarget creates or validates the target Dataset and its columns. Existing resources with a mismatched immutable contract
 // are rejected instead of being silently overwritten.
 func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.Subject) error {
@@ -82,6 +120,10 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if err != nil {
 		return err
 	}
+	sessionAttrs, _, err := taskresult.SessionAttributes(task.SpaceID)
+	if err != nil {
+		return err
+	}
 	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
 	params.TargetDatasetID = ids.DatasetID
 	targetDatasetID := ids.DatasetID
@@ -90,12 +132,17 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if sourceDataSourceID == "" {
 		sourceDataSourceID = source.Attributes["source_data_source_id"]
 	}
-	attrs := map[string]string{
+	immutableAttrs := map[string]string{
 		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "market_type": strings.ToLower(params.MarketType),
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": sourceDataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
 		"target_freq": targetFreq.Storage,
+	}
+	attrs := cloneStringMap(immutableAttrs)
+	// 交易时段市场写入与原始采集一致的 calendar 属性，避免下游策略因缺省回退到 crypto_24x7 日历。
+	for key, value := range sessionAttrs {
+		attrs[key] = value
 	}
 	createdDataset := false
 	compensate := func(original error) error {
@@ -119,7 +166,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return errors.New("get target Dataset: empty ret_info")
 	}
 	columns := targetDatasetColumns(tradeCount, params.OutputFields)
-	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
+	if taskresult.IsDatasetNotFound(target.GetRetInfo().GetCode()) {
 		// 数据集连同列在一次调用里建好，建好即可写入。
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: &storagepb.Dataset{
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID,
@@ -143,11 +190,50 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if target.GetDataset() == nil {
 		return compensate(errors.New("target Dataset is empty"))
 	}
-	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage); err != nil {
-		return compensate(err)
-	}
 	if target.GetDataset().GetAlignment() != market.Alignment {
 		return compensate(fmt.Errorf("目标数据集的 alignment %q 与市场的 %q 不一致", target.GetDataset().GetAlignment(), market.Alignment))
+	}
+	// 先校验除派生属性（如 calendar）外的全部不可变血缘契约，确保不会误修改其他任务的数据集。
+	if err := validateTargetDataset(target.GetDataset(), immutableAttrs, targetFreq.Storage); err != nil {
+		return compensate(err)
+	}
+	// 存量交易时段市场目标数据集仅缺失 calendar 时原地回填；非空且不匹配时按血缘冲突拒绝。
+	if !createdDataset && len(sessionAttrs) > 0 {
+		missing := map[string]string{}
+		for key, expected := range sessionAttrs {
+			actual := strings.TrimSpace(target.GetDataset().GetAttributes()[key])
+			if actual == "" {
+				missing[key] = expected
+				continue
+			}
+			if actual != expected {
+				return compensate(fmt.Errorf("target Dataset immutable lineage attribute %s does not match task", key))
+			}
+		}
+		if len(missing) > 0 {
+			updated := proto.Clone(target.GetDataset()).(*storagepb.Dataset)
+			if updated.Attributes == nil {
+				updated.Attributes = map[string]string{}
+			}
+			for key, value := range missing {
+				updated.Attributes[key] = value
+			}
+			resp, updateErr := c.Metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
+			if updateErr != nil {
+				return fmt.Errorf("update target Dataset attributes: %w", updateErr)
+			}
+			if err := ensureMetadataSuccess("update target Dataset attributes", resp.GetRetInfo()); err != nil {
+				return err
+			}
+			if resp.GetDataset() != nil {
+				target.Dataset = resp.GetDataset()
+			} else {
+				target.Dataset = updated
+			}
+		}
+	}
+	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage); err != nil {
+		return compensate(err)
 	}
 	_ = subjects
 	if !createdDataset {
@@ -165,12 +251,6 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	}
 	// 查询索引随目标数据集由 Storage 建好；等声明的列都建进索引再放行采集。
 	err = waitTargetViewColumns(ctx, c.View, task.SpaceID, targetDatasetID, columns, 5*time.Second)
-	if err != nil && ctx.Err() == nil && task.PrepareState == domain.PrepareStateReady && !createdDataset {
-		// 已经 Ready 的任务只在这里复核列：storage-view 不可达、恢复或重建期间索引暂时查不到，不能让任务掉出 Ready，
-		// 否则触发、历史作业与兜底都停下，恢复后更早的桶补不回来。只记日志，下一轮再看。
-		log.Warnf("collector 合成任务 %s/%s 的目标数据集 %s 的查询索引暂不可用，保持就绪：%v", task.SpaceID, task.TaskID, targetDatasetID, err)
-		return nil
-	}
 	return compensate(err)
 }
 

@@ -2,9 +2,11 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events"
@@ -24,11 +26,16 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("parse config %s: expected a single YAML document", path)
+	}
 	cfg.applyDefaults()
-	cfg.applyEnv()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -54,27 +61,5 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Broker.MaxPayloadBytes == 0 {
 		c.Broker.MaxPayloadBytes = d.Broker.MaxPayloadBytes
-	}
-}
-
-func (c *Config) applyEnv() {
-	if v := os.Getenv("MOOX_EVENTBUS_STORE_DIR"); v != "" {
-		c.Broker.StoreDir = v
-	}
-	if v := os.Getenv("MOOX_EVENTBUS_HOST"); v != "" {
-		c.Broker.Host = v
-	}
-	if v := os.Getenv("MOOX_EVENTBUS_SERVER_NAME"); v != "" {
-		c.Broker.ServerName = v
-	}
-	if v := os.Getenv("MOOX_EVENTBUS_PORT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.Broker.Port = n
-		}
-	}
-	if v := os.Getenv("MOOX_EVENTBUS_MAX_PAYLOAD_BYTES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.Broker.MaxPayloadBytes = n
-		}
 	}
 }

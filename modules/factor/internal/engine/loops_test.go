@@ -468,3 +468,77 @@ func TestRecalcLoopCatchesUpLocalDataBeforeComputing(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, jobStatusSucceeded, failing.reports[len(failing.reports)-1].status)
 }
+
+// 股票日历（有午休/隔夜/长假间隙）在未推进任何分块前失败或归还时，必须直接回传领取时的原始真实时间 Progress，
+// 不走 EndToAxis → FromAxisEnd 往返；否则开盘时刻会倒退到上一交易日收盘时刻，在管理端触发 ErrConflict 永久卡死单槽队列。
+func TestRecalcLoopKeepsOriginalProgressBeforeFirstChunkOnSessionCalendar(t *testing.T) {
+	cst := time.FixedZone("CST", 8*3600)
+	// 2026-10-08 09:30（国庆后首个交易日开盘）→ 10:00；轴往返会倒退到 2026-09-30 15:00。
+	start := time.Date(2026, 10, 8, 9, 30, 0, 0, cst).UTC()
+	end := time.Date(2026, 10, 8, 10, 0, 0, 0, cst).UTC()
+	newStockJob := func() PulledJob {
+		set := engineTask("ftask_stock", "dataset_a", true, "bias")
+		set.Set.SpaceID = "stockcn"
+		set.Set.Freq = "5m"
+		return PulledJob{
+			JobID: "job-stock", Subjects: []string{"000001.XSHE"},
+			Window: recalcexec.Window{Start: start, End: end, Progress: start},
+			Set:    set,
+		}
+	}
+
+	// 1. 首块执行失败：上报 failed 且 progress 精确等于领取时的原始真实时间 start。
+	client := &jobClientFake{job: newStockJob(), found: true}
+	runner := &planRecorder{err: errors.New("storage read failed")}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	found, err := loop.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, client.reports, 1)
+	require.Equal(t, jobStatusFailed, client.reports[0].status)
+	require.True(t, start.Equal(client.reports[0].progress), "首块失败应回传原始开盘时间 %s，实际 %s", start, client.reports[0].progress)
+
+	// 2. prepare 在首块前失败：同样原样回传 start。
+	prepClient := &jobClientFake{job: newStockJob(), found: true}
+	prepLoop := newTestLoop(prepClient, &planRecorder{}, &sourceFake{})
+	prepLoop.prepare = func(context.Context, domain.EngineTask) (func(), error) {
+		return nil, errors.New("udf load failed")
+	}
+	found, err = prepLoop.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, prepClient.reports, 1)
+	require.Equal(t, jobStatusFailed, prepClient.reports[0].status)
+	require.True(t, start.Equal(prepClient.reports[0].progress))
+
+	// 3. 首块前被门禁挡住归还（giveBack）：原样回传 start。
+	gatedClient := &jobClientFake{job: newStockJob(), found: true}
+	gatedExec := recalcexec.NewExecutor(&planRecorder{}, recalcexec.WithGate(func(string) bool { return false }))
+	gatedLoop := &recalcLoop{client: gatedClient, executor: gatedExec, source: &sourceFake{}, poll: time.Millisecond, gateWait: 10 * time.Millisecond, gateRetry: 2 * time.Millisecond}
+	found, err = gatedLoop.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Len(t, gatedClient.reports, 1)
+	require.Equal(t, jobStatusAccepted, gatedClient.reports[0].status)
+	require.True(t, start.Equal(gatedClient.reports[0].progress))
+
+	// 4. 推进完第一块（2 根 5m 线：09:30、09:35，收盘 09:40）后第二块失败：回传第一块已确认的真实进度 09:40。
+	chunkClient := &jobClientFake{job: newStockJob(), found: true}
+	calls := 0
+	chunkLoop := newTestLoop(chunkClient, &planRecorder{}, &sourceFake{})
+	chunkLoop.executor = recalcexec.NewExecutor(runnerFunc(func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
+		calls++
+		if calls > 1 {
+			return pipeline.Outcome{}, errors.New("second chunk failed")
+		}
+		return pipeline.Outcome{Status: "complete"}, nil
+	}), recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+	_, err = chunkLoop.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Len(t, chunkClient.reports, 2)
+	wantFirstChunkEnd := time.Date(2026, 10, 8, 9, 40, 0, 0, cst).UTC()
+	require.Equal(t, jobStatusRunning, chunkClient.reports[0].status)
+	require.True(t, wantFirstChunkEnd.Equal(chunkClient.reports[0].progress))
+	require.Equal(t, jobStatusFailed, chunkClient.reports[1].status)
+	require.True(t, wantFirstChunkEnd.Equal(chunkClient.reports[1].progress))
+}

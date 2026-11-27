@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -214,7 +215,83 @@ func UnitName(componentID string) string { return "moox-" + componentID + ".serv
 //go:embed catalog.yaml
 var embedded []byte
 
-func LoadEmbedded() (Catalog, error) { return Decode(bytes.NewReader(embedded)) }
+var (
+	embeddedOnce    sync.Once
+	embeddedCatalog Catalog
+	embeddedErr     error
+	decodeEmbedded  = func() (Catalog, error) { return Decode(bytes.NewReader(embedded)) }
+)
+
+// LoadEmbedded 返回已校验的内嵌服务目录的独立深拷贝。
+// 内嵌 catalog.yaml 仅在首次调用时解析并校验一次，避免热路径反复反序列化 YAML，
+// 同时保证调用方对返回值的原地修改不会污染进程内缓存。
+func LoadEmbedded() (Catalog, error) {
+	embeddedOnce.Do(func() {
+		embeddedCatalog, embeddedErr = decodeEmbedded()
+	})
+	if embeddedErr != nil {
+		return Catalog{}, embeddedErr
+	}
+	return embeddedCatalog.Clone(), nil
+}
+
+// Clone 返回目录的深拷贝，隔离所有切片和指针字段。
+func (c Catalog) Clone() Catalog {
+	out := Catalog{
+		Version:    c.Version,
+		Identities: slices.Clone(c.Identities),
+	}
+	if c.Components != nil {
+		out.Components = make([]Component, len(c.Components))
+		for i, component := range c.Components {
+			out.Components[i] = component.clone()
+		}
+	}
+	return out
+}
+
+func (c Component) clone() Component {
+	out := c
+	out.Ports = slices.Clone(c.Ports)
+	if c.Services != nil {
+		out.Services = make([]Service, len(c.Services))
+		for i, service := range c.Services {
+			out.Services[i] = service.clone()
+		}
+	}
+	if c.RelayHTTP != nil {
+		relay := *c.RelayHTTP
+		relay.Callers = slices.Clone(c.RelayHTTP.Callers)
+		out.RelayHTTP = &relay
+	}
+	out.Args = slices.Clone(c.Args)
+	out.Tools = slices.Clone(c.Tools)
+	out.ConfigFiles = slices.Clone(c.ConfigFiles)
+	out.After = slices.Clone(c.After)
+	out.Credentials = slices.Clone(c.Credentials)
+	return out
+}
+
+func (s Service) clone() Service {
+	out := s
+	if s.Methods != nil {
+		out.Methods = make([]Method, len(s.Methods))
+		for i, method := range s.Methods {
+			out.Methods[i] = method.clone()
+		}
+	}
+	return out
+}
+
+func (m Method) clone() Method {
+	out := m
+	out.Callers = slices.Clone(m.Callers)
+	if m.Operators != nil {
+		ops := slices.Clone(*m.Operators)
+		out.Operators = &ops
+	}
+	return out
+}
 
 // EmbeddedYAML returns an owned copy for release identity checks. Mutating it
 // does not change the catalog loaded by this package.

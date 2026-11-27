@@ -186,7 +186,7 @@ func (b *Backfiller) SeedTick(ctx context.Context, spaceID string) error {
 
 // startSeeds 为时间线里还没有补齐记录的数据集建记录并在后台拼作业。
 func (b *Backfiller) startSeeds(ctx context.Context, spaceID string) error {
-	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
+	timeline, err := b.loadTimeline(ctx, spaceID)
 	if err != nil {
 		return err
 	}
@@ -528,23 +528,18 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 				continue
 			}
 			if total[store.BackfillFailed] > 0 && !seed.Retried {
-				retryable := true
+				failedJobIDs := make([]string, 0, len(counts))
 				for id, perJob := range counts {
-					if perJob[store.BackfillFailed] == 0 {
-						continue
-					}
-					// 分块都结束了但作业状态还没被 Tick 改成 failed：等下一轮再重试。
-					if _, err := b.Store.RetryJob(ctx, id); errors.Is(err, store.ErrJobNotRetryable) {
-						retryable = false
-					} else if err != nil {
-						return err
+					if perJob[store.BackfillFailed] > 0 {
+						failedJobIDs = append(failedJobIDs, id)
 					}
 				}
-				if !retryable {
+				sort.Strings(failedJobIDs)
+				// 单事务原子校验并重试全部失败作业且置 retried=true：只要任一失败作业尚未被 Tick 改完状态，
+				// 整个事务回滚不改动任何作业，等下一轮再一起重试，消除多作业部分重试竞态。
+				if _, err := b.Store.RetryHistorySeed(ctx, spaceID, seed.DatasetID, seed.Frequency, failedJobIDs); errors.Is(err, store.ErrJobNotRetryable) {
 					continue
-				}
-				seed.Retried = true
-				if _, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedRunning); err != nil {
+				} else if err != nil {
 					return err
 				}
 				continue
@@ -565,7 +560,7 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 }
 
 func (b *Backfiller) firstSegment(ctx context.Context, spaceID string, seed store.HistorySeed) (Segment, bool, error) {
-	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
+	timeline, err := b.loadTimeline(ctx, spaceID)
 	if err != nil {
 		return Segment{}, false, err
 	}

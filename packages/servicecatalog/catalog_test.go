@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -658,5 +660,81 @@ func TestLifecycleMethodsAndTimeoutsCoverQuiesce(t *testing.T) {
 	collect, _ := c.Service("trpc.moox.collector.CollectMgr")
 	if read, check := collect.TimeoutFor("GetLifecycle"), collect.TimeoutFor("CheckKline"); read < check {
 		t.Fatalf("CollectMgr/GetLifecycle 路由超时 %d 毫秒短于 CheckKline 的 %d 毫秒", read, check)
+	}
+}
+
+func TestLoadEmbeddedCachesDecodeAndReturnsIsolatedClones(t *testing.T) {
+	origDecode := decodeEmbedded
+	t.Cleanup(func() {
+		embeddedOnce = sync.Once{}
+		embeddedCatalog, embeddedErr, decodeEmbedded = Catalog{}, nil, origDecode
+	})
+
+	var decodeCalls atomic.Int32
+	embeddedOnce = sync.Once{}
+	embeddedCatalog, embeddedErr = Catalog{}, nil
+	decodeEmbedded = func() (Catalog, error) {
+		decodeCalls.Add(1)
+		return Decode(bytes.NewReader(embedded))
+	}
+
+	const workers = 16
+	results := make([]Catalog, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			cat, err := LoadEmbedded()
+			if err != nil {
+				t.Errorf("LoadEmbedded() error = %v", err)
+				return
+			}
+			results[idx] = cat
+		}(i)
+	}
+	wg.Wait()
+
+	if got := decodeCalls.Load(); got != 1 {
+		t.Fatalf("embedded catalog decoded %d times, want 1", got)
+	}
+
+	fresh, err := Decode(bytes.NewReader(embedded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(results[0], fresh) {
+		t.Fatal("cloned catalog differs from freshly decoded catalog")
+	}
+
+	// 原地修改返回的全部可变字段（切片与指针），不得影响后续 LoadEmbedded 返回值。
+	mutated := results[0]
+	mutated.Identities[0].ID = "mutated-identity"
+	mutated.Components[0].Scope = "mutated-scope"
+	admin := componentPtr(&mutated, "admin")
+	admin.Ports[0] = 9999
+	admin.Args[0] = "mutated-arg"
+	admin.ConfigFiles[0].From = "mutated.yaml"
+	admin.Credentials = append(admin.Credentials, "mutated")
+	collector := componentPtr(&mutated, "collector")
+	collector.Tools[0] = "mutated-tool"
+	collector.After[0] = "mutated-after"
+	worker := componentPtr(&mutated, "archive-worker")
+	worker.RelayHTTP.Port = 19999
+	worker.RelayHTTP.Callers[0] = "mutated-caller"
+	method := methodPtr(&mutated, "trpc.moox.collector.CollectMgr", "GetTaskResultInventory")
+	method.Callers[0] = "mutated-caller"
+	deleteFn := methodPtr(&mutated, "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions")
+	(*deleteFn.Operators)[0] = "mutated-operator"
+
+	again, err := LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(again, fresh) {
+		t.Fatal("mutating returned catalog corrupted cached embedded catalog")
+	}
+	if got := decodeCalls.Load(); got != 1 {
+		t.Fatalf("embedded catalog decoded %d times after reload, want 1", got)
 	}
 }

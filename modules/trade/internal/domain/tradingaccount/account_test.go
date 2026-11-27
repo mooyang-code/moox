@@ -28,6 +28,26 @@ func TestAccountValidation(t *testing.T) {
 				account.ExecutionMode = exchange.ExecutionModeLive
 				account.Environment = exchange.AccountEnvironmentTestnet
 				account.CredentialSecretID = ""
+				account.Paper = nil
+				account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentTestnet}
+			}),
+			wantErr: true,
+		},
+		{
+			name: "LIVE rejects missing LiveConfig even when legacy fields are set",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.ExecutionMode = exchange.ExecutionModeLive
+				account.Environment = exchange.AccountEnvironmentTestnet
+				account.CredentialSecretID = "secret-1"
+				account.Paper = nil
+				account.Live = nil
+			}),
+			wantErr: true,
+		},
+		{
+			name: "PAPER rejects missing PaperConfig even when environment is PAPER",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.Paper = nil
 			}),
 			wantErr: true,
 		},
@@ -39,18 +59,78 @@ func TestAccountValidation(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "LIVE accepts TESTNET",
+			name: "PAPER accepts empty environment with PaperConfig",
 			account: mutate(validSpotAccount(), func(account *Account) {
-				account.ExecutionMode = exchange.ExecutionModeLive
-				account.Environment = exchange.AccountEnvironmentTestnet
+				account.Environment = exchange.AccountEnvironmentUnspecified
 			}),
 		},
 		{
-			name: "LIVE accepts PRODUCTION",
+			name: "PAPER rejects nonpositive initial balance",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.Paper = &PaperConfig{InitialBalance: shared.Zero(), OrderRetentionDays: DefaultOrderRetentionDays}
+			}),
+			wantErr: true,
+		},
+		{
+			name: "PAPER rejects invalid slippage",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.Paper = &PaperConfig{
+					InitialBalance: shared.MustDecimal("100"), SlippageBPS: shared.MustDecimal("10000"),
+					OrderRetentionDays: DefaultOrderRetentionDays,
+				}
+			}),
+			wantErr: true,
+		},
+		{
+			name: "rejects both Live and Paper configs",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
+			}),
+			wantErr: true,
+		},
+		{
+			name: "LIVE rejects PaperConfig",
 			account: mutate(validSpotAccount(), func(account *Account) {
 				account.ExecutionMode = exchange.ExecutionModeLive
+			}),
+			wantErr: true,
+		},
+		{
+			name: "PAPER rejects LiveConfig",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.Paper = nil
+				account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
+			}),
+			wantErr: true,
+		},
+		{
+			name: "LIVE rejects mismatched Environment",
+			account: mutate(validLiveAccount(exchange.AccountEnvironmentTestnet), func(account *Account) {
 				account.Environment = exchange.AccountEnvironmentProduction
 			}),
+			wantErr: true,
+		},
+		{
+			name: "LIVE rejects mismatched CredentialSecretID",
+			account: mutate(validLiveAccount(exchange.AccountEnvironmentTestnet), func(account *Account) {
+				account.CredentialSecretID = "secret-other"
+			}),
+			wantErr: true,
+		},
+		{
+			name: "LIVE accepts LiveConfig with empty legacy fields",
+			account: mutate(validLiveAccount(exchange.AccountEnvironmentProduction), func(account *Account) {
+				account.Environment = exchange.AccountEnvironmentUnspecified
+				account.CredentialSecretID = ""
+			}),
+		},
+		{
+			name:    "LIVE accepts TESTNET",
+			account: validLiveAccount(exchange.AccountEnvironmentTestnet),
+		},
+		{
+			name:    "LIVE accepts PRODUCTION",
+			account: validLiveAccount(exchange.AccountEnvironmentProduction),
 		},
 		{
 			name: "SPOT rejects margin mode",
@@ -144,10 +224,27 @@ func validSpotAccount() Account {
 		ExecutionMode:      exchange.ExecutionModePaper,
 		Environment:        exchange.AccountEnvironmentPaper,
 		CredentialSecretID: "secret-1",
-		SettlementAsset:    "USDT",
-		Status:             exchange.AccountStatusEnabled,
-		Ready:              true,
+		Paper: &PaperConfig{
+			InitialBalance:     shared.MustDecimal("100000"),
+			MakerFeeRate:       shared.Zero(),
+			TakerFeeRate:       shared.Zero(),
+			SlippageBPS:        shared.Zero(),
+			OrderRetentionDays: DefaultOrderRetentionDays,
+		},
+		SettlementAsset: "USDT",
+		Status:          exchange.AccountStatusEnabled,
+		Ready:           true,
 	}
+}
+
+func validLiveAccount(env exchange.AccountEnvironment) Account {
+	account := validSpotAccount()
+	account.ExecutionMode = exchange.ExecutionModeLive
+	account.Environment = env
+	account.CredentialSecretID = "secret-1"
+	account.Paper = nil
+	account.Live = &LiveConfig{Environment: env, CredentialSecretID: "secret-1"}
+	return account
 }
 
 func validSwapAccount() Account {

@@ -25,7 +25,6 @@ type Options struct {
 // future adapters to provide broker state without opening a socket.
 type StateSource interface {
 	StreamInfo(stream string, opts ...nats.JSOpt) (*nats.StreamInfo, error)
-	StreamsInfo(opts ...nats.JSOpt) <-chan *nats.StreamInfo
 	Consumers(stream string, opts ...nats.JSOpt) <-chan *nats.ConsumerInfo
 	ConsumersInfo(stream string, opts ...nats.JSOpt) <-chan *nats.ConsumerInfo
 	ConsumerInfo(stream, consumer string, opts ...nats.JSOpt) (*nats.ConsumerInfo, error)
@@ -189,24 +188,16 @@ func (s *Service) statusErr() error {
 	return nil
 }
 func (s *Service) streams(ctx context.Context) ([]*nats.StreamInfo, error) {
-	out := []*nats.StreamInfo{}
-	if s.cfg != nil {
-		for _, spec := range s.cfg.Streams {
-			info, err := s.js.StreamInfo(spec.Name, nats.Context(ctx))
-			if err != nil {
-				return nil, fmt.Errorf("stream %q not found", spec.Name)
-			}
-			if info == nil {
-				return nil, fmt.Errorf("stream %q info is empty", spec.Name)
-			}
-			out = append(out, info)
+	out := make([]*nats.StreamInfo, 0, len(s.cfg.Streams))
+	for _, spec := range s.cfg.Streams {
+		info, err := s.js.StreamInfo(spec.Name, nats.Context(ctx))
+		if err != nil {
+			return nil, fmt.Errorf("stream %q not found", spec.Name)
 		}
-		return out, nil
-	}
-	for info := range s.js.StreamsInfo(nats.Context(ctx)) {
-		if info != nil {
-			out = append(out, info)
+		if info == nil {
+			return nil, fmt.Errorf("stream %q info is empty", spec.Name)
 		}
+		out = append(out, info)
 	}
 	return out, nil
 }
@@ -231,21 +222,22 @@ func consumerInfo(info *nats.ConsumerInfo) *eventbusgen.ConsumerInfo {
 func retOK() *commonpb.RetInfo { return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "ok"} }
 func retErr(err error) *commonpb.RetInfo {
 	code := commonpb.ErrorCode_INNER_ERR
-	message := strings.ToLower(sanitize(err))
+	sanitized := sanitize(err)
+	message := strings.ToLower(sanitized)
 	if strings.Contains(message, "not found") {
 		code = commonpb.ErrorCode_NOT_FOUND
 	}
 	if strings.Contains(message, "required") || strings.Contains(message, "invalid") {
 		code = commonpb.ErrorCode_INVALID_PARAM
 	}
-	return &commonpb.RetInfo{Code: code, Msg: sanitize(err)}
+	return &commonpb.RetInfo{Code: code, Msg: sanitized}
 }
 func sanitize(err error) string {
 	if err == nil {
 		return ""
 	}
 	msg := strings.ToLower(err.Error())
-	for _, token := range []string{"password", "secret", "credential", "store_dir", "/"} {
+	for _, token := range []string{"password", "secret", "credential", "store_dir"} {
 		if strings.Contains(msg, token) {
 			return "eventbus operation failed"
 		}

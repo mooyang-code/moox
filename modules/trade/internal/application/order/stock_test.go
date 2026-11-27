@@ -154,13 +154,14 @@ func TestStockBuyCapacityCoversMinimumCommission(t *testing.T) {
 
 // T+1：模拟盘卖单的资金检查在写事务里按余额表算，当日买入的部分要扣掉，手工卖单也卖不了当天买的。
 func TestPaperFundsSubtractTodayBuysForStockSell(t *testing.T) {
+	now := time.Date(2026, 11, 6, 2, 0, 0, 0, time.UTC) // 上海 10:00
 	for _, tc := range []struct {
 		name     string
 		tradedAt time.Time
 		wantErr  bool
 	}{
-		{"当日买入不能卖", time.Now(), true},
-		{"昨天买入可以卖", exchange.T1Since(time.Now()).Add(-time.Hour), false},
+		{"当日买入不能卖", now.Add(-15 * time.Minute), true},
+		{"昨天买入可以卖", exchange.T1Since(now).Add(-time.Hour), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
@@ -205,7 +206,7 @@ func TestPaperFundsSubtractTodayBuysForStockSell(t *testing.T) {
 				ReservedAsset: "600519.XSHG", ReservedQuantity: shared.MustDecimal("100"),
 			}
 			err = db.Transaction(context.Background(), func(tx *store.Tx) error {
-				return checkPaperFunds(tx, validation, shared.Zero(), validation.ReservedQuantity, "", "")
+				return checkPaperFunds(tx, validation, shared.Zero(), validation.ReservedQuantity, "", "", now)
 			})
 			if tc.wantErr {
 				require.ErrorIs(t, err, ErrInsufficientFunds)
@@ -218,4 +219,84 @@ func TestPaperFundsSubtractTodayBuysForStockSell(t *testing.T) {
 			require.Equal(t, "998994.99", balances.Totals["CNY"].String())
 		})
 	}
+}
+
+// A 股模拟盘的 Capacity 与 Place 计算 T+1 当日买入锁定时必须使用注入时钟 s.Now，而不是系统时钟 time.Now()。
+func TestStockPaperT1UsesInjectedClock(t *testing.T) {
+	day1 := time.Date(2020, 6, 1, 2, 0, 0, 0, time.UTC) // 上海 2020-06-01 10:00
+	day2 := day1.Add(24 * time.Hour)                    // 上海 2020-06-02 10:00
+	current := day1
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+			BaseAsset: "600519.XSHG", QuoteAsset: "CNY", SettlementAsset: "CNY",
+			ExchangeQuantityStep: "100", MinExchangeQuantity: "100", PriceTick: "0.01", Status: "TRADING",
+		}); err != nil {
+			return err
+		}
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "stock-1", Name: "A 股", Exchange: "ashare", Markets: []string{"equity"},
+			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "CNY", Status: "ENABLED",
+			PaperConfig: &store.PaperAccountConfigRecord{SpaceID: "space-1", TradingAccountID: "stock-1",
+				InitialBalance: "1000000", MakerFeeRate: "0.00025", TakerFeeRate: "0.00025", SlippageBPS: "0"},
+		})
+	}))
+	_, err = db.GetPaperBalanceSnapshot(context.Background(), "space-1", "stock-1")
+	require.NoError(t, err)
+	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", TradingAccountID: "stock-1", OrderID: "bought", ClientOrderID: "bought", ExchangeOrderID: "bought",
+			Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+			OrderType: "MARKET", Side: "BUY", Quantity: "100", FilledQuantity: "0", ReferencePrice: "10", State: "OPEN",
+			OwnerType: "EXTERNAL", OwnerID: "external-1", Version: 1,
+		}); err != nil {
+			return err
+		}
+		_, err := tx.InsertFill(store.FillRecord{
+			SpaceID: "space-1", FillID: "fill-1", ExchangeTradeID: "trade-1", OrderID: "bought", ExchangeOrderID: "bought",
+			TradingAccountID: "stock-1", Exchange: "ashare", MarketType: "equity", InstrumentID: "600519.XSHG",
+			ExchangeSymbol: "600519.XSHG", Side: "BUY", Price: "10", Quantity: "100", Fee: "5.01", FeeAsset: "CNY",
+			SettlementAsset: "CNY", RealizedPnL: "0", TradedAt: day1.Add(-10 * time.Minute).UnixMilli(),
+		})
+		return err
+	}))
+
+	adapter := &stockQuoteAdapter{quote: normalQuote(day1)}
+	svc := &Service{
+		Store:    db,
+		Adapters: errorBoundarySource{adapter: adapter},
+		Now:      func() time.Time { return current },
+		Validator: Validator{
+			Accounts:        accountEligibilityStub{account: stockAccount("100")},
+			Instruments:     instrumentSourceStub{instrument: stockInstrumentForOrder()},
+			Now:             func() time.Time { return current },
+			MaxReferenceAge: 10 * time.Second,
+			Quotes:          stockQuotes{adapter: adapter},
+		},
+	}
+
+	// 同日（day1，尽管远早于系统真实时间）：按注入时钟仍属当日买入，可卖容量为 0 且 Place 报资金不足。
+	spec := stockSpec(exchange.SideSell, "100", "10", day1)
+	spec.Owner = orderdomain.OrderOwner{Type: orderdomain.OwnerExternal, OwnerID: "ext-1"}
+	capDay1, err := svc.Capacity(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.True(t, capDay1.IsZero(), "day1 当日买入应被 T+1 锁定，实际可卖=%s", capDay1)
+	_, err = svc.Place(context.Background(), "space-1", spec)
+	require.ErrorIs(t, err, ErrInsufficientFunds)
+
+	// 推进注入时钟到次日（day2）：T+1 解锁，可卖 100 股且 Place 成功。
+	current = day2
+	adapter.quote = normalQuote(day2)
+	specDay2 := stockSpec(exchange.SideSell, "100", "10", day2)
+	specDay2.ClientOrderID = "stock-sell-day2"
+	specDay2.Owner = orderdomain.OrderOwner{Type: orderdomain.OwnerExternal, OwnerID: "ext-2"}
+	capDay2, err := svc.Capacity(context.Background(), "space-1", specDay2)
+	require.NoError(t, err)
+	require.Equal(t, "100", capDay2.String())
+	_, err = svc.Place(context.Background(), "space-1", specDay2)
+	require.NoError(t, err)
 }

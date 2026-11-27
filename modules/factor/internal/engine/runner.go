@@ -50,8 +50,8 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 	// periodTime 是轴上的周期：日志、指标与运行摘要按真实时间输出。
 	axis, axisErr := periodclock.AxisFor(plan.Set.SpaceID, plan.Set.Freq)
 	shown := periodclock.FormatPeriod(plan.Set.SpaceID, plan.Set.Freq, periodTime)
-	r.health.StartRunner(plan.Set.TaskID, started)
-	defer r.health.EndRunner(plan.Set.TaskID)
+	runHandle := r.health.StartRunner(plan.Set.TaskID, started)
+	defer r.health.EndRunner(runHandle)
 	log.InfoContextf(ctx, "factor_period_start task_id=%s period_time=%s mode=%d", plan.Set.TaskID, shown, plan.Mode)
 	outcome, err := r.inner.Run(ctx, plan)
 	taskID := plan.Set.TaskID

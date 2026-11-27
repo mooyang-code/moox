@@ -66,6 +66,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import { fetchArchiveRecentRows, type ArchiveRecentColumn, type ArchiveRecentRowsRsp } from "@/api/archive";
 import { listSubjects } from "@/api/storage/metadata";
 import type { Subject } from "@/api/storage/types";
@@ -144,7 +145,7 @@ async function load(before: string) {
     if (!token.isLatest()) return;
     result.value = rsp;
   } catch (cause) {
-    if (!token.isLatest()) return;
+    if (!token.isLatest() || cause instanceof AuthSessionExpiredError) return;
     error.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
   } finally {
     if (token.isLatest()) loading.value = false;

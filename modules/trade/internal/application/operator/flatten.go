@@ -342,7 +342,7 @@ func (s *Service) FlattenLogicalAccount(
 	}
 	// 这一轮执行的起点：运行中的动作被工作线程反复恢复时沿用原来的起点；从 FAILED、PARTIAL 重新进入运行（同一个动作号重试）、
 	// 或刚创建时记现在（精确到秒，操作记录的创建时间只到秒）。
-	attemptStart := time.Now().Truncate(time.Second).UnixMilli()
+	attemptStart := s.clock().Truncate(time.Second).UnixMilli()
 	if resuming {
 		if previous.AttemptStartedAt > 0 {
 			attemptStart = previous.AttemptStartedAt
@@ -491,11 +491,7 @@ func (s *Service) clock() time.Time {
 // roundOlderThan 判断这一轮执行（从 AttemptStartedAt 起）是否已经超过期限：同一个动作号在 FAILED、PARTIAL 之后重试要重新计时，
 // 不能按动作创建时间算（创建很久之后的重试一次只跑一轮就记 PARTIAL）。
 func (s *Service) roundOlderThan(result FlattenResult, age time.Duration) bool {
-	now := time.Now()
-	if s.Now != nil {
-		now = s.Now()
-	}
-	return now.Sub(time.UnixMilli(result.AttemptStartedAt)) >= age
+	return s.clock().Sub(time.UnixMilli(result.AttemptStartedAt)) >= age
 }
 
 // flattenLockWait 是清仓等组合账户锁的时长。锁是轮询抢占，目标执行器一整轮都持锁，太短实盘下容易报“正忙”。

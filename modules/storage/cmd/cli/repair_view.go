@@ -235,7 +235,11 @@ func purgeRepairViewIndexes(root, engine string, indexIDs ...string) ([]string, 
 	for id := range seen {
 		switch strings.ToLower(strings.TrimSpace(engine)) {
 		case "duckdb":
-			paths = append(paths, filepath.Join(root, "duckdb", id+".duckdb"), filepath.Join(root, "duckdb", id+".duckdb.wal"))
+			paths = append(paths,
+				filepath.Join(root, "duckdb", id+".duckdb"),
+				filepath.Join(root, "duckdb", id+".duckdb.wal"),
+				filepath.Join(root, "duckdb", id+".duckdb.tmp"),
+			)
 		case "bleve":
 			paths = append(paths, filepath.Join(root, "bleve", id))
 		default:

@@ -279,3 +279,12 @@ func TestFlagDefaultsDoNotOverrideData(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"order_type":"ORDER_TYPE_MARKET","reason":"默认原因"}`, string(gateway.body), "显式传的参数照常优先")
 }
+
+func TestMonitorArrivalTaskIDFlagDescribesFactorTask(t *testing.T) {
+	spec := specByPath(t, "monitor", "arrival")
+	cmd := buildRPCCommand(spec)
+	flag := cmd.Flags().Lookup("task-id")
+	require.NotNil(t, flag)
+	assert.Contains(t, flag.Usage, "因子任务 ID")
+	assert.NotContains(t, flag.Usage, "采集任务")
+}

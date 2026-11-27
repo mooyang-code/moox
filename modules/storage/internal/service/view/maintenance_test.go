@@ -334,7 +334,11 @@ func TestMaintenanceFollowsDatasetStatus(t *testing.T) {
 	if first == nil || first.queryState().active == "" {
 		t.Fatal("启用的数据集应当挂接")
 	}
-	first.revision.Store(5)
+	firstRev := first.revision.Load()
+	if firstRev == 0 || firstRev&1 != 0 {
+		t.Fatalf("新建运行时应以非零偶数修订号初始化，实际=%d", firstRev)
+	}
+	first.revision.Store(6)
 
 	disabled := recordSpec("space", "prices")
 	disabled.Status = "disabled"
@@ -356,8 +360,8 @@ func TestMaintenanceFollowsDatasetStatus(t *testing.T) {
 	if again == nil || again == first || again.queryState().active == "" || engine.prepares != 0 {
 		t.Fatalf("重新启用后应挂回、不重建：prepares=%d", engine.prepares)
 	}
-	if again.revision.Load() != 0 {
-		t.Fatal("新的运行时不应带着旧的修订号")
+	if againRev := again.revision.Load(); againRev == 0 || againRev&1 != 0 || againRev == 6 || againRev <= firstRev {
+		t.Fatalf("新的运行时应有新的非零偶数单调修订号，first=%d again=%d", firstRev, againRev)
 	}
 
 	if err := svc.maintainOnce(context.Background(), MaintenanceOptions{Metadata: &testMetadata{}}); err != nil {

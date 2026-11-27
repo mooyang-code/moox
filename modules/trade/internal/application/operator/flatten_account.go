@@ -107,13 +107,15 @@ func (s *Service) flattenAccount(
 		// 这些加起来超过本账户的预算就不睡了，结束这一轮。必须先睡再查名单：睡眠期间解除禁止，睡醒后不能再下一笔。
 		if until := result.pacingUntil; attempt > 0 && !until.IsZero() {
 			result.pacingUntil = time.Time{}
-			if until.Add(s.retryWait()).Add(flattenNewOrderReserve).After(deadline) {
-				break
-			}
-			if err := sleepUntil(ctx, until); err != nil {
-				result.Error = err.Error()
-				result.cause = errors.Join(result.cause, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_wait", Err: err})
-				break
+			if wait := until.Sub(s.clock()); wait > 0 {
+				if wait+s.retryWait()+flattenNewOrderReserve > time.Until(deadline) {
+					break
+				}
+				if err := sleepDuration(ctx, wait); err != nil {
+					result.Error = err.Error()
+					result.cause = errors.Join(result.cause, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_wait", Err: err})
+					break
+				}
 			}
 		}
 		if attempt > 0 && s.stopIfUnblocked(ctx, command, scope, tradingAccountID, &result) {
@@ -146,7 +148,7 @@ func (s *Service) flattenAccount(
 		result.quotes = nil
 		result.pacedOnly = false
 		reasons := make(map[string]flattenReason)
-		canOrder, sessionReason := execution.CanOrder(s.Exchanges, account.Exchange, time.Now())
+		canOrder, sessionReason := execution.CanOrder(s.Exchanges, account.Exchange, s.clock())
 		switch {
 		case len(account.Markets) == 0:
 			result.addError(flattenFinal{errors.New("账户没有开通任何市场")})
@@ -396,9 +398,8 @@ func (s *Service) waitFlattenRetry(ctx context.Context) error {
 	}
 }
 
-// sleepUntil 睡到指定时间，ctx 结束时提前返回。
-func sleepUntil(ctx context.Context, until time.Time) error {
-	wait := time.Until(until)
+// sleepDuration 睡眠指定时长，ctx 结束时提前返回。
+func sleepDuration(ctx context.Context, wait time.Duration) error {
 	if wait <= 0 {
 		return nil
 	}

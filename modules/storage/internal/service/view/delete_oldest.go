@@ -169,10 +169,9 @@ func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldest
 			break
 		}
 		lockedAt := time.Now()
+		endWrite := target.runtime.beginEngineWrite()
 		n, err := target.deleter.DeleteOldestRows(ctx, target.indexID, cuts)
-		if err == nil && n > 0 {
-			target.runtime.revision.Add(1)
-		}
+		endWrite()
 		held := time.Since(lockedAt)
 		release()
 		if err != nil {
@@ -198,10 +197,9 @@ func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldest
 	if err != nil {
 		return deleted, errors.Join(roundErr, err)
 	}
+	endWrite := target.runtime.beginEngineWrite()
 	from, err := target.deleter.FinishOldestRowsDelete(finishCtx, target.indexID, bars)
-	if err == nil {
-		target.runtime.revision.Add(1)
-	}
+	endWrite()
 	release()
 	if err != nil {
 		return deleted, errors.Join(roundErr, err)

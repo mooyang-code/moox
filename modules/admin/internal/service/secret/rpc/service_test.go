@@ -8,9 +8,9 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestRetHelpers(t *testing.T) {
@@ -28,27 +28,54 @@ func TestRetHelpers(t *testing.T) {
 func TestIsMaskedSecret(t *testing.T) {
 	assert.False(t, isMaskedSecret(""))
 	assert.False(t, isMaskedSecret("plain-secret"))
+	assert.False(t, isMaskedSecret("pass*word*with*stars"))
+	assert.True(t, isMaskedSecret(maskChar))
 	assert.True(t, isMaskedSecret("ab"+maskChar+"cd"))
+	assert.True(t, isMaskedSecret(maskSecretValue("a")))
+	assert.True(t, isMaskedSecret(maskSecretValue("密钥值")))
+	assert.True(t, isMaskedSecret(maskSecretValue("我的测试密钥")))
+	assert.True(t, isMaskedSecret(maskSecretValue("🔑🔐🔒🔓🗝")))
 }
 
 func TestMaskSecretValue(t *testing.T) {
-	assert.Equal(t, "", maskSecretValue(""))
-	assert.Equal(t, maskChar+maskChar+maskChar, maskSecretValue("abc"))
-	assert.Equal(t, maskChar+maskChar+maskChar+maskChar, maskSecretValue("abcd"))
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "empty", input: "", want: ""},
+		{name: "single_ascii", input: "a", want: "•"},
+		{name: "len_3_ascii", input: "abc", want: "•••"},
+		{name: "len_4_ascii", input: "abcd", want: "••••"},
+		{name: "len_5_ascii", input: "abcde", want: "ab•de"},
+		{name: "len_8_ascii", input: "abcdefgh", want: "ab••••gh"},
+		{name: "len_9_ascii", input: "abcdefghi", want: "abcd•fghi"},
+		{name: "len_16_ascii", input: "abcdefghijklmnop", want: "abcd••••••••mnop"},
+		{name: "len_26_ascii", input: "abcdefghijklmnopqrstuvwxyz", want: "abcd••••••••••••••••••wxyz"},
+		{name: "short_chinese_3_runes", input: "密钥值", want: "•••"},
+		{name: "short_chinese_4_runes", input: "秘密口令", want: "••••"},
+		{name: "medium_chinese_6_runes", input: "我的测试密钥", want: "我的••密钥"},
+		{name: "medium_chinese_8_runes", input: "一二三四五六七八", want: "一二••••七八"},
+		{name: "long_chinese_10_runes", input: "这是一个很长的密钥串", want: "这是一个••的密钥串"},
+		{name: "emoji_4_runes", input: "🔑🔐🔒🔓", want: "••••"},
+		{name: "emoji_5_runes", input: "🔑🔐🔒🔓🗝", want: "🔑🔐•🔓🗝"},
+		{name: "emoji_10_runes", input: "🔑🔐🔒🔓🗝🛡⚔🧲💎🚀", want: "🔑🔐🔒🔓••⚔🧲💎🚀"},
+		{name: "mixed_utf8", input: "ak_中文🔑_1234", want: "ak_中•••1234"},
+	}
 
-	got := maskSecretValue("abcdefgh")
-	assert.True(t, strings.HasPrefix(got, "ab"))
-	assert.True(t, strings.HasSuffix(got, "gh"))
-	assert.Contains(t, got, maskChar)
-
-	long := maskSecretValue("abcdefghijklmnop")
-	assert.True(t, strings.HasPrefix(long, "abcd"))
-	assert.True(t, strings.HasSuffix(long, "mnop"))
-	assert.Contains(t, long, maskChar)
-
-	veryLong := maskSecretValue("abcdefghijklmnopqrstuvwxyz")
-	assert.True(t, strings.HasPrefix(veryLong, "abcd"))
-	assert.True(t, strings.HasSuffix(veryLong, "wxyz"))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := maskSecretValue(tc.input)
+			assert.Equal(t, tc.want, got)
+			assert.True(t, utf8.ValidString(got), "masked output must remain valid UTF-8")
+			assert.Equal(t, utf8.RuneCountInString(tc.input), utf8.RuneCountInString(got))
+			if tc.input != "" {
+				assert.True(t, isMaskedSecret(got))
+			} else {
+				assert.False(t, isMaskedSecret(got))
+			}
+		})
+	}
 }
 
 func TestCloudIsValidSecretCategory(t *testing.T) {

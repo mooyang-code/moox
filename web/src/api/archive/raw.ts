@@ -1,5 +1,9 @@
 import { gatewayURL } from "@/api/gateway";
+import { expireBrowserSession } from "@/api/admin/space-client";
+import type { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import type { ArchiveRecentRowsRsp } from "./types";
+
+export { saveBlob } from "@/utils/download";
 
 /**
  * 归档分区下载与最新数据走 Admin 的裸 HTTP（/api/admin/archive/PartitionDownload|RecentRows），由 Admin 转给归档执行器的数据端口。
@@ -29,9 +33,9 @@ const STATUS_TEXT: Record<number, string> = {
   504: "归档执行器响应超时"
 };
 
-async function rawError(response: Response): Promise<ArchiveRawError> {
-  // 401 是会话失效（鉴权层的响应体是 {ret_info:{code,msg}}），按状态码说明
-  if (response.status === 401) return new ArchiveRawError(STATUS_TEXT[401], 401);
+async function rawError(response: Response): Promise<ArchiveRawError | AuthSessionExpiredError> {
+  // 401 是会话失效（鉴权层的响应体是 {ret_info:{code,msg}}）：清登录态并跳回登录页
+  if (response.status === 401) return expireBrowserSession(STATUS_TEXT[401]);
   let message = "";
   try {
     const body = JSON.parse(await response.text()) as { msg?: unknown; ret_info?: { msg?: unknown } };
@@ -104,12 +108,19 @@ export async function downloadArchivePartition(
   const total = encoding === "identity" ? Number(response.headers.get("Content-Length") || 0) : 0;
   const chunks: BlobPart[] = [];
   let received = 0;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const onAbort = () => {
+    void reader?.cancel().catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    const reader = response.body?.getReader();
+    reader = response.body?.getReader();
     if (!reader) throw new Error("浏览器不支持流式读取");
     for (;;) {
+      if (signal?.aborted) throw new DOMException("下载已取消", "AbortError");
       const { done, value } = await reader.read();
       if (done) break;
+      if (signal?.aborted) throw new DOMException("下载已取消", "AbortError");
       chunks.push(value);
       received += value.byteLength;
       onProgress?.(received, total);
@@ -117,23 +128,16 @@ export async function downloadArchivePartition(
   } catch (cause) {
     if (signal?.aborted) throw cause;
     throw new ArchiveRawError("下载不完整：连接中断，请重试", 0);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    if (signal?.aborted) {
+      void (reader ? reader.cancel() : response.body?.cancel())?.catch(() => undefined);
+    }
   }
+  if (signal?.aborted) throw new DOMException("下载已取消", "AbortError");
   if (total > 0 && received !== total) throw new ArchiveRawError("下载不完整：收到的字节数与文件大小不符，请重试", 0);
   return {
     blob: new Blob(chunks, { type: response.headers.get("Content-Type") || "application/gzip" }),
     fileName: dispositionFileName(response.headers.get("Content-Disposition")) || fallbackName
   };
-}
-
-/** 把下载好的文件交给浏览器保存。 */
-export function saveBlob(blob: Blob, fileName: string) {
-  const href = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = href;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  // 留一点时间给浏览器开始保存再释放
-  setTimeout(() => URL.revokeObjectURL(href), 60_000);
 }

@@ -109,6 +109,22 @@ func objectLabel(object *monitorpb.HealthObject) string {
 	return strings.Join(parts, "/")
 }
 
+type datasetAlertKey struct {
+	spaceID   string
+	producer  string
+	datasetID string
+	freq      string
+}
+
+func newDatasetAlertKey(spaceID, producer, datasetID, freq string) datasetAlertKey {
+	return datasetAlertKey{
+		spaceID:   spaceID,
+		producer:  producer,
+		datasetID: datasetID,
+		freq:      strings.ToLower(freq),
+	}
+}
+
 // BuildAlertsReport 把健康概览整理成需要处理的问题清单。不读取任何配置或凭据，也不输出主机地址。
 func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 	report := AlertsReport{Conclusion: core.ConclusionHealthy, Items: []AlertItem{}}
@@ -121,7 +137,7 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 	report.SystemState = overview.GetSystem().GetHealth()
 	report.AlertCount = overview.GetSummary().GetAlertCount()
 
-	alerted := map[string]bool{}
+	alerted := map[datasetAlertKey]bool{}
 	for _, alert := range overview.GetAlerts() {
 		reason := alert.GetReason()
 		if alert.GetRecovering() {
@@ -133,13 +149,13 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 			Hint: alertHint(alert.GetReason(), alert.GetRawError()),
 		})
 		if object := alert.GetObject(); object != nil && object.GetType() == "dataset" {
-			alerted[object.GetDatasetId()+"/"+object.GetFreq()] = true
+			alerted[newDatasetAlertKey(object.GetSpaceId(), object.GetProducer(), object.GetDatasetId(), object.GetFreq())] = true
 		}
 	}
 	for _, stage := range overview.GetPipeline() {
 		for _, dataset := range stage.GetDatasets() {
 			severity := statusSeverity(dataset.GetStatus())
-			if severity == "" || alerted[dataset.GetDatasetId()+"/"+dataset.GetFreq()] {
+			if severity == "" || alerted[newDatasetAlertKey(dataset.GetSpaceId(), dataset.GetProducer(), dataset.GetDatasetId(), dataset.GetFreq())] {
 				continue
 			}
 			if dataset.GetReason() == datasetWarmingReason {

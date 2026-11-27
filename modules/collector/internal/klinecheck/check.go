@@ -58,6 +58,8 @@ type Checker struct {
 	Absences AbsenceSource
 	// Fields 是行情源目录里可用的附加字段：深度检查的必需字段不含它们（来源没有值时这一列本来就是空的）。
 	Fields marketdata.FieldOffers
+
+	timelines timelineCache
 }
 
 // Request 是一次检查的范围。From 含、To 不含（K 线开始时间）。
@@ -120,10 +122,11 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 	if strings.TrimSpace(request.SpaceID) == "" || request.From.IsZero() || request.To.IsZero() || !request.From.Before(request.To) {
 		return nil, fmt.Errorf("space_id and a non-empty time range are required")
 	}
-	timeline, err := loadTimeline(ctx, c.Timeline, request.SpaceID)
+	cached, err := c.timelines.Load(ctx, c.Timeline, request.SpaceID)
 	if err != nil {
 		return nil, err
 	}
+	timeline := cloneTimeline(cached)
 	extendEarliestSegments(timeline, request.From)
 	var jobs []checkJob
 	var wanted map[string]bool

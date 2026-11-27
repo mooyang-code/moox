@@ -34,9 +34,10 @@ type catalogMetadataFake struct {
 	failAt      string
 	failCleanup bool
 	deleteOrder []string
-	// createColumns 是随 CreateDataset 一起写入的列；upsertColumns 是单独补列的次数。
-	createColumns []string
-	upsertColumns int
+	// createColumns 是随 CreateDataset 一起写入的列；upsertColumns 是单独补列的次数；updateDatasets 是更新数据集的次数。
+	createColumns  []string
+	upsertColumns  int
+	updateDatasets int
 	// datasetColumns 是各数据集的列，查询索引的列按它推出（和 Storage 一样）。
 	datasetColumns map[string][]*storagepb.DatasetColumn
 	// buildingPolls 是 GetViewState 先回答"索引还在建"的次数。
@@ -82,6 +83,16 @@ func (f *catalogMetadataFake) CreateDataset(_ context.Context, req *storagepb.Cr
 	f.datasetColumns[dataset.GetDatasetId()] = append([]*storagepb.DatasetColumn(nil), req.GetColumns()...)
 	f.datasets[dataset.GetDatasetId()] = dataset
 	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
+}
+
+func (f *catalogMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
+	f.updateDatasets++
+	if err := f.fail("update_dataset"); err != nil {
+		return nil, err
+	}
+	dataset := proto.Clone(req.GetDataset()).(*storagepb.Dataset)
+	f.datasets[dataset.GetDatasetId()] = dataset
+	return &storagepb.UpdateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
 
 func (f *catalogMetadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq, _ ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
@@ -316,21 +327,6 @@ func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m"), `freq is "1mo", not 5m`)
 }
 
-// 已经 Ready 的任务复核列时 storage-view 不可达（恢复、重建期间同理）：保持 Ready、只记日志；
-// 还没 Ready 的任务照常报错，等下一轮准备。
-func TestPrepareTargetKeepsReadyTaskWhenViewStateUnavailable(t *testing.T) {
-	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("")
-	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
-	metadata.failAt = "view_state"
-
-	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
-	require.ErrorContains(t, err, "view_state failed", "还没 Ready 的任务要等列建好")
-
-	rule.PrepareState = domain.PrepareStateReady
-	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
-	require.NotEmpty(t, metadata.datasets, "目标数据集保留")
-}
-
 // 逐级合成：源是上一级合成结果、没有数据来源时，目标沿用它记下的原始 K 线来源，因子任务才能以它为源。
 func TestPrepareTargetInheritsSourceDataSourceForChainedResample(t *testing.T) {
 	metadata, catalog, rule, params, _, subjects := newPrepareTargetFixture("")
@@ -339,4 +335,73 @@ func TestPrepareTargetInheritsSourceDataSourceForChainedResample(t *testing.T) {
 	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
 	ids := taskresult.ResultIDs(rule.TaskID)
 	require.Equal(t, "binance", metadata.datasets[ids.DatasetID].GetAttributes()["source_data_source_id"])
+}
+
+// 交易时段市场（如 A 股）的重采样目标数据集必须写入 calendar 属性，防止下游策略回退到 crypto_24x7 日历；
+// 连续交易市场（crypto）不写 calendar 属性；
+// 已有目标数据集仅缺失 calendar 时原地 UpdateDataset 回填成功，calendar 非空且不匹配时按血缘冲突拒绝。
+func TestPrepareTargetWritesCalendarAttributeForSessionMarkets(t *testing.T) {
+	// 公共逻辑 taskresult.SessionAttributes 对所有已登记交易时段市场均输出对应日历。
+	for _, tc := range []struct {
+		spaceID      string
+		wantCalendar string
+		wantAlign    string
+	}{
+		{spaceID: "stockcn", wantCalendar: "cn_stock", wantAlign: "session"},
+		{spaceID: "stockhk", wantCalendar: "hk_stock", wantAlign: "session"},
+		{spaceID: "stockus", wantCalendar: "us_stock", wantAlign: "session"},
+		{spaceID: "crypto", wantCalendar: "", wantAlign: ""},
+	} {
+		attrs, alignment, err := taskresult.SessionAttributes(tc.spaceID)
+		require.NoError(t, err, tc.spaceID)
+		require.Equal(t, tc.wantAlign, alignment, tc.spaceID)
+		require.Equal(t, tc.wantCalendar, attrs["calendar"], tc.spaceID)
+	}
+
+	// PrepareTarget 端到端校验（测试包登记了 stockcn 与 crypto 的标的规则）。
+	cases := []struct {
+		spaceID      string
+		wantCalendar string
+		wantAlign    string
+	}{
+		{spaceID: "stockcn", wantCalendar: "cn_stock", wantAlign: "session"},
+		{spaceID: "crypto", wantCalendar: "", wantAlign: "epoch_utc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.spaceID, func(t *testing.T) {
+			metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("")
+			rule.SpaceID = tc.spaceID
+			params.Alignment = tc.wantAlign
+			params.MarketType = "equity"
+			if tc.spaceID == "crypto" {
+				params.MarketType = "spot"
+			}
+			source.DataSourceID = tc.spaceID
+
+			require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
+			ids := taskresult.ResultIDs(rule.TaskID)
+			dataset := metadata.datasets[ids.DatasetID]
+			require.NotNil(t, dataset)
+			require.Equal(t, tc.wantAlign, dataset.GetAlignment())
+			require.Zero(t, metadata.updateDatasets, "新建数据集时无需 UpdateDataset")
+			if tc.wantCalendar == "" {
+				_, exists := dataset.GetAttributes()["calendar"]
+				require.False(t, exists, "连续交易市场不写 calendar 属性")
+			} else {
+				require.Equal(t, tc.wantCalendar, dataset.GetAttributes()["calendar"])
+
+				// 1. 已有目标数据集仅缺失 calendar（存量历史数据集）：自动调用 UpdateDataset 原地回填成功。
+				delete(dataset.Attributes, "calendar")
+				require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
+				require.Equal(t, 1, metadata.updateDatasets, "历史缺失 calendar 应原地 UpdateDataset 回填")
+				require.Equal(t, tc.wantCalendar, metadata.datasets[ids.DatasetID].GetAttributes()["calendar"])
+
+				// 2. 已有目标数据集 calendar 非空且不匹配（真实血缘冲突）：必须拒绝且不调用 UpdateDataset。
+				metadata.datasets[ids.DatasetID].Attributes["calendar"] = "hk_stock"
+				err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
+				require.ErrorContains(t, err, "immutable lineage attribute calendar")
+				require.Equal(t, 1, metadata.updateDatasets, "真实血缘冲突不得覆盖写入")
+			}
+		})
+	}
 }

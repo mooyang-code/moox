@@ -2,14 +2,18 @@ package klinecheck
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -648,4 +652,129 @@ func TestSeedChunksBeyondTheSourceLookbackAreTrimmed(t *testing.T) {
 	}
 	require.False(t, rows.missing["BTC-USDT"][base.Add(-14*time.Minute).Unix()])
 	require.False(t, rows.missing["BTC-USDT"][base.Add(-5*time.Minute).Unix()])
+}
+
+// 多作业失败重试原子性：一个补齐有多个作业且全部分块都已失败，若其中任一作业的状态尚未被 Tick 改完（仍为 running），
+// 绝不能先重试另一个已 failed 的作业；必须等全部失败作业落定后再在单事务内一起重试并标记 Retried，防止竞态与重复重试。
+func TestSeedMultiJobRetryWaitsUntilAllFailedJobsFinishAtomically(t *testing.T) {
+	b, invoker, rows, base := seedFixture(t, 2*time.Hour, 5)
+	rows.mu.Lock()
+	rows.missing["ETH-USDT"][base.Add(-6*time.Minute).Unix()] = true
+	rows.mu.Unlock()
+	b.Seed.SubjectsPerJob = 1 // 2 个标的拆成 2 个作业
+	invoker.fail = true
+	ctx := context.Background()
+
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	seed := seedOf(t, b)
+	require.Equal(t, store.SeedRunning, seed.Status)
+	require.Len(t, seed.JobIDs, 2, "2 个标的应拆成 2 个补齐作业")
+
+	// 让两个作业的分块全部跑完并失败；只给第 1 个作业写回 failed，模拟 Tick 尚未收尾第 2 个作业的竞态窗口。
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	b.Wait()
+	require.NoError(t, b.Store.SetJobStatus(ctx, seed.JobIDs[0], store.BackfillFailed, "1 chunks failed"))
+	status1, err := b.Status(ctx, seed.JobIDs[1])
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillRunning, status1.Job.Status, "第 2 个作业仍为 running")
+	require.Equal(t, 1, status1.Counts[store.BackfillFailed])
+
+	// 竞态触发：SeedTick 看到两个作业分块都失败了，但第 2 个作业仍是 running -> 必须整体回滚，第 1 个作业不能被提前重试。
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	status0, err := b.Status(ctx, seed.JobIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillFailed, status0.Job.Status, "部分作业未收尾时，已 failed 的作业绝不能被提前重置")
+	require.Equal(t, 1, status0.Counts[store.BackfillFailed])
+	require.False(t, seedOf(t, b).Retried, "未重试时 Retried 保持 false")
+
+	// 第 2 个作业也被 Tick 标记为 failed 后，并发调用多次 SeedTick：两个作业原子一起重置为 pending 且 Retried=true。
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = b.SeedTick(ctx, "crypto")
+		}()
+	}
+	wg.Wait()
+
+	seed = seedOf(t, b)
+	require.True(t, seed.Retried, "所有失败作业落定后原子置 Retried=true")
+	for _, jobID := range seed.JobIDs {
+		st, stErr := b.Status(ctx, jobID)
+		require.NoError(t, stErr)
+		require.Equal(t, store.BackfillPending, st.Job.Status)
+		require.Equal(t, 1, st.Counts[store.BackfillPending])
+	}
+
+	// 重试这一次后再次失败：不再二次重试，直接收尾为 SeedDone。
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	b.Wait()
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	seed = seedOf(t, b)
+	require.Equal(t, store.SeedDone, seed.Status)
+	require.Contains(t, seed.Note, "2 个分块失败（已重试）")
+}
+
+// 越界空分块（整块早于行情源回看上限、未调用执行端写入任何数据）不得误写 backfill_notices；
+// 只有真正执行并补写的分块才写 backfill_notices。
+func TestSeedOutOfLookbackChunkDoesNotWriteBackfillNotice(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = db.Close() })
+
+	const slot = 5 * time.Minute
+	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
+	base := now.Add(-2*time.Hour - 3*time.Minute)
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
+		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
+		Subjects: []string{"BTC-USDT"},
+	}}, nil)
+	require.NoError(t, err)
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: base})
+	require.NoError(t, err)
+	raw, err := json.Marshal(content)
+	require.NoError(t, err)
+	record, err := db.FetchPlans().Create(ctx, "crypto", string(raw), "{}")
+	require.NoError(t, err)
+	require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanApplied, "{}", "", appliedTimeline("crypto", string(raw))...))
+
+	rows := &fakeRows{missing: map[string]map[int64]bool{"BTC-USDT": {
+		base.Add(-25 * time.Minute).Unix(): true, // 整块越界
+		base.Add(-5 * time.Minute).Unix():  true, // 在回看窗口内，真实补写
+	}}}
+	checker := &Checker{Timeline: db.SeriesTimeline(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }}
+	invoker := &healingInvoker{rows: rows}
+	b := &Backfiller{
+		Checker: checker, Store: db.Backfill(), Routes: fakeRoutes{}, Invoker: invoker, BaseCtx: ctx, Now: func() time.Time { return now },
+		Functions: func(string) FunctionProvider { return fakeFunctions{} },
+		Seed: SeedOptions{
+			Enabled: true,
+			Depth:   func(context.Context, string, string, string) (time.Duration, error) { return 30 * time.Minute, nil },
+		},
+	}
+
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	// 拼完作业后回看窗口起点收窄到 base-10m，使 base-25m 那块整块越界。
+	window := base.Add(-10 * time.Minute)
+	lookback := b.now().Sub(window) + seedWindowMargin
+	b.Seed.Lookback = func(marketfetch.PlanMarket, string) (time.Duration, bool, error) { return lookback, true, nil }
+
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	b.Wait()
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+
+	require.Len(t, invoker.events, 1, "只调用执行端补写未越界的 1 块")
+	notices, err := db.Resample().UnsealedNotices(ctx, 100)
+	require.NoError(t, err)
+	require.Len(t, notices, 1, "越界空分块不得写 backfill_notices，只有真实补写的 1 块有通知")
+	require.Equal(t, base.Add(-5*time.Minute).UTC(), notices[0].Start.UTC())
 }

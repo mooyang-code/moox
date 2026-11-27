@@ -169,15 +169,80 @@ func TestEveryStrategyTableIsClassifiedForInstanceDeletion(t *testing.T) {
 			t.Errorf("表 %s 带 c_instance_id，不能登记为全局表", table)
 		}
 	}
-	statements := strings.Join(instanceScopedDeletes, "\n") + sqlDeleteViewsAgePassed
+	allDeletes := append(append([]string{}, instanceBatchedDeletes...), instanceFinalDeletes...)
+	statements := strings.Join(allDeletes, "\n") + "\n" + sqlDeleteViewsAgePassedBatch
 	for table := range withInstance {
-		if table != "t_strategy_instances" && !strings.Contains(statements, "DELETE FROM "+table+" ") {
+		if table != "t_strategy_instances" && !strings.Contains(statements, "DELETE FROM "+table) {
 			t.Errorf("表 %s 带 c_instance_id，但 DeleteInstance 没有删除它", table)
 		}
 	}
 	for table := range cleanedOtherwise {
 		if !strings.Contains(statements, "DELETE FROM "+table) {
 			t.Errorf("表 %s 应由 DeleteInstance 清理", table)
+		}
+	}
+}
+
+// DeleteInstance 分多批删除大明细子表（ready_events、result_items、results、replay_bars、age_passed），
+// 并在明细清完后用短事务删除实例主行；期间不动其他实例的记录。
+func TestDeleteInstanceDeletesDetailRowsInBatches(t *testing.T) {
+	oldBatch := deleteInstanceBatch
+	deleteInstanceBatch = 2
+	t.Cleanup(func() { deleteInstanceBatch = oldBatch })
+
+	ctx := context.Background()
+	repo := openTestStore(t)
+	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	seedInstanceRows(t, repo, "inst_batch", "ftask_batch", "dataset_factor_batch")
+	seedInstanceRows(t, repo, "inst_keep", "ftask_keep", "dataset_factor_keep")
+
+	at := testNow.Format(time.RFC3339)
+	for i := 2; i <= 5; i++ {
+		resID := fmt.Sprintf("res_inst_batch_%d", i)
+		if err := repo.db.Exec(`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_input_json, c_targets_json, c_summary_json)
+			VALUES (?, 'inst_batch', 'sess_inst_batch', ?, ?, 'ok', '{}', '[]', '{}')`, resID, i, i+1).Error; err != nil {
+			t.Fatal(err)
+		}
+		for j := 0; j < 2; j++ {
+			if err := repo.db.Exec(`INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_stage, c_ctime)
+				VALUES (?, 'r', ?, 'weighted', ?)`, resID, fmt.Sprintf("SYM-%d-%d", i, j), at).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := repo.db.Exec(`INSERT INTO t_strategy_ready_events (c_instance_id, c_session_id, c_dataset_id, c_bar_end_time, c_event_id, c_event_bytes)
+			VALUES ('inst_batch', 'sess_inst_batch', 'dataset_factor_batch', ?, 'evt', x'00')`, i).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.db.Exec(`INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json)
+			VALUES ('rep_inst_batch', ?, 'ok', '[]', '{}', '{}')`, i).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.db.Exec(`INSERT INTO t_strategy_age_passed (c_space_id, c_dataset_id, c_index_id, c_min_age_bars, c_market, c_subject_id)
+			VALUES ('space', 'dataset_factor_batch', 'idx', 10, 'spot', ?)`, fmt.Sprintf("SYM-%d", i)).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := repo.DeleteInstance(ctx, "inst_batch", "space", []string{"dataset_factor_batch"}); err != nil {
+		t.Fatal(err)
+	}
+	tables := tablesWithInstanceID(t, repo)
+	for table, count := range instanceRowCounts(t, repo, tables, "inst_batch") {
+		if count != 0 {
+			t.Errorf("分批删除后表 %s 还剩 %d 条记录", table, count)
+		}
+	}
+	if count := countRows(t, repo, `SELECT COUNT(*) FROM t_strategy_result_items WHERE c_result_id LIKE 'res_inst_batch%'`); count != 0 {
+		t.Errorf("分批删除后 t_strategy_result_items 还剩 %d 条记录", count)
+	}
+	if count := countRows(t, repo, `SELECT COUNT(*) FROM t_strategy_age_passed WHERE c_dataset_id = 'dataset_factor_batch'`); count != 0 {
+		t.Errorf("分批删除后 t_strategy_age_passed 还剩 %d 条记录", count)
+	}
+	for table, count := range instanceRowCounts(t, repo, tables, "inst_keep") {
+		if count == 0 {
+			t.Errorf("表 %s 里另一个实例的记录被误删", table)
 		}
 	}
 }

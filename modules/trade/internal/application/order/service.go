@@ -199,12 +199,12 @@ func (s *Service) Place(
 		}
 		if !validation.ReservedQuantity.IsZero() {
 			if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
-				if err := checkPaperFunds(tx, validation, marginAdjustment, validation.ReservedQuantity, "", ""); err != nil {
+				if err := checkPaperFunds(tx, validation, marginAdjustment, validation.ReservedQuantity, "", "", s.now()); err != nil {
 					return err
 				}
 				return tx.CreateOrder(record)
 			}
-			available, err := availableReservationFunds(tx, validation, marginAdjustment)
+			available, err := availableReservationFunds(tx, validation, marginAdjustment, s.now())
 			if err != nil {
 				return err
 			}
@@ -1252,7 +1252,7 @@ func (s *Service) prepareSubmit(
 				return err
 			}
 			if !required.IsZero() {
-				if err := checkPaperFunds(tx, validation, marginAdjustment, required, oldReservedAsset, oldRemaining); err != nil {
+				if err := checkPaperFunds(tx, validation, marginAdjustment, required, oldReservedAsset, oldRemaining, s.now()); err != nil {
 					return err
 				}
 			}

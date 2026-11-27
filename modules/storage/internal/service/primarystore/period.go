@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
@@ -28,7 +29,7 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 	ctx = s.requestContext(ctx)
 	scope := &pb.DatasetPeriodExpectation{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Frequency: req.GetFrequency()}
 	if err := validatePeriodDataset(ctx, scope); err != nil {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := validateSnapshotAlignment(ctx, req); err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -57,7 +58,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	}
 	ctx = s.requestContext(ctx)
 	if err := validatePeriodDataset(ctx, exp); err != nil {
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	rows := make([]*pb.RowFieldUpsert, 0, len(req.GetItems()))
 	for _, item := range req.GetItems() {
@@ -147,27 +148,31 @@ func validateSnapshotAlignment(ctx context.Context, req *pb.PrimaryRegisterSerie
 }
 
 // validatePeriodDataset 检查周期提交与快照登记的目标：数据集存在于请求快照、是时序数据且频率与声明一致。
+// 返回带 storeerr 类别的错误，由 retinfo.FromError 映射为准确的 INVALID_PARAM / NOT_FOUND / INNER_ERR。
 func validatePeriodDataset(ctx context.Context, expectation *pb.DatasetPeriodExpectation) error {
 	if expectation == nil || strings.TrimSpace(expectation.GetSpaceId()) == "" || strings.TrimSpace(expectation.GetDatasetId()) == "" {
-		return errors.New("period expectation requires space_id and dataset_id")
+		return storeerr.Invalidf("period expectation requires space_id and dataset_id")
 	}
 	snapshot := metadata.RequestSnapshotFromContext(ctx)
 	if snapshot == nil {
 		return errors.New("metadata cache snapshot is unavailable")
 	}
 	dataset, ok := snapshot.GetDataset(expectation.GetSpaceId(), expectation.GetDatasetId())
-	if !ok || dataset == nil || dataset.GetSpaceId() != expectation.GetSpaceId() || dataset.GetDatasetId() != expectation.GetDatasetId() {
-		return errors.New("period Dataset is not present in the request metadata snapshot")
+	if !ok || dataset == nil {
+		return storeerr.NotFoundf("period Dataset is not present in the request metadata snapshot")
+	}
+	if dataset.GetSpaceId() != expectation.GetSpaceId() || dataset.GetDatasetId() != expectation.GetDatasetId() {
+		return errors.New("period Dataset identity does not match the request metadata snapshot")
 	}
 	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
-		return errors.New("period Dataset must be time_series")
+		return storeerr.Invalidf("period Dataset must be time_series")
 	}
 	frequency := expectation.GetFrequency()
 	if !frequencypkg.IsCanonical(frequency) {
-		return errors.New("period frequency is invalid")
+		return storeerr.Invalidf("period frequency is invalid")
 	}
 	if dataset.GetFreq() != frequency {
-		return errors.New("period frequency does not match the Dataset declaration")
+		return storeerr.Invalidf("period frequency does not match the Dataset declaration")
 	}
 	return nil
 }

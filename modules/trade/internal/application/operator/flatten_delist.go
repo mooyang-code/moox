@@ -42,11 +42,7 @@ func (s *Service) pastDeadline(command FlattenCommand) bool {
 	if command.DeadlineAt <= 0 {
 		return false
 	}
-	now := time.Now()
-	if s.Now != nil {
-		now = s.Now()
-	}
-	return now.UnixMilli() >= command.DeadlineAt
+	return s.clock().UnixMilli() >= command.DeadlineAt
 }
 
 // errDelistDeadlinePassed：已过下架时间（截止时间），不再下单也不再提交待提交的子单，属终结原因。
@@ -224,7 +220,7 @@ func (s *Service) checkDelistAttempt(history delistHistory) error {
 	if history.unfilled >= flattenMaxUnfilled {
 		return flattenFinal{fmt.Errorf("下架清仓连续 %d 次限价单（滑点 3%%）一股都没成交，需要人工处理", history.unfilled)}
 	}
-	if interval := s.delistAttemptInterval(); interval > 0 && !history.lastFinishedAt.IsZero() && time.Since(history.lastFinishedAt) < interval {
+	if interval := s.delistAttemptInterval(); interval > 0 && !history.lastFinishedAt.IsZero() && s.clock().Sub(history.lastFinishedAt) < interval {
 		return delistPacingError{until: history.lastFinishedAt.Add(interval)}
 	}
 	return nil

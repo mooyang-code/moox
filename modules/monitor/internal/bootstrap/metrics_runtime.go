@@ -231,16 +231,8 @@ func metricsObservabilityRoute(
 		parsed := len(samples)
 		samples = monmetrics.FilterHealthSamples(samples)
 		filtered := parsed - len(samples)
-		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
-		if err != nil || duplicate {
-			return err
-		}
-		// 服务指标只保存最新值与目录（SQLite），不写 Storage 历史：Storage 故障不会卡住健康事实的入库。
-		if err := messageStore.TouchService(ctx, message, metricReport); err != nil {
-			runtime.recordObservabilityWriteFailure(reasonMetricsCatalog, err)
-			return err
-		}
-		duplicate, err = messageStore.CommitIngest(ctx, message, metricReport, samples)
+		// 服务指标只保存最新值与目录（SQLite），不写 Storage 历史：去重与服务心跳统一在单次 CommitIngest 事务内原子提交。
+		duplicate, err := messageStore.CommitIngest(ctx, message, metricReport, samples)
 		if err != nil || duplicate {
 			if err != nil {
 				runtime.recordObservabilityWriteFailure(reasonMetricsCatalog, err)

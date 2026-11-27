@@ -2,6 +2,7 @@ package fetchplan
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -213,4 +214,69 @@ func TestEnsureBackfillFunctionInCreatesTheRegionalFunction(t *testing.T) {
 	require.Equal(t, int64(8*64), function.ReservedMem)
 	require.Equal(t, 8, r.BackfillReservedConcurrency())
 	require.Equal(t, DefaultBackfillReservedConcurrency, (&PlanReconciler{}).BackfillReservedConcurrency())
+}
+
+// 慢云端操作等待在 backfillMu 锁外进行：一个地域的补采函数正在创建等待（可达 50s）时，
+// 同一空间里已就绪的其他地域必须立即返回，同一地域的并发调用也立即返回 pending，不得被 backfillMu 阻塞。
+func TestEnsureBackfillFunctionWaitDoesNotHoldBackfillMu(t *testing.T) {
+	h, r, nanjingName := backfillHarness(t)
+	r.Options.Markets = map[string][]string{"spot": {"ap-nanjing", "ap-guangzhou"}}
+	r.Deploy.Networks["ap-guangzhou"] = r.Deploy.Networks["ap-nanjing"]
+	r.opWaitMax = 5 * time.Second
+
+	// 先让 ap-nanjing 就绪。
+	got, err := r.EnsureBackfillFunctionIn(context.Background(), "spot", "ap-nanjing")
+	require.NoError(t, err)
+	require.Equal(t, nanjingName, got)
+
+	// 阻塞 ap-guangzhou 的 CreateFunction，并发触发慢创建等待。
+	guangzhouName := BackfillFunctionName("crypto", "spot", "ap-guangzhou")
+	release := blockWrites(t, h, "CreateFunction", guangzhouName)
+
+	type callResult struct {
+		name string
+		err  error
+	}
+	slowDone := make(chan callResult, 1)
+	go func() {
+		name, callErr := r.EnsureBackfillFunctionIn(context.Background(), "spot", "ap-guangzhou")
+		slowDone <- callResult{name: name, err: callErr}
+	}()
+
+	// 等到 ap-guangzhou 的操作已实际进入云端 CreateFunction（即原调用已释放 backfillMu 进入 wait）。
+	require.Eventually(t, func() bool {
+		return h.cloud.client.Count("CreateFunction") >= 2
+	}, time.Second, 5*time.Millisecond)
+
+	// 在 ap-guangzhou 阻塞等待期间，已就绪的 ap-nanjing 必须立即命中缓存返回，绝不被 5s 等待堵住。
+	started := time.Now()
+	fastName, fastErr := r.EnsureBackfillFunctionIn(context.Background(), "spot", "ap-nanjing")
+	require.NoError(t, fastErr)
+	require.Equal(t, nanjingName, fastName)
+	require.Less(t, time.Since(started), 500*time.Millisecond, "已就绪地域不应被另一地域的云等待阻塞")
+
+	// 对正在创建的 ap-guangzhou 的并发调用也应立即返回 errBackfillFunctionPending，不重复建也不堵在锁上。
+	started = time.Now()
+	_, pendingErr := r.EnsureBackfillFunctionIn(context.Background(), "spot", "ap-guangzhou")
+	require.ErrorIs(t, pendingErr, errBackfillFunctionPending)
+	require.Less(t, time.Since(started), 500*time.Millisecond)
+
+	// 放行云端创建后，慢调用成功返回，并可被并发读取。
+	release()
+	res := <-slowDone
+	require.NoError(t, res.err)
+	require.Equal(t, guangzhouName, res.name)
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			name, callErr := r.EnsureBackfillFunctionIn(context.Background(), "spot", "ap-guangzhou")
+			require.NoError(t, callErr)
+			require.Equal(t, guangzhouName, name)
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, 2, h.cloud.client.Count("CreateFunction"), "两地域各建一次，无重复创建")
 }

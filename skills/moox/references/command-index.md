@@ -192,7 +192,7 @@
 | 命令 | 说明 |
 | --- | --- |
 | `lifecycle catchup` | 查看恢复追赶的进度 |
-| `lifecycle pause` | 暂停：不再计算新周期、不下单（--for 可设定自动恢复） |
+| `lifecycle pause` | 暂停：不再计算新周期、不下单（默认只预览，--yes 才执行；--for 可设定自动恢复） |
 | `lifecycle release` | 放行：追赶已追平的模块回到运行 |
 | `lifecycle resume` | 恢复：先追赶暂停期间的周期，追平后放行 |
 | `lifecycle status` | 查看生命周期状态 |

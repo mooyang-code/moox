@@ -17,7 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"trpc.group/trpc-go/tnet/log"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // 清仓下单：永续与现货各自的平仓、子单号、交易规则校验。
@@ -415,7 +415,7 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	// IOC 单发出后马上就结束了：下一笔最早时间直接记成现在加间隔，下一轮先睡再同步，不用再多跑一轮被间隔挡住的空轮。
 	if err == nil && delist {
 		if interval := s.delistAttemptInterval(); interval > 0 {
-			if until := time.Now().Add(interval); until.After(result.pacingUntil) {
+			if until := s.clock().Add(interval); until.After(result.pacingUntil) {
 				result.pacingUntil = until
 			}
 		}

@@ -139,6 +139,53 @@ func TestProjectSystemPausePhases(t *testing.T) {
 	muted := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "monitor", lifecycle: &metricspb.ModuleLifecycle{Stage: "paused", Reason: "手动暂停：告警屏蔽", PauseKind: "manual"}})
 	require.Equal(t, "running", muted.Phase)
 	require.Equal(t, []string{"监控服务：手动暂停：告警屏蔽"}, muted.Issues)
+
+	// 部分系统可暂停模块崩溃停报、其余在报模块已暂停：不能误判为全系统 "paused"，应为 "partially_paused" 且健康标红。
+	oneSilent := reportedSystem(t,
+		moduleReport{id: "collector", lifecycle: paused("system")},
+		moduleReport{id: "factor-engine", lifecycle: paused("system")},
+		moduleReport{id: "strategy", lifecycle: paused("system")},
+		moduleReport{id: "trade", silent: true},
+	)
+	require.Equal(t, "partially_paused", oneSilent.Phase)
+	require.Equal(t, "attention", oneSilent.Health)
+	require.Equal(t, "red", oneSilent.Color)
+	require.Equal(t, int32(1), oneSilent.SilentModules)
+	require.Contains(t, oneSilent.Issues, "交易服务：停止上报")
+
+	mostSilent := reportedSystem(t,
+		moduleReport{id: "collector", silent: true},
+		moduleReport{id: "factor-engine", silent: true},
+		moduleReport{id: "strategy", lifecycle: paused("manual")},
+		moduleReport{id: "trade", silent: true},
+	)
+	require.Equal(t, "partially_paused", mostSilent.Phase)
+	require.Equal(t, "attention", mostSilent.Health)
+	require.Equal(t, "red", mostSilent.Color)
+	require.Equal(t, int32(3), mostSilent.SilentModules)
+
+	// 全部系统可暂停模块都已确认暂停，仅非可暂停模块（Monitor）停报：阶段仍为 "paused"，健康标红。
+	nonPausableSilent := reportedSystem(t,
+		moduleReport{id: "collector", lifecycle: paused("system")},
+		moduleReport{id: "factor-engine", lifecycle: paused("system")},
+		moduleReport{id: "strategy", lifecycle: paused("system")},
+		moduleReport{id: "trade", lifecycle: paused("system")},
+		moduleReport{id: "monitor", silent: true},
+	)
+	require.Equal(t, "paused", nonPausableSilent.Phase)
+	require.Equal(t, "attention", nonPausableSilent.Health)
+	require.Equal(t, "red", nonPausableSilent.Color)
+	require.Equal(t, int32(1), nonPausableSilent.SilentModules)
+
+	// 已停用（disabled）的可暂停部署不计入分母：其余已启用可暂停模块全部暂停时仍为 "paused"。
+	disabledExcluded := projectSystem([]*pb.HealthComponent{
+		{ComponentId: "collector", Name: "行情采集服务", Status: "healthy", Reporter: &pb.HealthSignal{Status: "healthy"}, Lifecycle: &pb.HealthLifecycle{Stage: "paused", Pause: &pb.HealthPause{Kind: "system"}}},
+		{ComponentId: "strategy", Name: "策略服务", Status: "healthy", Reporter: &pb.HealthSignal{Status: "healthy"}, Lifecycle: &pb.HealthLifecycle{Stage: "paused", Pause: &pb.HealthPause{Kind: "system"}}},
+		{ComponentId: "trade", Name: "交易服务", Status: "disabled", Reporter: &pb.HealthSignal{Status: "unknown"}},
+	})
+	require.Equal(t, "paused", disabledExcluded.Phase)
+	require.Equal(t, "healthy", disabledExcluded.Health)
+	require.Equal(t, "orange", disabledExcluded.Color)
 }
 
 // 恢复追赶：显示追赶中的模块数与已追平（待放行）的模块数，以及各模块的进度文字。

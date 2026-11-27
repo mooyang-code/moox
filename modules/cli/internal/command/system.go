@@ -122,11 +122,7 @@ func withSystem(ctx context.Context, o systemOptions, out, warn io.Writer, fn fu
 // previewSystemPause 只列出将要暂停的模块（按暂停顺序：下游到上游），不执行。
 func previewSystemPause(cmd *cobra.Command, o systemOptions) error {
 	return withSystem(cmd.Context(), o, nil, cmd.ErrOrStderr(), func(orch *sysctl.Orchestrator) error {
-		var modules []string
-		for _, module := range orch.Modules {
-			modules = append([]string{module.Name}, modules...)
-		}
-		return writePreview(cmd, map[string]any{"action": "system_pause", "modules": modules, "reason": o.Reason})
+		return writePreview(cmd, map[string]any{"action": "system_pause", "modules": orch.PauseOrder(), "reason": o.Reason})
 	})
 }
 

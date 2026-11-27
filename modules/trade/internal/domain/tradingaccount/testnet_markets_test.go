@@ -16,6 +16,7 @@ func TestTestnetAccountCannotOpenBothMarkets(t *testing.T) {
 	account.Environment = exchange.AccountEnvironmentTestnet
 	account.CredentialSecretID = "secret-1"
 	account.Paper = nil
+	account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
 
 	err := account.Validate()
 	if !errors.Is(err, ErrInvalidAccount) || !strings.Contains(err.Error(), "币安测试网一个账户只能开通一个市场") {
@@ -23,12 +24,14 @@ func TestTestnetAccountCannotOpenBothMarkets(t *testing.T) {
 	}
 
 	account.Environment = exchange.AccountEnvironmentProduction
+	account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentProduction, CredentialSecretID: "secret-1"}
 	if err := account.Validate(); err != nil {
 		t.Fatalf("生产环境可以同时开通两个市场：%v", err)
 	}
 
 	// OKX 模拟盘（测试网环境）一个账户可以同时做现货和永续。
 	account.Environment = exchange.AccountEnvironmentTestnet
+	account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
 	account.Exchange = exchange.ExchangeOKX
 	if err := account.Validate(); err != nil {
 		t.Fatalf("OKX 模拟盘可以同时开通两个市场：%v", err)
