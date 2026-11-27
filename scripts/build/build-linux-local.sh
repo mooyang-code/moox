@@ -47,7 +47,7 @@ if [[ -d "${HOME}/.local/go${go_version}/bin" ]]; then
   export PATH="${HOME}/.local/go${go_version}/bin:${PATH}"
 fi
 
-# 含 CGO 的目标与 build.sh 的 CGO 默认一致：Storage 的三个进程依赖 DuckDB。
+# 含 CGO 的目标与 build.sh 的 CGO 默认一致：Storage 的两个进程（storage-primary 与 storage-view）依赖 DuckDB。
 cgo_targets=() plain_targets=()
 for target in "${targets[@]}"; do
   case "${target}" in
@@ -99,8 +99,23 @@ if [[ ${#cgo_targets[@]} -gt 0 ]]; then
 
   echo "==> 在 Docker 里编译 ${cgo_targets[*]} (linux/amd64, CGO=1)" >&2
   # 源码和产物都用 tar 管道进出，不依赖主机目录能否被 Docker 挂载（colima 默认只共享 $HOME，远程 Docker 更是完全没有共享）。
-  # 模块缓存与编译缓存放在具名卷里，重复构建不用重新下载和编译。源码里不带 .git 与 node_modules。
-  tar -C "${ROOT}" --exclude=./.git --exclude=./bin --exclude=node_modules --exclude=./web/dist --exclude='./.claude' -cf - . \
+  # 模块缓存与编译缓存放在具名卷里，重复构建不用重新下载和编译。只带构建所需源码，排除 .git、重型目录与本机敏感配置。
+  stream_cgo_source_tar() {
+    if git -C "${ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      (cd "${ROOT}" && git ls-files -z -co --exclude-standard -- \
+        .go-version go.mod go.sum packages modules scripts/build scripts/ci \
+        ':!moox.toml*' ':!moox.secrets.toml*' \
+        | COPYFILE_DISABLE=1 tar --null --no-xattrs -T - -cf -)
+    else
+      COPYFILE_DISABLE=1 tar -C "${ROOT}" \
+        --exclude=./.git --exclude=./bin --exclude=./bin-linux --exclude=./dist --exclude=./release \
+        --exclude=./.toolchain --exclude=./.pnpm-store --exclude=./local --exclude=./data --exclude=./var \
+        --exclude=node_modules --exclude=./web/dist --exclude='./.claude' \
+        --exclude='./moox.toml*' --exclude='./moox.secrets.toml*' \
+        -cf - .
+    fi
+  }
+  stream_cgo_source_tar \
     | "${DOCKER}" run --rm -i \
         -v moox-go-mod-cache:/root/go/pkg/mod -v moox-go-build-cache:/root/.cache/go-build \
         -e "VERSION=${version}" -e "GIT_COMMIT=${commit}" -e "GO_STRIP=${GO_STRIP:-}" \

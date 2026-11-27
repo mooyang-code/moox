@@ -100,9 +100,9 @@ func TestCheckCLI(t *testing.T) {
 }
 
 // packageFixture 写好服务目录里全部组件的假二进制。
-func packageFixture(t *testing.T, catalog servicecatalog.Catalog) (string, string) {
+func packageFixture(t *testing.T, catalog servicecatalog.Catalog) string {
 	t.Helper()
-	repository, binaries := t.TempDir(), t.TempDir()
+	binaries := t.TempDir()
 	for _, component := range catalog.Components {
 		for _, name := range Binaries(component) {
 			if err := os.WriteFile(filepath.Join(binaries, name), []byte("binary "+name), 0o755); err != nil {
@@ -110,7 +110,7 @@ func packageFixture(t *testing.T, catalog servicecatalog.Catalog) (string, strin
 			}
 		}
 	}
-	return repository, binaries
+	return binaries
 }
 
 type tarEntry struct {
@@ -155,19 +155,19 @@ func readPackage(t *testing.T, name string) []tarEntry {
 	return entries
 }
 
-// 每个组件一个包，内容只有 bin/<二进制>（第三方另带 LICENSE），同一输入两次打出的包逐字节相同。
+// 每个组件一个包，内容只有 bin/<二进制>，同一输入两次打出的包逐字节相同。
 func TestPackageComponentsIsDeterministic(t *testing.T) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	repository, binaries := packageFixture(t, catalog)
+	binaries := packageFixture(t, catalog)
 	first, second := t.TempDir(), t.TempDir()
-	one, err := PackageComponents(catalog, repository, binaries, first, "v9.9.9", "amd64")
+	one, err := PackageComponents(catalog, binaries, first, "v9.9.9", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, err := PackageComponents(catalog, repository, binaries, second, "v9.9.9", "amd64")
+	two, err := PackageComponents(catalog, binaries, second, "v9.9.9", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,11 +224,11 @@ func TestPackageComponentsNamesMissingBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repository, binaries := packageFixture(t, catalog)
+	binaries := packageFixture(t, catalog)
 	if err := os.Remove(filepath.Join(binaries, "moox-collector-cli")); err != nil {
 		t.Fatal(err)
 	}
-	_, err = PackageComponents(catalog, repository, binaries, t.TempDir(), "v9.9.9", "amd64")
+	_, err = PackageComponents(catalog, binaries, t.TempDir(), "v9.9.9", "amd64")
 	if err == nil || !strings.Contains(err.Error(), "组件 collector 缺 moox-collector-cli") {
 		t.Fatalf("缺二进制应指明组件与文件：%v", err)
 	}
@@ -236,7 +236,7 @@ func TestPackageComponentsNamesMissingBinary(t *testing.T) {
 	if err := os.Symlink(filepath.Join(binaries, "moox-collector"), filepath.Join(binaries, "moox-collector-cli")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PackageComponents(catalog, repository, binaries, t.TempDir(), "v9.9.9", "amd64"); err == nil {
+	if _, err := PackageComponents(catalog, binaries, t.TempDir(), "v9.9.9", "amd64"); err == nil {
 		t.Fatal("符号链接应拒绝")
 	}
 }
@@ -246,11 +246,11 @@ func TestPackageComponentsRejectsBadInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repository, binaries := packageFixture(t, catalog)
-	if _, err := PackageComponents(catalog, repository, binaries, t.TempDir(), "v9/9", "amd64"); err == nil {
+	binaries := packageFixture(t, catalog)
+	if _, err := PackageComponents(catalog, binaries, t.TempDir(), "v9/9", "amd64"); err == nil {
 		t.Fatal("版本带斜杠应拒绝")
 	}
-	if _, err := PackageComponents(catalog, repository, binaries, t.TempDir(), "v9.9.9", "386"); err == nil {
+	if _, err := PackageComponents(catalog, binaries, t.TempDir(), "v9.9.9", "386"); err == nil {
 		t.Fatal("不支持的架构应拒绝")
 	}
 }

@@ -31,7 +31,7 @@ GoogleUpdater（日志里的 `app_wakeall.cc ... GoogleUpdater --wake`），偶�
 页面只调用同源的 `/api/admin/{service}/{method}`，不直接访问业务服务；会话在 HttpOnly Cookie 里，只发给同源请求。
 本地 `pnpm dev` 时在 `.env.development` 中设置 `VITE_ADMIN_PROXY_TARGET` 指向一个可用的管理入口
 （例如 `https://127.0.0.1:9527`），开发服务器把 `/api/admin`（含 WebSocket）与 `/ca` 代理过去；留空则不代理。生产构建不用这个代理。
-控制机 `console.yaml` 的 `console.allowed_origins` 要加上开发服务器的来源（例如 `http://localhost:9527`）；内部 CA 不在 Node 的信任里时，用 `NODE_EXTRA_CA_CERTS` 指向根证书。
+控制机 `modules/admin/config/app.yaml`（部署机为 `config/admin/app.yaml`）的 `console.allowed_origins` 要加上开发服务器的来源（例如 `http://localhost:9527`）；内部 CA 不在 Node 的信任里时，用 `NODE_EXTRA_CA_CERTS` 指向根证书。
 
 - 管理接口：`/api/admin/{service}/{method}`
 - Storage：`/api/admin/storage/{method}`（Admin 的 Storage BFF）

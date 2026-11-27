@@ -40,7 +40,7 @@ func Binaries(component servicecatalog.Component) []string {
 // 包里只有 bin/<二进制>（0755）。
 // 条目按名字排序，时间戳为 0、属主为 0 且不带用户名组名，相同输入得到逐字节相同的包。
 // binaryDir 里缺哪个组件的哪个文件就报哪个，不生成残缺的包。
-func PackageComponents(catalog servicecatalog.Catalog, _ string, binaryDir, outputDir, version, goarch string) (map[string]Artifact, error) {
+func PackageComponents(catalog servicecatalog.Catalog, binaryDir, outputDir, version, goarch string) (map[string]Artifact, error) {
 	if !versionPattern.MatchString(version) {
 		return nil, fmt.Errorf("package_invalid: 版本 %q 只能用字母、数字、点、下划线和连字符", version)
 	}

@@ -67,7 +67,7 @@ done
 #    文件排序、时间戳为 0，同一提交结果相同。输出 {"catalog_sha256": ..., "components": {<组件>: 包}} 给第 4 步写清单。
 BINARIES="${STAGE}/binaries"
 LOCAL_CLI="${STAGE}/cli-$(go env GOOS)-$(go env GOARCH)/moox-cli"
-"${LOCAL_CLI}" setup package-components --repo-root "${ROOT}" --binary-dir "${BINARIES}" --output-dir "${OUT}" \
+"${LOCAL_CLI}" setup package-components --binary-dir "${BINARIES}" --output-dir "${OUT}" \
   --version "${VERSION}" --goarch amd64 > "${STAGE}/components.json"
 cp "${BINARIES}/moox-collector-scf" "${OUT}/moox-collector-scf_${VERSION}_linux_amd64"
 

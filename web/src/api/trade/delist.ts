@@ -9,9 +9,6 @@ import type { RetInfo } from "@/api/trade/types";
 export type DelistExchange = "binance" | "okx";
 export type DelistMarket = "spot" | "swap";
 
-/** 下架检测登记用的空间：Collector 是按空间的服务，下架检测只覆盖 crypto。 */
-export const DELIST_SPACE_ID = "crypto";
-
 export interface InstrumentHolder {
   space_id: string;
   logical_account_id: string;
@@ -124,9 +121,7 @@ export async function listInstrumentHolders(input: Parameters<typeof buildHolder
 }
 
 export async function registerDelistNotice(req: RegisterDelistNoticeReq): Promise<RegisterDelistNoticeResult> {
-  const rsp = await call<RegisterDelistNoticeReq, Partial<RegisterDelistNoticeResult>>("collector", "RegisterDelistNotice", req, {
-    spaceId: DELIST_SPACE_ID
-  });
+  const rsp = await call<RegisterDelistNoticeReq, Partial<RegisterDelistNoticeResult>>("collector", "RegisterDelistNotice", req);
   return { created: Boolean(rsp.created), event_id: rsp.event_id ?? "" };
 }
 

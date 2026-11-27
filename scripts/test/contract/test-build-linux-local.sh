@@ -32,8 +32,12 @@ printf 'host-binary-%s\n' "$1" >"${BIN_DIR}/moox-$1"
 if [[ "$1" == archive-worker ]]; then printf 'x\n' >"${BIN_DIR}/stray.txt"; fi
 EOF
 chmod +x "${FAKE}/scripts/build/build.sh"
-mkdir -p "${FAKE}/.git" "${FAKE}/web/node_modules/pkg" "${FAKE}/bin" "${FAKE}/web/dist" "${FAKE}/modules/storage"
-echo secret >"${FAKE}/.git/config"; echo x >"${FAKE}/web/node_modules/pkg/index.js"; echo old >"${FAKE}/bin/moox-old"; echo x >"${FAKE}/web/dist/index.html"
+mkdir -p "${FAKE}/.git" "${FAKE}/web/node_modules/pkg" "${FAKE}/bin" "${FAKE}/bin-linux" "${FAKE}/web/dist" \
+  "${FAKE}/.toolchain/go" "${FAKE}/.pnpm-store/v3" "${FAKE}/local/data" "${FAKE}/modules/storage"
+echo secret >"${FAKE}/.git/config"; echo x >"${FAKE}/web/node_modules/pkg/index.js"; echo old >"${FAKE}/bin/moox-old"
+echo old >"${FAKE}/bin-linux/moox-admin"; echo x >"${FAKE}/web/dist/index.html"
+echo heavy >"${FAKE}/.toolchain/go/bin"; echo heavy >"${FAKE}/.pnpm-store/v3/pkg"; echo heavy >"${FAKE}/local/data/db"
+echo host >"${FAKE}/moox.toml"; echo topsecret >"${FAKE}/moox.secrets.toml"
 echo keep >"${FAKE}/modules/storage/main.go"
 
 cat >"${TMP}/bin/go" <<'EOF'
@@ -126,14 +130,40 @@ run_line="$(grep '^docker run ' "${DOCKER_LOG}")" || fail "要用 docker run 编
 [[ "${run_line}" == *"GOPROXY=https://mirrors.tencent.com/go,direct"* ]] || fail "容器里要有 Go 依赖代理"
 [[ "${run_line}" == *"container-build storage-primary"* ]] || fail "目标要作为参数传给容器里的构建命令：${run_line}"
 [[ "${run_line}" == *"container-build.sh"* ]] || fail "要在容器里运行 container-build.sh：${run_line}"
-# 送进容器的源码 tar：要有构建脚本和源码，不能带 .git、node_modules、旧的 bin、前端产物。
+# 送进容器的源码 tar：要有构建脚本和源码，不能带 .git、node_modules、旧的 bin、前端产物、重型本地目录及敏感配置。
 listing="$(tar -tf "${DOCKER_FLAGS}/source.tar")"
 grep -q 'scripts/build/docker/container-build.sh' <<<"${listing}" || fail "源码 tar 里缺少容器构建脚本"
 grep -q 'modules/storage/main.go' <<<"${listing}" || fail "源码 tar 里缺少源码"
-for excluded in '\.git/' 'node_modules' '^\./bin/' 'web/dist'; do
+for excluded in '\.git/' 'node_modules' '^\./bin/' '^\./bin-linux/' 'web/dist' '\.toolchain/' '\.pnpm-store/' '^\./local/' 'moox\.toml' 'moox\.secrets\.toml'; do
   ! grep -Eq "${excluded}" <<<"${listing}" || fail "源码 tar 不该包含 ${excluded}：$(grep -E "${excluded}" <<<"${listing}" | head -3)"
 done
 grep -q "^BUILT:moox-storage-primary:$(sha "${OUT}/moox-storage-primary")\$" "${TMP}/stdout.txt" || fail "stdout 要有 storage-primary 的 BUILT 行"
+
+# 真实 Git 工作区分支：只带构建目录且排除 .gitignore 项及 moox.toml / moox.secrets.toml（即使未被忽略）。
+GIT_FAKE="${TMP}/git-repo"
+mkdir -p "${GIT_FAKE}/scripts/build/docker" "${GIT_FAKE}/modules/storage" "${GIT_FAKE}/local" "${GIT_FAKE}/.toolchain"
+cp "${ROOT}/scripts/build/build-linux-local.sh" "${GIT_FAKE}/scripts/build/"
+cp "${ROOT}/scripts/build/docker/"* "${GIT_FAKE}/scripts/build/docker/"
+printf '%s\n' "${go_version}" >"${GIT_FAKE}/.go-version"
+printf 'module example.com/fake\n' >"${GIT_FAKE}/go.mod"
+printf 'local/\n.toolchain/\n' >"${GIT_FAKE}/.gitignore"
+printf 'package main\n' >"${GIT_FAKE}/modules/storage/main.go"
+printf 'heavy\n' >"${GIT_FAKE}/local/db.sqlite"
+printf 'heavy\n' >"${GIT_FAKE}/.toolchain/sdk"
+printf 'host\n' >"${GIT_FAKE}/moox.toml"
+printf 'topsecret\n' >"${GIT_FAKE}/moox.secrets.toml"
+git -C "${GIT_FAKE}" init -q
+git -C "${GIT_FAKE}" config user.email "test@example.com"
+git -C "${GIT_FAKE}" config user.name "Test"
+git -C "${GIT_FAKE}" add .go-version go.mod .gitignore scripts modules
+git -C "${GIT_FAKE}" commit -q -m "init"
+bash "${GIT_FAKE}/scripts/build/build-linux-local.sh" --out "${TMP}/out-git" storage-primary >/dev/null 2>&1 || fail "Git 仓库 CGO 构建应成功"
+git_listing="$(tar -tf "${DOCKER_FLAGS}/source.tar")"
+grep -q 'scripts/build/docker/container-build.sh' <<<"${git_listing}" || fail "Git 源码 tar 缺少容器构建脚本"
+grep -q 'modules/storage/main.go' <<<"${git_listing}" || fail "Git 源码 tar 缺少源码"
+for excluded in '(^|/)local/' '(^|/)\.toolchain/' 'moox\.toml' 'moox\.secrets\.toml'; do
+  ! grep -Eq "${excluded}" <<<"${git_listing}" || fail "Git 源码 tar 不该包含 ${excluded}：$(grep -E "${excluded}" <<<"${git_listing}" | head -3)"
+done
 
 # 镜像已存在时不再构建。
 : >"${DOCKER_LOG}"

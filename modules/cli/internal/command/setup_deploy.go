@@ -118,7 +118,7 @@ func (s setupSource) deployOptions(cmd *cobra.Command, snapshot *setupSnapshot, 
 	}
 }
 
-// setupComponentOnHost 校验主机和组件：组件要在这台主机该有的组件里（含每台主机都有的主机级组件与内置对象存储）。
+// setupComponentOnHost 校验主机和组件：组件要在这台主机该有的组件里（含每台主机都有的主机级组件）。
 func setupComponentOnHost(manifest *topology.Config, hostID, component string) (topology.Host, error) {
 	components, err := manifest.HostComponents(hostID)
 	if err != nil {
@@ -356,7 +356,7 @@ func defaultSetupWipeHost(ctx context.Context, host topology.Host, root string) 
 
 // newSetupPackageComponentsCommand 给发布脚本用：按服务目录把编译好的二进制打成每个组件一个包，输出清单要用的摘要。
 func newSetupPackageComponentsCommand() *cobra.Command {
-	var repositoryRoot, binaryDir, outputDir, version, goarch string
+	var binaryDir, outputDir, version, goarch string
 	cmd := &cobra.Command{
 		Use:   "package-components",
 		Short: "按服务目录把编译好的 Linux 二进制打成每个组件一个包（发布脚本用）",
@@ -365,25 +365,17 @@ func newSetupPackageComponentsCommand() *cobra.Command {
 			if binaryDir == "" || outputDir == "" || version == "" {
 				return errors.New("package-components 要带 --binary-dir、--output-dir 与 --version")
 			}
-			if repositoryRoot == "" {
-				root, err := os.Getwd()
-				if err != nil {
-					return err
-				}
-				repositoryRoot = root
-			}
 			catalog, err := servicecatalog.LoadEmbedded()
 			if err != nil {
 				return err
 			}
-			components, err := bundle.PackageComponents(catalog, repositoryRoot, binaryDir, outputDir, version, goarch)
+			components, err := bundle.PackageComponents(catalog, binaryDir, outputDir, version, goarch)
 			if err != nil {
 				return err
 			}
 			return writeSetupJSON(cmd, map[string]any{"catalog_sha256": bundle.CatalogSHA256(), "components": components})
 		},
 	}
-	cmd.Flags().StringVar(&repositoryRoot, "repo-root", "", "仓库根目录（默认当前目录）：第三方组件的许可证从这里读")
 	cmd.Flags().StringVar(&binaryDir, "binary-dir", "", "编译好的 Linux 二进制目录")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "", "组件包的输出目录")
 	cmd.Flags().StringVar(&version, "version", "", "发布版本号，例如 v0.0.2")
