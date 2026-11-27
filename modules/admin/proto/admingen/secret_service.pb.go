@@ -418,7 +418,7 @@ func (x *GetSecretRsp) GetSecret() *Secret {
 	return nil
 }
 
-// GetSecretValue 仅供后台服务通过 /api/service/secret/GetSecretValue 调用，
+// GetSecretValue 仅供后台内部服务经 HostGateway 原生 RPC 调用，
 // 返回明文 secret_value。管理台 /api/admin 路径不得调用此接口。
 type GetSecretValueReq struct {
 	state         protoimpl.MessageState
@@ -1510,7 +1510,7 @@ func (x *GetCloudCredentialReq) GetSecretId() string {
 	return ""
 }
 
-// CloudCredential 是云账号密钥的明文。和带脱敏的 Secret 分开，脱敏过滤器不会改写它。
+// CloudCredential 是云账号密钥的明文，与管理台展示用的脱敏 Secret 结构区分。
 type CloudCredential struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
