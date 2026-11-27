@@ -95,7 +95,7 @@ SCF 函数运行在各地域的 VPC 里，只经同地域入口主机网关的�
 
 ## 开发者（在源码仓库里工作时）
 
-- 仓库是 Go Workspace：`modules/*` 是各服务，`packages/*` 是共享包，`web/` 是管理台，`docs/` 是设计文档。模块之间只经 RPC 与事件交互。
+- 仓库是单根 `go.mod` 大仓：`modules/*` 是各服务，`packages/*` 是共享包，`web/` 是管理台，`docs/` 是设计文档。模块之间只经 RPC 与事件交互（静态门禁守护边界）。
 - `make build`、`make test`、`make proto`、`make verify`（提交前的完整检查）；构建环境见 [`references/build.md`](references/build.md)。
 - 对外发布：`scripts/release/build-release.sh vX.Y.Z` 生成五个平台的 `moox-cli` 与 linux/amd64 部署产物包。
 - 协议与命名：用 Space、DataSource、Subject、Dataset、DatasetColumn、View（数据集的查询索引）、Factor；时间字段用 `start_time` / `end_time` / `snapshot_time`；`series_tag` 是单个可选标签。细节见 [`references/protocol.md`](references/protocol.md)。

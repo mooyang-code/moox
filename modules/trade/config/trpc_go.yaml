@@ -6,7 +6,6 @@ server:
   filter:
     - recovery
     - validation
-    - masking
     - spacectx
     - prometheus
   timeout: 10000

@@ -6,14 +6,35 @@ cd "${ROOT}"
 
 overview=docs/总体设计.md
 
-# Every go.work module is listed in the overview's code-organization table.
+# Every top-level Go module directory (all modules/*, packages, tools/zstddict) is listed in the overview's code-organization table.
+module_dirs=(
+  modules/admin
+  modules/archive
+  modules/cli
+  modules/collector
+  modules/egressproxy
+  modules/eventbus
+  modules/factor
+  modules/hostagent
+  modules/hostgateway
+  modules/monitor
+  modules/storage
+  modules/strategy
+  modules/trade
+  packages
+  tools/zstddict
+)
+for dir in modules/*; do
+  [[ -d "${dir}" ]] || continue
+  module_dirs+=("${dir}")
+done
 while IFS= read -r module_path; do
   [[ -n "${module_path}" ]] || continue
   grep -Fq "| \`${module_path}\` |" "${overview}" || {
-    echo "${overview} missing go.work module: ${module_path}" >&2
+    echo "${overview} missing Go module directory: ${module_path}" >&2
     exit 1
   }
-done < <(awk '/^use \(/ {on=1; next} on && /^\)/ {exit} on {gsub(/^[[:space:]]*\.\//, ""); if (length) print}' go.work)
+done < <(printf '%s\n' "${module_dirs[@]}" | sort -u)
 
 # Every module design document is reachable from the overview and the site sidebar.
 for doc in docs/模块/*.md; do
@@ -39,7 +60,11 @@ for root in roots:
         files.append(root)
         continue
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in ("node_modules", ".vitepress", "public")]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in ("node_modules", ".vitepress", "public")
+            and not (dirpath == "docs" and d == "计划")
+        ]
         files += [os.path.join(dirpath, f) for f in filenames if f.endswith(".md")]
 
 link = re.compile(r"\]\(([^)\s]+)\)")

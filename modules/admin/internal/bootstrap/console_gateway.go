@@ -74,7 +74,7 @@ func newConsoleGateway(db *gorm.DB, hostID, keyFile string) (*gatewayclient.Clie
 }
 
 // Preserve the configured RPC filters when calling a generated handler in
-// process, including validation, response masking and observability.
+// process, including validation and observability.
 func localServiceFilters(service string) ([]filter.ServerFilter, error) {
 	cfg := trpc.GlobalConfig()
 	names := append([]string(nil), cfg.Server.Filter...)

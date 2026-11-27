@@ -51,24 +51,25 @@ contains() {
   return 1
 }
 
+[[ -f go.mod ]] || fail "missing root go.mod"
+require_text go.mod 'trpc.group/trpc-go/trpc-filter/recovery v1.0.0' "missing recovery dependency in root go.mod"
+require_text go.mod 'trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0' "missing prometheus dependency in root go.mod"
+require_text go.mod 'trpc.group/trpc-go/trpc-filter/validation v1.0.1' "missing validation dependency in root go.mod"
+
 for module in "${modules[@]}"; do
-	modfile="modules/${module}/go.mod"
 	main="modules/${module}/cmd/server/main.go"
 	if [[ "${module}" == factor ]]; then
 		main="modules/factor/cmd/mgr/main.go"
 	fi
 	configs=("modules/${module}/config/trpc_go.yaml")
 	if [[ "${module}" == storage ]]; then
-		configs=(modules/storage/config/trpc_go*.yaml)
+		configs=(modules/storage/config/trpc_go*.yaml modules/storage/config/storage_view/trpc_go*.yaml)
 	fi
 
-	[[ -f "${modfile}" ]] || fail "missing go.mod for ${module}"
 	[[ -f "${main}" ]] || fail "missing server entrypoint for ${module}"
 
-	require_text "${modfile}" 'trpc.group/trpc-go/trpc-filter/recovery v1.0.0' "missing recovery dependency for ${module}"
 	require_text "${main}" 'trpc.group/trpc-go/trpc-filter/recovery' "missing recovery registration for ${module}"
 	require_text "${main}" 'packages/healthz/trpcrecovery' "missing sanitized recovery registration for ${module}"
-	require_text "${modfile}" 'trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0' "missing prometheus dependency for ${module}"
 	require_text "${main}" 'trpc.group/trpc-go/trpc-metrics-prometheus' "missing prometheus registration for ${module}"
 	# 服务的 main 空白引入 logcls：重要日志发给 Monitor，启用了 CLS 时另外上报。它在代码里给默认日志加上 moox 输出，
 	# 所以配置文件里不能出现 writer: moox（线上的旧二进制不认识它，回滚二进制时会起不来）。
@@ -94,21 +95,32 @@ for module in "${modules[@]}"; do
 			require_text "${config}" '    - validation' "missing validation filter for ${module}"
 			require_text "${config}" '      enable_error_log: false' "validation request logging must be disabled for ${module}"
 		fi
-		if [[ "${module}" == storage ]]; then
-			require_text "${config}" '    - opentelemetry' "missing staged OpenTelemetry filter for storage"
-		fi
 	done
 
 	if contains "${module}" "${validation_modules[@]}"; then
-		require_text "${modfile}" 'trpc.group/trpc-go/trpc-filter/validation v1.0.1' "missing validation dependency for ${module}"
 		require_text "${main}" 'trpc.group/trpc-go/trpc-filter/validation' "missing validation registration for ${module}"
 	fi
 done
 
-for module in admin trade; do
-	require_text "modules/${module}/cmd/server/main.go" 'trpc.group/trpc-go/trpc-filter/masking' "missing masking registration for ${module}"
-	require_text "modules/${module}/config/trpc_go.yaml" '    - masking' "missing masking filter for ${module}"
-done
+# 已摘除未使用的 trpc-filter/masking 与空转的 packages/healthz/trpcotel，禁止回流。
+if grep -Fq -- 'trpc.group/trpc-go/trpc-filter/masking' go.mod; then
+	fail 'root go.mod must not depend on unused trpc.group/trpc-go/trpc-filter/masking'
+fi
+if rg -n 'trpc\.group/trpc-go/trpc-filter/masking' modules packages --glob '*.go' 2>/dev/null; then
+	fail 'Go sources must not import removed trpc-filter/masking'
+fi
+if rg -n '^[[:space:]]*-[[:space:]]*masking[[:space:]]*$' modules/*/config/trpc_go*.yaml modules/*/config/*/trpc_go*.yaml 2>/dev/null; then
+	fail 'tRPC configs must not declare removed masking filter'
+fi
+if [[ -e packages/healthz/trpcotel ]]; then
+	fail 'removed no-op package packages/healthz/trpcotel must not exist'
+fi
+if rg -n 'packages/healthz/trpcotel' modules packages --glob '*.go' 2>/dev/null; then
+	fail 'Go sources must not import removed packages/healthz/trpcotel'
+fi
+if rg -n '^[[:space:]]*-[[:space:]]*opentelemetry[[:space:]]*$' modules/*/config/trpc_go*.yaml modules/*/config/*/trpc_go*.yaml 2>/dev/null; then
+	fail 'tRPC configs must not declare removed opentelemetry filter'
+fi
 
 # 主机网关只转发一次：只读调用的重发由调用方 gatewayclient 负责，网关再重试会放大上游请求量。
 if grep -Fq -- 'client.WithFilter(' modules/hostgateway/internal/router/upstream.go; then
@@ -117,10 +129,6 @@ fi
 if grep -Fq -- '          - baggage' modules/factor/config/trpc_go.yaml; then
 	fail 'arbitrary W3C baggage must not cross the Factor to Storage boundary'
 fi
-require_text packages/healthz/trpcotel/filter.go 'intentionally never records request or response bodies' 'tracing adapter must document body suppression'
-require_text packages/healthz/trpcotel/filter_test.go 'TestFiltersNeverAttachBodies' 'tracing adapter must test body suppression'
-require_text modules/admin/cmd/server/main.go 'packages/healthz/trpcotel' 'missing admin tracing registration'
-require_text modules/storage/cmd/server/main.go 'packages/healthz/trpcotel' 'missing storage tracing registration'
 
 # 矩阵之外的常驻服务同样要引入 logcls。
 for main in modules/archive/cmd/mgr/main.go modules/collector/cmd/stream/main.go; do
@@ -133,20 +141,20 @@ if rg -n 'writer: (cls|moox)\b' modules/*/config deploy 2>/dev/null; then
 	fail 'tRPC configs must not list writer: cls (no longer registered) or writer: moox (installed in code)'
 fi
 
-if rg -n '^  telemetry:$' modules/*/config/trpc_go*.yaml; then
-	fail 'local OpenTelemetry adapter is environment-configured and must not declare an unregistered telemetry plugin'
+if rg -n '^  telemetry:$' modules/*/config/trpc_go*.yaml modules/*/config/*/trpc_go*.yaml; then
+	fail 'tRPC configs must not declare an unregistered telemetry plugin'
 fi
 
-if rg -n 'filterextensions' modules/*/config/trpc_go*.yaml modules/*/cmd/server/main.go; then
+if rg -n 'filterextensions' modules/*/config/trpc_go*.yaml modules/*/config/*/trpc_go*.yaml modules/*/cmd/server/main.go; then
 	fail 'filterextensions must remain deferred until method policies diverge'
 fi
 
 # tRPC 框架配置里的服务端只监听回环；对外的端口（11003、外部入口 11004）由主机网关自己的 app.yaml 配置。
-for config in modules/*/config/trpc_go*.yaml; do
+for config in modules/*/config/trpc_go*.yaml modules/*/config/*/trpc_go*.yaml; do
 	assert_loopback_server_services "${config}"
 done
 
-if rg -n '^  prometheus:$' modules/*/config/trpc_go.yaml; then
+if rg -n '^  prometheus:$' modules/*/config/trpc_go*.yaml modules/*/config/*/trpc_go*.yaml; then
   fail 'prometheus must be nested under plugins.metrics.prometheus'
 fi
 

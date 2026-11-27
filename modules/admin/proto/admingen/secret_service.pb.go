@@ -475,8 +475,7 @@ func (x *GetSecretValueReq) GetSecretId() string {
 	return ""
 }
 
-// SecretMaterial is deliberately distinct from Secret so the masking filter
-// cannot redact the service-auth-only plaintext response.
+// SecretMaterial 仅供后台服务明文读取，与脱敏展示用的 Secret 区分。
 type SecretMaterial struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

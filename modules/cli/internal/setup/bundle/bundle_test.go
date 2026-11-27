@@ -39,7 +39,7 @@ func TestLoadNotBundle(t *testing.T) {
 }
 
 func TestLoadValid(t *testing.T) {
-	root := writeManifest(t, `{"version":2,"release":"v0.2.0","commit":"`+testCommit+`","components":{"collector":`+validComponent()+`},"files":["go.work","packages/servicecatalog/catalog.yaml"]}`)
+	root := writeManifest(t, `{"version":2,"release":"v0.2.0","commit":"`+testCommit+`","components":{"collector":`+validComponent()+`},"files":["go.mod","packages/servicecatalog/catalog.yaml"]}`)
 	manifest, ok, err := Load(root)
 	if err != nil || !ok {
 		t.Fatalf("应读出清单: ok=%v err=%v", ok, err)

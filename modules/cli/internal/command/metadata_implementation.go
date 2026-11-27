@@ -415,7 +415,8 @@ func writeMetadataImportSummary(summary metadataImportSummary) error {
 
 func metadataNotFound(retInfo *pb.RetInfo) bool {
 	switch retInfo.GetCode() {
-	case pb.ErrorCode_SPACE_NOT_FOUND,
+	case pb.ErrorCode_NOT_FOUND,
+		pb.ErrorCode_SPACE_NOT_FOUND,
 		pb.ErrorCode_DATASET_NOT_FOUND,
 		pb.ErrorCode_SUBJECT_NOT_FOUND,
 		pb.ErrorCode_FACTOR_NOT_FOUND:

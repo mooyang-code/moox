@@ -60,8 +60,6 @@ message PageResult {
 
 // ErrorCode 表示跨模块通用错误码。
 enum ErrorCode {
-  option allow_alias = true;
-
   // SUCCESS 表示请求成功。
   SUCCESS = 0;
   // INVALID_PARAM 表示请求参数错误。
@@ -74,8 +72,6 @@ enum ErrorCode {
   INNER_ERR = 4;
   // NOT_FOUND 表示通用资源不存在。
   NOT_FOUND = 5;
-  // SPACE_NOT_FOUND 表示使用空间不存在。
-  SPACE_NOT_FOUND = 5;
   // DATASET_NOT_FOUND 表示数据集不存在。
   DATASET_NOT_FOUND = 6;
   // SUBJECT_NOT_FOUND 表示数据对象不存在。
@@ -94,6 +90,8 @@ enum ErrorCode {
   QUERY_SHAPE_UNSUPPORTED = 13;
   // CONFLICT 表示资源状态或版本已发生并发冲突。
   CONFLICT = 14;
+  // SPACE_NOT_FOUND 表示使用空间不存在。
+  SPACE_NOT_FOUND = 15;
   // ENGINE_CAPABILITY_UNSUPPORTED 表示所选存储引擎不支持该能力。
   ENGINE_CAPABILITY_UNSUPPORTED = 16;
   // DIMENSION_VALUE_INVALID 表示业务维度取值不合法。

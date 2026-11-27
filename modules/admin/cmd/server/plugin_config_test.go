@@ -27,7 +27,6 @@ import (
 )
 
 func TestPluginConfigInitializes(t *testing.T) {
-	t.Setenv("MOOX_OTEL_ENDPOINT", "")
 	cfg, err := trpc.LoadConfig("../../config/trpc_go.yaml")
 	if err != nil {
 		t.Fatalf("load tRPC config: %v", err)

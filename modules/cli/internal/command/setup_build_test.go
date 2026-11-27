@@ -20,7 +20,7 @@ func TestRunSetupBuildLinuxRejectsPureGoFactor(t *testing.T) {
 
 func TestLinuxBuildSourceSelectsWorktreeWithoutCopyingManifest(t *testing.T) {
 	configRoot, source := t.TempDir(), t.TempDir()
-	for _, path := range []string{"go.work", ".go-version", "scripts/build/build-linux-local.sh"} {
+	for _, path := range []string{"go.mod", ".go-version", "scripts/build/build-linux-local.sh"} {
 		path = filepath.Join(source, path)
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
 		require.NoError(t, os.WriteFile(path, []byte("test"), 0600))
@@ -31,13 +31,13 @@ func TestLinuxBuildSourceSelectsWorktreeWithoutCopyingManifest(t *testing.T) {
 	_, err = os.Stat(filepath.Join(root, "moox.toml"))
 	require.True(t, os.IsNotExist(err))
 	_, err = linuxBuildSource(configRoot, "")
-	require.ErrorContains(t, err, "missing go.work")
+	require.ErrorContains(t, err, "missing go.mod")
 }
 
 func TestRunSetupBuildLinuxRunsLocalBuildScriptIntoSourceBin(t *testing.T) {
 	source := t.TempDir()
 	record := filepath.Join(source, "args.txt")
-	for _, path := range []string{"go.work", ".go-version"} {
+	for _, path := range []string{"go.mod", ".go-version"} {
 		require.NoError(t, os.WriteFile(filepath.Join(source, path), []byte("test"), 0600))
 	}
 	script := filepath.Join(source, "scripts", "build", "build-linux-local.sh")

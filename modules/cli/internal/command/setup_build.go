@@ -60,7 +60,7 @@ func linuxBuildSource(configRoot, sourceDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid build source directory")
 	}
-	for _, path := range []string{"go.work", ".go-version", "scripts/build/build-linux-local.sh"} {
+	for _, path := range []string{"go.mod", ".go-version", "scripts/build/build-linux-local.sh"} {
 		info, err := os.Stat(filepath.Join(root, path))
 		if err != nil || !info.Mode().IsRegular() {
 			return "", fmt.Errorf("build source directory is missing %s", path)

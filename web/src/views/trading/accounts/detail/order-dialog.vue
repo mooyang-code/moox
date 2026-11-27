@@ -325,6 +325,7 @@ async function submitManual() {
           "3",
           "5",
           "14",
+          "15",
           "19",
           "INVALID_PARAM",
           "NO_AUTH",

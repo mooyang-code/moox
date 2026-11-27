@@ -1,37 +1,21 @@
 package adminpb
 
 import (
-	"context"
+	"reflect"
 	"testing"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"trpc.group/trpc-go/trpc-filter/masking"
 )
 
-func TestMaskingFilterDoesNotOverwriteBulletMaskedSecret(t *testing.T) {
-	filter := masking.ServerFilter()
-	want := "abcd••••wxyz"
-	rsp, err := filter(context.Background(), nil, func(context.Context, interface{}) (interface{}, error) {
-		return &GetSecretRsp{Secret: &Secret{SecretValue: want}}, nil
-	})
-	if err != nil {
-		t.Fatalf("filter error = %v", err)
+func TestSecretDoesNotImplementMasking(t *testing.T) {
+	if _, ok := any(&Secret{}).(interface{ Masking() }); ok {
+		t.Fatal("*Secret must not implement Masking(); secret redaction happens in SecretMgr RPC")
 	}
-	if got := rsp.(*GetSecretRsp).GetSecret().GetSecretValue(); got != want {
-		t.Fatalf("secret masking value was overwritten: got %q, want %q", got, want)
+	if _, ok := reflect.TypeOf(&Secret{}).MethodByName("Masking"); ok {
+		t.Fatal("*Secret must not expose a Masking method")
 	}
-}
-
-func TestMaskingFilterPreservesServiceOnlyPlaintextResponse(t *testing.T) {
-	filter := masking.ServerFilter()
-	rsp, err := filter(context.Background(), nil, func(context.Context, interface{}) (interface{}, error) {
-		return &GetSecretValueRsp{Secret: &SecretMaterial{SecretValue: "plain-sensitive-value"}}, nil
-	})
-	if err != nil {
-		t.Fatalf("filter error = %v", err)
-	}
-	if got := rsp.(*GetSecretValueRsp).GetSecret().GetSecretValue(); got != "plain-sensitive-value" {
-		t.Fatalf("service-only plaintext response was modified: %q", got)
+	if _, ok := reflect.TypeOf(&SecretMaterial{}).MethodByName("Masking"); ok {
+		t.Fatal("*SecretMaterial must not expose a Masking method")
 	}
 }
 

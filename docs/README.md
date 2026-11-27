@@ -35,4 +35,4 @@ pnpm docs:build   # 构建静态站点
 ```
 
 修改代码时同步更新对应的模块文档；`scripts/test/contract/test-docs-architecture.sh` 会检查
-`go.work` 模块清单、模块文档的入口链接和文档内的相对链接。
+全部 Go 模块目录清单、模块文档的入口链接和文档内的相对链接。

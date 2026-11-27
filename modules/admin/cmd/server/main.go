@@ -1,14 +1,10 @@
 package main
 
 import (
-	"context"
 	"flag"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
-	"github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
-	_ "trpc.group/trpc-go/trpc-filter/masking"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -21,7 +17,6 @@ import (
 )
 
 func main() {
-	defer shutdownTracing()
 	// 业务配置的位置（console.yaml 在同一目录）；要在 trpc.NewServer 解析命令行之前定义。
 	configPath := flag.String("config", "config/app.yaml", "admin 业务配置")
 	ctx := trpc.BackgroundContext()
@@ -38,13 +33,5 @@ func main() {
 	log.Info("启动TRPC服务器...")
 	if err := server.Serve(); err != nil {
 		log.Fatalf("TRPC服务器出错: %v", err)
-	}
-}
-
-func shutdownTracing() {
-	ctx, cancel := context.WithTimeout(trpc.BackgroundContext(), 5*time.Second)
-	defer cancel()
-	if err := trpcotel.Shutdown(ctx); err != nil {
-		log.Errorf("flush OpenTelemetry spans: %v", err)
 	}
 }

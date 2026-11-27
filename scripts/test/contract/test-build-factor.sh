@@ -7,7 +7,7 @@ trap 'rm -rf "${tmp}"' EXIT
 mkdir -p "${tmp}/scripts/build" "${tmp}/scripts/ci" "${tmp}/modules/factor" "${tmp}/tools"
 cp "${ROOT}/scripts/build/build.sh" "${tmp}/scripts/build/build.sh"
 cp "${ROOT}/scripts/ci/check-go-version.sh" "${tmp}/scripts/ci/check-go-version.sh"
-cp "${ROOT}/.go-version" "${ROOT}/go.work" "${tmp}/"
+cp "${ROOT}/.go-version" "${ROOT}/go.mod" "${tmp}/"
 cat >"${tmp}/tools/go" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail

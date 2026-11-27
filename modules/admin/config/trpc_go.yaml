@@ -6,8 +6,6 @@ server:
   filter:
     - recovery
     - validation
-    - masking
-    - opentelemetry
     - prometheus
   # 各 RPC 服务的默认时限上限，与网关路由允许的最长超时（960 秒）一致。
   # 浏览器入口（9527）不在这里：它由 Admin 自己用标准库监听，接口时限由控制台处理器按服务目录控制。
@@ -83,10 +81,6 @@ server:
       network: "0 0 0 * * *"
       protocol: timer
       timeout: 30000
-
-client:
-  filter:
-    - opentelemetry
 
 plugins:
   metrics:

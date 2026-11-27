@@ -215,7 +215,7 @@ describe("下单对话框", () => {
     expect(tracker.submittedOrder.value).toBeNull();
   });
 
-  it.each([1, 2, 3, 5, 14, 19, "INVALID_PARAM", "CONFLICT", "TRADE_SESSION_NOT_READY"])(
+  it.each([1, 2, 3, 5, 14, 15, 19, "INVALID_PARAM", "CONFLICT", "SPACE_NOT_FOUND", "TRADE_SESSION_NOT_READY"])(
     "明确被拒绝的请求可以修改后重填，不轮询（%s）",
     async code => {
       const vm = await openEntry();

@@ -29,4 +29,19 @@ for bad in 0/3 4/3 1/0 abc 1-3 /3 1/; do
   fi
 done
 
+go_version="$(tr -d '[:space:]' < "${ROOT}/.go-version")"
+if [[ -d "${HOME}/.local/go${go_version}/bin" ]]; then
+  export PATH="${HOME}/.local/go${go_version}/bin:${PATH}"
+fi
+root_pkgs="$(cd "${ROOT}" && GOTOOLCHAIN=local go list ./... | sort)"
+shard_pkgs_raw="$(while IFS= read -r m; do (cd "${ROOT}/${m}" && GOTOOLCHAIN=local go list ./...); done <<<"${all}")"
+dup_pkgs="$(printf '%s\n' "${shard_pkgs_raw}" | sort | uniq -d)"
+[[ -z "${dup_pkgs}" ]] || { echo "有 Go 包被多个模块目录重复覆盖：${dup_pkgs}" >&2; exit 1; }
+shard_pkgs="$(printf '%s\n' "${shard_pkgs_raw}" | sort)"
+[[ "${shard_pkgs}" == "${root_pkgs}" ]] || {
+  echo "test-go-workspace.sh 的 MODULES 清单与 go list ./... 不一致" >&2
+  diff -u <(printf '%s\n' "${root_pkgs}") <(printf '%s\n' "${shard_pkgs}") >&2 || true
+  exit 1
+}
+
 echo "go workspace shard contract passed"

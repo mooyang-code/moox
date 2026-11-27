@@ -29,11 +29,6 @@ profile.cov
 __pycache__/
 *.py[cod]
 
-# Go workspace file
-go.work.sum
-# 本机遗留的校验和文件，Go 工具链不读它，仓库里也没有引用
-/go.work.pin.sum
-
 # 系统与本机工具产生的文件
 .DS_Store
 .zcode/

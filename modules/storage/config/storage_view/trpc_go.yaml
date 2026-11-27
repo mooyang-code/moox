@@ -6,7 +6,6 @@ server:
   filter:
     - recovery
     - validation
-    - opentelemetry
     - prometheus
   # History backfills may temporarily contend with PrimaryStore reads. Keep
   # the request alive long enough for a bounded Pebble batch to complete.
@@ -41,7 +40,6 @@ server:
 client:
   filter:
     - validation
-    - opentelemetry
   service:
     - name: trpc.moox.storage.PrimaryStore
       target: ip://127.0.0.1:20102

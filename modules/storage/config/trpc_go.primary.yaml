@@ -6,7 +6,6 @@ server:
   filter:
     - recovery
     - validation
-    - opentelemetry
     - prometheus
   # History backfill requests are key-only and bounded by the configured
   # lookback, but a cold history index can take several minutes. The view

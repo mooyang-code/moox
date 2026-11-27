@@ -6,7 +6,6 @@ server:
   filter:
     - recovery
     - validation
-    - opentelemetry
     - prometheus
   timeout: 5000
   admin:
@@ -49,7 +48,6 @@ server:
 client:
   filter:
     - validation
-    - opentelemetry
   service:
     - name: trpc.moox.storage.PrimaryStore
       target: ip://127.0.0.1:20102
