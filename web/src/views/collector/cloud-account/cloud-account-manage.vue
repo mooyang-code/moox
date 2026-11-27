@@ -203,7 +203,7 @@ const loadAccountList = async () => {
 };
 
 const loadCloudSecrets = async () => {
-  const response = await listSecrets({ category: "cloud", provider: "tencent", status: "active", limit: 200 });
+  const response = await listSecrets({ category: "cloud", provider: "tencent", status: "active", page: { page: 1, size: 200 } });
   cloudSecrets.value = response.secrets ?? [];
 };
 

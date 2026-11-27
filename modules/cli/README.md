@@ -31,7 +31,7 @@ make test-deployment-packages
 
 Admin 的密钥、Setup 与部署诊断复用命令持有的隧道客户端。`doctor bootstrap/diagnose --file <moox.toml>` 从同一操作员身份访问 SysDeploy；Monitor 与 Storage 管理入口同样复用这一客户端，命令结束时统一释放。
 
-Doctor 的 Monitor 与 SysDeploy 查询共用命令持有的隧道客户端；本地 CLI 配置只保存 Doctor 选项，严格拒绝未知字段、重复键和额外 YAML 文档。
+Doctor 的 Monitor 与 SysDeploy 查询共用命令持有的隧道客户端，配置仅依赖 `--file` 指定的 `moox.toml`（不设独立本地 CLI 配置文件）。
 
 Metadata 的 `import/apply` 用 `--seed` 选择本地 seed 文件，历史数据导入 `moox-cli import` 用 `--path` 或 `--pack` 选择数据文件，两者都用 `--file ./moox.toml` 选择 SSH 主机；`data rows export --file ./moox.toml` 与 Doctor 同样经操作员网关访问原生 RPC。Storage 没有自己的调用方凭据，只靠网关的签名与访问控制。建连失败且请求未发出时最多重试一次；请求可能已发出后的传输重试只允许只读方法与服务目录明确列出的幂等写方法。其他写请求结果未知时返回错误，由操作员核对状态后再决定是否重跑。
 

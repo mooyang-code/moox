@@ -136,11 +136,6 @@ message ReplayBar {
   string params_json = 17;               // 这一期因子实际生效的、由回放逐期提交的可变成员参数（成员键 → 参数名 → {default, overrides}）；只有因子现算的调参策略有内容，其余为 {}；brief 时为 {}
 }
 
-message PageRequest {
-  int32 page = 1;
-  int32 page_size = 2;
-}
-
 message CreateStrategyReq { Strategy strategy = 1; }
 message CreateStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; }
 message UpdateStrategyReq { string strategy_id = 1; string dsl_yaml = 2; }
@@ -168,8 +163,8 @@ message StrategySourceRequirement {
   string name = 1;
   string bar = 2;
 }
-message ListStrategiesReq { PageRequest page = 1; }
-message ListStrategiesRsp { common.RetInfo ret_info = 1; repeated Strategy strategies = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message ListStrategiesReq { common.Page page = 1; }
+message ListStrategiesRsp { common.RetInfo ret_info = 1; repeated Strategy strategies = 2; common.PageResult page_result = 3; }
 message DeleteStrategyReq { string strategy_id = 1; }
 message DeleteStrategyRsp { common.RetInfo ret_info = 1; }
 
@@ -192,8 +187,8 @@ message UpdateStrategyInstanceReq { StrategyInstance instance = 1; }
 message UpdateStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
 message GetStrategyInstanceReq { string instance_id = 1; }
 message GetStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
-message ListStrategyInstancesReq { PageRequest page = 1; string strategy_id = 2; string space_id = 3; optional bool enabled = 4; }
-message ListStrategyInstancesRsp { common.RetInfo ret_info = 1; repeated StrategyInstance instances = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message ListStrategyInstancesReq { common.Page page = 1; string strategy_id = 2; string space_id = 3; optional bool enabled = 4; }
+message ListStrategyInstancesRsp { common.RetInfo ret_info = 1; repeated StrategyInstance instances = 2; common.PageResult page_result = 3; }
 message SetStrategyInstanceEnabledReq { string instance_id = 1; bool enabled = 2; }
 message SetStrategyInstanceEnabledRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
 // ConfirmStrategyInstanceReq 把挂了组合账户、正在试运行的实例确认为实盘：下一期起目标交给 Trade 下单。
@@ -211,8 +206,8 @@ message DeleteStrategyInstanceRsp {
   bool incomplete = 2;
 }
 
-message ListStrategyResultsReq { PageRequest page = 1; string instance_id = 2; string session_id = 3; }
-message ListStrategyResultsRsp { common.RetInfo ret_info = 1; repeated StrategyResult results = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message ListStrategyResultsReq { common.Page page = 1; string instance_id = 2; string session_id = 3; }
+message ListStrategyResultsRsp { common.RetInfo ret_info = 1; repeated StrategyResult results = 2; common.PageResult page_result = 3; }
 message GetStrategyResultReq { string result_id = 1; }
 message GetStrategyResultRsp {
   common.RetInfo ret_info = 1;
@@ -247,10 +242,10 @@ message StartReplayReq {
 message StartReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; int32 bar_count = 3; int64 first_bar_end = 4; int64 last_bar_end = 5; }
 message GetReplayReq { string replay_id = 1; }
 message GetReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }
-message ListReplaysReq { PageRequest page = 1; }
-message ListReplaysRsp { common.RetInfo ret_info = 1; repeated Replay replays = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
-message ListReplayBarsReq { string replay_id = 1; PageRequest page = 2; bool brief = 3; }  // brief 只返回曲线与摘要字段，不含目标、持仓与摘要 JSON
-message ListReplayBarsRsp { common.RetInfo ret_info = 1; repeated ReplayBar bars = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
+message ListReplaysReq { common.Page page = 1; }
+message ListReplaysRsp { common.RetInfo ret_info = 1; repeated Replay replays = 2; common.PageResult page_result = 3; }
+message ListReplayBarsReq { string replay_id = 1; common.Page page = 2; bool brief = 3; }  // brief 只返回曲线与摘要字段，不含目标、持仓与摘要 JSON
+message ListReplayBarsRsp { common.RetInfo ret_info = 1; repeated ReplayBar bars = 2; common.PageResult page_result = 3; }
 message CancelReplayReq { string replay_id = 1; }
 message CancelReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }
 

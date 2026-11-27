@@ -163,10 +163,6 @@ portfolio:
   max_weight: 0.1
 `;
 
-export interface DSLDiagnostic {
-  message: string;
-}
-
 export interface DSLRulePreview {
   id: string;
   name: string;
@@ -180,7 +176,7 @@ export interface DSLRulePreview {
 /** 规则级市场的中文名。 */
 export const RULE_MARKET_LABELS: Record<string, string> = { spot: "现货", swap: "永续" };
 
-/** 策略池的预览：成员、分配方式、择时与步长。 */
+/** 策略池的只读展示预览：成员、分配方式、择时与步长。 */
 export interface DSLPoolPreview {
   memberIds: string[];
   /** fixed、rotation、drift，或写错的原文；没写为空串。 */
@@ -211,55 +207,62 @@ export interface DSLPreview {
   tuned?: boolean;
 }
 
-/** 本地只做 YAML 与结构预检；字段、表达式与列的完整校验以服务端 ValidateStrategy 为准。 */
+export interface DSLParseResult {
+  preview: DSLPreview | null;
+  syntaxError: string;
+  syntaxErrorLine: number;
+}
+
 /** DSL 是不是策略池（写了 strategy_pool）：只用于展示（绑定表按池的样式显示）；解析不了按不是处理。 */
 export function isPoolDsl(source: string): boolean {
   return Boolean(parseDSL(source).preview?.pool);
 }
 
-export function parseDSL(source: string): { preview: DSLPreview | null; diagnostics: DSLDiagnostic[] } {
+/**
+ * 极简只读 YAML 解析，仅用于生成列表摘要与编辑器侧栏展示预览；
+ * 全部 DSL 语义、规则、策略池约束与表达式校验统一由服务端 ValidateStrategy 负责。
+ */
+export function parseDSL(source: string): DSLParseResult {
   const document = parseDocument(source, { uniqueKeys: true });
-  const diagnostics: DSLDiagnostic[] = [...document.errors, ...document.warnings].map(item => ({ message: item.message }));
-  if (document.errors.length > 0) return { preview: null, diagnostics };
+  if (document.errors.length > 0) {
+    const first = document.errors[0];
+    return {
+      preview: null,
+      syntaxError: first.message,
+      syntaxErrorLine: first.linePos?.[0]?.line ?? 0
+    };
+  }
   let value: Record<string, any> | null;
   try {
     value = document.toJS() as Record<string, any> | null;
   } catch (error) {
     // 例如未解析的别名：document.errors 里没有，但转换成对象时会抛异常。
-    return { preview: null, diagnostics: [{ message: error instanceof Error ? error.message : "YAML 无法解析" }] };
+    return {
+      preview: null,
+      syntaxError: error instanceof Error ? error.message : "YAML 无法解析",
+      syntaxErrorLine: 0
+    };
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { preview: null, diagnostics: [{ message: "DSL 必须是 YAML 对象" }] };
+    return { preview: null, syntaxError: "DSL 必须是 YAML 对象", syntaxErrorLine: 0 };
   }
-  if (typeof value.name !== "string" || !value.name.trim()) diagnostics.push({ message: "缺少 name" });
-  const rules: DSLRulePreview[] = [];
   const hasPool = value.strategy_pool !== undefined && value.strategy_pool !== null;
-  let pool: DSLPoolPreview | undefined;
-  if (hasPool) {
-    pool = inspectPool(value, diagnostics);
-  } else if (!Array.isArray(value.rules) || value.rules.length === 0) {
-    diagnostics.push({
-      message: `rules 必须是非空列表，每条规则包含 id 与 type${value.rules === undefined ? "（策略池请写 strategy_pool）" : ""}`
-    });
-  } else {
-    value.rules.forEach((rule: any, index: number) => {
-      const id = typeof rule?.id === "string" ? rule.id : "";
-      const type = typeof rule?.type === "string" ? rule.type : "";
-      if (!id) diagnostics.push({ message: `rules[${index}] 缺少 id` });
-      if (type !== "rank") diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank` });
-      const preview: DSLRulePreview = {
-        id: id || `#${index + 1}`,
-        name: typeof rule?.name === "string" ? rule.name : "",
-        type
-      };
-      if (rule?.pool !== undefined && rule?.hold !== undefined) preview.timing = true;
-      if (rule?.market !== undefined) {
-        if (rule.market in RULE_MARKET_LABELS) preview.market = rule.market;
-        else diagnostics.push({ message: `rules[${index}] 的 market 只能是 spot 或 swap` });
-      }
-      rules.push(preview);
-    });
-  }
+  const pool = hasPool ? extractPoolPreview(value.strategy_pool) : undefined;
+  const rules: DSLRulePreview[] =
+    !hasPool && Array.isArray(value.rules)
+      ? value.rules.map((rule: any, index: number) => {
+          const id = typeof rule?.id === "string" ? rule.id : "";
+          const type = typeof rule?.type === "string" ? rule.type : "";
+          const preview: DSLRulePreview = {
+            id: id || `#${index + 1}`,
+            name: typeof rule?.name === "string" ? rule.name : "",
+            type
+          };
+          if (rule?.pool !== undefined && rule?.hold !== undefined) preview.timing = true;
+          if (typeof rule?.market === "string" && rule.market in RULE_MARKET_LABELS) preview.market = rule.market;
+          return preview;
+        })
+      : [];
   const universe = [
     value.universe && typeof value.universe === "object" ? describeUniverse(value.universe) : "全部标的",
     ...describeRuleUniverses(value.rules)
@@ -276,8 +279,19 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       ...(pool ? { pool } : {}),
       ...(value.factor_params !== undefined ? { tuned: true } : {})
     },
-    diagnostics
+    syntaxError: "",
+    syntaxErrorLine: 0
   };
+}
+
+/** 从服务端 ValidateStrategy 诊断文案里提取首个 YAML 1-based 行号（如“第 12 行附近”或“yaml: line 12”）；忽略表达式内部的行列号，无行号时返回 0。 */
+export function extractDiagnosticLine(diagnostics: readonly string[]): number {
+  for (const message of diagnostics) {
+    const match = /第\s*(\d+)\s*行(?!\s*第\s*\d+\s*列)|\byaml:\s*line\s+(\d+)\b/i.exec(message);
+    const line = Number(match?.[1] || match?.[2] || 0);
+    if (Number.isInteger(line) && line > 0) return line;
+  }
+  return 0;
 }
 
 const marketSelectText: Record<string, string> = { spot: "现货", swap: "永续", both: "现货与永续" };
@@ -292,113 +306,37 @@ function describeMarket(market: unknown): string {
   return parts.join("，");
 }
 
-const rotationFactorNames = ["return", "ma_ratio", "drawdown"];
-
-/** 策略池的本地结构预检（与 rules 互斥、必须写 bar、不写 market 等）；成员是否存在、市场与周期是否匹配由服务端校验。 */
-function inspectPool(value: Record<string, any>, diagnostics: DSLDiagnostic[]): DSLPoolPreview | undefined {
-  const report = (message: string) => diagnostics.push({ message });
-  if (value.rules !== undefined) report("rules 与 strategy_pool 只能写一个：策略池的逻辑都在成员策略里");
-  if (value.market !== undefined)
-    report("策略池不写 market：现货、永续成员各自写 market（股票成员不写），池要绑定的计算任务是成员所需市场的并集");
-  if (value.bar === undefined) report("策略池必须写 bar：成员的周期要与池一致");
-  if (value.universe !== undefined) report("策略池不写 universe：标的范围由各成员自己的 universe 决定");
-  if (value.factor_params !== undefined) report("策略池不支持 factor_params：多个成员可能给同一个可变成员写参数，会冲突");
-  const pool = value.strategy_pool;
-  if (typeof pool !== "object" || Array.isArray(pool)) {
-    report("strategy_pool 必须是对象，包含 members 与 allocation");
-    return undefined;
-  }
+function extractPoolPreview(pool: unknown): DSLPoolPreview | undefined {
+  if (!pool || typeof pool !== "object" || Array.isArray(pool)) return undefined;
+  const raw = pool as Record<string, any>;
   const memberIds: string[] = [];
-  if (!Array.isArray(pool.members) || pool.members.length === 0) {
-    report("strategy_pool.members 必须是非空列表，每个成员写 id 与 strategy");
-  } else {
-    pool.members.forEach((member: any, index: number) => {
+  if (Array.isArray(raw.members)) {
+    for (const member of raw.members) {
       const id = typeof member?.id === "string" ? member.id : "";
-      if (!id) report(`strategy_pool.members[${index}] 缺少 id`);
-      else if (memberIds.includes(id)) report(`strategy_pool.members 的成员 id ${id} 重复`);
-      if (id) memberIds.push(id);
-      if (typeof member?.strategy !== "string" || !member.strategy) report(`strategy_pool.members[${index}] 缺少 strategy`);
-    });
-  }
-  const allocation = pool.allocation && typeof pool.allocation === "object" ? pool.allocation : {};
-  const method = typeof allocation.method === "string" ? allocation.method : "";
-  let top = 0;
-  if (!method) {
-    report("strategy_pool.allocation.method 必须写 fixed、rotation 或 drift");
-  } else if (method === "fixed" || method === "drift") {
-    const ratios = allocation.ratios && typeof allocation.ratios === "object" ? allocation.ratios : null;
-    if (!ratios) report(`allocation.method 是 ${method}，需要写 ratios（成员 id → 比例）`);
-    else for (const id of memberIds) if (!(id in ratios)) report(`allocation.ratios 缺少成员 ${id} 的比例（不分配请写 0）`);
-  } else if (method === "rotation") {
-    const factors = allocation.rotation?.factors;
-    if (!Array.isArray(factors) || factors.length === 0) report("allocation.method 是 rotation，需要写 rotation.factors");
-    else
-      factors.forEach((factor: any, index: number) => {
-        if (!rotationFactorNames.includes(String(factor?.name)))
-          report(`rotation.factors[${index}] 的 name 只能是 ${rotationFactorNames.join("、")}`);
-      });
-    top = Number(allocation.rotation?.top);
-    if (!Number.isInteger(top) || top < 1) {
-      report("rotation.top 必须是不小于 1 的整数");
-      top = 0;
+      if (id && !memberIds.includes(id)) memberIds.push(id);
     }
-  } else {
-    report("strategy_pool.allocation.method 只能是 fixed、rotation 或 drift");
   }
-  inspectPoolOptions(pool, allocation, method, report);
-  const timingWindow = Number(pool.timing?.window);
+  const allocation = raw.allocation && typeof raw.allocation === "object" ? raw.allocation : {};
+  const method = typeof allocation.method === "string" ? allocation.method : "";
+  const rawTop = Number(allocation.rotation?.top);
+  const top = method === "rotation" && Number.isInteger(rawTop) && rawTop >= 1 ? rawTop : 0;
+  const timingWindow = Number(raw.timing?.window);
   const driftStart = allocation.start ?? allocation.initial?.at;
   const extras = [
     allocation.switch !== undefined && "条件转移",
-    pool.exposure !== undefined && "净敞口区间",
-    pool.gross !== undefined && "总杠杆区间",
-    pool.freeze !== undefined && "波动冻结"
+    raw.exposure !== undefined && "净敞口区间",
+    raw.gross !== undefined && "总杠杆区间",
+    raw.freeze !== undefined && "波动冻结"
   ].filter((item): item is string => Boolean(item));
   return {
     memberIds,
     method,
     top,
     timingWindow: Number.isInteger(timingWindow) && timingWindow > 0 ? timingWindow : 0,
-    step: pool.step === undefined || pool.step === null ? "" : String(pool.step),
+    step: raw.step === undefined || raw.step === null ? "" : String(raw.step),
     ...(method === "drift" && driftStart !== undefined && driftStart !== null ? { driftStart: String(driftStart) } : {}),
     ...(extras.length ? { extras } : {})
   };
-}
-
-const poolRebalanceModes = ["none", "every_bar", "periodic", "threshold", "both"];
-
-/** drift 与组合约束的本地互斥预检；数值范围、时刻是否落在 bar 起点等由服务端校验。 */
-function inspectPoolOptions(
-  pool: Record<string, any>,
-  allocation: Record<string, any>,
-  method: string,
-  report: (message: string) => void
-) {
-  if (method === "drift") {
-    const conflicts = [
-      pool.timing !== undefined && "timing",
-      pool.step !== undefined && "step",
-      allocation.rotation !== undefined && "rotation"
-    ].filter(Boolean);
-    if (conflicts.length) report(`drift 不能写 ${conflicts.join("、")}：漂移分配按成员持仓的价值变化调整比例`);
-    if (allocation.start !== undefined && allocation.initial !== undefined)
-      report("allocation.start 与 allocation.initial 只能写一个");
-    const sides = allocation.sides && typeof allocation.sides === "object" ? allocation.sides : {};
-    for (const [side, config] of Object.entries(sides) as [string, any][]) {
-      if (side !== "long" && side !== "short") report(`allocation.sides 只能写 long、short，不能写 ${side}`);
-      else if (config?.rebalance !== undefined && !poolRebalanceModes.includes(String(config.rebalance)))
-        report(`allocation.sides.${side}.rebalance 只能是 ${poolRebalanceModes.join("、")}`);
-    }
-  } else if (method) {
-    const driftOnly = [
-      allocation.start !== undefined && "allocation.start",
-      allocation.initial !== undefined && "allocation.initial",
-      allocation.sides !== undefined && "allocation.sides",
-      pool.freeze !== undefined && "freeze"
-    ].filter(Boolean);
-    if (driftOnly.length) report(`${driftOnly.join("、")} 只能与 method: drift 一起写`);
-  }
-  if (method === "rotation" && allocation.switch !== undefined) report("allocation.switch 只能与 fixed 或 drift 一起写");
 }
 
 /** 策略池的一句话说明：3 个成员，轮动（前 1 名），择时 24 根，步长 0.2；drift 写起点，再列出组合约束与冻结。 */

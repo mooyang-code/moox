@@ -26,10 +26,10 @@ control 网关直接访问 `127.0.0.1:11112`；其他主机经 control 的 TLS �
 真实 Admin 联调单独运行，避免业务模块互相导入内部实现（`make test-e2e-gates` 会现编译并运行它，下面是分步做法）。测试位于 Admin 的 `gatewaycontrol` 包，使用 `hostgateway_e2e` 构建标签；以真实 SQLite、PKI、GatewayControl 和生产网关二进制运行。执行端要求 Linux 的两个 loopback IP，预留 `127.0.0.1:11112/20102/11402`、`127.0.0.{1,2}:11002/11003/11012` 和 `127.0.0.2:11004`。纯 Go 产物可在本机交叉编译后传到 Linux，运行脚本不编译：
 
 ```bash
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go -C modules/hostgateway build \
-  -ldflags '-X main.Version=control-e2e' -o /tmp/moox-host-gateway-e2e ./cmd/server
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go -C modules/admin test -c \
-  -tags hostgateway_e2e -o /tmp/moox-admin-gateway-e2e ./internal/service/gatewaycontrol
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
+  -ldflags '-X main.Version=control-e2e' -o /tmp/moox-host-gateway-e2e ./modules/hostgateway/cmd/server
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c \
+  -tags hostgateway_e2e -o /tmp/moox-admin-gateway-e2e ./modules/admin/internal/service/gatewaycontrol
 # 在 Linux 的源码目录运行，变量使用该机器上的产物绝对路径。
 MOOX_HOST_GATEWAY_E2E_BINARY=/tmp/moox-host-gateway-e2e \
 MOOX_HOST_GATEWAY_E2E_TEST_BINARY=/tmp/moox-admin-gateway-e2e \

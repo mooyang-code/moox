@@ -152,7 +152,7 @@ async function load() {
   try {
     const [params, list, settings, cats] = await Promise.all([
       getFactorParams({ task_id: taskBinding.taskId }),
-      listStrategyResults(props.instance.instance_id, { page_size: 100, session_id: props.instance.session_id || undefined }),
+      listStrategyResults(props.instance.instance_id, { size: 100, session_id: props.instance.session_id || undefined }),
       getStrategyDisplaySettings(props.instance.instance_id),
       listFactorCategories().catch(() => [] as FactorCategory[])
     ]);

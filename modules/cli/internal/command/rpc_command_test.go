@@ -166,13 +166,18 @@ func TestSpecBuildsRequestFromFlagsDataAndPaging(t *testing.T) {
 	assert.Contains(t, out, `"items"`)
 }
 
-func TestSpecPagingStyleForStrategy(t *testing.T) {
+func TestSpecPagingStyleForStrategyAndSecret(t *testing.T) {
 	gateway := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
 	useRPCGateway(t, gateway)
-	spec := rpcSpec{Path: []string{"s", "list"}, Short: "t", Service: "trpc.moox.strategy.StrategyMgr", Method: "ListStrategies", NoSpace: true, Page: rpcPagePSize}
+	spec := rpcSpec{Path: []string{"s", "list"}, Short: "t", Service: "trpc.moox.strategy.StrategyMgr", Method: "ListStrategies", NoSpace: true, Page: rpcPageSize}
 	_, _, err := runSpecCommand(t, spec)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"page":{"page":1,"page_size":50}}`, string(gateway.body))
+	assert.JSONEq(t, `{"page":{"page":1,"size":50}}`, string(gateway.body))
+
+	secretSpec := specByPath(t, "secret", "list")
+	_, _, err = runSpecCommand(t, secretSpec, "--page", "2", "--page-size", "15", "--category", "cloud")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"category":"cloud","page":{"page":2,"size":15}}`, string(gateway.body))
 }
 
 func TestSpecRequiredFlagMayComeFromData(t *testing.T) {

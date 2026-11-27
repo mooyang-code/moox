@@ -16,7 +16,7 @@ go test -count=1 ./modules/collector/...
 
 ## 配置
 
-`config/trpc_go.yaml`、`config/app.yaml`、`config/markets/`（各市场参数，编进二进制）、`config/stream/`（`collector-stream`）；数据源与 SCF 运行时配置在 `configs/`；schema 在 `schema/collector.sql`。行情源参考见 [docs/行情接口目录.md](docs/行情接口目录.md)。
+`config/trpc_go.yaml`、`config/app.yaml`、`config/markets/`（各市场参数与含 `binance.yaml` 在内的全部数据源配置，均编进二进制）、`config/stream/`（`collector-stream`）；`configs/` 仅保留 `trpc_go.yaml`（SCF 代码包仅含单一 `main` 二进制）；schema 在 `schema/collector.sql`。行情源参考见 [docs/行情接口目录.md](docs/行情接口目录.md)。
 
 常驻进程和标的同步共用 `config/app.yaml` 中的 `gateway_client` 身份：caller 固定为 `collector`，签名用本机的主机签名私钥（默认 `../../secrets/host.key`）；本机网关地址、主机 ID 和私有 CA 由部署写进 `gateway_client` 段。标的同步任务统一在 `app.yaml` 的 `subject_sync` 中配置，由 Collector 定时器执行。Storage 没有调用方密钥，访问控制由主机网关按服务目录做。
 

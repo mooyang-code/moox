@@ -304,7 +304,7 @@ func criticalAlertLines(items []doctorcli.AlertItem) []string {
 func readStrategyInstances(ctx context.Context, gateway rpcclient.GatewayForwarder, spaceID string) ([]verify.Instance, error) {
 	var rsp json.RawMessage
 	client := &rpcclient.Client{Gateway: gateway, SpaceID: spaceID}
-	if err := client.CallGatewayJSON(ctx, strategyMgr, "ListStrategyInstances", map[string]any{"space_id": spaceID, "page": map[string]any{"page": 1, "page_size": 100}}, &rsp); err != nil {
+	if err := client.CallGatewayJSON(ctx, strategyMgr, "ListStrategyInstances", map[string]any{"space_id": spaceID, "page": map[string]any{"page": 1, "size": 100}}, &rsp); err != nil {
 		return nil, fmt.Errorf("read strategy instances: %w", err)
 	}
 	var parsed struct {

@@ -62,7 +62,6 @@ export default defineConfig(({ mode }) => {
             
             // 工具库 - 最基础的
             'utils-core': ['axios'],
-            'utils-crypto': ['node-forge'],
             
             // 终端相关 - 按需加载
             'terminal-core': ['@xterm/xterm'],

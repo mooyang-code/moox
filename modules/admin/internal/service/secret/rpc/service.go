@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gorm.io/gorm"
 
@@ -67,10 +68,13 @@ func NewService(store secretStore) *Service {
 
 // ========== 秘钥 CRUD ==========
 
-// defaultListSecretsLimit 是 ListSecrets 不带条数时的每页条数。
-const defaultListSecretsLimit = 50
+// ListSecrets 分页默认值与上限。
+const (
+	defaultListSecretsPageSize = 50
+	maxListSecretsPageSize     = 200
+)
 
-// ListSecrets 列出秘钥。
+// ListSecrets 分页列出秘钥（统一使用 common.Page / common.PageResult）。
 func (s *Service) ListSecrets(ctx context.Context, req *pb.ListSecretsReq) (*pb.ListSecretsRsp, error) {
 	filters := &dao.SecretFilters{
 		Keyword:  req.GetKeyword(),
@@ -78,12 +82,18 @@ func (s *Service) ListSecrets(ctx context.Context, req *pb.ListSecretsReq) (*pb.
 		Provider: req.GetProvider(),
 		Status:   req.GetStatus(),
 	}
-	// 不带条数时返回第一页，而不是空列表。
-	limit := int(req.GetLimit())
-	if limit <= 0 {
-		limit = defaultListSecretsLimit
+	page, size := int(req.GetPage().GetPage()), int(req.GetPage().GetSize())
+	if page <= 0 {
+		page = 1
 	}
-	secrets, total, err := s.store.List(ctx, int(req.GetOffset()), limit, filters)
+	if size <= 0 {
+		size = defaultListSecretsPageSize
+	}
+	if size > maxListSecretsPageSize {
+		size = maxListSecretsPageSize
+	}
+	offset := (page - 1) * size
+	secrets, total, err := s.store.List(ctx, offset, size, filters)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Secret] ListSecrets failed: %v", err)
 		return &pb.ListSecretsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥列表失败")}, nil
@@ -95,7 +105,13 @@ func (s *Service) ListSecrets(ctx context.Context, req *pb.ListSecretsReq) (*pb.
 	return &pb.ListSecretsRsp{
 		RetInfo: retOK(),
 		Secrets: pbSecrets,
-		Total:   total,
+		PageResult: &commonpb.PageResult{
+			Page:       uint32(page),
+			Size:       uint32(size),
+			Total:      uint32(total),
+			HasMore:    int64(page)*int64(size) < total,
+			TotalState: commonpb.TotalState_EXACT,
+		},
 	}, nil
 }
 

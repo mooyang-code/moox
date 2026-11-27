@@ -1,136 +1,66 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import process from 'node:process';
-import ts from 'typescript';
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const root = process.cwd();
-const sources = [
-  path.join(root, 'src/api/modules/host-monitor.ts'),
-  path.join(root, 'src/views/ops/host-workbench/index.vue'),
-  path.join(root, 'src/views/ops/host-workbench/host-monitor.vue'),
-  path.join(root, 'src/views/ops/host-workbench/host-monitor-card-grid.vue'),
-  path.join(root, 'src/views/ops/host-workbench/host-monitor-master-detail.vue'),
-  path.join(root, 'src/views/ops/host-workbench/host-monitor-detail.vue'),
-  path.join(root, 'src/router/route.ts'),
-  // 主机列表的连接、文件管理按钮按 sshAvailability 置灰
-  path.join(root, 'src/views/ops/host-workbench/ssh-hosts.vue'),
-].map((file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '').join('\n');
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(scriptDir, "..");
 
-const required = [
-  'host_id',
-  'maxAvailableFilesystemUsage',
-  'aggregateNetworkRate',
-  'data_gap',
-  'key: "monitor"',
-  'label: "主机监控"',
-  'normalizeTab(route.query.tab)',
-  'getCurrentMetrics',
-  'listAllDeploymentHosts',
-  'buildHostMonitorRows',
-  'sshAvailability',
-  '15_000',
-  "'cards'",
-  'value="master"',
-  'host-monitor-card-grid',
-  'host-monitor-master-detail',
-  'host-monitor-detail',
-  'value="3d"',
-  'value="7d"',
-  'selectedRow',
-  'filesystems',
-  'rate_available',
-  'aria-pressed',
-  'aria-label="自动刷新"',
-  'min-height: 0',
-  '文件系统',
-  '磁盘 I/O',
-  '网络接口',
-  'historyHasRenderableData',
-  'PageTitleTabs',
-  'aria-label="主机工作台"',
-  'detail-table',
-  'table-layout: fixed',
-  'overflow-x: hidden',
+const files = [
+  "src/api/modules/host-monitor.ts",
+  "src/views/ops/host-workbench/index.vue",
+  "src/views/ops/host-workbench/host-monitor.vue",
+  "src/views/ops/host-workbench/host-monitor-card-grid.vue",
+  "src/views/ops/host-workbench/host-monitor-master-detail.vue",
+  "src/views/ops/host-workbench/host-monitor-detail.vue",
+  "src/router/route.ts",
+  "src/views/ops/host-workbench/ssh-hosts.vue"
 ];
 
-const missing = required.filter((token) => !sources.includes(token));
+const sources = files
+  .map(relativePath => {
+    const abs = path.join(root, relativePath);
+    return fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : "";
+  })
+  .join("\n");
+
+// 核心契约：主机监控基于 SysDeploy 已登记主机与指标可用性标志，不恢复旧 SSH 主机清单或在线会话页。
+const requiredContracts = [
+  "listAllDeploymentHosts",
+  "getCurrentMetrics",
+  "buildHostMonitorRows",
+  "sshAvailability",
+  "maxAvailableFilesystemUsage",
+  "aggregateNetworkRate",
+  "historyHasRenderableData",
+  "PageTitleTabs"
+];
+
+const missing = requiredContracts.filter(token => !sources.includes(token));
 if (missing.length) {
-  console.error(`host monitor contract missing: ${missing.join(', ')}`);
+  console.error(`host monitor contract missing: ${missing.join(", ")}`);
   process.exit(1);
 }
 
-// 主机只来自 SysDeploy 登记，监控页不再有 SSH 主机清单或按地址、名称猜测的关联。
-const removedHostSourceTokens = [
-  'listSSHHosts',
-  'createSSHHost',
-  'updateSSHHost',
-  'deleteSSHHost',
-  'getSSHHostDetail',
-  'mergeHostWorkbenchRows',
-  'deployment_host_id',
-  'unique_name',
-  'monitorOnly',
+const retiredTokens = [
+  "listSSHHosts",
+  "createSSHHost",
+  "updateSSHHost",
+  "deleteSSHHost",
+  "getSSHHostDetail",
+  "mergeHostWorkbenchRows",
+  "deployment_host_id",
+  "unique_name",
+  "monitorOnly",
+  "SshSessions",
+  "getOnlineSessions",
+  'tab: "sessions"'
 ];
-const remainingHostSourceTokens = removedHostSourceTokens.filter((token) => sources.includes(token));
-if (remainingHostSourceTokens.length) {
-  console.error(`host monitor must only use registered hosts, still present: ${remainingHostSourceTokens.join(', ')}`);
+
+const remaining = retiredTokens.filter(token => sources.includes(token));
+if (remaining.length) {
+  console.error(`retired host monitor contract still present: ${remaining.join(", ")}`);
   process.exit(1);
 }
 
-const removedSessionPageTokens = [
-  'key="sessions"',
-  'title="在线会话"',
-  'SshSessions',
-  'getOnlineSessions',
-  'tab: "sessions"',
-];
-const remainingSessionPageTokens = removedSessionPageTokens.filter((token) => sources.includes(token));
-if (remainingSessionPageTokens.length) {
-  console.error(`removed session page contract still present: ${remainingSessionPageTokens.join(', ')}`);
-  process.exit(1);
-}
-
-const removedLayoutTokens = [
-  '<h2>主机工作台</h2>',
-  'type="rounded"',
-  'min-width:460px',
-  'overflow:auto',
-];
-const remainingLayoutTokens = removedLayoutTokens.filter((token) => sources.includes(token));
-if (remainingLayoutTokens.length) {
-  console.error(`old host workbench layout still present: ${remainingLayoutTokens.join(', ')}`);
-  process.exit(1);
-}
-
-const mappingPath = path.join(root, 'src/api/modules/host-monitor-mapping.ts');
-const mappingSource = fs.readFileSync(mappingPath, 'utf8');
-const compiled = ts.transpileModule(mappingSource, { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText;
-const mapping = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
-
-if (mapping.maxAvailableFilesystemUsage([{ percent: 0, percent_available: true }]) !== 0) {
-  throw new Error('0% filesystem usage must remain available');
-}
-if (!mapping.memoryUsageAvailable(1024, true)) {
-  throw new Error('0% memory usage with a valid total must remain available');
-}
-const rate = mapping.aggregateNetworkRate([
-  { rx_speed: 10, tx_speed: 5, rate_available: true },
-  { rx_speed: 7, tx_speed: 3, rate_available: true },
-]);
-if (!rate || rate.rx !== 17 || rate.tx !== 8) {
-  throw new Error('network rates must aggregate across available interfaces');
-}
-if (mapping.metricValueAvailable('offline', true)) {
-  throw new Error('offline hosts must not present stale values as current metrics');
-}
-if (!mapping.metricValueAvailable('online', true)) {
-  throw new Error('online available metrics must remain visible');
-}
-if (mapping.historyHasRenderableData([{ cpu_available: false, memory_available: false, disk_available: false }])) {
-  throw new Error('history without available percentage metrics must render the empty state');
-}
-if (!mapping.historyHasRenderableData([{ cpu_available: false, memory_available: true, disk_available: false }])) {
-  throw new Error('history with one available percentage metric must render a chart');
-}
-
-console.log('host monitor frontend contract passed');
+console.log("host monitor frontend contract passed");

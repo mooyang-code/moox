@@ -7,22 +7,119 @@ import (
 	"strings"
 )
 
-// 第一组服务必须携带 X-Space-Id；第二组（Storage、Factor）既有空间内数据，
-// 也有全局运维接口，请求里没有空间时按全局运维处理。
-func requiresSpaceHeader(serviceID string) bool {
-	switch serviceID {
-	case "trade", "strategy", "collector", "archive":
-		return true
+// spacePolicy 描述控制台网关对单个 (serviceID, method) 的空间契约等级（决策 D7）。
+type spacePolicy int
+
+const (
+	// spacePolicyGlobal 纯全局方法：无空间归属，无 X-Space-Id 直接放行，不校验也不回填请求体 space_id。
+	spacePolicyGlobal spacePolicy = iota
+	// spacePolicyOptional 空间可选方法：无空间直接放行；带有请求头或请求体空间时校验一致性并透传 X-Space-Id。
+	spacePolicyOptional
+	// spacePolicyRequired 业务空间内方法：必须携带空间，且请求头与请求体空间同时出现时必须一致。
+	spacePolicyRequired
+)
+
+// globalServices 是全服务纯全局的控制台服务（所有方法均无空间归属）。
+var globalServices = map[string]bool{
+	"auth":      true,
+	"ssh":       true,
+	"secret":    true,
+	"sysdeploy": true,
+	"monitor":   true,
+	"eventbus":  true,
+}
+
+// globalMethods 是业务服务中无空间归属的纯全局方法清单（如空间目录、云账号、下架名单、全局定义、生命周期）。
+var globalMethods = map[string]map[string]bool{
+	"storage": {
+		"ListSpaces":  true,
+		"CreateSpace": true,
+		"UpdateSpace": true,
+		"DeleteSpace": true,
+	},
+	"collector": {
+		"ListCloudAccounts":           true,
+		"CreateCloudAccount":          true,
+		"UpdateCloudAccount":          true,
+		"DeleteCloudAccount":          true,
+		"ListCloudRegions":            true,
+		"GetDataTypeConfigs":          true,
+		"GetDataTypeConfigWithFields": true,
+		"ListSubjectListers":          true,
+		"RegisterDelistNotice":        true,
+		"GetLifecycle":                true,
+		"ControlLifecycle":            true,
+	},
+	"trade": {
+		"InspectExchangeCredential": true,
+		"ListBlockedInstruments":    true,
+		"UnblockInstrument":         true,
+		"ListInstrumentHolders":     true,
+		"ListDelists":               true,
+		"GetLifecycle":              true,
+		"ControlLifecycle":          true,
+	},
+	"strategy": {
+		"CreateStrategy":   true,
+		"UpdateStrategy":   true,
+		"ListStrategies":   true,
+		"DeleteStrategy":   true,
+		"GetLifecycle":     true,
+		"ControlLifecycle": true,
+	},
+	"factor-mgr": {
+		"CreateFactor":         true,
+		"UpdateFactor":         true,
+		"DeleteFactor":         true,
+		"ImportFactorCatalog":  true,
+		"ValidateFactorSpec":   true,
+		"ListFactorFunctions":  true,
+		"ListFactorCategories": true,
+		"UpsertFactorCategory": true,
+		"DeleteFactorCategory": true,
+		"SetFactorCategory":    true,
+		"GetStatus":            true,
+		"PublishUdf":           true,
+		"ListUdfs":             true,
+		"GetUdf":               true,
+		"ActivateUdf":          true,
+		"GetLifecycle":         true,
+		"ControlLifecycle":     true,
+	},
+	"archive": {
+		"GetLifecycle":     true,
+		"ControlLifecycle": true,
+	},
+}
+
+// optionalSpaceMethods 是无空间可调、有空间时按空间校验一致性并透传 X-Space-Id 的方法清单。
+var optionalSpaceMethods = map[string]map[string]bool{
+	"strategy": {
+		"GetStrategy":      true,
+		"ValidateStrategy": true,
+	},
+	"activity": {
+		"ListActivityLogs": true,
+	},
+	"factor-mgr": {
+		"ListFactorTasks": true,
+		"ListFactors":     true,
+		"GetFactor":       true,
+	},
+}
+
+// methodSpacePolicy 返回控制台请求 (serviceID, method) 的方法级空间策略。
+func methodSpacePolicy(serviceID, method string) spacePolicy {
+	if globalServices[serviceID] {
+		return spacePolicyGlobal
 	}
-	return false
-}
-
-func spaceOptional(serviceID string) bool {
-	return serviceID == "storage" || serviceID == "factor-mgr"
-}
-
-func isSpaceScopedService(serviceID string) bool {
-	return requiresSpaceHeader(serviceID) || spaceOptional(serviceID)
+	if globalMethods[serviceID][method] {
+		return spacePolicyGlobal
+	}
+	if optionalSpaceMethods[serviceID][method] {
+		return spacePolicyOptional
+	}
+	return spacePolicyRequired
 }
 
 // bodySpaceIDs 收集请求体（含嵌套对象）里出现的 space_id。
@@ -75,12 +172,6 @@ func effectiveSpaceID(header string, body []byte) (string, error) {
 		}
 	}
 	return space, nil
-}
-
-// storageGlobalMethods 没有空间归属（空间目录本身），不做空间授权，
-// 也不会用请求头声明的空间回填请求体。
-var storageGlobalMethods = map[string]bool{
-	"CreateSpace": true, "UpdateSpace": true, "DeleteSpace": true, "ListSpaces": true,
 }
 
 // requestBodySpace 是空间内 Storage 方法实际作用的空间。请求体声明的空间必须唯一且与请求头一致；

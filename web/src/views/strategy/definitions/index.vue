@@ -104,7 +104,6 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
-import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import type { Strategy } from "@/api/strategy-types";
 import { summarizeDSL } from "@/views/strategy/dsl";
@@ -123,7 +122,6 @@ const ROUTE_NAME = "strategy-definitions";
 const router = useRouter();
 const route = useRoute();
 const store = useStrategyStore();
-const spaceStore = useSpaceStore();
 // URL 是分页与查看对象的唯一来源：刷新、前进后退都能恢复；定义是全局资源，切空间时保留。
 // 搜索词进 URL（?q=）：后端没有按名称搜索，搜索时在完整的策略目录里筛，前端分页；不搜索时按后端分页。
 const keyword = computed(() => queryString(route.query.q).trim());
@@ -162,7 +160,7 @@ function stateQuery(patch: { page?: number; definition_id?: string; q?: string }
 }
 async function refresh() {
   if (searching.value) await store.loadAllStrategies(200).catch(() => undefined);
-  else await store.loadStrategies({ page: pagination.current, page_size: pagination.pageSize }).catch(() => undefined);
+  else await store.loadStrategies({ page: pagination.current, size: pagination.pageSize }).catch(() => undefined);
 }
 function search() {
   void router.replace({ name: ROUTE_NAME, query: stateQuery({ q: keywordDraft.value.trim(), page: 1 }) });
@@ -210,31 +208,25 @@ async function remove(strategyId: string) {
   if (pagination.current > lastPage) changePage(lastPage);
   else await refresh();
 }
-// 请求按空间授权：空间初始化完成或切换后才加载，避免无空间头被拒绝且不再恢复。
+// 策略定义属于全局资源（D7 global），无选中空间时也可直接加载，切空间无需重载。
 onMounted(() => {
-  if (spaceStore.selectedSpaceId) void refresh();
+  void refresh();
 });
-watch(
-  () => spaceStore.selectedSpaceId,
-  next => {
-    if (next) void refresh();
-  }
-);
 // 页码变化来自 URL（翻页、前进后退）；离开本页时路由已切换，不再响应。
 watch(
   () => queryPage(route.query.page),
   page => {
     if (route.name !== ROUTE_NAME || page === pagination.current) return;
     pagination.current = page;
-    if (spaceStore.selectedSpaceId && !searching.value) void refresh();
+    if (!searching.value) void refresh();
   }
 );
 // 搜索词变化（搜索、清空、前进后退）：同步输入框；开始搜索时读完整目录
 watch(keyword, (next, previous) => {
   if (route.name !== ROUTE_NAME) return;
   keywordDraft.value = next;
-  if (next && !previous && !store.strategiesComplete && spaceStore.selectedSpaceId) void refresh();
-  if (!next && previous && spaceStore.selectedSpaceId) void refresh();
+  if (next && !previous && !store.strategiesComplete) void refresh();
+  if (!next && previous) void refresh();
 });
 </script>
 

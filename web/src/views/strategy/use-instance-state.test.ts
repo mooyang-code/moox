@@ -245,7 +245,7 @@ describe("实例详情与实例列表", () => {
     api.listStrategies.mockRejectedValue(new Error("目录失败"));
     const store = useStrategyStore();
     const list = useInstanceList();
-    const loadingInstances = list.loadInstances({ page: 1, page_size: 20 });
+    const loadingInstances = list.loadInstances({ page: 1, size: 20 });
     await expect(store.loadAllStrategies(200)).rejects.toThrow("目录失败");
     // 目录请求先结束并失败：不能关闭实例列表的加载状态，也不能把错误算到实例头上。
     expect(store.catalogLoading).toBe(false);
@@ -263,7 +263,7 @@ describe("实例详情与实例列表", () => {
     const store = useInstanceList();
     store.instances = [instance({ instance_id: "old" })] as never;
     store.totalInstances = 1;
-    const stale = store.loadInstances({ page: 1, page_size: 20 });
+    const stale = store.loadInstances({ page: 1, size: 20 });
     store.clearInstances();
     expect(store.instances).toEqual([]);
     expect(store.instancesLoading).toBe(false);

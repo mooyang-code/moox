@@ -36,13 +36,13 @@ describe("strategy API", () => {
   it("lists definitions and keeps service errors visible", async () => {
     call.mockResolvedValueOnce({
       strategies: [{ strategy_id: "momentum", name: "动量", dsl_yaml: "name: 动量", dsl_hash: "sha256:abc" }],
-      total: 1,
-      page: 1,
-      page_size: 20
+      page_result: { page: 1, size: 20, total: "1", has_more: false, total_state: "EXACT" }
     });
-    await expect(listStrategies({ page: 1, page_size: 20 })).resolves.toMatchObject({
-      items: [{ strategy_id: "momentum", name: "动量", dsl_hash: "sha256:abc" }]
+    await expect(listStrategies({ page: 1, size: 20 })).resolves.toMatchObject({
+      items: [{ strategy_id: "momentum", name: "动量", dsl_hash: "sha256:abc" }],
+      page: { page: 1, size: 20, total: 1, has_more: false, total_state: "EXACT" }
     });
+    expect(call).toHaveBeenLastCalledWith("strategy", "ListStrategies", { page: { page: 1, size: 20 } });
     call.mockRejectedValueOnce(new RequestError("upstream EOF", { ret_info: { code: 13, msg: "upstream EOF" } }));
     await expect(listStrategies()).rejects.toThrow("upstream EOF");
   });
@@ -65,9 +65,13 @@ describe("strategy API", () => {
     const instance = await confirmInstance("i-1", "session-1");
     expect(call).toHaveBeenCalledWith("strategy", "ConfirmStrategyInstance", { instance_id: "i-1", session_id: "session-1" });
     expect(instance.confirmed_at).toBe("1794704400000");
-    call.mockResolvedValueOnce({ instances: [{ instance_id: "i-2", enabled: true }], total: 1 });
+    call.mockResolvedValueOnce({
+      instances: [{ instance_id: "i-2", enabled: true }],
+      page_result: { page: 1, size: 20, total: 1, has_more: false }
+    });
     const page = await listInstances();
     expect(page.items[0].confirmed_at).toBe("0");
+    expect(page.page).toMatchObject({ page: 1, size: 20, total: 1, has_more: false });
   });
 
   it("reads results with status, skip reason and explanation items", async () => {
@@ -82,7 +86,7 @@ describe("strategy API", () => {
       results: [
         { result_id: "r1", bar_end_time: "1788656400000", status: "skipped", skip_reason: "factor_missing", targets: [] }
       ],
-      total: 1
+      page_result: { page: 2, size: 10, total: 1, has_more: false }
     });
     call.mockResolvedValueOnce({
       result: { result_id: "r1", status: "ok" },
@@ -94,8 +98,9 @@ describe("strategy API", () => {
       resolved_json: '{"dataset_id":"d"}'
     });
     await expect(listStrategyTargets("i-1")).resolves.toMatchObject({ session_id: "s1", result_id: "r1" });
-    const page = await listStrategyResults("i-1", { session_id: "s1", page: 2, page_size: 10 });
+    const page = await listStrategyResults("i-1", { session_id: "s1", page: 2, size: 10 });
     expect(page.items[0]).toMatchObject({ status: "skipped", skip_reason: "factor_missing", summary_json: "{}" });
+    expect(page.page).toMatchObject({ page: 2, size: 10, total: 1, has_more: false });
     const detail = await getStrategyResult("r1");
     expect(detail.items[0]).toMatchObject({ rule_id: "r", rank: 1, weight: "0.5", scale: "0.8" });
     // 规则没写 scale 时为空串，系数列据此隐藏
@@ -104,7 +109,7 @@ describe("strategy API", () => {
     expect(call).toHaveBeenNthCalledWith(2, "strategy", "ListStrategyResults", {
       instance_id: "i-1",
       session_id: "s1",
-      page: { page: 2, page_size: 10 }
+      page: { page: 2, size: 10 }
     });
   });
 
@@ -151,11 +156,11 @@ describe("strategy API", () => {
   });
 
   it("omits the enabled filter unless it is a boolean", async () => {
-    call.mockResolvedValue({ instances: [], total: 0 });
+    call.mockResolvedValue({ instances: [], page_result: { page: 1, size: 20, total: 0, has_more: false } });
     await listInstances({ enabled: "" as unknown as boolean });
     await listInstances({ enabled: false });
-    expect(call.mock.calls[0][2]).toMatchObject({ enabled: undefined });
-    expect(call.mock.calls[1][2]).toMatchObject({ enabled: false });
+    expect(call.mock.calls[0][2]).toMatchObject({ enabled: undefined, page: { page: 1, size: 20 } });
+    expect(call.mock.calls[1][2]).toMatchObject({ enabled: false, page: { page: 1, size: 20 } });
   });
 
   it("starts a replay with the requested window and fee", async () => {
@@ -196,21 +201,22 @@ describe("strategy API", () => {
   it("reads replay bars in brief or full pages", async () => {
     call.mockResolvedValueOnce({
       bars: [{ bar_end_time: "t", equity: 1.2, holdings: 3, skip_reason: "no_data" }],
-      total: 1
+      page_result: { page: 2, size: 2000, total: 1, has_more: false }
     });
-    const page = await listReplayBars("p1", { page: 2, page_size: 2000, brief: true });
+    const page = await listReplayBars("p1", { page: 2, size: 2000, brief: true });
     expect(call).toHaveBeenLastCalledWith("strategy", "ListReplayBars", {
       replay_id: "p1",
-      page: { page: 2, page_size: 2000 },
+      page: { page: 2, size: 2000 },
       brief: true
     });
     expect(page.items[0]).toMatchObject({ equity: 1.2, holdings: 3, skip_reason: "no_data", targets: [] });
+    expect(page.page).toMatchObject({ page: 2, size: 2000, total: 1, has_more: false });
   });
 
   it("silences the global error toast for background polling requests", async () => {
-    call.mockResolvedValueOnce({ replays: [], total: 0 });
-    await listReplays({ page: 1, page_size: 20 });
-    expect(call).toHaveBeenLastCalledWith("strategy", "ListReplays", { page: { page: 1, page_size: 20 } });
+    call.mockResolvedValueOnce({ replays: [], page_result: { page: 1, size: 20, total: 0, has_more: false } });
+    await listReplays({ page: 1, size: 20 });
+    expect(call).toHaveBeenLastCalledWith("strategy", "ListReplays", { page: { page: 1, size: 20 } });
     call.mockResolvedValueOnce({ replay: { replay_id: "p1" } });
     await getReplay("p1");
     expect(call).toHaveBeenLastCalledWith("strategy", "GetReplay", { replay_id: "p1" });

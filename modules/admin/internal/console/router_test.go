@@ -51,14 +51,14 @@ func newTestRouter(t *testing.T, store *auth.SessionStore, local *LocalDispatche
 }
 
 func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
-	for _, tc := range []struct{ name, method, path string }{
-		{"storage", "ListDatasets", "trpc.moox.storage.Metadata"},
-		{"storage", "UpsertFields", "trpc.moox.storage.PrimaryStore"},
-		{"storage", "QueryTimeSeriesRows", "trpc.moox.storage.DataView"},
-		{"collector", "GetTaskList", "trpc.moox.collector.CollectMgr"},
-		{"factor-mgr", "ListFactors", "trpc.moox.factor.FactorMgr"},
-		{"monitor", "GetHealthOverview", "trpc.moox.monitor.MonitorMgr"},
-		{"trade", "ListOrders", "trpc.moox.trade.TradeConsoleService"},
+	for _, tc := range []struct{ name, method, path, wantSpace string }{
+		{"storage", "ListDatasets", "trpc.moox.storage.Metadata", "space-1"},
+		{"storage", "UpsertFields", "trpc.moox.storage.PrimaryStore", "space-1"},
+		{"storage", "QueryTimeSeriesRows", "trpc.moox.storage.DataView", "space-1"},
+		{"collector", "GetTaskList", "trpc.moox.collector.CollectMgr", "space-1"},
+		{"factor-mgr", "ListFactors", "trpc.moox.factor.FactorMgr", "space-1"},
+		{"monitor", "GetHealthOverview", "trpc.moox.monitor.MonitorMgr", ""},
+		{"trade", "ListOrders", "trpc.moox.trade.TradeConsoleService", "space-1"},
 	} {
 		t.Run(tc.name+"/"+tc.method, func(t *testing.T) {
 			store, current := setupSessionTest(t)
@@ -70,9 +70,9 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 				require.Equal(t, tc.path, service)
 				require.Equal(t, tc.method, method)
 				require.Equal(t, codec.SerializationTypeJSON, serialization)
-				// 请求体已声明空间，不需要回填，Storage 与其他服务一样原样转发。
+				// 请求体已声明空间，不需要回填，Storage 与其他服务一样原样转发；纯全局方法不向下游透传空间元数据。
 				require.Equal(t, body, raw)
-				require.Equal(t, gatewayclient.CallMetadata{SpaceID: "space-1", UserID: "u1", TraceID: "trace-1"}, gatewayclient.CallMetadataFromContext(ctx))
+				require.Equal(t, gatewayclient.CallMetadata{SpaceID: tc.wantSpace, UserID: "u1", TraceID: "trace-1"}, gatewayclient.CallMetadataFromContext(ctx))
 				return response, nil
 			})
 			router := newTestRouter(t, store, nil, gateway).buildControlRouter()

@@ -45,11 +45,11 @@ export const useStrategyStore = defineStore("strategy", () => {
       const items: Strategy[] = [];
       let total = 0;
       for (let page = 1; ; page += 1) {
-        const response = await listStrategies({ page, page_size: pageSize });
+        const response = await listStrategies({ page, size: pageSize });
         if (requestId !== catalogRequest) return;
         items.push(...response.items);
         total = response.page.total;
-        if (!response.items.length || items.length >= total) break;
+        if (!response.items.length || (!response.page.has_more && items.length >= total)) break;
       }
       strategyCatalog.value = items;
       strategiesComplete.value = true;

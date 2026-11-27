@@ -222,7 +222,7 @@ portfolio: {max_missing: 0.2}
 ```bash
 ./bin/moox-cli strategy validate --space-id stockcn --dsl-file s.yaml \
   --factor-task equity=<5m 因子任务> --factor-task daily:equity=<日线因子任务>
-./bin/moox-cli strategy create --space-id stockcn --dsl-file s.yaml
+./bin/moox-cli strategy create --dsl-file s.yaml
 ./bin/moox-cli strategy instance create --space-id stockcn --strategy-id <ID> \
   --factor-task equity=<5m 因子任务> --factor-task daily:equity=<日线因子任务>
 ```

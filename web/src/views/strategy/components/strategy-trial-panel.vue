@@ -83,7 +83,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { listAllFactorTasks } from "@/api/factor";
 import { validateStrategy } from "@/api/strategy";
-import type { ValidateStrategyResult } from "@/api/strategy-types";
+import type { StrategyTaskRequirement, ValidateStrategyResult } from "@/api/strategy-types";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import { enabledTasks, type TaskOption } from "@/views/strategy/components/task-options";
@@ -96,7 +96,13 @@ import { useDisplayZone } from "@/hooks/useDisplayZone";
 // 页面时间按当前空间登记的时区显示
 const displayZone = useDisplayZone();
 
-const props = defineProps<{ source: string; spaceId: string }>();
+const props = defineProps<{
+  source: string;
+  spaceId: string;
+  /** 外层编辑器已防抖调用 ValidateStrategy 时直接复用其 requirement，避免每次按键重复请求。 */
+  managedRequirement?: boolean;
+  requirement?: StrategyTaskRequirement | null;
+}>();
 const singleMarkets = ["spot", "swap", "equity"];
 // 策略没有写 market 时只试算一个任务，市场由用户选（不预设）。
 const singleMarket = ref<string>();
@@ -114,7 +120,10 @@ let tasksRequest = 0;
 let runRequest = 0;
 
 // 要绑定的市场由后端按 DSL 推出（ValidateStrategy 的 requirement），编辑时停下 400 毫秒再读。
-const { requirement, reload: reloadRequirement } = useTaskRequirement(computed(() => ({ dsl: props.source })));
+const { requirement: fetchedRequirement, reload: reloadRequirement } = useTaskRequirement(
+  computed(() => (props.managedRequirement ? {} : { dsl: props.source }))
+);
+const requirement = computed(() => (props.managedRequirement ? (props.requirement ?? null) : fetchedRequirement.value));
 const pool = computed(() => Boolean(requirement.value?.pool));
 // 试算只绑主帧市场的任务（不含参考市场与附加来源）
 const activeMarkets = computed(() => mainMarkets(requirement.value, singleMarket.value || ""));

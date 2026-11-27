@@ -4,8 +4,8 @@ import { installMessageDedupe } from "@/utils/message-dedupe";
 import { createApp } from "vue";
 import "@/style.css";
 import App from "@/App.vue";
-// arco-design
-import ArcoVue from "@arco-design/web-vue";
+// arco-design 函数式组件上下文绑定（模板 <a-*> 组件由 unplugin-vue-components 按需解析）
+import { Message, Modal, Notification } from "@arco-design/web-vue";
 // vue-router
 import router from "@/router/index";
 // pinia
@@ -64,13 +64,10 @@ app.config.errorHandler = (err, instance, info) => {
   }
 };
 
-// app.use(plugin, options)
-// 其中 plugin 表示要传递的插件对象， options 参数是可选的，表示选项配置
-// https://cn.vuejs.org/api/application.html#app-use
+Message._context = app._context;
+Modal._context = app._context;
+Notification._context = app._context;
 
-app.use(ArcoVue, {
-  componentPrefix: "arco"
-});
 app.use(pinia);
 app.use(ArcoVueIcon);
 app.use(router);

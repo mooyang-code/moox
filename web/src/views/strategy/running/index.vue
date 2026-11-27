@@ -248,7 +248,7 @@ async function refresh(background = false) {
         strategy_id: strategyId || undefined,
         enabled: enabled === "" ? undefined : enabled === "true",
         page,
-        page_size: PAGE_SIZE
+        size: PAGE_SIZE
       },
       { background }
     );

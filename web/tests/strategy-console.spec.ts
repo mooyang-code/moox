@@ -37,9 +37,7 @@ test("strategy definitions render the DSL v3 contract", async ({ page }) => {
             updated_at: String(Date.UTC(2026, 6, 30))
           }
         ],
-        total: "1",
-        page: 1,
-        page_size: 20
+        page_result: { page: 1, size: 20, total: "1", has_more: false }
       }
     })
   );
@@ -125,7 +123,7 @@ test("instance detail distinguishes valid target weight from trade fills and exp
             publish_status: "none"
           }
         ],
-        total: "2"
+        page_result: { page: 1, size: 20, total: "2", has_more: false }
       }
     })
   );

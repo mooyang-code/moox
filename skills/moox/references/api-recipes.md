@@ -74,7 +74,7 @@
 - 业务失败（`ret_info.code` 非 0，`0` 或 `SUCCESS` 才算成功）时先打印响应、再以非 0 退出。
 - **写方法不带 `--yes` 只预览**（输出将要发出的请求）：把预览给用户看，确认后再加 `--yes`；`gateway methods` 标为“写”的都算，只读方法不受影响。
 - **`gateway call` 不能调用返回密钥明文或完整 webhook 的方法**（`SecretMgr.GetSecretValue`、`MonitorMgr.ListNotificationChannels`），也拒绝密钥的新建、修改、启停、删除（`CreateSecret`、`UpdateSecret`、`ToggleSecretStatus`、`DeleteSecret`，由用户在管理台操作）：云账户凭证由专用命令在进程内使用，告警渠道请用户到管理台「资源与运维 › 监控告警」的“消息通知设置”查看。
-- 请求字段以 `modules/<模块>/proto/*.proto` 为准；分页字段因服务而异（策略用 `{"page":{"page":1,"page_size":50}}`，其余用 `{"page":{"page":1,"size":50}}`）。
+- 请求字段以 `modules/<模块>/proto/*.proto` 为准；非游标列表接口全仓统一使用 `{"page":{"page":1,"size":50}}`。
 
 ### 人工结束钱包划转记录（`trpc.moox.trade.TradeConsoleService` 的 `ResolveWalletTransfer`）
 

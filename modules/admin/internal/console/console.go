@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
@@ -177,8 +178,9 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	// 请求头没有空间而由请求体声明时，把授权通过的空间写回下游元数据。
-	if authorizedSpace != "" && headers["space_id"] != authorizedSpace {
+	// 按授权结果统一同步下游元数据空间：纯全局方法会清空误带的 X-Space-Id，
+	// 请求头未带空间而由请求体声明时则把授权通过的空间写回下游元数据。
+	if headers["space_id"] != authorizedSpace {
 		headers["space_id"] = authorizedSpace
 		ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{
 			SpaceID: authorizedSpace, UserID: headers["user_id"], TraceID: headers["trace_id"],
@@ -228,13 +230,11 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	writeForwardResponse(w, response, headers)
 }
 
-// authorizeRequest 在转发前定下请求作用的空间（可能来自请求体），只核对请求头与请求体里的空间一致。
-// 系统只有一个超级用户，不按空间放行：空间是否存在、是否停用不在这里判断（见管理后台.md 已知差别）。
+// authorizeRequest 在转发前按方法级三档空间策略（global / space_optional / space_required）定下请求作用的空间（可能来自请求体），
+// 仅核对请求头与请求体里的空间一致；系统只有一个超级用户，空间是否存在、是否停用不在这里判断（见管理后台.md 已知差别）。
 func (hr *HTTPRouter) authorizeRequest(r *http.Request, serviceID, method string, body []byte) (string, bool, int, error) {
-	if serviceID == "storage" && storageGlobalMethods[method] {
-		return "", false, 0, nil
-	}
-	if !isSpaceScopedService(serviceID) {
+	policy := methodSpacePolicy(serviceID, method)
+	if policy == spacePolicyGlobal {
 		return "", false, 0, nil
 	}
 	var spaceID string
@@ -250,10 +250,9 @@ func (hr *HTTPRouter) authorizeRequest(r *http.Request, serviceID, method string
 		return "", false, http.StatusBadRequest, err
 	}
 	if spaceID == "" {
-		if requiresSpaceHeader(serviceID) {
+		if policy == spacePolicyRequired {
 			return "", false, http.StatusForbidden, errors.New("space_id is required")
 		}
-		// Storage、Factor 的无空间请求属于全局运维接口。
 		return "", false, 0, nil
 	}
 	return spaceID, inject, 0, nil
@@ -309,7 +308,7 @@ func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]s
 		headers["accept_encoding"] = acceptEncoding
 	}
 	// space_id：硬隔离维度，经 gatewayclient 元数据透传给下游业务服务
-	if spaceID := r.Header.Get("X-Space-Id"); spaceID != "" {
+	if spaceID := strings.TrimSpace(r.Header.Get("X-Space-Id")); spaceID != "" {
 		headers["space_id"] = spaceID
 	}
 	return headers

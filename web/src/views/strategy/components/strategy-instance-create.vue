@@ -405,7 +405,7 @@ async function loadAccountsList() {
       listTradingAccounts({ page: { page: 1, size: 200 } })
         .then(rsp => new Map((rsp.accounts || []).map(item => [item.trading_account_id, item])))
         .catch(() => null),
-      listInstances({ page: 1, page_size: 500, enabled: true })
+      listInstances({ page: 1, size: 500, enabled: true })
         .then(rsp => enabledInstanceAccounts(rsp.items))
         .catch(() => null)
     ]);

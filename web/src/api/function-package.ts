@@ -1,6 +1,6 @@
 import { readSelectedSpaceId } from "./admin/space-header";
 import { call } from "@/api/http";
-import forge from "node-forge";
+import { computeFileMd5 } from "@/utils/md5";
 
 /** 代码包状态：pending 已发上传地址，available COS 对象已核对、可以部署。 */
 export type PackageStatus = "pending" | "available";
@@ -66,12 +66,7 @@ export const uploadFunctionPackage = async (data: UploadPackageRequest, file: Fi
   if (!putResp.ok) {
     throw new Error(`上传到 COS 失败：HTTP ${putResp.status}`);
   }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  const md5Hex = forge.md.md5.create().update(binary).digest().toHex();
+  const md5Hex = await computeFileMd5(file);
   const rsp = await call<
     { space_id: string; package_id: string; file_size: number; file_md5: string },
     { package?: FunctionPackage }

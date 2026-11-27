@@ -489,7 +489,7 @@ func (c gatewayStartClient) Instances(ctx context.Context, spaceID string) ([]se
 	var parsed struct {
 		Instances []setupStartInstance `json:"instances"`
 	}
-	err := c.strategyCall(ctx, spaceID, "ListStrategyInstances", map[string]any{"space_id": spaceID, "page": map[string]any{"page": 1, "page_size": 100}}, &parsed)
+	err := c.strategyCall(ctx, spaceID, "ListStrategyInstances", map[string]any{"space_id": spaceID, "page": map[string]any{"page": 1, "size": 100}}, &parsed)
 	return parsed.Instances, err
 }
 

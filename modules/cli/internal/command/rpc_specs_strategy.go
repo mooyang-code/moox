@@ -10,7 +10,7 @@ import (
 
 const strategyMgr = "trpc.moox.strategy.StrategyMgr"
 
-// 策略服务按请求头里的空间 ID 取元数据，所有命令都带 --space-id（默认 crypto）。
+// 策略定义（list/create/update/delete）全局生效，show/validate 空间可选，实例、结果与回放按 --space-id 隔离（默认 crypto）。
 func init() {
 	rpcGroupShort["strategy"] = "策略定义、实例、结果、历史回放与展示设置（调用 StrategyMgr）"
 	rpcGroupShort["strategy instance"] = "策略实例"
@@ -33,19 +33,19 @@ func init() {
 		mapFlag("factor-task", "instance.factor_tasks", "可省略；给了就必须与现有的一致（因子任务创建时写定，含参考市场与 来源名:市场 的任务），写法同 create"),
 	}
 	registerRPCSpecs(
-		rpcSpec{Path: []string{"strategy", "list"}, Short: "列出策略定义", Service: strategyMgr, Method: "ListStrategies", Page: rpcPagePSize},
+		rpcSpec{Path: []string{"strategy", "list"}, Short: "列出策略定义", Service: strategyMgr, Method: "ListStrategies", NoSpace: true, Page: rpcPageSize},
 		rpcSpec{Path: []string{"strategy", "show"}, Short: "查看一个策略定义", Service: strategyMgr, Method: "GetStrategy",
 			Flags: []rpcFlag{reqFlag("strategy-id", "strategy_id", "策略 ID")}},
 		rpcSpec{Path: []string{"strategy", "validate"}, Short: "试算策略 DSL（不落库）", Service: strategyMgr, Method: "ValidateStrategy",
 			Flags: []rpcFlag{fileFlag("dsl-file", "dsl_yaml", "策略 DSL YAML 文件；- 为标准输入", true), mapFlag("factor-task", "factor_tasks", "用这些因子任务校验列引用并试算，写成 市场=任务 ID，可重复（混合市场策略给 spot= 和 swap= 两个；参考市场的任务按市场给；附加来源写 来源名:市场=任务 ID）")}},
-		rpcSpec{Path: []string{"strategy", "create"}, Short: "创建策略定义（DSL 写在 --dsl-file 里，写法见 skill 的 strategy-dsl）", Service: strategyMgr, Method: "CreateStrategy",
+		rpcSpec{Path: []string{"strategy", "create"}, Short: "创建策略定义（DSL 写在 --dsl-file 里，写法见 skill 的 strategy-dsl）", Service: strategyMgr, Method: "CreateStrategy", NoSpace: true,
 			Flags: []rpcFlag{fileFlag("dsl-file", "strategy.dsl_yaml", "策略 DSL YAML 文件；- 为标准输入", true), strFlag("strategy-id", "strategy.strategy_id", "策略 ID；不给由服务端生成"), strFlag("name", "strategy.name", "策略名称")}},
-		rpcSpec{Path: []string{"strategy", "update"}, Short: "修改策略定义（引用它的实例要先停用）", Service: strategyMgr, Method: "UpdateStrategy",
+		rpcSpec{Path: []string{"strategy", "update"}, Short: "修改策略定义（引用它的实例要先停用）", Service: strategyMgr, Method: "UpdateStrategy", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("strategy-id", "strategy_id", "策略 ID"), fileFlag("dsl-file", "dsl_yaml", "策略 DSL YAML 文件；- 为标准输入", true)}},
-		rpcSpec{Path: []string{"strategy", "delete"}, Short: "删除策略定义（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "DeleteStrategy", Destructive: true,
+		rpcSpec{Path: []string{"strategy", "delete"}, Short: "删除策略定义（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "DeleteStrategy", NoSpace: true, Destructive: true,
 			Flags: []rpcFlag{reqFlag("strategy-id", "strategy_id", "策略 ID")}},
 
-		rpcSpec{Path: []string{"strategy", "instance", "list"}, Short: "列出策略实例（--space-id 过滤空间，默认 crypto）", Service: strategyMgr, Method: "ListStrategyInstances", Page: rpcPagePSize, SpaceField: "space_id",
+		rpcSpec{Path: []string{"strategy", "instance", "list"}, Short: "列出策略实例（--space-id 过滤空间，默认 crypto）", Service: strategyMgr, Method: "ListStrategyInstances", Page: rpcPageSize, SpaceField: "space_id",
 			Flags: []rpcFlag{strFlag("strategy-id", "strategy_id", "只列这个策略的实例"), boolFlag("enabled", "enabled", "按启用状态过滤（--enabled=false 只列停用的）")}},
 		rpcSpec{Path: []string{"strategy", "instance", "show"}, Short: "查看一个策略实例", Service: strategyMgr, Method: "GetStrategyInstance",
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
@@ -59,7 +59,7 @@ func init() {
 		rpcSpec{Path: []string{"strategy", "instance", "disable"}, Destructive: true, Short: "停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": false},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
 
-		rpcSpec{Path: []string{"strategy", "result", "list"}, Short: "列出实例每期的结果", Service: strategyMgr, Method: "ListStrategyResults", Page: rpcPagePSize,
+		rpcSpec{Path: []string{"strategy", "result", "list"}, Short: "列出实例每期的结果", Service: strategyMgr, Method: "ListStrategyResults", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID"), strFlag("session-id", "session_id", "只看这次启用会话的结果")}},
 		rpcSpec{Path: []string{"strategy", "result", "show"}, Short: "查看一期结果", Service: strategyMgr, Method: "GetStrategyResult",
 			Flags: []rpcFlag{reqFlag("result-id", "result_id", "结果 ID")}},
@@ -75,10 +75,10 @@ func init() {
 				strFlag("funding-column", "funding_column", "永续持仓按 View 里的这一列结算资金费（本根累计的资金费率，例如 funding_rate）；不写不计，策略池写在池 DSL 的 fees.funding_column"),
 				strFlag("instance-id", "instance_id", "沿用这个实例当前会话的策略版本与因子任务"),
 				strFlag("input", "input", "主帧的因子数据来源：view（默认，读因子任务的结果 View）或 compute（因子现算：经主机网关调因子引擎，按因子机本地 K 线与回放中的参数现算，不受 View 保留根数限制）；声明了 factor_params 的策略必须用 compute；compute 不支持策略池与股票市场")}},
-		rpcSpec{Path: []string{"strategy", "replay", "list"}, Short: "列出策略历史回放", Service: strategyMgr, Method: "ListReplays", Page: rpcPagePSize},
+		rpcSpec{Path: []string{"strategy", "replay", "list"}, Short: "列出策略历史回放", Service: strategyMgr, Method: "ListReplays", Page: rpcPageSize},
 		rpcSpec{Path: []string{"strategy", "replay", "show"}, Short: "查看一次回放", Service: strategyMgr, Method: "GetReplay",
 			Flags: []rpcFlag{reqFlag("replay-id", "replay_id", "回放 ID")}},
-		rpcSpec{Path: []string{"strategy", "replay", "bars"}, Short: "查看回放逐期明细", Service: strategyMgr, Method: "ListReplayBars", Page: rpcPagePSize,
+		rpcSpec{Path: []string{"strategy", "replay", "bars"}, Short: "查看回放逐期明细", Service: strategyMgr, Method: "ListReplayBars", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("replay-id", "replay_id", "回放 ID"), boolFlag("brief", "brief", "只返回摘要")}},
 		rpcSpec{Path: []string{"strategy", "replay", "cancel"}, Short: "取消回放", Service: strategyMgr, Method: "CancelReplay",
 			Flags: []rpcFlag{reqFlag("replay-id", "replay_id", "回放 ID")}},

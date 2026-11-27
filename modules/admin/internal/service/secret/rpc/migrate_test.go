@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
@@ -240,11 +241,63 @@ func TestOpenBundleRejectsTamperedOrForeignFiles(t *testing.T) {
 	require.ErrorIs(t, err, errWeakPassphrase)
 }
 
-// 不带条数时返回第一页，不是空列表。
+// 不带分页参数时默认返回第一页（size=50），且返回标准 PageResult。
 func TestListSecretsDefaultsToFirstPageWithoutLimit(t *testing.T) {
-	service := NewService(newMemSecrets(model.Secret{SecretID: "a"}, model.Secret{SecretID: "b"}))
+	service := NewService(newMemSecrets(
+		model.Secret{SecretID: "a"}, model.Secret{SecretID: "b"},
+		model.Secret{SecretID: "c"}, model.Secret{SecretID: "d"},
+		model.Secret{SecretID: "e"},
+	))
 	rsp, err := service.ListSecrets(context.Background(), &pb.ListSecretsReq{})
 	require.NoError(t, err)
-	require.Len(t, rsp.GetSecrets(), 2)
-	require.EqualValues(t, 2, rsp.GetTotal())
+	require.Len(t, rsp.GetSecrets(), 5)
+	require.EqualValues(t, 1, rsp.GetPageResult().GetPage())
+	require.EqualValues(t, defaultListSecretsPageSize, rsp.GetPageResult().GetSize())
+	require.EqualValues(t, 5, rsp.GetPageResult().GetTotal())
+	require.False(t, rsp.GetPageResult().GetHasMore())
+	require.Equal(t, commonpb.TotalState_EXACT, rsp.GetPageResult().GetTotalState())
+
+	page1, err := service.ListSecrets(context.Background(), &pb.ListSecretsReq{Page: &pb.Page{Page: 1, Size: 2}})
+	require.NoError(t, err)
+	require.Len(t, page1.GetSecrets(), 2)
+	require.EqualValues(t, 1, page1.GetPageResult().GetPage())
+	require.EqualValues(t, 2, page1.GetPageResult().GetSize())
+	require.EqualValues(t, 5, page1.GetPageResult().GetTotal())
+	require.True(t, page1.GetPageResult().GetHasMore())
+	require.Equal(t, commonpb.TotalState_EXACT, page1.GetPageResult().GetTotalState())
+
+	page3, err := service.ListSecrets(context.Background(), &pb.ListSecretsReq{Page: &pb.Page{Page: 3, Size: 2}})
+	require.NoError(t, err)
+	require.Len(t, page3.GetSecrets(), 1)
+	require.EqualValues(t, 3, page3.GetPageResult().GetPage())
+	require.EqualValues(t, 2, page3.GetPageResult().GetSize())
+	require.EqualValues(t, 5, page3.GetPageResult().GetTotal())
+	require.False(t, page3.GetPageResult().GetHasMore())
+	require.Equal(t, commonpb.TotalState_EXACT, page3.GetPageResult().GetTotalState())
+
+	clamped, err := service.ListSecrets(context.Background(), &pb.ListSecretsReq{Page: &pb.Page{Page: 1, Size: 999}})
+	require.NoError(t, err)
+	require.EqualValues(t, maxListSecretsPageSize, clamped.GetPageResult().GetSize())
+
+	// 整除末页（page*size == total）：has_more 必须为 false
+	exact, err := service.ListSecrets(context.Background(), &pb.ListSecretsReq{Page: &pb.Page{Page: 1, Size: 5}})
+	require.NoError(t, err)
+	require.Len(t, exact.GetSecrets(), 5)
+	require.False(t, exact.GetPageResult().GetHasMore())
+
+	// 超页边界：返回空列表且 has_more 为 false
+	overflow, err := service.ListSecrets(context.Background(), &pb.ListSecretsReq{Page: &pb.Page{Page: 4, Size: 2}})
+	require.NoError(t, err)
+	require.Empty(t, overflow.GetSecrets())
+	require.EqualValues(t, 5, overflow.GetPageResult().GetTotal())
+	require.False(t, overflow.GetPageResult().GetHasMore())
+
+	// 空表边界：total=0、has_more=false
+	emptyService := NewService(newMemSecrets())
+	emptyRsp, err := emptyService.ListSecrets(context.Background(), &pb.ListSecretsReq{Page: &pb.Page{Page: 1, Size: 2}})
+	require.NoError(t, err)
+	require.Empty(t, emptyRsp.GetSecrets())
+	require.EqualValues(t, 0, emptyRsp.GetPageResult().GetTotal())
+	require.False(t, emptyRsp.GetPageResult().GetHasMore())
+	require.Equal(t, commonpb.TotalState_EXACT, emptyRsp.GetPageResult().GetTotalState())
 }

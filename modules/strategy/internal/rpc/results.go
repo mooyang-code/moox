@@ -45,7 +45,7 @@ func (s *Service) ListStrategyResults(ctx context.Context, req *strategypb.ListS
 	for _, result := range results {
 		items = append(items, resultProto(result))
 	}
-	return &strategypb.ListStrategyResultsRsp{RetInfo: success(), Results: items, Total: total, Page: int32(page), PageSize: int32(size)}, nil
+	return &strategypb.ListStrategyResultsRsp{RetInfo: success(), Results: items, PageResult: pageResult(page, size, total)}, nil
 }
 
 func (s *Service) GetStrategyResult(ctx context.Context, req *strategypb.GetStrategyResultReq) (*strategypb.GetStrategyResultRsp, error) {

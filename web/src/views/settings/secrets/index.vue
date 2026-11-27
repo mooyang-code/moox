@@ -323,11 +323,10 @@ async function load() {
       keyword: filters.keyword || undefined,
       category: filters.category || undefined,
       status: filters.status || undefined,
-      offset: (pagination.current - 1) * pagination.pageSize,
-      limit: pagination.pageSize
+      page: { page: pagination.current, size: pagination.pageSize }
     });
     rows.value = rsp.secrets || [];
-    pagination.total = rsp.total || 0;
+    pagination.total = Number(rsp.page_result?.total ?? 0);
   } finally {
     loading.value = false;
   }

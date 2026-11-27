@@ -7,7 +7,7 @@ const ctx = vi.hoisted(() => ({ store: null as any, space: null as any, listInst
 vi.mock("@/api/strategy", () => ({
   listInstances: ctx.listInstances,
   listAllInstances: (options?: unknown) =>
-    ctx.listInstances({ page: 1, page_size: 200 }, options).then((rsp: { items: unknown[] }) => rsp.items)
+    ctx.listInstances({ page: 1, size: 200 }, options).then((rsp: { items: unknown[] }) => rsp.items)
 }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ctx.space }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => ctx.store }));

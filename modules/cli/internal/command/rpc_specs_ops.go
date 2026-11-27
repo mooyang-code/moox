@@ -46,9 +46,8 @@ func init() {
 		rpcSpec{Path: []string{"host", "agent", "status"}, HostRequired: true, Short: "主机代理的采集与上报状态", Service: hostAgentSvc, Method: "GetStatus", NoSpace: true, Host: true},
 		rpcSpec{Path: []string{"host", "agent", "run-once"}, HostRequired: true, Short: "让主机代理立即采集并上报一次", Service: hostAgentSvc, Method: "RunOnce", NoSpace: true, Host: true},
 
-		rpcSpec{Path: []string{"secret", "list"}, Short: "列出密钥（只含打码后的信息）", Service: secretMgrSvc, Method: "ListSecrets", NoSpace: true,
-			Flags: []rpcFlag{strFlag("keyword", "keyword", "关键字"), strFlag("category", "category", "分类"), strFlag("provider", "provider", "云厂商"), strFlag("status", "status", "状态"),
-				intFlag("offset", "offset", "偏移"), intFlag("limit", "limit", "条数")}},
+		rpcSpec{Path: []string{"secret", "list"}, Short: "列出密钥（只含打码后的信息）", Service: secretMgrSvc, Method: "ListSecrets", NoSpace: true, Page: rpcPageSize,
+			Flags: []rpcFlag{strFlag("keyword", "keyword", "关键字"), strFlag("category", "category", "分类"), strFlag("provider", "provider", "云厂商"), strFlag("status", "status", "状态")}},
 		rpcSpec{Path: []string{"secret", "show"}, Short: "查看一个密钥的元信息（值已打码）", Service: secretMgrSvc, Method: "GetSecret", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("secret-id", "secret_id", "密钥 ID")}},
 	)

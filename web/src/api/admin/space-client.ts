@@ -44,17 +44,98 @@ export function setSpaceInitializer(initializer: SpaceInitializer | null): void 
 
 const SPACE_INIT_TIMEOUT_MS = 10_000;
 
-/** Storage 的空间目录本身（列出、新建、修改、删除空间）：没有空间归属。 */
-const STORAGE_SPACE_METHOD = /\/api\/admin\/storage\/(?:ListSpaces|CreateSpace|UpdateSpace|DeleteSpace)$/;
+/**
+ * 空间契约三档策略（与 Admin Console policy.go 1:1 对齐，决策 D7）：
+ * - global：纯全局接口，永不等空间初始化、不注入 X-Space-Id、不参与“切换空间即取消”；
+ * - space_optional：空间可选接口，无选中空间时不阻塞；有选中空间且未显式指定空间、请求体未传 global: true 时透传 X-Space-Id，
+ *   并在带了 injectedSpaceId 时随切空间取消旧读取；
+ * - space_required：空间内接口，无选中空间时等待空间初始化、注入 X-Space-Id，并随切空间取消旧读取。
+ */
+export type SpacePolicy = "global" | "space_optional" | "space_required";
 
-// 登录、空间列表本身不依赖已选空间，也不能等它（空间列表请求就是初始化的一部分，等自己会死锁）。
-function independentOfSelectedSpace(url: string | undefined): boolean {
-  return /\/api\/admin\/auth\//.test(url || "") || STORAGE_SPACE_METHOD.test(url || "");
+const ADMIN_API_PATH = /\/api\/admin\/([^/?#]+)\/([^/?#]+)/;
+
+const GLOBAL_SERVICES = new Set(["auth", "ssh", "secret", "sysdeploy", "monitor", "eventbus"]);
+
+const GLOBAL_METHODS: Record<string, ReadonlySet<string>> = {
+  storage: new Set(["ListSpaces", "CreateSpace", "UpdateSpace", "DeleteSpace"]),
+  collector: new Set([
+    "ListCloudAccounts",
+    "CreateCloudAccount",
+    "UpdateCloudAccount",
+    "DeleteCloudAccount",
+    "ListCloudRegions",
+    "GetDataTypeConfigs",
+    "GetDataTypeConfigWithFields",
+    "ListSubjectListers",
+    "RegisterDelistNotice",
+    "GetLifecycle",
+    "ControlLifecycle"
+  ]),
+  trade: new Set([
+    "InspectExchangeCredential",
+    "ListBlockedInstruments",
+    "UnblockInstrument",
+    "ListInstrumentHolders",
+    "ListDelists",
+    "GetLifecycle",
+    "ControlLifecycle"
+  ]),
+  strategy: new Set(["ListStrategies", "CreateStrategy", "UpdateStrategy", "DeleteStrategy", "GetLifecycle", "ControlLifecycle"]),
+  "factor-mgr": new Set([
+    "CreateFactor",
+    "UpdateFactor",
+    "DeleteFactor",
+    "ImportFactorCatalog",
+    "ValidateFactorSpec",
+    "ListFactorFunctions",
+    "ListFactorCategories",
+    "UpsertFactorCategory",
+    "DeleteFactorCategory",
+    "SetFactorCategory",
+    "GetStatus",
+    "PublishUdf",
+    "ListUdfs",
+    "GetUdf",
+    "ActivateUdf",
+    "GetLifecycle",
+    "ControlLifecycle"
+  ]),
+  archive: new Set(["GetLifecycle", "ControlLifecycle"])
+};
+
+const SPACE_OPTIONAL_METHODS: Record<string, ReadonlySet<string>> = {
+  strategy: new Set(["GetStrategy", "ValidateStrategy"]),
+  activity: new Set(["ListActivityLogs"]),
+  // GetFactor / ListFactors 无空间时可正常读取全局定义，有空间时服务端按 X-Space-Id 区分本空间与其他空间引用计数。
+  "factor-mgr": new Set(["ListFactorTasks", "GetFactor", "ListFactors"])
+};
+
+export function spacePolicyForUrl(url: string | undefined): SpacePolicy {
+  const match = ADMIN_API_PATH.exec(url || "");
+  if (!match) return "space_required";
+  const [, service, method] = match;
+  if (GLOBAL_SERVICES.has(service)) return "global";
+  if (GLOBAL_METHODS[service]?.has(method)) return "global";
+  if (SPACE_OPTIONAL_METHODS[service]?.has(method)) return "space_optional";
+  return "space_required";
 }
 
-/** 与空间无关的全局服务（没有空间归属）：不参与“切换空间即取消”，否则全局单例读取会被无故打断。 */
-const GLOBAL_SERVICE =
-  /\/api\/admin\/(?:(?:auth|ssh|secret|sysdeploy|setup|monitor)\/|storage\/(?:ListSpaces|CreateSpace|UpdateSpace|DeleteSpace)$|collector\/(?:ListCloudAccounts|ListCloudRegions)$)/;
+function isGlobalPayload(data: unknown): boolean {
+  if (typeof data === "string") {
+    try {
+      const parsed = JSON.parse(data) as Record<string, unknown> | null;
+      return Boolean(parsed && parsed.global === true);
+    } catch {
+      return false;
+    }
+  }
+  return typeof data === "object" && data !== null && (data as Record<string, unknown>).global === true;
+}
+
+function shouldSkipSpaceContext(policy: SpacePolicy, data: unknown): boolean {
+  return policy === "global" || (policy === "space_optional" && isGlobalPayload(data));
+}
 
 let lastSpaceInitFinished = 0;
 let spaceInitInflight: Promise<void> | null = null;
@@ -112,7 +193,7 @@ onSpaceGenerationChange(() => {
 });
 
 function isSpaceScopedRead(config: Pick<AxiosRequestConfig, "url" | "injectedSpaceId"> | undefined): boolean {
-  return Boolean(config?.injectedSpaceId) && READ_METHOD.test(config?.url || "") && !GLOBAL_SERVICE.test(config?.url || "");
+  return Boolean(config?.injectedSpaceId) && READ_METHOD.test(config?.url || "") && spacePolicyForUrl(config?.url) !== "global";
 }
 
 function isStaleSpaceRead(config: InternalAxiosRequestConfig | undefined): boolean {
@@ -134,24 +215,29 @@ function hasExplicitSpace(config: AxiosRequestConfig | undefined): boolean {
  *  不依赖请求内部何时结束，也就不会晚于新空间的任何响应。 */
 function runSpaceRead<T>(
   url: string,
+  data: unknown,
   config: AxiosRequestConfig | undefined,
   run: (config: AxiosRequestConfig) => Promise<T>,
   afterInit = false
 ): Promise<T> {
-  const spaceId = readSelectedSpaceId();
-  // 还没有选中空间：先等空间初始化，在确定有效空间之后再登记取消，避免初始化期间发起的读取漏登。
   const target = config?.url ?? url;
+  const policy = spacePolicyForUrl(target);
+  if (shouldSkipSpaceContext(policy, data ?? config?.data)) {
+    return run(config as AxiosRequestConfig);
+  }
+  const spaceId = readSelectedSpaceId();
+  // 只有 space_required 在没有选中空间时等空间初始化；space_optional 无空间时不阻塞，直接发无空间头请求。
   if (
+    policy === "space_required" &&
     !spaceId &&
     !afterInit &&
     spaceInitializer &&
     READ_METHOD.test(target) &&
-    !GLOBAL_SERVICE.test(target) &&
     !hasExplicitSpace(config)
   ) {
-    return ensureSpaceSelected().then(() => runSpaceRead(url, config, run, true));
+    return ensureSpaceSelected().then(() => runSpaceRead(url, data, config, run, true));
   }
-  const tracked: AxiosRequestConfig = { ...config, url: config?.url ?? url } as AxiosRequestConfig;
+  const tracked: AxiosRequestConfig = { ...config, url: target } as AxiosRequestConfig;
   if (!spaceId || hasExplicitSpace(config) || !isSpaceScopedRead(Object.assign(tracked, { injectedSpaceId: spaceId }))) {
     return run(config as AxiosRequestConfig); // 原样透传，保持调用形态不变
   }
@@ -180,17 +266,17 @@ export function installSpaceAwareClient(client: AxiosInstance): void {
   if (typeof client.post === "function") {
     const post = client.post.bind(client);
     client.post = ((url: string, data?: unknown, config?: AxiosRequestConfig) =>
-      runSpaceRead(url, config, c => (c === undefined ? post(url, data) : post(url, data, c)))) as typeof client.post;
+      runSpaceRead(url, data, config, c => (c === undefined ? post(url, data) : post(url, data, c)))) as typeof client.post;
   }
   if (typeof client.get === "function") {
     const get = client.get.bind(client);
     client.get = ((url: string, config?: AxiosRequestConfig) =>
-      runSpaceRead(url, config, c => (c === undefined ? get(url) : get(url, c)))) as typeof client.get;
+      runSpaceRead(url, undefined, config, c => (c === undefined ? get(url) : get(url, c)))) as typeof client.get;
   }
   if (typeof client.request === "function") {
     const request = client.request.bind(client);
     client.request = ((config: AxiosRequestConfig) =>
-      runSpaceRead(config.url || "", config, c => request(c))) as typeof client.request;
+      runSpaceRead(config.url || "", config.data, config, c => request(c))) as typeof client.request;
   }
   client.interceptors.response.use(
     response => {
@@ -205,11 +291,13 @@ export function installSpaceAwareClient(client: AxiosInstance): void {
   );
   installSessionExpiry(client);
   client.interceptors.request.use(async config => {
-    if (!config.headers.get("X-Space-Id") && !independentOfSelectedSpace(config.url)) await ensureSpaceSelected();
+    const policy = spacePolicyForUrl(config.url);
+    if (shouldSkipSpaceContext(policy, config.data)) return config;
+    if (policy === "space_required" && !config.headers.get("X-Space-Id")) await ensureSpaceSelected();
     const spaceId = readSelectedSpaceId();
     if (spaceId && !config.headers.get("X-Space-Id")) {
       config.headers.set("X-Space-Id", spaceId);
-      // 调用点（下面的包装）已记录发起时的空间与代次；这里只补上没有经过包装的请求
+      // 调用点（上面的包装）已记录发起时的空间与代次；这里只补上没有经过包装的请求
       config.injectedSpaceId ??= spaceId;
       config.injectedSpaceGeneration ??= selectedSpaceGeneration();
     }

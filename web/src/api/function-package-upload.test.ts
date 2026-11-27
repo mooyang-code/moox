@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
 
@@ -48,8 +49,40 @@ describe("uploadFunctionPackage", () => {
     expect(calls.map(call => call[3]?.spaceId)).toEqual(["space-a", "space-a"]);
     expect(calls.map(call => call[2].space_id)).toEqual(["space-a", "space-a"]);
     expect(calls[0][2]).toMatchObject({ filename: "moox-collector-v1.0.1.zip", cloud_account_id: "acc" });
-    expect(calls[1][2]).toMatchObject({ package_id: "pkg-1", file_size: file.size });
-    expect(calls[1][2].file_md5).toMatch(/^[0-9a-f]{32}$/);
+    expect(calls[1][2]).toMatchObject({
+      package_id: "pkg-1",
+      file_size: file.size,
+      file_md5: createHash("md5").update("zip-bytes").digest("hex")
+    });
+  });
+
+  it("computes exact MD5 across empty and multi-chunk (>2 MiB) package files", async () => {
+    const cases: Array<{ name: string; bytes: Uint8Array }> = [
+      { name: "empty.zip", bytes: new Uint8Array(0) },
+      { name: "single.zip", bytes: new Uint8Array(1024).map((_, i) => i & 0xff) },
+      { name: "multi-chunk.zip", bytes: new Uint8Array(4 * 1024 * 1024 + 37).map((_, i) => (i * 17 + 11) & 0xff) }
+    ];
+    for (const item of cases) {
+      mocks.call.mockReset().mockImplementation(async (_service: string, method: string) => {
+        if (method === "InitPackageUpload") {
+          return { package: { package_id: `pkg-${item.name}` }, upload_url: "https://cos.example/put" };
+        }
+        return { package: { package_id: `pkg-${item.name}`, status: "available" } };
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ ok: true, status: 200 }))
+      );
+      const file = new File([item.bytes], item.name);
+      await uploadFunctionPackage(
+        { package_name: "moox-collector", version: "v1.0.2", runtime: "Go1", cloud_account_id: "acc" },
+        file,
+        "crypto"
+      );
+      const completeCall = mocks.call.mock.calls[1][2];
+      expect(completeCall.file_size, item.name).toBe(item.bytes.length);
+      expect(completeCall.file_md5, item.name).toBe(createHash("md5").update(item.bytes).digest("hex"));
+    }
   });
 
   it("stops before PUT when Collector returns no upload address", async () => {

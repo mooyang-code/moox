@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
@@ -187,4 +188,18 @@ func TestBrowserCallersNeedSpaceOrGlobalAndCannotWrite(t *testing.T) {
 	both, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{Global: true, SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, both.GetRetInfo().GetCode())
+
+	// 有 X-Space-Id 元数据、请求体省略 space_id 时按元数据空间过滤；显式 global=true 仍查全局事件。
+	headerCtx := gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{SpaceID: "crypto"})
+	fromHeader, err := service.ListActivityLogs(headerCtx, &pb.ListActivityLogsReq{})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, fromHeader.GetRetInfo().GetCode())
+	require.Len(t, fromHeader.GetItems(), 1)
+	require.Equal(t, "crypto", fromHeader.GetItems()[0].GetSpaceId())
+
+	globalWithHeader, err := service.ListActivityLogs(headerCtx, &pb.ListActivityLogsReq{Global: true})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, globalWithHeader.GetRetInfo().GetCode())
+	require.Len(t, globalWithHeader.GetItems(), 1)
+	require.Equal(t, "auth.login", globalWithHeader.GetItems()[0].GetCategory())
 }

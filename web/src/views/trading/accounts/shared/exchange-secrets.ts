@@ -13,7 +13,7 @@ export interface ExchangeSecretOption {
  * （ID 里看不出环境的照常列出，由检测判断）。
  */
 export async function loadExchangeSecrets(exchange: Exchange, environment?: 1 | 2): Promise<ExchangeSecretOption[]> {
-  const rsp = await listSecrets({ category: "exchange", status: "active", offset: 0, limit: 200 });
+  const rsp = await listSecrets({ category: "exchange", status: "active", page: { page: 1, size: 200 } });
   // 密钥的提供方就是 Trade 的交易所写法（binance、okx）
   const provider = exchange;
   return (rsp.secrets || [])

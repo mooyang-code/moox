@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
 var (
@@ -103,14 +104,14 @@ func replayBarProto(value store.ReplayBar) *strategypb.ReplayBar {
 }
 
 // pageValues 返回页码与页大小（默认 1 / 20，上限 500）。
-func pageValues(value *strategypb.PageRequest) (int, int) {
+func pageValues(value *commonpb.Page) (int, int) {
 	page, size := 1, 20
 	if value != nil {
 		if value.GetPage() > 0 {
 			page = int(value.GetPage())
 		}
-		if value.GetPageSize() > 0 {
-			size = int(value.GetPageSize())
+		if value.GetSize() > 0 {
+			size = int(value.GetSize())
 		}
 	}
 	if size > 500 {
@@ -120,7 +121,7 @@ func pageValues(value *strategypb.PageRequest) (int, int) {
 }
 
 // pageBounds 对内存中的列表分页。
-func pageBounds(value *strategypb.PageRequest, total int) (int, int, int, int) {
+func pageBounds(value *commonpb.Page, total int) (int, int, int, int) {
 	page, size := pageValues(value)
 	start := (page - 1) * size
 	if start > total {
@@ -128,6 +129,20 @@ func pageBounds(value *strategypb.PageRequest, total int) (int, int, int, int) {
 	}
 	end := min(start+size, total)
 	return page, size, start, end
+}
+
+// pageResult 构造全仓统一的精确分页结果。
+func pageResult(page, size int, total int64) *commonpb.PageResult {
+	if total < 0 {
+		total = 0
+	}
+	return &commonpb.PageResult{
+		Page:       uint32(page),
+		Size:       uint32(size),
+		Total:      uint32(total),
+		HasMore:    int64(page)*int64(size) < total,
+		TotalState: commonpb.TotalState_EXACT,
+	}
 }
 
 func dereference(value *string) string {

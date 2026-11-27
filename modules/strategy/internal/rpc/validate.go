@@ -12,7 +12,8 @@ import (
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 )
 
-// ValidateStrategy 解析校验 DSL；给出 factor_tasks 时解析绑定并在最新周期试算一次，结果不落库。
+// ValidateStrategy 解析校验 DSL（space_optional）：
+// 不带 factor_tasks 时执行纯语法与结构校验（不要求 X-Space-Id）；给出 factor_tasks 时按调用空间解析绑定并在最新周期试算一次，结果不落库。
 func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.ValidateStrategyReq) (*strategypb.ValidateStrategyRsp, error) {
 	if req == nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(errNilRequest)}, nil
@@ -43,7 +44,7 @@ func (s *Service) validate(ctx context.Context, req *strategypb.ValidateStrategy
 	}
 	scoped, err := requireSpaceID(ctx)
 	if err != nil {
-		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err)}
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}
 	}
 	if s.Resolver == nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(errDependenciesUnavailable), Diagnostics: []string{errDependenciesUnavailable.Error()}}

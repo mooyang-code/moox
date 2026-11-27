@@ -227,7 +227,7 @@ func (s *Service) ListStrategyInstances(ctx context.Context, req *strategypb.Lis
 		items = append(items, instanceProto(value))
 	}
 	s.markMissingTasks(ctx, values[start:end], items, false)
-	return &strategypb.ListStrategyInstancesRsp{RetInfo: success(), Instances: items, Total: int64(len(values)), Page: int32(page), PageSize: int32(size)}, nil
+	return &strategypb.ListStrategyInstancesRsp{RetInfo: success(), Instances: items, PageResult: pageResult(page, size, int64(len(values)))}, nil
 }
 
 func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategypb.SetStrategyInstanceEnabledReq) (*strategypb.SetStrategyInstanceEnabledRsp, error) {

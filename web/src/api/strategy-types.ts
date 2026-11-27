@@ -1,12 +1,16 @@
+import type { TotalState } from "@/api/storage/types";
+
 export interface PageRequest {
   page?: number;
-  page_size?: number;
+  size?: number;
 }
 
 export interface PageResponse {
+  page: number;
+  size: number;
   total: number;
-  page?: number;
-  page_size?: number;
+  has_more: boolean;
+  total_state?: TotalState;
 }
 
 // 时刻字段（*_at、bar_end_time、valid_until、回放的起止与进度、首末根）在 JSON 里是 Unix 毫秒的数字字符串，"0" 表示没有；

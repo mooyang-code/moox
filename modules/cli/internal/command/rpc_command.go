@@ -140,9 +140,8 @@ type rpcFlag struct {
 type rpcPageStyle int
 
 const (
-	rpcNoPage    rpcPageStyle = iota
-	rpcPageSize               // {"page":{"page":N,"size":M}}，因子、采集、存储、归档等
-	rpcPagePSize              // {"page":{"page":N,"page_size":M}}，策略
+	rpcNoPage   rpcPageStyle = iota
+	rpcPageSize              // {"page":{"page":N,"size":M}}，全仓统一的 common.Page 分页
 )
 
 type rpcSpec struct {
@@ -454,19 +453,14 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 	for field, value := range s.Fixed {
 		setRequestPath(request, field, value)
 	}
-	switch s.Page {
-	case rpcPageSize, rpcPagePSize:
+	if s.Page == rpcPageSize {
 		page, _ := cmd.Flags().GetInt64("page")
 		size, _ := cmd.Flags().GetInt64("page-size")
-		key := "size"
-		if s.Page == rpcPagePSize {
-			key = "page_size"
-		}
 		if cmd.Flags().Changed("page") || !hasRequestPath(request, "page.page") {
 			setRequestPath(request, "page.page", page)
 		}
-		if cmd.Flags().Changed("page-size") || !hasRequestPath(request, "page."+key) {
-			setRequestPath(request, "page."+key, size)
+		if cmd.Flags().Changed("page-size") || !hasRequestPath(request, "page.size") {
+			setRequestPath(request, "page.size", size)
 		}
 	}
 	for _, field := range s.AutoIDs {

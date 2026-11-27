@@ -1,4 +1,5 @@
 import { call } from "@/api/http";
+import type { Page, PageResult } from "@/api/storage/types";
 
 export interface Secret {
   id?: number;
@@ -23,13 +24,12 @@ export interface ListSecretsReq {
   category?: string;
   provider?: string;
   status?: string;
-  offset?: number;
-  limit?: number;
+  page?: Page;
 }
 
 export interface ListSecretsRsp {
   secrets: Secret[];
-  total: number;
+  page_result?: PageResult;
 }
 
 export interface CreateSecretReq {

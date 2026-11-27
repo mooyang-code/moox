@@ -279,11 +279,7 @@ func TestRPCSpecsMatchProtoAndCatalog(t *testing.T) {
 				assert.True(t, exists, "空间字段 %s：%s", spec.SpaceField, why)
 			}
 			if spec.Page != rpcNoPage {
-				key := "size"
-				if spec.Page == rpcPagePSize {
-					key = "page_size"
-				}
-				for _, path := range []string{"page.page", "page." + key} {
+				for _, path := range []string{"page.page", "page.size"} {
 					_, exists, why := index.checkPath(request, path)
 					assert.True(t, exists, "分页字段 %s：%s", path, why)
 				}
@@ -425,8 +421,12 @@ func TestProtoIndexCatchesWrongSpecs(t *testing.T) {
 	// 嵌套消息与公共包里的分页。
 	_, ok, why = index.checkPath(request, "page.size")
 	assert.True(t, ok, why)
+	_, ok, why = index.checkPath(index.rpcs["trpc.moox.strategy.StrategyMgr/ListStrategies"], "page.size")
+	assert.True(t, ok, why)
+	_, ok, why = index.checkPath(index.rpcs["trpc.moox.ops.SecretMgr/ListSecrets"], "page.size")
+	assert.True(t, ok, why)
 	_, ok, _ = index.checkPath(index.rpcs["trpc.moox.strategy.StrategyMgr/ListStrategies"], "page.page_size")
-	assert.True(t, ok)
+	assert.False(t, ok)
 	repeated, ok, _ := index.checkPath(index.rpcs["trpc.moox.factor.FactorMgr/RecalcFactors"], "members")
 	require.True(t, ok)
 	matches, _ = index.kindMatches(rpcStrings, repeated)

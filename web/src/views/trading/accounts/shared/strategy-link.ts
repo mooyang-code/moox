@@ -55,8 +55,8 @@ export function buildStrategyLinks(
 export async function loadStrategyLinks(logicals: readonly LogicalRef[]): Promise<Map<string, StrategyLink> | null> {
   try {
     const [instances, strategies] = await Promise.all([
-      listInstances({ page: 1, page_size: 500 }),
-      listStrategies({ page: 1, page_size: 500 })
+      listInstances({ page: 1, size: 500 }),
+      listStrategies({ page: 1, size: 500 })
     ]);
     return buildStrategyLinks(logicals, instances.items, new Map(strategies.items.map(item => [item.strategy_id, item.name])));
   } catch {

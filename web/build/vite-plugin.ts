@@ -1,13 +1,13 @@
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "path";
 import { PluginOption } from "vite";
-import { vitePluginForArco } from "@arco-plugins/vite-vue";
 import { createHtmlPlugin } from "vite-plugin-html";
 import { createSvgIconsPlugin } from "vite-plugin-svg-icons";
 import AutoImport from "unplugin-auto-import/vite";
 import { ArcoResolver } from "unplugin-vue-components/resolvers";
 import Components from "unplugin-vue-components/vite";
 import eslintPlugin from "vite-plugin-eslint";
+
 /**
  * 创建 vite 插件
  * @param viteEnv
@@ -18,32 +18,27 @@ export const createVitePlugins = (viteEnv: ViteEnv): (PluginOption | PluginOptio
     vue(),
     // esLint 报错信息显示在浏览器界面上
     // Temporarily disable eslint plugin during build to avoid rollup error
-    process.env.NODE_ENV === 'production' ? null : eslintPlugin(),
-    vitePluginForArco({
-      style: "css"
-    }),
-    // 提供ejs模板能力，用于index.html的标题显示
+    process.env.NODE_ENV === "production" ? null : eslintPlugin(),
+    // 提供 ejs 模板能力，用于 index.html 的标题显示
     createHtmlPlugin({
       inject: {
         data: {
-          title: env.VITE_GLOB_APP_TITLE  + " 一站式量化平台",
+          title: env.VITE_GLOB_APP_TITLE + " 一站式量化平台",
           mode: process.env.NODE_ENV || "development"
         }
       }
     }),
     createSvgIconsPlugin({
-      // 配置src下存放svg的路径，这里表示在src/assets/svgs文件夹下
+      // 配置 src 下存放 svg 的路径，这里表示在 src/assets/svgs 文件夹下
       iconDirs: [resolve(process.cwd(), "src/assets/svgs")],
       symbolId: "icon-[dir]-[name]"
     }),
     AutoImport({
       // 自动导入 Vue 相关函数，如：ref, reactive, toRef 等
       imports: ["vue", "vue-router"],
-      // arco组件的按需加载
-      resolvers: [ArcoResolver()],
-      // 解决eslint报错问题
+      // 解决 eslint 报错问题
       eslintrc: {
-        // 这里先设置成true然后npm run dev 运行之后会生成 .eslintrc-auto-import.json 文件之后，在改为false
+        // 这里先设置成 true 然后 npm run dev 运行之后会生成 .eslintrc-auto-import.json 文件之后，再改为 false
         enabled: false,
         filepath: "./.eslintrc-auto-import.json", // 生成的文件路径
         globalsPropValue: true
@@ -53,19 +48,19 @@ export const createVitePlugins = (viteEnv: ViteEnv): (PluginOption | PluginOptio
     }),
     Components({
       resolvers: [
-        // arco组件的按需加载
+        // 仅按需自动引入 <a-*> JS 组件；全局样式统一由 main.ts 引入 arco.css，关闭冗余 CSS 侧效应注入
         ArcoResolver({
-          sideEffect: true
+          sideEffect: false
         })
       ],
-      // 自动加载组件的目录配置,默认的为 'src/components'
+      // 自动加载组件的目录配置，默认的为 'src/components'
       dirs: ["src/components"],
       // 组件的有效文件扩展名
       extensions: ["vue"],
       // 配置文件生成位置
       dts: "src/components.d.ts"
-    }),
+    })
   ];
-  
+
   return plugins.filter(Boolean) as (PluginOption | PluginOption[])[];
 };

@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -282,16 +283,244 @@ func TestStrategyDefinitionCRUD(t *testing.T) {
 		t.Fatalf("修改结果不符：%+v", updated.GetStrategy())
 	}
 	listed, _ := h.service.ListStrategies(h.ctx, &strategypb.ListStrategiesReq{})
-	if listed.GetTotal() != 1 || listed.GetStrategies()[0].GetName() != "demo2" {
+	if listed.GetPageResult().GetTotal() != 1 || listed.GetPageResult().GetPage() != 1 || listed.GetPageResult().GetSize() != 20 || listed.GetPageResult().GetHasMore() || listed.GetPageResult().GetTotalState() != commonpb.TotalState_EXACT || listed.GetStrategies()[0].GetName() != "demo2" {
 		t.Fatalf("列表不符：%+v", listed)
 	}
-	missingSpace, _ := h.service.ListStrategies(trpc.BackgroundContext(), &strategypb.ListStrategiesReq{})
-	requireFail(t, int32(missingSpace.GetRetInfo().GetCode()), missingSpace.GetRetInfo().GetMsg(), "space_id")
+	noSpaceList, _ := h.service.ListStrategies(trpc.BackgroundContext(), &strategypb.ListStrategiesReq{})
+	requireOK(t, int32(noSpaceList.GetRetInfo().GetCode()), noSpaceList.GetRetInfo().GetMsg())
+	if noSpaceList.GetPageResult().GetTotal() != 1 || noSpaceList.GetStrategies()[0].GetName() != "demo2" {
+		t.Fatalf("无空间列策略定义应成功：%+v", noSpaceList)
+	}
 	deleted, _ := h.service.DeleteStrategy(h.ctx, &strategypb.DeleteStrategyReq{StrategyId: created.GetStrategyId()})
 	requireOK(t, int32(deleted.GetRetInfo().GetCode()), deleted.GetRetInfo().GetMsg())
-	if listed, _ := h.service.ListStrategies(h.ctx, &strategypb.ListStrategiesReq{}); listed.GetTotal() != 0 {
+	if listed, _ := h.service.ListStrategies(h.ctx, &strategypb.ListStrategiesReq{}); listed.GetPageResult().GetTotal() != 0 {
 		t.Fatalf("删除后列表应为空：%+v", listed)
 	}
+}
+
+// D7 空间契约双路径校验：
+// - Create/Update/List/DeleteStrategy 为纯全局接口，无 X-Space-Id 与带 X-Space-Id 均可正常执行；
+// - GetStrategy 与 ValidateStrategy 为 space_optional：无空间时返回纯定义/纯语法校验与 DSL 推导要求，不调用依赖空间的 Resolver；
+// - ValidateStrategy 带 factor_tasks 时需要空间解析任务，无空间拒绝、带空间成功；
+// - 实例/结果/回放等空间内接口仍严格要求 X-Space-Id。
+func TestStrategySpaceContractDualPaths(t *testing.T) {
+	h := newHarness(t)
+	noSpace := trpc.BackgroundContext()
+
+	// 全局定义 CRUD 在无 X-Space-Id 下完整跑通。
+	created, _ := h.service.CreateStrategy(noSpace, &strategypb.CreateStrategyReq{
+		Strategy: &strategypb.Strategy{StrategyId: "global-s1", DslYaml: demoDSL},
+	})
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+
+	updatedDSL := strings.Replace(demoDSL, "name: demo", "name: demo-global", 1)
+	updated, _ := h.service.UpdateStrategy(noSpace, &strategypb.UpdateStrategyReq{
+		StrategyId: "global-s1", DslYaml: updatedDSL,
+	})
+	requireOK(t, int32(updated.GetRetInfo().GetCode()), updated.GetRetInfo().GetMsg())
+
+	listed, _ := h.service.ListStrategies(noSpace, &strategypb.ListStrategiesReq{})
+	requireOK(t, int32(listed.GetRetInfo().GetCode()), listed.GetRetInfo().GetMsg())
+	if listed.GetPageResult().GetTotal() != 1 || len(listed.GetStrategies()) != 1 {
+		t.Fatalf("无空间 ListStrategies 结果不符：%+v", listed)
+	}
+
+	// GetStrategy：无空间与带空间均成功，返回定义与纯 DSL 推导的 Requirement，不触发 Resolver。
+	for name, ctx := range map[string]context.Context{"no_space": noSpace, "with_space": h.ctx} {
+		got, _ := h.service.GetStrategy(ctx, &strategypb.GetStrategyReq{StrategyId: "global-s1"})
+		requireOK(t, int32(got.GetRetInfo().GetCode()), name+": "+got.GetRetInfo().GetMsg())
+		if got.GetStrategy().GetName() != "demo-global" || got.GetRequirement() == nil {
+			t.Fatalf("%s GetStrategy 结果不符：%+v", name, got)
+		}
+	}
+	if h.resolver.calls != 0 {
+		t.Fatalf("GetStrategy 不应调用依赖空间的 Resolver，实际 calls=%d", h.resolver.calls)
+	}
+
+	// ValidateStrategy 无 factor_tasks：无空间与带空间均执行纯语法校验并返回 Requirement。
+	for name, ctx := range map[string]context.Context{"no_space": noSpace, "with_space": h.ctx} {
+		okRsp, _ := h.service.ValidateStrategy(ctx, &strategypb.ValidateStrategyReq{DslYaml: updatedDSL})
+		requireOK(t, int32(okRsp.GetRetInfo().GetCode()), name+": "+okRsp.GetRetInfo().GetMsg())
+		if okRsp.GetRequirement() == nil {
+			t.Fatalf("%s ValidateStrategy 应返回纯 DSL 推导要求", name)
+		}
+		badRsp, _ := h.service.ValidateStrategy(ctx, &strategypb.ValidateStrategyReq{DslYaml: "name: x\nrules: []\nbogus: 1\n"})
+		requireFail(t, int32(badRsp.GetRetInfo().GetCode()), badRsp.GetRetInfo().GetMsg(), "bogus")
+	}
+	if h.resolver.calls != 0 {
+		t.Fatalf("纯语法 ValidateStrategy 不应调用 Resolver，实际 calls=%d", h.resolver.calls)
+	}
+
+	// ValidateStrategy 带 factor_tasks：无空间拒绝（仍附带 DSL 推导要求），带空间正常解析与试算。
+	noSpaceTrial, _ := h.service.ValidateStrategy(noSpace, &strategypb.ValidateStrategyReq{
+		DslYaml: updatedDSL, FactorTasks: map[string]string{"spot": "ftask_a"},
+	})
+	requireFail(t, int32(noSpaceTrial.GetRetInfo().GetCode()), noSpaceTrial.GetRetInfo().GetMsg(), "space_id")
+	if noSpaceTrial.GetRequirement() == nil || len(noSpaceTrial.GetDiagnostics()) == 0 {
+		t.Fatalf("缺空间带 factor_tasks 时应返回诊断与要求：%+v", noSpaceTrial)
+	}
+	h.resolver.loaded = input.Loaded{
+		Frame: engine.Frame{
+			BarEnd:   h.now,
+			Markets:  map[string]engine.MarketInput{"spot": {Rows: map[string]engine.Row{"BTC-USDT": {Values: map[string]float64{"close": 2}}}}},
+			Universe: []string{"BTC-USDT"}, Expected: map[string][]string{"r": {"BTC-USDT"}}, AgedOut: map[string][]string{},
+		},
+		Boundary: input.PeriodBoundaries{BarEnd: h.now, StorageStart: h.now.Add(-time.Hour)},
+	}
+	withSpaceTrial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{
+		DslYaml: updatedDSL, FactorTasks: map[string]string{"spot": "ftask_a"},
+	})
+	requireOK(t, int32(withSpaceTrial.GetRetInfo().GetCode()), withSpaceTrial.GetRetInfo().GetMsg())
+	if withSpaceTrial.GetResolvedJson() == "" || withSpaceTrial.GetTrial().GetStatus() != "ok" {
+		t.Fatalf("带空间试算应成功：%+v", withSpaceTrial)
+	}
+
+	// 空间内接口无 X-Space-Id 仍严格拒绝。
+	instNoSpace, _ := h.service.ListStrategyInstances(noSpace, &strategypb.ListStrategyInstancesReq{})
+	requireFail(t, int32(instNoSpace.GetRetInfo().GetCode()), instNoSpace.GetRetInfo().GetMsg(), "space_id")
+	replayNoSpace, _ := h.service.ListReplays(noSpace, &strategypb.ListReplaysReq{})
+	requireFail(t, int32(replayNoSpace.GetRetInfo().GetCode()), replayNoSpace.GetRetInfo().GetMsg(), "space_id")
+
+	// 无空间删除定义成功。
+	deleted, _ := h.service.DeleteStrategy(noSpace, &strategypb.DeleteStrategyReq{StrategyId: "global-s1"})
+	requireOK(t, int32(deleted.GetRetInfo().GetCode()), deleted.GetRetInfo().GetMsg())
+}
+
+// 全部 5 个 Strategy 分页接口统一使用 commonpb.Page 与 commonpb.PageResult（含 HasMore 与 TotalState=EXACT）。
+func TestStrategyUnifiedPagination(t *testing.T) {
+	h := newHarness(t)
+	assertPage := func(label string, pr *commonpb.PageResult, wantPage, wantSize, wantTotal uint32, wantHasMore bool) {
+		t.Helper()
+		if pr == nil {
+			t.Fatalf("%s page_result 不能为空", label)
+		}
+		if pr.GetPage() != wantPage || pr.GetSize() != wantSize || pr.GetTotal() != wantTotal || pr.GetHasMore() != wantHasMore || pr.GetTotalState() != commonpb.TotalState_EXACT {
+			t.Fatalf("%s page_result=%+v, want page=%d size=%d total=%d hasMore=%t state=EXACT", label, pr, wantPage, wantSize, wantTotal, wantHasMore)
+		}
+	}
+
+	// 0. 空表边界（total=0，has_more=false）
+	emptySp, _ := h.service.ListStrategies(h.ctx, &strategypb.ListStrategiesReq{Page: &commonpb.Page{Page: 1, Size: 2}})
+	requireOK(t, int32(emptySp.GetRetInfo().GetCode()), emptySp.GetRetInfo().GetMsg())
+	if len(emptySp.GetStrategies()) != 0 {
+		t.Fatalf("empty ListStrategies len=%d", len(emptySp.GetStrategies()))
+	}
+	assertPage("ListStrategies empty", emptySp.GetPageResult(), 1, 2, 0, false)
+
+	// 1. ListStrategies（3 条，含常规页、整除末页与超页边界）
+	for _, id := range []string{"s1", "s2", "s3"} {
+		h.createStrategy(id, strings.Replace(demoDSL, "name: demo", "name: "+id, 1))
+	}
+	sp1, _ := h.service.ListStrategies(h.ctx, &strategypb.ListStrategiesReq{Page: &commonpb.Page{Page: 1, Size: 2}})
+	requireOK(t, int32(sp1.GetRetInfo().GetCode()), sp1.GetRetInfo().GetMsg())
+	if len(sp1.GetStrategies()) != 2 {
+		t.Fatalf("ListStrategies page 1 len=%d", len(sp1.GetStrategies()))
+	}
+	assertPage("ListStrategies p1", sp1.GetPageResult(), 1, 2, 3, true)
+	sp2, _ := h.service.ListStrategies(h.ctx, &strategypb.ListStrategiesReq{Page: &commonpb.Page{Page: 2, Size: 2}})
+	if len(sp2.GetStrategies()) != 1 {
+		t.Fatalf("ListStrategies page 2 len=%d", len(sp2.GetStrategies()))
+	}
+	assertPage("ListStrategies p2", sp2.GetPageResult(), 2, 2, 3, false)
+	spExact, _ := h.service.ListStrategies(h.ctx, &strategypb.ListStrategiesReq{Page: &commonpb.Page{Page: 1, Size: 3}})
+	if len(spExact.GetStrategies()) != 3 {
+		t.Fatalf("ListStrategies exact page len=%d", len(spExact.GetStrategies()))
+	}
+	assertPage("ListStrategies exact", spExact.GetPageResult(), 1, 3, 3, false)
+	spOverflow, _ := h.service.ListStrategies(h.ctx, &strategypb.ListStrategiesReq{Page: &commonpb.Page{Page: 5, Size: 2}})
+	if len(spOverflow.GetStrategies()) != 0 {
+		t.Fatalf("ListStrategies overflow page len=%d", len(spOverflow.GetStrategies()))
+	}
+	assertPage("ListStrategies overflow", spOverflow.GetPageResult(), 5, 2, 3, false)
+
+	// 2. ListStrategyInstances（3 条，每页 2 条）
+	for _, id := range []string{"i1", "i2", "i3"} {
+		rsp := h.createInstance(id, "s1", "ftask_"+id, "", false)
+		requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	}
+	ip1, _ := h.service.ListStrategyInstances(h.ctx, &strategypb.ListStrategyInstancesReq{Page: &commonpb.Page{Page: 1, Size: 2}})
+	if len(ip1.GetInstances()) != 2 {
+		t.Fatalf("ListStrategyInstances page 1 len=%d", len(ip1.GetInstances()))
+	}
+	assertPage("ListStrategyInstances p1", ip1.GetPageResult(), 1, 2, 3, true)
+	ip2, _ := h.service.ListStrategyInstances(h.ctx, &strategypb.ListStrategyInstancesReq{Page: &commonpb.Page{Page: 2, Size: 2}})
+	if len(ip2.GetInstances()) != 1 {
+		t.Fatalf("ListStrategyInstances page 2 len=%d", len(ip2.GetInstances()))
+	}
+	assertPage("ListStrategyInstances p2", ip2.GetPageResult(), 2, 2, 3, false)
+
+	// 3. ListStrategyResults（3 条，每页 2 条）
+	enabled := h.setEnabled("i1", true)
+	requireOK(t, int32(enabled.GetRetInfo().GetCode()), enabled.GetRetInfo().GetMsg())
+	sid := enabled.GetInstance().GetSessionId()
+	for idx := range 3 {
+		barEnd := h.now.Add(time.Duration(idx+1) * time.Hour)
+		res := store.Result{
+			ResultID: fmt.Sprintf("r-%d", idx), InstanceID: "i1", SessionID: sid, BarEndTime: barEnd,
+			ValidUntil: barEnd.Add(2 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)),
+			InputJSON: []byte(`{}`), TargetsJSON: []byte(`[]`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: barEnd,
+		}
+		if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: res, Now: barEnd}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rp1, _ := h.service.ListStrategyResults(h.ctx, &strategypb.ListStrategyResultsReq{InstanceId: "i1", Page: &commonpb.Page{Page: 1, Size: 2}})
+	if len(rp1.GetResults()) != 2 {
+		t.Fatalf("ListStrategyResults page 1 len=%d", len(rp1.GetResults()))
+	}
+	assertPage("ListStrategyResults p1", rp1.GetPageResult(), 1, 2, 3, true)
+	rp2, _ := h.service.ListStrategyResults(h.ctx, &strategypb.ListStrategyResultsReq{InstanceId: "i1", Page: &commonpb.Page{Page: 2, Size: 2}})
+	if len(rp2.GetResults()) != 1 {
+		t.Fatalf("ListStrategyResults page 2 len=%d", len(rp2.GetResults()))
+	}
+	assertPage("ListStrategyResults p2", rp2.GetPageResult(), 2, 2, 3, false)
+
+	// 4. ListReplays（3 条，每页 2 条）与 5. ListReplayBars（含 brief 突破 500 上限）
+	var replayID string
+	for idx := range 3 {
+		started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{
+			StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"},
+			StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"),
+		})
+		requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
+		replayID = started.GetReplay().GetReplayId()
+		if idx < 2 {
+			cancelled, _ := h.service.CancelReplay(h.ctx, &strategypb.CancelReplayReq{ReplayId: replayID})
+			requireOK(t, int32(cancelled.GetRetInfo().GetCode()), cancelled.GetRetInfo().GetMsg())
+		}
+	}
+	repP1, _ := h.service.ListReplays(h.ctx, &strategypb.ListReplaysReq{Page: &commonpb.Page{Page: 1, Size: 2}})
+	if len(repP1.GetReplays()) != 2 {
+		t.Fatalf("ListReplays page 1 len=%d", len(repP1.GetReplays()))
+	}
+	assertPage("ListReplays p1", repP1.GetPageResult(), 1, 2, 3, true)
+	repP2, _ := h.service.ListReplays(h.ctx, &strategypb.ListReplaysReq{Page: &commonpb.Page{Page: 2, Size: 2}})
+	if len(repP2.GetReplays()) != 1 {
+		t.Fatalf("ListReplays page 2 len=%d", len(repP2.GetReplays()))
+	}
+	assertPage("ListReplays p2", repP2.GetPageResult(), 2, 2, 3, false)
+
+	for i := range 3 {
+		bar := store.ReplayBar{
+			ReplayID: replayID, BarEndTime: h.now.Add(time.Duration(i+1) * time.Hour), Status: store.StatusOK,
+			TargetsJSON: []byte(`[]`), PositionsJSON: []byte(`{}`), SummaryJSON: []byte(`{}`), ParamsJSON: []byte(`{}`), Equity: 1.0,
+		}
+		if err := h.service.Store.AppendReplayBar(h.ctx, bar); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bp1, _ := h.service.ListReplayBars(h.ctx, &strategypb.ListReplayBarsReq{ReplayId: replayID, Page: &commonpb.Page{Page: 1, Size: 2}})
+	requireOK(t, int32(bp1.GetRetInfo().GetCode()), bp1.GetRetInfo().GetMsg())
+	if len(bp1.GetBars()) != 2 {
+		t.Fatalf("ListReplayBars page 1 len=%d", len(bp1.GetBars()))
+	}
+	assertPage("ListReplayBars p1", bp1.GetPageResult(), 1, 2, 3, true)
+	bpBrief, _ := h.service.ListReplayBars(h.ctx, &strategypb.ListReplayBarsReq{ReplayId: replayID, Brief: true, Page: &commonpb.Page{Page: 1, Size: 1000}})
+	requireOK(t, int32(bpBrief.GetRetInfo().GetCode()), bpBrief.GetRetInfo().GetMsg())
+	assertPage("ListReplayBars brief", bpBrief.GetPageResult(), 1, 1000, 3, false)
+	bpFullClamped, _ := h.service.ListReplayBars(h.ctx, &strategypb.ListReplayBarsReq{ReplayId: replayID, Brief: false, Page: &commonpb.Page{Page: 1, Size: 500}})
+	requireOK(t, int32(bpFullClamped.GetRetInfo().GetCode()), bpFullClamped.GetRetInfo().GetMsg())
+	assertPage("ListReplayBars full clamped", bpFullClamped.GetPageResult(), 1, 100, 3, false)
 }
 
 // S14：重启（新的 Service 实例）后沿用会话；重复启用不新建会话、不联系 Trade；停用再启用新建会话（规则状态是否沿用见 store 的 carryState）。
@@ -532,7 +761,7 @@ func TestS20HistoryAfterRedefinition(t *testing.T) {
 	requireFail(t, int32(refused.GetRetInfo().GetCode()), refused.GetRetInfo().GetMsg(), "引用")
 	history, _ := h.service.ListStrategyResults(h.ctx, &strategypb.ListStrategyResultsReq{InstanceId: "i1"})
 	requireOK(t, int32(history.GetRetInfo().GetCode()), history.GetRetInfo().GetMsg())
-	if history.GetTotal() != 1 || history.GetResults()[0].GetResultId() != "r-old" {
+	if history.GetPageResult().GetTotal() != 1 || history.GetResults()[0].GetResultId() != "r-old" {
 		t.Fatalf("旧会话的历史结果仍应可查：%+v", history)
 	}
 }
@@ -579,7 +808,7 @@ func TestS26StartReplayChecksTaskMarkets(t *testing.T) {
 		t.Fatalf("回放任务不符：%+v", started.GetReplay())
 	}
 	listed, _ := h.service.ListReplays(h.ctx, &strategypb.ListReplaysReq{})
-	if listed.GetTotal() != 1 {
+	if listed.GetPageResult().GetTotal() != 1 {
 		t.Fatalf("回放列表不符：%+v", listed)
 	}
 	cancelled, _ := h.service.CancelReplay(h.ctx, &strategypb.CancelReplayReq{ReplayId: started.GetReplay().GetReplayId()})

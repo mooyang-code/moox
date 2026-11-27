@@ -43,7 +43,7 @@ const running = computed(() => activeReplays(replays.value));
 async function load() {
   const token = gate.begin();
   try {
-    const page = await listReplays({ page: 1, page_size: 20 });
+    const page = await listReplays({ page: 1, size: 20 });
     if (!token.isLatest()) return;
     replays.value = page.items;
     replayError.value = "";

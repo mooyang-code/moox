@@ -163,8 +163,31 @@ export interface PageResult<T> {
   page: PageResponse;
 }
 
-function pageRequest(params: PageRequest): Required<PageRequest> {
-  return { page: params.page ?? 1, page_size: params.page_size ?? 20 };
+interface WirePage {
+  page: number;
+  size: number;
+}
+
+interface WirePageResult {
+  page?: number;
+  size?: number;
+  total?: number | string;
+  has_more?: boolean;
+  total_state?: PageResponse["total_state"];
+}
+
+function pageRequest(params: PageRequest, defaultSize = 20): WirePage {
+  return { page: params.page ?? 1, size: params.size ?? defaultSize };
+}
+
+function normalizePageResult(value: WirePageResult | undefined, fallback: WirePage): PageResponse {
+  return {
+    page: Number(value?.page ?? fallback.page),
+    size: Number(value?.size ?? fallback.size),
+    total: Number(value?.total ?? 0),
+    has_more: Boolean(value?.has_more),
+    ...(value?.total_state !== undefined ? { total_state: value.total_state } : {})
+  };
 }
 
 function callStrategy<Req extends object, Rsp extends Record<string, any>>(method: string, request: Req): Promise<Rsp> {
@@ -201,13 +224,14 @@ export async function deleteStrategy(strategy_id: string) {
 }
 
 export async function listStrategies(params: PageRequest = {}): Promise<PageResult<Strategy>> {
-  const response = await callStrategy<
-    { page: Required<PageRequest> },
-    { strategies?: Strategy[]; total?: number; page?: number; page_size?: number }
-  >("ListStrategies", { page: pageRequest(params) });
+  const page = pageRequest(params);
+  const response = await callStrategy<{ page: WirePage }, { strategies?: Strategy[]; page_result?: WirePageResult }>(
+    "ListStrategies",
+    { page }
+  );
   return {
     items: (response.strategies ?? []).map(normalizeStrategy),
-    page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
+    page: normalizePageResult(response.page_result, page)
   };
 }
 
@@ -275,18 +299,19 @@ export async function getInstance(instance_id: string) {
 export async function listInstances(
   params: PageRequest & { strategy_id?: string; enabled?: boolean } = {}
 ): Promise<PageResult<StrategyInstance>> {
+  const page = pageRequest(params);
   const response = await callStrategy<
-    { page: Required<PageRequest>; strategy_id?: string; enabled?: boolean },
-    { instances?: StrategyInstance[]; total?: number; page?: number; page_size?: number }
+    { page: WirePage; strategy_id?: string; enabled?: boolean },
+    { instances?: StrategyInstance[]; page_result?: WirePageResult }
   >("ListStrategyInstances", {
-    page: pageRequest(params),
+    page,
     strategy_id: params.strategy_id || undefined,
     // 清空筛选时下拉框给出空字符串：只在确实是布尔值时才发送。
     enabled: typeof params.enabled === "boolean" ? params.enabled : undefined
   });
   return {
     items: (response.instances ?? []).map(normalizeInstance),
-    page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
+    page: normalizePageResult(response.page_result, page)
   };
 }
 
@@ -294,9 +319,9 @@ export async function listInstances(
 export function listAllInstances(): Promise<StrategyInstance[]> {
   let read = 0;
   return readAllPages(async page => {
-    const rsp = await listInstances({ page, page_size: 200 });
+    const rsp = await listInstances({ page, size: 200 });
     read += rsp.items.length;
-    return { items: rsp.items, hasMore: read < rsp.page.total };
+    return { items: rsp.items, hasMore: rsp.page.has_more || read < rsp.page.total };
   });
 }
 
@@ -329,13 +354,14 @@ export async function listStrategyResults(
   instance_id: string,
   params: PageRequest & { session_id?: string } = {}
 ): Promise<PageResult<StrategyResult>> {
+  const page = pageRequest(params);
   const response = await callStrategy<
-    { instance_id: string; session_id?: string; page: Required<PageRequest> },
-    { results?: StrategyResult[]; total?: number; page?: number; page_size?: number }
-  >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page: pageRequest(params) });
+    { instance_id: string; session_id?: string; page: WirePage },
+    { results?: StrategyResult[]; page_result?: WirePageResult }
+  >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page });
   return {
     items: (response.results ?? []).map(normalizeResult),
-    page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
+    page: normalizePageResult(response.page_result, page)
   };
 }
 
@@ -386,13 +412,13 @@ export async function getReplay(replay_id: string) {
 }
 
 export async function listReplays(params: PageRequest = {}): Promise<PageResult<Replay>> {
-  const response = await callStrategy<
-    { page: Required<PageRequest> },
-    { replays?: Replay[]; total?: number; page?: number; page_size?: number }
-  >("ListReplays", { page: pageRequest(params) });
+  const page = pageRequest(params);
+  const response = await callStrategy<{ page: WirePage }, { replays?: Replay[]; page_result?: WirePageResult }>("ListReplays", {
+    page
+  });
   return {
     items: (response.replays ?? []).map(normalizeReplay),
-    page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
+    page: normalizePageResult(response.page_result, page)
   };
 }
 
@@ -404,17 +430,18 @@ export async function listReplayBars(
   replay_id: string,
   params: PageRequest & { brief?: boolean } = {}
 ): Promise<PageResult<ReplayBar>> {
+  const page = pageRequest(params, 50);
   const response = await callStrategy<
-    { replay_id: string; page: Required<PageRequest>; brief: boolean },
-    { bars?: ReplayBar[]; total?: number; page?: number; page_size?: number }
+    { replay_id: string; page: WirePage; brief: boolean },
+    { bars?: ReplayBar[]; page_result?: WirePageResult }
   >("ListReplayBars", {
     replay_id,
-    page: { page: params.page ?? 1, page_size: params.page_size ?? 50 },
+    page,
     brief: Boolean(params.brief)
   });
   return {
     items: (response.bars ?? []).map(normalizeReplayBar),
-    page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
+    page: normalizePageResult(response.page_result, page)
   };
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -93,6 +94,9 @@ func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogs
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	if req.GetGlobal() && spaceID != "" {
 		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id and global are mutually exclusive")}, nil
+	}
+	if !req.GetGlobal() && spaceID == "" {
+		spaceID = strings.TrimSpace(gatewayclient.CallMetadataFromContext(ctx).SpaceID)
 	}
 	if isBrowserCaller(ctx) && !req.GetGlobal() && spaceID == "" {
 		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id or global is required")}, nil

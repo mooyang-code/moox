@@ -50,15 +50,15 @@ describe("strategy store", () => {
       updated_at: ""
     });
     const all = Array.from({ length: 21 }, (_, index) => definition(`s${index}`));
-    const latePage = deferred<{ items: unknown[]; page: { total: number } }>();
-    api.listStrategies.mockImplementation((params: { page?: number; page_size?: number }) =>
-      params.page_size === 200 ? Promise.resolve({ items: all, page: { total: 21 } }) : latePage.promise
+    const latePage = deferred<{ items: unknown[]; page: { total: number; has_more?: boolean } }>();
+    api.listStrategies.mockImplementation((params: { page?: number; size?: number }) =>
+      params.size === 200 ? Promise.resolve({ items: all, page: { total: 21, has_more: false } }) : latePage.promise
     );
     const store = useStrategyStore();
     await store.loadAllStrategies(200);
     expect(store.strategyCatalog).toHaveLength(21);
-    const paged = store.loadStrategies({ page: 1, page_size: 20 });
-    latePage.resolve({ items: all.slice(0, 20), page: { total: 21 } });
+    const paged = store.loadStrategies({ page: 1, size: 20 });
+    latePage.resolve({ items: all.slice(0, 20), page: { total: 21, has_more: true } });
     await paged;
     expect(store.strategies).toHaveLength(20);
     expect(store.strategyCatalog).toHaveLength(21);

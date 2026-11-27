@@ -354,7 +354,7 @@ func (s *Service) ListReplays(ctx context.Context, req *strategypb.ListReplaysRe
 	for _, replay := range replays {
 		items = append(items, replayProto(replay))
 	}
-	return &strategypb.ListReplaysRsp{RetInfo: success(), Replays: items, Total: total, Page: int32(page), PageSize: int32(size)}, nil
+	return &strategypb.ListReplaysRsp{RetInfo: success(), Replays: items, PageResult: pageResult(page, size, total)}, nil
 }
 
 func (s *Service) ListReplayBars(ctx context.Context, req *strategypb.ListReplayBarsReq) (*strategypb.ListReplayBarsRsp, error) {
@@ -371,8 +371,8 @@ func (s *Service) ListReplayBars(ctx context.Context, req *strategypb.ListReplay
 	if req.GetBrief() {
 		limit = 5000
 	}
-	if req.GetPage() != nil && req.GetPage().GetPageSize() > 0 {
-		size = int(req.GetPage().GetPageSize())
+	if req.GetPage() != nil && req.GetPage().GetSize() > 0 {
+		size = int(req.GetPage().GetSize())
 	}
 	size = min(size, limit)
 	bars, total, err := s.Store.ListReplayBars(ctx, replay.ReplayID, (page-1)*size, size, req.GetBrief())
@@ -383,7 +383,7 @@ func (s *Service) ListReplayBars(ctx context.Context, req *strategypb.ListReplay
 	for _, bar := range bars {
 		items = append(items, replayBarProto(bar))
 	}
-	return &strategypb.ListReplayBarsRsp{RetInfo: success(), Bars: items, Total: total, Page: int32(page), PageSize: int32(size)}, nil
+	return &strategypb.ListReplayBarsRsp{RetInfo: success(), Bars: items, PageResult: pageResult(page, size, total)}, nil
 }
 
 func (s *Service) CancelReplay(ctx context.Context, req *strategypb.CancelReplayReq) (*strategypb.CancelReplayRsp, error) {

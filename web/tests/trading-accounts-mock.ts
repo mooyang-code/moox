@@ -395,11 +395,16 @@ async function gateway(route: Route) {
           instances: [
             { instance_id: "inst-1", strategy_id: "st-1", logical_account_id: "la-paper-1", enabled: true, health: "ok" }
           ],
-          total: "1"
+          page_result: { page: 1, size: 500, total: "1", has_more: false }
         })
       });
     case "ListStrategies":
-      return route.fulfill({ json: ok({ strategies: [{ strategy_id: "st-1", name: "动量轮动" }], total: "1" }) });
+      return route.fulfill({
+        json: ok({
+          strategies: [{ strategy_id: "st-1", name: "动量轮动" }],
+          page_result: { page: 1, size: 500, total: "1", has_more: false }
+        })
+      });
     case "CreateTradingAccount":
       if (body.paper) calls.paper.push(body);
       return route.fulfill({

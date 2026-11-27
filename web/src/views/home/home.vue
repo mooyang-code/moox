@@ -522,7 +522,7 @@ async function loadSpaceScoped() {
     getCollectorStatus(spaceId).then(rsp => {
       if (isCurrent()) counts.nodes = (rsp.functions || []).filter(item => (item.executor || "scf") === "scf").length;
     }),
-    listStrategies({ page: 1, page_size: 200 }).then(rsp => {
+    listStrategies({ page: 1, size: 200 }).then(rsp => {
       if (isCurrent()) catalog.value = rsp.items;
     })
   ]);
@@ -598,7 +598,7 @@ async function loadSeeds(isCurrent: () => boolean) {
 }
 
 async function loadStrategies(isCurrent: () => boolean) {
-  const page = await listInstances({ page: 1, page_size: 200 });
+  const page = await listInstances({ page: 1, size: 200 });
   if (!isCurrent()) return;
   const enabled = page.items.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
   const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id)));

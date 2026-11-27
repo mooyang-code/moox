@@ -259,12 +259,10 @@ func parseDefinition(raw string) (dsl.Strategy, string, error) {
 	return strategy, dsl.Hash([]byte(raw)), nil
 }
 
+// CreateStrategy 创建全局策略定义（无空间归属，不要求 X-Space-Id）。
 func (s *Service) CreateStrategy(ctx context.Context, req *strategypb.CreateStrategyReq) (*strategypb.CreateStrategyRsp, error) {
 	if err := s.ready(); err != nil {
 		return &strategypb.CreateStrategyRsp{RetInfo: failure(err)}, nil
-	}
-	if _, err := requireSpaceID(ctx); err != nil {
-		return &strategypb.CreateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
 	if req == nil || req.GetStrategy() == nil {
 		return &strategypb.CreateStrategyRsp{RetInfo: invalid(errors.New("strategy 不能为空"))}, nil
@@ -290,12 +288,10 @@ func (s *Service) CreateStrategy(ctx context.Context, req *strategypb.CreateStra
 	return &strategypb.CreateStrategyRsp{RetInfo: success(), Strategy: definitionProto(def)}, nil
 }
 
+// UpdateStrategy 修改全局策略定义（无空间归属，不要求 X-Space-Id）。
 func (s *Service) UpdateStrategy(ctx context.Context, req *strategypb.UpdateStrategyReq) (*strategypb.UpdateStrategyRsp, error) {
 	if err := s.ready(); err != nil {
 		return &strategypb.UpdateStrategyRsp{RetInfo: failure(err)}, nil
-	}
-	if _, err := requireSpaceID(ctx); err != nil {
-		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
 	if req == nil || strings.TrimSpace(req.GetStrategyId()) == "" {
 		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(errors.New("strategy_id 不能为空"))}, nil
@@ -326,12 +322,10 @@ func (s *Service) UpdateStrategy(ctx context.Context, req *strategypb.UpdateStra
 	return &strategypb.UpdateStrategyRsp{RetInfo: success(), Strategy: definitionProto(updated)}, nil
 }
 
+// GetStrategy 读取全局策略定义及其纯 DSL 推导的任务要求（space_optional：不要求 X-Space-Id，不查依赖空间的外部任务）。
 func (s *Service) GetStrategy(ctx context.Context, req *strategypb.GetStrategyReq) (*strategypb.GetStrategyRsp, error) {
 	if err := s.ready(); err != nil {
 		return &strategypb.GetStrategyRsp{RetInfo: failure(err)}, nil
-	}
-	if _, err := requireSpaceID(ctx); err != nil {
-		return &strategypb.GetStrategyRsp{RetInfo: invalid(err)}, nil
 	}
 	if req == nil || strings.TrimSpace(req.GetStrategyId()) == "" {
 		return &strategypb.GetStrategyRsp{RetInfo: invalid(errors.New("strategy_id 不能为空"))}, nil
@@ -347,12 +341,10 @@ func (s *Service) GetStrategy(ctx context.Context, req *strategypb.GetStrategyRe
 	return rsp, nil
 }
 
+// ListStrategies 分页列出全局策略定义（无空间归属，不要求 X-Space-Id）。
 func (s *Service) ListStrategies(ctx context.Context, req *strategypb.ListStrategiesReq) (*strategypb.ListStrategiesRsp, error) {
 	if err := s.ready(); err != nil {
 		return &strategypb.ListStrategiesRsp{RetInfo: failure(err)}, nil
-	}
-	if _, err := requireSpaceID(ctx); err != nil {
-		return &strategypb.ListStrategiesRsp{RetInfo: invalid(err)}, nil
 	}
 	defs, err := s.Store.ListDefinitions(ctx)
 	if err != nil {
@@ -363,15 +355,13 @@ func (s *Service) ListStrategies(ctx context.Context, req *strategypb.ListStrate
 	for _, def := range defs[start:end] {
 		items = append(items, definitionProto(def))
 	}
-	return &strategypb.ListStrategiesRsp{RetInfo: success(), Strategies: items, Total: int64(len(defs)), Page: int32(page), PageSize: int32(size)}, nil
+	return &strategypb.ListStrategiesRsp{RetInfo: success(), Strategies: items, PageResult: pageResult(page, size, int64(len(defs)))}, nil
 }
 
+// DeleteStrategy 软删除全局策略定义（无空间归属，不要求 X-Space-Id）。
 func (s *Service) DeleteStrategy(ctx context.Context, req *strategypb.DeleteStrategyReq) (*strategypb.DeleteStrategyRsp, error) {
 	if err := s.ready(); err != nil {
 		return &strategypb.DeleteStrategyRsp{RetInfo: failure(err)}, nil
-	}
-	if _, err := requireSpaceID(ctx); err != nil {
-		return &strategypb.DeleteStrategyRsp{RetInfo: invalid(err)}, nil
 	}
 	if req == nil || strings.TrimSpace(req.GetStrategyId()) == "" {
 		return &strategypb.DeleteStrategyRsp{RetInfo: invalid(errors.New("strategy_id 不能为空"))}, nil

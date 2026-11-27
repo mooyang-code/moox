@@ -533,7 +533,7 @@ async function loadReplays() {
   const page = replayPage.value;
   listLoading.value = true;
   try {
-    const result = await listReplays({ page, page_size: replayPageSize });
+    const result = await listReplays({ page, size: replayPageSize });
     if (applyReplayList(gen, seq, page, result)) pollFailures.value = 0;
   } catch (err) {
     if (gen === generation && seq > listApplied)
@@ -571,7 +571,7 @@ async function loadTasks() {
 async function fetchSeries(replayId: string, known: ReplayBar[], isCurrent: () => boolean): Promise<ReplayBar[] | null> {
   let merged = known;
   for (let page = Math.floor(known.length / seriesPageSize) + 1; ; page += 1) {
-    const next = await listReplayBars(replayId, { page, page_size: seriesPageSize, brief: true });
+    const next = await listReplayBars(replayId, { page, size: seriesPageSize, brief: true });
     if (!isCurrent()) return null;
     merged = mergeBars(merged, next.items);
     if (next.items.length < seriesPageSize || merged.length >= next.page.total) return merged;
@@ -591,7 +591,7 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
   const page = tablePage.value;
   if (!silent) tableLoading.value = true;
   try {
-    const result = await listReplayBars(replayId, { page, page_size: tablePageSize });
+    const result = await listReplayBars(replayId, { page, size: tablePageSize });
     if (!live()) return;
     tableRows.value = result.items;
     tableTotal.value = result.page.total;
@@ -954,7 +954,7 @@ async function pollTick() {
     const page = replayPage.value;
     try {
       // 轮询请求不弹全局错误：失败由下面的计数在页面上统一提示，断网时不会每 5 秒弹出一串错误。
-      const result = await listReplays({ page, page_size: replayPageSize });
+      const result = await listReplays({ page, size: replayPageSize });
       if (gen !== generation) return;
       applyReplayList(gen, seq, page, result);
       await refreshSelected();

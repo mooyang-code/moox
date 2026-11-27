@@ -122,7 +122,7 @@ describe("strategy running page", () => {
     const { wrapper } = await setup({ strategy_id: "s1", enabled: "false", page: "2", instance_id: "i1" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     expect(api.loadInstances).toHaveBeenCalledWith(
-      { strategy_id: "s1", enabled: false, page: 2, page_size: 20 },
+      { strategy_id: "s1", enabled: false, page: 2, size: 20 },
       { background: false }
     );
     expect(wrapper.find(".quick").text()).toBe("quick:i1");
@@ -164,7 +164,7 @@ describe("strategy running page", () => {
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ page: "3", strategy_id: "s1" });
     expect(api.loadInstances).toHaveBeenLastCalledWith(
-      { strategy_id: "s1", enabled: undefined, page: 3, page_size: 20 },
+      { strategy_id: "s1", enabled: undefined, page: 3, size: 20 },
       { background: false }
     );
   });
@@ -187,7 +187,7 @@ describe("strategy running page", () => {
     expect(router.currentRoute.value.query).toEqual({});
     expect(api.loadInstances).toHaveBeenCalledTimes(2);
     expect(api.loadInstances).toHaveBeenLastCalledWith(
-      { strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 },
+      { strategy_id: undefined, enabled: undefined, page: 1, size: 20 },
       { background: false }
     );
   });
@@ -212,7 +212,7 @@ describe("strategy running page", () => {
     await hooks.onSettled(false);
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     expect(api.loadInstances).toHaveBeenLastCalledWith(
-      { strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 },
+      { strategy_id: undefined, enabled: undefined, page: 2, size: 20 },
       { background: false }
     );
     expect(vm.togglingId).toBe("");
@@ -245,7 +245,7 @@ describe("strategy running page", () => {
     expect(router.currentRoute.value.query).toEqual({});
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     expect(api.loadInstances).toHaveBeenLastCalledWith(
-      { strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 },
+      { strategy_id: undefined, enabled: undefined, page: 1, size: 20 },
       { background: false }
     );
   });

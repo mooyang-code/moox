@@ -30,24 +30,41 @@
       </div>
       <a-alert v-if="error" type="error" show-icon class="top-alert">{{ error }}</a-alert>
       <a-grid :cols="{ xs: 1, sm: 2 }" :col-gap="20" :row-gap="16">
-        <a-grid-item
-          ><a-form layout="vertical"
-            ><a-form-item label="策略 ID"
-              ><a-input
+        <a-grid-item>
+          <a-form layout="vertical">
+            <a-form-item label="策略 ID">
+              <a-input
                 v-model="strategyId"
                 :disabled="editing || loading || saving"
-                placeholder="留空自动生成，例如 momentum_hourly" /></a-form-item
-            ><a-alert v-if="parse.diagnostics.length" type="warning" show-icon
-              ><div v-for="item in parse.diagnostics" :key="item.message">{{ item.message }}</div></a-alert
-            >
+                placeholder="留空自动生成，例如 momentum_hourly"
+              />
+            </a-form-item>
+            <a-alert v-if="activeDiagnostics.length" type="warning" show-icon class="diag-alert">
+              <div v-for="item in activeDiagnostics" :key="item">{{ item }}</div>
+            </a-alert>
             <div class="editor-label">DSL YAML</div>
-            <a-textarea
-              v-model="source"
-              :disabled="!loaded || loading"
-              :readonly="saving"
-              class="code-input"
-              :auto-size="{ minRows: 24, maxRows: 36 }" /></a-form
-        ></a-grid-item>
+            <div class="code-panel">
+              <div class="code-panel__tab">
+                <span class="code-panel__file">{{ fileName }}</span>
+                <span class="code-panel__meta">YAML · 缩进 2 空格</span>
+              </div>
+              <AsyncCodeEditor
+                v-model="source"
+                language="yaml"
+                :read-only="!loaded || loading || saving"
+                :error-line="errorLine"
+                :min-lines="24"
+                :max-lines="36"
+                aria-label="策略 DSL YAML"
+                @cursor-change="cursor = $event"
+              />
+              <div class="code-panel__status">
+                <span>行 {{ cursor.line }}，列 {{ cursor.column }}</span>
+                <span :class="validationClass">{{ validationText }}</span>
+              </div>
+            </div>
+          </a-form>
+        </a-grid-item>
         <a-grid-item>
           <div class="summary-pane">
             <div class="section-title">定义摘要</div>
@@ -58,22 +75,27 @@
               <a-descriptions-item label="市场">{{ parse.preview.market }}</a-descriptions-item>
               <a-descriptions-item v-if="!parse.preview.pool" label="标的池">{{ parse.preview.universe }}</a-descriptions-item>
               <a-descriptions-item label="杠杆上限">{{ parse.preview.leverage }}</a-descriptions-item>
-              <a-descriptions-item v-if="parse.preview.pool" label="策略池"
-                ><div>{{ describePool(parse.preview.pool) }}</div>
-                <div class="mono">{{ parse.preview.pool.memberIds.join("、") || "未写成员" }}</div></a-descriptions-item
-              >
-              <a-descriptions-item v-else label="规则"
-                ><div v-for="rule in parse.preview.rules" :key="rule.id">
+              <a-descriptions-item v-if="parse.preview.pool" label="策略池">
+                <div>{{ describePool(parse.preview.pool) }}</div>
+                <div class="mono">{{ parse.preview.pool.memberIds.join("、") || "未写成员" }}</div>
+              </a-descriptions-item>
+              <a-descriptions-item v-else label="规则">
+                <div v-for="rule in parse.preview.rules" :key="rule.id">
                   {{ rule.name || rule.id }} · <span class="mono">{{ rule.id }}</span> ·
                   {{ rule.type === "rank" ? (rule.timing ? "固定标的择时" : "截面选股") : rule.type
                   }}{{ rule.market ? ` · 只用${RULE_MARKET_LABELS[rule.market]}` : "" }}
-                </div></a-descriptions-item
-              >
+                </div>
+              </a-descriptions-item>
             </a-descriptions>
             <a-alert type="info" show-icon class="note"
               >规则 id 是规则状态与解释明细的稳定标识，修改 id 等于从零开始；name 只用于展示。</a-alert
             >
-            <TrialPanel :source="source" :space-id="spaceStore.selectedSpaceId" />
+            <TrialPanel
+              :source="source"
+              :space-id="spaceStore.selectedSpaceId"
+              managed-requirement
+              :requirement="validatedRequirement"
+            />
           </div>
         </a-grid-item>
       </a-grid>
@@ -84,12 +106,15 @@
 <script setup lang="ts">
 import { useUnsavedGuard } from "@/hooks/useUnsavedGuard";
 import { goBackOr } from "@/utils/navigate-back";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, onMounted, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
-import { createStrategy, getStrategy, updateStrategy } from "@/api/strategy";
+import { createStrategy, getStrategy, updateStrategy, validateStrategy } from "@/api/strategy";
+import type { StrategyTaskRequirement } from "@/api/strategy-types";
+import { AsyncCodeEditor } from "@/components/code-editor/async";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import TrialPanel from "@/views/strategy/components/strategy-trial-panel.vue";
@@ -97,6 +122,7 @@ import { instancesLink, replayLink } from "@/views/strategy/links";
 import {
   RULE_MARKET_LABELS,
   describePool,
+  extractDiagnosticLine,
   mixedMarketTemplate,
   parseDSL,
   poolTemplate,
@@ -106,6 +132,17 @@ import {
 } from "@/views/strategy/dsl";
 
 defineOptions({ name: "StrategyEditor" });
+
+/** 输入停止多久后调用服务端 ValidateStrategy。 */
+const VALIDATE_DELAY_MS = 400;
+
+type ValidationState =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "valid"; source: string; requirement: StrategyTaskRequirement | null }
+  | { status: "invalid"; source: string; diagnostics: string[]; requirement: StrategyTaskRequirement | null }
+  | { status: "error"; message: string };
+
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -118,9 +155,89 @@ const loaded = ref(!editing.value);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
+const cursor = ref({ line: 1, column: 1 });
 const parse = computed(() => parseDSL(source.value));
 const dirty = computed(() => source.value !== original.value);
+const fileName = computed(() => `${strategyId.value.trim() || "strategy"}.yaml`);
+
+const validation = ref<ValidationState>({ status: "idle" });
+const validatedRequirement = ref<StrategyTaskRequirement | null>(null);
+const validateGate = createLatestRequestGuard();
+let validateTimer: ReturnType<typeof setTimeout> | undefined;
 let loadRequest = 0;
+
+const activeDiagnostics = computed(() => {
+  const state = validation.value;
+  if (state.status === "invalid" && state.source === source.value) return state.diagnostics;
+  if (parse.value.syntaxError) return [parse.value.syntaxError];
+  return [];
+});
+
+const errorLine = computed(() => {
+  const state = validation.value;
+  if (state.status === "invalid" && state.source === source.value) {
+    return extractDiagnosticLine(state.diagnostics) || parse.value.syntaxErrorLine;
+  }
+  return parse.value.syntaxErrorLine;
+});
+
+const validationText = computed(() => {
+  if (!loaded.value) return "加载中…";
+  if (!source.value.trim()) return "定义为空";
+  const state = validation.value;
+  if (state.status === "checking") return "校验中…";
+  if (state.status === "error") return `校验失败：${state.message}`;
+  if (state.status === "valid") return state.source === source.value ? "校验通过" : "等待校验";
+  if (state.status === "invalid") {
+    return state.source === source.value ? state.diagnostics[0] || "校验未通过" : "等待校验";
+  }
+  return "等待校验";
+});
+
+const validationClass = computed(() => ({
+  "is-error":
+    (validation.value.status === "invalid" && validation.value.source === source.value) ||
+    validation.value.status === "error" ||
+    Boolean(parse.value.syntaxError),
+  "is-ok": validation.value.status === "valid" && validation.value.source === source.value
+}));
+
+function scheduleValidate() {
+  if (validateTimer) clearTimeout(validateTimer);
+  validateGate.invalidate();
+  if (!loaded.value || !source.value.trim()) {
+    validation.value = { status: "idle" };
+    validatedRequirement.value = null;
+    return;
+  }
+  validation.value = { status: "idle" };
+  validateTimer = setTimeout(() => void validateNow(), VALIDATE_DELAY_MS);
+}
+
+async function validateNow() {
+  const snapshot = source.value;
+  if (!loaded.value || !snapshot.trim()) return;
+  const token = validateGate.begin();
+  validation.value = { status: "checking" };
+  try {
+    const result = await validateStrategy(snapshot);
+    if (!token.isLatest()) return;
+    validatedRequirement.value = result.requirement;
+    if (result.diagnostics.length) {
+      validation.value = {
+        status: "invalid",
+        source: snapshot,
+        diagnostics: result.diagnostics,
+        requirement: result.requirement
+      };
+    } else {
+      validation.value = { status: "valid", source: snapshot, requirement: result.requirement };
+    }
+  } catch (err) {
+    if (!token.isLatest() || err instanceof StaleSpaceRequestError) return;
+    validation.value = { status: "error", message: err instanceof Error ? err.message : "校验接口调用失败" };
+  }
+}
 
 async function load() {
   if (!editing.value) return;
@@ -168,7 +285,7 @@ async function save() {
     return;
   }
   if (!parse.value.preview) {
-    error.value = "请先修正 YAML 解析错误";
+    error.value = parse.value.syntaxError || "请先修正 YAML 解析错误";
     return;
   }
   saving.value = true;
@@ -207,32 +324,40 @@ watch(
   () => route.params.strategyId,
   () => {
     strategyId.value = String(route.params.strategyId || "");
-    if (editing.value) load();
+    if (editing.value) void load();
     else {
       loadRequest += 1;
       loading.value = false;
       loaded.value = true;
       source.value = rankedTemplate;
       original.value = source.value;
+      validatedRequirement.value = null;
       error.value = "";
     }
   }
 );
-// 空间初始化完成前请求会被拒绝；空间就绪后补载尚未加载的定义（不覆盖已加载、可能含未保存修改的内容）。
+watch(() => [source.value, loaded.value], scheduleValidate, { immediate: true });
+// GetStrategy / ValidateStrategy 是空间可选接口（D7 space_optional），无选中空间时可直接加载与校验；
+// 切换空间若取消了在途的定义读取则补载一次，并重跑服务端校验以刷新策略池成员要求。
 onMounted(() => {
-  if (spaceStore.selectedSpaceId) void load();
+  if (editing.value) void load();
 });
 watch(
   () => spaceStore.selectedSpaceId,
-  next => {
-    // 在途的定义读取已随切换取消；load 自带请求序号，旧请求不会覆盖新结果
-    if (next && editing.value && !loaded.value) void load();
+  (next, previous) => {
+    if (next === previous) return;
+    if (editing.value && !loaded.value) void load();
+    else if (loaded.value && source.value.trim()) scheduleValidate();
   }
 );
 
 // 保存作用域：页面卸载或切换策略定义都会使进行中的保存失效，迟到的响应不能再导航
 const saveScope = createSubmitScope({ global: true });
-onBeforeUnmount(() => saveScope.invalidate());
+onBeforeUnmount(() => {
+  saveScope.invalidate();
+  if (validateTimer) clearTimeout(validateTimer);
+  validateGate.invalidate();
+});
 watch(strategyId, () => saveScope.invalidate());
 </script>
 
@@ -261,7 +386,8 @@ watch(strategyId, () => saveScope.invalidate());
   font-size: 13px;
 }
 
-.top-alert {
+.top-alert,
+.diag-alert {
   margin-bottom: var(--moox-space-2);
 }
 .editor-label,
@@ -269,12 +395,47 @@ watch(strategyId, () => saveScope.invalidate());
   margin-bottom: 8px;
   font-weight: 600;
 }
-.code-input {
-  font:
-    12px/1.6 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+.code-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.code-panel__tab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: #252526;
+  color: #cccccc;
+  font-size: 12px;
+}
+.code-panel__file {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #ffffff;
+}
+.code-panel__meta {
+  color: #9da5b4;
+}
+.code-panel__status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  background: #252526;
+  color: #cccccc;
+  font-size: 12px;
+}
+.code-panel__status .is-ok {
+  color: #73d13d;
+}
+.code-panel__status .is-error {
+  color: #f48771;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -81,14 +81,14 @@ describe("strategy definitions page URL state", () => {
 
   it("restores page and detail drawer from the URL", async () => {
     const { wrapper } = await setup({ page: "2", definition_id: "s1" });
-    expect(api.loadStrategies).toHaveBeenCalledWith({ page: 2, page_size: 20 });
+    expect(api.loadStrategies).toHaveBeenCalledWith({ page: 2, size: 20 });
     expect(wrapper.find(".drawer").text()).toBe("drawer:s1");
   });
 
-  it("normalizes an invalid page and keeps the deep link when the space initializes", async () => {
+  it("loads definitions even when no space is selected, normalizing an invalid page and keeping the deep link", async () => {
     api.space.selectedSpaceId = "";
     const { wrapper } = await setup({ page: "abc", definition_id: "s9" });
-    expect(api.loadStrategies).not.toHaveBeenCalled();
+    expect(api.loadStrategies).toHaveBeenCalledWith({ page: 1, size: 20 });
     expect(wrapper.find(".drawer").text()).toBe("drawer:s9");
   });
 
@@ -98,7 +98,7 @@ describe("strategy definitions page URL state", () => {
     await wrapper.find(".goto-3").trigger("click");
     await flushPromises();
     expect(replace).toHaveBeenLastCalledWith({ name: "strategy-definitions", query: { definition_id: "s1", page: "3" } });
-    expect(api.loadStrategies).toHaveBeenLastCalledWith({ page: 3, page_size: 20 });
+    expect(api.loadStrategies).toHaveBeenLastCalledWith({ page: 3, size: 20 });
     await wrapper.find(".drawer").trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ page: "3" });
@@ -111,7 +111,7 @@ describe("strategy definitions page URL state", () => {
     await router.push({ path: "/strategy/definitions", query: { page: "4" } });
     await flushPromises();
     expect(api.loadStrategies).toHaveBeenCalledTimes(1);
-    expect(api.loadStrategies).toHaveBeenCalledWith({ page: 4, page_size: 20 });
+    expect(api.loadStrategies).toHaveBeenCalledWith({ page: 4, size: 20 });
   });
 
   it("does not reload when only the drawer id changes", async () => {

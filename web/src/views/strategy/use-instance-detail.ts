@@ -67,7 +67,7 @@ export function useInstanceDetail() {
           ? listStrategyResults(instanceId, {
               session_id: allHistory ? undefined : current.session_id,
               page,
-              page_size: pageSize
+              size: pageSize
             })
           : Promise.resolve(null);
       // 首次读取该实例时显示结果加载态；后台轮询刷新不遮罩，失败时保留上次的数据并提示。
@@ -121,7 +121,7 @@ export function useInstanceDetail() {
     try {
       const response = await listStrategyResults(instance.value.instance_id, {
         page,
-        page_size: pageSize,
+        size: pageSize,
         session_id: allHistory ? undefined : instance.value.session_id || undefined
       });
       if (requestId !== resultRequest) return;
