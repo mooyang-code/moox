@@ -81,7 +81,7 @@ func (s *Store) CreateTask(ctx context.Context, task Task) (Task, error) {
 c_retention, c_meta_json, c_backfill_from, c_status, c_creator)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			task.SpaceID, task.DatasetID, task.Purpose, task.DirName, task.Freq, task.PartitionUnit,
-			task.Retention, task.MetaJSON, fmtTime(task.BackfillFrom), task.Status, task.Creator)
+			task.Retention, task.MetaJSON, millisOf(task.BackfillFrom), task.Status, task.Creator)
 		if err != nil && isUnique(err) {
 			// 目录名在上面已查过，这里撞上的只能是数据集已有任务。
 			return ErrConflict
@@ -155,7 +155,7 @@ c_unrecoverable_json = CASE WHEN ? THEN '[]' ELSE c_unrecoverable_json END WHERE
 		}
 		if update.Status == StatusPaused {
 			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '任务已停用'
-WHERE c_space_id = ? AND c_dataset_id = ? AND c_status = 'queued'`, fmtTime(now), spaceID, datasetID); err != nil {
+WHERE c_space_id = ? AND c_dataset_id = ? AND c_status = 'queued'`, millisOf(now), spaceID, datasetID); err != nil {
 				return err
 			}
 		}

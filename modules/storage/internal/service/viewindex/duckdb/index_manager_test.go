@@ -512,7 +512,7 @@ func TestDuckDBSeriesTagSchemaIdentitySelectorsAndUpsert(t *testing.T) {
 	}
 }
 
-func TestBackfillPreservesLiveFieldsAndProvenance(t *testing.T) {
+func TestBackfillPreservesLiveFields(t *testing.T) {
 	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
 	if err != nil {
 		t.Fatal(err)
@@ -521,35 +521,63 @@ func TestBackfillPreservesLiveFieldsAndProvenance(t *testing.T) {
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: "s", DatasetID: "prices", ViewVersion: 1,
 		Engine: "duckdb", SchemaHash: "hash",
-		Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+		Columns: []*viewindex.Column{
+			{ColumnName: "open", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+			{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		},
 	}
 	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
 		t.Fatal(err)
 	}
-	key := duckRowKey("s", "prices", "BTC", "1m", "2026-07-29T00:00:00Z", "")
-	write := func(close float64, sourceHash string) viewindex.RowWrite {
-		return viewindex.RowWrite{
-			Key:        viewindex.RowKey{Key: key},
-			Fields:     []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: close}}}},
-			Attributes: map[string]*pb.TypedValue{"factor.source_hash.bias": {Value: &pb.TypedValue_StringValue{StringValue: sourceHash}}},
-		}
-	}
-	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{write(2, "hash-b")}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+	// 确认物理表不再包含已清理的内部属性列。
+	db, _, _, _, err := manager.getIndex(context.Background(), "idx")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{write(1, "hash-a")}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.Backfill}); err != nil {
+	colRows, err := db.QueryContext(context.Background(), `PRAGMA table_info('view_rows')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer colRows.Close()
+	var tableCols []string
+	for colRows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk bool
+		var dflt any
+		if err := colRows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		tableCols = append(tableCols, name)
+	}
+	if len(tableCols) != 6 {
+		t.Fatalf("view_rows 列数 = %d (%v)，期望 4 个系统键列 + 2 个数据列", len(tableCols), tableCols)
+	}
+
+	key := duckRowKey("s", "prices", "BTC", "1m", "2026-07-29T00:00:00Z", "")
+	liveRow := viewindex.RowWrite{
+		Key:    viewindex.RowKey{Key: key},
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}},
+	}
+	backfillRow := viewindex.RowWrite{
+		Key: viewindex.RowKey{Key: key},
+		Fields: []*pb.FieldValue{
+			{FieldId: "open", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}},
+			{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}},
+		},
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{liveRow}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{backfillRow}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.Backfill}); err != nil {
 		t.Fatal(err)
 	}
 	rows, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || fieldDouble(rows[0], "close") != 2 {
-		t.Fatalf("backfill replaced live field: rows=%v", rows)
-	}
-	got := rows[0].GetAttributes()["factor.source_hash.bias"].GetStringValue()
-	if got != "hash-b" {
-		t.Fatalf("backfill replaced live provenance: got %q", got)
+	if len(rows) != 1 || fieldDouble(rows[0], "close") != 2 || fieldDouble(rows[0], "open") != 1.5 {
+		t.Fatalf("backfill should preserve live close=2 and fill open=1.5: rows=%v", rows)
 	}
 }
 

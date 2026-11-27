@@ -69,7 +69,7 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	_, err := store.db.ExecContext(ctx, `
 		INSERT INTO t_spaces(c_space_id,c_name) VALUES ('target','Target'),('keep','Keep');
 		INSERT INTO t_data_sources(c_space_id,c_data_source_id,c_name) VALUES ('target','source','Source');
-		INSERT INTO t_subjects(c_space_id,c_subject_id,c_name) VALUES ('target','subject','Subject');
+		INSERT INTO t_subjects(c_space_id,c_subject_id,c_name) VALUES ('target','subject','Subject'),('keep','subject','Subject');
 		INSERT INTO t_tags(c_space_id,c_tag_id,c_tag_name,c_mode) VALUES ('target','tag','Tag','manual');
 		INSERT INTO t_subject_tags(c_space_id,c_tag_id,c_subject_id) VALUES ('target','tag','subject');
 		INSERT INTO t_datasets(c_space_id,c_dataset_id,c_data_source_id,c_name,c_data_kind,c_freq)
@@ -80,12 +80,19 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if rev, err := store.SubjectsRevision(ctx, "target"); err != nil || rev == 0 {
+		t.Fatalf("target revision before delete = %d, err = %v", rev, err)
+	}
+	keepRevBefore, err := store.SubjectsRevision(ctx, "keep")
+	if err != nil || keepRevBefore == 0 {
+		t.Fatalf("keep revision before delete = %d, err = %v", keepRevBefore, err)
+	}
 	if err := store.DeleteSpace(ctx, "target"); err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range []string{
 		"t_spaces", "t_data_sources", "t_subjects", "t_tags", "t_subject_tags",
-		"t_datasets", "t_dataset_columns",
+		"t_datasets", "t_dataset_columns", "t_space_revisions",
 	} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE c_space_id = 'target'").Scan(&count); err != nil {
@@ -101,5 +108,8 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	}
 	if keep != 1 {
 		t.Fatalf("unrelated space count = %d", keep)
+	}
+	if keepRevAfter, err := store.SubjectsRevision(ctx, "keep"); err != nil || keepRevAfter != keepRevBefore {
+		t.Fatalf("keep revision changed after deleting target: %d -> %d (err=%v)", keepRevBefore, keepRevAfter, err)
 	}
 }

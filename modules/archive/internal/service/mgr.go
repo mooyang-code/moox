@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var _ archivepb.ArchiveMgrService = (*MgrService)(nil)
@@ -506,12 +507,24 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 			return nil, err
 		}
 	}
+	spaceTZs := map[string]string{}
+	for _, task := range tasks {
+		if _, ok := spaceTZs[task.SpaceID]; ok {
+			continue
+		}
+		tz, err := s.spaceTimezone(ctx, task.SpaceID)
+		if err != nil {
+			log.WarnContextf(ctx, "archive taskViews: resolve space %s timezone: %v", task.SpaceID, err)
+			tz = "UTC"
+		}
+		spaceTZs[task.SpaceID] = tz
+	}
 	out := make([]*archivepb.ArchiveTask, 0, len(tasks))
 	for _, task := range tasks {
 		key := task.SpaceID + "/" + task.DatasetID
 		view := s.taskToPB(task)
 		in := healthInput{Now: now, Task: task, OpenParts: openByTask[key], OldestQueued: queued[key], WorkerLastSeen: status.lastSeen,
-			Lateness: s.cfg.AllowedLateness, SpaceTZ: s.cfg.Space(task.SpaceID).TZ, SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose,
+			Lateness: s.cfg.AllowedLateness, SpaceTZ: spaceTZs[task.SpaceID], SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose,
 			RemoteEnabled: status.remoteEnabled, Remote: backlogs[key]}
 		if run, ok := lastRuns[key]; ok {
 			copied := run

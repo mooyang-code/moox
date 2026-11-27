@@ -245,11 +245,11 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	h.app.mu.Unlock()
 	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{CancelRunIds: []string{"r1", "ghost"},
 		Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "7"}}}
-	tasks := h.app.heartbeatOnce(ctx)
+	tasks := h.app.heartbeatOnce(ctx, true)
 	req := h.mgr.heartbeats[0]
 	if req.GetWorkerId() != "w1" || req.GetVersion() != "test" || req.GetRootDir() != h.root || req.GetDiskTotalBytes() != 200<<30 ||
 		req.GetDiskFreeBytes() != 100<<30 || req.GetDiskUsedBytes() != 90<<30 || req.GetMinFreeBytes() != uint64(h.cfg.Worker.MinFreeBytes) || h.cfg.Worker.MinFreeBytes <= 0 ||
-		len(req.GetRunningRunIds()) != 1 || !strings.Contains(req.GetPacingJson(), "max_concurrent_runs") {
+		len(req.GetRunningRunIds()) != 1 || !strings.Contains(req.GetPacingJson(), "max_concurrent_runs") || !req.GetIncludeTasks() {
 		t.Fatalf("heartbeat = %v", req)
 	}
 	if !cancelled || !h.app.running["r1"].stop.Load() {
@@ -259,15 +259,18 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 		t.Fatalf("tasks=%v", tasks)
 	}
 	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{}
-	if tasks := h.app.heartbeatOnce(ctx); tasks == nil || len(tasks) != 0 {
+	if tasks := h.app.heartbeatOnce(ctx, false); tasks == nil || len(tasks) != 0 {
 		t.Fatalf("没有任务时应拿到空列表: %v", tasks)
+	}
+	if h.mgr.heartbeats[1].GetIncludeTasks() {
+		t.Fatal("常规心跳不应设置 include_tasks")
 	}
 	if h.app.Snapshot().DiskInsufficient {
 		t.Fatal("可用空间高于下限时不算磁盘不足")
 	}
 	// 可用空间低于下限：心跳照常只报数值（由 mgr 与页面按同一下限判断），worker 自己记为磁盘不足、停止领取。
 	h.free = 1 << 30
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	if last := h.mgr.heartbeats[len(h.mgr.heartbeats)-1]; last.GetDiskFreeBytes() != 1<<30 || last.GetMinFreeBytes() <= last.GetDiskFreeBytes() {
 		t.Fatalf("heartbeat = %v", last)
 	}
@@ -276,7 +279,7 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	}
 	// 读不到磁盘用量时沿用上一次的数值与判断，心跳不报 0（否则页面会按“可用低于下限”误报）。
 	h.diskErr = errors.New("statfs failed")
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	if last := h.mgr.heartbeats[len(h.mgr.heartbeats)-1]; last.GetDiskTotalBytes() != 200<<30 || last.GetDiskUsedBytes() != 90<<30 || last.GetDiskFreeBytes() != 1<<30 {
 		t.Fatalf("读取失败时应沿用上一次的数值: %v", last)
 	}
@@ -289,7 +292,7 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 func TestHeartbeatReportsThePacingConfig(t *testing.T) {
 	h := newHarness(t)
 	h.cfg.Pacing.MinuteWindow = false
-	h.app.heartbeatOnce(context.Background())
+	h.app.heartbeatOnce(context.Background(), false)
 	js := h.mgr.heartbeats[0].GetPacingJson()
 	if !strings.Contains(js, `"minute_window":false`) || !strings.Contains(js, `"request_interval":"200ms"`) || strings.Contains(js, "every_minutes") {
 		t.Fatalf("pacing_json = %s", js)
@@ -302,13 +305,13 @@ func TestPullStartsAfterTheFirstHeartbeat(t *testing.T) {
 	if h.canPull(ctx) {
 		t.Fatal("首次心跳成功之前不领取")
 	}
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	if !h.app.Snapshot().Ready || !h.canPull(ctx) {
 		t.Fatal("首次心跳成功后应就绪并可领取")
 	}
 	// 心跳失败只记下错误，不影响领取。
 	h.mgr.heartbeatErr = errors.New("timeout")
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	if !h.canPull(ctx) || h.app.Snapshot().LastError == "" {
 		t.Fatalf("心跳失败后仍可领取并记下错误: %+v", h.app.Snapshot())
 	}
@@ -323,7 +326,7 @@ func TestPullDoesNotCountImportRunsAgainstStorageRuns(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 3, 2
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	h.app.mu.Lock()
 	h.app.running["a"] = &activeRun{assignment: assignment("a", nil), cancel: func() {}}
 	h.app.running["imp"] = &activeRun{assignment: assignment("imp", func(x *archivepb.RunAssignment) { x.Kind = "import" }), cancel: func() {}}
@@ -347,7 +350,7 @@ func TestPullHonorsSlotsLeaseMaintenanceAndDisk(t *testing.T) {
 	if len(h.mgr.pulls) != 0 {
 		t.Fatal("没有取得租约不领取")
 	}
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	h.app.mu.Lock()
 	h.app.running["a"] = &activeRun{assignment: assignment("a", nil), cancel: func() {}}
 	h.app.running["b"] = &activeRun{assignment: assignment("b", nil), cancel: func() {}}
@@ -398,7 +401,7 @@ func TestPulledRunsAreExecutedAndReportedWithStatsAndPartitions(t *testing.T) {
 		h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day.Add(time.Duration(i) * time.Minute), Values: []any{float64(i)}})
 	}
 	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r1", nil)}
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
 	if req.GetRunId() != "r1" || req.GetLeaseToken() != "tok-r1" || req.GetStatus() != "succeeded" ||
@@ -409,13 +412,23 @@ func TestPulledRunsAreExecutedAndReportedWithStatsAndPartitions(t *testing.T) {
 		t.Fatalf("partitions = %v", req.GetPartitions())
 	}
 	h.idle()
-	// 同样的数据再跑一次：没有新增。
+	// 同样的数据再跑一次：没有新增，且 pullOnce 应带上已同步的 task_id，让 mgr 跳过重传已登记分区。
 	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(x *archivepb.RunAssignment) { x.StartedAt = rfcMillis("2026-10-17T02:04:43Z") })}
 	h.now = h.now.Add(time.Hour)
-	h.app.heartbeatOnce(ctx) // 一小时后租约需要靠新的心跳续上
+	h.app.heartbeatOnce(ctx, false) // 一小时后租约需要靠新的心跳续上
 	h.app.pullOnce(ctx)
 	if second := h.waitComplete(); second.GetRunId() != "r2" || second.GetRowsAdded() != 0 || second.GetStatus() != "succeeded" {
 		t.Fatalf("second = %v", second)
+	}
+	h.mgr.mu.Lock()
+	firstSynced := h.mgr.pulls[0].GetSyncedTasks()
+	secondSynced := h.mgr.pulls[1].GetSyncedTasks()
+	h.mgr.mu.Unlock()
+	if len(firstSynced) != 0 {
+		t.Fatalf("首次领取不应带 synced_tasks: %v", firstSynced)
+	}
+	if len(secondSynced) != 1 || secondSynced[0].GetSpaceId() != "crypto" || secondSynced[0].GetDatasetId() != "ds_1m" || secondSynced[0].GetTaskId() != "1" {
+		t.Fatalf("第二次领取应带上已同步任务: %v", secondSynced)
 	}
 }
 
@@ -426,7 +439,7 @@ func TestIndependentProgressTimerRenewsTheLeaseAndHonorsCancellation(t *testing.
 	h.src.block = true // 读取一直不返回：只有独立的续租定时器能让 mgr 知道运行还活着
 	h.mgr.progressStop = true
 	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r1", nil)}
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
 	if req.GetStatus() != "canceled" {
@@ -451,7 +464,7 @@ func TestRunsOfTheSameDatasetNeverOverlapLocally(t *testing.T) {
 	// mgr 取消旧运行后立刻为同一个数据集派发了新运行：两个运行同时在 worker 里，但必须一个接一个执行。
 	backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = day.Format(time.RFC3339) }
 	h.mgr.assignments = []*archivepb.RunAssignment{assignment("old", backfill), assignment("new", backfill)}
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	h.app.pullOnce(ctx)
 	h.waitComplete()
 	h.waitComplete()
@@ -512,7 +525,7 @@ func TestMaintenanceWaitsForInFlightPullsThenReconcilesWithAFreshTaskList(t *tes
 	ctx := context.Background()
 	h.seed("gone", "1")
 	h.seed("ds_1m", "1")
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	// 领取调用还在途中（运行还没登记）：维护不能开始，也不能对账。
 	gate := make(chan struct{})
 	entered := make(chan struct{})
@@ -532,7 +545,7 @@ func TestMaintenanceWaitsForInFlightPullsThenReconcilesWithAFreshTaskList(t *tes
 	<-pulled
 	h.waitComplete()
 	h.idle()
-	// 运行结束后维护：先发心跳取当前任务列表，删掉不在列表里的「gone」。
+	// 运行结束后维护：先发对账心跳（include_tasks=true）取当前任务列表，删掉不在列表里的「gone」。
 	h.mgr.mu.Lock()
 	before := len(h.mgr.heartbeats)
 	h.mgr.mu.Unlock()
@@ -540,8 +553,8 @@ func TestMaintenanceWaitsForInFlightPullsThenReconcilesWithAFreshTaskList(t *tes
 	if got := stagedTasks(t, h, "gone", "ds_1m"); got["gone"] || !got["ds_1m"] {
 		t.Fatalf("对账后: %v", got)
 	}
-	if len(h.mgr.heartbeats) != before+1 {
-		t.Fatal("维护应主动发一次心跳拿任务列表")
+	if len(h.mgr.heartbeats) != before+1 || !h.mgr.heartbeats[before].GetIncludeTasks() {
+		t.Fatalf("维护应主动发一次带 include_tasks 的心跳拿任务列表: %v", h.mgr.heartbeats)
 	}
 }
 
@@ -576,7 +589,7 @@ func TestPartitionsAreMarkedReportedOnlyAfterTheManagerAcknowledges(t *testing.T
 		h.mgr.completeErrs = append(h.mgr.completeErrs, errors.New("mgr down"))
 	}
 	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r1", nil)}
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	h.app.pullOnce(ctx)
 	h.idle()
 	if pending, _ := h.store.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 1 {
@@ -585,7 +598,7 @@ func TestPartitionsAreMarkedReportedOnlyAfterTheManagerAcknowledges(t *testing.T
 	// 第二次：上报成功，随后清除标记。
 	h.now = h.now.Add(time.Hour)
 	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(a *archivepb.RunAssignment) { a.StartedAt = rfcMillis("2026-10-17T02:04:43Z") })}
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
 	h.idle()
@@ -720,7 +733,7 @@ func TestRunStartsCleansLeftoversAndStopsGracefully(t *testing.T) {
 func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	h.src.block = true
 	h.mgr.assignments = []*archivepb.RunAssignment{
 		assignment("run_imp", func(a *archivepb.RunAssignment) { a.Kind = "import" }),

@@ -18,7 +18,6 @@ const testKey = "0123456789abcdef0123456789abcdef"
 
 func setupHostDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", testKey)
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
@@ -46,7 +45,7 @@ func TestHostDAOTargetComposesRegistryAndCredential(t *testing.T) {
 	insertHost(t, db, "storage", "198.51.100.7", "direct", 2222)
 	putCredential(t, db, "storage", secretmodel.SSHCredential{PrivateKey: "KEY", Passphrase: "phrase"})
 
-	target, err := NewHostDAO(db).Target(context.Background(), "storage")
+	target, err := NewHostDAO(db, testKey).Target(context.Background(), "storage")
 	require.NoError(t, err)
 	assert.Equal(t, "storage", target.HostID)
 	assert.Equal(t, "198.51.100.7:2222", target.Endpoint())
@@ -61,7 +60,7 @@ func TestHostDAOTargetComposesRegistryAndCredential(t *testing.T) {
 
 func TestHostDAOTargetRejectsUnregisteredAndUnavailableHosts(t *testing.T) {
 	db := setupHostDB(t)
-	d := NewHostDAO(db)
+	d := NewHostDAO(db, testKey)
 	_, err := d.Target(context.Background(), "missing")
 	require.ErrorIs(t, err, ErrHostNotFound)
 
@@ -82,7 +81,7 @@ func TestHostDAOTargetRejectsUnregisteredAndUnavailableHosts(t *testing.T) {
 func TestPinHostKeyTrustsFirstKeyPerEndpoint(t *testing.T) {
 	db := setupHostDB(t)
 	insertHost(t, db, "storage", "198.51.100.7", "direct", 22)
-	d := NewHostDAO(db)
+	d := NewHostDAO(db, testKey)
 
 	pinned, err := d.PinHostKey("storage", "198.51.100.7:22", "SHA256:first")
 	require.NoError(t, err)
@@ -120,7 +119,7 @@ func TestPinHostKeyTrustsFirstKeyPerEndpoint(t *testing.T) {
 func TestPinHostKeyConcurrentFirstConnectionsAgree(t *testing.T) {
 	db := setupHostDB(t)
 	insertHost(t, db, "storage", "198.51.100.7", "direct", 22)
-	d := NewHostDAO(db)
+	d := NewHostDAO(db, testKey)
 	const workers = 8
 	results := make(chan string, workers)
 	var group sync.WaitGroup

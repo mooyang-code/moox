@@ -14,6 +14,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type cleanupDatasetReader struct{}
@@ -87,7 +88,11 @@ func TestStorageEventBusConfigLoadsCredentialFromExplicitEnv(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CONFIG", "")
 	t.Setenv("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES", "")
 
-	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-view")
+	loaded, err := loadRuntimeStorageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := storageEventBusConfig(loaded, []string{"nats://127.0.0.1:4222"}, "storage-view")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +112,11 @@ func TestStorageEventBusConfigHonorsExplicitReconnectBuffer(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CONFIG", "")
 	t.Setenv("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES", "0")
 
-	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-view")
+	loaded, err := loadRuntimeStorageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := storageEventBusConfig(loaded, []string{"nats://127.0.0.1:4222"}, "storage-view")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +158,11 @@ func TestLoadStoragePolicyFromThePackageRoot(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte("storage:\n  root: ./var/storage\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadStoragePolicy(); err == nil || !strings.Contains(err.Error(), "storage.policy_file is required") {
+	cfg, err := loadRuntimeStorageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.LoadPolicy(); err == nil || !strings.Contains(err.Error(), "storage.policy_file is required") {
 		t.Fatalf("missing policy_file error = %v", err)
 	}
 
@@ -170,7 +183,11 @@ func TestLoadStoragePolicyFromThePackageRoot(t *testing.T) {
 	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := loadStoragePolicy()
+	cfg, err = loadRuntimeStorageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := cfg.LoadPolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,14 +198,18 @@ func TestLoadStoragePolicyFromThePackageRoot(t *testing.T) {
 	if err := os.WriteFile(policyPath, []byte(`{"retention":{"defaults":{"1m":"7d"}},"view":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadStoragePolicy(); err == nil {
+	if _, err := cfg.LoadPolicy(); err == nil {
 		t.Fatal("an incomplete policy file was accepted")
 	}
 }
 
 func TestLoadStoragePolicyDefaultsWithoutStorageConfig(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CONFIG", "")
-	policy, err := loadStoragePolicy()
+	cfg, err := loadRuntimeStorageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := cfg.LoadPolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,10 +240,14 @@ func TestStorageViewMaintenanceDisabled(t *testing.T) {
 func TestStorageEventBusConfigRejectsInvalidReconnectBuffer(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", "")
 	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	loaded, err := loadRuntimeStorageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, value := range []string{"garbage", "-1"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES", value)
-			if _, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-view"); err == nil {
+			if _, err := storageEventBusConfig(loaded, []string{"nats://127.0.0.1:4222"}, "storage-view"); err == nil {
 				t.Fatalf("reconnect buffer %q was accepted", value)
 			}
 		})
@@ -242,7 +267,11 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", "")
 	t.Setenv("MOOX_STORAGE_CONFIG", configFile)
 
-	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-primary")
+	loaded, err := loadRuntimeStorageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := storageEventBusConfig(loaded, []string{"nats://127.0.0.1:4222"}, "storage-primary")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,8 +282,12 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 
 func TestStorageViewDeleteOldestBatchSizeDefaultsAndBounds(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_CONFIG", "")
-	if size, err := storageViewDeleteOldestBatchSize(); err != nil || size != 2000 {
-		t.Fatalf("没有配置文件时应取默认 2000，实际 %d，错误 %v", size, err)
+	loaded, err := loadRuntimeStorageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vs, err := loaded.ViewSettings(); err != nil || vs.DeleteOldestBatchSize != 2000 {
+		t.Fatalf("没有配置文件时应取默认 2000，实际 %+v，错误 %v", vs, err)
 	}
 	for _, c := range []struct {
 		yaml    string
@@ -271,15 +304,27 @@ func TestStorageViewDeleteOldestBatchSizeDefaultsAndBounds(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("MOOX_STORAGE_CONFIG", path)
-		size, err := storageViewDeleteOldestBatchSize()
+		loaded, err := loadRuntimeStorageConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		vs, err := loaded.ViewSettings()
 		if c.wantErr {
 			if err == nil {
-				t.Fatalf("%q 应报越界错误，实际取到 %d", c.yaml, size)
+				t.Fatalf("%q 应报越界错误，实际取到 %d", c.yaml, vs.DeleteOldestBatchSize)
 			}
 			continue
 		}
-		if err != nil || size != c.want {
-			t.Fatalf("%q 应取到 %d，实际 %d，错误 %v", c.yaml, c.want, size, err)
+		if err != nil || vs.DeleteOldestBatchSize != c.want {
+			t.Fatalf("%q 应取到 %d，实际 %d，错误 %v", c.yaml, c.want, vs.DeleteOldestBatchSize, err)
 		}
+	}
+}
+
+// 验证 nativewire 将 tRPC 帧上限抬升至不低于 servicecatalog/catalog.yaml 声明的 32 MiB max_body_bytes。
+func TestTRPCMaxFrameSizeCoversCatalogMaxBodyBytes(t *testing.T) {
+	const catalogMaxBodyBytes = 33554432 // 32 MiB
+	if trpc.DefaultMaxFrameSize < catalogMaxBodyBytes {
+		t.Fatalf("trpc.DefaultMaxFrameSize=%d 小于 catalog.yaml 声明的 max_body_bytes=%d", trpc.DefaultMaxFrameSize, catalogMaxBodyBytes)
 	}
 }

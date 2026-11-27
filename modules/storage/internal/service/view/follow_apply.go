@@ -144,7 +144,7 @@ func (s *Service) ensureFollower(ref datasetRef) {
 		return
 	}
 	// 有活动索引，或断档重建还没完成（由跟随器接着重建）时才跟随。
-	if runtime.queryState().active == "" && !runtime.needsRebuild() {
+	if !runtime.queryState().active() && !runtime.needsRebuild() {
 		return
 	}
 	manager.Ensure(follow.Key{SpaceID: ref.spaceID, DatasetID: ref.datasetID}, followTarget{s: s, ref: ref})
@@ -165,7 +165,7 @@ func (t followTarget) LoadState(ctx context.Context) (viewindex.FollowState, err
 		// 上一次重建没完成（失败、中途停掉或进程退出），或活动索引文件不见了：返回空进度，由跟随器重建。
 		return viewindex.FollowState{}, nil
 	}
-	if runtime.queryState().active == "" {
+	if !runtime.queryState().active() {
 		return viewindex.FollowState{}, fmt.Errorf("View %s/%s 没有活动索引", t.ref.spaceID, t.ref.datasetID)
 	}
 	stats, err := restoreIndexStats(ctx, runtime.engine, runtime.indexID)
@@ -183,7 +183,7 @@ func (t followTarget) SaveState(ctx context.Context, state viewindex.FollowState
 	if err != nil {
 		return err
 	}
-	if runtime.queryState().active == "" {
+	if !runtime.queryState().active() {
 		return fmt.Errorf("View %s/%s 没有活动索引", t.ref.spaceID, t.ref.datasetID)
 	}
 	return t.s.saveFollowState(ctx, runtime, state)
@@ -242,7 +242,7 @@ func (s *Service) applyFollowRows(ctx context.Context, ref datasetRef, changes [
 	reader, rangeReader := s.primary, s.primaryRange
 	s.mu.RUnlock()
 	state := runtime.queryState()
-	if state.active == "" {
+	if !state.active() {
 		return false, fmt.Errorf("View %s/%s 没有活动索引", ref.spaceID, ref.datasetID)
 	}
 	spec := state.spec
@@ -260,7 +260,7 @@ func (s *Service) applyFollowRows(ctx context.Context, ref datasetRef, changes [
 		if withCursor {
 			at = &cursor
 		}
-		wrote, err := s.writeFollowRows(ctx, runtime, state.active, pending, at)
+		wrote, err := s.writeFollowRows(ctx, runtime, runtime.indexID, pending, at)
 		if err != nil {
 			return err
 		}
@@ -308,7 +308,7 @@ func (s *Service) applyFollowRows(ctx context.Context, ref datasetRef, changes [
 func (s *Service) writeFollowRows(ctx context.Context, runtime *viewRuntime, indexID string, writes []viewindex.RowWrite, cursor *viewindex.ChangeCursor) (bool, error) {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.active != indexID {
+	if !runtime.phase.isActive() || runtime.indexID != indexID {
 		return false, fmt.Errorf("View %s/%s 的活动索引已变化", runtime.ref.spaceID, runtime.ref.datasetID)
 	}
 	kept := s.dropExpiredWrites(indexID, writes)

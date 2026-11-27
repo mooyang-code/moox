@@ -2,11 +2,12 @@ package activitylog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -24,11 +25,32 @@ func NewService(db *gorm.DB) *Service {
 	return &Service{dao: NewDAO(db), now: time.Now}
 }
 
+// RecordLogin 把一次成功登录写进全局活动日志（不属于任何空间）。
+func (s *Service) RecordLogin(ctx context.Context, userID, username, clientIP, userAgent string) error {
+	detail, err := json.Marshal(map[string]string{
+		"username":   username,
+		"ip":         clientIP,
+		"user_agent": userAgent,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.dao.Append(ctx, []Entry{{
+		Source:   auth.LoginLogSource,
+		Category: auth.LoginLogCategory,
+		Level:    "info",
+		Title:    "用户 " + username + " 登录",
+		Detail:   string(detail),
+		RefID:    userID,
+	}}, s.now())
+	return err
+}
+
 func ret(code pb.ErrorCode, message string) *pb.RetInfo { return &pb.RetInfo{Code: code, Msg: message} }
 
 // isBrowserCaller 判断请求是否来自已登录的浏览器用户；内部组件由网关 ACL 限定，没有用户身份。
 func isBrowserCaller(ctx context.Context) bool {
-	_, _, err := utils.GetUserInfoFromCtx(ctx)
+	_, _, err := auth.GetUserInfoFromCtx(ctx)
 	return err == nil
 }
 

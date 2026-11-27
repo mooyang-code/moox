@@ -24,14 +24,8 @@ import (
 // UnitTemplatePath 是统一的单元模板在仓库里的位置。
 const UnitTemplatePath = "deploy/systemd/user/moox-component.service.tmpl"
 
-// 内置对象存储（SeaweedFS）给归档 worker 用的固定参数：端口只听 127.0.0.1，桶与前缀由安装脚本建好。
-const (
-	seaweedfsS3Endpoint = "127.0.0.1:11473"
-	seaweedfsRegion     = "us-east-1"
-	seaweedfsBucket     = "moox-archive"
-	seaweedfsPrefix     = "moox-archive/"
-	objectStoreEnvFile  = "archive-object-store.env"
-)
+// objectStoreEnvFile 是归档 worker 使用外部对象存储时在 secrets/ 下存放的凭据文件名。
+const objectStoreEnvFile = "archive-object-store.env"
 
 // defaultStreamSpace 是 collector-stream 实例服务的空间（同一空间只部署一个实例）。
 const defaultStreamSpace = "crypto"
@@ -65,7 +59,7 @@ type Request struct {
 	Identity   Identity
 	// CLS 是服务日志上报的写入密钥，只在 moox.toml 打开了 logging.cls 时使用。
 	CLS topology.CLSWriter
-	// ObjectStoreEnv 是归档 worker 用外部对象存储时的凭据文件内容；用内置对象存储时为空（凭据在目标机生成）。
+	// ObjectStoreEnv 是归档 worker 使用外部对象存储时的凭据文件内容；未配 [archive_object_store] 时为空。
 	ObjectStoreEnv []byte
 }
 
@@ -146,11 +140,9 @@ func (r *renderer) fingerprint(component string) string {
 	names := slices.Clone(r.used[component])
 	sort.Strings(names)
 	hash := sha256.New()
-	if spec, _ := r.Catalog.Component(component); !spec.ThirdParty {
-		fmt.Fprintf(hash, "sign-public-key\x00%s\x00", r.Identity.SignPublicKey)
-		if component == "collector" {
-			fmt.Fprintf(hash, "scf-collector-public-key\x00%s\x00", r.Identity.SCFCollectorPublicKey)
-		}
+	fmt.Fprintf(hash, "sign-public-key\x00%s\x00", r.Identity.SignPublicKey)
+	if component == "collector" {
+		fmt.Fprintf(hash, "scf-collector-public-key\x00%s\x00", r.Identity.SCFCollectorPublicKey)
 	}
 	for _, name := range names {
 		if name == "secrets/host.crt" || name == "secrets/host.tls.key" || name == "secrets/host.key" || name == "secrets/scf-collector.key" {
@@ -168,10 +160,10 @@ func (r *renderer) fingerprint(component string) string {
 
 func (r *renderer) component(component servicecatalog.Component, unitTemplate *template.Template) error {
 	id := component.ID
-	environment := map[string]string{}
-	if !component.ThirdParty {
-		environment["MOOX_NODE_ID"], environment["MOOX_SERVICE_NAME"] = r.Host.Name, id
-		environment["MOOX_INSTANCE_ID"] = id + "@" + r.Host.Name
+	environment := map[string]string{
+		"MOOX_NODE_ID":      r.Host.Name,
+		"MOOX_SERVICE_NAME": id,
+		"MOOX_INSTANCE_ID":  id + "@" + r.Host.Name,
 	}
 	if err := r.eventBus(component, environment); err != nil {
 		return err
@@ -216,9 +208,6 @@ func (r *renderer) component(component servicecatalog.Component, unitTemplate *t
 
 // secretsOf 是组件用到的身份文件（相对部署根）。
 func (r *renderer) secretsOf(component servicecatalog.Component) []string {
-	if component.ThirdParty {
-		return nil
-	}
 	names := []string{"secrets/moox-ca.crt"}
 	// 主机证书是主机网关和 EventBus 的服务端证书。
 	if component.ID == "host-gateway" || component.ID == "eventbus" {
@@ -437,7 +426,9 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 		case "archive-worker":
 			set("worker.worker_id", id+"@"+r.Host.Name)
 			set("worker.root_dir", path.Join(layout.Root, "archive"))
-			set("object_store", r.objectStore())
+			if section := r.objectStore(); section != nil {
+				set("object_store", section)
+			}
 		}
 	}
 	if err != nil {
@@ -479,16 +470,13 @@ func (r *renderer) gatewayClient(component servicecatalog.Component, client *yam
 	return nil
 }
 
-// objectStore 是归档 worker 的 object_store 段：没配 [archive_object_store] 时用本机内置的 SeaweedFS。
+// objectStore 是归档 worker 的 object_store 段：未配 [archive_object_store] 时返回 nil（省略整段，仅保留本机磁盘归档）。
 func (r *renderer) objectStore() map[string]any {
-	credentials := r.layout.Secret(objectStoreEnvFile)
 	store := r.Config.ArchiveObjectStore
 	if store == nil {
-		return map[string]any{
-			"endpoint": seaweedfsS3Endpoint, "region": seaweedfsRegion, "bucket": seaweedfsBucket, "prefix": seaweedfsPrefix,
-			"url_style": "path", "use_tls": false, "credentials_file": credentials,
-		}
+		return nil
 	}
+	credentials := r.layout.Secret(objectStoreEnvFile)
 	section := map[string]any{
 		"endpoint": store.Endpoint, "region": store.Region, "bucket": store.Bucket, "url_style": store.URLStyle,
 		"use_tls": store.TLS(), "credentials_file": credentials,

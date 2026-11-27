@@ -81,12 +81,59 @@ func TestDatasetColumnsCarryTheirOwnDisplayName(t *testing.T) {
 	require.Equal(t, []string{"close", "bias_20", "momentum_5"}, columnNames(listed.GetColumns()))
 	require.Equal(t, "动量", listed.GetColumns()[2].GetGroup())
 
-	cached, err := metacache.New(ctx, store, metacache.Options{})
+	cached, err := metacache.NewDatasetCache(ctx, store)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cached.Close() })
 	columns, _, err := cached.ListDatasetColumns(ctx, dataset.GetSpaceId(), dataset.GetDatasetId(), nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"close", "bias_20", "momentum_5"}, columnNames(columns), "缓存保留建列顺序")
+}
+
+// 标的/标签/数据源等非数据集写入不触发 DatasetCache 刷新；数据集/列/删空间变更必须同步刷新。
+func TestDatasetCacheRefreshOnlyTriggeredByDatasetMutations(t *testing.T) {
+	ctx := context.Background()
+	store, service, dataset := newDatasetFixture(t)
+	cached, err := metacache.NewDatasetCache(ctx, store)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cached.Close() })
+
+	var refreshes int
+	service.datasetCache = cached
+	service.refreshOverride = func(ctx context.Context) error {
+		refreshes++
+		return cached.Refresh(ctx)
+	}
+
+	_, err = service.UpsertSubject(ctx, &pb.UpsertSubjectReq{Subject: &pb.Subject{SpaceId: dataset.GetSpaceId(), SubjectId: "BTC-USDT", Name: "BTC"}})
+	require.NoError(t, err)
+	_, err = service.UpsertTag(ctx, &pb.UpsertTagReq{Tag: &pb.Tag{SpaceId: dataset.GetSpaceId(), TagId: "hot", TagName: "热门"}})
+	require.NoError(t, err)
+	_, err = service.ApplyTagSnapshot(ctx, &pb.ApplyTagSnapshotReq{
+		SpaceId: dataset.GetSpaceId(), TagId: "hot",
+		Items: []*pb.TagSnapshotItem{{SubjectId: "BTC-USDT", Name: "BTC"}},
+	})
+	require.NoError(t, err)
+	_, err = service.UpdateSubjectAttributes(ctx, &pb.UpdateSubjectAttributesReq{
+		SpaceId: dataset.GetSpaceId(),
+		Items:   []*pb.SubjectAttributes{{SubjectId: "BTC-USDT", Attributes: map[string]string{"sector": "layer1"}}},
+	})
+	require.NoError(t, err)
+	_, err = service.CreateDataSource(ctx, &pb.CreateDataSourceReq{DataSource: &pb.DataSource{SpaceId: dataset.GetSpaceId(), DataSourceId: "ds_extra", Name: "扩展源"}})
+	require.NoError(t, err)
+	require.Equal(t, 0, refreshes, "非数据集变更不应触发 DatasetCache 刷新")
+
+	rspCol, err := service.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: newDatasetColumn(dataset, "rsi_14", "RSI")})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rspCol.GetRetInfo().GetCode())
+	require.Equal(t, 1, refreshes)
+	_, err = cached.GetDatasetColumn(ctx, dataset.GetSpaceId(), dataset.GetDatasetId(), "rsi_14")
+	require.NoError(t, err)
+
+	rspDel, err := service.DeleteDataset(ctx, &pb.DeleteDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rspDel.GetRetInfo().GetCode())
+	require.Equal(t, 2, refreshes)
+	require.False(t, cached.HasDataset(dataset.GetSpaceId(), dataset.GetDatasetId()))
 }
 
 // 每个数据集恰好一个查询索引，不单独登记：删数据集一次调用即可。

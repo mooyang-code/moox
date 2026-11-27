@@ -15,7 +15,10 @@ import (
 )
 
 func (s *ServiceImpl) topologyDAO() (*TopologyDAO, error) {
-	return NewTopologyDAO(s.db, s.adminNodeID)
+	if s.topology == nil {
+		return nil, errors.New("topology DAO is not initialized")
+	}
+	return s.topology, nil
 }
 
 func topologyRet(err error) *pb.RetInfo {
@@ -121,9 +124,8 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
-	// 期望哈希总是按当前登记的内容给出，包含上次心跳之后的变更；网关不能自己决定期望哈希。
-	status.ExpectedHash = snapshot.Hash
-	response := &pb.GetHostRoutesRsp{RetInfo: retOK(), HostId: compiled.HostID, GatewayStatus: statusToProto(status), SnapshotSchemaVersion: snapshot.SchemaVersion, CompiledAt: compiledAt}
+	// 期望哈希总是按当前登记的内容实时计算，包含上次心跳之后的变更；不冗余落库。
+	response := &pb.GetHostRoutesRsp{RetInfo: retOK(), HostId: compiled.HostID, GatewayStatus: statusToProto(status, snapshot.Hash), SnapshotSchemaVersion: snapshot.SchemaVersion, CompiledAt: compiledAt}
 	for _, route := range compiled.Routes {
 		response.Routes = append(response.Routes, &pb.HostGatewayRoute{ComponentId: route.ComponentID, ServicePath: route.ServicePath, Method: route.Method, Address: route.Address, TimeoutMs: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes, Callers: route.Callers, ReadOnly: route.ReadOnly})
 	}
@@ -160,8 +162,8 @@ func (s *ServiceImpl) SyncTopology(ctx context.Context, req *pb.SyncTopologyReq)
 	return &pb.SyncTopologyRsp{RetInfo: topologyRet(err)}, nil
 }
 
-func statusToProto(status *HostGatewayStatus) *pb.HostGatewayRuntimeStatus {
-	result := &pb.HostGatewayRuntimeStatus{ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash}
+func statusToProto(status *HostGatewayStatus, expectedHash string) *pb.HostGatewayRuntimeStatus {
+	result := &pb.HostGatewayRuntimeStatus{ExpectedHash: expectedHash, AppliedHash: status.AppliedHash}
 	if status.LastSeenAt != nil {
 		result.LastSeenAt = status.LastSeenAt.UnixMilli()
 	}

@@ -108,13 +108,31 @@ func newViewSpec(dataset *pb.Dataset, columns []*pb.DatasetColumn) *viewSpec {
 	return spec
 }
 
+// viewPhase 描述一个 View 运行时的生命周期状态。每个数据集只有一个固定 indexID，
+// 用显式状态机替代历史遗留的多代索引名字段。
+type viewPhase uint8
+
+const (
+	// viewPhaseEmpty 表示尚未建好索引（新创建、首次建失败已丢弃、或已摘除）。
+	viewPhaseEmpty viewPhase = iota
+	// viewPhaseBuilding 表示维护协程正在执行首次建索引（失败时丢弃半成品并退回 viewPhaseEmpty）。
+	viewPhaseBuilding
+	// viewPhaseRebuilding 表示跟随器正在执行断档原地重建（或上次重建未完成，需由跟随器继续重建）。
+	viewPhaseRebuilding
+	// viewPhaseActive 表示活动索引可读且可跟随写入。
+	viewPhaseActive
+)
+
+func (p viewPhase) isActive() bool   { return p == viewPhaseActive }
+func (p viewPhase) isBuilding() bool { return p == viewPhaseBuilding || p == viewPhaseRebuilding }
+
 // viewRuntime 是一个数据集 View 的全部内存状态。
 //
 // runtime 在 views 里只按 datasetRef 建一次：摘掉 View 前先停跟随器并拿 gate 关闭索引，之后不会再有写入方拿到这个
 // runtime；同一数据集重建时是新的 runtime 和新的 gate。旧 runtime 的摘除删文件与新 runtime 的首次建索引都在维护协程里
 // 串行执行，所以两把不同的 gate 不需要互相排斥。摘掉时整个 runtime 从 views 删掉，gate 与 revision 随之回收。
 //
-// 不被写索引卡住的东西不放在 mu 下：spec 进原子副本，fileOverLimit、revision、statsRefreshedAt 用原子量，
+// 不被写索引卡住的东西不放在 mu 下：spec、phase、stats 进原子副本，fileOverLimit、revision、statsRefreshedAt 用原子量，
 // ref、indexID、engine、gate 构造时定下、之后只读。查询路径只读 readState，不等 mu。
 type viewRuntime struct {
 	ref     datasetRef
@@ -129,28 +147,28 @@ type viewRuntime struct {
 	statsRefreshedAt atomic.Int64
 
 	// mu 只保护下面几项；写索引期间一直持有（大批因子写入要几秒）。
-	mu     sync.Mutex
-	active string
-	// building 是正在建的索引（首次建索引或断档重建），建成后转为 active，期间 active 为空。任何时刻只写一个索引。
-	building string
-	// schema 是正在写的那份契约（建索引中或已建好）。
-	schema       viewindex.ViewIndexSchema
-	spec         *viewSpec
-	statsIndexID string
-	stats        viewindex.ViewIndexStats
+	mu    sync.Mutex
+	phase viewPhase
+	// schema 是当前索引的列契约（建索引中、重建中或已建好）。
+	schema   viewindex.ViewIndexSchema
+	spec     *viewSpec
+	hasStats bool
+	stats    viewindex.ViewIndexStats
 
 	readState atomic.Pointer[runtimeReadState]
 }
 
-// runtimeReadState 是查询路径要的副本，随 active、schema、spec 或统计一起整体替换。
+// runtimeReadState 是查询路径要的副本，随 phase、schema、spec 或统计一起整体替换。
 type runtimeReadState struct {
-	active        string
+	phase         viewPhase
 	schema        viewindex.ViewIndexSchema
 	spec          *viewSpec
-	statsIndexID  string
+	hasStats      bool
 	stats         viewindex.ViewIndexStats
 	hiddenColumns map[string]struct{}
 }
+
+func (s runtimeReadState) active() bool { return s.phase.isActive() }
 
 // lastInitialRevision 保证同一进程内先后新建的 viewRuntime 也拿到严格递增的非零偶数初始修订号；
 // 以当前 Unix 纳秒向上取偶为底则保证跨进程重启单调递增、永不为 0（Pin.Revision == 0 表示跳过校验），
@@ -169,7 +187,7 @@ func nextInitialRevision() uint64 {
 	}
 }
 
-// newViewRuntime 创建运行时并立即发布一份查询路径副本：没有发布过副本的运行时在读取 active 时要等运行时锁。
+// newViewRuntime 创建运行时并立即发布一份查询路径副本：没有发布过副本的运行时在读取状态时要等运行时锁。
 // revision 以非零偶数且跨进程重启单调递增的基数初始化，避免重启后首次写入前多页翻页跳过版本校验。
 func newViewRuntime(spec *viewSpec, engine viewindex.Engine) *viewRuntime {
 	ref := spec.ref()
@@ -193,37 +211,31 @@ func (r *viewRuntime) bumpRevision() {
 	r.revision.Add(2)
 }
 
-// needsRebuild 报告 View 是否要原地重建或正在重建（断档、重建中途失败或退出、活动索引文件不见了）：此时元数据仍说
-// 数据集是活动的，维护流程不能在建成前把它挂回去，跟随器据此接着重建。
-//
-// 首次建索引期间同样是“没有活动索引、有建索引目标”，但它只在维护协程里、持有 buildMu 一次做完：开头先停掉跟随器，
-// 失败时 discardInitialBuild 清掉 building，建成后转为 active，这段时间里没有别的调用方读这个判断。所以长期保持
-// 这个状态的只有未完成的重建。
-//
-// 这个推断依赖启动顺序：RestoreActiveViews 与 StartFollowing 都在维护循环启动之前做完，首次建索引期间只有维护协程自己
-// 会调 ensureFollower 和挂接。以后若有别的协程在维护运行期间起跟随器或挂接 View，要重新加上单独的标记。
+// needsRebuild 报告 View 是否处于断档原地重建状态（断档、重建中途失败或重启恢复前未完成）：
+// 此时维护流程不另起首次建索引，也不在建成前挂回活动索引，由跟随器接着重建。
 func (r *viewRuntime) needsRebuild() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.active == "" && r.building != ""
+	return r.queryState().phase == viewPhaseRebuilding
 }
 
-// publishReadStateLocked 重新发布查询路径副本；改了 active、schema、spec 或统计后在持有 mu 时调用。
+// publishReadStateLocked 重新发布查询路径副本；改了 phase、schema、spec 或统计后在持有 mu 时调用。
 func (r *viewRuntime) publishReadStateLocked() {
 	hidden := make(map[string]struct{}, len(r.spec.HiddenColumns))
 	for _, name := range r.spec.HiddenColumns {
 		hidden[name] = struct{}{}
 	}
-	r.readState.Store(&runtimeReadState{active: r.active, schema: r.schema, spec: r.spec, statsIndexID: r.statsIndexID, stats: r.stats, hiddenColumns: hidden})
+	r.readState.Store(&runtimeReadState{
+		phase: r.phase, schema: r.schema, spec: r.spec,
+		hasStats: r.hasStats, stats: r.stats, hiddenColumns: hidden,
+	})
 }
 
-// clearActiveLocked 清空活动索引及其统计缓存（调用方持有 mu）；若原先存在活动索引则递增修订号，让在途查询感知切换。
+// clearActiveLocked 清空活动状态及统计缓存（调用方持有 mu）；若原先处于活动态则递增修订号，让在途查询感知切换。
 func (r *viewRuntime) clearActiveLocked() {
-	if r.active != "" {
+	if r.phase.isActive() {
 		r.bumpRevision()
 	}
-	r.active = ""
-	r.statsIndexID = ""
+	r.phase = viewPhaseEmpty
+	r.hasStats = false
 	r.stats = viewindex.ViewIndexStats{}
 	r.publishReadStateLocked()
 }
@@ -292,14 +304,13 @@ func (s *Service) ensureRuntime(ctx context.Context, spec *viewSpec) (*viewRunti
 	return runtime, nil
 }
 
-// detachView 摘掉一个 View：停跟随器，清掉活动索引并从 views 删掉；removeFiles 为真时删除索引文件（数据集已删除），
+// detachView 摘掉一个 View：停跟随器，清掉活动状态并从 views 删掉；removeFiles 为真时删除索引文件（数据集已删除），
 // 否则保留（数据集停用，重新启用后挂回）。
 func (s *Service) detachView(ctx context.Context, runtime *viewRuntime, removeFiles bool) {
 	s.followManager().Stop(runtime.ref.spaceID, runtime.ref.datasetID)
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	runtime.clearActiveLocked()
-	runtime.building = ""
 	s.mu.Lock()
 	// 只有确实摘掉了这个运行时才删文件：映射里已经换成别的运行时时，文件属于新的那个。
 	owned := s.views[runtime.ref] == runtime
@@ -357,22 +368,21 @@ func (s *Service) HasEngine(name string) bool {
 var _ pb.DataViewService = (*Service)(nil)
 
 // prepareIndex 把 View 的索引清成一个空索引，准备回填。schemaOf 在运行时锁内给出要建的列契约，给不出时什么都不动。
-// 持有运行时锁准备：实时写入、加列、删除最旧数据都在运行时锁下看 active 与 building，不会碰到准备了一半的文件。
-// 从这里开始 View 不可读（active 清空、building 记上），直到建成后转为活动索引；中途失败时 building 留着，由调用方决定丢弃还是重试。
-func (s *Service) prepareIndex(ctx context.Context, runtime *viewRuntime, schemaOf func(*viewRuntime) (viewindex.ViewIndexSchema, error)) (viewindex.ViewIndexSchema, error) {
+// 持有运行时锁准备：实时写入、加列、删除最旧数据都在运行时锁下看 phase，不会碰到准备了一半的文件。
+// 从这里开始 View 不可读（phase 切到 targetPhase），直到建成后转为 viewPhaseActive；中途失败时由调用方决定丢弃还是重试。
+func (s *Service) prepareIndex(ctx context.Context, runtime *viewRuntime, targetPhase viewPhase, schemaOf func(*viewRuntime) (viewindex.ViewIndexSchema, error)) (viewindex.ViewIndexSchema, error) {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	schema, err := schemaOf(runtime)
 	if err != nil {
 		return viewindex.ViewIndexSchema{}, err
 	}
-	if runtime.active != "" {
+	if runtime.phase.isActive() {
 		runtime.bumpRevision()
 	}
-	runtime.active = ""
-	runtime.statsIndexID = ""
+	runtime.phase = targetPhase
+	runtime.hasStats = false
 	runtime.stats = viewindex.ViewIndexStats{}
-	runtime.building = runtime.indexID
 	runtime.schema = schema
 	runtime.publishReadStateLocked()
 	release, err := runtime.gate.lock(ctx)
@@ -417,7 +427,10 @@ func (s *Service) activeIndex(spaceID, datasetID string) (string, *viewRuntime) 
 	if runtime == nil {
 		return "", nil
 	}
-	return runtime.queryState().active, runtime
+	if !runtime.queryState().active() {
+		return "", runtime
+	}
+	return runtime.indexID, runtime
 }
 
 // engineFor 返回可读索引的引擎；没有运行时或没有活动索引时返回“还没就绪”。
@@ -434,20 +447,20 @@ func (s *Service) cacheActiveIndexStats(runtime *viewRuntime, indexID string, st
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.active != indexID {
+	if !runtime.phase.isActive() || runtime.indexID != indexID {
 		return
 	}
-	runtime.statsIndexID = indexID
+	runtime.hasStats = true
 	runtime.stats = stats
 	runtime.publishReadStateLocked()
 }
 
 func cachedActiveIndexStats(runtime *viewRuntime, indexID string) (viewindex.ViewIndexStats, bool) {
-	if runtime == nil || indexID == "" {
+	if runtime == nil || indexID == "" || runtime.indexID != indexID {
 		return viewindex.ViewIndexStats{}, false
 	}
 	state := runtime.queryState()
-	if state.active != indexID || state.statsIndexID != indexID {
+	if !state.active() || !state.hasStats {
 		return viewindex.ViewIndexStats{}, false
 	}
 	return state.stats, true
@@ -459,10 +472,10 @@ func tryCacheActiveIndexStats(runtime *viewRuntime, indexID string, stats viewin
 		return
 	}
 	defer runtime.mu.Unlock()
-	if runtime.active != indexID {
+	if !runtime.phase.isActive() || runtime.indexID != indexID {
 		return
 	}
-	runtime.statsIndexID = indexID
+	runtime.hasStats = true
 	runtime.stats = stats
 	runtime.publishReadStateLocked()
 }

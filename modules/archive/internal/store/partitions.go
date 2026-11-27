@@ -108,7 +108,8 @@ func (s *Store) TaskPartitions(ctx context.Context, spaceID, datasetID string, s
 	if withUnreplicated {
 		query = queryPartitions6
 	}
-	rows, err := s.db.QueryContext(ctx, query, spaceID, datasetID, fmtTime(since))
+	ms := millisOf(since)
+	rows, err := s.db.QueryContext(ctx, query, spaceID, datasetID, ms, ms)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +147,7 @@ type PartitionSummary struct {
 // PartitionSummaries 汇总每个任务的分区，用于任务列表；key 为 "space/dataset"。
 func (s *Store) PartitionSummaries(ctx context.Context, spaceID string) (map[string]PartitionSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT c_space_id, c_dataset_id, COUNT(*), COALESCE(SUM(CASE WHEN c_file_path != '' THEN 1 ELSE 0 END), 0),
-COALESCE(SUM(c_row_count), 0), COALESCE(SUM(c_file_bytes), 0), MIN(c_min_data_time), MAX(c_max_data_time)
+COALESCE(SUM(c_row_count), 0), COALESCE(SUM(c_file_bytes), 0), MIN(NULLIF(c_min_data_time, 0)), MAX(NULLIF(c_max_data_time, 0))
 FROM t_archive_partitions WHERE (? = '' OR c_space_id = ?) GROUP BY c_space_id, c_dataset_id`, spaceID, spaceID)
 	if err != nil {
 		return nil, err
@@ -215,8 +216,8 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 		if reason != "" {
 			regression = fmt.Errorf("%w：%s", ErrPartitionRegression, reason)
 			// 只记下失败原因，分区与任务都不动；worker 收到冲突不清待上报标记，下次运行还会报、还会被拒，健康等级一直显示失败。
-			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'failed', c_finished_at = ?, c_message = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_id = ?`,
-				fmtTime(req.Now), reason, req.RunID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'failed', c_finished_at = ?, c_message = ?, c_lease_until = 0, c_lease_token = '' WHERE c_run_id = ?`,
+				millisOf(req.Now), reason, req.RunID); err != nil {
 				return err
 			}
 			_, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = ? WHERE c_space_id = ? AND c_dataset_id = ?`, reason, run.SpaceID, run.DatasetID)
@@ -229,8 +230,8 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, completeRun, status, fmtTime(req.Now), message,
-			req.Stats.SubjectsTotal, req.Stats.SubjectsDone, req.Stats.RequestCount, req.Stats.BytesRead, req.Stats.RowsRead,
+		if _, err := tx.ExecContext(ctx, completeRun, status, millisOf(req.Now), message,
+			req.Stats.SubjectsDone, req.Stats.RequestCount, req.Stats.BytesRead, req.Stats.RowsRead,
 			req.Stats.RowsAdded, req.Stats.RowsChanged, req.Stats.PartitionsExported, req.Stats.PartitionsFinalized, req.Stats.PartitionsUploaded,
 			mergeUnrecoverable(req.Unrecoverable), req.RunID); err != nil {
 			return err
@@ -243,8 +244,9 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 		}
 		// 被取消的运行即使 worker 上报成功也不推进任务状态；最近成功时间只前进不回退。
 		if status == RunSucceeded && (run.Kind == KindFollow || run.Kind == KindManual) {
-			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_last_success_at = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_last_success_at IS NULL OR c_last_success_at < ?)`,
-				fmtTime(run.StartedAt), run.SpaceID, run.DatasetID, fmtTime(run.StartedAt)); err != nil {
+			started := millisOf(run.StartedAt)
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_last_success_at = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_last_success_at = 0 OR c_last_success_at < ?)`,
+				started, run.SpaceID, run.DatasetID, started); err != nil {
 				return err
 			}
 		}
@@ -254,8 +256,9 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 			}
 		}
 		if status == RunSucceeded && !req.FinalUntil.IsZero() {
-			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_final_until = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_final_until IS NULL OR c_final_until < ?)`,
-				fmtTime(req.FinalUntil), run.SpaceID, run.DatasetID, fmtTime(req.FinalUntil)); err != nil {
+			final := millisOf(req.FinalUntil)
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_final_until = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_final_until = 0 OR c_final_until < ?)`,
+				final, run.SpaceID, run.DatasetID, final); err != nil {
 				return err
 			}
 		}
@@ -292,7 +295,7 @@ func findRegression(ctx context.Context, tx *sql.Tx, spaceID, datasetID string, 
 	return "", nil
 }
 
-// accumulateUnrecoverable 把本次的无法补齐区间并进任务的累积记录（去重，最多 maxUnrecoverable 条）。
+// accumulateUnrecoverable 把本次的无法补齐区间并进任务的累积记录（按同标的同序列归并重叠/相邻区间，最多 maxUnrecoverable 条）。
 func accumulateUnrecoverable(ctx context.Context, tx *sql.Tx, spaceID, datasetID string, items []Unrecoverable) error {
 	var current string
 	if err := tx.QueryRowContext(ctx, `SELECT c_unrecoverable_json FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID).Scan(&current); err != nil {
@@ -302,16 +305,7 @@ func accumulateUnrecoverable(ctx context.Context, tx *sql.Tx, spaceID, datasetID
 	if current != "" && current != "[]" {
 		_ = json.Unmarshal([]byte(current), &merged)
 	}
-	seen := map[Unrecoverable]bool{}
-	for _, item := range merged {
-		seen[item] = true
-	}
-	for _, item := range items {
-		if !seen[item] {
-			seen[item] = true
-			merged = append(merged, item)
-		}
-	}
+	merged = append(merged, items...)
 	_, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_unrecoverable_json = ? WHERE c_space_id = ? AND c_dataset_id = ?`, mergeUnrecoverable(merged), spaceID, datasetID)
 	return err
 }
@@ -375,17 +369,17 @@ func upsertPartition(ctx context.Context, tx *sql.Tx, p Partition) error {
 	}
 	if !found {
 		_, err = tx.ExecContext(ctx, insertPartition,
-			p.SpaceID, p.DatasetID, p.PartitionKey, fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status,
-			p.RowCount, p.SubjectCount, nullTime(p.MinDataTime), nullTime(p.MaxDataTime), p.FilePath, p.FileBytes, p.FileSHA256, columns, p.Preview, p.ExportCount,
-			nullTime(p.LastChangedAt), nullTime(p.ExportedAt), nullTime(p.FinalizedAt), p.LastRunID,
-			p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, nullTime(p.Remote.UploadedAt), nullTime(p.Remote.VerifiedAt), p.Remote.Error)
+			p.SpaceID, p.DatasetID, p.PartitionKey, millisOf(p.RangeStart), millisOf(p.RangeEnd), p.Status,
+			p.RowCount, p.SubjectCount, millisOf(p.MinDataTime), millisOf(p.MaxDataTime), p.FilePath, p.FileBytes, p.FileSHA256, columns, p.Preview, p.ExportCount,
+			millisOf(p.LastChangedAt), millisOf(p.ExportedAt), millisOf(p.FinalizedAt), p.LastRunID,
+			p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, millisOf(p.Remote.UploadedAt), millisOf(p.Remote.VerifiedAt), p.Remote.Error)
 		return err
 	}
 	_, err = tx.ExecContext(ctx, updatePartition,
-		fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status, p.RowCount, p.SubjectCount, nullTime(p.MinDataTime), nullTime(p.MaxDataTime),
-		p.FilePath, p.FileBytes, p.FileSHA256, columns, p.Preview, p.ExportCount, nullTime(p.LastChangedAt), nullTime(p.ExportedAt),
-		nullTime(p.FinalizedAt), p.LastRunID,
-		p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, nullTime(p.Remote.UploadedAt), nullTime(p.Remote.VerifiedAt), p.Remote.Error,
+		millisOf(p.RangeStart), millisOf(p.RangeEnd), p.Status, p.RowCount, p.SubjectCount, millisOf(p.MinDataTime), millisOf(p.MaxDataTime),
+		p.FilePath, p.FileBytes, p.FileSHA256, columns, p.Preview, p.ExportCount, millisOf(p.LastChangedAt), millisOf(p.ExportedAt),
+		millisOf(p.FinalizedAt), p.LastRunID,
+		p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, millisOf(p.Remote.UploadedAt), millisOf(p.Remote.VerifiedAt), p.Remote.Error,
 		p.SpaceID, p.DatasetID, p.PartitionKey)
 	return err
 }
@@ -439,7 +433,7 @@ func (s *Store) RemoteBacklogs(ctx context.Context, spaceID string) (map[string]
 		if err := rows.Scan(&space, &dataset, &key, &text); err != nil {
 			return nil, err
 		}
-		// c_mtime 只精确到秒，同一秒可能有几条并列：取分区键最小的那条，结果稳定。
+		// 同一毫秒内可能有几条并列：取分区键最小的那条，结果稳定。
 		b := out[space+"/"+dataset]
 		if b.LastError == "" || key < b.ErrorKey {
 			b.LastError, b.ErrorKey = text, key
@@ -472,13 +466,13 @@ const (
 	queryPartitions2 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND c_partition_key = ?`
 	queryPartitions3 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_run_id = ?`
 	queryPartitions4 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_status = 'open' AND (? = '' OR c_space_id = ?)`
-	queryPartitions5 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND c_range_end > ? ORDER BY c_partition_key`
+	queryPartitions5 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND (? = 0 OR c_range_end > ?) ORDER BY c_partition_key`
 	queryPartitions6 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ?
-AND (c_range_end > ? OR (` + unreplicatedFilter + `))
+AND ((? = 0 OR c_range_end > ?) OR (` + unreplicatedFilter + `))
 ORDER BY c_partition_key`
-	completeRun = `UPDATE t_archive_runs SET c_status = ?, c_finished_at = ?, c_message = ?, c_subjects_total = ?, c_subjects_done = ?,
+	completeRun = `UPDATE t_archive_runs SET c_status = ?, c_finished_at = ?, c_message = ?, c_subjects_done = ?,
 c_request_count = ?, c_bytes_read = ?, c_rows_read = ?, c_rows_added = ?, c_rows_changed = ?, c_partitions_exported = ?, c_partitions_finalized = ?,
-c_partitions_uploaded = ?, c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_id = ?`
+c_partitions_uploaded = ?, c_unrecoverable_json = ?, c_lease_until = 0, c_lease_token = '' WHERE c_run_id = ?`
 	insertPartition = `INSERT INTO t_archive_partitions (c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status,
 c_row_count, c_subject_count, c_min_data_time, c_max_data_time, c_file_path, c_file_bytes, c_file_sha256, c_columns_json, c_preview, c_export_count,
 c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id,
@@ -493,11 +487,11 @@ WHERE c_space_id = ? AND c_dataset_id = ? AND c_partition_key = ?`
 
 // 远端副本积压：未复制 = 有文件且 NOT (远端 sha256 = 文件 sha256 且已校验)。
 const (
-	unreplicatedFilter = `c_file_path != '' AND NOT (c_remote_sha256 = c_file_sha256 AND c_remote_verified_at IS NOT NULL)`
-	queryRemoteBacklog = `SELECT c_space_id, c_dataset_id, COUNT(*), MIN(c_exported_at) FROM t_archive_partitions
+	unreplicatedFilter = `c_file_path != '' AND NOT (c_remote_sha256 = c_file_sha256 AND c_remote_verified_at > 0)`
+	queryRemoteBacklog = `SELECT c_space_id, c_dataset_id, COUNT(*), MIN(NULLIF(c_exported_at, 0)) FROM t_archive_partitions
 WHERE (? = '' OR c_space_id = ?) AND ` + unreplicatedFilter + ` GROUP BY c_space_id, c_dataset_id`
 	queryRemoteOldest = `SELECT c_partition_key FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND ` + unreplicatedFilter + `
-ORDER BY c_exported_at, c_partition_key LIMIT 1`
+ORDER BY CASE WHEN c_exported_at = 0 THEN 1 ELSE 0 END, c_exported_at, c_partition_key LIMIT 1`
 	// 每个任务最近一次更新的那条错误（按 c_mtime，不按字典序取 MAX）。
 	queryRemoteLastError = `SELECT c_space_id, c_dataset_id, c_partition_key, c_remote_error FROM t_archive_partitions p
 WHERE (? = '' OR c_space_id = ?) AND c_remote_error != ''

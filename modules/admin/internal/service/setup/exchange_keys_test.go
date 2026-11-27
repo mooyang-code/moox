@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
@@ -54,27 +55,36 @@ func TestApplyWritesExchangeKeysIntoSecretMgr(t *testing.T) {
 	assert.Equal(t, "ro-key", row.KeyID)
 	assert.Equal(t, "active", row.Status)
 	assert.Equal(t, "setup", row.Creator)
+	assert.NotContains(t, row.ExtraConfig, "readonly", "c_extra_config 落库必须是密文")
 	plain, err := mooxsecurity.Decrypt(row.SecretValue, testEncryptionKey)
 	require.NoError(t, err)
 	assert.Equal(t, "ro-secret", plain)
-	// 只读密钥：extra_config 只有 readonly，值是字符串，Trade 按 map[string]string 解析。
+	plainExtra, err := mooxsecurity.Decrypt(row.ExtraConfig, testEncryptionKey)
+	require.NoError(t, err)
 	var extra map[string]string
-	require.NoError(t, json.Unmarshal([]byte(row.ExtraConfig), &extra))
+	require.NoError(t, json.Unmarshal([]byte(plainExtra), &extra))
 	assert.Equal(t, map[string]string{"readonly": "true"}, extra)
 
 	rows = secretRows(t, service, "exchange-okx-testnet-main")
 	require.Len(t, rows, 1)
 	assert.Equal(t, "okx", rows[0].Provider)
+	assert.NotContains(t, rows[0].ExtraConfig, "okx-pass", "OKX passphrase 不能明文落库")
+	plainExtra, err = mooxsecurity.Decrypt(rows[0].ExtraConfig, testEncryptionKey)
+	require.NoError(t, err)
 	extra = nil
-	require.NoError(t, json.Unmarshal([]byte(rows[0].ExtraConfig), &extra))
+	require.NoError(t, json.Unmarshal([]byte(plainExtra), &extra))
 	assert.Equal(t, map[string]string{"passphrase": "okx-pass"}, extra)
 
-	// 没有 passphrase 也不是只读：extra_config 是空对象。
+	// 没有 passphrase 也不是只读：extra_config 加密后的明文是空对象。
 	manifest := testManifest()
 	manifest.ExchangeKeys = []ExchangeKey{{Name: "trade", Exchange: "binance", Environment: "production", APIKey: "k", SecretKey: "s"}}
 	_, err = service.Apply(context.Background(), manifest)
 	require.NoError(t, err)
-	assert.Equal(t, "{}", secretRows(t, service, "exchange-binance-production-trade")[0].ExtraConfig)
+	rawExtra := secretRows(t, service, "exchange-binance-production-trade")[0].ExtraConfig
+	assert.NotEqual(t, "{}", rawExtra)
+	plainExtra, err = mooxsecurity.Decrypt(rawExtra, testEncryptionKey)
+	require.NoError(t, err)
+	assert.Equal(t, "{}", plainExtra)
 }
 
 // 只建不改：管理台改过的密钥不会被 moox.toml 改回去，也不算冲突。
@@ -84,9 +94,12 @@ func TestApplyNeverOverwritesExistingExchangeKey(t *testing.T) {
 	_, err := service.Apply(context.Background(), manifest)
 	require.NoError(t, err)
 
-	// 用户在管理台换了密钥。
-	require.NoError(t, service.db.Model(&secretmodel.Secret{}).Where("c_secret_id = ?", "exchange-okx-testnet-main").
-		Updates(map[string]any{"c_key_id": "rotated-key", "c_extra_config": `{"passphrase":"rotated"}`}).Error)
+	dao := secretdao.NewSecretDAO(service.db, testEncryptionKey)
+	existing, err := dao.FindByID(context.Background(), "exchange-okx-testnet-main")
+	require.NoError(t, err)
+	existing.KeyID = "rotated-key"
+	existing.ExtraConfig = `{"passphrase":"rotated"}`
+	require.NoError(t, dao.Update(context.Background(), existing))
 
 	manifest.ExchangeKeys[1].APIKey = "different-from-console"
 	manifest.ExchangeKeys[1].SecretKey = "different-secret"
@@ -96,12 +109,11 @@ func TestApplyNeverOverwritesExistingExchangeKey(t *testing.T) {
 	for _, item := range result.ExchangeKeys {
 		assert.Equal(t, ExchangeKeyExists, item.State)
 	}
-	row := secretRows(t, service, "exchange-okx-testnet-main")[0]
-	assert.Equal(t, "rotated-key", row.KeyID)
-	assert.Equal(t, `{"passphrase":"rotated"}`, row.ExtraConfig)
-	plain, err := mooxsecurity.Decrypt(row.SecretValue, testEncryptionKey)
+	got, err := dao.FindByID(context.Background(), "exchange-okx-testnet-main")
 	require.NoError(t, err)
-	assert.Equal(t, "okx-secret", plain)
+	assert.Equal(t, "rotated-key", got.KeyID)
+	assert.Equal(t, `{"passphrase":"rotated"}`, got.ExtraConfig)
+	assert.Equal(t, "okx-secret", got.SecretValue)
 
 	status, err := service.Inspect(context.Background(), manifest)
 	require.NoError(t, err)
@@ -109,14 +121,15 @@ func TestApplyNeverOverwritesExistingExchangeKey(t *testing.T) {
 	assert.Empty(t, status.Kept)
 }
 
-// 已在管理台删除的密钥（作废或泄露）不重建；软删除后重建还会撞 (c_secret_id, c_is_deleted) 唯一索引。
+// 已在管理台硬删除的密钥（作废或泄露）由墓碑表记录，不静默复活；手工新建或重新导入同 ID 时自动清除墓碑。
 func TestApplyDoesNotRecreateExchangeKeyDeletedInConsole(t *testing.T) {
 	service := NewService(setupDB(t), testEncryptionKey)
 	manifest := exchangeKeyManifest()
 	_, err := service.Apply(context.Background(), manifest)
 	require.NoError(t, err)
-	require.NoError(t, service.db.Model(&secretmodel.Secret{}).Where("c_secret_id = ?", "exchange-binance-production-readonly").
-		Update("c_is_deleted", true).Error)
+
+	dao := secretdao.NewSecretDAO(service.db, testEncryptionKey)
+	require.NoError(t, dao.Delete(context.Background(), "exchange-binance-production-readonly"))
 
 	result, err := service.Apply(context.Background(), manifest)
 	require.NoError(t, err)
@@ -124,9 +137,7 @@ func TestApplyDoesNotRecreateExchangeKeyDeletedInConsole(t *testing.T) {
 	assert.Equal(t, ExchangeKeyDeleted, result.ExchangeKeys[0].State)
 	assert.Equal(t, ExchangeKeyExists, result.ExchangeKeys[1].State)
 	assert.Equal(t, 2, result.Secrets, "腾讯云一把加一把还在的交易所密钥，已在管理台删除的不再算")
-	rows := secretRows(t, service, "exchange-binance-production-readonly")
-	require.Len(t, rows, 1, "不能再建出第二行")
-	assert.True(t, rows[0].IsDeleted)
+	assert.Empty(t, secretRows(t, service, "exchange-binance-production-readonly"), "硬删除后 t_secrets 无残留行且不复活")
 
 	// 已删除算完成：否则 setup init 在 apply 之后要求 completed，会永远报未完成。
 	status, err := service.Inspect(context.Background(), manifest)
@@ -135,6 +146,15 @@ func TestApplyDoesNotRecreateExchangeKeyDeletedInConsole(t *testing.T) {
 	assert.Zero(t, status.Missing)
 	assert.Equal(t, 2, status.Secrets, "已在管理台删除的密钥不算在应当存在的数量里")
 	assert.Equal(t, ExchangeKeyDeleted, status.ExchangeKeys[0].State)
+
+	// 手工重建/导入同 ID 会清除墓碑，后续 inspect 视为 exists。
+	require.NoError(t, dao.Create(context.Background(), &secretmodel.Secret{
+		SecretID: "exchange-binance-production-readonly", Name: "reimported", Category: "exchange", Provider: "binance",
+		SecretType: "api_key", KeyID: "new-ro-key", SecretValue: "new-ro-secret", ExtraConfig: `{"readonly":"true"}`, Status: "active",
+	}))
+	status, err = service.Inspect(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, ExchangeKeyExists, status.ExchangeKeys[0].State)
 }
 
 func TestInspectReportsMissingExchangeKeysAndCountsSecrets(t *testing.T) {
@@ -168,7 +188,6 @@ func TestApplyKeepsExchangeKeysRemovedFromManifest(t *testing.T) {
 	assert.Equal(t, 1, result.Secrets)
 	rows := secretRows(t, service, "exchange-okx-testnet-main")
 	require.Len(t, rows, 1)
-	assert.False(t, rows[0].IsDeleted)
 }
 
 func TestApplyRejectsInvalidExchangeKeys(t *testing.T) {
@@ -196,7 +215,6 @@ func TestApplyRejectsInvalidExchangeKeys(t *testing.T) {
 		})
 	}
 
-	// 固定 ID 重复（大小写不同的交易所、环境写法归一后相同）。
 	duplicate := valid
 	duplicate.Exchange = "Binance"
 	manifest := testManifest()
@@ -204,7 +222,6 @@ func TestApplyRejectsInvalidExchangeKeys(t *testing.T) {
 	_, err := NewService(setupDB(t), testEncryptionKey).Apply(context.Background(), manifest)
 	require.ErrorIs(t, err, ErrInvalid)
 
-	// 同名但交易所或环境不同的是不同的密钥。
 	other := valid
 	other.Environment = "testnet"
 	manifest.ExchangeKeys = []ExchangeKey{valid, other}

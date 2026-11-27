@@ -29,15 +29,12 @@ var keyColumnTypes = []string{"VARCHAR", "VARCHAR", "TIMESTAMP_NS", "VARCHAR"}
 func writeRowGroups(ctx context.Context, tx *sql.Tx, columns map[string]pb.FieldValueType, writes []viewindex.RowWrite, mode viewindex.WriteMode) (seriesTook, upsertTook time.Duration, err error) {
 	for _, group := range groupRowWrites(writes) {
 		names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, group.columns...)
-		names = append(names, internalAttributesColumn)
 		listTypes := make([]string, len(names))
 		bytesColumns := make([]bool, len(names))
 		for i, name := range names {
 			switch {
 			case i < len(keyColumnTypes):
 				listTypes[i] = keyColumnTypes[i]
-			case name == internalAttributesColumn:
-				listTypes[i] = "JSON"
 			case columns[name] == pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:
 				// 驱动不支持绑定 BLOB 的 LIST：以十六进制文本传入，SQL 里用 from_hex 还原。
 				listTypes[i], bytesColumns[i] = "VARCHAR", true
@@ -156,26 +153,13 @@ func nullPlaceholder(listType string) any {
 	}
 }
 
-// upsertConflictSQL 是 UPSERT 的冲突处理：实时写入整行覆盖，回填只补空值；内部属性 JSON 按键合并。
+// upsertConflictSQL 是 UPSERT 的冲突处理：实时写入整行覆盖，回填只补空值。
 func upsertConflictSQL(names []string, mode viewindex.WriteMode) string {
 	sets := make([]string, 0, len(names)-4)
 	for _, name := range names[4:] {
-		// Live writes overwrite complete rows. Backfill only fills missing values.
 		set := fmt.Sprintf("%s = excluded.%s", quote(name), quote(name))
-		if name == internalAttributesColumn {
-			// Dataset events often carry only a subset of provenance attributes.
-			// Merge JSON objects by key so a later factor patch cannot erase hashes
-			// written by earlier factors on the same projected row.
-			set = fmt.Sprintf("%s = CASE WHEN excluded.%s IS NULL THEN view_rows.%s ELSE json_merge_patch(COALESCE(view_rows.%s, '{}'), excluded.%s) END", quote(name), quote(name), quote(name), quote(name), quote(name))
-		}
 		if mode == viewindex.Backfill {
-			if name == internalAttributesColumn {
-				// Backfill must never overwrite live provenance. Put the
-				// backfill object first so existing/live keys win on conflicts.
-				set = fmt.Sprintf("%s = CASE WHEN view_rows.%s IS NULL THEN excluded.%s ELSE json_merge_patch(COALESCE(excluded.%s, '{}'), view_rows.%s) END", quote(name), quote(name), quote(name), quote(name), quote(name))
-			} else {
-				set = fmt.Sprintf("%s = COALESCE(view_rows.%s, excluded.%s)", quote(name), quote(name), quote(name))
-			}
+			set = fmt.Sprintf("%s = COALESCE(view_rows.%s, excluded.%s)", quote(name), quote(name), quote(name))
 		}
 		sets = append(sets, set)
 	}

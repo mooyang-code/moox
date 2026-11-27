@@ -20,7 +20,6 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/encoding/protojson"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -69,10 +68,6 @@ const (
 	defaultDuckDBThreads  = 1
 	defaultMaxOpenConns   = 4
 	defaultMaxIdleConns   = 1
-	// internalAttributesColumn keeps row attributes that are not part of the
-	// declared View projection (notably factor.source_hash) available to
-	// downstream readers without exposing them as user columns.
-	internalAttributesColumn = "__moox_attributes"
 )
 
 func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
@@ -129,7 +124,6 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		"freq VARCHAR NOT NULL",
 		"data_time TIMESTAMP_NS NOT NULL",
 		"series_tag VARCHAR NOT NULL",
-		internalAttributesColumn + " JSON",
 	}
 	for name, valueType := range columns {
 		if isSystemColumn(name) {
@@ -486,7 +480,7 @@ func collapseRowWrites(writes []viewindex.RowWrite) []viewindex.RowWrite {
 		id := physicalRowKeyID(write.Key.Key)
 		position, ok := positions[id]
 		if !ok {
-			clone := viewindex.RowWrite{Key: write.Key, Fields: append([]*pb.FieldValue(nil), write.Fields...), Attributes: cloneAttributes(write.Attributes)}
+			clone := viewindex.RowWrite{Key: write.Key, Fields: append([]*pb.FieldValue(nil), write.Fields...)}
 			positions[id] = len(result)
 			result = append(result, clone)
 			continue
@@ -540,32 +534,13 @@ func mergeRowWrite(dst *viewindex.RowWrite, src viewindex.RowWrite) {
 			dst.Fields = append(dst.Fields, field)
 		}
 	}
-	if len(src.Attributes) > 0 {
-		if dst.Attributes == nil {
-			dst.Attributes = make(map[string]*pb.TypedValue, len(src.Attributes))
-		}
-		for name, value := range src.Attributes {
-			dst.Attributes[name] = value
-		}
-	}
-}
-
-func cloneAttributes(attributes map[string]*pb.TypedValue) map[string]*pb.TypedValue {
-	if len(attributes) == 0 {
-		return nil
-	}
-	cloned := make(map[string]*pb.TypedValue, len(attributes))
-	for name, value := range attributes {
-		cloned[name] = value
-	}
-	return cloned
 }
 
 func groupRowWrites(writes []viewindex.RowWrite) []rowWriteGroup {
 	groups := make([]rowWriteGroup, 0)
 	byKey := make(map[string]int)
 	for _, write := range writes {
-		fieldSet := make(map[string]struct{}, len(write.Fields)+len(write.Attributes))
+		fieldSet := make(map[string]struct{}, len(write.Fields))
 		for _, field := range write.Fields {
 			if field != nil {
 				fieldSet[field.GetFieldId()] = struct{}{}
@@ -597,7 +572,7 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 	if err != nil {
 		return nil, fmt.Errorf("invalid data_time: %w", err)
 	}
-	values := make(map[string]any, len(write.Fields)+len(write.Attributes))
+	values := make(map[string]any, len(write.Fields))
 	for _, field := range write.Fields {
 		if field == nil {
 			continue
@@ -618,88 +593,9 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 	args := make([]any, 0, len(names))
 	args = append(args, key.GetSubjectId(), key.GetFreq(), when, key.GetSeriesTag())
 	for _, name := range names[4:] {
-		if name == internalAttributesColumn {
-			encoded, encodeErr := encodeRowAttributes(write.Attributes)
-			if encodeErr != nil {
-				return nil, encodeErr
-			}
-			args = append(args, encoded)
-			continue
-		}
 		args = append(args, values[name])
 	}
 	return args, nil
-}
-
-func encodeRowAttributes(attributes map[string]*pb.TypedValue) (any, error) {
-	if len(attributes) == 0 {
-		return nil, nil
-	}
-	encoded := make(map[string]json.RawMessage, len(attributes))
-	for name, value := range attributes {
-		if strings.TrimSpace(name) == "" || value == nil {
-			continue
-		}
-		raw, err := protojson.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("attribute %q: %w", name, err)
-		}
-		encoded[name] = raw
-	}
-	if len(encoded) == 0 {
-		return nil, nil
-	}
-	raw, err := json.Marshal(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("encode row attributes: %w", err)
-	}
-	return string(raw), nil
-}
-
-func decodeRowAttributes(value any) (map[string]*pb.TypedValue, error) {
-	if value == nil {
-		return nil, nil
-	}
-	var raw []byte
-	switch value := value.(type) {
-	case string:
-		raw = []byte(value)
-	case []byte:
-		raw = value
-	case map[string]any:
-		// DuckDB's JSON scanner may expose a logical JSON object as a Go map
-		// rather than its encoded text. Re-encode it before decoding the
-		// protobuf JSON values stored under each attribute key.
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("encode scanned row attributes: %w", err)
-		}
-		raw = encoded
-	case map[string]string:
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("encode scanned row attributes: %w", err)
-		}
-		raw = encoded
-	default:
-		raw = []byte(valueString(value))
-	}
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	encoded := make(map[string]json.RawMessage)
-	if err := json.Unmarshal(raw, &encoded); err != nil {
-		return nil, fmt.Errorf("decode row attributes: %w", err)
-	}
-	result := make(map[string]*pb.TypedValue, len(encoded))
-	for name, item := range encoded {
-		value := &pb.TypedValue{}
-		if err := protojson.Unmarshal(item, value); err != nil {
-			return nil, fmt.Errorf("decode row attribute %q: %w", name, err)
-		}
-		result[name] = value
-	}
-	return result, nil
 }
 
 func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex.WriteMode) (any, error) {
@@ -791,7 +687,7 @@ type whereClause struct {
 }
 
 func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[string]pb.FieldValueType, spaceID, datasetID string, spec viewindex.QuerySpec, where string, args []any) ([]*pb.RowFieldValues, error) {
-	selectColumns := []string{"subject_id", "freq", "data_time", "series_tag", internalAttributesColumn}
+	selectColumns := []string{"subject_id", "freq", "data_time", "series_tag"}
 	projected, err := resolveIncludedColumns(columns, spec.Includes)
 	if err != nil {
 		return nil, err
@@ -840,14 +736,6 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Freq: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
 		for index, name := range selectColumns[4:] {
 			value := values[index+4]
-			if name == internalAttributesColumn {
-				attributes, decodeErr := decodeRowAttributes(value)
-				if decodeErr != nil {
-					return nil, decodeErr
-				}
-				row.Attributes = attributes
-				continue
-			}
 			if value == nil {
 				if len(spec.Includes) == 0 {
 					continue
@@ -1294,11 +1182,10 @@ func validateSystemSchema(ctx context.Context, db *sql.DB) error {
 	defer rows.Close()
 	found := make(map[string]bool)
 	systemTypes := map[string]string{
-		"subject_id":             "VARCHAR",
-		"freq":                   "VARCHAR",
-		"data_time":              "TIMESTAMP_NS",
-		"series_tag":             "VARCHAR",
-		internalAttributesColumn: "JSON",
+		"subject_id": "VARCHAR",
+		"freq":       "VARCHAR",
+		"data_time":  "TIMESTAMP_NS",
+		"series_tag": "VARCHAR",
 	}
 	for rows.Next() {
 		var cid int
@@ -1353,7 +1240,7 @@ func schemaColumns(columns []*viewindex.Column) map[string]pb.FieldValueType {
 }
 
 func isSystemColumn(name string) bool {
-	return name == "subject_id" || name == "freq" || name == "data_time" || name == "series_tag" || name == internalAttributesColumn
+	return name == "subject_id" || name == "freq" || name == "data_time" || name == "series_tag"
 }
 
 func duckType(valueType pb.FieldValueType) string {

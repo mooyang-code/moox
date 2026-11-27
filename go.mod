@@ -20,7 +20,6 @@ require (
 	github.com/klauspost/compress v1.20.3
 	github.com/matoous/go-nanoid/v2 v2.1.0
 	github.com/minio/minio-go/v7 v7.4.1
-	github.com/mooyang-code/snapshotcache v0.1.1
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
 	github.com/pbnjay/grate v0.0.0-20231006022435-3f8e65d74a14

@@ -153,9 +153,16 @@ export function archiveUnavailableHint(error: string): string {
     : "";
 }
 
-/** 分区“下载”按钮：只有远端副本是当前版本且已校验时可下载，否则给出置灰的原因。 */
-export function downloadBlockedReason(partition: Pick<ArchivePartition, "remote_state" | "remote_error" | "remote_key">): string {
-  switch (partition.remote_state) {
+/**
+ * 分区“下载”按钮：
+ * - 启用对象存储时，只有远端副本是当前版本且已校验（verified）可下载；
+ * - 未启用对象存储（off）时，本地分区已导出（file_path 非空）即可校验下载。
+ */
+export function downloadBlockedReason(
+  partition: Pick<ArchivePartition, "remote_state" | "remote_error" | "remote_key" | "file_path">
+): string {
+  const state: string | undefined = partition.remote_state;
+  switch (state) {
     case "verified":
       return "";
     case "pending":
@@ -163,9 +170,13 @@ export function downloadBlockedReason(partition: Pick<ArchivePartition, "remote_
     case "failed":
       return `远端副本上传失败${partition.remote_error ? `：${partition.remote_error}` : ""}`;
     case "none":
-      return "还没有远端副本";
+      return "分区还没有导出文件";
+    case "off":
+    case "":
+    case undefined:
+      return partition.file_path ? "" : "分区还没有导出文件";
     default:
-      return "执行器没有配置对象存储，只能下载远端副本";
+      return "当前状态不可下载";
   }
 }
 
@@ -247,11 +258,6 @@ export function diskStatus(worker: ArchiveWorkerInfo | undefined): DiskStatus | 
     warning: insufficient ? `磁盘空间不足（可用低于下限 ${formatBytes(minFree)}），已暂停领取新运行` : "",
     title
   };
-}
-
-/** 内置 SeaweedFS 只听执行器本机 127.0.0.1:11473；没有“是否内置”字段，按地址判断。 */
-export function isBuiltinObjectStore(endpoint?: string): boolean {
-  return /^(https?:\/\/)?(127\.0\.0\.1|localhost):11473\/?$/i.test((endpoint || "").trim());
 }
 
 export function storageClassText(store: Pick<ArchiveObjectStore, "storage_class">): string {

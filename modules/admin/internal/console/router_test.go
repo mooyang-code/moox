@@ -15,8 +15,7 @@ import (
 	"testing"
 	"time"
 
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -39,11 +38,11 @@ func catalogReadOnly(t *testing.T, path, method string) bool {
 }
 
 // newTestRouter 建控制台路由；store 为空时用一张新的会话表。
-func newTestRouter(t *testing.T, store *session.Store, local *LocalDispatcher, gateway RPCForwarder) *HTTPRouter {
+func newTestRouter(t *testing.T, store *auth.SessionStore, local *LocalDispatcher, gateway RPCForwarder) *HTTPRouter {
 	t.Helper()
 	if store == nil {
 		var err error
-		store, err = session.NewStore(time.Hour)
+		store, err = auth.NewSessionStore(time.Hour)
 		require.NoError(t, err)
 	}
 	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, store)
@@ -121,7 +120,7 @@ func TestConsoleRejectsMethodsWhoseOperatorsExcludeConsole(t *testing.T) {
 	router := newTestRouter(t, nil, nil, gateway).buildControlRouter()
 	post := func(name, method string) int {
 		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, browserRequest(t, session.Session{}, "/api/admin/"+name+"/"+method, "", []byte(`{}`)))
+		router.ServeHTTP(rr, browserRequest(t, auth.Session{}, "/api/admin/"+name+"/"+method, "", []byte(`{}`)))
 		return rr.Code
 	}
 	// Storage 的三个服务共用一个控制台名：只要其中一个服务允许 console，这个方法就合法地解析到那个服务。
@@ -170,7 +169,7 @@ func TestConsoleRejectsMethodsWhoseOperatorsExcludeConsole(t *testing.T) {
 
 type localAuth struct {
 	pb.UnimplementedAuth
-	sessions *session.Store
+	sessions *auth.SessionStore
 	username string
 	calls    int
 	sid      string
@@ -180,7 +179,7 @@ type localAuth struct {
 func (a *localAuth) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, error) {
 	a.calls++
 	a.username = req.Username
-	login := session.LoginFrom(ctx)
+	login := auth.LoginFrom(ctx)
 	if login == nil || login.ClientIP != "203.0.113.9" {
 		return nil, errors.New("console did not pass the login context")
 	}
@@ -195,7 +194,7 @@ func (a *localAuth) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 func (a *localAuth) GetUserInfo(ctx context.Context, _ *pb.GetUserInfoReq) (*pb.GetUserInfoRsp, error) {
 	a.calls++
 	received := gatewayclient.CallMetadataFromContext(ctx)
-	if received.UserID != "u1" || string(trpc.GetMetaData(ctx, authmodel.CtxUserID)) != "u1" || string(trpc.GetMetaData(ctx, authmodel.CtxSessionID)) != a.sid {
+	if received.UserID != "u1" || string(trpc.GetMetaData(ctx, auth.CtxUserID)) != "u1" || string(trpc.GetMetaData(ctx, auth.CtxSessionID)) != a.sid {
 		return nil, errors.New("verified user/session was not injected")
 	}
 	return &pb.GetUserInfoRsp{RetInfo: &pb.RetInfo{}}, nil
@@ -213,7 +212,7 @@ func TestConsoleUsesGeneratedLocalHandlersAndVerifiedUserContext(t *testing.T) {
 	})
 	router := newTestRouter(t, store, local, gateway).buildControlRouter()
 	rr := httptest.NewRecorder()
-	login := browserRequest(t, session.Session{}, "/api/admin/auth/Login", "", []byte(`{"username":"alice","password":"x"}`))
+	login := browserRequest(t, auth.Session{}, "/api/admin/auth/Login", "", []byte(`{"username":"alice","password":"x"}`))
 	login.RemoteAddr = "203.0.113.9:40000"
 	login.Header.Set("X-Forwarded-For", "6.6.6.6")
 	router.ServeHTTP(rr, login)
@@ -225,7 +224,7 @@ func TestConsoleUsesGeneratedLocalHandlersAndVerifiedUserContext(t *testing.T) {
 	require.NotContains(t, rr.Body.String(), implementation.sid, "会话 ID 不进响应体")
 
 	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, browserRequest(t, session.Session{ID: implementation.sid}, "/api/admin/auth/GetUserInfo", "", []byte(`{}`)))
+	router.ServeHTTP(rr, browserRequest(t, auth.Session{ID: implementation.sid}, "/api/admin/auth/GetUserInfo", "", []byte(`{}`)))
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Empty(t, rr.Header().Get("trpc-ret"))
 	require.Equal(t, 2, implementation.calls)
@@ -265,9 +264,9 @@ func TestConsoleAuthenticationPrecedesRemoteDispatch(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, 1, calls)
 
-	noCookie := browserRequest(t, session.Session{}, "/api/admin/storage/ListDatasets", "", body)
-	unknown := browserRequest(t, session.Session{ID: "not-a-session"}, "/api/admin/storage/ListDatasets", "", body)
-	headerToken := browserRequest(t, session.Session{}, "/api/admin/storage/ListDatasets", "", body)
+	noCookie := browserRequest(t, auth.Session{}, "/api/admin/storage/ListDatasets", "", body)
+	unknown := browserRequest(t, auth.Session{ID: "not-a-session"}, "/api/admin/storage/ListDatasets", "", body)
+	headerToken := browserRequest(t, auth.Session{}, "/api/admin/storage/ListDatasets", "", body)
 	headerToken.Header.Set("Authorization", current.ID)
 	for _, request := range []*http.Request{noCookie, unknown, headerToken} {
 		rr := httptest.NewRecorder()
@@ -298,7 +297,7 @@ func TestConsoleRejectsCrossOriginWrites(t *testing.T) {
 		router.ServeHTTP(rr, r)
 		require.Equal(t, http.StatusForbidden, rr.Code, name)
 	}
-	login := browserRequest(t, session.Session{}, "/api/admin/auth/Login", "", []byte(`{}`))
+	login := browserRequest(t, auth.Session{}, "/api/admin/auth/Login", "", []byte(`{}`))
 	login.Header.Set("Origin", "https://evil.example")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, login)
@@ -308,7 +307,7 @@ func TestConsoleRejectsCrossOriginWrites(t *testing.T) {
 	// RPC 只收 POST：GET 不带请求体也会触发方法，同站的链接就能借 Cookie 发起。
 	get := httptest.NewRequest(http.MethodGet, "/api/admin/monitor/GetHealthOverview", nil)
 	get.Host = testHost
-	get.AddCookie(&http.Cookie{Name: session.CookieName, Value: current.ID})
+	get.AddCookie(&http.Cookie{Name: auth.CookieName, Value: current.ID})
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, get)
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
@@ -324,14 +323,11 @@ func TestConsoleRejectsCrossOriginWrites(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
-// 每条裸路由（SSH 流式与归档）都按会话 Cookie 鉴权，把原样的请求体与用户交给处理器；没有 Cookie 一律 401，
-// SSH 路由的 session_id 不是当前用户的返回 403。
+// 每条裸路由（SSH 流式与归档）都按会话 Cookie 鉴权，把原样的请求体与用户交给处理器；没有 Cookie 一律 401。
 func TestConsoleRawRoutesUseSessionCookie(t *testing.T) {
 	for route := range rawRoutes {
 		t.Run(route, func(t *testing.T) {
 			store, current := setupSessionTest(t)
-			SetRawSessionOwnerVerifier(func(sshSession, user string) bool { return sshSession == "ssh-1" && user == "u1" })
-			t.Cleanup(func() { SetRawSessionOwnerVerifier(nil) })
 			query := "session_id=ssh-1"
 			if strings.HasPrefix(route, "archive/") {
 				query = "space=crypto&dataset=ds"
@@ -344,7 +340,7 @@ func TestConsoleRawRoutesUseSessionCookie(t *testing.T) {
 				got, err := io.ReadAll(r.Body)
 				require.NoError(t, err)
 				require.Equal(t, body, got)
-				require.Equal(t, "u1", r.Context().Value(authmodel.CtxUserID))
+				require.Equal(t, "u1", r.Context().Value(auth.CtxUserID))
 				w.WriteHeader(http.StatusAccepted)
 			})
 			t.Cleanup(func() { rawHandlersMutex.Lock(); delete(rawHandlers[parts[0]], parts[1]); rawHandlersMutex.Unlock() })
@@ -354,13 +350,8 @@ func TestConsoleRawRoutesUseSessionCookie(t *testing.T) {
 			router.ServeHTTP(rr, browserRequest(t, current, path, "", body))
 			require.Equal(t, http.StatusAccepted, rr.Code)
 			rr = httptest.NewRecorder()
-			router.ServeHTTP(rr, browserRequest(t, session.Session{}, path, "", body))
+			router.ServeHTTP(rr, browserRequest(t, auth.Session{}, path, "", body))
 			require.Equal(t, http.StatusUnauthorized, rr.Code)
-			if parts[0] == "ssh" {
-				rr = httptest.NewRecorder()
-				router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/"+route+"?session_id=ssh-other", "", body))
-				require.Equal(t, http.StatusForbidden, rr.Code)
-			}
 			require.Equal(t, 1, calls)
 		})
 	}
@@ -381,7 +372,7 @@ func TestConsoleArchiveDownloadUsesCookieOnGet(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/api/admin/archive/PartitionDownload?space=crypto&dataset=ds&partition=2026-10-15", nil)
 		r.Host = testHost
 		if cookie != "" {
-			r.AddCookie(&http.Cookie{Name: session.CookieName, Value: cookie})
+			r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: cookie})
 		}
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, r)
@@ -403,8 +394,6 @@ func TestConsoleDoesNotExposeArbitraryRawHandlerRegistration(t *testing.T) {
 // 终端 WebSocket 握手是 GET，同样核对 Origin（缺少或不是本站返回 403），再看 Cookie（没有返回 401）。
 func TestConsoleWebSocketHandshakeRequiresOriginAndCookie(t *testing.T) {
 	store, current := setupSessionTest(t)
-	SetRawSessionOwnerVerifier(func(sshSession, user string) bool { return sshSession == "ssh-1" && user == "u1" })
-	t.Cleanup(func() { SetRawSessionOwnerVerifier(nil) })
 	calls := 0
 	RegisterRawHandler("ssh", "WsConnect", func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(http.StatusSwitchingProtocols) })
 	t.Cleanup(func() { rawHandlersMutex.Lock(); delete(rawHandlers["ssh"], "WsConnect"); rawHandlersMutex.Unlock() })
@@ -418,7 +407,7 @@ func TestConsoleWebSocketHandshakeRequiresOriginAndCookie(t *testing.T) {
 			r.Header.Set("Origin", origin)
 		}
 		if cookie != "" {
-			r.AddCookie(&http.Cookie{Name: session.CookieName, Value: cookie})
+			r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: cookie})
 		}
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, r)
@@ -468,7 +457,7 @@ func TestConsoleRateLimitsConfiguredMethodsOnRealRoute(t *testing.T) {
 	codes := map[int]int{}
 	for i := 0; i < 8; i++ {
 		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, browserRequest(t, session.Session{}, "/api/admin/auth/Login", "", []byte(`{}`)))
+		router.ServeHTTP(rr, browserRequest(t, auth.Session{}, "/api/admin/auth/Login", "", []byte(`{}`)))
 		codes[rr.Code]++
 	}
 	require.NotZero(t, codes[http.StatusTooManyRequests], "超额请求必须被限流: %v", codes)

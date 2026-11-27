@@ -3,12 +3,11 @@ package bootstrap
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
-	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/activitylog"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	setupservice "github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
@@ -19,26 +18,15 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Services 应用服务集合
+// Services 应用服务集合。
 type Services struct {
-	// 数据库管理器（共享基础模块）
 	DBManager *database.Manager
 
-	// 各模块服务
-
-	// SSH 服务
 	SSHService ssh.Service
-
-	// 秘钥管理服务
-	SecretService secret.Service
-
+	SecretDAO  *secretdao.SecretDAO
 	// Setup is exposed only through the loopback setup listener.
-	Setup *setupservice.Service
-
-	// 系统服务部署信息
-	SysDeploy sysdeploy.Service
-
-	// 全局活动日志：各模块写入、用户可查询的展示日志。
+	Setup       *setupservice.Service
+	SysDeploy   sysdeploy.Service
 	ActivityLog *activitylog.Service
 
 	consoleGateway *gatewayclient.Client
@@ -53,23 +41,19 @@ func (s *Services) closeGateways() {
 }
 
 // StartBackgroundServices 启动 admin 本地基础服务。
-// 云账号、代码包与云函数由 Collector 管理，admin 只保留网关转发和基础管理能力。
 func StartBackgroundServices(ctx context.Context, cfg *Config) (*Services, error) {
 	log.Info("正在启动后台服务...")
 
-	// 1. 初始化数据库
 	dbManager, err := initializeDatabase(&cfg.App.Database)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. 创建核心服务（只创建，不启动）
 	services, err := createCoreServices(ctx, dbManager, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. 启动所有后台服务
 	if err := startBackgroundWorkers(ctx, services); err != nil {
 		return nil, err
 	}
@@ -78,7 +62,6 @@ func StartBackgroundServices(ctx context.Context, cfg *Config) (*Services, error
 	return services, nil
 }
 
-// initializeDatabase 初始化数据库
 func initializeDatabase(dbCfg *config.DatabaseConfig) (*database.Manager, error) {
 	log.Info("[Bootstrap] 正在初始化数据库...")
 
@@ -92,51 +75,45 @@ func initializeDatabase(dbCfg *config.DatabaseConfig) (*database.Manager, error)
 	return dbManager, nil
 }
 
-// createCoreServices 创建核心服务
 func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *Config) (*Services, error) {
 	log.Info("[Bootstrap] 正在创建核心服务...")
+	_ = ctx
 
-	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
+	encryptionKey := strings.TrimSpace(cfg.EncryptionKey)
+	if encryptionKey == "" {
+		return nil, secretdao.ErrMissingEncryptionKey
+	}
+
 	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
-	sysDeployService := sysdeploy.NewService(dbManager, cfg.AdminNodeID)
-	db := dbManager.GetDB()
-
-	// 创建 SSH 服务
-	log.Info("[Bootstrap] 正在创建 SSH 服务...")
-	sshService := ssh.NewService(sshdao.NewHostDAO(db))
-	sysDeployService.SetSessionCloser(sshService)
-
-	// 创建秘钥管理服务
-	log.Info("[Bootstrap] 正在创建秘钥管理服务...")
-	secretDAO := secretdao.NewSecretDAO(db)
-	secretService := secret.NewService(secretDAO)
-	encryptionKey, err := adminsecurity.GetEncryptionKey()
+	sysDeployService, err := sysdeploy.NewService(dbManager, cfg.AdminNodeID, encryptionKey)
 	if err != nil {
 		return nil, err
 	}
+	db := dbManager.GetDB()
+
+	log.Info("[Bootstrap] 正在创建 SSH 服务...")
+	sshService := ssh.NewService(sshdao.NewHostDAO(db, encryptionKey))
+	sysDeployService.SetSessionCloser(sshService)
+
+	log.Info("[Bootstrap] 正在创建秘钥管理服务...")
+	secretDAO := secretdao.NewSecretDAO(db, encryptionKey)
 	setupService := setupservice.NewService(db, encryptionKey)
 
 	log.Info("[Bootstrap] 核心服务创建完成")
-	services := &Services{
-		DBManager:     dbManager,
-		SSHService:    sshService,
-		SecretService: secretService,
-		Setup:         setupService,
-		SysDeploy:     sysDeployService,
-		ActivityLog:   activitylog.NewService(db),
-	}
-
-	return services, nil
+	return &Services{
+		DBManager:   dbManager,
+		SSHService:  sshService,
+		SecretDAO:   secretDAO,
+		Setup:       setupService,
+		SysDeploy:   sysDeployService,
+		ActivityLog: activitylog.NewService(db),
+	}, nil
 }
 
-// startBackgroundWorkers 启动所有后台服务
 func startBackgroundWorkers(ctx context.Context, services *Services) error {
 	log.Info("[Bootstrap] 正在启动后台服务...")
 	_ = ctx
 	_ = services
-	// Collector 等业务服务各自独立部署，由 admin 网关转发。
-	// SSH 直连端点（WebSocket/SFTP 上传下载）通过统一网关 rawhandler（/api/admin/ssh/*）提供。
-
 	log.Info("[Bootstrap] 所有后台服务已启动")
 	return nil
 }

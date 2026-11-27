@@ -33,7 +33,7 @@ func (r recoveryFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRows
 func prepareActiveIndex(t *testing.T, svc *Service, spec *viewSpec, schema viewindex.ViewIndexSchema) *viewRuntime {
 	t.Helper()
 	runtime := testRuntime(svc, spec)
-	if _, err := svc.prepareIndex(context.Background(), runtime, func(*viewRuntime) (viewindex.ViewIndexSchema, error) { return schema, nil }); err != nil {
+	if _, err := svc.prepareIndex(context.Background(), runtime, viewPhaseBuilding, func(*viewRuntime) (viewindex.ViewIndexSchema, error) { return schema, nil }); err != nil {
 		t.Fatalf("prepare %s: %v", runtime.indexID, err)
 	}
 	if err := svc.activateBuiltIndex(runtime, spec, schema); err != nil {

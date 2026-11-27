@@ -50,10 +50,6 @@ type Syncer struct {
 	now   func() time.Time
 
 	watch *Watch
-
-	mu      sync.Mutex
-	lastErr string
-	lastAt  time.Time
 }
 
 // SetWatch 让每次拉取的结果交给直推判断（控制机或 Monitor 不可达、Monitor 反复重启）。
@@ -79,16 +75,12 @@ func (s *Syncer) SyncOnce(ctx context.Context, report *monitorpb.HostReport) (Re
 	if s.watch != nil {
 		s.watch.Observe(ctx, startedAt, fetchErr)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err != nil {
 		syncTotal.WithLabelValues("error").Inc()
-		s.lastErr = err.Error()
 		return "", err
 	}
 	syncTotal.WithLabelValues(string(result)).Inc()
-	s.lastErr, s.lastAt = "", s.now().UTC()
-	lastSuccess.Set(float64(s.lastAt.Unix()))
+	lastSuccess.Set(float64(s.now().UTC().Unix()))
 	return result, nil
 }
 
@@ -141,11 +133,4 @@ func fromResponse(rsp *monitorpb.GetHostPolicyRsp, now time.Time) hostpolicy.Pol
 		policy.NotificationChannels = append(policy.NotificationChannels, hostpolicy.Channel{Type: channel.GetChannelType(), WebhookURL: channel.GetWebhookUrl(), Secret: channel.GetSecret()})
 	}
 	return policy
-}
-
-// Status 返回最近一次成功的时间与最近一次错误，供健康详情展示。
-func (s *Syncer) Status() (time.Time, string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.lastAt, s.lastErr
 }

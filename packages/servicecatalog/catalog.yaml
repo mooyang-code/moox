@@ -44,13 +44,10 @@ components:
     services:
       - path: trpc.moox.hostagent.HostAgentMgr
         port: 11426
-        timeout_ms: 5000
+        timeout_ms: 30000
         max_body_bytes: 4194304
         methods:
           - name: GetStatus
-            read_only: true
-            operators: [moox-cli]
-          - name: GetSnapshot
             read_only: true
             operators: [moox-cli]
           - name: RunOnce
@@ -68,7 +65,6 @@ components:
     tools: [moox-admin-cli]
     config_files:
       - from: modules/admin/config/app.yaml
-      - from: modules/admin/config/console.yaml
       - from: modules/admin/config/trpc_go.yaml
     after: [eventbus]
     credentials: [cls]
@@ -79,7 +75,7 @@ components:
       port: 11010
     services:
       - path: trpc.moox.infra.Auth
-        port: 11100
+        port: 0
         console_name: auth
         timeout_ms: 5000
         max_body_bytes: 4194304
@@ -92,7 +88,7 @@ components:
             read_only: true
             operators: [console]
       - path: trpc.moox.ops.Ssh
-        port: 11106
+        port: 0
         console_name: ssh
         timeout_ms: 5000
         max_body_bytes: 4194304
@@ -117,7 +113,6 @@ components:
         methods:
           - name: ListSecrets
             read_only: true
-            callers: [trade]
           - name: GetSecret
             read_only: true
           # 组件里只有 trade 能调，并且只拿得到交易所密钥：网关把验过签的调用方名字写给 SecretMgr，
@@ -167,13 +162,14 @@ components:
             operators: [moox-cli]
       - path: trpc.moox.admin.Setup
         port: 11110
-        console_name: setup
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
           - name: ApplySetup
+            operators: [moox-cli]
           - name: GetSetupStatus
             read_only: true
+            operators: [moox-cli]
       - path: trpc.moox.admin.ActivityLog
         port: 11113
         console_name: activity
@@ -506,17 +502,14 @@ components:
           - name: SetTaskMemberStatus
           - name: ListFactors
             read_only: true
-            callers: [strategy]
           - name: RecalcFactors
           - name: ListRecalcJobs
             read_only: true
-            callers: [strategy]
           - name: GetRecalcJob
             read_only: true
           - name: CancelRecalcJob
           - name: GetStatus
             read_only: true
-            callers: [strategy]
           - name: ValidateFactorSpec
             read_only: true
           - name: PreviewFactor
@@ -525,7 +518,6 @@ components:
             read_only: true
           - name: ListFactorCategories
             read_only: true
-            callers: [strategy]
           - name: UpsertFactorCategory
           - name: DeleteFactorCategory
           - name: SetFactorCategory
@@ -540,7 +532,6 @@ components:
             operators: []
           - name: GetFactorParams
             read_only: true
-            callers: [strategy]
           - name: PublishUdf
           - name: ListUdfs
             read_only: true
@@ -601,14 +592,12 @@ components:
         methods:
           - name: GetArchiveOverview
             read_only: true
-            callers: [monitor]
           # strategy 删除策略实例前确认结果数据集没有归档任务。
           - name: ListArchiveTasks
             read_only: true
-            callers: [monitor, strategy]
+            callers: [strategy]
           - name: PrepareArchiveTask
             read_only: true
-            callers: [monitor]
           - name: CreateArchiveTask
           - name: UpdateArchiveTask
           - name: DeleteArchiveTask
@@ -617,16 +606,12 @@ components:
           - name: CancelArchiveRun
           - name: ListArchiveRuns
             read_only: true
-            callers: [monitor]
           - name: GetArchiveRun
             read_only: true
-            callers: [monitor]
           - name: ListArchivePartitions
             read_only: true
-            callers: [monitor]
           - name: GetArchivePartition
             read_only: true
-            callers: [monitor]
           # moox-cli import 的归档目标建导入运行（行经 worker 数据端口写入），以及清除无法补齐区间：只给 moox-cli。
           - name: StartArchiveImport
             operators: [moox-cli]
@@ -656,7 +641,7 @@ components:
             operators: []
     doctor:
       transport: reporter
-      functional_observability: deferred
+      functional_observability: active
   - id: strategy
     name: 策略服务
     binary: moox-strategy
@@ -755,7 +740,7 @@ components:
           - name: DeleteSpace
           - name: GetSpace
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [archive-mgr, collector, factor-mgr, monitor, strategy]
           - name: ListSpaces
             read_only: true
             callers: [collector, factor-mgr, monitor, strategy]
@@ -865,7 +850,7 @@ components:
             operators: [moox-cli]
     doctor:
       transport: reporter
-      functional_observability: deferred
+      functional_observability: active
   - id: storage-view
     name: 存储视图服务
     binary: moox-storage-view
@@ -906,7 +891,7 @@ components:
             timeout_ms: 35000
     doctor:
       transport: reporter
-      functional_observability: deferred
+      functional_observability: active
   - id: egress-proxy
     name: 出口代理
     binary: moox-egress-proxy
@@ -1100,7 +1085,7 @@ components:
             operators: [moox-cli]
     doctor:
       transport: delegated
-      functional_observability: deferred
+      functional_observability: not_applicable
   - id: archive-worker
     name: 数据归档执行器
     binary: moox-archive-worker
@@ -1110,7 +1095,7 @@ components:
     args: ["-config={config}/app.yaml"]
     config_files:
       - from: modules/archive/config/worker/app.yaml
-    after: [host-gateway, archive-mgr, seaweedfs]
+    after: [host-gateway, archive-mgr]
     external_program: true
     health:
       port: 11418
@@ -1122,18 +1107,4 @@ components:
         - moox-cli
     doctor:
       transport: delegated
-      functional_observability: deferred
-  # 内置对象存储（第三方程序 SeaweedFS，固定版本见 scripts/build/seaweedfs-sha256.txt）：只给同机的 archive-worker 用，
-  # 所有端口只听 127.0.0.1（gRPC 端口为 HTTP 端口 + 10000）；访问密钥在目标机上生成一次，桶由部署脚本建。
-  # 不写在 [deployments] 里：装了 archive-worker 且没配 [archive_object_store] 的主机自动部署它。
-  - id: seaweedfs
-    name: 内置对象存储
-    binary: weed
-    scope: any
-    replicas: single
-    protected: false
-    third_party: true
-    args: ["-logtostderr=true", "server", "-dir={data}", "-ip=127.0.0.1", "-ip.bind=127.0.0.1", "-master.port=11470", "-master.port.grpc=21470", "-master.telemetry=false", "-master.volumeSizeLimitMB=1024", "-volume.port=11471", "-volume.port.grpc=21471", "-volume.max=0", "-filer", "-filer.port=11472", "-filer.port.grpc=21472", "-s3", "-s3.port=11473", "-s3.port.grpc=21473", "-s3.port.iceberg=0", "-s3.port.lance=0", "-s3.config={secrets}/seaweedfs/s3.json"]
-    ports: [11470, 11471, 11472, 11473, 21470, 21471, 21472, 21473]
-    health:
-      port: 0
+      functional_observability: not_applicable

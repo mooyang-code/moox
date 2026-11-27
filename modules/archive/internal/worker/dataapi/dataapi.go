@@ -1,5 +1,6 @@
-// Package dataapi 是 worker 只听 127.0.0.1 的数据端口：下载分区的远端副本（GET /v1/partition）、查看暂存库里
-// 某个标的最近的行（GET /v1/recent），以及 moox-cli import 的归档目标写入批次（POST /v1/import/rows、/v1/import/finish）。
+// Package dataapi 是 worker 只听 127.0.0.1 的数据端口：下载分区归档文件（GET /v1/partition，配置了对象存储时读远端副本，
+// 未配置对象存储时直接校验下载本地已导出的 .csv.gz）、查看暂存库里某个标的最近的行（GET /v1/recent），
+// 以及 moox-cli import 的归档目标写入批次（POST /v1/import/rows、/v1/import/finish）。
 // 端口不验签：外部只能经 control 的中转（按服务目录只放行 console 与 moox-cli）、SSH 本地转发或 control 本机的 Admin 进入；
 // 浏览器的鉴权由 Admin 的一次性 ticket 完成，Admin 只转发两个 GET 路径。写接口只接受 worker 正在执行的导入运行。
 package dataapi
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -76,9 +78,9 @@ type Remote interface {
 type Options struct {
 	// StatePath 是暂存库文件路径；每次请求用只读连接打开，用完关闭。
 	StatePath string
-	// Files 用来定位 dataset.json。
+	// Files 用来定位 dataset.json 与本地已导出的归档文件。
 	Files export.Files
-	// Remote 为 nil 表示没有配置对象存储，下载一律 409。
+	// Remote 为 nil 表示没有配置对象存储，GET /v1/partition 直接读取本地已导出的归档文件并校验 SHA-256。
 	Remote Remote
 	// Imports 接收导入批次；nil 时写接口一律 404。
 	Imports ImportSink
@@ -183,40 +185,79 @@ func (s *Server) partition(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "该分区不在当前执行器的登记里")
 		return
 	}
+	var (
+		reader io.ReadCloser
+		size   int64
+	)
 	if s.opts.Remote == nil {
-		writeError(w, http.StatusConflict, "远端副本未就绪：执行器没有配置对象存储")
-		return
-	}
-	if !p.Replicated() {
-		writeError(w, http.StatusConflict, "远端副本未就绪：当前版本还没有上传或还没有校验")
-		return
-	}
-	stream, err := s.opts.Remote.Open(ctx, p.Remote.Key)
-	if err != nil {
-		log.Errorf("archive data api: 读取远端副本 %s 失败: %v", p.Remote.Key, err)
-		if errors.Is(err, objectstore.ErrNotFound) {
-			writeError(w, http.StatusConflict, "远端副本未就绪：对象存储里找不到该文件")
+		if p.FilePath == "" || p.SHA256 == "" {
+			writeError(w, http.StatusConflict, "本地归档文件未就绪：该分区还没有导出")
 			return
 		}
-		writeError(w, http.StatusBadGateway, "读取远端副本失败")
-		return
+		rel := filepath.FromSlash(p.FilePath)
+		if strings.Contains(p.FilePath, "\\") || !filepath.IsLocal(rel) || rel == "." {
+			log.Errorf("archive data api: 非法本地归档路径 %q", p.FilePath)
+			writeError(w, http.StatusInternalServerError, "读取本地归档文件失败")
+			return
+		}
+		root, err := os.OpenRoot(s.opts.Files.Root)
+		if err != nil {
+			log.Errorf("archive data api: 打开归档根目录失败: %v", err)
+			writeError(w, http.StatusInternalServerError, "读取本地归档文件失败")
+			return
+		}
+		defer root.Close()
+		file, err := root.Open(rel)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				writeError(w, http.StatusConflict, "本地归档文件未就绪：磁盘上找不到该分区文件")
+				return
+			}
+			log.Errorf("archive data api: 打开本地归档文件 %s 失败: %v", p.FilePath, err)
+			writeError(w, http.StatusInternalServerError, "读取本地归档文件失败")
+			return
+		}
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			_ = file.Close()
+			log.Errorf("archive data api: 检查本地归档文件 %s 失败: %v", p.FilePath, err)
+			writeError(w, http.StatusInternalServerError, "读取本地归档文件失败")
+			return
+		}
+		reader, size = file, info.Size()
+	} else {
+		if !p.Replicated() {
+			writeError(w, http.StatusConflict, "远端副本未就绪：当前版本还没有上传或还没有校验")
+			return
+		}
+		stream, err := s.opts.Remote.Open(ctx, p.Remote.Key)
+		if err != nil {
+			log.Errorf("archive data api: 读取远端副本 %s 失败: %v", p.Remote.Key, err)
+			if errors.Is(err, objectstore.ErrNotFound) {
+				writeError(w, http.StatusConflict, "远端副本未就绪：对象存储里找不到该文件")
+				return
+			}
+			writeError(w, http.StatusBadGateway, "读取远端副本失败")
+			return
+		}
+		reader, size = stream, stream.Size
 	}
-	defer stream.Close()
+	defer reader.Close()
 	name := path.Base(p.FilePath)
 	ext := strings.TrimPrefix(name, strings.SplitN(name, ".", 2)[0])
 	w.Header().Set("Content-Type", objectstore.ContentType(name))
-	w.Header().Set("Content-Length", strconv.FormatInt(stream.Size, 10))
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s_%s%s"`, dirName, p.Key, ext))
 	w.Header().Set(SHA256Header, p.SHA256)
 	w.WriteHeader(http.StatusOK)
-	if err := s.verifiedCopy(ctx, w, stream, p.SHA256); err != nil {
+	if err := s.verifiedCopy(ctx, w, reader, p.SHA256); err != nil {
 		// 已写出的字节少于 Content-Length，返回后 net/http 会关闭连接，客户端拿到的是长度不足的响应。
 		log.Errorf("archive data api: 下载 %s/%s/%s 中断: %v", space, dataset, key, err)
 	}
 }
 
-// errSHAMismatch 表示远端副本的内容与登记的 sha256 不符。
-var errSHAMismatch = errors.New("远端副本的 sha256 与登记不符")
+// errSHAMismatch 表示分区文件的内容与登记的 sha256 不符。
+var errSHAMismatch = errors.New("分区文件的 sha256 与登记不符")
 
 // verifiedCopy 边读边算 sha256，按令牌桶限速写出，并始终扣住最后 holdBytes 字节：读完核对相符才写出最后一段。
 func (s *Server) verifiedCopy(ctx context.Context, w io.Writer, r io.Reader, want string) error {

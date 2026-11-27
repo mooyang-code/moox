@@ -182,3 +182,31 @@ func TestListTagsReportsHasMore(t *testing.T) {
 		t.Fatalf("last page: items=%d page=%v err=%v", len(items), page, err)
 	}
 }
+
+// 不同空间允许创建相同的 tag_id 与 tag_name，同一空间内重复 tag_id 仍被拒绝。
+func TestSameTagIDAllowedAcrossSpaces(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	for _, space := range []*pb.Space{
+		{SpaceId: "space_a", Name: "空间A"},
+		{SpaceId: "space_b", Name: "空间B"},
+	} {
+		if _, err := store.CreateSpace(ctx, space); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tagA, err := store.CreateTag(ctx, &pb.Tag{SpaceId: "space_a", TagId: "watchlist", TagName: "自选", Mode: metadata.TagModeManual})
+	if err != nil {
+		t.Fatalf("space_a create tag: %v", err)
+	}
+	tagB, err := store.CreateTag(ctx, &pb.Tag{SpaceId: "space_b", TagId: "watchlist", TagName: "自选", Mode: metadata.TagModeAuto})
+	if err != nil {
+		t.Fatalf("space_b create same tag_id: %v", err)
+	}
+	if tagA.GetMode() != metadata.TagModeManual || tagB.GetMode() != metadata.TagModeAuto {
+		t.Fatalf("tags interfered across spaces: a=%+v b=%+v", tagA, tagB)
+	}
+	if _, err := store.CreateTag(ctx, &pb.Tag{SpaceId: "space_a", TagId: "watchlist", TagName: "重复", Mode: metadata.TagModeManual}); err == nil {
+		t.Fatal("same space duplicate tag_id unexpectedly succeeded")
+	}
+}

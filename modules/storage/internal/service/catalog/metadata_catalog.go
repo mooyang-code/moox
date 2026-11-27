@@ -29,18 +29,12 @@ func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSource
 	if err != nil {
 		return &pb.CreateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
 	return &pb.CreateDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: created}, nil
 }
 
 func (s *Service) UpdateDataSource(ctx context.Context, req *pb.UpdateDataSourceReq) (*pb.UpdateDataSourceRsp, error) {
 	updated, err := s.metadata.UpsertDataSource(ctx, req.GetDataSource())
 	if err != nil {
-		return &pb.UpdateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.UpdateDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: updated}, nil
@@ -53,7 +47,6 @@ func (s *Service) DeleteDataSource(ctx context.Context, req *pb.DeleteDataSource
 	if err := s.metadata.DeleteDataSource(ctx, req.GetSpaceId(), req.GetDataSourceId()); err != nil {
 		return &pb.DeleteDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataSource")
 	return &pb.DeleteDataSourceRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
@@ -83,9 +76,6 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 	}
 	created, err := s.metadata.UpsertSubject(ctx, item)
 	if err != nil {
-		return &pb.UpsertSubjectRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpsertSubjectRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.UpsertSubjectRsp{RetInfo: retinfo.Success("success"), Subject: created}, nil
@@ -142,8 +132,8 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	// 建好即可写入：返回前把元数据缓存发布出去，写入方紧接着的写入才能在缓存里查到数据集和列。
-	if err := s.refreshMetadataCacheSynchronously(ctx, "CreateDataset"); err != nil {
+	// 建好即可写入：返回前把数据集缓存发布出去，写入方紧接着的写入才能在缓存里查到数据集和列。
+	if err := s.refreshDatasetCache(ctx, "CreateDataset"); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集已创建，但元数据缓存尚未发布，请重试")), Dataset: s.withRetention(created)}, nil
 	}
 	return &pb.CreateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(created)}, nil
@@ -167,7 +157,7 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	if err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
+	if err := s.refreshDatasetCache(ctx, "UpdateDataset"); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.UpdateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(updated)}, nil
@@ -186,7 +176,7 @@ func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (
 	if metadataErr != nil && !errors.Is(metadataErr, sql.ErrNoRows) {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.FromError(metadataErr)}, nil
 	}
-	if err := s.refreshMetadataCacheSynchronously(ctx, "DeleteDataset"); err != nil {
+	if err := s.refreshDatasetCache(ctx, "DeleteDataset"); err != nil {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集元数据已删除，但缓存尚未发布，请重试删除"))}, nil
 	}
 	if _, err := s.rows.DeleteDatasetRows(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
@@ -257,7 +247,7 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	// 写入方补完列就会写行：返回前把列发布到缓存，否则首次写入可能因未登记的列被拒。
-	if err := s.refreshMetadataCacheSynchronously(ctx, "UpsertDatasetColumn"); err != nil {
+	if err := s.refreshDatasetCache(ctx, "UpsertDatasetColumn"); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("列已写入，缓存尚未发布，请重试")), Column: created}, nil
 	}
 	return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Success("success"), Column: created}, nil

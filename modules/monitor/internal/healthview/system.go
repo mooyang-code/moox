@@ -6,31 +6,32 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
-func projectPause(p *observability.LifecyclePause) *pb.HealthPause {
+func projectPause(p *observability.LifecyclePause) *commonpb.LifecyclePause {
 	if p == nil {
 		return nil
 	}
-	return &pb.HealthPause{Kind: p.Kind, Reason: p.Reason, By: p.By, Since: p.Since}
+	return &commonpb.LifecyclePause{Kind: p.Kind, Reason: p.Reason, By: p.By, Since: p.Since}
 }
 
-func projectCatchup(c *observability.LifecycleCatchup) *pb.HealthCatchup {
+func projectCatchup(c *observability.LifecycleCatchup) *commonpb.CatchupProgress {
 	if c == nil {
 		return nil
 	}
-	return &pb.HealthCatchup{
+	return &commonpb.CatchupProgress{
 		Since: c.Since, Done: c.Done, Total: c.Total, CaughtUp: c.CaughtUp,
 		BlockedBy: c.BlockedBy, Unfillable: int32(c.Unfillable), Message: c.Message,
 	}
 }
 
 // projectLifecycle 把模块上报的生命周期状态投影成概览里的组件字段。
-func projectLifecycle(l *lifecycleSource) *pb.HealthLifecycle {
+func projectLifecycle(l *lifecycleSource) *commonpb.LifecycleSnapshot {
 	if l == nil {
 		return nil
 	}
-	return &pb.HealthLifecycle{Stage: l.Stage, Reason: l.Reason, Pause: projectPause(l.Pause), Catchup: projectCatchup(l.Catchup)}
+	return &commonpb.LifecycleSnapshot{Stage: l.Stage, Reason: l.Reason, Pause: projectPause(l.Pause), Catchup: projectCatchup(l.Catchup)}
 }
 
 // lifecycleModules 是提供生命周期接口的模块（组件 ID）。
@@ -48,7 +49,7 @@ var systemPausable = map[string]bool{"collector": true, "factor-engine": true, "
 func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	type module struct {
 		id, name string
-		l        *pb.HealthLifecycle
+		l        *commonpb.LifecycleSnapshot
 	}
 	var modules []module
 	// silent 是停止上报（或从未上报）的模块，notReady 是上报了未就绪的模块，都是“模块：说明”。
@@ -148,7 +149,7 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 }
 
 // catchupNote 是一个恢复追赶中的模块的进度文字：已追平待放行、被谁阻塞、或已完成多少。
-func catchupNote(name string, c *pb.HealthCatchup) string {
+func catchupNote(name string, c *commonpb.CatchupProgress) string {
 	switch {
 	case c == nil:
 		return name + "：追赶中"

@@ -27,7 +27,7 @@ const hosts: DeploymentHost[] = [
 ];
 const layout: Record<string, string[]> = {
   control: ["admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"],
-  storage: ["storage-primary", "storage-view", "archive-worker", "seaweedfs"],
+  storage: ["storage-primary", "storage-view", "archive-worker"],
   overseas: ["trade", "egress-proxy", "collector-stream"],
   factor: ["factor-engine"]
 };

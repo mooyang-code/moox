@@ -47,8 +47,8 @@ func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
 		t.Fatalf("views=%v", svc.views)
 	}
 	runtime := svc.runtimeOf(datasetRef{spaceID: "space", datasetID: "records"})
-	if runtime.active != indexID || runtime.building != "" {
-		t.Fatalf("建成后 active=%q building=%q", runtime.active, runtime.building)
+	if runtime.phase != viewPhaseActive {
+		t.Fatalf("建成后 phase=%d, want viewPhaseActive", runtime.phase)
 	}
 	state, err := svc.GetViewState(context.Background(), &pb.GetViewStateReq{SpaceId: "space", DatasetId: "records"})
 	if err != nil || state.GetIndexId() != indexID || len(state.GetColumns()) != 1 || state.GetColumns()[0].GetDisplayName() != "title" {
@@ -85,16 +85,16 @@ func TestInitialBuildFailureDiscardsPartialIndexAndRetries(t *testing.T) {
 		t.Fatal("回填失败应当返回错误")
 	}
 	runtime := svc.runtimeOf(spec.ref())
-	if runtime.building != "" || runtime.active != "" || runtime.schema.SchemaHash != "" {
-		t.Fatalf("失败后 building=%q active=%q schema=%+v", runtime.building, runtime.active, runtime.schema)
+	if runtime.phase != viewPhaseEmpty || runtime.schema.SchemaHash != "" {
+		t.Fatalf("失败后 phase=%d schema=%+v", runtime.phase, runtime.schema)
 	}
 	reader.failPage = 0
 	reader.requests = nil
 	if err := svc.maintainView(context.Background(), opts, spec); err != nil {
 		t.Fatalf("下一轮重建：%v", err)
 	}
-	if runtime.active != runtime.indexID {
-		t.Fatalf("重建后 active=%q", runtime.active)
+	if runtime.phase != viewPhaseActive {
+		t.Fatalf("重建后 phase=%d", runtime.phase)
 	}
 }
 
@@ -132,8 +132,8 @@ func TestMaintenanceRebuildsMissingIndex(t *testing.T) {
 	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadataFor(spec), PrimaryRange: &pagedRangeReader{}}, spec); err != nil {
 		t.Fatalf("索引缺失 err=%v", err)
 	}
-	if runtime.active != runtime.indexID || runtime.building != "" {
-		t.Fatalf("应当重新建好索引：active=%q building=%q", runtime.active, runtime.building)
+	if runtime.phase != viewPhaseActive {
+		t.Fatalf("应当重新建好索引：phase=%d", runtime.phase)
 	}
 	if schema := runtime.queryState().schema; len(schema.Columns) != 1 || schema.Columns[0].GetColumnName() != "close" {
 		t.Fatalf("新索引应按数据集的列建：%+v", schema)
@@ -146,12 +146,13 @@ func TestMaintenanceLeavesRebuildToFollower(t *testing.T) {
 	svc := newTestService(map[string]viewindex.Engine{"duckdb": engine})
 	spec := timeSeriesSpec("space", "prices", "1m")
 	runtime := testRuntime(svc, spec)
-	runtime.building = runtime.indexID
+	runtime.phase = viewPhaseRebuilding
+	runtime.publishReadStateLocked()
 	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadataFor(spec)}, spec); err != nil {
 		t.Fatal(err)
 	}
-	if engine.statCalls != 0 || runtime.building != runtime.indexID || runtime.active != "" {
-		t.Fatalf("不应查看或另建索引：stat=%d building=%q active=%q", engine.statCalls, runtime.building, runtime.active)
+	if engine.statCalls != 0 || runtime.phase != viewPhaseRebuilding {
+		t.Fatalf("不应查看或另建索引：stat=%d phase=%d", engine.statCalls, runtime.phase)
 	}
 }
 
@@ -200,7 +201,7 @@ func TestRestoreActiveViewsAttachesBuiltIndexFile(t *testing.T) {
 		t.Fatalf("restore active view: %v", err)
 	}
 	runtime := svc.runtimeOf(datasetRef{spaceID: "space", datasetID: "prices"})
-	if runtime == nil || runtime.queryState().active != viewindex.IndexID("space", "prices") {
+	if runtime == nil || !runtime.queryState().active() || runtime.indexID != viewindex.IndexID("space", "prices") {
 		t.Fatalf("restored runtime=%v", runtime)
 	}
 	if schema := runtime.queryState().schema; schema.ViewVersion != 1 || schema.SchemaHash != "hash" || len(schema.Columns) != 1 {
@@ -331,7 +332,7 @@ func TestMaintenanceFollowsDatasetStatus(t *testing.T) {
 	}
 	ref := spec.ref()
 	first := svc.runtimeOf(ref)
-	if first == nil || first.queryState().active == "" {
+	if first == nil || !first.queryState().active() {
 		t.Fatal("启用的数据集应当挂接")
 	}
 	firstRev := first.revision.Load()
@@ -357,7 +358,7 @@ func TestMaintenanceFollowsDatasetStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	again := svc.runtimeOf(ref)
-	if again == nil || again == first || again.queryState().active == "" || engine.prepares != 0 {
+	if again == nil || again == first || !again.queryState().active() || engine.prepares != 0 {
 		t.Fatalf("重新启用后应挂回、不重建：prepares=%d", engine.prepares)
 	}
 	if againRev := again.revision.Load(); againRev == 0 || againRev&1 != 0 || againRev == 6 || againRev <= firstRev {

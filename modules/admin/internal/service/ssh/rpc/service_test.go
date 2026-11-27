@@ -5,7 +5,7 @@ import (
 	"mime/multipart"
 	"testing"
 
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/conn"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -32,10 +32,12 @@ func (f *fakeSSHService) ResizeWindow(ctx context.Context, sessionID string, w, 
 }
 
 func (f *fakeSSHService) GetSessionConn(sessionID string) (*conn.SSHConn, bool) { return nil, false }
-func (f *fakeSSHService) SessionBelongsToUser(sessionID, userID string) bool    { return false }
+func (f *fakeSSHService) SessionBelongsToUser(sessionID, userID string) bool {
+	return sessionID != "" && userID != "" && sessionID != "someone-else"
+}
 
-func (f *fakeSSHService) SftpList(ctx context.Context, sessionID string, dirPath string) (interface{}, error) {
-	return map[string]interface{}{}, nil
+func (f *fakeSSHService) SftpList(ctx context.Context, sessionID string, dirPath string) (*ssh.SftpListResult, error) {
+	return &ssh.SftpListResult{CurrentDir: dirPath}, nil
 }
 
 func (f *fakeSSHService) SftpUpload(ctx context.Context, sessionID string, dstPath string, files []*multipart.FileHeader) ([]string, error) {
@@ -76,7 +78,7 @@ func TestService_CreateSession_MissingHostID_ShouldReturnInvalidParam(t *testing
 func TestService_CreateSession_ValidHostID_ShouldReturnSession(t *testing.T) {
 	svc := NewService(&fakeSSHService{})
 	ctx := trpc.BackgroundContext()
-	trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte("user-1"))
+	trpc.SetMetaData(ctx, auth.CtxUserID, []byte("user-1"))
 	rsp, err := svc.CreateSession(ctx, &pb.CreateSessionReq{HostId: "storage"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
@@ -111,35 +113,23 @@ func TestService_SftpMkdir_MissingParams_ShouldReturnInvalidParam(t *testing.T) 
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
-func TestParsePathsPB_AbsolutePath_ShouldBuildBreadcrumbs(t *testing.T) {
-	paths := parsePathsPB("/opt/app")
-	require.Len(t, paths, 3)
-	assert.Equal(t, "app", paths[2].GetName())
-}
-
-func TestSftpListResultToPB_MapPayload_ShouldConvert(t *testing.T) {
-	data := map[string]interface{}{
-		"files": []map[string]interface{}{
-			{"path": "/tmp/a", "name": "a", "mode": "drwx", "size": int64(10), "modified_at": int64(1700000000123), "type": "d"},
+func TestSftpListResultToPB_TypedPayload_ShouldConvert(t *testing.T) {
+	data := &ssh.SftpListResult{
+		Files: []ssh.SftpFileEntry{
+			{Path: "/tmp/a", Name: "a", Mode: "drwx", Size: 10, ModifiedAt: 1700000000123, Type: "d"},
 		},
-		"file_count": 0,
-		"dir_count":  1,
+		FileCount:  0,
+		DirCount:   1,
+		Paths:      []ssh.SftpPathCrumb{{Name: "/", Dir: "/"}, {Name: "tmp", Dir: "/tmp"}},
+		CurrentDir: "/tmp",
 	}
 	rsp := sftpListResultToPB(data, "/tmp")
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Len(t, rsp.GetFiles(), 1)
 	assert.Equal(t, "a", rsp.GetFiles()[0].GetName())
 	assert.Equal(t, int64(1700000000123), rsp.GetFiles()[0].GetModifiedAt())
-}
-
-// 修改时刻不是 int64 毫秒（比如还是旧的文本写法）时报错，不能留成 0。
-func TestSftpListResultToPB_ModifiedAtNotMillis_ShouldFail(t *testing.T) {
-	data := map[string]interface{}{
-		"files": []map[string]interface{}{{"path": "/tmp/a", "name": "a", "modified_at": "2026-11-24T00:00:00Z", "type": "f"}},
-	}
-	rsp := sftpListResultToPB(data, "/tmp")
-	assert.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-	assert.Empty(t, rsp.GetFiles())
+	require.Len(t, rsp.GetPaths(), 2)
+	assert.Equal(t, "/tmp", rsp.GetPaths()[1].GetDir())
 }
 
 func TestNewMockSSHService_GoomApply_ShouldNotPanic(t *testing.T) {

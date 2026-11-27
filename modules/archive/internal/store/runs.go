@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -23,7 +24,6 @@ const maxUnrecoverable = 200
 
 // RunStats 是运行的统计，进度与完成共用。
 type RunStats struct {
-	SubjectsTotal       uint64
 	SubjectsDone        uint64
 	RequestCount        uint64
 	BytesRead           uint64
@@ -57,7 +57,7 @@ type Run struct {
 }
 
 const runColumns = `c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at, c_started_at, c_finished_at,
-c_lease_token, c_lease_until, c_subjects_total, c_subjects_done, c_request_count, c_bytes_read, c_rows_read, c_rows_added,
+c_lease_token, c_lease_until, c_subjects_done, c_request_count, c_bytes_read, c_rows_read, c_rows_added,
 c_rows_changed, c_partitions_exported, c_partitions_finalized, c_unrecoverable_json, c_message, c_ctime, c_partitions_uploaded`
 
 func scanRun(row rowScanner) (Run, error) {
@@ -65,7 +65,7 @@ func scanRun(row rowScanner) (Run, error) {
 	var rangeStart, rangeEnd, scheduled, started, finished, leaseUntil, created timeValue
 	var unrecoverable string
 	err := row.Scan(&r.RunID, &r.SpaceID, &r.DatasetID, &r.Kind, &rangeStart, &rangeEnd, &r.Status, &scheduled, &started, &finished,
-		&r.LeaseToken, &leaseUntil, &r.Stats.SubjectsTotal, &r.Stats.SubjectsDone, &r.Stats.RequestCount, &r.Stats.BytesRead,
+		&r.LeaseToken, &leaseUntil, &r.Stats.SubjectsDone, &r.Stats.RequestCount, &r.Stats.BytesRead,
 		&r.Stats.RowsRead, &r.Stats.RowsAdded, &r.Stats.RowsChanged, &r.Stats.PartitionsExported, &r.Stats.PartitionsFinalized,
 		&unrecoverable, &r.Message, &created, &r.Stats.PartitionsUploaded)
 	if err != nil {
@@ -89,7 +89,7 @@ type RunSpec struct {
 func insertRun(ctx context.Context, tx *sql.Tx, spaceID, datasetID string, spec RunSpec, scheduledAt time.Time) (Run, error) {
 	id := newID("run_")
 	if _, err := tx.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at)
-VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`, id, spaceID, datasetID, spec.Kind, nullTime(spec.RangeStart), nullTime(spec.RangeEnd), fmtTime(scheduledAt)); err != nil {
+VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`, id, spaceID, datasetID, spec.Kind, millisOf(spec.RangeStart), millisOf(spec.RangeEnd), millisOf(scheduledAt)); err != nil {
 		return Run{}, err
 	}
 	return scanRun(tx.QueryRowContext(ctx, queryRuns1, id))
@@ -131,7 +131,7 @@ func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID string, spec R
 		}
 		// 排队中的 follow 让位：取消它，下一分钟的 follow 在新运行结束后再生成。
 		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '让位给整段重读、补拉区间或导入'
-WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'follow' AND c_status = 'queued'`, fmtTime(now), spaceID, datasetID); err != nil {
+WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'follow' AND c_status = 'queued'`, millisOf(now), spaceID, datasetID); err != nil {
 			return err
 		}
 		blocking, err := scanRun(tx.QueryRowContext(ctx, queryRunsBlocking, spaceID, datasetID))
@@ -242,7 +242,7 @@ func (s *Store) CancelRun(ctx context.Context, runID, spaceID string, now time.T
 		if run.Status != RunQueued && run.Status != RunRunning {
 			return ErrConflict
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '已取消' WHERE c_run_id = ?`, fmtTime(now), runID)
+		_, err = tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '已取消' WHERE c_run_id = ?`, millisOf(now), runID)
 		return err
 	})
 	if err != nil {
@@ -259,6 +259,26 @@ type ClaimRequest struct {
 	BusyStorageRuns int
 	Now             time.Time
 	LeaseTTL        time.Duration
+	// AllowedSpaces 非 nil 时，仅领取属于该集合内空间的排队运行（用于先解析空间时区再领取，避免解析失败锁死租约）。
+	AllowedSpaces map[string]bool
+}
+
+// QueuedSpaces 返回当前有排队中运行的去重空间 ID 列表（按字典序）。
+func (s *Store) QueuedSpaces(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT c_space_id FROM t_archive_runs WHERE c_status = 'queued' ORDER BY c_space_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var space string
+		if err := rows.Scan(&space); err != nil {
+			return nil, err
+		}
+		out = append(out, space)
+	}
+	return out, rows.Err()
 }
 
 // Claimed 是被领取的运行和它所属的任务。
@@ -312,6 +332,9 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 			if len(claimed) >= req.FreeSlots {
 				break
 			}
+			if req.AllowedSpaces != nil && !req.AllowedSpaces[run.SpaceID] {
+				continue
+			}
 			if runningTasks[run.SpaceID+"/"+run.DatasetID] {
 				continue
 			}
@@ -329,7 +352,7 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 			}
 			token := newToken()
 			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'running', c_started_at = ?, c_lease_token = ?, c_lease_until = ?
-WHERE c_run_id = ? AND c_status = 'queued'`, fmtTime(req.Now), token, fmtTime(req.Now.Add(req.LeaseTTL)), run.RunID); err != nil {
+WHERE c_run_id = ? AND c_status = 'queued'`, millisOf(req.Now), token, millisOf(req.Now.Add(req.LeaseTTL)), run.RunID); err != nil {
 				return err
 			}
 			run.Status, run.StartedAt, run.LeaseToken, run.LeaseUntil = RunRunning, req.Now, token, req.Now.Add(req.LeaseTTL)
@@ -358,8 +381,8 @@ func (s *Store) Progress(ctx context.Context, runID, leaseToken string, stats Ru
 			canceled = true
 			return nil
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_lease_until = ?, c_subjects_total = ?, c_subjects_done = ?, c_request_count = ?, c_bytes_read = ?, c_rows_read = ?
-WHERE c_run_id = ?`, fmtTime(now.Add(ttl)), stats.SubjectsTotal, stats.SubjectsDone, stats.RequestCount, stats.BytesRead, stats.RowsRead, runID)
+		_, err = tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_lease_until = ?, c_subjects_done = ?, c_request_count = ?, c_bytes_read = ?, c_rows_read = ?
+WHERE c_run_id = ?`, millisOf(now.Add(ttl)), stats.SubjectsDone, stats.RequestCount, stats.BytesRead, stats.RowsRead, runID)
 		return err
 	})
 	return canceled, err
@@ -379,7 +402,7 @@ func (s *Store) ExpireLeases(ctx context.Context, now time.Time, workerOnline bo
 		message = LeaseExpiredWorkerOnline
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'failed', c_finished_at = ?, c_message = ?
-WHERE c_status = 'running' AND c_lease_until IS NOT NULL AND c_lease_until < ?`, fmtTime(now), message, fmtTime(now))
+WHERE c_status = 'running' AND c_lease_until > 0 AND c_lease_until < ?`, millisOf(now), message, millisOf(now))
 	if err != nil {
 		return 0, err
 	}
@@ -408,11 +431,11 @@ func (s *Store) RunningRunIDsCanceled(ctx context.Context, runIDs []string) ([]s
 
 // CleanupRuns 按保留期清理运行记录：成功的 follow 用 followSuccess，失败与取消的 follow 用 followOtherRetention，其余用 other。
 func (s *Store) CleanupRuns(ctx context.Context, now time.Time, followSuccess, other time.Duration) (int, error) {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM t_archive_runs WHERE c_status IN ('succeeded', 'failed', 'canceled') AND c_finished_at IS NOT NULL AND
+	result, err := s.db.ExecContext(ctx, `DELETE FROM t_archive_runs WHERE c_status IN ('succeeded', 'failed', 'canceled') AND c_finished_at > 0 AND
 ((c_kind = 'follow' AND c_status = 'succeeded' AND c_finished_at < ?)
 OR (c_kind = 'follow' AND c_status != 'succeeded' AND c_finished_at < ?)
 OR (c_kind != 'follow' AND c_finished_at < ?))`,
-		fmtTime(now.Add(-followSuccess)), fmtTime(now.Add(-followOtherRetention)), fmtTime(now.Add(-other)))
+		millisOf(now.Add(-followSuccess)), millisOf(now.Add(-followOtherRetention)), millisOf(now.Add(-other)))
 	if err != nil {
 		return 0, err
 	}
@@ -430,11 +453,82 @@ func (s *Store) CountQueued(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// mergeUnrecoverable 按 (subject_id, series_tag) 归并重叠或相邻的无法补齐区间，再截断到 maxUnrecoverable 条并序列化为 JSON。
 func mergeUnrecoverable(items []Unrecoverable) string {
-	if len(items) > maxUnrecoverable {
-		items = items[:maxUnrecoverable]
+	if len(items) == 0 {
+		return "[]"
 	}
-	raw, err := json.Marshal(items)
+	type seriesKey struct {
+		subjectID string
+		seriesTag string
+	}
+	type span struct {
+		start time.Time
+		end   time.Time
+	}
+	bySeries := make(map[seriesKey][]span)
+	var keys []seriesKey
+	var unparsed []Unrecoverable
+	seenUnparsed := make(map[Unrecoverable]bool)
+	for _, item := range items {
+		start, serr := time.Parse(time.RFC3339Nano, item.StartTime)
+		end, eerr := time.Parse(time.RFC3339Nano, item.EndTime)
+		if serr != nil || eerr != nil || end.Before(start) {
+			if !seenUnparsed[item] {
+				seenUnparsed[item] = true
+				unparsed = append(unparsed, item)
+			}
+			continue
+		}
+		k := seriesKey{subjectID: item.SubjectID, seriesTag: item.SeriesTag}
+		if _, ok := bySeries[k]; !ok {
+			keys = append(keys, k)
+		}
+		bySeries[k] = append(bySeries[k], span{start: start.UTC(), end: end.UTC()})
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].subjectID != keys[j].subjectID {
+			return keys[i].subjectID < keys[j].subjectID
+		}
+		return keys[i].seriesTag < keys[j].seriesTag
+	})
+	merged := make([]Unrecoverable, 0, len(items))
+	for _, k := range keys {
+		spans := bySeries[k]
+		sort.Slice(spans, func(i, j int) bool {
+			if !spans[i].start.Equal(spans[j].start) {
+				return spans[i].start.Before(spans[j].start)
+			}
+			return spans[i].end.Before(spans[j].end)
+		})
+		cur := spans[0]
+		for _, next := range spans[1:] {
+			if !next.start.After(cur.end) {
+				if next.end.After(cur.end) {
+					cur.end = next.end
+				}
+				continue
+			}
+			merged = append(merged, Unrecoverable{
+				SubjectID: k.subjectID,
+				SeriesTag: k.seriesTag,
+				StartTime: cur.start.Format(time.RFC3339Nano),
+				EndTime:   cur.end.Format(time.RFC3339Nano),
+			})
+			cur = next
+		}
+		merged = append(merged, Unrecoverable{
+			SubjectID: k.subjectID,
+			SeriesTag: k.seriesTag,
+			StartTime: cur.start.Format(time.RFC3339Nano),
+			EndTime:   cur.end.Format(time.RFC3339Nano),
+		})
+	}
+	merged = append(merged, unparsed...)
+	if len(merged) > maxUnrecoverable {
+		merged = merged[:maxUnrecoverable]
+	}
+	raw, err := json.Marshal(merged)
 	if err != nil || strings.TrimSpace(string(raw)) == "null" {
 		return "[]"
 	}

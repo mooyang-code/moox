@@ -6,6 +6,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/doctor"
 )
 
 func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
@@ -41,7 +42,7 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 			for _, service := range facts.Services {
 				if service.ServiceName == id && service.Enabled {
 					status := domain.HealthStatus(service.Status)
-					if !expected || rank(status) > rank(stage.Status) {
+					if !expected || doctor.HealthStatusRank(status) > doctor.HealthStatusRank(stage.Status) {
 						stage.Status = status
 					}
 					expected = true
@@ -61,7 +62,7 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 			}
 			dataset := projectDataset(item)
 			stage.Datasets = append(stage.Datasets, dataset)
-			if rank(dataset.Status) > rank(stage.Status) {
+			if doctor.HealthStatusRank(dataset.Status) > doctor.HealthStatusRank(stage.Status) {
 				stage.Status = dataset.Status
 			}
 		}
@@ -86,20 +87,5 @@ func projectDataset(item observability.DatasetFrequencyStatus) *pb.HealthDataset
 		WaitingBars: int32(item.WaitingBars), WaitingSince: stamp(item.WaitingSince), OverdueSeconds: item.OverdueSeconds,
 		LateConfirmed:        item.LateConfirmed,
 		LatenessLimitSeconds: item.LatenessLimitSeconds, ClockIssue: item.ClockIssue, Timezone: item.Timezone,
-	}
-}
-
-func rank(status string) int {
-	switch status {
-	case "down":
-		return 5
-	case "degraded":
-		return 4
-	case "unknown":
-		return 3
-	case "healthy":
-		return 2
-	default:
-		return 1
 	}
 }

@@ -56,10 +56,13 @@ func hostKeyFile() string {
 }
 
 // newConsoleGateway 以 console 的身份、用控制机的主机密钥签名，代浏览器调用各业务服务。
-func newConsoleGateway(db *gorm.DB, hostID, keyFile string) (*gatewayclient.Client, error) {
-	topology, err := sysdeploy.NewTopologyDAO(db, hostID)
-	if err != nil {
-		return nil, err
+func newConsoleGateway(db *gorm.DB, topology *sysdeploy.TopologyDAO, hostID, keyFile string) (*gatewayclient.Client, error) {
+	if topology == nil {
+		var err error
+		topology, err = sysdeploy.NewTopologyDAO(db, hostID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	key, err := gatewayauth.ReadSigningKey(keyFile)
 	if err != nil {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -85,27 +84,6 @@ func TestAdminUserJSONDoesNotExposePasswordOrHash(t *testing.T) {
 	assert.NotContains(t, stdout.String(), "hash")
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
-}
-
-func TestRandomSecretEmitsRequestedBytesAsLowercaseHex(t *testing.T) {
-	var stdout bytes.Buffer
-	require.NoError(t, runRandomSecretCommand([]string{"random-secret", "--bytes", "32"}, &stdout, &bytes.Buffer{}))
-	var result map[string]any
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
-	value, ok := result["secret"].(string)
-	require.True(t, ok)
-	assert.Len(t, value, 64)
-	_, err := hex.DecodeString(value)
-	require.NoError(t, err)
-	assert.Equal(t, strings.ToLower(value), value)
-}
-
-func TestRandomSecretRejectsUnsafeSizes(t *testing.T) {
-	for _, size := range []string{"0", "-1", "4097"} {
-		err := runRandomSecretCommand([]string{"random-secret", "--bytes", size}, &bytes.Buffer{}, &bytes.Buffer{})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "between 1 and 4096")
-	}
 }
 
 func runAdminUserForTest(t *testing.T, args []string, stdin string) map[string]any {

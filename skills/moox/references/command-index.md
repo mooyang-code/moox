@@ -110,7 +110,7 @@
 | `doctor bootstrap` | 检查新部署各模块的安装与配置 |
 | `doctor diagnose` | 按 Monitor 的事实诊断模块 |
 
-各组件的健康端口（`/healthz`、`/readyz`、`/metrics`）只听 127.0.0.1、不验签：`doctor bootstrap` 只查本机，直接请求本机端口；`doctor diagnose` 在组件给 Monitor 的上报缺失或过期时，经 SSH 在目标机上请求它的本机 `/readyz`（SSH 连不上记为无法判断），`systemd` 用户服务的状态同样经 SSH 读取。因子机只能出站，SSH 只有在家里的局域网才连得上，所以因子机的 doctor 与 `/readyz` 检查只能在局域网里做；不在局域网时看 Monitor 的上报状态（`doctor alerts`）和 `moox-cli host agent status --host factor`。
+各组件的健康端口（`/healthz`、`/readyz`、`/metrics`）只听 127.0.0.1、不验签：`doctor bootstrap` 支持检查本机或经 SSH 探测 `moox.toml` 登记的远端主机（无远端 SSH 能力时报错提示）；`doctor diagnose` 在组件给 Monitor 的上报缺失或过期时，经 SSH 在目标机上请求它的本机 `/readyz`（SSH 连不上记为无法判断），`systemd` 用户服务的状态同样经 SSH 读取。因子机只能出站，SSH 只有在家里的局域网才连得上，所以因子机的 doctor 与 `/readyz` 检查只能在局域网里做；不在局域网时看 Monitor 的上报状态（`doctor alerts`）和 `moox-cli host agent status --host factor`。
 
 ## eventbus：EventBus：流、消费者与事件概览（调用 EventBusMgr，只读）
 
@@ -171,7 +171,6 @@
 | 命令 | 说明 |
 | --- | --- |
 | `host agent run-once` | 让主机代理立即采集并上报一次 |
-| `host agent snapshot` | 主机代理最近一次的资源快照 |
 | `host agent status` | 主机代理的采集与上报状态 |
 | `host catalog` | 服务目录：组件、端口与服务 |
 | `host deployments` | 列出组件部署 |

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -90,6 +91,10 @@ type KlineFreshnessEvaluator struct {
 
 	disabledMu     sync.Mutex
 	disabledChecks map[string]struct{}
+
+	pruneMu    sync.Mutex
+	prunedOnce bool
+	lastPruned [][2]string
 }
 
 // RuleDisabledCheckIDs 返回最近一次评估时规则存在但关闭了新鲜度监控的检查 ID。这些检查会在每次评估里被补建出来（页面据此显示“已关闭”），
@@ -128,6 +133,11 @@ type SubjectFirstSeenStore interface {
 	ObserveSubjects(ctx context.Context, spaceID, datasetID string, active map[string]struct{}, now time.Time) (map[string]time.Time, error)
 	// DatasetFirstSeen 返回数据集的对象最早出现在采集清单里的时间（含部署前的存量）；还没有记录时 ok 为假。
 	DatasetFirstSeen(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error)
+}
+
+// subjectFirstSeenPruner 是可选的孤立数据集清理能力，由 SubjectFirstSeenRepository 实现。
+type subjectFirstSeenPruner interface {
+	PruneDatasets(ctx context.Context, active map[[2]string]struct{}) (int64, error)
 }
 
 // SetSubjectFirstSeenStore 启用新上线对象的宽限期。
@@ -189,6 +199,9 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		inventoryStale = stale
 	}
 	e.recordDisabledChecks(rules)
+	if inventoryEvaluated && !inventoryStale {
+		e.pruneDeletedDatasets(ctx, rules)
+	}
 	filters := make([]ViewMetricScope, 0, len(rules))
 	for _, rule := range rules {
 		if !rule.Enabled || rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
@@ -831,6 +844,48 @@ func pendingNewSubjects(report *KlineFreshnessReport, namedStale int, newSubject
 		report.MissingCount -= pending
 	}
 	return pending
+}
+
+// pruneDeletedDatasets 在采集任务清单新鲜且完整时，清理已删除数据集在 t_monitor_subject_first_seen 中的残留记录。
+// 仅在首次对账或活跃数据集集合发生变化时执行数据库清理，避免稳态轮次额外查库。
+func (e *KlineFreshnessEvaluator) pruneDeletedDatasets(ctx context.Context, rules []KlineFreshnessRule) {
+	pruner, ok := e.firstSeen.(subjectFirstSeenPruner)
+	if !ok {
+		return
+	}
+	active := make(map[[2]string]struct{}, len(rules))
+	keys := make([][2]string, 0, len(rules))
+	for _, rule := range rules {
+		spaceID, datasetID := strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.DatasetID)
+		if spaceID == "" || datasetID == "" {
+			continue
+		}
+		key := [2]string{spaceID, datasetID}
+		if _, exists := active[key]; !exists {
+			active[key] = struct{}{}
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i][0] != keys[j][0] {
+			return keys[i][0] < keys[j][0]
+		}
+		return keys[i][1] < keys[j][1]
+	})
+	e.pruneMu.Lock()
+	unchanged := e.prunedOnce && slices.Equal(e.lastPruned, keys)
+	e.pruneMu.Unlock()
+	if unchanged {
+		return
+	}
+	if _, err := pruner.PruneDatasets(ctx, active); err != nil {
+		log.WarnContextf(ctx, "monitor prune deleted subject first-seen datasets failed: %v", err)
+		return
+	}
+	e.pruneMu.Lock()
+	e.prunedOnce = true
+	e.lastPruned = keys
+	e.pruneMu.Unlock()
 }
 
 // newSubjectDeadlines 返回仍在宽限期内的新上线对象及其宽限截止时间。没有配置存储、清单读取失败或周期无法按日历推算时返回空，

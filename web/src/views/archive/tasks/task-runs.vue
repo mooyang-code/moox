@@ -40,9 +40,7 @@
         <a-table-column title="状态" :width="80">
           <template #cell="{ record }">
             <span :class="`tone-${runTone(record.status)}`">{{ runStatusLabel(record.status) }}</span>
-            <div v-if="record.status === 'running'" class="sub">
-              {{ toNum(record.subjects_done) }}/{{ toNum(record.subjects_total) }} 个标的
-            </div>
+            <div v-if="record.status === 'running'" class="sub">已读 {{ toNum(record.subjects_done) }} 个标的</div>
           </template>
         </a-table-column>
         <a-table-column title="计划时刻" :width="190"

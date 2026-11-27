@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	adminconfig "github.com/mooyang-code/moox/modules/admin/internal/config"
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	setupdomain "github.com/mooyang-code/moox/modules/admin/internal/service/setup"
@@ -43,7 +43,7 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	// 管理员由部署控制机时的 moox-admin-cli user ensure 建，setup 只核对。
 	hash, err := mooxsecurity.HashPassword("admin-e2e-password")
 	require.NoError(t, err)
-	require.NoError(t, manager.GetDB().Create(&authmodel.User{UserID: "admin-user", Username: "admin", PasswordHash: hash}).Error)
+	require.NoError(t, manager.GetDB().Create(&auth.User{UserID: "admin-user", Username: "admin", PasswordHash: hash}).Error)
 
 	rpcService := setuprpc.NewService(setupdomain.NewService(manager.GetDB(), encryptionKey))
 	privateMux := http.NewServeMux()

@@ -120,3 +120,38 @@ func TestSubjectFirstSeenDatasetFirstSeen(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, t0, at)
 }
+
+func TestSubjectFirstSeenPruneDatasetsRemovesDeletedDatasets(t *testing.T) {
+	repo, _ := newFirstSeenRepository(t, filepath.Join(t.TempDir(), "monitor.db"))
+	ctx := context.Background()
+	t0 := time.Date(2026, 11, 4, 7, 33, 0, 0, time.UTC)
+
+	_, err := repo.ObserveSubjects(ctx, "crypto", "ds_keep", subjectSet("BTC", "ETH"), t0)
+	require.NoError(t, err)
+	_, err = repo.ObserveSubjects(ctx, "crypto", "ds_deleted", subjectSet("SOL", "DOGE"), t0)
+	require.NoError(t, err)
+
+	deleted, err := repo.PruneDatasets(ctx, map[[2]string]struct{}{{"crypto", "ds_keep"}: {}})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), deleted)
+
+	_, ok, err := repo.DatasetFirstSeen(ctx, "crypto", "ds_keep")
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, ok, err = repo.DatasetFirstSeen(ctx, "crypto", "ds_deleted")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	// 再次对账无变化时删除数为 0。
+	deleted, err = repo.PruneDatasets(ctx, map[[2]string]struct{}{{"crypto", "ds_keep"}: {}})
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+
+	// 清空清单时可清理全部已删数据集。
+	deleted, err = repo.PruneDatasets(ctx, map[[2]string]struct{}{})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), deleted)
+	_, ok, err = repo.DatasetFirstSeen(ctx, "crypto", "ds_keep")
+	require.NoError(t, err)
+	require.False(t, ok)
+}

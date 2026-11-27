@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,8 +43,9 @@ func TestHealthHandler_ReadyAgent_ShouldReturnOK(t *testing.T) {
 func TestHealthHandler_RequiredCollectionFailureMakesAgentUnready(t *testing.T) {
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{err: errors.New("required host collectors failed: cpu")}
-	_, err := a.RunOnce(context.Background(), nil)
-	require.Error(t, err)
+	rsp, err := a.RunOnce(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 
 	rr := httptest.NewRecorder()
 	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -62,8 +64,9 @@ func TestHealthHandler_ReportFailureDoesNotMakeAgentUnready(t *testing.T) {
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
 	a.report = (&fakeReporter{err: errors.New("monitor unreachable")}).report
-	_, err := a.RunOnce(context.Background(), nil)
-	require.Error(t, err)
+	rsp, err := a.RunOnce(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 
 	status, statusErr := a.GetStatus(context.Background(), nil)
 	require.NoError(t, statusErr)
@@ -77,11 +80,13 @@ func TestHealthHandler_ReportFailureDoesNotMakeAgentUnready(t *testing.T) {
 func TestHealthHandler_CollectionRecoveryClearsUnready(t *testing.T) {
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{err: errors.New("cpu")}
-	_, err := a.RunOnce(context.Background(), nil)
-	require.Error(t, err)
-	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	_, err = a.RunOnce(context.Background(), nil)
+	rsp, err := a.RunOnce(context.Background(), nil)
 	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
+	rsp, err = a.RunOnce(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 
 	rr := httptest.NewRecorder()
 	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -63,7 +64,11 @@ func newEnv(t *testing.T) *env {
 
 // server 建数据端口；记下每次只读打开的库，供断言“用后关闭”。
 func (e *env) server(rate int64, sleepFn func(context.Context, time.Duration) error, now func() time.Time) *httptest.Server {
-	srv := New(Options{StatePath: e.store.Path(), Files: e.files, Remote: e.remote, BytesPerSecond: rate, Sleep: sleepFn, Now: now,
+	return e.serverWithRemote(e.remote, rate, sleepFn, now)
+}
+
+func (e *env) serverWithRemote(remote Remote, rate int64, sleepFn func(context.Context, time.Duration) error, now func() time.Time) *httptest.Server {
+	srv := New(Options{StatePath: e.store.Path(), Files: e.files, Remote: remote, BytesPerSecond: rate, Sleep: sleepFn, Now: now,
 		OpenStore: func(path string) (*staging.Store, error) {
 			s, err := staging.OpenReadOnly(path)
 			if err == nil {
@@ -76,6 +81,13 @@ func (e *env) server(rate int64, sleepFn func(context.Context, time.Duration) er
 	ts := httptest.NewServer(srv)
 	e.t.Cleanup(ts.Close)
 	return ts
+}
+
+func (e *env) writeLocalFile(rel string, content []byte) {
+	e.t.Helper()
+	abs := e.files.Abs(rel)
+	require.NoError(e.t, os.MkdirAll(filepath.Dir(abs), 0o755))
+	require.NoError(e.t, os.WriteFile(abs, content, 0o644))
 }
 
 func (e *env) assertStoresClosed() {
@@ -172,13 +184,111 @@ func TestDownloadRejectsUnknownUnreplicatedAndBadParams(t *testing.T) {
 		resp, _, _ = get(t, ts, "/v1/partition", query)
 		require.Equal(t, http.StatusBadRequest, resp.StatusCode, query.Encode())
 	}
+}
 
-	// 没有配置对象存储时一律 409。
-	noRemote := httptest.NewServer(New(Options{StatePath: e.store.Path(), Files: e.files, BytesPerSecond: 2 << 20}))
-	t.Cleanup(noRemote.Close)
-	resp, body, _ = get(t, noRemote, "/v1/partition", partitionQuery(key))
+func TestDownloadStreamsVerifiedLocalFileWhenRemoteIsDisabled(t *testing.T) {
+	e := newEnv(t)
+	content := randomBytes(t, 200<<10)
+	key := e.partition(content, false)
+	rel, err := e.files.RelPath(e.task, key)
+	require.NoError(t, err)
+	e.writeLocalFile(rel, content)
+
+	ts := e.serverWithRemote(nil, 2<<20, noSleep, time.Now)
+	resp, body, err := get(t, ts, "/v1/partition", partitionQuery(key))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.True(t, bytes.Equal(body, content))
+	sum := sha256.Sum256(content)
+	require.Equal(t, "application/gzip", resp.Header.Get("Content-Type"))
+	require.Equal(t, "204800", resp.Header.Get("Content-Length"))
+	require.Equal(t, `attachment; filename="binance-spot-kline-1m_2026-10-15.csv.gz"`, resp.Header.Get("Content-Disposition"))
+	require.Equal(t, hex.EncodeToString(sum[:]), resp.Header.Get(SHA256Header))
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
+	e.assertStoresClosed()
+}
+
+func TestDownloadLocalFileRejectsUnexportedMissingAndCorruptedFiles(t *testing.T) {
+	// 1. 仅暂存、尚未导出的分区：409。
+	e := newEnv(t)
+	_, err := e.store.Stage(t.Context(), e.task, []staging.Row{{SubjectID: "BTCUSDT", DataTime: day0, Values: []any{1.0, true}}},
+		func(time.Time) staging.PartitionRef {
+			return staging.PartitionRef{Key: "2026-10-15", Start: day0, End: day0.AddDate(0, 0, 1)}
+		}, day0.Add(time.Hour))
+	require.NoError(t, err)
+	ts := e.serverWithRemote(nil, 2<<20, noSleep, time.Now)
+	resp, body, _ := get(t, ts, "/v1/partition", partitionQuery("2026-10-15"))
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
-	require.Contains(t, string(body), "没有配置对象存储")
+	require.Contains(t, string(body), "还没有导出")
+
+	// 2. 已登记导出但本地文件不存在：409。
+	key := e.partition([]byte("missing on disk"), false)
+	resp, body, _ = get(t, ts, "/v1/partition", partitionQuery(key))
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Contains(t, string(body), "找不到该分区文件")
+
+	// 3. 本地文件被篡改：扣住末尾 64 KiB，校验失败中断连接。
+	for _, size := range []int{300 << 10, 10 << 10} {
+		e2 := newEnv(t)
+		content := randomBytes(t, size)
+		k := e2.partition(content, false)
+		rel, err := e2.files.RelPath(e2.task, k)
+		require.NoError(t, err)
+		corrupted := bytes.Clone(content)
+		corrupted[len(corrupted)-1] ^= 0xff
+		e2.writeLocalFile(rel, corrupted)
+
+		ts2 := e2.serverWithRemote(nil, 2<<20, noSleep, time.Now)
+		resp, body, err := get(t, ts2, "/v1/partition", partitionQuery(k))
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Error(t, err, "本地文件校验失败必须中断响应")
+		want := max(size-holdBytes, 0)
+		require.Equal(t, want, len(body), "size %d", size)
+		require.True(t, bytes.Equal(body, corrupted[:want]))
+	}
+}
+
+func TestDownloadLocalFileBlocksPathTraversalAndEscapingSymlink(t *testing.T) {
+	outsideDir := t.TempDir()
+	secret := []byte("top-secret-outside-archive-root")
+	secretPath := filepath.Join(outsideDir, "secret.txt")
+	require.NoError(t, os.WriteFile(secretPath, secret, 0o600))
+	secretSum := sha256.Sum256(secret)
+	secretSHA := hex.EncodeToString(secretSum[:])
+
+	// 1. file_path 含 ../../ 穿越路径：返回 500 且不泄露路径或外部文件内容。
+	e1 := newEnv(t)
+	_, err := e1.store.Stage(t.Context(), e1.task, []staging.Row{{SubjectID: "BTCUSDT", DataTime: day0, Values: []any{1.0, true}}},
+		func(time.Time) staging.PartitionRef {
+			return staging.PartitionRef{Key: "2026-10-15", Start: day0, End: day0.AddDate(0, 0, 1)}
+		}, day0.Add(time.Hour))
+	require.NoError(t, err)
+	relToSecret, err := filepath.Rel(e1.files.Root, secretPath)
+	require.NoError(t, err)
+	traversalPath := filepath.ToSlash(relToSecret)
+	require.Contains(t, traversalPath, "..")
+	require.NoError(t, e1.store.MarkExported(t.Context(), space, dataset, "2026-10-15", day0.Add(2*time.Hour), traversalPath, secretSHA))
+
+	ts1 := e1.serverWithRemote(nil, 2<<20, noSleep, time.Now)
+	resp, body, _ := get(t, ts1, "/v1/partition", partitionQuery("2026-10-15"))
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	require.NotContains(t, string(body), string(secret))
+	require.NotContains(t, string(body), "secret.txt")
+
+	// 2. 归档根目录内存在指向外部文件的符号链接：os.Root 阻断，返回 500 且不泄露外部文件内容。
+	e2 := newEnv(t)
+	key := e2.partition(secret, false)
+	rel, err := e2.files.RelPath(e2.task, key)
+	require.NoError(t, err)
+	linkPath := e2.files.Abs(rel)
+	require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), 0o755))
+	require.NoError(t, os.Symlink(secretPath, linkPath))
+
+	ts2 := e2.serverWithRemote(nil, 2<<20, noSleep, time.Now)
+	resp, body, _ = get(t, ts2, "/v1/partition", partitionQuery(key))
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	require.NotContains(t, string(body), string(secret))
+	require.NotContains(t, string(body), "secret.txt")
 }
 
 // 远端内容与登记的 sha256 不符：最后 64KB 不写出，客户端拿到长度不足的响应并报错；小于 64KB 的文件一个字节都拿不到。

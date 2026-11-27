@@ -95,6 +95,31 @@ func (s *Store) TaskDir(ctx context.Context, spaceID, datasetID string) (purpose
 	return purpose, dirName, err == nil, err
 }
 
+// SyncedTask 表示暂存库已完成分区登记同步的任务（新建或丢失暂存库后为空，任务重建会换 task_id 并重置）。
+type SyncedTask struct {
+	SpaceID   string
+	DatasetID string
+	TaskID    string
+}
+
+// SyncedTasks 返回本地已完成已登记分区同步的任务列表，用于 PullArchiveRun 按需下发。
+func (s *Store) SyncedTasks(ctx context.Context) ([]SyncedTask, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT space_id, dataset_id, task_id FROM task_state WHERE task_id != '' AND partitions_synced = 1 ORDER BY space_id, dataset_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SyncedTask
+	for rows.Next() {
+		var t SyncedTask
+		if err := rows.Scan(&t.SpaceID, &t.DatasetID, &t.TaskID); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // Reconcile 按 mgr 下发的当前全部任务对账：keep 的键是 "space/dataset"，值是任务 ID。
 // 本地有状态、但不在 keep 里（任务已删除）或任务 ID 不同（任务已重建）的数据集，删掉其暂存表与全部状态。返回删掉的数据集。
 func (s *Store) Reconcile(ctx context.Context, keep map[string]string) ([]string, error) {

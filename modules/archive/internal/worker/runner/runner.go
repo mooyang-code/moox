@@ -312,9 +312,7 @@ func (s *runState) restorePartitions(ctx context.Context) error {
 		}
 		regs = append(regs, state)
 	}
-	if len(regs) == 0 {
-		return nil
-	}
+	// 即使 regs 为空也执行 RestorePartitions，以便把 task_state.partitions_synced 置为 1，后续 follow 不再重复拉取全量登记。
 	_, err := s.r.Staging.RestorePartitions(ctx, s.task.SpaceID, s.task.DatasetID, regs, s.r.now())
 	return err
 }

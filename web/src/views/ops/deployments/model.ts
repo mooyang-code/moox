@@ -55,8 +55,8 @@ export function deploymentRows(
 export function componentPorts(component?: CatalogComponent) {
   return [
     ...new Set([
-      ...(component?.ports || []),
-      ...(component?.services || []).map(item => item.port),
+      ...(component?.ports || []).filter(port => port > 0),
+      ...(component?.services || []).map(item => item.port).filter(port => port > 0),
       ...(component?.health.port ? [component.health.port] : [])
     ])
   ].sort((a, b) => a - b);

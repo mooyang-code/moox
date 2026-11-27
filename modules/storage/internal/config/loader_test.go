@@ -203,3 +203,61 @@ func TestRuntimeConfigRejectsRemovedStorageRPC(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadSinglePassResolvesPolicyViewSettingsAndPaths(t *testing.T) {
+	// 无配置文件时使用全套默认值。
+	empty, err := Load("")
+	if err != nil {
+		t.Fatalf("Load(\"\"): %v", err)
+	}
+	if empty.ConfigPath != "" || empty.Storage.Root != "./var/storage" {
+		t.Fatalf("empty LoadedConfig = %+v", empty)
+	}
+	policy, err := empty.LoadPolicy()
+	if err != nil || policy.View.Bars != 10000 {
+		t.Fatalf("default policy = %+v err=%v", policy, err)
+	}
+	vs, err := empty.ViewSettings()
+	if err != nil || vs.BackfillPageSize != DefaultViewBackfillPageSize || vs.DeleteOldestBatchSize != DefaultViewDeleteOldestBatchSize {
+		t.Fatalf("default view settings = %+v err=%v", vs, err)
+	}
+
+	// 单次加载配置文件后复用：策略、View 参数、EventBus 凭据路径与 Metadata 路径均可直接解析。
+	loaded, err := Load("../../config/storage_view/trpc_go.yaml")
+	if err != nil {
+		t.Fatalf("Load(storage_view/trpc_go.yaml): %v", err)
+	}
+	vs, err = loaded.ViewSettings()
+	if err != nil || vs.BackfillPageSize != 2000 || vs.DeleteOldestBatchSize != 2000 || vs.BackfillRequestInterval != 100*1e6 {
+		t.Fatalf("view settings = %+v err=%v", vs, err)
+	}
+	if got := loaded.EventBusCredentialFile(""); got != "~/.config/moox/eventbus/storage-eventbus.yaml" {
+		t.Fatalf("EventBusCredentialFile = %q", got)
+	}
+	if got := loaded.EventBusCredentialFile("/override/cred.yaml"); got != "/override/cred.yaml" {
+		t.Fatalf("EventBusCredentialFile(override) = %q", got)
+	}
+	if got := loaded.MetadataDBPath("/override/meta.db"); got != "/override/meta.db" {
+		t.Fatalf("MetadataDBPath(override) = %q", got)
+	}
+
+	// 非法 View 参数校验。
+	for _, yamlText := range []string{
+		"storage:\n  view:\n    backfill_page_size: 10001\n",
+		"storage:\n  view:\n    backfill_request_interval: -1s\n",
+		"storage:\n  view:\n    delete_oldest_batch_size: 20001\n",
+		"storage:\n  view:\n    delete_oldest_batch_size: -1\n",
+	} {
+		path := filepath.Join(t.TempDir(), "storage.yaml")
+		if err := os.WriteFile(path, []byte(yamlText), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		bad, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load(%q): %v", yamlText, err)
+		}
+		if _, err := bad.ViewSettings(); err == nil {
+			t.Fatalf("ViewSettings(%q) expected error", yamlText)
+		}
+	}
+}

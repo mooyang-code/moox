@@ -2,10 +2,8 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -13,20 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// viewMetadataReader 提供大量标的、一个数据集和可变的列定义，用来确认写路径的元数据读取与标的数量无关。
+// viewMetadataReader 提供数据集与可变列定义；故意暴露 ListSubjects 并在被调用时失败，
+// 验证 DatasetCache 刷新永不扫描标的。
 type viewMetadataReader struct {
-	stubMetadataReader
-	mu       sync.Mutex
-	subjects int
-	columns  []string
-}
-
-func (r *viewMetadataReader) ListSubjects(_ context.Context, _ string, _ []string, _ string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
-	items := make([]*pb.Subject, 0, r.subjects)
-	for i := 0; i < r.subjects; i++ {
-		items = append(items, &pb.Subject{SpaceId: "crypto", SubjectId: fmt.Sprintf("S%05d-USDT", i), Name: "x", Status: "active"})
-	}
-	return pageItems(items, page)
+	mu      sync.Mutex
+	columns []string
 }
 
 func (r *viewMetadataReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
@@ -55,21 +44,21 @@ func (r *viewMetadataReader) setColumns(columns ...string) {
 	r.columns = columns
 }
 
-func newViewStore(t testing.TB, reader *viewMetadataReader) *Store {
+func newViewCache(t testing.TB, reader *viewMetadataReader) *DatasetCache {
 	t.Helper()
-	store, err := New(context.Background(), reader, Options{RefreshInterval: RefreshDisabled, InitialLoadTimeout: 30 * time.Second})
+	cache, err := NewDatasetCache(context.Background(), reader)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	return store
+	t.Cleanup(func() { require.NoError(t, cache.Close()) })
+	return cache
 }
 
 // 写请求拿到的是共享的只读视图：同一代元数据下两次请求得到同一批消息对象，读取的分配次数是常数，
-// 不随标的数量增长（原来每个请求把全部条目连同 payload 深拷贝一遍）。
+// 不拷贝数据集与列定义。
 func TestRequestSnapshotSharesDatasetViewWithoutCopy(t *testing.T) {
-	reader := &viewMetadataReader{subjects: 10000, columns: []string{"open", "high", "low", "close", "volume"}}
-	store := newViewStore(t, reader)
+	reader := &viewMetadataReader{columns: []string{"open", "high", "low", "close", "volume"}}
+	cache := newViewCache(t, reader)
 
-	first, second := store.RequestSnapshot(), store.RequestSnapshot()
+	first, second := cache.RequestSnapshot(), cache.RequestSnapshot()
 	require.NotNil(t, first)
 	datasetA, ok := first.GetDataset("crypto", "dataset_kline_5m")
 	require.True(t, ok)
@@ -96,7 +85,7 @@ func TestRequestSnapshotSharesDatasetViewWithoutCopy(t *testing.T) {
 
 	query := &pb.Page{Page: 1, Size: 1000}
 	allocs := testing.AllocsPerRun(100, func() {
-		snapshot := store.RequestSnapshot()
+		snapshot := cache.RequestSnapshot()
 		if _, ok := snapshot.GetDataset("crypto", "dataset_kline_5m"); !ok {
 			t.Fatal("数据集不在视图里")
 		}
@@ -104,46 +93,46 @@ func TestRequestSnapshotSharesDatasetViewWithoutCopy(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	assert.LessOrEqual(t, allocs, float64(2), "写路径读元数据不应随标的数量分配内存")
+	assert.LessOrEqual(t, allocs, float64(2), "写路径读元数据不应按次深拷贝")
 }
 
 // 元数据变更后视图整体替换：新请求看到新列，已经拿到旧视图的请求内容不变。
 func TestRequestSnapshotReplacedOnRefresh(t *testing.T) {
-	reader := &viewMetadataReader{subjects: 3, columns: []string{"open"}}
-	store := newViewStore(t, reader)
+	reader := &viewMetadataReader{columns: []string{"open"}}
+	cache := newViewCache(t, reader)
 
-	old := store.RequestSnapshot()
+	old := cache.RequestSnapshot()
 	oldDataset, _ := old.GetDataset("crypto", "dataset_kline_5m")
 	reader.setColumns("open", "close")
-	require.NoError(t, store.Refresh(context.Background()))
+	require.NoError(t, cache.Refresh(context.Background()))
 
 	oldColumns, _, err := old.ListDatasetColumns("crypto", "dataset_kline_5m", nil)
 	require.NoError(t, err)
 	require.Len(t, oldColumns, 1, "旧视图不应被原地修改")
 
-	current := store.RequestSnapshot()
+	current := cache.RequestSnapshot()
 	columns, _, err := current.ListDatasetColumns("crypto", "dataset_kline_5m", nil)
 	require.NoError(t, err)
 	require.Len(t, columns, 2)
 	currentDataset, _ := current.GetDataset("crypto", "dataset_kline_5m")
 	assert.NotSame(t, oldDataset, currentDataset)
 
-	// 其他读取方仍走原来的缓存索引，每次返回各自解码的副本。
-	cached, _, err := store.ListDatasetColumns(context.Background(), "crypto", "dataset_kline_5m", nil)
+	// 非快照读取方每次拿到独立的克隆副本，避免调用方修改污染快照。
+	cached, _, err := cache.ListDatasetColumns(context.Background(), "crypto", "dataset_kline_5m", nil)
 	require.NoError(t, err)
 	require.Len(t, cached, 2)
 	assert.NotSame(t, columns[0], cached[0])
 }
 
-// BenchmarkRequestSnapshot 量一次写请求读元数据的成本（1 万个标的）。
+// BenchmarkRequestSnapshot 量一次写请求读元数据的成本。
 func BenchmarkRequestSnapshot(b *testing.B) {
-	reader := &viewMetadataReader{subjects: 10000, columns: []string{"open", "high", "low", "close", "volume"}}
-	store := newViewStore(b, reader)
+	reader := &viewMetadataReader{columns: []string{"open", "high", "low", "close", "volume"}}
+	cache := newViewCache(b, reader)
 	query := &pb.Page{Page: 1, Size: 1000}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		snapshot := store.RequestSnapshot()
+		snapshot := cache.RequestSnapshot()
 		snapshot.GetDataset("crypto", "dataset_kline_5m")
 		snapshot.ListDatasetColumns("crypto", "dataset_kline_5m", query)
 	}

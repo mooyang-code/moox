@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +22,7 @@ func (u *uploadCapture) SftpUpload(_ context.Context, sessionID, dstPath string,
 	return []string{files[0].Filename}, nil
 }
 
-func uploadRequest(t *testing.T, query, formSession string) *http.Request {
+func uploadRequest(t *testing.T, query, formSession, userID string) *http.Request {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -35,21 +36,30 @@ func uploadRequest(t *testing.T, query, formSession string) *http.Request {
 	require.NoError(t, writer.Close())
 	request := httptest.NewRequest(http.MethodPost, "/api/admin/ssh/SftpUpload"+query, &body)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if userID != "" {
+		request = request.WithContext(context.WithValue(request.Context(), auth.CtxUserID, userID))
+	}
 	return request
 }
 
-// 控制台入口按地址栏的 session_id 核对会话归属，上传也只认地址栏这一份：表单里的同名字段不能换成别人的会话。
-func TestSftpUploadUsesQuerySessionOnly(t *testing.T) {
+// 上传只认地址栏 session_id 且校验归属于当前登录用户：表单里的同名字段不能换成别人的会话，不属于当前用户时返回 403。
+func TestSftpUploadUsesQuerySessionAndVerifiesOwner(t *testing.T) {
 	svc := &uploadCapture{}
 	recorder := httptest.NewRecorder()
-	SftpUploadHandler(svc)(recorder, uploadRequest(t, "?session_id=mine", "someone-else"))
+	SftpUploadHandler(svc)(recorder, uploadRequest(t, "?session_id=mine", "someone-else", "u1"))
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Equal(t, "mine", svc.sessionID)
 	require.Equal(t, "/tmp", svc.path)
 
 	svc = &uploadCapture{}
 	recorder = httptest.NewRecorder()
-	SftpUploadHandler(svc)(recorder, uploadRequest(t, "", "someone-else"))
-	require.Equal(t, http.StatusBadRequest, recorder.Code, "地址栏没有 session_id 就拒绝，不退到表单字段")
+	SftpUploadHandler(svc)(recorder, uploadRequest(t, "", "someone-else", "u1"))
+	require.Equal(t, http.StatusForbidden, recorder.Code, "地址栏没有 session_id 就拒绝，不退到表单字段")
+	require.Empty(t, svc.sessionID)
+
+	svc = &uploadCapture{}
+	recorder = httptest.NewRecorder()
+	SftpUploadHandler(svc)(recorder, uploadRequest(t, "?session_id=someone-else", "", "u1"))
+	require.Equal(t, http.StatusForbidden, recorder.Code, "不属于当前登录用户的 session_id 返回 403")
 	require.Empty(t, svc.sessionID)
 }

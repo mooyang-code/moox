@@ -231,7 +231,9 @@ func componentPorts(component Component) []int {
 		ports = append(ports, component.Health.Port)
 	}
 	for _, service := range component.Services {
-		ports = append(ports, service.Port)
+		if service.Port != 0 {
+			ports = append(ports, service.Port)
+		}
 	}
 	if component.RelayHTTP != nil {
 		ports = append(ports, component.RelayHTTP.Port)
@@ -262,6 +264,9 @@ func (c Catalog) Resolve(t Topology) (directory Directory, unknown []string) {
 			continue
 		}
 		for _, service := range component.Services {
+			if service.Port == 0 {
+				continue
+			}
 			directory.Services[service.Path] = append(directory.Services[service.Path], deployment.HostID)
 		}
 	}
@@ -290,6 +295,9 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 			continue
 		}
 		for _, service := range component.Services {
+			if service.Port == 0 {
+				continue
+			}
 			limit := service.MaxBodyBytes
 			if limit == 0 {
 				limit = DefaultMaxBodyBytes
@@ -334,6 +342,9 @@ func (c Catalog) relayTargets(t Topology) []RelayTarget {
 				local[component.RelayHTTP.Port] = relayHTTPCallers(*component.RelayHTTP)
 			}
 			for _, service := range component.Services {
+				if service.Port == 0 {
+					continue
+				}
 				for _, method := range service.Methods {
 					for _, caller := range c.routeCallers(method) {
 						// 外部身份自己不连出站主机：入口主机的网关以 host-gateway 身份替它打开中转流。
@@ -417,7 +428,7 @@ func (c Catalog) routeCallers(method Method) []string {
 	return callers
 }
 
-// SigningCallers 返回每台已登记主机上可以用主机密钥签名的调用方（排序后）：这台主机上启用的组件（第三方程序不签名），
+// SigningCallers 返回每台已登记主机上可以用主机密钥签名的调用方（排序后）：这台主机上启用的组件，
 // 部署了 admin 的主机另有 console（管理台代浏览器调用时的身份）。每台主机的网关都在内：停用的主机没有别的调用方，
 // 但它的网关仍要验签取到“已停用”的快照。
 func (c Catalog) SigningCallers(t Topology) map[string][]string {
@@ -429,7 +440,7 @@ func (c Catalog) SigningCallers(t Topology) map[string][]string {
 	}
 	for _, deployment := range t.Deployments {
 		component, ok := c.Component(deployment.ComponentID)
-		if !ok || component.ThirdParty || deployment.Status != Enabled || !enabled[deployment.HostID] {
+		if !ok || deployment.Status != Enabled || !enabled[deployment.HostID] {
 			continue
 		}
 		callers[deployment.HostID] = append(callers[deployment.HostID], component.ID)

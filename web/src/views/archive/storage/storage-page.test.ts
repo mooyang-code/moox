@@ -33,7 +33,7 @@ const overview = (over: Record<string, unknown> = {}) => ({
     min_free_bytes: String(5 * GiB),
     staging_bytes: String(GiB),
     last_heartbeat_at: String(Date.parse("2026-11-08T00:00:00Z")),
-    object_store: { endpoint: "127.0.0.1:11473", bucket: "moox-archive", prefix: "moox-archive/" },
+    object_store: { endpoint: "cos.ap-nanjing.myqcloud.com", bucket: "moox-archive", prefix: "moox-archive/" },
     ...over
   }
 });
@@ -57,7 +57,7 @@ async function mountPage() {
 }
 
 describe("归档存储页", () => {
-  it("执行器所在主机、根目录、磁盘、内置对象存储", async () => {
+  it("执行器所在主机、根目录、磁盘、外部对象存储", async () => {
     const text = await mountPage();
     expect(api.listDeployments).toHaveBeenCalledWith({
       component_id: "archive-worker",
@@ -68,8 +68,9 @@ describe("归档存储页", () => {
     expect(text).toContain("/data/moox/archive");
     expect(text).toContain("已用 30 GB / 共 100 GB，可用 65 GB");
     expect(text).not.toContain("磁盘空间不足");
-    expect(text).toContain("内置 SeaweedFS");
-    expect(text).toContain("不防整盘故障");
+    expect(text).toContain("外部 S3 兼容存储");
+    expect(text).not.toContain("内置 SeaweedFS");
+    expect(text).not.toContain("不防整盘故障");
     expect(text).toContain("datasets.csv");
   });
 
@@ -80,7 +81,7 @@ describe("归档存储页", () => {
   });
 
   it("探测失败时写出连不上的起点；起点为 0 时不写", async () => {
-    const store = { endpoint: "127.0.0.1:11473", bucket: "moox-archive", probe_error: "访问被拒绝" };
+    const store = { endpoint: "cos.ap-nanjing.myqcloud.com", bucket: "moox-archive", probe_error: "访问被拒绝" };
     api.getArchiveOverview.mockResolvedValue(
       overview({ object_store: { ...store, unavailable_since: String(Date.parse("2026-11-08T00:00:00Z")) } })
     );
@@ -90,10 +91,11 @@ describe("归档存储页", () => {
     expect(await mountPage()).not.toContain("起连不上");
   });
 
-  it("没配对象存储时说明不能下载", async () => {
+  it("未配置对象存储时说明支持本地校验下载", async () => {
     api.getArchiveOverview.mockResolvedValue(overview({ object_store: {} }));
     const text = await mountPage();
-    expect(text).toContain("没有配置对象存储");
+    expect(text).toContain("未配置外部对象存储");
+    expect(text).toContain("校验下载");
   });
 
   it("首次读取失败显示原因和重试", async () => {

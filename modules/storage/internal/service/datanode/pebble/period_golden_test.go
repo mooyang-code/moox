@@ -761,3 +761,109 @@ func TestGoldenLedgerDeadlineRacesLateCommit(t *testing.T) {
 		require.False(t, found, "迟到的行不写入")
 	}
 }
+
+// 传入 PeriodEndAt 时（例如 session 1d 数据集的真实市场收盘时刻），截止时间按 PeriodEndAt + allowed_lateness 计算，
+// 不再按 UTC 零点 + 24h 干等。同时校验非法 PeriodEndAt（早于 period_time）会被拒绝。
+func TestGoldenLedgerCustomPeriodEndAtDeadline(t *testing.T) {
+	cases := []struct {
+		name       string
+		space      string
+		dataset    string
+		day        time.Time
+		periodEnd  time.Time
+		lateness   int64
+		commitAt   time.Time
+		finalizeAt time.Time
+	}{
+		{
+			name:       "cn_stock 1d 按 15:00 CST + lateness 降级而非次日 00:00 UTC",
+			space:      "stockcn",
+			dataset:    "kline_1d",
+			day:        time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC),
+			periodEnd:  time.Date(2026, 10, 21, 7, 0, 0, 0, time.UTC),
+			lateness:   300,
+			commitAt:   time.Date(2026, 10, 21, 7, 1, 0, 0, time.UTC),
+			finalizeAt: time.Date(2026, 10, 21, 7, 5, 0, 0, time.UTC),
+		},
+		{
+			name:       "hk_stock 半日市按 12:00 HKT + lateness 降级",
+			space:      "stockhk",
+			dataset:    "kline_1d",
+			day:        time.Date(2026, 12, 24, 0, 0, 0, 0, time.UTC),
+			periodEnd:  time.Date(2026, 12, 24, 4, 0, 0, 0, time.UTC),
+			lateness:   300,
+			commitAt:   time.Date(2026, 12, 24, 4, 1, 0, 0, time.UTC),
+			finalizeAt: time.Date(2026, 12, 24, 4, 5, 0, 0, time.UTC),
+		},
+		{
+			name:       "us_stock 半日市按 13:00 EST + lateness 降级",
+			space:      "stockus",
+			dataset:    "kline_1d",
+			day:        time.Date(2026, 11, 27, 0, 0, 0, 0, time.UTC),
+			periodEnd:  time.Date(2026, 11, 27, 18, 0, 0, 0, time.UTC),
+			lateness:   300,
+			commitAt:   time.Date(2026, 11, 27, 18, 1, 0, 0, time.UTC),
+			finalizeAt: time.Date(2026, 11, 27, 18, 5, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			clock := newGoldenClock(tc.commitAt)
+			store := newGoldenStore(t, clock)
+			series := goldenSeries(t, goldenDefaultSeries())
+			exp := goldenRegister(t, store, clock, tc.space, tc.dataset, "1d", series, tc.day, tc.lateness)
+			exp.PeriodEndAt = tc.periodEnd.Unix()
+
+			res, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{
+				{SeriesIndex: 0, Row: goldenRow(tc.space, tc.dataset, "1d", series[0], tc.day, 1)},
+			})
+			require.NoError(t, err)
+			require.Equal(t, "waiting", res.Status)
+			require.Equal(t, tc.finalizeAt.Unix(), res.DeadlineAt)
+
+			// 截止前 1 秒仍处于 waiting
+			clock.set(tc.finalizeAt.Add(-time.Second))
+			require.NoError(t, goldenFinalize(t, store, clock.now()))
+			require.Equal(t, "waiting", goldenPeriodStatus(t, store, tc.space, tc.dataset, "1d", tc.day.Unix()))
+
+			// 到达真实收盘 + lateness 立即降级，远早于 day + 24h
+			clock.set(tc.finalizeAt)
+			require.NoError(t, goldenFinalize(t, store, clock.now()))
+			require.Equal(t, "degraded", goldenPeriodStatus(t, store, tc.space, tc.dataset, "1d", tc.day.Unix()))
+			markers := goldenMarkers(t, store, tc.space, tc.dataset)
+			require.Len(t, markers, 1)
+			require.Equal(t, "degraded", markers[0].payload.GetStatus())
+			require.Equal(t, []string{"ETH-USDT"}, markers[0].payload.GetFailedSubjects())
+		})
+	}
+
+	t.Run("crypto epoch_utc 1d 未设 PeriodEndAt 沿用 +24h", func(t *testing.T) {
+		ctx := context.Background()
+		day := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+		clock := newGoldenClock(day.Add(24*time.Hour + time.Minute))
+		store := newGoldenStore(t, clock)
+		series := goldenSeries(t, goldenDefaultSeries())
+		exp := goldenRegister(t, store, clock, "crypto", "kline_1d", "1d", series, day, 300)
+		res, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{
+			{SeriesIndex: 0, Row: goldenRow("crypto", "kline_1d", "1d", series[0], day, 1)},
+		})
+		require.NoError(t, err)
+		require.Equal(t, day.Add(24*time.Hour+300*time.Second).Unix(), res.DeadlineAt)
+	})
+
+	t.Run("PeriodEndAt 早于 PeriodTime 被拒绝", func(t *testing.T) {
+		ctx := context.Background()
+		day := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+		clock := newGoldenClock(day.Add(time.Hour))
+		store := newGoldenStore(t, clock)
+		series := goldenSeries(t, goldenDefaultSeries())
+		exp := goldenRegister(t, store, clock, "stockcn", "kline_1d", "1d", series, day, 300)
+		exp.PeriodEndAt = day.Add(-time.Minute).Unix()
+		_, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{
+			{SeriesIndex: 0, Row: goldenRow("stockcn", "kline_1d", "1d", series[0], day, 1)},
+		})
+		goldenErrorIs(t, err, "invalid")
+	})
+}

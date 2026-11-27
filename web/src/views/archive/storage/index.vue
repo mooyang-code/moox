@@ -58,34 +58,32 @@
 
         <section class="block" aria-label="对象存储">
           <h3>对象存储</h3>
-          <div v-if="!store?.endpoint" class="muted">没有配置对象存储：分区文件只在执行器本机磁盘上，不能在页面下载。</div>
-          <template v-else>
-            <a-descriptions :column="{ xs: 1, sm: 1, md: 2 }" size="small" bordered>
-              <a-descriptions-item label="类型">{{ builtin ? "内置 SeaweedFS" : "外部 S3 兼容存储" }}</a-descriptions-item>
-              <a-descriptions-item label="地址"
-                ><span class="mono">{{ store.endpoint }}</span></a-descriptions-item
-              >
-              <a-descriptions-item label="桶"
-                ><span class="mono">{{ store.bucket || "—" }}</span></a-descriptions-item
-              >
-              <a-descriptions-item label="前缀"
-                ><span class="mono">{{ store.prefix || "—" }}</span></a-descriptions-item
-              >
-              <a-descriptions-item label="存储类型">{{ storageClassText(store) }}</a-descriptions-item>
-              <a-descriptions-item label="探测">
-                <span v-if="!store.probe_error" class="is-ok">正常</span>
-                <template v-else>
-                  <span class="is-bad">失败：{{ store.probe_error }}</span>
-                  <div v-if="toInstantMs(store.unavailable_since) !== null" class="muted">
-                    自 {{ formatInstant(store.unavailable_since, "UTC") }} 起连不上
-                  </div>
-                </template>
-              </a-descriptions-item>
-            </a-descriptions>
-            <div v-if="builtin" class="note muted">
-              内置 SeaweedFS 和归档在同一台机器、同一块盘上，能防误删和文件损坏，不防整盘故障。
-            </div>
-          </template>
+          <div v-if="!store?.endpoint" class="muted">
+            未配置外部对象存储：分区文件保存在执行器本机磁盘，可在页面直接做 SHA-256 校验下载；需要异机容灾时可接入 COS、R2 等 S3
+            兼容存储。
+          </div>
+          <a-descriptions v-else :column="{ xs: 1, sm: 1, md: 2 }" size="small" bordered>
+            <a-descriptions-item label="类型">外部 S3 兼容存储</a-descriptions-item>
+            <a-descriptions-item label="地址"
+              ><span class="mono">{{ store.endpoint }}</span></a-descriptions-item
+            >
+            <a-descriptions-item label="桶"
+              ><span class="mono">{{ store.bucket || "—" }}</span></a-descriptions-item
+            >
+            <a-descriptions-item label="前缀"
+              ><span class="mono">{{ store.prefix || "—" }}</span></a-descriptions-item
+            >
+            <a-descriptions-item label="存储类型">{{ storageClassText(store) }}</a-descriptions-item>
+            <a-descriptions-item label="探测">
+              <span v-if="!store.probe_error" class="is-ok">正常</span>
+              <template v-else>
+                <span class="is-bad">失败：{{ store.probe_error }}</span>
+                <div v-if="toInstantMs(store.unavailable_since) !== null" class="muted">
+                  自 {{ formatInstant(store.unavailable_since, "UTC") }} 起连不上
+                </div>
+              </template>
+            </a-descriptions-item>
+          </a-descriptions>
         </section>
 
         <section class="block" aria-label="目录对照表">
@@ -113,14 +111,7 @@ import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { relativeTime } from "@/views/home/home-model";
-import {
-  archiveUnavailableHint,
-  diskStatus,
-  isBuiltinObjectStore,
-  storageClassText,
-  toNum,
-  workerHostText
-} from "../shared/archive-model";
+import { archiveUnavailableHint, diskStatus, storageClassText, toNum, workerHostText } from "../shared/archive-model";
 import { useArchiveWorkerHost } from "../shared/use-archive-worker-host";
 
 /**
@@ -168,7 +159,6 @@ function retry() {
 
 const worker = computed(() => overview.value?.worker);
 const store = computed(() => worker.value?.object_store);
-const builtin = computed(() => isBuiltinObjectStore(store.value?.endpoint));
 const disk = computed(() => diskStatus(worker.value));
 const rootDir = computed(() => worker.value?.root_dir || "<归档根目录>");
 const unavailableHint = computed(() => archiveUnavailableHint(error.value));
@@ -196,11 +186,6 @@ h3 {
   margin: 0 0 8px;
   font-size: 15px;
   font-weight: 600;
-}
-
-.note {
-  margin-top: 8px;
-  line-height: 22px;
 }
 
 .text {

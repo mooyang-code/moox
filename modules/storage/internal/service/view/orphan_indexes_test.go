@@ -176,7 +176,8 @@ func TestMaintenanceRemovesIndexOfDatasetDeletedWhileDisabled(t *testing.T) {
 	disabled.Status = "disabled"
 	active := timeSeriesSpec("space", "kept", "1m")
 	runtime := testRuntime(svc, active)
-	runtime.building = runtime.indexID // 正在建索引：清理不能碰它
+	runtime.phase = viewPhaseRebuilding // 正在断档重建：维护与清理都不能碰它
+	runtime.publishReadStateLocked()
 	if err := svc.maintainOnce(ctx, MaintenanceOptions{Metadata: metadataFor(disabled, active)}); err != nil {
 		t.Fatal(err)
 	}

@@ -58,7 +58,7 @@ type Config struct {
 	EgressProxy         EgressProxy         `toml:"egress_proxy"`
 	Logging             Logging             `toml:"logging"`
 	SCFPlan             SCFPlan             `toml:"scf_plan"`
-	// ArchiveObjectStore 为 nil 表示归档用因子机上内置的 SeaweedFS；非 nil 时用这里配置的外部 S3。
+	// ArchiveObjectStore 为 nil 表示归档仅保存在执行器本机磁盘；非 nil 时使用这里配置的外部 S3 副本。
 	ArchiveObjectStore *ArchiveObjectStore `toml:"archive_object_store"`
 	// Overrides 是手工调过的组件配置：组件 → 配置文件名 → 键路径 → 值，部署渲染之后逐项覆盖。
 	Overrides Overrides `toml:"overrides"`

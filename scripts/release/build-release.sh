@@ -3,7 +3,7 @@
 #
 #   moox-cli_<版本>_<系统>_<架构>.tar.gz（Windows 为 .zip）  五个平台的命令行
 #   moox-bundle_<版本>_linux_amd64.tar.gz                    部署产物包：该提交的仓库文件快照 + 附件清单，不含服务器程序
-#   moox-<组件>_<版本>_linux_amd64.tar.gz                    每个组件一个包（服务目录里的全部组件，含内置对象存储 seaweedfs），
+#   moox-<组件>_<版本>_linux_amd64.tar.gz                    每个组件一个包（服务目录里的全部组件），
 #                                                            只有 bin/ 下的二进制与配套命令行，目标机按需下载
 #   moox-collector-scf_<版本>_linux_amd64                    云函数程序
 #   SHA256SUMS
@@ -37,7 +37,7 @@ trap 'rm -rf "${STAGE}"' EXIT
 
 # 1. 服务器二进制。目标要覆盖服务目录里每个组件的 binary 与 tools（第 3 步按服务目录打包，缺文件会报出组件与文件名）：
 #    admin 带 moox-admin-cli，host-gateway 带 moox-host-gateway-cli，collector、factor-mgr、
-#    strategy、storage 各带自己的 CLI，archive-worker 在 Linux 上附带内置对象存储的 weed。
+#    strategy、storage 各带自己的 CLI。
 BUNDLE="moox-${VERSION}"
 mkdir -p "${STAGE}/${BUNDLE}"
 git -C "${ROOT}" archive "${COMMIT}" | tar -x -C "${STAGE}/${BUNDLE}"

@@ -18,8 +18,6 @@ var reservedTimeSeriesSystemColumns = map[string]struct{}{
 	"freq":       {},
 	"data_time":  {},
 	"series_tag": {},
-	// DuckDB View 索引内部存行属性的列。
-	"__moox_attributes": {},
 }
 
 // datasetColumnNamePattern 是数据集列名的标识符规则：列名会原样成为 View 索引里的列名。

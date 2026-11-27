@@ -13,10 +13,7 @@ import (
 
 	"github.com/gorilla/mux"
 	appconfig "github.com/mooyang-code/moox/modules/admin/internal/config"
-	authcfg "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
-	authimpl "github.com/mooyang-code/moox/modules/admin/internal/service/auth/impl"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
@@ -28,7 +25,7 @@ import (
 const flowPassword = "pw123"
 
 // newSessionFlowRouter 用真实的认证服务（SQLite 里有一个用户 admin）接到控制台路由上。
-func newSessionFlowRouter(t *testing.T, ttl time.Duration) (*mux.Router, *session.Store) {
+func newSessionFlowRouter(t *testing.T, ttl time.Duration) (*mux.Router, *auth.SessionStore) {
 	t.Helper()
 	// 登录接口默认 1 QPS，这里放宽，测的是锁定而不是限流。
 	SetConfig(&Config{RateLimit: RateLimitConfig{MethodLimits: map[string]MethodLimit{"/api/admin/auth/Login": {QPS: 1000, Burst: 1000}}}})
@@ -41,18 +38,18 @@ func newSessionFlowRouter(t *testing.T, ttl time.Duration) (*mux.Router, *sessio
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	hash, err := mooxsecurity.HashPassword(flowPassword)
 	require.NoError(t, err)
-	require.NoError(t, db.Create(&model.User{UserID: "user-1", Username: "admin", PasswordHash: hash}).Error)
+	require.NoError(t, db.Create(&auth.User{UserID: "user-1", Username: "admin", PasswordHash: hash}).Error)
 
-	sessions, err := session.NewStore(ttl)
+	sessions, err := auth.NewSessionStore(ttl)
 	require.NoError(t, err)
-	auth, err := authimpl.InitAuthServiceImpl(&authcfg.Config{
-		Session:  authcfg.SessionConfig{TTL: ttl},
-		Security: authcfg.SecurityConfig{MaxLoginAttempt: 5, LockDuration: 15 * time.Minute},
-	}, manager, sessions)
+	authSvc, err := auth.NewService(&auth.Config{
+		Session:  auth.SessionConfig{TTL: ttl},
+		Security: auth.SecurityConfig{MaxLoginAttempt: 5, LockDuration: 15 * time.Minute},
+	}, manager, sessions, nil)
 	require.NoError(t, err)
 	local, err := NewLocalDispatcher()
 	require.NoError(t, err)
-	require.NoError(t, local.Register(&pb.AuthServer_ServiceDesc, auth))
+	require.NoError(t, local.Register(&pb.AuthServer_ServiceDesc, authSvc))
 	return newTestRouter(t, sessions, local, forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) {
 		t.Fatal("认证服务不应经网关")
 		return nil, nil
@@ -70,7 +67,7 @@ type flowResult struct {
 // flowCall 发一个浏览器请求；peer 是连接的对端 IP（空着用 198.51.100.7），请求头里另带一个伪造的转发地址。
 func flowCall(t *testing.T, router *mux.Router, path, body, cookie, peer string) flowResult {
 	t.Helper()
-	r := browserRequest(t, session.Session{ID: cookie}, path, "", []byte(body))
+	r := browserRequest(t, auth.Session{ID: cookie}, path, "", []byte(body))
 	if peer == "" {
 		peer = "198.51.100.7"
 	}
@@ -102,7 +99,7 @@ func TestBrowserSessionLifecycleWithRealAuthService(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, login.retCode, login.msg)
 	require.Len(t, login.cookies, 1)
 	cookie := login.cookies[0]
-	assert.Equal(t, session.CookieName, cookie.Name)
+	assert.Equal(t, auth.CookieName, cookie.Name)
 	assert.True(t, cookie.HttpOnly)
 	assert.True(t, cookie.Secure)
 	assert.Equal(t, http.SameSiteStrictMode, cookie.SameSite)
@@ -125,7 +122,7 @@ func TestBrowserSessionLifecycleWithRealAuthService(t *testing.T) {
 	require.Equal(t, http.StatusOK, logout.code)
 	require.Equal(t, pb.ErrorCode_SUCCESS, logout.retCode)
 	require.Len(t, logout.cookies, 1)
-	assert.Equal(t, session.CookieName, logout.cookies[0].Name)
+	assert.Equal(t, auth.CookieName, logout.cookies[0].Name)
 	assert.Equal(t, -1, logout.cookies[0].MaxAge, "退出时让浏览器删掉 Cookie")
 	_, ok = sessions.Get(cookie.Value)
 	assert.False(t, ok, "服务端会话已删除")

@@ -7,38 +7,38 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"trpc.group/trpc-go/trpc-go"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
-	authcfg "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/webserver"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
-
+	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Config 应用配置集合
+// Config 应用配置集合（单次加载 app.yaml，显式持有主密钥）。
 type Config struct {
-	App         *config.AppConfig
-	Auth        *authcfg.Config
-	Console     *console.Config
-	AdminNodeID string
+	App           *config.AppConfig
+	Auth          *auth.Config
+	Console       *console.Config
+	AdminNodeID   string
+	EncryptionKey string
 	// Web 是浏览器入口（9527）的部署参数。
 	Web webserver.Config
 }
 
-// LoadConfigs 加载系统中各个模块配置：configPath 是业务配置 app.yaml（-config），console.yaml 在同一目录。
+// LoadConfigs 加载系统配置：configPath 为单一配置文件 app.yaml（-config）。
 func LoadConfigs(ctx context.Context, configPath string) (*Config, error) {
 	log.Info("正在加载应用配置...")
 
-	// 1. 加载应用配置
 	appCfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
 	}
-	if err := loadEncryptionKey(); err != nil {
+	encryptionKey, err := loadEncryptionKey()
+	if err != nil {
 		return nil, err
 	}
 	// 校验必须针对 tRPC 实际加载的配置文件（-conf 可指定其他路径）；NewServer 已解析该参数，
@@ -58,33 +58,26 @@ func LoadConfigs(ctx context.Context, configPath string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info("应用配置加载成功")
 
-	// 2. 加载认证配置
-	consolePath := filepath.Join(filepath.Dir(configPath), "console.yaml")
-	authCfg, err := authcfg.LoadConfig(consolePath)
-	if err != nil {
-		return nil, err
+	authCfg := &auth.Config{
+		Session:  appCfg.Session,
+		Security: appCfg.Security,
 	}
-	log.Info("认证配置加载成功")
-
-	// 3. 加载控制台配置
-	consoleCfg, err := console.LoadConfig(consolePath)
-	if err != nil {
-		return nil, err
+	consoleCfg := &console.Config{
+		Console:   appCfg.Console,
+		RateLimit: appCfg.RateLimit,
 	}
 	console.SetConfig(consoleCfg)
-	log.Info("控制台配置加载成功")
+	log.Info("应用配置加载成功")
 
-	// 5. 创建配置对象
-	cfg := &Config{
-		App:         appCfg,
-		Auth:        authCfg,
-		Console:     consoleCfg,
-		AdminNodeID: adminNodeID,
-		Web:         web,
-	}
-	return cfg, nil
+	return &Config{
+		App:           appCfg,
+		Auth:          authCfg,
+		Console:       consoleCfg,
+		AdminNodeID:   adminNodeID,
+		EncryptionKey: encryptionKey,
+		Web:           web,
+	}, nil
 }
 
 // loadWebConfig 读浏览器入口的部署参数：控制机地址 MOOX_ADMIN_WEB_ADDRESS（必填）、监听地址 MOOX_ADMIN_WEB_LISTEN
@@ -188,27 +181,29 @@ func validateSetupListener(path string) error {
 	return nil
 }
 
-func loadEncryptionKey() error {
-	if strings.TrimSpace(os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY")) != "" {
-		return nil
+// loadEncryptionKey 读取主密钥并返回，不修改进程环境变量。
+func loadEncryptionKey() (string, error) {
+	if key := strings.TrimSpace(os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY")); key != "" {
+		return key, nil
 	}
 	path := strings.TrimSpace(os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE"))
 	if path == "" {
-		return fmt.Errorf("MOOX_ADMIN_ENCRYPTION_KEY_FILE is required in server mode")
+		return "", fmt.Errorf("MOOX_ADMIN_ENCRYPTION_KEY_FILE is required in server mode")
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("stat admin encryption key file: %w", err)
+		return "", fmt.Errorf("stat admin encryption key file: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return fmt.Errorf("admin encryption key file must be a regular 0600 file")
+		return "", fmt.Errorf("admin encryption key file must be a regular 0600 file")
 	}
 	raw, err := os.ReadFile(filepath.Clean(path))
-	if err != nil || strings.TrimSpace(string(raw)) == "" {
+	key := strings.TrimSpace(string(raw))
+	if err != nil || key == "" {
 		if err == nil {
 			err = fmt.Errorf("file is empty")
 		}
-		return fmt.Errorf("read admin encryption key file: %w", err)
+		return "", fmt.Errorf("read admin encryption key file: %w", err)
 	}
-	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))
+	return key, nil
 }

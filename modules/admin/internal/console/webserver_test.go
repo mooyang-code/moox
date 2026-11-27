@@ -14,7 +14,7 @@ import (
 	"testing/fstest"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/webserver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,7 +59,7 @@ func TestConsoleBehindAdminWebEntry(t *testing.T) {
 		if origin != "" {
 			request.Header.Set("Origin", origin)
 		}
-		request.AddCookie(&http.Cookie{Name: session.CookieName, Value: current.ID})
+		request.AddCookie(&http.Cookie{Name: auth.CookieName, Value: current.ID})
 		response, err := client.Do(request)
 		require.NoError(t, err)
 		defer response.Body.Close()

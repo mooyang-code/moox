@@ -116,7 +116,6 @@ func (c *Config) DeploymentEnabled(hostID, component string) bool {
 
 // UnitEnabled 报告部署时组件的 systemd 单元该不该运行：停用的主机只留 host-gateway（各网关只认它，别的组件调不通，
 // 例如 host-agent 拉主机策略会一直失败、误推“控制机或 Monitor 不可达”）；启用的主机按部署的登记状态。
-// 内置对象存储（seaweedfs）不登记，随主机启停。
 func (c *Config) UnitEnabled(hostID, component string) bool {
 	if !c.HostByID(hostID).Enabled {
 		return component == "host-gateway"
@@ -379,8 +378,7 @@ func (h Host) ConsoleSSH() (*ConsoleSSH, error) {
 	return &ConsoleSSH{Port: h.Port, User: h.Username, PrivateKey: string(raw)}, nil
 }
 
-// HostComponents 是一台主机上要部署的全部组件：每台主机都有的主机级组件、[deployments] 里写的组件，
-// 以及按拓扑推出来的内置对象存储（装了 archive-worker 且没配外部对象存储的主机）。顺序是启动顺序。
+// HostComponents 是一台主机上要部署的全部组件：每台主机都有的主机级组件与 [deployments] 里写的组件。顺序是启动顺序。
 func (c *Config) HostComponents(hostID string) ([]string, error) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
@@ -391,10 +389,7 @@ func (c *Config) HostComponents(hostID string) ([]string, error) {
 	}
 	ids := []string{}
 	for _, component := range catalog.Components {
-		switch {
-		case component.Scope == servicecatalog.ScopeHost, slices.Contains(c.Deployments[hostID], component.ID):
-			ids = append(ids, component.ID)
-		case component.ID == "seaweedfs" && c.ArchiveObjectStore == nil && slices.Contains(c.Deployments[hostID], "archive-worker"):
+		if component.Scope == servicecatalog.ScopeHost || slices.Contains(c.Deployments[hostID], component.ID) {
 			ids = append(ids, component.ID)
 		}
 	}

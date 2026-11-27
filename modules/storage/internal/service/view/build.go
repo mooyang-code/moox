@@ -61,7 +61,7 @@ func (l *backfillRequestLimiter) wait(ctx context.Context) error {
 // 最后转为活动索引。跟随器从 H_start 接着应用（重放的行是幂等写入），(H_start, H_done] 之间的完成标记只推进游标、不发布。
 // schemaOf 在运行时锁内给出要建的列契约：首次建用元数据里的列，重建沿用已有索引的契约。
 // 调用方持有 buildMu，并决定失败后怎么办（首次建丢弃半成品，重建留着由跟随器接着重建）。
-func (s *Service) buildIndex(ctx context.Context, opts MaintenanceOptions, runtime *viewRuntime, spec *viewSpec, schemaOf func(*viewRuntime) (viewindex.ViewIndexSchema, error)) (viewindex.FollowState, error) {
+func (s *Service) buildIndex(ctx context.Context, opts MaintenanceOptions, runtime *viewRuntime, spec *viewSpec, targetPhase viewPhase, schemaOf func(*viewRuntime) (viewindex.ViewIndexSchema, error)) (viewindex.FollowState, error) {
 	manager := s.followManager()
 	var state viewindex.FollowState
 	if manager != nil {
@@ -71,7 +71,7 @@ func (s *Service) buildIndex(ctx context.Context, opts MaintenanceOptions, runti
 		}
 		state.Cursor = start
 	}
-	schema, err := s.prepareIndex(ctx, runtime, schemaOf)
+	schema, err := s.prepareIndex(ctx, runtime, targetPhase, schemaOf)
 	if err != nil {
 		return viewindex.FollowState{}, fmt.Errorf("准备 View 索引 %q：%w", runtime.indexID, err)
 	}
@@ -102,7 +102,7 @@ func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions
 	s.followManager().Stop(spec.SpaceID, spec.DatasetID)
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
-	_, err := s.buildIndex(ctx, opts, runtime, spec, func(*viewRuntime) (viewindex.ViewIndexSchema, error) {
+	_, err := s.buildIndex(ctx, opts, runtime, spec, viewPhaseBuilding, func(*viewRuntime) (viewindex.ViewIndexSchema, error) {
 		// 回填单次最多读取 maxLatestPerSeries 行，记录的保留行数不能超过实际回填的行数。
 		schema := viewindex.ViewIndexSchema{
 			SpaceID: spec.SpaceID, DatasetID: spec.DatasetID, ViewVersion: initialViewRevision,
@@ -122,7 +122,7 @@ func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions
 
 // rebuildFollowIndex 在断档（View 停机超过日志保留期，或存储已重建）或索引没有跟随进度时由跟随器原地重建索引：
 // 沿用当前索引的列契约（修订号、哈希不变）。重建期间 View 不可读；记录型 View 重建后为空，只跟随之后的写入。
-// 失败后不丢弃：View 留在“等待重建”的状态，由跟随器接着重建。
+// 失败后不丢弃：View 留在 viewPhaseRebuilding 状态，由跟随器接着重建。
 func (s *Service) rebuildFollowIndex(ctx context.Context, ref datasetRef) (viewindex.FollowState, error) {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
@@ -140,7 +140,7 @@ func (s *Service) rebuildFollowIndex(ctx context.Context, ref datasetRef) (viewi
 		return viewindex.FollowState{}, fmt.Errorf("View %s/%s 不在目录中", ref.spaceID, ref.datasetID)
 	}
 	spec := runtime.queryState().spec
-	return s.buildIndex(ctx, opts, runtime, spec, func(runtime *viewRuntime) (viewindex.ViewIndexSchema, error) {
+	return s.buildIndex(ctx, opts, runtime, spec, viewPhaseRebuilding, func(runtime *viewRuntime) (viewindex.ViewIndexSchema, error) {
 		// 当前契约是活动索引或上一次没建完的重建在用的那份。
 		schema := runtime.schema
 		if schema.SchemaHash == "" {
@@ -155,7 +155,7 @@ func (s *Service) rebuildFollowIndex(ctx context.Context, ref datasetRef) (viewi
 // activateBuiltIndex 把建好的索引转为活动索引。持有运行时锁转换，实时写入不会夹在中间。
 func (s *Service) activateBuiltIndex(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIndexSchema) error {
 	runtime.mu.Lock()
-	if runtime.building != runtime.indexID {
+	if !runtime.phase.isBuilding() {
 		runtime.mu.Unlock()
 		return errViewBuildCancelled
 	}
@@ -166,12 +166,12 @@ func (s *Service) activateBuiltIndex(runtime *viewRuntime, spec *viewSpec, schem
 	return nil
 }
 
-// discardInitialBuild 丢弃建失败的半成品，下一轮重建。
+// discardInitialBuild 丢弃建失败的首次建索引半成品，下一轮重建。
 func (s *Service) discardInitialBuild(ctx context.Context, runtime *viewRuntime) {
 	ctx = context.WithoutCancel(ctx)
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.building != runtime.indexID {
+	if runtime.phase != viewPhaseBuilding {
 		return
 	}
 	release, err := runtime.gate.lock(ctx)
@@ -180,7 +180,7 @@ func (s *Service) discardInitialBuild(ctx context.Context, runtime *viewRuntime)
 		return
 	}
 	defer release()
-	runtime.building = ""
+	runtime.phase = viewPhaseEmpty
 	runtime.schema = viewindex.ViewIndexSchema{}
 	runtime.publishReadStateLocked()
 	if err := runtime.engine.Remove(ctx, runtime.indexID); err != nil {
@@ -286,7 +286,7 @@ var errViewBuildCancelled = errors.New("View 的建索引已被取消")
 func backfillStillBuilding(runtime *viewRuntime) error {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.building != runtime.indexID {
+	if !runtime.phase.isBuilding() {
 		return errViewBuildCancelled
 	}
 	return nil
@@ -314,11 +314,11 @@ func attachRuntime(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIn
 	defer runtime.mu.Unlock()
 	// 维护在锁外读的索引契约可能早于定时任务刚提交的加列：不能用旧快照把写入契约改回去，只刷新声明与隐藏列。
 	// 加列在运行时锁下提交，这里必须在锁内读当前契约，锁外读到的可能已经过期。
-	if runtime.active == runtime.indexID && runtime.schema.ViewVersion > schema.ViewVersion {
+	if runtime.phase.isActive() && runtime.schema.ViewVersion > schema.ViewVersion {
 		schema = runtime.schema
 	}
-	// 断档重建进行中：索引建成前不能挂回去。
-	if runtime.active == "" && runtime.building != "" {
+	// 建索引或断档重建进行中：索引建成前不能挂回去。
+	if runtime.phase.isBuilding() {
 		return false
 	}
 	attachActiveLocked(runtime, spec, schema)
@@ -327,14 +327,13 @@ func attachRuntime(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIn
 
 // attachActiveLocked 更新内存里的活动索引（调用方持有 runtime.mu）：重启恢复、维护和建索引完成都走这里。
 func attachActiveLocked(runtime *viewRuntime, spec *viewSpec, schema viewindex.ViewIndexSchema) {
-	if runtime.active != runtime.indexID {
+	if !runtime.phase.isActive() {
 		runtime.bumpRevision()
-		runtime.statsIndexID = ""
+		runtime.hasStats = false
 		runtime.stats = viewindex.ViewIndexStats{}
 	}
 	runtime.spec = spec
-	runtime.active = runtime.indexID
-	runtime.building = ""
+	runtime.phase = viewPhaseActive
 	runtime.schema = schema
 	runtime.publishReadStateLocked()
 }

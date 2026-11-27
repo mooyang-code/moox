@@ -143,7 +143,7 @@
 
 ## 主机与运维
 
-- 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host <主机>`。
+- 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog`、`host agent status|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
 - 部署、升级与回滚：[`source-deploy.md`](source-deploy.md)；主机代理：[`host-agent.md`](host-agent.md)。
 - 腾讯云：`setup firewall`（按拓扑放行所需端口）、`setup reboot-host`（重启无响应的主机）、
@@ -171,7 +171,7 @@
 导入（`import --target archive`）：CLI 先整份校验全部文件（与写 Storage 同一套规则），再建一条占住任务的导入运行，行经 worker 数据端口（只出站主机经 control 中转，较慢）写进暂存区，命令结束时统一导出；同键已归档的一律覆盖，`series_tag` 必须非空；只写归档时可用带 `subject_id` 列的多标的文件、不检查标签范围。
 预检按行数估算 worker 暂存库要的磁盘，不够时按时间拆成几次导入。导入不自动清无法补齐区间，补齐历史缺口后确认再用 `clear-unrecoverable` 清。规则细节见 `docs/模块/归档.md` 第 9 节“导入运行”。
 
-对象存储副本：默认用随 archive-worker 部署的内置 SeaweedFS（`moox-seaweedfs`，只听 127.0.0.1，和归档文件同盘，不防整盘故障）；要异地副本就在 `moox.toml` 写 `[archive_object_store]` 改用外部 S3（只写 endpoint、region、bucket、url_style、storage_class 与管理台密钥的 `secret_id`，不写密钥值；第一次加只能用 `config edit` 的“归档对象存储”一组）。
+对象存储副本（可选）：未配 `[archive_object_store]` 时仅保留因子机本地带 SHA-256 的 `.csv.gz` 归档目录（支持管理台直接做 SHA-256 校验下载）；需要异地副本防坏盘时在 `moox.toml` 写 `[archive_object_store]` 接入外部 S3（如 COS / R2，只写 endpoint、region、bucket、url_style、storage_class 与管理台密钥的 `secret_id`，不写密钥值；第一次加只能用 `config edit` 的“归档对象存储”一组）。
 worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺文件从远端取回；用外部 S3 时换机器不用拷目录。对象存储连续不可用超过 5 分钟，Monitor 推送“归档对象存储”告警。看状态：`archive tasks list` 的 `remote_pending_count` / `remote_verified_count`，
 `archive partitions get` 的 `remote_state`（off / none / verified / failed / pending），`archive runs list` 的 `partitions_uploaded`。导出超过 24 小时没有已校验的远端副本算需关注、超过 3 天算异常。
 密钥、桶与权限的准备见 `docs/部署与运维.md` 的“归档对象存储”；worker 侧细节见 `docs/模块/归档.md` 第 9 节。

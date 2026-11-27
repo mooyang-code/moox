@@ -42,9 +42,8 @@ func contains(values []string, want string) bool {
 }
 
 type coverageComponent struct {
-	ID         string `yaml:"id"`
-	ThirdParty bool   `yaml:"third_party"`
-	Doctor     struct {
+	ID     string `yaml:"id"`
+	Doctor struct {
 		Transport    string   `yaml:"transport"`
 		Dependencies []string `yaml:"dependencies"`
 	} `yaml:"doctor"`
@@ -70,10 +69,6 @@ func TestMonitorCoverageComponentCatalog(t *testing.T) {
 		components[component.ID] = component
 	}
 	for name, component := range components {
-		if component.ThirdParty {
-			// 第三方程序（内置 SeaweedFS）不上报、没有健康端口，Monitor 不覆盖它。
-			continue
-		}
 		if !contains([]string{"reporter", "host_snapshot", "delegated"}, component.Doctor.Transport) {
 			t.Errorf("%s: unsupported transport %q", name, component.Doctor.Transport)
 		}

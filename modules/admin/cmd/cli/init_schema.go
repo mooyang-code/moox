@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -15,48 +14,6 @@ import (
 )
 
 const defaultInitDBPath = "./data/admin.db"
-
-type initResult struct {
-	Module string `json:"module"`
-	Action string `json:"action"`
-	Status string `json:"status"`
-	DBPath string `json:"db_path"`
-}
-
-func isInitCommand(args []string) bool {
-	return len(args) > 1 && args[1] == "init"
-}
-
-func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "init" {
-		return fmt.Errorf("expected init command")
-	}
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
-	}
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	dbPath := defaultInitDBPath
-	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected init arguments: %s", strings.Join(fs.Args(), " "))
-	}
-	if err := applySchema(dbPath, adminschema.AdminSQL()); err != nil {
-		return err
-	}
-	return json.NewEncoder(stdout).Encode(initResult{
-		Module: "admin",
-		Action: "init",
-		Status: "ok",
-		DBPath: dbPath,
-	})
-}
 
 func printInitError(stderr io.Writer, err error) {
 	if stderr == nil {

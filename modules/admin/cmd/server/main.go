@@ -17,8 +17,8 @@ import (
 )
 
 func main() {
-	// 业务配置的位置（console.yaml 在同一目录）；要在 trpc.NewServer 解析命令行之前定义。
-	configPath := flag.String("config", "config/app.yaml", "admin 业务配置")
+	// 业务配置 app.yaml 的位置；要在 trpc.NewServer 解析命令行之前定义。
+	configPath := flag.String("config", "config/app.yaml", "admin 应用配置")
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer(gatewaycontrol.ServerOption())
 	trpclog.InstallServiceName("admin")

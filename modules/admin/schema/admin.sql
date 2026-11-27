@@ -1,9 +1,8 @@
--- ============ MooX Admin 本地基础数据库表设计 ============
+-- MooX Admin 本地基础数据库表设计
 
 PRAGMA foreign_keys = ON;
 
--- ************ 用户表 ************
--- 系统只有一个超级用户：没有角色、状态和个人资料；登录记录写入全局活动日志（auth.login）。
+-- 用户表：系统只有一个超级用户，登录记录写入全局活动日志（auth.login）
 CREATE TABLE IF NOT EXISTS t_users (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_user_id TEXT NOT NULL,
@@ -18,16 +17,16 @@ CREATE TABLE IF NOT EXISTS t_users (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_id ON t_users (c_user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON t_users (c_username);
 
-CREATE TRIGGER IF NOT EXISTS update_users_mtime
+CREATE TRIGGER IF NOT EXISTS trg_t_users_mtime
 AFTER UPDATE ON t_users
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+    UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- ============ 主机登记与部署 ============
-
--- 主机登记表：唯一的主机来源，只能通过 moox-cli 维护。
--- 部署配置与网关运行状态分表；SSH 的端口、用户和指纹是本表的列，密码或私钥存在 t_secrets（moox:ssh-host:<主机ID>）。
+-- 主机登记表：唯一的主机来源，只能通过 moox-cli 维护
+-- 部署配置与网关运行状态分表；SSH 的端口、用户和指纹是本表的列，密码或私钥存在 t_secrets（moox:ssh-host:<主机ID>）
 CREATE TABLE IF NOT EXISTS t_hosts (
     c_host_id TEXT NOT NULL PRIMARY KEY,
     -- 控制台展示用的中文名，如“控制机”
@@ -46,7 +45,7 @@ CREATE TABLE IF NOT EXISTS t_hosts (
     c_ssh_user TEXT NOT NULL DEFAULT '',
     -- 首次连接记录的主机密钥指纹，格式为“地址:端口 指纹”，地址或端口变化后自然失效
     c_ssh_fingerprint TEXT NOT NULL DEFAULT '',
-    -- 这台主机的签名公钥（base64 的 32 字节 ed25519 公钥），本机全部组件共用；空表示还没签发过身份包。私钥只在主机上
+    -- 这台主机的签名公钥（base64 的 32 字节 ed25519 公钥），本机全部组件共用；空表示还没签发过身份包，私钥只在主机上
     c_sign_public_key TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -65,7 +64,7 @@ BEGIN
     UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
 END;
 
--- 不属于主机的签名身份的公钥：moox-cli、scf-collector、moox-skill。一个身份一把，没有新旧并存
+-- 不属于主机的签名身份的公钥：moox-cli、scf-collector、moox-skill；一个身份一把，没有新旧并存
 CREATE TABLE IF NOT EXISTS t_identity_keys (
     c_identity TEXT NOT NULL PRIMARY KEY,
     c_sign_public_key TEXT NOT NULL,
@@ -79,7 +78,7 @@ CREATE TABLE IF NOT EXISTS t_deployments (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('enabled', 'disabled')),
-    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id),
+    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id) ON DELETE CASCADE,
     PRIMARY KEY (c_host_id, c_component_id)
 );
 
@@ -96,54 +95,58 @@ END;
 
 CREATE TABLE IF NOT EXISTS t_host_gateway_status (
     c_host_id TEXT NOT NULL PRIMARY KEY,
-    c_expected_hash TEXT NOT NULL DEFAULT '',
     c_applied_hash TEXT NOT NULL DEFAULT '',
     c_last_seen_at DATETIME,
     -- control 网关带来的反向连接会话（JSON 数组），其他主机为空
     c_relay_sessions TEXT NOT NULL DEFAULT '',
-    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
+    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id) ON DELETE CASCADE
 );
 
--- ============ 秘钥管理系统表设计 ============
-
--- ************ 秘钥管理表 ************
+-- 秘钥管理表：物理硬删除，c_secret_value 与 c_extra_config 均使用 AES-GCM 加密存储
 CREATE TABLE IF NOT EXISTS t_secrets (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
-    c_secret_id TEXT NOT NULL,                                  -- 秘钥唯一标识 (UUID)
-    c_name TEXT NOT NULL,                                       -- 秘钥名称
-    c_description TEXT NOT NULL DEFAULT '',                     -- 秘钥描述/备注
-    c_category TEXT NOT NULL,                                   -- 秘钥分类: ssh=SSH凭证, exchange=交易所,
-                                                                --           cloud=云厂商凭据, database=数据库,
-                                                                --           jwt=系统令牌, other=其他
-    c_provider TEXT NOT NULL DEFAULT '',                        -- 提供方/来源 (binance/okx/mysql/postgres等)
-    c_secret_type TEXT NOT NULL DEFAULT 'api_key',              -- 秘钥类型: api_key=API密钥对, password=密码,
-                                                                --           token=访问令牌, certificate=证书,
-                                                                --           ssh_key=SSH密钥, other=其他
-    c_key_id TEXT NOT NULL DEFAULT '',                          -- 公开标识 (SecretId/AppId/Username/API Key)，不脱敏
-    c_secret_value TEXT NOT NULL,                               -- 秘钥值（AES加密存储，返回时脱敏）
-    c_extra_config TEXT NOT NULL DEFAULT '{}',                  -- 额外配置 (JSON: cert_pwd/passphrase/region/permissions等)
-    c_status TEXT NOT NULL DEFAULT 'active',                    -- 状态: active=启用, inactive=禁用
-    c_creator TEXT NOT NULL DEFAULT '',                         -- 创建人
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 软删除标记: 0=有效,1=删除
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                 -- 创建时间
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                  -- 修改时间
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_secret_id TEXT NOT NULL,
+    c_name TEXT NOT NULL,
+    c_description TEXT NOT NULL DEFAULT '',
+    -- 秘钥分类：ssh=SSH凭证, exchange=交易所, cloud=云厂商凭据, database=数据库, jwt=系统令牌, eventbus=事件总线, other=其他
+    c_category TEXT NOT NULL,
+    -- 提供方/来源（binance/okx/tencent/moox_eventbus 等）
+    c_provider TEXT NOT NULL DEFAULT '',
+    -- 秘钥类型：api_key/password/token/certificate/ssh_key/other
+    c_secret_type TEXT NOT NULL DEFAULT 'api_key',
+    -- 公开标识（SecretId/AppId/Username/API Key），不脱敏
+    c_key_id TEXT NOT NULL DEFAULT '',
+    -- 秘钥值（AES-GCM 加密存储，返回时脱敏）
+    c_secret_value TEXT NOT NULL,
+    -- 额外配置 JSON（AES-GCM 加密存储，含 passphrase 等敏感项）
+    c_extra_config TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'active',
+    c_creator TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_secret_id)
 );
 
--- ************ 秘钥管理相关索引 ************
--- 秘钥只有几十条，按 ID 查以外的列表与过滤直接扫表，不另建索引
-CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_secret_id_deleted ON t_secrets (c_secret_id, c_is_deleted);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_eventbus_active_key
 ON t_secrets (c_category, c_provider, c_key_id)
-WHERE c_is_deleted = 0 AND c_status = 'active' AND c_category = 'eventbus';
+WHERE c_status = 'active' AND c_category = 'eventbus';
 
--- ************ 秘钥管理触发器 ************
-CREATE TRIGGER IF NOT EXISTS update_secrets_mtime
+CREATE TRIGGER IF NOT EXISTS trg_t_secrets_mtime
 AFTER UPDATE ON t_secrets
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+    UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 活动日志：各模块写入的、需要展示给用户的事件；永久保存，不清理
+-- 管理台已删除的初始密钥墓碑：防止 moox-cli setup init 将作废或泄露的初始密钥（tencent-default、[[exchange_keys]]）静默复活
+-- 手工新建或导入同 c_secret_id 时清除对应记录
+CREATE TABLE IF NOT EXISTS t_deleted_initial_secrets (
+    c_secret_id TEXT NOT NULL PRIMARY KEY,
+    c_ctime INTEGER NOT NULL
+);
+
+-- 活动日志：各模块写入的、需要展示给用户的事件；永久保存，不清理；c_ctime 为 Unix 毫秒时间戳
 CREATE TABLE IF NOT EXISTS t_activity_logs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -154,7 +157,7 @@ CREATE TABLE IF NOT EXISTS t_activity_logs (
     c_detail TEXT NOT NULL DEFAULT '{}',
     c_ref_id TEXT NOT NULL DEFAULT '',
     c_dedup_key TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL,
     CHECK (c_level IN ('info', 'warning', 'error'))
 );
 

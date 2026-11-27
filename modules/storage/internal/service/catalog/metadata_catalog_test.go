@@ -72,10 +72,15 @@ func testDataset(status string) *pb.Dataset {
 	return &pb.Dataset{SpaceId: "space-a", DatasetId: "dataset_a", Name: "数据集", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: status, Revision: 7}
 }
 
-func TestCreateSpaceSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
+func TestCreateSpaceDoesNotRefreshDatasetCache(t *testing.T) {
 	store := &createSpaceMetadataStore{}
-	service, err := NewMetadataService(store, &metacache.Store{}, Options{})
+	service, err := NewMetadataService(store, &metacache.DatasetCache{}, Options{})
 	require.NoError(t, err)
+	refreshCalls := 0
+	service.refreshOverride = func(context.Context) error {
+		refreshCalls++
+		return errors.New("unexpected refresh")
+	}
 
 	rsp, err := service.CreateSpace(context.Background(), &pb.CreateSpaceReq{Space: &pb.Space{
 		SpaceId: "space-create", Name: "Create", Owner: "test",
@@ -83,6 +88,7 @@ func TestCreateSpaceSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, 1, store.createCall)
+	require.Equal(t, 0, refreshCalls, "CreateSpace 不涉及数据集定义，不应触发 DatasetCache 刷新")
 	require.Equal(t, "space-create", rsp.GetSpace().GetSpaceId())
 }
 

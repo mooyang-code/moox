@@ -62,9 +62,6 @@ type Component struct {
 	// RelayHTTP 是外部程序只听回环地址的 HTTP 端口：装在只出站主机上时，声明的调用方可经 control 中转连接它
 	// （归档 worker 的下载与预览）。端口本身不验签，由 control 的中转按调用方白名单放行。
 	RelayHTTP *RelayHTTP `yaml:"relay_http,omitempty" json:"relay_http,omitempty"`
-	// ThirdParty 标记第三方程序（内置对象存储 SeaweedFS）：二进制不叫 moox-*、没有健康端口，
-	// 不签名、不上报、不登记到 Admin；部署由 moox-cli 按拓扑推出来，不写在 [deployments] 里。
-	ThirdParty bool `yaml:"third_party,omitempty" json:"third_party,omitempty"`
 
 	// 以下是部署字段（moox-cli setup deploy 用）。占位 {root}、{config}、{data}、{logs}、{secrets} 在部署时
 	// 换成部署根、config/<组件>、data/<组件>、logs/<组件>、secrets 的绝对路径。
@@ -81,7 +78,7 @@ type Component struct {
 	// StopTimeoutSec 是停止的最长等待（TimeoutStopSec），省略为 DefaultStopTimeoutSec。
 	StopTimeoutSec int `yaml:"stop_timeout_sec,omitempty" json:"stop_timeout_sec,omitempty"`
 	// Credentials 是部署要给它的凭据：eventbus:<角色> 是 EventBus 角色文件；cls 是服务日志上报 CLS 的写入密钥。
-	// 除 host-agent（不连 EventBus）与第三方程序外，每个组件还隐含一个 eventbus:metrics-publisher（上报指标）。
+	// 除 host-agent（不连 EventBus）外，每个组件还隐含一个 eventbus:metrics-publisher（上报指标）。
 	Credentials []string `yaml:"credentials,omitempty" json:"credentials,omitempty"`
 }
 
@@ -120,7 +117,7 @@ func (c Component) EventBusRoles() []string {
 			roles = append(roles, role)
 		}
 	}
-	if !c.ThirdParty && c.ID != "host-agent" {
+	if c.ID != "host-agent" {
 		roles = append(roles, "metrics-publisher")
 	}
 	sort.Strings(roles)

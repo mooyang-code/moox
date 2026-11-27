@@ -12,6 +12,7 @@ import (
 	"time"
 
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,7 +104,8 @@ func TestScheduledAndManualRunsShareAgentGuard(t *testing.T) {
 	go func() { scheduledDone <- handler.Handle(context.Background()) }()
 	<-started
 	rsp, manualErr := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
-	assert.Error(t, manualErr)
+	require.NoError(t, manualErr)
+	assert.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
 	assert.Equal(t, "collection already running", rsp.GetReportError())
 	assert.Equal(t, uint64(1), a.skipped.Load())
 	close(release)

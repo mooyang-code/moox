@@ -244,13 +244,12 @@ func TestUnitOnlyListsSameHostDependenciesAndHasNoNetworkTarget(t *testing.T) {
 	require.Contains(t, collector, "EnvironmentFile=/data/moox/secrets/env/collector.env\n")
 	require.Contains(t, collector, "TimeoutStopSec=120\n")
 	factor, components := renderHost(t, cfg, "factor")
-	require.Contains(t, components, "seaweedfs", "没配外部对象存储时，装了 archive-worker 的主机带内置对象存储")
-	require.Contains(t, string(factor.Units["moox-archive-worker.service"]), "moox-seaweedfs.service")
-	require.Contains(t, string(factor.Units["moox-seaweedfs.service"]), "-s3.config=/data/moox/secrets/seaweedfs/s3.json")
-	require.Contains(t, string(factor.Files["config/archive-worker/app.yaml"].Data), "endpoint: 127.0.0.1:11473")
+	require.NotContains(t, components, "seaweedfs")
+	require.Contains(t, string(factor.Units["moox-archive-worker.service"]), "After=moox-host-gateway.service\n")
+	require.NotContains(t, string(factor.Files["config/archive-worker/app.yaml"].Data), "\nobject_store:")
 }
 
-func TestExternalObjectStoreReplacesBuiltin(t *testing.T) {
+func TestExternalObjectStoreRendersWhenConfigured(t *testing.T) {
 	cfg := exampleConfig(t, "\n[archive_object_store]\nendpoint = \"cos.ap-nanjing.myqcloud.com\"\nregion = \"ap-nanjing\"\nbucket = \"moox-archive-1250000000\"\nurl_style = \"virtual\"\nsecret_id = \"archive-cos\"\n")
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)

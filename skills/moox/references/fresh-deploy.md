@@ -41,7 +41,7 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY bash scripts/build/build-linux-local.
   archive-mgr archive-worker strategy strategy-cli trade monitor storage-cli storage
 ```
 
-- 目标清单和 `scripts/release/build-release.sh` 里的 `server_targets` 一致（去掉 `collector-scf`）；`archive-worker` 这个目标会带上内置对象存储的 `weed`。
+- 目标清单和 `scripts/release/build-release.sh` 里的 `server_targets` 一致（去掉 `collector-scf`）。
   部署时缺哪个组件的哪个文件，`setup deploy` 会直接报出来（`binary_missing`）。
 - **前端随 admin 现场构建**：`build.sh admin` 编译时按当前源码构建前端并内嵌；`web/dist` 缺少 `static/js` 时构建直接失败。
   想先跑前端测试和代码检查：`cd $WT && bash scripts/build/build-web-docker.sh --check`。
@@ -52,10 +52,10 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY bash scripts/build/build-linux-local.
 
 清空一律用 `setup wipe`，不要手工 `rm`。它逐台停用并删除全部 `moox-*` 用户服务，杀掉可执行文件在部署根里的进程，清空部署根下的内容（保留目录本身，否则要 sudo 重建），再删掉这台电脑上的操作员身份（`moox-cli` 的签名私钥、控制机根证书与它的指纹）。
 
-因子机的 `/data/moox/import`、归档文件 `/data/moox/archive` 和内置对象存储的数据 `/data/moox/data/seaweedfs` 都在部署根下，会一起清掉；预览里单独列出后两项的大小。导入包要留下先挪走：`mkdir -p ~/moox-import-keep && mv /data/moox/import/* ~/moox-import-keep/`。
+因子机的 `/data/moox/import` 和本地归档文件 `/data/moox/archive` 都在部署根下，会一起清掉；预览里单独列出归档文件的大小。导入包要留下先挪走：`mkdir -p ~/moox-import-keep && mv /data/moox/import/* ~/moox-import-keep/`。
 
 ```bash
-$CLI setup wipe --file ./moox.toml                                   # 预览：主机、条目、单元、归档与对象存储的大小、digest
+$CLI setup wipe --file ./moox.toml                                   # 预览：主机、条目、单元、归档的大小、digest
 $CLI setup wipe --file ./moox.toml --yes --expect <预览里的 plan.digest>
 $CLI setup validate --file ./moox.toml                               # deployment.route 应为 fresh
 ```
@@ -84,7 +84,7 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 3 | `setup deploy --host storage` | Storage、EventBus，存储机的网关同时开外部入口（11004）；Storage 主库启动前自动初始化元数据库 |
 | 4 | `setup init --stage storage` | 业务空间、初始秘密、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
-| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
+| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
 | 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验（这些要等 Collector、Monitor 起来） |
 | 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
@@ -301,7 +301,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     - 再跑一次 `$CLI setup install $SRC --space-id crypto --yes`：不报错，没有组件被重启，操作电脑的 `~/.config/moox/moox-cli.key` 没有变（它会再执行一次 `setup start`，手工停用过的内置采集任务与默认因子任务成员会被重新启用；只升级用 `setup update`）。
     - 在控制机第一次装完、存储机装到一半时中断安装，重跑同一条命令能接着装完。
 33. **换电脑与清空预览**：另一台电脑上放两份配置文件、SSH 私钥、解密密钥（在系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`），`$CLI setup operator --register` 再 `$CLI setup deploy $SRC --host control`、`$CLI setup status` 成功，原电脑的调用被拒（先问用户，做完要在原电脑上重新登记）。
-    `$CLI setup wipe` 的预览单独列出归档文件与 SeaweedFS 数据的大小，并提醒先导出管理台里的密钥。
+    `$CLI setup wipe` 的预览单独列出本地归档文件的大小，并提醒先导出管理台里的密钥。
 
 ## 7. 踩坑清单
 

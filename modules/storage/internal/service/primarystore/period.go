@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-go/log"
 
+	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
@@ -93,6 +96,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	}
 	commitExp := periodExpectation(exp)
 	commitExp.AllowedLatenessSeconds = datasetAllowedLateness(ctx, exp)
+	commitExp.PeriodEndAt = datasetPeriodEndAt(ctx, exp)
 	result, err := s.store.CommitTimeSeriesBatch(ctx, commitExp, items)
 	if err != nil {
 		s.observeTimeSeriesRows(ctx, rows, "error", false)
@@ -191,4 +195,90 @@ func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectatio
 		log.WarnContextf(ctx, "dataset %s/%s has no allowed_lateness_seconds; the store falls back to its default", exp.GetSpaceId(), exp.GetDatasetId())
 	}
 	return int64(dataset.GetAllowedLatenessSeconds())
+}
+
+// sessionDailyClocks 缓存每个交易日历的 1d barclock.Clock，避免热路径重复解析嵌入日历与时区。
+var sessionDailyClocks sync.Map // map[string]barclock.Clock
+
+// datasetPeriodEndAt 计算周期的实际收盘时刻（Unix 秒）。
+// 仅对 session 对齐的 1d 数据集（其 period_time 为交易日 UTC 00:00:00）返回对应市场当天的真实收盘时刻
+// （优先通过 barclock.DailyBucket 处理正常交易日、半日市提前收市与夏令时，超覆盖范围回退到市场常规收盘时刻）；
+// 其余场景（epoch_utc、日内周期、未识别日历）返回 0，由存储层沿用 frequency.BarEnd。
+func datasetPeriodEndAt(ctx context.Context, exp *pb.DatasetPeriodExpectation) int64 {
+	if exp == nil || exp.GetPeriodTime() <= 0 || exp.GetFrequency() != string(frequencypkg.Day1) {
+		return 0
+	}
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return 0
+	}
+	dataset, ok := snapshot.GetDataset(exp.GetSpaceId(), exp.GetDatasetId())
+	if !ok || dataset == nil {
+		return 0
+	}
+	return resolveSessionDailyClose(dataset, exp.GetFrequency(), exp.GetPeriodTime())
+}
+
+func resolveSessionDailyClose(dataset *pb.Dataset, frequency string, periodTime int64) int64 {
+	if dataset == nil || periodTime <= 0 || frequency != string(frequencypkg.Day1) {
+		return 0
+	}
+	if !strings.EqualFold(strings.TrimSpace(dataset.GetAlignment()), barclock.AlignmentSession) {
+		return 0
+	}
+	keyTime := time.Unix(periodTime, 0).UTC()
+	if keyTime.Hour() != 0 || keyTime.Minute() != 0 || keyTime.Second() != 0 {
+		return 0
+	}
+	market, ok := sessionMarketForDataset(dataset)
+	if !ok {
+		return 0
+	}
+	date, err := marketcalendar.NewCivilDate(keyTime.Year(), keyTime.Month(), keyTime.Day())
+	if err != nil {
+		return 0
+	}
+	if clock, err := loadSessionDailyClock(market); err == nil {
+		if bucket, isTrading, err := barclock.DailyBucket(clock, date); err == nil && isTrading && !bucket.End.IsZero() {
+			return bucket.End.UTC().Unix()
+		}
+	}
+	// 超出日历覆盖范围或非交易日兜底：按市场常规收盘时刻与本地时区换算。
+	closeOffset, err := market.RegularClose()
+	if err != nil {
+		return 0
+	}
+	loc, err := time.LoadLocation(market.Timezone)
+	if err != nil {
+		return 0
+	}
+	closeAt := time.Date(keyTime.Year(), keyTime.Month(), keyTime.Day(), int(closeOffset/time.Hour), int(closeOffset%time.Hour/time.Minute), 0, 0, loc).UTC()
+	if closeAt.Unix() < periodTime {
+		return 0
+	}
+	return closeAt.Unix()
+}
+
+func sessionMarketForDataset(dataset *pb.Dataset) (barclock.Market, bool) {
+	calendarID := strings.TrimSpace(dataset.GetAttributes()["calendar"])
+	if calendarID != "" {
+		return barclock.MarketForCalendar(calendarID)
+	}
+	market, err := barclock.MarketFor(dataset.GetSpaceId())
+	if err != nil || market.Alignment != barclock.AlignmentSession {
+		return barclock.Market{}, false
+	}
+	return market, true
+}
+
+func loadSessionDailyClock(market barclock.Market) (barclock.Clock, error) {
+	if cached, ok := sessionDailyClocks.Load(market.CalendarID); ok {
+		return cached.(barclock.Clock), nil
+	}
+	clock, err := market.Clock(24 * time.Hour)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := sessionDailyClocks.LoadOrStore(market.CalendarID, clock)
+	return actual.(barclock.Clock), nil
 }

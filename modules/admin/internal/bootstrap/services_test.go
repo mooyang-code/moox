@@ -12,13 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testBootstrapEncryptionKey = "0123456789abcdef0123456789abcdef"
+
 func TestStartBackgroundWorkers_EmptyServices_ShouldPass(t *testing.T) {
 	require.NoError(t, startBackgroundWorkers(context.Background(), &Services{}))
 }
 
 func setupBootstrapTestDB(t *testing.T) *database.Manager {
 	t.Helper()
-	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
 	mgr := database.NewManager()
 	require.NoError(t, mgr.Initialize(&config.DatabaseConfig{Path: dbPath}))
@@ -29,14 +30,21 @@ func setupBootstrapTestDB(t *testing.T) *database.Manager {
 func TestCreateCoreServices_ValidDB_ShouldCreateServices(t *testing.T) {
 	mgr := setupBootstrapTestDB(t)
 
-	cfg := &Config{App: &config.AppConfig{}, AdminNodeID: "admin-node-test"}
+	cfg := &Config{App: &config.AppConfig{}, AdminNodeID: "admin-node-test", EncryptionKey: testBootstrapEncryptionKey}
 	services, err := createCoreServices(context.Background(), mgr, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, services)
 	require.NotNil(t, services.SSHService)
-	require.NotNil(t, services.SecretService)
+	require.NotNil(t, services.SecretDAO)
 	require.NotNil(t, services.Setup)
 	require.NotNil(t, services.SysDeploy)
+	require.NotNil(t, services.ActivityLog)
+}
+
+func TestCreateCoreServices_MissingEncryptionKey_ShouldError(t *testing.T) {
+	mgr := setupBootstrapTestDB(t)
+	_, err := createCoreServices(context.Background(), mgr, &Config{App: &config.AppConfig{}, AdminNodeID: "admin-node-test"})
+	require.Error(t, err)
 }
 
 func TestInitializeDatabase_ValidPath_ShouldOpenDB(t *testing.T) {
@@ -51,16 +59,15 @@ func TestStartBackgroundServices_FullFlow_ShouldPass(t *testing.T) {
 	mgr := setupBootstrapTestDB(t)
 
 	cfg := &Config{
-		AdminNodeID: "admin-node-test",
+		AdminNodeID:   "admin-node-test",
+		EncryptionKey: testBootstrapEncryptionKey,
 		App: &config.AppConfig{
 			Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "unused.db")},
 		},
 	}
-	// 复用已初始化的 DB manager，避免重复打开同一文件。
 	services, err := createCoreServices(context.Background(), mgr, cfg)
 	require.NoError(t, err)
 	require.NoError(t, startBackgroundWorkers(context.Background(), services))
 }
 
-// 确保 sqlite 驱动在测试中可用。
 var _ = sqlite.Open

@@ -111,8 +111,7 @@ CREATE TABLE IF NOT EXISTS t_tags (
     CHECK (c_builtin IN (0, 1)),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_tag_id),
-    UNIQUE (c_space_id, c_tag_name),
-    UNIQUE (c_tag_id)
+    UNIQUE (c_space_id, c_tag_name)
 );
 
 CREATE TRIGGER IF NOT EXISTS trg_t_tags_mtime
@@ -161,13 +160,15 @@ CREATE TABLE IF NOT EXISTS t_datasets (
     c_name TEXT NOT NULL,
     c_data_kind TEXT NOT NULL,
     c_freq TEXT NOT NULL DEFAULT '',
-    c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0),
-    c_status TEXT NOT NULL DEFAULT 'active' CHECK (c_status IN ('active', 'disabled')),
+    c_revision INTEGER NOT NULL DEFAULT 1,
+    c_status TEXT NOT NULL DEFAULT 'active',
     c_item_json TEXT NOT NULL DEFAULT '{}',
     c_subject_tags_json TEXT NOT NULL DEFAULT '[]',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_data_kind IN ('record', 'time_series')),
+    CHECK (c_revision > 0),
+    CHECK (c_status IN ('active', 'disabled')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (c_space_id, c_data_source_id) REFERENCES t_data_sources (c_space_id, c_data_source_id) ON DELETE RESTRICT ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_dataset_id),
@@ -191,7 +192,8 @@ END;
 -- 触发器的 UPDATE OF 只列业务列，排除 c_mtime，避免 mtime 触发器造成多余递增。
 CREATE TABLE IF NOT EXISTS t_space_revisions (
     c_space_id TEXT NOT NULL PRIMARY KEY,
-    c_subjects_revision INTEGER NOT NULL DEFAULT 0
+    c_subjects_revision INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_insert
@@ -215,6 +217,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_delete
 AFTER DELETE ON t_subjects
 FOR EACH ROW
+WHEN EXISTS (SELECT 1 FROM t_spaces WHERE c_space_id = OLD.c_space_id)
 BEGIN
     INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
     VALUES (OLD.c_space_id, 1)
@@ -242,6 +245,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_rev_delete
 AFTER DELETE ON t_subject_tags
 FOR EACH ROW
+WHEN EXISTS (SELECT 1 FROM t_spaces WHERE c_space_id = OLD.c_space_id)
 BEGIN
     INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
     VALUES (OLD.c_space_id, 1)
@@ -260,6 +264,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_t_tags_rev_delete
 AFTER DELETE ON t_tags
 FOR EACH ROW
+WHEN EXISTS (SELECT 1 FROM t_spaces WHERE c_space_id = OLD.c_space_id)
 BEGIN
     INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
     VALUES (OLD.c_space_id, 1)
@@ -287,6 +292,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_t_datasets_rev_delete
 AFTER DELETE ON t_datasets
 FOR EACH ROW
+WHEN EXISTS (SELECT 1 FROM t_spaces WHERE c_space_id = OLD.c_space_id)
 BEGIN
     INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
     VALUES (OLD.c_space_id, 1)

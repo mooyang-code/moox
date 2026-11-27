@@ -57,7 +57,7 @@ func TestEventBusClientExportContainsOnlyRequestedRolesAndDoesNotRotate(t *testi
 	require.Equal(t, before, after)
 	require.Error(t, runEventBusCredentialsCommand(args, &bytes.Buffer{}, &bytes.Buffer{}))
 	for _, roles := range []string{"server", "ca-private", "trade-eventbus,trade-eventbus", ""} {
-		require.Error(t, exportEventBusClients(t.Context(), db, "gateway-node-1", filepath.Join(directory, "refused"), roles, false, &bytes.Buffer{}))
+		require.Error(t, exportEventBusClients(t.Context(), db, "synthetic-eventbus-client-export-master-key", "gateway-node-1", filepath.Join(directory, "refused"), roles, false, &bytes.Buffer{}))
 		_, err := os.Lstat(filepath.Join(directory, "refused"))
 		require.True(t, os.IsNotExist(err))
 	}

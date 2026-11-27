@@ -14,7 +14,7 @@ export type ArchiveRunStatus = "queued" | "running" | "succeeded" | "failed" | "
 export type ArchiveTaskStatus = "enabled" | "paused";
 export type ArchiveHealth = "ok" | "warning" | "error" | "paused";
 export type ArchivePartitionStatus = "open" | "exported" | "final";
-/** off：没启用对象存储；none：还没有远端副本；verified：远端是当前版本且已校验 */
+/** off：没启用对象存储；none：还没有导出文件；verified：远端是当前版本且已校验 */
 export type ArchiveRemoteState = "off" | "none" | "pending" | "verified" | "failed";
 
 /** 超出线上保留期、无法补齐的区间 */
@@ -38,7 +38,6 @@ export interface ArchiveRun {
   started_at?: string;
   finished_at?: string;
   lease_until?: string;
-  subjects_total?: number | string;
   subjects_done?: number | string;
   request_count?: number | string;
   bytes_read?: number | string;

@@ -47,7 +47,7 @@ func runToPB(r store.Run) *archivepb.ArchiveRun {
 	out := &archivepb.ArchiveRun{
 		RunId: r.RunID, SpaceId: r.SpaceID, DatasetId: r.DatasetID, Kind: r.Kind, RangeStart: fmtRFC(r.RangeStart), RangeEnd: fmtRFC(r.RangeEnd),
 		Status: r.Status, ScheduledAt: millisOf(r.ScheduledAt), StartedAt: millisOf(r.StartedAt), FinishedAt: millisOf(r.FinishedAt),
-		LeaseUntil: millisOf(r.LeaseUntil), SubjectsTotal: r.Stats.SubjectsTotal, SubjectsDone: r.Stats.SubjectsDone,
+		LeaseUntil: millisOf(r.LeaseUntil), SubjectsDone: r.Stats.SubjectsDone,
 		RequestCount: r.Stats.RequestCount, BytesRead: r.Stats.BytesRead, RowsRead: r.Stats.RowsRead, RowsAdded: r.Stats.RowsAdded,
 		RowsChanged: r.Stats.RowsChanged, PartitionsExported: r.Stats.PartitionsExported, PartitionsFinalized: r.Stats.PartitionsFinalized, Message: r.Message,
 		PartitionsUploaded: r.Stats.PartitionsUploaded,

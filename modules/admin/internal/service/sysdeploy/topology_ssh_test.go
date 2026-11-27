@@ -16,8 +16,7 @@ const sshTestKey = "0123456789abcdef0123456789abcdef"
 
 func sshTopologyDAO(t *testing.T) *TopologyDAO {
 	t.Helper()
-	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", sshTestKey)
-	return topologyDAO(t)
+	return topologyDAO(t).WithEncryptionKey(sshTestKey)
 }
 
 func readHost(t *testing.T, dao *TopologyDAO, hostID string) HostRecord {
@@ -149,7 +148,7 @@ func (r *recordingCloser) CloseHostSessions(hostID string) { r.hosts = append(r.
 
 func TestServiceClosesSessionsOfChangedHostsOnly(t *testing.T) {
 	dao := sshTopologyDAO(t)
-	service := &ServiceImpl{db: dao.db, adminNodeID: "control"}
+	service := &ServiceImpl{topology: dao, adminNodeID: "control"}
 	closer := &recordingCloser{}
 	service.SetSessionCloser(closer)
 	ctx := context.Background()

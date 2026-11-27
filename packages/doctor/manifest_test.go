@@ -3,7 +3,6 @@ package doctor
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -21,8 +20,8 @@ func TestEmbeddedManifestIsValid(t *testing.T) {
 		t.Fatal("embedded manifest is empty")
 	}
 	for _, component := range manifest.Components {
-		if strings.HasPrefix(component.ServiceName, "storage-") && component.FunctionalObservability != FunctionalObservabilityDeferred {
-			t.Fatalf("storage component %q observability = %q", component.ComponentID, component.FunctionalObservability)
+		if component.FunctionalObservability == FunctionalObservabilityDeferred {
+			t.Fatalf("component %q still has obsolete deferred observability", component.ComponentID)
 		}
 	}
 }
@@ -38,15 +37,14 @@ func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	diagnosed := slices.DeleteFunc(slices.Clone(catalog.Components), func(c servicecatalog.Component) bool { return c.ThirdParty })
-	if len(manifest.Components) != len(diagnosed) {
-		t.Fatalf("Doctor components %d, catalog components %d", len(manifest.Components), len(diagnosed))
+	if len(manifest.Components) != len(catalog.Components) {
+		t.Fatalf("Doctor components %d, catalog components %d", len(manifest.Components), len(catalog.Components))
 	}
 	manifestServices := make(map[string]Component, len(manifest.Components))
 	for _, component := range manifest.Components {
 		manifestServices[component.ServiceName] = component
 	}
-	for _, component := range diagnosed {
+	for _, component := range catalog.Components {
 		got, ok := manifestServices[component.ID]
 		if !ok || got.ComponentID != component.ID {
 			t.Fatalf("canonical component %q is missing", component.ID)
@@ -114,10 +112,7 @@ func TestManifestValidation(t *testing.T) {
 		{name: "timer service", mutate: func(m *Manifest) { m.Components[0].ServiceName = "collector_timer" }},
 		{name: "unknown transport", mutate: func(m *Manifest) { m.Components[0].Transport = "push" }},
 		{name: "missing health port", mutate: func(m *Manifest) { m.Components[0].HealthPort = 0 }},
-		{name: "storage active", mutate: func(m *Manifest) {
-			m.Components[0].ServiceName = "storage-primary"
-			m.Components[0].FunctionalObservability = FunctionalObservabilityActive
-		}},
+		{name: "unknown observability", mutate: func(m *Manifest) { m.Components[0].FunctionalObservability = "invalid" }},
 	}
 
 	for _, tt := range tests {
@@ -149,8 +144,8 @@ func TestManifestChecksumStable(t *testing.T) {
 	}
 }
 
-// 全部组件都由 systemd 用户服务托管；第三方程序（内置 SeaweedFS）不进诊断清单，外部程序的健康由管理端代报。
-func TestEmbeddedManifestSkipsThirdPartyComponents(t *testing.T) {
+// 全部组件都由 systemd 用户服务托管；外部程序的健康由管理端代报。
+func TestEmbeddedManifestDelegatedComponents(t *testing.T) {
 	t.Parallel()
 
 	manifest, err := LoadEmbeddedManifest()
@@ -158,9 +153,6 @@ func TestEmbeddedManifestSkipsThirdPartyComponents(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, component := range manifest.Components {
-		if component.ComponentID == "seaweedfs" {
-			t.Fatal("third-party seaweedfs must not be diagnosed")
-		}
 		if (component.ComponentID == "factor-engine" || component.ComponentID == "archive-worker") && component.Transport != TransportDelegated {
 			t.Fatalf("%s transport = %q", component.ComponentID, component.Transport)
 		}

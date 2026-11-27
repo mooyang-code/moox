@@ -1,10 +1,7 @@
 package command
 
 import (
-	"errors"
 	"testing"
-
-	"github.com/mooyang-code/moox/modules/cli/internal/config"
 
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/stretchr/testify/require"
@@ -33,10 +30,16 @@ func TestValidateDoctorFlagsAndExitCodes(t *testing.T) {
 	require.Equal(t, 3, doctorExitCode(core.ConclusionInconclusive))
 }
 
-func TestDoctorRejectsInvalidLocalConfigBeforeOpeningGateway(t *testing.T) {
-	failure := errors.New("invalid Doctor configuration")
-	cmd := newDoctorModeCommand("diagnose", doctorCommandDeps{loadConfig: func() (*config.Config, error) { return nil, failure }})
-	cmd.SetArgs([]string{})
-	cmd.SetContext(t.Context())
-	require.ErrorIs(t, cmd.Execute(), failure)
+func TestResolveDoctorEnvUsesEnvironmentOverridesAndDefaults(t *testing.T) {
+	t.Setenv("MOOX_NODE_ID", "factor")
+	t.Setenv("MOOX_DEPLOY_ROOT", "/srv/moox")
+	t.Setenv("MOOX_DATASET_HEALTH_POLICY", "/tmp/policy.yaml")
+	env := resolveDoctorEnv()
+	require.Equal(t, "factor", env.nodeID)
+	require.Equal(t, "/srv/moox", env.deployRoot)
+	require.Equal(t, "/tmp/policy.yaml", env.datasetHealthPolicyPath)
+
+	t.Setenv("MOOX_DATASET_HEALTH_POLICY", "")
+	env = resolveDoctorEnv()
+	require.Equal(t, defaultDatasetHealthPolicyPath, env.datasetHealthPolicyPath)
 }

@@ -25,6 +25,8 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/events"
+	// 注册与 catalog.yaml max_body_bytes(32 MiB) 对齐的 tRPC 帧上限（64 MiB）及有界 zstd 字典压缩。
+	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -62,19 +64,20 @@ func main() {
 const pebbleDirName = "storage-primary"
 
 func runPrimaryRole() error {
-	root := os.Getenv("MOOX_STORAGE_HOME")
-	if root == "" {
-		root = "./var/storage"
+	loadedCfg, err := loadRuntimeStorageConfig()
+	if err != nil {
+		return err
 	}
-	metadataPath := os.Getenv("MOOX_STORAGE_METADATA_PATH")
-	if metadataPath == "" {
-		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")
-	}
+	metadataPath := loadedCfg.MetadataDBPath(os.Getenv("MOOX_STORAGE_METADATA_PATH"))
 	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for primary role")
 	}
-	eventConfig, err := storageEventBusConfig([]string{rawURL}, "storage-primary")
+	eventConfig, err := storageEventBusConfig(loadedCfg, []string{rawURL}, "storage-primary")
+	if err != nil {
+		return err
+	}
+	policy, err := loadedCfg.LoadPolicy()
 	if err != nil {
 		return err
 	}
@@ -86,19 +89,16 @@ func runPrimaryRole() error {
 	if err := meta.ValidateSchemaVersion(trpc.BackgroundContext()); err != nil {
 		return fmt.Errorf("metadata schema validation failed: %w", err)
 	}
-	cached, err := metacache.New(trpc.BackgroundContext(), meta, metacache.Options{})
+	cached, err := metacache.NewDatasetCache(trpc.BackgroundContext(), meta)
 	if err != nil {
-		return fmt.Errorf("open metadata cache: %w", err)
+		return fmt.Errorf("open dataset cache: %w", err)
 	}
 	defer cached.Close()
 	store, err := pebble.Open(pebble.Options{
-		Path:          filepath.Join(root, "pebble", pebbleDirName),
+		Path:          filepath.Join(loadedCfg.Storage.Devices.PebblePath, pebbleDirName),
 		MaxEventBytes: eventConfig.MaxPayloadBytes(),
-		// 写入拿到数据集读锁后按最新的元数据缓存确认数据集仍在（按索引点查），见 Metadata.DeleteDataset。
-		DatasetExists: func(spaceID, datasetID string) bool {
-			_, err := cached.GetDataset(trpc.BackgroundContext(), spaceID, datasetID)
-			return err == nil
-		},
+		// 写入拿到数据集读锁后按最新的 DatasetCache 无锁确认数据集仍在，见 Metadata.DeleteDataset。
+		DatasetExists: cached.HasDataset,
 	})
 	if err != nil {
 		return err
@@ -121,10 +121,6 @@ func runPrimaryRole() error {
 		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot,
 		DatasetMetrics: datasetMetrics, DeadlineRejections: deadlineRejections,
 	})
-	if err != nil {
-		return err
-	}
-	policy, err := loadStoragePolicy()
 	if err != nil {
 		return err
 	}
@@ -256,11 +252,19 @@ func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset,
 }
 
 func runViewRole() error {
-	root := os.Getenv("MOOX_STORAGE_HOME")
-	if root == "" {
-		root = "./var/storage"
+	loadedCfg, err := loadRuntimeStorageConfig()
+	if err != nil {
+		return err
 	}
-	svc, err := viewservice.New(filepath.Join(root, "view-indexes"))
+	viewSettings, err := loadedCfg.ViewSettings()
+	if err != nil {
+		return err
+	}
+	policy, err := loadedCfg.LoadPolicy()
+	if err != nil {
+		return err
+	}
+	svc, err := viewservice.New(loadedCfg.Storage.Devices.ViewIndexRoot)
 	if err != nil {
 		return err
 	}
@@ -298,18 +302,6 @@ func runViewRole() error {
 		client.WithTimeout(5*time.Minute),
 	)
 	svc.SetPrimaryReader(primaryProxy)
-	backfillPageSize, backfillRequestInterval, err := storageViewBackfillSettings()
-	if err != nil {
-		return err
-	}
-	deleteOldestBatchSize, err := storageViewDeleteOldestBatchSize()
-	if err != nil {
-		return err
-	}
-	policy, err := loadStoragePolicy()
-	if err != nil {
-		return err
-	}
 	// The policy is validated on load, so its durations parse.
 	maintenanceInterval, _ := time.ParseDuration(policy.View.MaintenanceCheckInterval)
 	// 每序列保留根数随 DataView 查询响应告知调用方：不依赖维护器是否启动。
@@ -321,8 +313,8 @@ func runViewRole() error {
 		Interval:                maintenanceInterval,
 		Bars:                    policy.View.Bars,
 		MaxViewFileBytes:        policy.View.MaxViewFileBytes,
-		BackfillPageSize:        backfillPageSize,
-		BackfillRequestInterval: backfillRequestInterval,
+		BackfillPageSize:        viewSettings.BackfillPageSize,
+		BackfillRequestInterval: viewSettings.BackfillRequestInterval,
 	}
 	// 先绑定监听再恢复已建的索引：部署大时恢复要一段时间，进程先可达，存活检查能看到它。
 	s := trpc.NewServer()
@@ -348,7 +340,7 @@ func runViewRole() error {
 		return err
 	}
 	observability.DefaultViewMetrics.ObserveRestore(true, time.Since(restoreStarted))
-	eventConfig, err := storageEventBusConfig([]string{rawURL}, "storage-view")
+	eventConfig, err := storageEventBusConfig(loadedCfg, []string{rawURL}, "storage-view")
 	if err != nil {
 		return err
 	}
@@ -389,7 +381,7 @@ func runViewRole() error {
 		}
 		defer stopViewMaintainer()
 	}
-	stopMinuteTasks := svc.StartMinuteTasks(trpc.BackgroundContext(), viewservice.DeleteOldestOptions{BatchSize: deleteOldestBatchSize})
+	stopMinuteTasks := svc.StartMinuteTasks(trpc.BackgroundContext(), viewservice.DeleteOldestOptions{BatchSize: viewSettings.DeleteOldestBatchSize})
 	defer stopMinuteTasks()
 	return <-serveErr
 }
@@ -446,69 +438,16 @@ func storageViewMaintenanceDisabled() bool {
 	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
 }
 
-func loadStoragePolicy() (storagepolicy.Policy, error) {
-	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
-	if path == "" {
-		return storagepolicy.Default(), nil
+// loadRuntimeStorageConfig 与 CLI 复用同一条单次配置加载路径，并应用 MOOX_STORAGE_HOME 目录重定位。
+func loadRuntimeStorageConfig() (storageconfig.LoadedConfig, error) {
+	loaded, err := storageconfig.Load(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if err != nil {
+		return storageconfig.LoadedConfig{}, err
 	}
-	var runtimeConfig storageconfig.RuntimeConfig
-	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return storagepolicy.Policy{}, fmt.Errorf("load storage config: %w", err)
+	if home := os.Getenv("MOOX_STORAGE_HOME"); home != "" {
+		loaded.Storage.ApplyHomeRoot(home)
 	}
-	policyPath := strings.TrimSpace(runtimeConfig.Storage.PolicyFile)
-	if policyPath == "" {
-		return storagepolicy.Policy{}, errors.New("storage.policy_file is required")
-	}
-	if !filepath.IsAbs(policyPath) {
-		// MOOX_STORAGE_CONFIG points at <package>/config/*.yaml while the
-		// policy path is expressed from the package root.
-		policyPath = filepath.Join(filepath.Dir(filepath.Dir(path)), policyPath)
-	}
-	return storagepolicy.Load(policyPath)
-}
-
-// storageViewDeleteOldestBatchSize 读取定时删除最旧数据时每批最多删除的行数（storage.view.delete_oldest_batch_size）。
-func storageViewDeleteOldestBatchSize() (int, error) {
-	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
-	if path == "" {
-		return viewservice.DefaultDeleteOldestBatchSize, nil
-	}
-	var runtimeConfig storageconfig.RuntimeConfig
-	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return 0, fmt.Errorf("读取 storage view 删除最旧数据配置失败：%w", err)
-	}
-	size := runtimeConfig.Storage.View.DeleteOldestBatchSize
-	if size < 1 || size > viewservice.MaxDeleteOldestBatchSize {
-		return 0, fmt.Errorf("storage.view.delete_oldest_batch_size 必须在 1～%d 之间，当前为 %d", viewservice.MaxDeleteOldestBatchSize, size)
-	}
-	return size, nil
-}
-
-func storageViewBackfillSettings() (uint32, time.Duration, error) {
-	const (
-		defaultPageSize        = 2000
-		defaultRequestInterval = 100 * time.Millisecond
-		maxPageSize            = 10000
-	)
-	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
-	if path == "" {
-		return defaultPageSize, defaultRequestInterval, nil
-	}
-	var runtimeConfig storageconfig.RuntimeConfig
-	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return 0, 0, fmt.Errorf("load storage view backfill config: %w", err)
-	}
-	if runtimeConfig.Storage.View.BackfillPageSize == 0 || runtimeConfig.Storage.View.BackfillPageSize > maxPageSize {
-		return 0, 0, fmt.Errorf("storage view backfill_page_size must be between 1 and %d", maxPageSize)
-	}
-	interval, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.BackfillRequestInterval))
-	if err != nil || interval < 0 {
-		return 0, 0, errors.New("storage view backfill_request_interval must be a non-negative duration")
-	}
-	return runtimeConfig.Storage.View.BackfillPageSize, interval, nil
+	return loaded, nil
 }
 
 func envOrDefault(name, fallback string) string {
@@ -520,7 +459,7 @@ func envOrDefault(name, fallback string) string {
 
 const storageEventBusReconnectBufferBytes = 32 * 1024 * 1024
 
-func storageEventBusConfig(urls []string, name string) (jetstream.Config, error) {
+func storageEventBusConfig(loadedCfg storageconfig.LoadedConfig, urls []string, name string) (jetstream.Config, error) {
 	cfg := jetstream.ConfigFromEnv(urls, name)
 	reconnectBuffer := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES"))
 	if reconnectBuffer == "" {
@@ -532,10 +471,7 @@ func storageEventBusConfig(urls []string, name string) (jetstream.Config, error)
 		}
 		cfg.ReconnectBufferBytes = value
 	}
-	path, err := storageEventBusCredentialFile()
-	if err != nil {
-		return jetstream.Config{}, err
-	}
+	path := jetstream.ExpandCredentialPath(loadedCfg.EventBusCredentialFile(os.Getenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE")))
 	if path == "" {
 		return cfg, nil
 	}
@@ -551,22 +487,6 @@ func storageEventBusConfig(urls []string, name string) (jetstream.Config, error)
 	// without editing shared credentials.
 	cfg.URLs = append([]string(nil), urls...)
 	return cfg, nil
-}
-
-func storageEventBusCredentialFile() (string, error) {
-	if path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE")); path != "" {
-		return jetstream.ExpandCredentialPath(path), nil
-	}
-	configPath := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
-	if configPath == "" {
-		return "", nil
-	}
-	var runtimeConfig storageconfig.RuntimeConfig
-	loader := storageconfig.NewConfigLoader(filepath.Dir(configPath))
-	if err := loader.LoadConfig(filepath.Base(configPath), &runtimeConfig); err != nil {
-		return "", fmt.Errorf("load storage eventbus config: %w", err)
-	}
-	return jetstream.ExpandCredentialPath(strings.TrimSpace(runtimeConfig.Storage.EventBus.CredentialFile)), nil
 }
 
 // registerRoleHealth 注册健康检查；返回的状态再交给指标上报，上报里的就绪与 /readyz 是同一个判断。

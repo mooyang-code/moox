@@ -114,13 +114,13 @@ test("归档任务页：归档服务返回 500 时显示失败和重试、没有
   expect(await page.locator(".arco-message").count()).toBeLessThanOrEqual(1);
 });
 
-test("归档存储页：所在主机、根目录、磁盘、内置对象存储", async ({ page }) => {
+test("归档存储页：所在主机、根目录、磁盘、外部对象存储", async ({ page }) => {
   await page.goto("/#/archive/storage");
   const main = page.locator(".moox-page");
   await expect(main).toContainText("因子机（192.168.0.103）");
   await expect(main).toContainText("/data/moox/archive");
   await expect(main).toContainText("已用 137 GB / 共 1.76 TB，可用 1.53 TB");
-  await expect(main).toContainText("内置 SeaweedFS");
+  await expect(main).toContainText("外部 S3 兼容存储");
   await expect(main).toContainText("datasets.csv");
 });
 

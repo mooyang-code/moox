@@ -21,8 +21,6 @@ import (
 type HostAgentMgrService interface {
 	GetStatus(ctx context.Context, req *GetStatusReq) (*GetStatusRsp, error)
 
-	GetSnapshot(ctx context.Context, req *GetSnapshotReq) (*GetSnapshotRsp, error)
-
 	RunOnce(ctx context.Context, req *RunOnceReq) (*RunOnceRsp, error)
 }
 
@@ -34,24 +32,6 @@ func HostAgentMgrService_GetStatus_Handler(svr interface{}, ctx context.Context,
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(HostAgentMgrService).GetStatus(ctx, reqbody.(*GetStatusReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func HostAgentMgrService_GetSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetSnapshotReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(HostAgentMgrService).GetSnapshot(ctx, reqbody.(*GetSnapshotReq))
 	}
 
 	var rsp interface{}
@@ -90,10 +70,6 @@ var HostAgentMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: HostAgentMgrService_GetStatus_Handler,
 		},
 		{
-			Name: "/trpc.moox.hostagent.HostAgentMgr/GetSnapshot",
-			Func: HostAgentMgrService_GetSnapshot_Handler,
-		},
-		{
 			Name: "/trpc.moox.hostagent.HostAgentMgr/RunOnce",
 			Func: HostAgentMgrService_RunOnce_Handler,
 		},
@@ -114,9 +90,6 @@ type UnimplementedHostAgentMgr struct{}
 func (s *UnimplementedHostAgentMgr) GetStatus(ctx context.Context, req *GetStatusReq) (*GetStatusRsp, error) {
 	return nil, errors.New("rpc GetStatus of service HostAgentMgr is not implemented")
 }
-func (s *UnimplementedHostAgentMgr) GetSnapshot(ctx context.Context, req *GetSnapshotReq) (*GetSnapshotRsp, error) {
-	return nil, errors.New("rpc GetSnapshot of service HostAgentMgr is not implemented")
-}
 func (s *UnimplementedHostAgentMgr) RunOnce(ctx context.Context, req *RunOnceReq) (*RunOnceRsp, error) {
 	return nil, errors.New("rpc RunOnce of service HostAgentMgr is not implemented")
 }
@@ -130,8 +103,6 @@ func (s *UnimplementedHostAgentMgr) RunOnce(ctx context.Context, req *RunOnceReq
 // HostAgentMgrClientProxy defines service client proxy
 type HostAgentMgrClientProxy interface {
 	GetStatus(ctx context.Context, req *GetStatusReq, opts ...client.Option) (rsp *GetStatusRsp, err error)
-
-	GetSnapshot(ctx context.Context, req *GetSnapshotReq, opts ...client.Option) (rsp *GetSnapshotRsp, err error)
 
 	RunOnce(ctx context.Context, req *RunOnceReq, opts ...client.Option) (rsp *RunOnceRsp, err error)
 }
@@ -159,26 +130,6 @@ func (c *HostAgentMgrClientProxyImpl) GetStatus(ctx context.Context, req *GetSta
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetStatusRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *HostAgentMgrClientProxyImpl) GetSnapshot(ctx context.Context, req *GetSnapshotReq, opts ...client.Option) (*GetSnapshotRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.hostagent.HostAgentMgr/GetSnapshot")
-	msg.WithCalleeServiceName(HostAgentMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("hostagent")
-	msg.WithCalleeService("HostAgentMgr")
-	msg.WithCalleeMethod("GetSnapshot")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetSnapshotRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -32,13 +32,27 @@ func (s *Secret) EnvironmentBound() bool {
 	return s.IsSystem() || (s.Category == EventBusCategory && s.Provider == EventBusProvider)
 }
 
+// setup init 管理的固定初始密钥标识：
+// - TencentDefaultSecretID：默认腾讯云密钥；
+// - ExchangeSecretIDPrefix：[[exchange_keys]] 生成的固定交易所密钥前缀。
+const (
+	TencentDefaultSecretID = "tencent-default"
+	ExchangeSecretIDPrefix = "exchange-"
+)
+
 // ExchangeSecretID 返回交易所密钥的固定秘钥 ID：exchange-<交易所>-<环境>-<名称>，三段一律小写。
 // setup apply 按 moox.toml 的 [[exchange_keys]] 写入时用它；Collector 读只读 Key 用的 exchange-binance-production-readonly 也是它。
 func ExchangeSecretID(exchange, environment, name string) string {
-	return strings.ToLower("exchange-" + exchange + "-" + environment + "-" + name)
+	return strings.ToLower(ExchangeSecretIDPrefix + exchange + "-" + environment + "-" + name)
 }
 
-// Secret 秘钥管理表
+// IsInitialSecretID 报告秘钥 ID 是否属于 setup init 管理的初始密钥（tencent-default 或 exchange-*）。
+// 仅这类初始密钥在管理台硬删除时需要写入墓碑表，避免删除普通随机 UUID 密钥时污染墓碑表。
+func IsInitialSecretID(secretID string) bool {
+	return secretID == TencentDefaultSecretID || strings.HasPrefix(secretID, ExchangeSecretIDPrefix)
+}
+
+// Secret 秘钥管理表（物理硬删除，c_secret_value 与 c_extra_config 均 AES-GCM 加密存储）。
 type Secret struct {
 	ID          int       `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
 	SecretID    string    `gorm:"column:c_secret_id;not null" json:"secret_id"`
@@ -49,14 +63,23 @@ type Secret struct {
 	SecretType  string    `gorm:"column:c_secret_type;not null;default:'api_key'" json:"secret_type"`
 	KeyID       string    `gorm:"column:c_key_id;not null;default:''" json:"key_id"`
 	SecretValue string    `gorm:"column:c_secret_value;not null" json:"secret_value"`
-	ExtraConfig string    `gorm:"column:c_extra_config;not null;default:'{}'" json:"extra_config"`
+	ExtraConfig string    `gorm:"column:c_extra_config;not null;default:''" json:"extra_config"`
 	Status      string    `gorm:"column:c_status;not null;default:'active'" json:"status"`
 	Creator     string    `gorm:"column:c_creator;not null;default:''" json:"creator"`
-	IsDeleted   bool      `gorm:"column:c_is_deleted;not null;default:false" json:"is_deleted"`
 	CreateTime  time.Time `gorm:"column:c_ctime;type:datetime;default:CURRENT_TIMESTAMP" json:"create_time"`
 	ModifyTime  time.Time `gorm:"column:c_mtime;type:datetime;default:CURRENT_TIMESTAMP" json:"modify_time"`
 }
 
 func (s *Secret) TableName() string {
 	return "t_secrets"
+}
+
+// DeletedInitialSecret 记录管理台主动硬删除的密钥 ID，防止 setup init 静默复活作废初始密钥。
+type DeletedInitialSecret struct {
+	SecretID  string `gorm:"primaryKey;column:c_secret_id"`
+	CreatedAt int64  `gorm:"column:c_ctime;not null"`
+}
+
+func (DeletedInitialSecret) TableName() string {
+	return "t_deleted_initial_secrets"
 }

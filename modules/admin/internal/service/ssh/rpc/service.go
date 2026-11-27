@@ -1,18 +1,16 @@
 // Package rpc 提供 ssh 对外的 trpc 普通 RPC 服务实现，
 // 承载 ssh 管理 API（会话/SFTP 操作；主机与凭据随主机登记，由 moox-cli 维护），
-// 由统一 HTTP 转发层（/api/admin/ssh/{method}）调度。
+// 由控制台进程内 LocalDispatcher 调度。
 //
 // WebSocket 终端、SFTP 流式上传/下载（multipart）不经本 RPC 服务，
-// 由统一网关 rawhandler 分派（session_id 鉴权）。
+// 由统一网关 rawhandler 分派并在 SSH rawhandler 中校验 session_id 归属。
 package rpc
 
 import (
 	"context"
 	"errors"
-	"path"
-	"strings"
 
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -32,19 +30,16 @@ func NewService(svc ssh.Service) *Service {
 	return &Service{svc: svc}
 }
 
-// ========== SSH 会话 ==========
-
 // CreateSession 创建 SSH 会话。
 func (s *Service) CreateSession(ctx context.Context, req *pb.CreateSessionReq) (*pb.CreateSessionRsp, error) {
 	if req.GetHostId() == "" {
 		return &pb.CreateSessionRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "host_id不能为空")}, nil
 	}
-	clientIP := extractClientIP(ctx)
-	userID := string(trpc.GetMetaData(ctx, authmodel.CtxUserID))
+	userID := string(trpc.GetMetaData(ctx, auth.CtxUserID))
 	if userID == "" {
 		return &pb.CreateSessionRsp{RetInfo: retErr(pb.ErrorCode_NO_AUTH, "用户身份验证失败")}, nil
 	}
-	sessionID, err := s.svc.CreateSession(ctx, req.GetHostId(), clientIP, userID)
+	sessionID, err := s.svc.CreateSession(ctx, req.GetHostId(), "", userID)
 	if err != nil {
 		log.ErrorContextf(ctx, "[SSH] CreateSession failed: %v", err)
 		switch {
@@ -81,8 +76,6 @@ func (s *Service) ResizeWindow(ctx context.Context, req *pb.ResizeWindowReq) (*p
 	}
 	return &pb.ResizeWindowRsp{RetInfo: retOK()}, nil
 }
-
-// ========== SFTP 操作 ==========
 
 // SftpList 列出 SFTP 目录。
 func (s *Service) SftpList(ctx context.Context, req *pb.SftpListReq) (*pb.SftpListRsp, error) {
@@ -121,97 +114,42 @@ func (s *Service) SftpDelete(ctx context.Context, req *pb.SftpDeleteReq) (*pb.Sf
 	return &pb.SftpDeleteRsp{RetInfo: retOK()}, nil
 }
 
-// ========== 辅助 ==========
-
-// retOK 成功 RetInfo。
 func retOK() *pb.RetInfo {
 	return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}
 }
 
-// retErr 错误 RetInfo。
 func retErr(code pb.ErrorCode, msg string) *pb.RetInfo {
 	return &pb.RetInfo{Code: code, Msg: msg}
 }
 
-// extractClientIP 从 ctx 提取客户端IP（网关 authorize 注入 metadata 或 fallback）。
-func extractClientIP(ctx context.Context) string {
-	// 网关 dispatcher 未统一注入 client_ip metadata，此处返回空由 service 兜底
-	return ""
-}
-
-// sftpListResultToPB 将 SftpList 返回的 map[string]interface{} 转换为 PB。
-// service 层 SftpList 当前返回 map，此处统一转换为 RPC 响应结构。
-func sftpListResultToPB(data interface{}, currentDir string) *pb.SftpListRsp {
+// sftpListResultToPB 将强类型的 SftpListResult 转换为 PB 响应。
+func sftpListResultToPB(result *ssh.SftpListResult, currentDir string) *pb.SftpListRsp {
 	rsp := &pb.SftpListRsp{RetInfo: retOK(), CurrentDir: currentDir}
-	m, ok := data.(map[string]interface{})
-	if !ok {
+	if result == nil {
 		return rsp
 	}
-	if v, ok := m["files"].([]map[string]interface{}); ok {
-		for _, f := range v {
-			item := &pb.SftpFileItem{}
-			if s, ok := f["path"].(string); ok {
-				item.Path = s
-			}
-			if s, ok := f["name"].(string); ok {
-				item.Name = s
-			}
-			if s, ok := f["mode"].(string); ok {
-				item.Mode = s
-			}
-			if s, ok := f["size"].(int64); ok {
-				item.Size = s
-			} else if s, ok := f["size"].(int); ok {
-				item.Size = int64(s)
-			}
-			// 修改时刻是 Unix 毫秒；类型不对说明服务层写法变了，报错而不是留成 0 让页面显示“—”
-			modifiedAt, ok := f["modified_at"].(int64)
-			if !ok {
-				return &pb.SftpListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "目录条目的修改时刻不是 Unix 毫秒")}
-			}
-			item.ModifiedAt = modifiedAt
-			if s, ok := f["type"].(string); ok {
-				item.Type = s
-			}
-			rsp.Files = append(rsp.Files, item)
-		}
+	if result.CurrentDir != "" {
+		rsp.CurrentDir = result.CurrentDir
 	}
-	if v, ok := m["file_count"].(int); ok {
-		rsp.FileCount = int32(v)
+	rsp.FileCount = int32(result.FileCount)
+	rsp.DirCount = int32(result.DirCount)
+	rsp.Files = make([]*pb.SftpFileItem, 0, len(result.Files))
+	for _, entry := range result.Files {
+		rsp.Files = append(rsp.Files, &pb.SftpFileItem{
+			Path:       entry.Path,
+			Name:       entry.Name,
+			Mode:       entry.Mode,
+			Size:       entry.Size,
+			ModifiedAt: entry.ModifiedAt,
+			Type:       entry.Type,
+		})
 	}
-	if v, ok := m["dir_count"].(int); ok {
-		rsp.DirCount = int32(v)
-	}
-	if v, ok := m["paths"].([]map[string]string); ok {
-		for _, p := range v {
-			rsp.Paths = append(rsp.Paths, &pb.PathBreadcrumb{
-				Name: p["name"],
-				Dir:  p["dir"],
-			})
-		}
-	} else {
-		rsp.Paths = parsePathsPB(currentDir)
+	rsp.Paths = make([]*pb.PathBreadcrumb, 0, len(result.Paths))
+	for _, crumb := range result.Paths {
+		rsp.Paths = append(rsp.Paths, &pb.PathBreadcrumb{
+			Name: crumb.Name,
+			Dir:  crumb.Dir,
+		})
 	}
 	return rsp
-}
-
-// parsePathsPB 复刻 impl.parsePaths，将目录路径解析为面包屑。
-func parsePathsPB(dirPath string) []*pb.PathBreadcrumb {
-	parts := strings.Split(dirPath, "/")
-	var dirs []string
-	if strings.HasPrefix(dirPath, "/") {
-		dirs = append(dirs, "/")
-	}
-	for _, item := range parts {
-		name := strings.TrimSpace(item)
-		if len(name) > 0 {
-			dirs = append(dirs, name)
-		}
-	}
-	var paths []*pb.PathBreadcrumb
-	for i, item := range dirs {
-		fullPath := path.Join(dirs[:i+1]...)
-		paths = append(paths, &pb.PathBreadcrumb{Name: item, Dir: fullPath})
-	}
-	return paths
 }

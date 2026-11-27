@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -15,9 +16,12 @@ import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"google.golang.org/protobuf/proto"
 )
+
+var errCollectionRunning = errors.New("collection already running")
 
 // Reporter 把一次采集结果随拉取主机策略那次调用报给 Monitor；report 为空表示这次采集失败，只拉策略。
 type Reporter func(context.Context, *monitorpb.HostReport) error
@@ -67,7 +71,7 @@ func resolveHostName(systemName, configuredName string) string {
 func (a *Agent) runOnceGuarded(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 	if !a.running.CompareAndSwap(false, true) {
 		a.skipped.Add(1)
-		return &hostagentpb.RunOnceRsp{ReportError: "collection already running"}, fmt.Errorf("collection already running")
+		return &hostagentpb.RunOnceRsp{ReportError: errCollectionRunning.Error()}, errCollectionRunning
 	}
 	defer a.running.Store(false)
 	return a.runOnce(ctx)
@@ -160,18 +164,22 @@ func (a *Agent) GetStatus(context.Context, *hostagentpb.GetStatusReq) (*hostagen
 	}
 	return rsp, nil
 }
-func (a *Agent) GetSnapshot(context.Context, *hostagentpb.GetSnapshotReq) (*hostagentpb.GetSnapshotRsp, error) {
-	a.latestMu.RLock()
-	defer a.latestMu.RUnlock()
-	rsp := &hostagentpb.GetSnapshotRsp{}
-	if a.latest != nil {
-		rsp.Snapshot = proto.Clone(a.latest).(*hostmetricpb.HostSnapshot)
-	}
-	if !a.lastCollect.IsZero() {
-		rsp.CollectedAt = a.lastCollect.UnixMilli()
-	}
-	return rsp, nil
-}
 func (a *Agent) RunOnce(ctx context.Context, _ *hostagentpb.RunOnceReq) (*hostagentpb.RunOnceRsp, error) {
-	return a.runOnceGuarded(ctx)
+	rsp, err := a.runOnceGuarded(ctx)
+	if rsp == nil {
+		rsp = &hostagentpb.RunOnceRsp{}
+	}
+	if err != nil {
+		code := commonpb.ErrorCode_INNER_ERR
+		if errors.Is(err, errCollectionRunning) {
+			code = commonpb.ErrorCode_CONFLICT
+		}
+		if rsp.ReportError == "" {
+			rsp.ReportError = err.Error()
+		}
+		rsp.RetInfo = &commonpb.RetInfo{Code: code, Msg: err.Error()}
+		return rsp, nil
+	}
+	rsp.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+	return rsp, nil
 }

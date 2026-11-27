@@ -26,7 +26,6 @@ func legacyWrite(ctx context.Context, tx *sql.Tx, columns map[string]pb.FieldVal
 			return err
 		}
 		names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, group.columns...)
-		names = append(names, internalAttributesColumn)
 		for start := 0; start < len(group.writes); start += legacyMaxWriteRowsPerStatement {
 			end := min(start+legacyMaxWriteRowsPerStatement, len(group.writes))
 			chunk := group.writes[start:end]
@@ -150,20 +149,8 @@ func legacyUpsertSQLBatch(names []string, mode viewindex.WriteMode, rowCount int
 	for _, name := range names[4:] {
 		// Live writes overwrite complete rows. Backfill only fills missing values.
 		set := fmt.Sprintf("%s = excluded.%s", quote(name), quote(name))
-		if name == internalAttributesColumn {
-			// Dataset events often carry only a subset of provenance attributes.
-			// Merge JSON objects by key so a later factor patch cannot erase hashes
-			// written by earlier factors on the same projected row.
-			set = fmt.Sprintf("%s = CASE WHEN excluded.%s IS NULL THEN view_rows.%s ELSE json_merge_patch(COALESCE(view_rows.%s, '{}'), excluded.%s) END", quote(name), quote(name), quote(name), quote(name), quote(name))
-		}
 		if mode == viewindex.Backfill {
-			if name == internalAttributesColumn {
-				// Backfill must never overwrite live provenance. Put the
-				// backfill object first so existing/live keys win on conflicts.
-				set = fmt.Sprintf("%s = CASE WHEN view_rows.%s IS NULL THEN excluded.%s ELSE json_merge_patch(COALESCE(excluded.%s, '{}'), view_rows.%s) END", quote(name), quote(name), quote(name), quote(name), quote(name))
-			} else {
-				set = fmt.Sprintf("%s = COALESCE(view_rows.%s, excluded.%s)", quote(name), quote(name), quote(name))
-			}
+			set = fmt.Sprintf("%s = COALESCE(view_rows.%s, excluded.%s)", quote(name), quote(name), quote(name))
 		}
 		sets = append(sets, set)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 )
@@ -21,13 +22,7 @@ var moduleHealthNames = map[string]string{
 	"monitor-metrics":  "监控指标接收",
 }
 
-// moduleIdleAfter 是最近一次失败之后多久没有新的运行就算模块闲下来了。取 1 小时而不是 MaxLag：
-// 每小时跑一次、次次失败的模块要一直判失败，不能在两次运行之间恢复又失败。
-const moduleIdleAfter = time.Hour
-
-// moduleHealthItems 在模块上报过运行之后，把每个内置模块健康检查转成一项业务检查。
-// 最近一次运行失败、且 MaxLag 内没有成功过时判失败；模块恢复成功，或最近一次失败之后
-// 超过 moduleIdleAfter（和 MaxLag 取大）没有新的运行（闲置，例如组合解绑后没有调仓可做），判健康。
+// moduleHealthItems 在模块上报过运行之后，按与 Doctor 共用的判定口径把每个内置模块健康检查转成一项业务检查。
 func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, healthChecks []report.ModuleHealthCheck, now time.Time) ([]checks.Fact, error) {
 	if query == nil {
 		return nil, nil
@@ -45,7 +40,12 @@ func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, heal
 		if err != nil {
 			return nil, err
 		}
-		if lastSuccess.IsZero() && lastError.IsZero() {
+		verdict := doctor.EvaluateModuleRunHealth(doctor.ModuleRunSignals{
+			LastSuccess: lastSuccess,
+			LastError:   lastError,
+			MaxLag:      check.MaxLag,
+		}, now)
+		if verdict.Status == doctor.StatusSkipped {
 			continue
 		}
 		name := moduleHealthNames[check.ID]
@@ -56,19 +56,17 @@ func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, heal
 			SpaceID: events.SystemSpaceID, CheckID: "module:" + check.ID, Name: name,
 			Status: domain.CheckStatusOK, Reason: "最近一次运行成功",
 		}
-		failing := lastError.After(lastSuccess) && now.Sub(lastSuccess) > check.MaxLag
-		switch {
-		case failing && now.Sub(lastError) > max(check.MaxLag, moduleIdleAfter):
+		switch verdict.Reason {
+		case doctor.ModuleRunIdleAfterError:
 			item.Reason = fmt.Sprintf("最近一次运行失败（%s）之后已 %s没有新的运行，按闲置处理",
 				alerttext.Time(lastError), alerttext.Duration(now.Sub(lastError)))
-		case failing:
+		case doctor.ModuleRunNeverSucceeded:
 			item.Status = domain.CheckStatusDown
-			if lastSuccess.IsZero() {
-				item.Reason = fmt.Sprintf("最近一次运行失败（%s），且从未成功过", alerttext.Time(lastError))
-			} else {
-				item.Reason = fmt.Sprintf("最近一次运行失败（%s），已 %s没有成功运行（上次成功 %s）",
-					alerttext.Time(lastError), alerttext.Duration(now.Sub(lastSuccess)), alerttext.Time(lastSuccess))
-			}
+			item.Reason = fmt.Sprintf("最近一次运行失败（%s），且从未成功过", alerttext.Time(lastError))
+		case doctor.ModuleRunFailingOverMaxLag:
+			item.Status = domain.CheckStatusDown
+			item.Reason = fmt.Sprintf("最近一次运行失败（%s），已 %s没有成功运行（上次成功 %s）",
+				alerttext.Time(lastError), alerttext.Duration(now.Sub(lastSuccess)), alerttext.Time(lastSuccess))
 		}
 		items = append(items, item)
 	}

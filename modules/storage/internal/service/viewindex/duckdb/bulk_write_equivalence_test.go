@@ -66,12 +66,8 @@ func equivalenceNull(name string) *pb.FieldValue {
 	return &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL}}}
 }
 
-func equivalenceAttr(key string, seed int) map[string]*pb.TypedValue {
-	return map[string]*pb.TypedValue{key: {Value: &pb.TypedValue_StringValue{StringValue: fmt.Sprintf("h%d", seed)}}}
-}
-
 // equivalenceRow 生成一行：fields 为空则带全部列；nulls 里的列写显式 NULL；at 是 data_time 的文本。
-func equivalenceRow(subject, at, tag string, seed int, fields []string, nulls []string, attrs map[string]*pb.TypedValue) viewindex.RowWrite {
+func equivalenceRow(subject, at, tag string, seed int, fields []string, nulls []string) viewindex.RowWrite {
 	if fields == nil {
 		for _, column := range equivalenceColumns {
 			fields = append(fields, column.name)
@@ -89,7 +85,7 @@ func equivalenceRow(subject, at, tag string, seed int, fields []string, nulls []
 			values = append(values, equivalenceField(name, seed))
 		}
 	}
-	return viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("space", "dataset_x", subject, "5m", at, tag)}, Fields: values, Attributes: attrs}
+	return viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("space", "dataset_x", subject, "5m", at, tag)}, Fields: values}
 }
 
 func dumpIndex(t *testing.T, manager *IndexManager, id string) string {
@@ -176,50 +172,50 @@ func TestBulkWriteMatchesLegacyWrite(t *testing.T) {
 	t1 := "2026-10-01T00:05:00Z"
 	t2 := "2026-10-01T00:10:00Z"
 
-	t.Run("新键整行含显式NULL与属性", func(t *testing.T) {
+	t.Run("新键整行含显式NULL", func(t *testing.T) {
 		apply(t, viewindex.LiveWrite, []viewindex.RowWrite{
-			equivalenceRow("A-USDT", t0, "tag", 1, nil, nil, equivalenceAttr("factor.source_hash", 1)),
-			equivalenceRow("A-USDT", t1, "tag", 2, nil, []string{"dbl", "txt", "doc", "raw"}, nil),
-			equivalenceRow("B-USDT", t0, "tag", 3, nil, []string{"num", "flag", "at"}, equivalenceAttr("factor.source_hash", 3)),
-			equivalenceRow("B-USDT", t0, "", 4, nil, nil, nil),
+			equivalenceRow("A-USDT", t0, "tag", 1, nil, nil),
+			equivalenceRow("A-USDT", t1, "tag", 2, nil, []string{"dbl", "txt", "doc", "raw"}),
+			equivalenceRow("B-USDT", t0, "tag", 3, nil, []string{"num", "flag", "at"}),
+			equivalenceRow("B-USDT", t0, "", 4, nil, nil),
 		})
 	})
 	t.Run("已存在键只更新一个字段其余保持", func(t *testing.T) {
 		apply(t, viewindex.LiveWrite, []viewindex.RowWrite{
-			equivalenceRow("A-USDT", t0, "tag", 10, []string{"dbl"}, nil, nil),
-			equivalenceRow("B-USDT", t0, "tag", 11, []string{"txt", "num"}, nil, equivalenceAttr("factor.other", 11)),
+			equivalenceRow("A-USDT", t0, "tag", 10, []string{"dbl"}, nil),
+			equivalenceRow("B-USDT", t0, "tag", 11, []string{"txt", "num"}, nil),
 		})
 	})
 	t.Run("显式NULL覆盖已有值", func(t *testing.T) {
 		apply(t, viewindex.LiveWrite, []viewindex.RowWrite{
-			equivalenceRow("A-USDT", t0, "tag", 12, []string{"dbl", "flag"}, []string{"dbl", "flag"}, nil),
+			equivalenceRow("A-USDT", t0, "tag", 12, []string{"dbl", "flag"}, []string{"dbl", "flag"}),
 		})
 	})
 	t.Run("新旧键混合且字段集合不同", func(t *testing.T) {
 		apply(t, viewindex.LiveWrite, []viewindex.RowWrite{
-			equivalenceRow("A-USDT", t2, "tag", 20, []string{"dbl", "num"}, nil, nil),
-			equivalenceRow("A-USDT", t1, "tag", 21, []string{"dbl"}, nil, equivalenceAttr("factor.source_hash", 21)),
-			equivalenceRow("C-USDT", t0, "tag", 22, []string{"txt"}, nil, nil),
-			equivalenceRow("C-USDT", t1, "tag", 23, nil, nil, nil),
+			equivalenceRow("A-USDT", t2, "tag", 20, []string{"dbl", "num"}, nil),
+			equivalenceRow("A-USDT", t1, "tag", 21, []string{"dbl"}, nil),
+			equivalenceRow("C-USDT", t0, "tag", 22, []string{"txt"}, nil),
+			equivalenceRow("C-USDT", t1, "tag", 23, nil, nil),
 		})
 	})
 	t.Run("同一键重复出现与时间写法不同", func(t *testing.T) {
 		apply(t, viewindex.LiveWrite, []viewindex.RowWrite{
-			equivalenceRow("D-USDT", "2026-10-01T01:00:00Z", "tag", 30, []string{"dbl"}, nil, nil),
-			equivalenceRow("D-USDT", "2026-10-01T01:00:00.000000000Z", "tag", 31, []string{"num"}, nil, equivalenceAttr("factor.source_hash", 31)),
-			equivalenceRow("D-USDT", "2026-10-01T09:00:00+08:00", "tag", 32, []string{"txt"}, nil, equivalenceAttr("factor.source_hash", 32)),
+			equivalenceRow("D-USDT", "2026-10-01T01:00:00Z", "tag", 30, []string{"dbl"}, nil),
+			equivalenceRow("D-USDT", "2026-10-01T01:00:00.000000000Z", "tag", 31, []string{"num"}, nil),
+			equivalenceRow("D-USDT", "2026-10-01T09:00:00+08:00", "tag", 32, []string{"txt"}, nil),
 		})
 	})
-	t.Run("回填只补空值并让既有属性优先", func(t *testing.T) {
+	t.Run("回填只补空值不覆盖既有字段", func(t *testing.T) {
 		apply(t, viewindex.Backfill, []viewindex.RowWrite{
-			equivalenceRow("A-USDT", t0, "tag", 40, nil, nil, equivalenceAttr("factor.source_hash", 40)),
-			equivalenceRow("A-USDT", t1, "tag", 41, nil, nil, equivalenceAttr("factor.new", 41)),
-			equivalenceRow("E-USDT", t0, "tag", 42, nil, []string{"dbl", "doc"}, equivalenceAttr("factor.source_hash", 42)),
-			equivalenceRow("E-USDT", t1, "tag", 43, []string{"num"}, nil, nil),
+			equivalenceRow("A-USDT", t0, "tag", 40, nil, nil),
+			equivalenceRow("A-USDT", t1, "tag", 41, nil, nil),
+			equivalenceRow("E-USDT", t0, "tag", 42, nil, []string{"dbl", "doc"}),
+			equivalenceRow("E-USDT", t1, "tag", 43, []string{"num"}, nil),
 		})
 	})
 	t.Run("回填遇到畸形JSON丢弃该字段", func(t *testing.T) {
-		bad := equivalenceRow("F-USDT", t0, "tag", 50, []string{"dbl"}, nil, nil)
+		bad := equivalenceRow("F-USDT", t0, "tag", 50, []string{"dbl"}, nil)
 		bad.Fields = append(bad.Fields, &pb.FieldValue{FieldId: "doc", Value: &pb.TypedValue{Value: &pb.TypedValue_JsonValue{JsonValue: "{not json"}}})
 		apply(t, viewindex.Backfill, []viewindex.RowWrite{bad})
 	})
@@ -228,7 +224,7 @@ func TestBulkWriteMatchesLegacyWrite(t *testing.T) {
 		base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 		for s := 0; s < 3; s++ {
 			for i := 0; i < maxBulkWriteRows/2+7; i++ {
-				writes = append(writes, equivalenceRow(fmt.Sprintf("G%d-USDT", s), base.Add(time.Duration(i)*5*time.Minute).Format(time.RFC3339), "tag", i, []string{"dbl", "num"}, nil, nil))
+				writes = append(writes, equivalenceRow(fmt.Sprintf("G%d-USDT", s), base.Add(time.Duration(i)*5*time.Minute).Format(time.RFC3339), "tag", i, []string{"dbl", "num"}, nil))
 			}
 		}
 		apply(t, viewindex.LiveWrite, writes)

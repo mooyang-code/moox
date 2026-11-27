@@ -8,23 +8,27 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestAdminSchemaUsesBoolSoftDelete(t *testing.T) {
-	sql := AdminSQL()
-	if strings.Contains(sql, "c_is_deleted TEXT") {
-		t.Fatalf("admin schema must not store c_is_deleted as TEXT")
+func TestAdminSchemaUsesHardDeleteAndInitialSecretTombstone(t *testing.T) {
+	raw := AdminSQL()
+	if strings.Contains(raw, "c_is_deleted") {
+		t.Fatalf("admin schema must not keep soft-delete column c_is_deleted")
 	}
-	for _, line := range strings.Split(sql, "\n") {
-		if strings.Contains(line, "c_is_deleted") &&
-			(strings.Contains(line, "DEFAULT 'false'") || strings.Contains(line, "DEFAULT 'true'")) {
-			t.Fatalf("admin schema must not use string defaults for c_is_deleted")
+	if strings.Contains(raw, "c_expected_hash") {
+		t.Fatalf("admin schema must not keep write-only column c_expected_hash")
+	}
+	for _, required := range []string{
+		"UNIQUE (c_secret_id)",
+		"t_deleted_initial_secrets",
+		"c_ctime INTEGER NOT NULL",
+		"ON DELETE CASCADE",
+	} {
+		if !strings.Contains(raw, required) {
+			t.Fatalf("admin schema missing %q", required)
 		}
-	}
-	if got := strings.Count(sql, "c_is_deleted INTEGER NOT NULL DEFAULT 0"); got != 1 {
-		t.Fatalf("expected 1 bool soft-delete column, got %d", got)
 	}
 }
 
-func TestHostTopologySchemaEnforcesReferencesAndStatuses(t *testing.T) {
+func TestHostTopologySchemaEnforcesReferencesAndCascades(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +47,7 @@ func TestHostTopologySchemaEnforcesReferencesAndStatuses(t *testing.T) {
 		`INSERT INTO t_deployments (c_host_id, c_component_id) VALUES ('missing', 'admin')`,
 		`INSERT INTO t_deployments (c_host_id, c_component_id, c_status) VALUES ('control', 'admin', 'active')`,
 		`INSERT INTO t_host_gateway_status (c_host_id) VALUES ('missing')`,
-		`INSERT INTO t_host_gateway_status (c_host_id, c_route_count) VALUES ('control', -1)`,
+		`INSERT INTO t_host_gateway_status (c_host_id, c_expected_hash) VALUES ('control', 'deadbeef')`,
 	} {
 		if _, err := db.Exec(statement); err == nil {
 			t.Fatalf("schema accepted invalid input: %s", statement)
@@ -52,8 +56,20 @@ func TestHostTopologySchemaEnforcesReferencesAndStatuses(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO t_deployments (c_host_id, c_component_id) VALUES ('control', 'admin')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DELETE FROM t_hosts WHERE c_host_id = 'control'`); err == nil {
-		t.Fatal("host with deployments was deleted without removing dependent rows")
+	if _, err := db.Exec(`INSERT INTO t_host_gateway_status (c_host_id, c_applied_hash) VALUES ('control', 'abc')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM t_hosts WHERE c_host_id = 'control'`); err != nil {
+		t.Fatalf("deleting host should cascade to dependent tables: %v", err)
+	}
+	for _, table := range []string{"t_deployments", "t_host_gateway_status"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("expected cascade delete on %s, got %d remaining rows", table, count)
+		}
 	}
 }
 
@@ -66,12 +82,12 @@ func TestAdminSchemaExcludesRetiredDeploymentTables(t *testing.T) {
 }
 
 func TestAdminSchemaContainsNoUserActionsUpgradePath(t *testing.T) {
-	sql := AdminSQL()
+	raw := AdminSQL()
 	for _, statement := range []string{
 		"CREATE TABLE IF NOT EXISTS t_user_actions",
 		"DROP TABLE IF EXISTS t_user_actions",
 	} {
-		if strings.Contains(sql, statement) {
+		if strings.Contains(raw, statement) {
 			t.Fatalf("admin schema must not contain retired user-actions statement %q", statement)
 		}
 	}
@@ -84,30 +100,30 @@ func TestAdminSchemaExcludesLegacyHostMonitorHistory(t *testing.T) {
 }
 
 func TestAdminSchemaSupportsSetupWithoutStateTable(t *testing.T) {
-	sql := AdminSQL()
-	if strings.Contains(sql, "t_system_setup") {
+	raw := AdminSQL()
+	if strings.Contains(raw, "t_system_setup") {
 		t.Fatal("setup status must be derived from domain records, not t_system_setup")
 	}
 	for _, required := range []string{
 		"idx_users_username",
-		"idx_secrets_secret_id_deleted",
+		"UNIQUE (c_secret_id)",
 		"cloud=云厂商凭据",
 	} {
-		if !strings.Contains(sql, required) {
+		if !strings.Contains(raw, required) {
 			t.Fatalf("admin schema setup contract missing %q", required)
 		}
 	}
 }
 
 func TestAdminSchemaExcludesRetiredSingleUserAndSSHTables(t *testing.T) {
-	sql := AdminSQL()
+	raw := AdminSQL()
 	for _, table := range []string{"t_space_members", "t_login_history", "t_ssh_host", "t_ssh_host_key", "t_ssh_session"} {
-		if strings.Contains(sql, table) {
+		if strings.Contains(raw, table) {
 			t.Fatalf("retired table remains in admin schema: %s", table)
 		}
 	}
 	for _, column := range []string{"c_role", "c_nickname", "c_email", "c_avatar", "c_last_used_at", "c_last_used_by"} {
-		if strings.Contains(sql, column) {
+		if strings.Contains(raw, column) {
 			t.Fatalf("retired column remains in admin schema: %s", column)
 		}
 	}

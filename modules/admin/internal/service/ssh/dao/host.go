@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
@@ -36,10 +35,13 @@ func (hostRow) TableName() string { return "t_hosts" }
 
 // HostDAO 读取 t_hosts 里的 SSH 列与 t_secrets 里的凭据。
 type HostDAO struct {
-	db *gorm.DB
+	db            *gorm.DB
+	encryptionKey string
 }
 
-func NewHostDAO(db *gorm.DB) *HostDAO { return &HostDAO{db: db} }
+func NewHostDAO(db *gorm.DB, encryptionKey string) *HostDAO {
+	return &HostDAO{db: db, encryptionKey: strings.TrimSpace(encryptionKey)}
+}
 
 // Target 合成一次连接需要的信息。
 func (d *HostDAO) Target(ctx context.Context, hostID string) (model.Target, error) {
@@ -53,11 +55,10 @@ func (d *HostDAO) Target(ctx context.Context, hostID string) (model.Target, erro
 	if row.SSHPort == 0 || row.Reachability == "outbound" {
 		return model.Target{}, ErrSSHUnavailable
 	}
-	key, err := adminsecurity.GetEncryptionKey()
-	if err != nil {
-		return model.Target{}, err
+	if d.encryptionKey == "" {
+		return model.Target{}, secretdao.ErrMissingEncryptionKey
 	}
-	secret, err := secretdao.GetSystemSecret(d.db.WithContext(ctx), key, secretmodel.SSHHostSecretID(hostID))
+	secret, err := secretdao.GetSystemSecret(d.db.WithContext(ctx), d.encryptionKey, secretmodel.SSHHostSecretID(hostID))
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return model.Target{}, ErrSSHUnavailable
 	}

@@ -12,8 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
-	secret "github.com/mooyang-code/moox/modules/admin/internal/service/secret"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -45,15 +44,25 @@ var validSecretTypes = map[string]bool{
 	"other":       true,
 }
 
+// secretStore 由 *dao.SecretDAO 直接实现。
+type secretStore interface {
+	Create(ctx context.Context, secret *model.Secret) error
+	Update(ctx context.Context, secret *model.Secret) error
+	Delete(ctx context.Context, secretID string) error
+	FindByID(ctx context.Context, secretID string) (*model.Secret, error)
+	List(ctx context.Context, offset, limit int, filters *dao.SecretFilters) ([]model.Secret, int64, error)
+	UpdateStatus(ctx context.Context, secretID, status string) error
+}
+
 // Service 实现 pb.SecretMgrService，承载秘钥管理 API 的业务逻辑。
 type Service struct {
 	pb.UnimplementedSecretMgr
-	svc secret.Service
+	store secretStore
 }
 
 // NewService 创建 SecretMgr RPC 实现。
-func NewService(svc secret.Service) *Service {
-	return &Service{svc: svc}
+func NewService(store secretStore) *Service {
+	return &Service{store: store}
 }
 
 // ========== 秘钥 CRUD ==========
@@ -74,7 +83,7 @@ func (s *Service) ListSecrets(ctx context.Context, req *pb.ListSecretsReq) (*pb.
 	if limit <= 0 {
 		limit = defaultListSecretsLimit
 	}
-	secrets, total, err := s.svc.ListSecrets(ctx, int(req.GetOffset()), limit, filters)
+	secrets, total, err := s.store.List(ctx, int(req.GetOffset()), limit, filters)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Secret] ListSecrets failed: %v", err)
 		return &pb.ListSecretsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥列表失败")}, nil
@@ -95,7 +104,7 @@ func (s *Service) GetSecret(ctx context.Context, req *pb.GetSecretReq) (*pb.GetS
 	if req.GetSecretId() == "" {
 		return &pb.GetSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
 	}
-	secretRecord, err := s.svc.GetSecret(ctx, req.GetSecretId())
+	secretRecord, err := s.store.FindByID(ctx, req.GetSecretId())
 	if err != nil {
 		log.ErrorContextf(ctx, "[Secret] GetSecret failed: %v", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -111,7 +120,7 @@ func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq)
 	if req.GetSecretId() == "" {
 		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
 	}
-	secretRecord, err := s.svc.GetSecret(ctx, req.GetSecretId())
+	secretRecord, err := s.store.FindByID(ctx, req.GetSecretId())
 	if err != nil {
 		log.ErrorContextf(ctx, "[Secret] GetSecretValue failed: %v", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -153,7 +162,7 @@ func (s *Service) GetReadonlyExchangeKey(ctx context.Context, req *pb.GetReadonl
 	if exchange != "binance" && exchange != "okx" {
 		return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "exchange 只能是 binance 或 okx")}, nil
 	}
-	record, err := s.svc.GetSecret(ctx, ReadonlyExchangeKeyID(exchange))
+	record, err := s.store.FindByID(ctx, ReadonlyExchangeKeyID(exchange))
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "没有配置只读 Key")}, nil
@@ -174,7 +183,7 @@ func (s *Service) GetCloudCredential(ctx context.Context, req *pb.GetCloudCreden
 	if strings.TrimSpace(req.GetSecretId()) == "" {
 		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
 	}
-	record, err := s.svc.GetSecret(ctx, req.GetSecretId())
+	record, err := s.store.FindByID(ctx, req.GetSecretId())
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在")}, nil
@@ -221,13 +230,13 @@ func (s *Service) CreateSecret(ctx context.Context, req *pb.CreateSecretReq) (*p
 		secretRecord.Status = "active"
 	}
 	// 从会话自动填充 creator，忽略客户端传入值
-	if userID, username, err := utils.GetUserInfoFromCtx(ctx); err == nil && username != "" {
+	if userID, username, err := auth.GetUserInfoFromCtx(ctx); err == nil && username != "" {
 		secretRecord.Creator = username
 	} else if userID != "" {
 		secretRecord.Creator = userID
 	}
 	secretRecord.SecretID = dao.GenerateSecretID()
-	if err := s.svc.CreateSecret(ctx, secretRecord); err != nil {
+	if err := s.store.Create(ctx, secretRecord); err != nil {
 		log.ErrorContextf(ctx, "[Secret] CreateSecret failed: %v", err)
 		if errors.Is(err, dao.ErrMaskedValue) {
 			return &pb.CreateSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥值疑似脱敏后的值，请输入明文")}, nil
@@ -244,7 +253,7 @@ func (s *Service) UpdateSecret(ctx context.Context, req *pb.UpdateSecretReq) (*p
 	}
 
 	// 先查出现有记录
-	existing, err := s.svc.GetSecret(ctx, req.GetSecretId())
+	existing, err := s.store.FindByID(ctx, req.GetSecretId())
 	if err != nil {
 		log.ErrorContextf(ctx, "[Secret] UpdateSecret GetSecret failed: %v", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -296,7 +305,7 @@ func (s *Service) UpdateSecret(ctx context.Context, req *pb.UpdateSecretReq) (*p
 		existing.SecretValue = secretValue
 	}
 
-	if err := s.svc.UpdateSecret(ctx, existing); err != nil {
+	if err := s.store.Update(ctx, existing); err != nil {
 		log.ErrorContextf(ctx, "[Secret] UpdateSecret failed: %v", err)
 		if errors.Is(err, dao.ErrSecretNotFound) {
 			return &pb.UpdateSecretRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在")}, nil
@@ -309,12 +318,12 @@ func (s *Service) UpdateSecret(ctx context.Context, req *pb.UpdateSecretReq) (*p
 	return &pb.UpdateSecretRsp{RetInfo: retOK()}, nil
 }
 
-// DeleteSecret 删除秘钥（软删除）。
+// DeleteSecret 物理硬删除秘钥。
 func (s *Service) DeleteSecret(ctx context.Context, req *pb.DeleteSecretReq) (*pb.DeleteSecretRsp, error) {
 	if req.GetSecretId() == "" {
 		return &pb.DeleteSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
 	}
-	if err := s.svc.DeleteSecret(ctx, req.GetSecretId()); err != nil {
+	if err := s.store.Delete(ctx, req.GetSecretId()); err != nil {
 		log.ErrorContextf(ctx, "[Secret] DeleteSecret failed: %v", err)
 		if errors.Is(err, dao.ErrSecretNotFound) {
 			return &pb.DeleteSecretRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在或已被删除")}, nil
@@ -333,7 +342,7 @@ func (s *Service) ToggleSecretStatus(ctx context.Context, req *pb.ToggleSecretSt
 	if status != "active" && status != "inactive" {
 		return &pb.ToggleSecretStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "状态值无效，仅支持 active/inactive")}, nil
 	}
-	if err := s.svc.ToggleSecretStatus(ctx, req.GetSecretId(), status); err != nil {
+	if err := s.store.UpdateStatus(ctx, req.GetSecretId(), status); err != nil {
 		log.ErrorContextf(ctx, "[Secret] ToggleSecretStatus failed: %v", err)
 		if errors.Is(err, dao.ErrSecretNotFound) {
 			return &pb.ToggleSecretStatusRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在或已被删除")}, nil

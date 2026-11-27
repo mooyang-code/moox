@@ -34,10 +34,6 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	if err != nil {
 		return &pb.CreateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	// The SQLite INSERT is already committed before this point. Cache
-	// publication is best-effort so a response retry cannot turn a successful
-	// create into a duplicate-key failure or leak an orphaned Space.
-	s.refreshMetadataCacheAfterCommit(ctx, "CreateSpace")
 	return &pb.CreateSpaceRsp{RetInfo: retinfo.Success("success"), Space: created}, nil
 }
 
@@ -54,9 +50,6 @@ func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 	}
 	updated, err := s.metadata.UpsertSpace(ctx, space)
 	if err != nil {
-		return &pb.UpdateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.UpdateSpaceRsp{RetInfo: retinfo.Success("success"), Space: updated}, nil
@@ -91,7 +84,7 @@ func (s *Service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.
 	if err := s.metadata.DeleteSpace(ctx, req.GetSpaceId()); err != nil {
 		return &pb.DeleteSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	if err := s.refreshMetadataCacheSynchronously(ctx, "DeleteSpace"); err != nil {
+	if err := s.refreshDatasetCache(ctx, "DeleteSpace"); err != nil {
 		return &pb.DeleteSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("空间元数据已删除，但缓存尚未发布，请对这些数据集逐个重试 DeleteDataset 以删除行：%s", strings.Join(datasetIDs, ", ")))}, nil
 	}
 	for index, datasetID := range datasetIDs {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 )
 
@@ -48,19 +48,22 @@ func normalizeExchangeKeys(inputs []ExchangeKey) ([]ExchangeKey, error) {
 	return keys, nil
 }
 
-// inspectExchangeKey 按固定 ID 查密钥，连已软删除的行一起看：唯一索引是 (c_secret_id, c_is_deleted)，
-// 同一个 ID 不能被第二次软删除，所以软删除后重建会撞索引；用户在管理台删掉的密钥（作废或泄露）也不该被重新建出来。
+// inspectExchangeKey 按固定 ID 查密钥：先看 t_secrets，再看已删初始密钥墓碑表（t_deleted_initial_secrets），
+// 保证用户在管理台硬删除的作废或泄露密钥不会被 setup init 静默复活。
 func (s *Service) inspectExchangeKey(ctx context.Context, tx *gorm.DB, key ExchangeKey) (string, error) {
-	var rows []secretmodel.Secret
-	if err := tx.WithContext(ctx).Where("c_secret_id = ?", exchangeKeyID(key)).Find(&rows).Error; err != nil {
+	id := exchangeKeyID(key)
+	var count int64
+	if err := tx.WithContext(ctx).Model(&secretmodel.Secret{}).Where("c_secret_id = ?", id).Count(&count).Error; err != nil {
 		return "", ErrStorage
 	}
-	for _, row := range rows {
-		if !row.IsDeleted {
-			return ExchangeKeyExists, nil
-		}
+	if count > 0 {
+		return ExchangeKeyExists, nil
 	}
-	if len(rows) > 0 {
+	deleted, err := secretdao.IsDeletedInitialSecret(ctx, tx, id)
+	if err != nil {
+		return "", ErrStorage
+	}
+	if deleted {
 		return ExchangeKeyDeleted, nil
 	}
 	return ExchangeKeyMissing, nil
@@ -77,10 +80,6 @@ func (s *Service) ensureExchangeKey(ctx context.Context, tx *gorm.DB, key Exchan
 	if state != ExchangeKeyMissing {
 		return result, 0, nil
 	}
-	encrypted, err := mooxsecurity.Encrypt(key.SecretKey, s.encryptionKey)
-	if err != nil {
-		return result, 0, ErrStorage
-	}
 	extra, err := exchangeExtraConfig(key)
 	if err != nil {
 		return result, 0, ErrStorage
@@ -88,8 +87,11 @@ func (s *Service) ensureExchangeKey(ctx context.Context, tx *gorm.DB, key Exchan
 	now := time.Now()
 	secret := &secretmodel.Secret{
 		SecretID: result.SecretID, Name: exchangeKeyName(key), Description: "由 moox.toml 的 [[exchange_keys]] 写入；写入后以管理台为准，修改 moox.toml 不会覆盖",
-		Category: "exchange", Provider: key.Exchange, SecretType: "api_key", KeyID: key.APIKey, SecretValue: encrypted,
+		Category: "exchange", Provider: key.Exchange, SecretType: "api_key", KeyID: key.APIKey, SecretValue: key.SecretKey,
 		ExtraConfig: extra, Status: "active", Creator: "setup", CreateTime: now, ModifyTime: now,
+	}
+	if err := secretdao.EncryptSecretFields(secret, s.encryptionKey); err != nil {
+		return result, 0, ErrStorage
 	}
 	if err := tx.WithContext(ctx).Create(secret).Error; err != nil {
 		return result, 0, ErrStorage

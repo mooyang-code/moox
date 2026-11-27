@@ -7,54 +7,62 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/archiveproxy"
-	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
-	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-// RegisterTRPCServices 注册所有TRPC服务。
-// 控制台复用相同实例及生成的 RPC handler，独立校验 console ACL。
+// RegisterTRPCServices 注册所有 TRPC 服务与控制台本地分派器：
+// - 纯控制台服务（Auth、Ssh）仅注册到进程内 LocalDispatcher，不开多余回环 TCP 端口；
+// - 纯机器服务（Setup、GatewayControl）仅注册到回环 tRPC 端口，不暴露给控制台；
+// - 同时面向控制台与机器的服务（SecretMgr、SysDeploy、ActivityLog）双边注册，复用同一实例。
 func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) error {
 	local, err := console.NewLocalDispatcher()
 	if err != nil {
 		return err
 	}
-	register := func(desc *server.ServiceDesc, implementation any) error {
+	registerLocalOnly := func(desc *server.ServiceDesc, implementation any) error {
 		filters, err := localServiceFilters(desc.ServiceName)
 		if err != nil {
 			return err
 		}
-		if err := local.Register(desc, implementation, filters...); err != nil {
-			return err
-		}
+		return local.Register(desc, implementation, filters...)
+	}
+	registerRPCOnly := func(desc *server.ServiceDesc, implementation any) error {
 		rpc := s.Service(desc.ServiceName)
 		if rpc == nil {
 			return fmt.Errorf("Admin RPC service %q is not configured", desc.ServiceName)
 		}
 		return rpc.Register(desc, implementation)
 	}
-	// 1. 注册认证服务。浏览器会话只放在进程内存里，认证服务与控制台共用这一份。
+	registerRPCAndLocal := func(desc *server.ServiceDesc, implementation any) error {
+		if err := registerLocalOnly(desc, implementation); err != nil {
+			return err
+		}
+		return registerRPCOnly(desc, implementation)
+	}
+
+	// 1. 纯控制台服务：认证服务（浏览器会话只放在进程内存里，认证服务与控制台共用这一份）。
 	log.Info("正在初始化认证服务...")
-	sessions, err := session.NewStore(cfg.Auth.Session.TTL)
+	sessions, err := auth.NewSessionStore(cfg.Auth.Session.TTL)
 	if err != nil {
 		return err
 	}
-	authImp, err := authsvr.NewService(cfg.Auth, services.DBManager, sessions)
+	authImp, err := auth.NewService(cfg.Auth, services.DBManager, sessions, services.ActivityLog.RecordLogin)
 	if err != nil {
 		return err
 	}
-	if err := register(&adminpb.AuthServer_ServiceDesc, authImp); err != nil {
+	if err := registerLocalOnly(&adminpb.AuthServer_ServiceDesc, authImp); err != nil {
 		return err
 	}
+
+	// 2. 网关控制面（独立回环端口 + 专用 SerializationTypeNoop / 验签隔离）与健康端口。
 	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID)
 	if err != nil {
 		return err
@@ -62,44 +70,39 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	if err := gatewaycontrol.Register(s.Service("trpc.moox.admin.GatewayControl"), control); err != nil {
 		return err
 	}
-
 	if err := adminhealth.Register(s.Service("trpc.moox.admin.Health"), time.Now()); err != nil {
 		return err
 	}
 
-	// 3.5 SSH 管理服务（直连端点走 rawhandler）
+	// 3. 纯控制台服务：SSH 管理服务（RPC 走进程内 LocalDispatcher，流式端点走 rawhandler 并在 SSH 处理器内校验会话归属）。
 	sshSvc := sshrpc.NewService(services.SSHService)
-	if err := register(&adminpb.SshServer_ServiceDesc, sshSvc); err != nil {
+	if err := registerLocalOnly(&adminpb.SshServer_ServiceDesc, sshSvc); err != nil {
 		return err
 	}
-	console.SetRawSessionOwnerVerifier(services.SSHService.SessionBelongsToUser)
-	// 注册 SSH 裸 HTTP 处理器。和 RPC 一样按会话 Cookie 鉴权，另外要求 session_id 是当前用户建的 SSH 会话。
 	console.RegisterRawHandler("ssh", "WsConnect", console.RawHandler(sshrpc.WebSocketConnectHandler(services.SSHService)))
 	console.RegisterRawHandler("ssh", "SftpDownload", console.RawHandler(sshrpc.SftpDownloadHandler(services.SSHService)))
 	console.RegisterRawHandler("ssh", "SftpUpload", console.RawHandler(sshrpc.SftpUploadHandler(services.SSHService)))
 
-	// 3.7 秘钥管理服务
-	secretSvc := secretrpc.NewService(services.SecretService)
-	if err := register(&adminpb.SecretMgrServer_ServiceDesc, secretSvc); err != nil {
+	// 4. 控制台 + 机器回环服务：SecretMgr、SysDeploy、ActivityLog。
+	secretSvc := secretrpc.NewService(services.SecretDAO)
+	if err := registerRPCAndLocal(&adminpb.SecretMgrServer_ServiceDesc, secretSvc); err != nil {
+		return err
+	}
+	if err := registerRPCAndLocal(&adminpb.SysDeployServer_ServiceDesc, services.SysDeploy); err != nil {
+		return err
+	}
+	if err := registerRPCAndLocal(&adminpb.ActivityLogServer_ServiceDesc, services.ActivityLog); err != nil {
 		return err
 	}
 
-	// 3.8 服务部署信息
-	sysDeploySvc := sysdeployrpc.NewService(services.SysDeploy)
-	if err := register(&adminpb.SysDeployServer_ServiceDesc, sysDeploySvc); err != nil {
+	// 5. 纯机器回环服务：Setup（仅给 moox-cli setup init 调用，不注册到控制台 LocalDispatcher）。
+	if err := registerRPCOnly(&adminpb.SetupServer_ServiceDesc, setuprpc.NewService(services.Setup)); err != nil {
 		return err
 	}
 
-	// Machine setup uses its dedicated loopback listener; the browser surface
-	// uses the same implementation and the catalog's console ACL.
-	if err := register(&adminpb.SetupServer_ServiceDesc, setuprpc.NewService(services.Setup)); err != nil {
-		return err
-	}
-	if err := register(&adminpb.ActivityLogServer_ServiceDesc, services.ActivityLog); err != nil {
-		return err
-	}
-
-	gateway, err := newConsoleGateway(services.DBManager.GetDB(), cfg.AdminNodeID, hostKeyFile())
+	// 6. 控制台转发客户端与归档只出站中转（复用长生命周期 TopologyDAO）。
+	topology := services.SysDeploy.TopologyDAO()
+	gateway, err := newConsoleGateway(services.DBManager.GetDB(), topology, cfg.AdminNodeID, hostKeyFile())
 	if err != nil {
 		return err
 	}
@@ -109,9 +112,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 	services.consoleGateway, services.consoleHandler = gateway, handler
-	// 归档的分区副本下载与最新数据预览：裸 HTTP 处理器，按会话 Cookie 鉴权后，
-	// 再按拓扑里唯一启用的 archive-worker 部署转发到它的数据端口（本机直连，只出站主机经 console 网关客户端中转）。
-	if err := registerArchiveProxy(services, cfg.AdminNodeID, gateway); err != nil {
+	if err := registerArchiveProxy(topology, cfg.AdminNodeID, gateway); err != nil {
 		services.closeGateways()
 		return err
 	}
@@ -120,11 +121,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	return nil
 }
 
-func registerArchiveProxy(services *Services, controlHostID string, gateway archiveproxy.RelayDialer) error {
-	topology, err := sysdeploy.NewTopologyDAO(services.DBManager.GetDB(), controlHostID)
-	if err != nil {
-		return err
-	}
+func registerArchiveProxy(topology archiveproxy.Topology, controlHostID string, gateway archiveproxy.RelayDialer) error {
 	proxy, err := archiveproxy.New(archiveproxy.Options{Topology: topology, Relay: gateway, ControlHostID: controlHostID})
 	if err != nil {
 		return err

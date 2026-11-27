@@ -90,7 +90,7 @@ func newInstallHarness(t *testing.T) *installHarness {
 	writeLibrary(t, filepath.Join(seedDir, "factors"), "lib.yaml")
 	require.NoError(t, os.WriteFile(filepath.Join(seedDir, "factor-tasks.yaml"), []byte(testSeed), 0o600))
 	for _, host := range h.snapshot.Manifest.Hosts() {
-		h.reports = append(h.reports, deployscan.HostReport{Host: host.Name, Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20, ArchiveKB: -1, SeaweedFSKB: -1})
+		h.reports = append(h.reports, deployscan.HostReport{Host: host.Name, Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20, ArchiveKB: -1})
 	}
 	record := func(name string) error {
 		h.mu.Lock()
@@ -220,9 +220,9 @@ func TestSetupInstallPreviewChangesNothing(t *testing.T) {
 	require.NotContains(t, preview, "wipe", "没装过时没有清空范围")
 	require.Empty(t, h.calls, "预检不改任何东西")
 
-	// 装过时预检带上清空范围（含归档与内置对象存储的大小）与提醒。
+	// 装过时预检带上清空范围（含归档目录的大小）与提醒。
 	h.markInstalled()
-	h.report("factor").ArchiveKB, h.report("factor").SeaweedFSKB = 2048, 4096
+	h.report("factor").ArchiveKB = 2048
 	out, err = h.run("install", "--space-id", "crypto")
 	require.NoError(t, err)
 	preview = parsePreview(t, out)
@@ -378,7 +378,7 @@ func TestSetupUpdatePreviewsPerHostComponents(t *testing.T) {
 
 	h.markInstalled()
 	// 因子机是新加的主机；控制机上还留着 moox.toml 里已经去掉的组件。
-	*h.report("factor") = deployscan.HostReport{Host: "factor", Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20, ArchiveKB: -1, SeaweedFSKB: -1}
+	*h.report("factor") = deployscan.HostReport{Host: "factor", Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20, ArchiveKB: -1}
 	control := h.report("control")
 	control.Version = json.RawMessage(`{"version":"v0.0.1","components":{"admin":{},"host-gateway":{}}}`)
 	control.Units = []string{"moox-admin.service", "moox-host-gateway.service", "moox-old.service"}
@@ -462,7 +462,7 @@ func TestSetupUpdateDeploysInInstallOrderWithoutInitOrStart(t *testing.T) {
 func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
-	h.report("factor").ArchiveKB, h.report("factor").SeaweedFSKB = 2048, 4096
+	h.report("factor").ArchiveKB = 2048
 	operatorFiles := []string{identitybundle.OperatorKeyFile, identitybundle.OperatorPinFile, identitybundle.OperatorCAFile}
 	for _, name := range append(operatorFiles, "unrelated.txt") {
 		require.NoError(t, os.WriteFile(filepath.Join(h.operator, name), []byte("keep\n"), 0o600))
@@ -479,7 +479,6 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	require.GreaterOrEqual(t, at, 0)
 	factor := hosts[at].(map[string]any)
 	require.EqualValues(t, 2048, factor["archive_kb"], "预览里单独列出归档目录的大小")
-	require.EqualValues(t, 4096, factor["seaweedfs_kb"], "预览里单独列出内置对象存储数据的大小")
 	require.Empty(t, h.calls, "预览不清空")
 	require.Contains(t, preview["note"], "主机 overseas 上有 Trade：清空会删除 Trade 库，先确认没有持仓和挂单")
 	require.Contains(t, preview["left_behind"], "云上的采集计划函数（moox-fetch-plan- 开头；要删加 --clean-functions）", "预览列出卸载不会动的东西")
@@ -554,14 +553,14 @@ func TestSetupOperateCommandsPreviewAndValidateComponent(t *testing.T) {
 	}
 	for _, command := range []string{"restart", "stop", "start-component"} {
 		before := len(operations)
-		out, err := h.run(command, "--host", "factor", "--component", "seaweedfs")
+		out, err := h.run(command, "--host", "factor", "--component", "archive-worker")
 		require.NoError(t, err)
-		require.Equal(t, "moox-seaweedfs.service", parsePreview(t, out)["unit"], "内置对象存储也是这台主机上的一个组件")
+		require.Equal(t, "moox-archive-worker.service", parsePreview(t, out)["unit"])
 		require.Len(t, operations, before, "没有 --yes 只预览")
-		_, err = h.run(command, "--host", "factor", "--component", "seaweedfs", "--yes")
+		_, err = h.run(command, "--host", "factor", "--component", "archive-worker", "--yes")
 		require.NoError(t, err)
 	}
-	require.Equal(t, []string{"factor/seaweedfs/restart", "factor/seaweedfs/stop", "factor/seaweedfs/start"}, operations)
+	require.Equal(t, []string{"factor/archive-worker/restart", "factor/archive-worker/stop", "factor/archive-worker/start"}, operations)
 	_, err := h.run("restart", "--host", "storage", "--component", "monitor", "--yes")
 	require.ErrorContains(t, err, "主机 storage 上没有组件 monitor")
 	_, err = h.run("restart", "--host", "nowhere", "--component", "monitor", "--yes")

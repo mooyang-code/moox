@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/stretchr/testify/require"
@@ -48,7 +48,6 @@ func TestAppendIsIdempotentByDedupKey(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, replay.GetRetInfo().GetCode())
 	require.EqualValues(t, 1, replay.GetInserted(), "replayed dedup keys are ignored")
 
-	// 没有幂等键的记录每次都写入。
 	for i := 0; i < 2; i++ {
 		_, err := service.AppendActivityLogs(ctx, &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{entry("", "global", "全局事件", "")}})
 		require.NoError(t, err)
@@ -115,6 +114,48 @@ func TestListFiltersAndPaginatesNewestFirst(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 }
 
+// 同一秒内的毫秒级范围查询不发生秒级截断漏查。
+func TestListPreservesSubSecondMillisecondPrecision(t *testing.T) {
+	service, now := newTestService(t)
+	ctx := context.Background()
+	base := time.Date(2026, 10, 12, 8, 0, 1, 0, time.UTC)
+
+	*now = base.Add(150 * time.Millisecond)
+	_, err := service.AppendActivityLogs(ctx, &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{entry("crypto", "c", "ms-150", "")}})
+	require.NoError(t, err)
+
+	*now = base.Add(500 * time.Millisecond)
+	_, err = service.AppendActivityLogs(ctx, &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{entry("crypto", "c", "ms-500", "")}})
+	require.NoError(t, err)
+
+	*now = base.Add(850 * time.Millisecond)
+	_, err = service.AppendActivityLogs(ctx, &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{entry("crypto", "c", "ms-850", "")}})
+	require.NoError(t, err)
+
+	rsp, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{
+		SpaceId: "crypto",
+		Since:   base.Add(200 * time.Millisecond).UnixMilli(),
+		Until:   base.Add(800 * time.Millisecond).UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.Len(t, rsp.GetItems(), 1)
+	require.Equal(t, "ms-500", rsp.GetItems()[0].GetTitle())
+	require.Equal(t, base.Add(500*time.Millisecond).UnixMilli(), rsp.GetItems()[0].GetCreatedAt())
+}
+
+func TestRecordLoginAppendsGlobalAuthLog(t *testing.T) {
+	service, now := newTestService(t)
+	*now = time.Date(2026, 10, 12, 9, 30, 0, 250_000_000, time.UTC)
+	require.NoError(t, service.RecordLogin(context.Background(), "u-1", "admin", "203.0.113.7", "test-ua"))
+
+	rsp, err := service.ListActivityLogs(context.Background(), &pb.ListActivityLogsReq{Global: true, Category: auth.LoginLogCategory})
+	require.NoError(t, err)
+	require.Len(t, rsp.GetItems(), 1)
+	require.Equal(t, "u-1", rsp.GetItems()[0].GetRefId())
+	require.Contains(t, rsp.GetItems()[0].GetDetail(), "203.0.113.7")
+	require.Equal(t, now.UnixMilli(), rsp.GetItems()[0].GetCreatedAt())
+}
+
 func TestBrowserCallersNeedSpaceOrGlobalAndCannotWrite(t *testing.T) {
 	service, _ := newTestService(t)
 	_, err := service.AppendActivityLogs(context.Background(), &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{
@@ -123,7 +164,7 @@ func TestBrowserCallersNeedSpaceOrGlobalAndCannotWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := trpc.BackgroundContext()
-	trpc.SetMetaData(ctx, model.CtxUserID, []byte("admin"))
+	trpc.SetMetaData(ctx, auth.CtxUserID, []byte("admin"))
 
 	denied, err := service.AppendActivityLogs(ctx, &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{entry("crypto", "c", "t", "")}})
 	require.NoError(t, err)

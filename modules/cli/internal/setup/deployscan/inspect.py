@@ -1,4 +1,4 @@
-# 只读检测一台主机上的 MooX 部署：部署根、version.json、moox-* 用户单元、部署根里的进程、归档与 SeaweedFS 占用、
+# 只读检测一台主机上的 MooX 部署：部署根、version.json、moox-* 用户单元、部署根里的进程、归档占用、
 # 磁盘、linger 与 journald。不建目录、不改文件。参数是一个 JSON：{"root": 部署根, "sizes": 是否统计目录大小}。
 import json, os, pwd, subprocess, sys
 
@@ -35,7 +35,7 @@ root, sizes = request.get("root"), bool(request.get("sizes"))
 if not valid_root(root):
     fail("deploy root must be a clean absolute path other than /")
 report = {"root": root, "root_exists": os.path.isdir(root), "entries": [], "installed": False, "version_text": "",
-          "units": [], "active": [], "disabled": [], "processes": 0, "archive_kb": -1, "seaweedfs_kb": -1, "disk_free_kb": -1,
+          "units": [], "active": [], "disabled": [], "processes": 0, "archive_kb": -1, "disk_free_kb": -1,
           "linger": False, "journald": os.path.isdir("/var/log/journal")}
 if report["root_exists"]:
     report["entries"] = sorted(os.listdir(root))
@@ -47,7 +47,6 @@ if report["root_exists"]:
         report["version_text"] = raw.decode("utf-8", "replace")
     if sizes:
         report["archive_kb"] = size_kb(os.path.join(root, "archive"))
-        report["seaweedfs_kb"] = size_kb(os.path.join(root, "data", "seaweedfs"))
 probe = root
 while not os.path.isdir(probe) and probe != "/":
     probe = os.path.dirname(probe)

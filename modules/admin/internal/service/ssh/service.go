@@ -8,7 +8,32 @@ import (
 	"github.com/pkg/sftp"
 )
 
-// Service SSH 服务接口
+// SftpFileEntry 是 SFTP 目录中的一个条目。
+type SftpFileEntry struct {
+	Path       string
+	Name       string
+	Mode       string
+	Size       int64
+	ModifiedAt int64
+	Type       string
+}
+
+// SftpPathCrumb 是目录路径的一个面包屑节点。
+type SftpPathCrumb struct {
+	Name string
+	Dir  string
+}
+
+// SftpListResult 是 SftpList 的强类型返回结构。
+type SftpListResult struct {
+	Files      []SftpFileEntry
+	FileCount  int
+	DirCount   int
+	Paths      []SftpPathCrumb
+	CurrentDir string
+}
+
+// Service SSH 服务接口。
 type Service interface {
 	// SSH 会话。主机来自登记表 t_hosts，终端与文件只能连接登记了 SSH 信息的主机。
 	CreateSession(ctx context.Context, hostID, clientIP, userID string) (string, error)
@@ -20,7 +45,7 @@ type Service interface {
 	SessionBelongsToUser(sessionID, userID string) bool
 
 	// SFTP
-	SftpList(ctx context.Context, sessionID string, dirPath string) (interface{}, error)
+	SftpList(ctx context.Context, sessionID string, dirPath string) (*SftpListResult, error)
 	SftpUpload(ctx context.Context, sessionID string, dstPath string, files []*multipart.FileHeader) ([]string, error)
 	SftpDownload(ctx context.Context, sessionID, filePath string) (*sftp.File, int64, string, error)
 	SftpDelete(ctx context.Context, sessionID, path string) error

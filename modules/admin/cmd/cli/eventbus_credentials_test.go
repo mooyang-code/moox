@@ -52,7 +52,7 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int64
-	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
+	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ?", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count != int64(len(eventBusRoles)) {
@@ -267,7 +267,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	var count int64
-	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
+	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ?", "eventbus", "moox_eventbus").Count(&count).Error)
 	assert.EqualValues(t, len(eventBusRoles), count)
 }
 

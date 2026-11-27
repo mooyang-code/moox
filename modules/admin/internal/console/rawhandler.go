@@ -5,15 +5,12 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
-
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // RawHandler 是经统一网关分派的裸 HTTP 处理器（用于 multipart/流式等不适合 PB RPC 的场景）。
-// 它运行在 thttp http_no_protocol mux 之上，会话 Cookie、Origin 与 trace 由控制台前置统一完成，
+// 会话 Cookie、Origin 与 trace 由控制台前置统一完成，
 // handler 自行从 r 读取请求（含 multipart）、自行向 w 写响应。
-// ctx 已注入 space_id（X-Space-Id）和 trace_id，handler 可直接使用。
 type RawHandler http.HandlerFunc
 
 var (
@@ -48,14 +45,11 @@ func LookupRawHandler(serviceID, method string) (RawHandler, bool) {
 // rawAndServe 分派裸 HTTP 处理器。
 // 返回 true 表示已处理（命中裸处理器），false 表示未命中。
 // 注意：调用方应在读取请求体之前调用本函数，避免 multipart body 被网关读干。
-// 鉴权（会话 Cookie）由调用方在调用本函数之前完成；space_id/trace_id 在此注入 ctx。
-func rawAndServe(ctx context.Context, w http.ResponseWriter, r *http.Request, serviceID, method string, headers map[string]string) bool {
+func rawAndServe(ctx context.Context, w http.ResponseWriter, r *http.Request, serviceID, method string) bool {
 	h, ok := LookupRawHandler(serviceID, method)
 	if !ok {
 		return false
 	}
-	// 注入 space_id（硬隔离维度）与 trace_id，供裸 handler 使用
-	ctx = spacecontext.InjectFromHeaders(ctx, headers)
 	h(w, r.WithContext(ctx))
 	return true
 }

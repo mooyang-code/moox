@@ -40,6 +40,17 @@ describe("deployment presentation", () => {
       })[0].status
     ).toBe("disabled");
     expect(componentPorts(component)).toEqual([11011, 11012]);
+    expect(
+      componentPorts({
+        ...component,
+        ports: [9527],
+        services: [
+          { path: "trpc.moox.infra.Auth", port: 0, methods: [] },
+          { path: "trpc.moox.ops.SecretMgr", port: 11108, methods: [] }
+        ],
+        health: { port: 11010 }
+      })
+    ).toEqual([9527, 11010, 11108]);
   });
   it("uses server observation time for heartbeat age and keeps never-reported distinct", () => {
     expect(gatewayLabel(snapshot)).toBe("在线");

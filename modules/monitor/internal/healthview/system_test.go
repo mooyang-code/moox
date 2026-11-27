@@ -179,8 +179,8 @@ func TestProjectSystemPausePhases(t *testing.T) {
 
 	// 已停用（disabled）的可暂停部署不计入分母：其余已启用可暂停模块全部暂停时仍为 "paused"。
 	disabledExcluded := projectSystem([]*pb.HealthComponent{
-		{ComponentId: "collector", Name: "行情采集服务", Status: "healthy", Reporter: &pb.HealthSignal{Status: "healthy"}, Lifecycle: &pb.HealthLifecycle{Stage: "paused", Pause: &pb.HealthPause{Kind: "system"}}},
-		{ComponentId: "strategy", Name: "策略服务", Status: "healthy", Reporter: &pb.HealthSignal{Status: "healthy"}, Lifecycle: &pb.HealthLifecycle{Stage: "paused", Pause: &pb.HealthPause{Kind: "system"}}},
+		{ComponentId: "collector", Name: "行情采集服务", Status: "healthy", Reporter: &pb.HealthSignal{Status: "healthy"}, Lifecycle: &commonpb.LifecycleSnapshot{Stage: "paused", Pause: &commonpb.LifecyclePause{Kind: "system"}}},
+		{ComponentId: "strategy", Name: "策略服务", Status: "healthy", Reporter: &pb.HealthSignal{Status: "healthy"}, Lifecycle: &commonpb.LifecycleSnapshot{Stage: "paused", Pause: &commonpb.LifecyclePause{Kind: "system"}}},
 		{ComponentId: "trade", Name: "交易服务", Status: "disabled", Reporter: &pb.HealthSignal{Status: "unknown"}},
 	})
 	require.Equal(t, "paused", disabledExcluded.Phase)

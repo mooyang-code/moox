@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	secret "github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -129,12 +128,12 @@ func TestSecretModelConversions(t *testing.T) {
 }
 
 type getSecretValueFakeService struct {
-	secret.Service
+	secretStore
 	gotSecretID string
 	record      *model.Secret
 }
 
-func (f *getSecretValueFakeService) GetSecret(ctx context.Context, secretID string) (*model.Secret, error) {
+func (f *getSecretValueFakeService) FindByID(ctx context.Context, secretID string) (*model.Secret, error) {
 	f.gotSecretID = secretID
 	return f.record, nil
 }
@@ -221,7 +220,7 @@ func TestGetSecretValueReliesOnGatewayMethodAllowlist(t *testing.T) {
 
 func TestGetSecretValueMapsMissingSecret(t *testing.T) {
 	svc := NewService(&getSecretValueFakeService{
-		Service: secret.NewService(&dao.SecretDAO{}),
+		secretStore: &dao.SecretDAO{},
 	})
 
 	rsp, err := svc.GetSecretValue(context.Background(), &pb.GetSecretValueReq{})

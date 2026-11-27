@@ -116,3 +116,50 @@ func (r *SubjectFirstSeenRepository) DatasetFirstSeen(ctx context.Context, space
 	}
 	return value.at, value.ok, value.err
 }
+
+// PruneDatasets 清理不再存在于当前采集清单中的数据集残留记录，返回删除行数。
+// 当所有现存记录都属于 active 集合时直接返回，不开启写事务。
+func (r *SubjectFirstSeenRepository) PruneDatasets(ctx context.Context, active map[[2]string]struct{}) (int64, error) {
+	type result struct {
+		deleted int64
+		err     error
+	}
+	value, err := WithDatabase(r.store, func(db *gorm.DB) result {
+		var existing []struct {
+			SpaceID   string `gorm:"column:c_space_id"`
+			DatasetID string `gorm:"column:c_dataset_id"`
+		}
+		if err := db.WithContext(ctx).Model(&subjectFirstSeenRow{}).Select("DISTINCT c_space_id, c_dataset_id").Find(&existing).Error; err != nil {
+			return result{err: err}
+		}
+		var orphaned [][2]string
+		for _, item := range existing {
+			key := [2]string{item.SpaceID, item.DatasetID}
+			if _, ok := active[key]; !ok {
+				orphaned = append(orphaned, key)
+			}
+		}
+		if len(orphaned) == 0 {
+			return result{}
+		}
+		var deleted int64
+		err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			for _, key := range orphaned {
+				res := tx.Where("c_space_id = ? AND c_dataset_id = ?", key[0], key[1]).Delete(&subjectFirstSeenRow{})
+				if res.Error != nil {
+					return res.Error
+				}
+				deleted += res.RowsAffected
+			}
+			return nil
+		})
+		return result{deleted: deleted, err: err}
+	})
+	if err != nil {
+		return 0, fmt.Errorf("prune subject first seen datasets: %w", err)
+	}
+	if value.err != nil {
+		return 0, fmt.Errorf("prune subject first seen datasets: %w", value.err)
+	}
+	return value.deleted, nil
+}

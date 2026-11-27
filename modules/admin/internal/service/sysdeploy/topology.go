@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -24,8 +24,9 @@ var ErrInvalidTopology = errors.New("invalid host topology")
 type TopologyDAO struct {
 	db            *gorm.DB
 	catalog       servicecatalog.Catalog
+	keyStore      *keys.Store
 	controlHostID string
-	// encryptionKey 返回加密主机 SSH 凭据用的主密钥，只在真正要写凭据时才调用；为空时从环境读取（线上 Admin 进程）。
+	// encryptionKey 返回加密主机 SSH 凭据用的主密钥，只在真正要写凭据时才调用。
 	encryptionKey func() (string, error)
 }
 
@@ -37,7 +38,23 @@ func NewTopologyDAO(db *gorm.DB, controlHostID string) (*TopologyDAO, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TopologyDAO{db: db, catalog: catalog, controlHostID: controlHostID}, nil
+	keyStore, err := keys.NewStore(db)
+	if err != nil {
+		return nil, err
+	}
+	return &TopologyDAO{db: db, catalog: catalog, keyStore: keyStore, controlHostID: controlHostID}, nil
+}
+
+// WithEncryptionKey 指定加密主机 SSH 凭据的显式主密钥。
+func (d *TopologyDAO) WithEncryptionKey(key string) *TopologyDAO {
+	trimmed := strings.TrimSpace(key)
+	d.encryptionKey = func() (string, error) {
+		if trimmed == "" {
+			return "", secretdao.ErrMissingEncryptionKey
+		}
+		return trimmed, nil
+	}
+	return d
 }
 
 // WithEncryptionKeyFunc 指定取得 SSH 凭据主密钥的方式，离线 bootstrap 在进程环境之外使用。
@@ -231,8 +248,7 @@ func (d *TopologyDAO) declare(spec HostSpec, previous map[string]HostRecord, dep
 	wanted := map[string]bool{}
 	for _, id := range spec.Components {
 		component, ok := d.catalog.Component(id)
-		// 第三方程序（SeaweedFS）不登记：它不上报，部署由 moox-cli 按拓扑推出来。
-		if !ok || wanted[id] || component.Scope == servicecatalog.ScopeHost || component.ThirdParty {
+		if !ok || wanted[id] || component.Scope == servicecatalog.ScopeHost {
 			return HostRecord{}, nil, fmt.Errorf("%w: unknown, duplicate or automatic component %q", ErrInvalidTopology, id)
 		}
 		wanted[id] = true
@@ -320,11 +336,10 @@ func (d *TopologyDAO) writeSSHCredential(tx *gorm.DB, hostID string, ssh *SSHSpe
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 	}
-	keyFn := d.encryptionKey
-	if keyFn == nil {
-		keyFn = adminsecurity.GetEncryptionKey
+	if d.encryptionKey == nil {
+		return secretdao.ErrMissingEncryptionKey
 	}
-	key, err := keyFn()
+	key, err := d.encryptionKey()
 	if err != nil {
 		return err
 	}

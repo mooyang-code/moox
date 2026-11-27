@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
@@ -51,18 +50,15 @@ func newPrimaryViewEnv(t *testing.T, datasets []readyBenchDataset) *followEnv {
 	if _, err := meta.UpsertSpace(ctx, &pb.Space{SpaceId: readyBenchSpace, Name: "压测空间"}); err != nil {
 		t.Fatal(err)
 	}
-	cache, err := metacache.New(ctx, meta, metacache.Options{RefreshInterval: metacache.RefreshDisabled, RefreshTimeout: 5 * time.Second, InitialLoadTimeout: 5 * time.Second})
+	cache, err := metacache.NewDatasetCache(ctx, meta)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 	return newFollowEnv(t, datasets, followEnvOptions{
-		snapshot:  cache.RequestSnapshot,
-		validator: primarystore.NewMetadataValidator(cache),
-		datasetExists: func(spaceID, datasetID string) bool {
-			_, err := cache.GetDataset(context.Background(), spaceID, datasetID)
-			return err == nil
-		},
+		snapshot:      cache.RequestSnapshot,
+		validator:     primarystore.NewMetadataValidator(cache),
+		datasetExists: cache.HasDataset,
 		setup: func(store *pebble.Store) {
 			metadataService, err := catalog.NewMetadataService(meta, cache, catalog.Options{Rows: store})
 			if err != nil {

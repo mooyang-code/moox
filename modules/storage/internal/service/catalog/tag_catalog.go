@@ -24,14 +24,12 @@ func (s *Service) UpsertTag(ctx context.Context, req *pb.UpsertTagReq) (*pb.Upse
 		if err != nil {
 			return &pb.UpsertTagRsp{RetInfo: retinfo.FromError(err)}, nil
 		}
-		s.refreshMetadataCacheAfterCommit(ctx, "UpsertTag")
 		return &pb.UpsertTagRsp{RetInfo: retinfo.Success("success"), Tag: tag}, nil
 	}
 	tag, err := s.metadata.UpsertTag(ctx, req.GetTag())
 	if err != nil {
 		return &pb.UpsertTagRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	s.refreshMetadataCacheAfterCommit(ctx, "UpsertTag")
 	return &pb.UpsertTagRsp{RetInfo: retinfo.Success("success"), Tag: tag}, nil
 }
 
@@ -72,7 +70,6 @@ func (s *Service) DeleteTag(ctx context.Context, req *pb.DeleteTagReq) (*pb.Dele
 		}
 		return rsp, nil
 	}
-	s.refreshMetadataCacheAfterCommit(ctx, "DeleteTag")
 	return &pb.DeleteTagRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
@@ -131,7 +128,6 @@ func (s *Service) ApplyTagSnapshot(ctx context.Context, req *pb.ApplyTagSnapshot
 	if err != nil {
 		return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	s.refreshMetadataCacheAfterCommit(ctx, "ApplyTagSnapshot")
 	return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.Success("success"), Added: uint32(result.Added), Activated: uint32(result.Activated), Inactivated: uint32(result.Inactivated)}, nil
 }
 
@@ -143,7 +139,6 @@ func (s *Service) UpdateSubjectAttributes(ctx context.Context, req *pb.UpdateSub
 	if err != nil {
 		return &pb.UpdateSubjectAttributesRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	s.refreshMetadataCacheAfterCommit(ctx, "UpdateSubjectAttributes")
 	return &pb.UpdateSubjectAttributesRsp{RetInfo: retinfo.Success("success"), Updated: uint32(updated), Skipped: uint32(skipped)}, nil
 }
 
@@ -154,9 +149,6 @@ func (s *Service) SetTagMemberTradingStatus(ctx context.Context, req *pb.SetTagM
 	updated, skipped, err := s.metadata.SetTagMemberTradingStatus(ctx, req.GetSpaceId(), req.GetTagId(), req.GetItems())
 	if err != nil {
 		return &pb.SetTagMemberTradingStatusRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if updated > 0 {
-		s.refreshMetadataCacheAfterCommit(ctx, "SetTagMemberTradingStatus")
 	}
 	return &pb.SetTagMemberTradingStatusRsp{RetInfo: retinfo.Success("success"), Updated: uint32(updated), Skipped: uint32(skipped)}, nil
 }

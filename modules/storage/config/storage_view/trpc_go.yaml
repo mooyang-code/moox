@@ -10,11 +10,6 @@ server:
   # History backfills may temporarily contend with PrimaryStore reads. Keep
   # the request alive long enough for a bounded Pebble batch to complete.
   timeout: 60000
-  admin:
-    ip: 127.0.0.1
-    port: 20001
-    read_timeout: 3000
-    write_timeout: 60000
   service:
     - name: trpc.moox.storage.Health
       ip: 127.0.0.1

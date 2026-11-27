@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -31,7 +30,6 @@ import (
 
 func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	const master = "fixture-only-topology-gateway-master-0123456789"
-	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", master)
 	manager := database.NewManager()
 	require.NoError(t, manager.Initialize(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "admin.db")}))
 	db := manager.GetDB()
@@ -46,11 +44,12 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.Nil(t, methods.ByName("ListServiceDeployments"))
 	require.Nil(t, methods.ByName("GetDirectory"), "目录不再由 Admin 展开下发")
 
-	service := sysdeploy.NewService(manager, "control")
+	service, err := sysdeploy.NewService(manager, "control", master)
+	require.NoError(t, err)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
-	pb.RegisterSysDeployService(svc, rpc.NewService(service))
+	pb.RegisterSysDeployService(svc, service)
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	proxy := pb.NewSysDeployClientProxy(client.WithTransport(transport.NewClientTransport()), client.WithTarget("ip://"+listener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(3*time.Second))

@@ -387,14 +387,14 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, spe
 		s.ensureFollower(runtime.ref)
 		return nil
 	}
-	active := runtime.queryState().active
+	isActive := runtime.queryState().active()
 	// 维护每轮都会跑：DuckDB 的完整 Stat 要对全表做 COUNT/MIN/MAX，这里只做元数据级的检查，文件大小也在其中。
 	stats, metadataOnly, err := maintainIndexStats(ctx, runtime.engine, runtime.indexID)
 	if err != nil {
 		return err
 	}
 	// 本进程刚建好、还没有跟随器记进度的索引（没起跟随时）同样算建好。
-	if !indexBuiltFor(spec, stats) && !(active == runtime.indexID && indexOwnedBy(spec, stats)) {
+	if !indexBuiltFor(spec, stats) && !(isActive && indexOwnedBy(spec, stats)) {
 		return s.buildInitialIndex(ctx, opts, runtime, spec)
 	}
 	s.observeViewFileSize(runtime, stats, opts)

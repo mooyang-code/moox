@@ -7,28 +7,8 @@ import "host_metric.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen;monitorpb";
 
-enum AlertEventType {
-  ALERT_EVENT_TYPE_UNSPECIFIED = 0;
-  ALERT_EVENT_TYPE_TRIGGERED = 1;
-  ALERT_EVENT_TYPE_REMINDER = 2;
-  ALERT_EVENT_TYPE_RESOLVED = 3;
-}
-
 // 本文件的墙钟时刻（*_at、since 等 int64 字段）都是 Unix 纪元起算的毫秒，0 表示没有；
 // 例外是 HealthDataset 的 input_watermark_at、output_watermark_at、expected_bar_at：它们是 data_time（开盘时间）文本，与 Storage 行键同一口径。
-
-// AlertEvent 是一条告警事件；标题与级别是写事件时检查的名称与级别，检查删除后仍能显示。
-message AlertEvent {
-  string event_id = 1;
-  string space_id = 2;
-  string check_id = 3;
-  AlertEventType event_type = 4;
-  string title = 5;
-  string severity = 6;
-  string message = 7;
-  string payload_json = 8;
-  int64 created_at = 9;
-}
 
 // Health overview v2: identities are explicit; status has six canonical values.
 message HealthObject {
@@ -94,40 +74,10 @@ message HealthComponent {
   repeated HealthReporter instances = 8;
   int64 status_since = 9;
   // 模块自己的生命周期状态（设计 3.8），取最近一次新鲜的上报；模块没有生命周期或已停止上报时为空。
-  HealthLifecycle lifecycle = 12;
+  common.LifecycleSnapshot lifecycle = 12;
   // readiness 是最近一次上报的就绪判断：ready、not_ready，空表示上报里没有；not_ready_reason 是未就绪的原因。
   string readiness = 13;
   string not_ready_reason = 14;
-}
-// HealthLifecycle 是模块上报的模块级生命周期状态（设计 3.8）。
-message HealthLifecycle {
-  // running | paused | resuming。
-  string stage = 1;
-  string reason = 2;
-  // 暂停详情（暂停或恢复追赶中）。
-  HealthPause pause = 3;
-  // 恢复追赶进度（恢复追赶中）。
-  HealthCatchup catchup = 4;
-}
-// HealthPause 是暂停详情：类型、原因、操作者、开始时间。
-message HealthPause {
-  // manual | system。
-  string kind = 1;
-  string reason = 2;
-  string by = 3;
-  int64 since = 4;
-}
-// HealthCatchup 是恢复追赶进度：暂停期间缺失的数据补采、增量进入，追平后才放行。
-message HealthCatchup {
-  int64 since = 1;
-  int64 done = 2;
-  int64 total = 3;
-  bool caught_up = 4;
-  // 被谁阻塞（例如某个任务、上游模块尚未追平）。
-  string blocked_by = 5;
-  // 暂停区间里确认无法补采的周期数。
-  int32 unfillable = 6;
-  string message = 7;
 }
 // HealthSystem 是系统状态：健康面（有生命周期的模块是否都在上报、都已就绪）与运行阶段（只由用户命令推进）两个维度。
 message HealthSystem {
@@ -474,7 +424,6 @@ message GetDoctorContextRsp {
   repeated DoctorWatermark watermarks = 8;
   repeated HostAgentInfo host_resources = 9;
   repeated DoctorDiskForecast disk_forecasts = 10;
-  repeated AlertEvent active_alerts = 11;
   repeated DoctorObservation missing_observations = 12;
 }
 

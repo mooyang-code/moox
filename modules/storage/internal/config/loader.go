@@ -2,12 +2,23 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"gopkg.in/yaml.v2"
+)
+
+const (
+	DefaultViewBackfillPageSize        uint32 = 2000
+	MaxViewBackfillPageSize            uint32 = 10000
+	DefaultViewBackfillRequestInterval        = 100 * time.Millisecond
+	DefaultViewDeleteOldestBatchSize          = 2000
+	MaxViewDeleteOldestBatchSize              = 20000
 )
 
 // ConfigLoader 配置加载器
@@ -18,6 +29,101 @@ type ConfigLoader struct {
 // RuntimeConfig 保存运行时加载出的完整业务配置。
 type RuntimeConfig struct {
 	Storage StorageConfig `yaml:"storage"`
+}
+
+// LoadedConfig 保存单次解析后的业务配置及配置来源路径，供服务端与 CLI 复用。
+type LoadedConfig struct {
+	ConfigPath string
+	Storage    StorageConfig
+}
+
+// ViewSettings 保存校验后的 View 建索引与定时删旧行参数。
+type ViewSettings struct {
+	BackfillPageSize        uint32
+	BackfillRequestInterval time.Duration
+	DeleteOldestBatchSize   int
+}
+
+// Load 单次解析业务配置文件并应用默认值；configPath 为空时直接返回默认配置。
+func Load(configPath string) (LoadedConfig, error) {
+	trimmed := strings.TrimSpace(configPath)
+	var cfg RuntimeConfig
+	if trimmed == "" {
+		cfg.ApplyDefaults()
+		return LoadedConfig{Storage: cfg.Storage}, nil
+	}
+	loader := NewConfigLoader(filepath.Dir(trimmed))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(trimmed), &cfg, cfg.ApplyDefaults); err != nil {
+		return LoadedConfig{}, fmt.Errorf("load storage config %s: %w", trimmed, err)
+	}
+	return LoadedConfig{ConfigPath: trimmed, Storage: cfg.Storage}, nil
+}
+
+// LoadPolicy 解析并加载 Storage 策略文件；未提供配置文件时返回内置默认策略。
+func (c LoadedConfig) LoadPolicy() (storagepolicy.Policy, error) {
+	if c.ConfigPath == "" {
+		return storagepolicy.Default(), nil
+	}
+	policyPath := strings.TrimSpace(c.Storage.PolicyFile)
+	if policyPath == "" {
+		return storagepolicy.Policy{}, errors.New("storage.policy_file is required")
+	}
+	if !filepath.IsAbs(policyPath) {
+		// MOOX_STORAGE_CONFIG 指向 <package>/config/*.yaml，相对 policy_file 以包根目录为基准。
+		policyPath = filepath.Join(filepath.Dir(filepath.Dir(c.ConfigPath)), policyPath)
+	}
+	return storagepolicy.Load(policyPath)
+}
+
+// ViewSettings 校验并返回 View 的回填与定时删除最旧数据配置。
+func (c LoadedConfig) ViewSettings() (ViewSettings, error) {
+	if c.ConfigPath == "" {
+		return ViewSettings{
+			BackfillPageSize:        DefaultViewBackfillPageSize,
+			BackfillRequestInterval: DefaultViewBackfillRequestInterval,
+			DeleteOldestBatchSize:   DefaultViewDeleteOldestBatchSize,
+		}, nil
+	}
+	pageSize := c.Storage.View.BackfillPageSize
+	if pageSize == 0 || pageSize > MaxViewBackfillPageSize {
+		return ViewSettings{}, fmt.Errorf("storage view backfill_page_size must be between 1 and %d", MaxViewBackfillPageSize)
+	}
+	interval, err := time.ParseDuration(strings.TrimSpace(c.Storage.View.BackfillRequestInterval))
+	if err != nil || interval < 0 {
+		return ViewSettings{}, errors.New("storage view backfill_request_interval must be a non-negative duration")
+	}
+	deleteBatch := c.Storage.View.DeleteOldestBatchSize
+	if deleteBatch < 1 || deleteBatch > MaxViewDeleteOldestBatchSize {
+		return ViewSettings{}, fmt.Errorf("storage.view.delete_oldest_batch_size 必须在 1～%d 之间，当前为 %d", MaxViewDeleteOldestBatchSize, deleteBatch)
+	}
+	return ViewSettings{
+		BackfillPageSize:        pageSize,
+		BackfillRequestInterval: interval,
+		DeleteOldestBatchSize:   deleteBatch,
+	}, nil
+}
+
+// EventBusCredentialFile 返回生效的 EventBus 凭据文件路径（环境变量覆盖优先于配置文件）。
+func (c LoadedConfig) EventBusCredentialFile(envOverride string) string {
+	if path := strings.TrimSpace(envOverride); path != "" {
+		return path
+	}
+	return strings.TrimSpace(c.Storage.EventBus.CredentialFile)
+}
+
+// MetadataDBPath 返回生效的元数据 SQLite 路径（环境变量覆盖优先于配置文件）。
+func (c LoadedConfig) MetadataDBPath(envOverride string) string {
+	if path := strings.TrimSpace(envOverride); path != "" {
+		return path
+	}
+	if path := strings.TrimSpace(c.Storage.Metadata.Path); path != "" {
+		return path
+	}
+	root := strings.TrimSpace(c.Storage.Root)
+	if root == "" {
+		root = "./var/storage"
+	}
+	return filepath.Join(root, "metadata", "storage_metadata.db")
 }
 
 // StorageConfig 保存 storage.yaml 中的业务配置。

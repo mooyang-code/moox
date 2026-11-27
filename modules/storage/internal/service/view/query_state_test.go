@@ -16,8 +16,8 @@ func TestQueryPathDoesNotWaitForRuntimeLock(t *testing.T) {
 	svc := newTestService(map[string]viewindex.Engine{"duckdb": &queryEngine{}})
 	runtime := testRuntime(svc, timeSeriesSpec("crypto", "factors", "1m", "close"))
 	runtime.mu.Lock()
-	runtime.active = runtime.indexID
-	runtime.statsIndexID = runtime.indexID
+	runtime.phase = viewPhaseActive
+	runtime.hasStats = true
 	runtime.stats = viewindex.ViewIndexStats{Exists: true, EntryCount: 42}
 	runtime.publishReadStateLocked()
 	runtime.mu.Unlock()

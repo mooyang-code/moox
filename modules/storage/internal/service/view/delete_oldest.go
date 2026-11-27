@@ -111,14 +111,14 @@ func (s *Service) deleteOldestRound(ctx context.Context, batchSize int) {
 	targets := make([]deleteOldestTarget, 0, len(candidates))
 	for _, runtime := range candidates {
 		state := runtime.queryState()
-		if state.active == "" || !state.spec.timeSeries() {
+		if !state.active() || !state.spec.timeSeries() {
 			continue
 		}
 		deleter, ok := runtime.engine.(viewindex.OldestRowsDeleter)
 		if !ok {
 			continue
 		}
-		targets = append(targets, deleteOldestTarget{runtime: runtime, indexID: state.active, deleter: deleter})
+		targets = append(targets, deleteOldestTarget{runtime: runtime, indexID: runtime.indexID, deleter: deleter})
 	}
 	sort.Slice(targets, func(i, j int) bool {
 		left, right := targets[i].runtime.ref, targets[j].runtime.ref

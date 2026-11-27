@@ -94,7 +94,7 @@ func (s *ServiceImpl) SessionBelongsToUser(sessionID, userID string) bool {
 
 // ========== SFTP ==========
 
-func (s *ServiceImpl) SftpList(ctx context.Context, sessionID string, dirPath string) (interface{}, error) {
+func (s *ServiceImpl) SftpList(ctx context.Context, sessionID string, dirPath string) (*SftpListResult, error) {
 	sshConn, ok := s.sessionMgr.Load(sessionID)
 	if !ok {
 		return nil, fmt.Errorf("会话不存在: %s", sessionID)
@@ -113,34 +113,31 @@ func (s *ServiceImpl) SftpList(ctx context.Context, sessionID string, dirPath st
 
 	fileCount := 0
 	dirCount := 0
-	var fileList []map[string]interface{}
+	fileList := make([]SftpFileEntry, 0, len(files))
 	for _, file := range files {
-		fileInfo := map[string]interface{}{
-			"path":        path.Join(dirPath, file.Name()),
-			"name":        file.Name(),
-			"mode":        file.Mode().String(),
-			"size":        file.Size(),
-			"modified_at": file.ModTime().UnixMilli(),
+		entry := SftpFileEntry{
+			Path:       path.Join(dirPath, file.Name()),
+			Name:       file.Name(),
+			Mode:       file.Mode().String(),
+			Size:       file.Size(),
+			ModifiedAt: file.ModTime().UnixMilli(),
 		}
 		if file.IsDir() {
-			fileInfo["type"] = "d"
+			entry.Type = "d"
 			dirCount++
 		} else {
-			fileInfo["type"] = "f"
+			entry.Type = "f"
 			fileCount++
 		}
-		fileList = append(fileList, fileInfo)
+		fileList = append(fileList, entry)
 	}
 
-	// 解析路径面包屑
-	paths := parsePaths(dirPath)
-
-	return map[string]interface{}{
-		"files":       fileList,
-		"file_count":  fileCount,
-		"dir_count":   dirCount,
-		"paths":       paths,
-		"current_dir": dirPath,
+	return &SftpListResult{
+		Files:      fileList,
+		FileCount:  fileCount,
+		DirCount:   dirCount,
+		Paths:      parsePaths(dirPath),
+		CurrentDir: dirPath,
 	}, nil
 }
 
@@ -232,7 +229,7 @@ func (s *ServiceImpl) SftpMkdir(ctx context.Context, sessionID, dirPath string) 
 
 // ========== 内部工具 ==========
 
-func parsePaths(dirPath string) []map[string]string {
+func parsePaths(dirPath string) []SftpPathCrumb {
 	parts := strings.Split(dirPath, "/")
 	var dirs []string
 	if strings.HasPrefix(dirPath, "/") {
@@ -245,12 +242,12 @@ func parsePaths(dirPath string) []map[string]string {
 		}
 	}
 
-	var paths []map[string]string
+	paths := make([]SftpPathCrumb, 0, len(dirs))
 	for i, item := range dirs {
 		fullPath := path.Join(dirs[:i+1]...)
-		paths = append(paths, map[string]string{
-			"name": item,
-			"dir":  fullPath,
+		paths = append(paths, SftpPathCrumb{
+			Name: item,
+			Dir:  fullPath,
 		})
 	}
 	return paths

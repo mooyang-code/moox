@@ -159,7 +159,7 @@ WHEN NEW.c_host_id = 'new-host' BEGIN SELECT RAISE(ABORT, 'simulated disk failur
 // 声明里没有的主机连同它的网关状态、部署与控制台 SSH 凭据一起删掉。
 func TestReplaceTopologyDeletesUndeclaredHosts(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
-	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "overseas", ExpectedHash: "previous"}).Error)
+	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "overseas", AppliedHash: "previous"}).Error)
 	require.Equal(t, []string{"overseas"}, replace(t, dao, topologySpecs()[:2]))
 	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)

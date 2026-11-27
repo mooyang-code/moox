@@ -82,12 +82,12 @@ func TestDiagnoseChecksTheSystemdSupervisorOfEveryComponent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, core.StatusUnknown, result.CheckByID("service.supervisor:factor-engine@factor").Status)
 
-	// 普通组件同样由 systemd 托管；第三方程序与未知组件不在诊断清单里。
+	// 普通组件同样由 systemd 托管；未知组件不在诊断清单里。
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
 	unit, systemd := systemdUnit(manifest, "trade")
 	assert.True(t, systemd)
 	assert.Equal(t, "moox-trade.service", unit)
-	_, systemd = systemdUnit(manifest, "seaweedfs")
+	_, systemd = systemdUnit(manifest, "unknown-component")
 	assert.False(t, systemd)
 }

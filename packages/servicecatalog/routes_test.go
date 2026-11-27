@@ -146,9 +146,9 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 		routes  int
 		callers []string
 	}{
-		"control":  {172, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
-		"storage":  {50, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
-		"overseas": {51, []string{"collector", "console", "moox-cli", "strategy"}},
+		"control":  {162, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
+		"storage":  {49, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
+		"overseas": {50, []string{"collector", "console", "moox-cli", "strategy"}},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -172,9 +172,9 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 			t.Fatal("missing directory hosts")
 		}
 		for _, route := range compiled.Routes {
-			address, _, err := net.SplitHostPort(route.Address)
-			if err != nil || address != "127.0.0.1" {
-				t.Fatalf("non-local route: %+v", route)
+			address, rawPort, err := net.SplitHostPort(route.Address)
+			if err != nil || address != "127.0.0.1" || rawPort == "0" {
+				t.Fatalf("non-local or zero-port route: %+v", route)
 			}
 			if route.TimeoutMS <= 0 || route.MaxBodyBytes <= 0 || len(route.Callers) == 0 {
 				t.Fatalf("unbounded route: %+v", route)
@@ -412,8 +412,8 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 		t.Fatalf("CreateArchiveTask route = %+v", create)
 	}
 	list := routes["trpc.moox.archive.ArchiveMgr/ListArchiveTasks"]
-	if !slices.Equal(list.Callers, []string{"console", "monitor", "moox-cli", "strategy"}) || !list.ReadOnly {
-		t.Fatalf("ListArchiveTasks 只读方法允许 monitor 与 strategy: %+v", list)
+	if !slices.Equal(list.Callers, []string{"console", "moox-cli", "strategy"}) || !list.ReadOnly {
+		t.Fatalf("ListArchiveTasks 只读方法允许 console/moox-cli/strategy: %+v", list)
 	}
 	// ArchiveWorker 的方法只有归档 worker 能调：它用所在主机的密钥直接到网关，不是外部身份。
 	pull := routes["trpc.moox.archive.ArchiveWorker/PullArchiveRun"]
@@ -736,5 +736,43 @@ func TestNewTopologyFindsControlByAdminDeployment(t *testing.T) {
 	withoutAdmin := slices.DeleteFunc(slices.Clone(p.Deployments), func(d Deployment) bool { return d.ComponentID == "admin" })
 	if got := NewTopology(p.Hosts, withoutAdmin); got.ControlHostID != "" {
 		t.Fatalf("control host without admin = %q", got.ControlHostID)
+	}
+}
+
+// 纯控制台内部服务（Auth、Ssh）声明 port: 0，不占端口、不进目录发现、不编出主机网关路由，但仍可按 console_name 解析。
+func TestConsoleOnlyPortZeroServicesSkipPortsDirectoryAndRoutes(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	if err := c.ValidateTopology(p); err != nil {
+		t.Fatalf("ValidateTopology failed with port 0 services: %v", err)
+	}
+	admin, ok := c.Component("admin")
+	if !ok {
+		t.Fatal("admin component missing")
+	}
+	if slices.Contains(componentPorts(admin), 0) {
+		t.Fatalf("componentPorts(admin) must skip port 0: %v", componentPorts(admin))
+	}
+	compiled, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"trpc.moox.infra.Auth", "trpc.moox.ops.Ssh"} {
+		if _, exists := compiled.Directory.Services[path]; exists {
+			t.Errorf("port 0 service %s must not appear in Directory.Services", path)
+		}
+		for _, route := range compiled.Routes {
+			if route.ServicePath == path {
+				t.Errorf("port 0 service %s must not produce gateway route: %+v", path, route)
+			}
+		}
+	}
+	if svc, ok := c.ConsoleService("auth", "Login"); !ok || svc.Path != "trpc.moox.infra.Auth" || svc.Port != 0 {
+		t.Fatalf("ConsoleService(auth, Login) = %+v, %v", svc, ok)
+	}
+	if svc, ok := c.ConsoleService("ssh", "CreateSession"); !ok || svc.Path != "trpc.moox.ops.Ssh" || svc.Port != 0 {
+		t.Fatalf("ConsoleService(ssh, CreateSession) = %+v, %v", svc, ok)
+	}
+	if _, ok := c.ConsoleService("setup", "GetSetupStatus"); ok {
+		t.Fatal("Setup must not be exposed to console")
 	}
 }

@@ -77,16 +77,9 @@ func alertHint(texts ...string) string {
 	return ""
 }
 
-// statusSeverity 把健康状态映射为严重程度；healthy、disabled、unchecked 不是问题，返回空。
+// statusSeverity 把健康状态映射为严重程度；复用 packages/doctor 与 Monitor 对齐的口径。
 func statusSeverity(status string) string {
-	switch status {
-	case "", "healthy", "ok", "disabled", "unchecked":
-		return ""
-	case "down", "stale", "firing":
-		return AlertSeverityCritical
-	default:
-		return AlertSeverityWarning
-	}
+	return core.HealthStatusSeverity(status)
 }
 
 func alertSeverity(severity string) string {

@@ -76,9 +76,49 @@ func TestRunBootstrapChecksDeployedCatalog(t *testing.T) {
 	require.Equal(t, "node-a:"+filepath.Join(root, "version.json"), asked)
 }
 
-func TestRunBootstrapRejectsRemoteNode(t *testing.T) {
+func TestRunBootstrapRemoteNodeRequiresRemoteCapabilities(t *testing.T) {
 	_, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "remote", LocalNodeID: "local"})
-	require.ErrorContains(t, err, "only accepts the local node")
+	require.ErrorContains(t, err, "requires remote SSH capabilities")
+
+	manifest, err := core.LoadEmbeddedManifest()
+	require.NoError(t, err)
+	root := t.TempDir()
+	writeVersion(t, root, manifest.Checksum)
+	policy := writePolicy(t, root)
+	var readNode, readPath, probedNode, probedPath string
+	versionRaw, err := os.ReadFile(filepath.Join(root, "version.json"))
+	require.NoError(t, err)
+	report, err := RunBootstrap(context.Background(), BootstrapOptions{
+		NodeID:                  "remote",
+		LocalNodeID:             "local",
+		DeployRoot:              "/data/moox",
+		DatasetHealthPolicyPath: policy,
+		CheckIDs:                []string{"bootstrap.path_permissions:host-gateway@remote", "service.health:host-gateway@remote"},
+		Client: deploymentClientStub{rows: []Deployment{
+			{ComponentID: "host-gateway", HostID: "remote", Status: "enabled"},
+			{ComponentID: "host-agent", HostID: "remote", Status: "enabled"},
+		}},
+		ReadFile: func(_ context.Context, node, filePath string) ([]byte, error) {
+			readNode, readPath = node, filePath
+			return versionRaw, nil
+		},
+		Probe: func(_ context.Context, node string, _ int, _ string) (ProbeResult, error) {
+			probedNode = node
+			return ProbeResult{StatusCode: 200}, nil
+		},
+		ProbeWritable: func(_ context.Context, _, rel string) error {
+			probedPath = rel
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, core.ConclusionHealthy, report.Conclusion)
+	require.Equal(t, "remote", readNode)
+	require.Equal(t, "/data/moox/version.json", readPath)
+	require.Equal(t, "remote", probedNode)
+	require.Equal(t, "data/host-gateway", probedPath)
+	require.Equal(t, "/data/moox/version.json", joinNodePath(true, "/data/moox/", "version.json"))
+	require.Equal(t, "data/archive-worker", joinNodePath(true, "data", "archive-worker"))
 }
 
 // 自启动检查对每个组件都读 systemd 用户服务 moox-<组件>.service；数据目录检查写的是 <部署根>/data/<组件>。

@@ -242,9 +242,9 @@ func (f *identityFixture) options(host string) Options {
 }
 
 // run 取一台主机的身份材料。选哪些组件只决定要不要一并取 EventBus 角色文件；
-// 这里选不带 EventBus 角色的第三方程序，只看主机身份包这一部分。
+// 这里传空组件列表，只看主机身份包这一部分。
 func (f *identityFixture) run(options Options, target *fakeHost, fresh bool) (Identity, issuedKeys, error) {
-	return options.identity(context.Background(), target, f.catalog, f.cfg.HostByID(options.HostID), f.cfg.ControlHost(), []string{"seaweedfs"}, fresh)
+	return options.identity(context.Background(), target, f.catalog, f.cfg.HostByID(options.HostID), f.cfg.ControlHost(), nil, fresh)
 }
 
 func (f *identityFixture) operatorKey() ed25519.PrivateKey {

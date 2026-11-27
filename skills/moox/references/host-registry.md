@@ -14,7 +14,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 | `control` | 控制机 | Admin、Monitor、Collector（含云函数管理）、因子管理、归档管理、策略、控制台 |
 | `storage` | 存储机 | Storage primary/view、EventBus；网关开外部入口（`external_entry = true`） |
 | `overseas` | 海外机 | Trade、EgressProxy、Collector Stream；网关开外部入口 |
-| `factor` | 因子机 | 因子引擎、归档 Worker、内置对象存储（Linux，可以是内网机器） |
+| `factor` | 因子机 | 因子引擎、归档 Worker（Linux，可以是内网机器） |
 
 `moox.toml` 里 `[hosts.<ID>]` 写 `label`（不写时按 ID 生成）、`address`、`region`、`ssh = { port, username }`，可选 `enabled = false` 停用这台主机；
 `[deployments]` 按主机 ID 列出业务组件，`host-gateway` 与 `host-agent` 自动补齐；`[deployments_disabled]` 与 `[deployments]` 同形，列出停用的组件（必须是该主机 `[deployments]` 的子集）。控制台终端只对配了 SSH 私钥文件（`ssh.private_key_file`）、
@@ -60,8 +60,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 
 - 归档文件在 `<部署根>/archive`，导入包放在 `<部署根>/import`。
 - `moox.toml` 有 `[archive_object_store]` 时，部署 archive-worker 会从 Admin 读出 `secret_id` 指向的密钥（提供方 `s3`、已启用）写成 `<部署根>/secrets/archive-object-store.env`；读密钥失败时部署停下，旧配置与旧进程不动。
-  没有这一段时，这台主机会多一个内置对象存储组件 `seaweedfs`（服务 `moox-seaweedfs`，只听 127.0.0.1，数据在 `<部署根>/data/seaweedfs`，访问密钥在目标机上生成一次后一直沿用）。
-  用外部 S3 时换机器不用拷归档目录（读回时从远端取回）；用内置对象存储时要把 `<部署根>/archive` 和 `<部署根>/data/seaweedfs` 一起拷。
+  没有这一段时仅保留本地 `<部署根>/archive` 归档目录（管理台支持对已导出分区做 SHA-256 校验下载）；用外部 S3 时换机器不用拷归档目录（读回时从远端取回），纯本地模式换机时拷贝 `<部署根>/archive` 即可。
 - 退役一个外部程序：从 `[deployments]` 删除条目并 `setup deploy --host <ID>`（单元停掉并删除，登记随之删除）。
 
 ## 全新部署

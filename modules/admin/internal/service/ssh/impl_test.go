@@ -14,7 +14,6 @@ import (
 
 func setupSSHTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
@@ -22,7 +21,7 @@ func setupSSHTestDB(t *testing.T) *gorm.DB {
 }
 
 func newTestSSHService(t *testing.T) *ServiceImpl {
-	return NewService(dao.NewHostDAO(setupSSHTestDB(t)))
+	return NewService(dao.NewHostDAO(setupSSHTestDB(t), "0123456789abcdef0123456789abcdef"))
 }
 
 func TestServiceImpl_CreateSession_UnregisteredHost_ShouldFail(t *testing.T) {
@@ -52,16 +51,16 @@ func TestServiceImpl_DisconnectSession_UnknownSession_ShouldPass(t *testing.T) {
 func TestParsePaths_AbsolutePath_ShouldBuildBreadcrumbs(t *testing.T) {
 	paths := parsePaths("/var/log")
 	require.Len(t, paths, 3)
-	assert.Equal(t, "/", paths[0]["name"])
-	assert.Equal(t, "var", paths[1]["name"])
-	assert.Equal(t, "log", paths[2]["name"])
-	assert.Equal(t, "/var/log", paths[2]["dir"])
+	assert.Equal(t, "/", paths[0].Name)
+	assert.Equal(t, "var", paths[1].Name)
+	assert.Equal(t, "log", paths[2].Name)
+	assert.Equal(t, "/var/log", paths[2].Dir)
 }
 
 func TestParsePaths_RelativePath_ShouldBuildBreadcrumbs(t *testing.T) {
 	paths := parsePaths("tmp/data")
 	require.Len(t, paths, 2)
-	assert.Equal(t, "tmp", paths[0]["name"])
+	assert.Equal(t, "tmp", paths[0].Name)
 }
 
 // CreateSession 连接真实 SSH 的部分在 conn 包里用本地 SSH 服务端测试。

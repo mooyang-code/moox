@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -265,6 +266,10 @@ func (s *Store) RestorePartitions(ctx context.Context, spaceID, datasetID string
 			if p.FilePath == "" {
 				continue
 			}
+			rel := filepath.FromSlash(p.FilePath)
+			if strings.Contains(p.FilePath, "\\") || !filepath.IsLocal(rel) || rel == "." {
+				return fmt.Errorf("分区 %s 的登记文件路径 %q 非法，无法恢复", p.Key, p.FilePath)
+			}
 			if p.SHA256 == "" || p.ExportedAt.IsZero() {
 				return fmt.Errorf("分区 %s 的登记缺少 sha256 或导出时间，无法恢复", p.Key)
 			}
@@ -290,7 +295,8 @@ func (s *Store) RestorePartitions(ctx context.Context, spaceID, datasetID string
 				inserted++
 			}
 		}
-		return nil
+		_, err := tx.ExecContext(ctx, `UPDATE task_state SET partitions_synced = 1 WHERE space_id = ? AND dataset_id = ? AND partitions_synced = 0`, spaceID, datasetID)
+		return err
 	})
 	return inserted, err
 }

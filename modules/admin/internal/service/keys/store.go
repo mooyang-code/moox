@@ -115,8 +115,13 @@ func (s *Store) DeleteIdentity(ctx context.Context, identity string) error {
 
 // Identities 按名字顺序返回登记着的全部身份公钥。库里不是合法身份或公钥格式不对的行（只可能是手工改库）不返回。
 func (s *Store) Identities(ctx context.Context) ([]IdentityKey, error) {
+	return s.IdentitiesTx(ctx, s.db)
+}
+
+// IdentitiesTx 在指定事务句柄上读取全部合法身份公钥，便于复用长生命周期 Store。
+func (s *Store) IdentitiesTx(ctx context.Context, tx *gorm.DB) ([]IdentityKey, error) {
 	var rows []IdentityKey
-	if err := s.db.WithContext(ctx).Order("c_identity").Find(&rows).Error; err != nil {
+	if err := tx.WithContext(ctx).Order("c_identity").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	return slices.DeleteFunc(rows, func(row IdentityKey) bool { return s.check(row.Identity, row.PublicKey) != nil }), nil

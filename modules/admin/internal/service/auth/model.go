@@ -1,6 +1,22 @@
-package model
+package auth
 
-import "time"
+import (
+	"time"
+
+	appconfig "github.com/mooyang-code/moox/modules/admin/internal/config"
+)
+
+// Config 认证服务配置（由 app.yaml 单次加载后传入）。
+type Config struct {
+	Session  appconfig.SessionConfig
+	Security appconfig.SecurityConfig
+}
+
+// SessionConfig 与 SecurityConfig 复用 internal/config 定义，避免重复结构。
+type (
+	SessionConfig  = appconfig.SessionConfig
+	SecurityConfig = appconfig.SecurityConfig
+)
 
 // User 用户数据模型 (对应 t_users 表)。系统只有一个超级用户，没有角色、状态与个人资料。
 type User struct {
@@ -14,10 +30,7 @@ type User struct {
 	UpdatedAt    time.Time  `gorm:"column:c_mtime;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }
 
-// TableName 表名
-func (u *User) TableName() string {
-	return "t_users"
-}
+func (u *User) TableName() string { return "t_users" }
 
 // 登录日志在活动日志里的来源与类别。
 const (
@@ -25,7 +38,7 @@ const (
 	LoginLogCategory = "auth.login"
 )
 
-// 上下文元数据键常量
+// 上下文元数据键常量。
 const (
 	CtxUserID    = "X-User-ID"
 	CtxUsername  = "X-User-Name"

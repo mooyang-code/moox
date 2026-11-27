@@ -28,13 +28,19 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_mtime",
 		"c_name TEXT NOT NULL",
 		"c_freq TEXT NOT NULL DEFAULT '',",
-		"c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0)",
-		"c_status TEXT NOT NULL DEFAULT 'active' CHECK (c_status IN ('active', 'disabled'))",
+		"c_revision INTEGER NOT NULL DEFAULT 1,",
+		"c_status TEXT NOT NULL DEFAULT 'active',",
+		"CHECK (c_revision > 0)",
+		"CHECK (c_status IN ('active', 'disabled'))",
+		"FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE",
 		"c_dataset_id TEXT NOT NULL",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("metadata schema missing %q", want)
 		}
+	}
+	if strings.Contains(text, "UNIQUE (c_tag_id)") {
+		t.Errorf("metadata schema must not have global UNIQUE (c_tag_id) on t_tags")
 	}
 	removedTables := []string{
 		"t_" + "subject" + "_symbols",

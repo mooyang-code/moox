@@ -10,18 +10,15 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
-	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
 const (
 	MaxObservations = 128
-	MaxAlerts       = 100
 	MaxSeries       = 256
 )
 
@@ -33,7 +30,6 @@ type ServiceSource interface {
 type Builder struct {
 	Deployments         deployment.Source
 	Services            ServiceSource
-	Alerts              *store.AlertRepository
 	Metrics             *monmetrics.QueryService
 	Hosts               *hostmetrics.Store
 	HealthChecks        []report.ModuleHealthCheck
@@ -72,7 +68,6 @@ type Context struct {
 	Watermarks           []Watermark
 	Hosts                []hostmetrics.AgentView
 	Forecasts            map[string][]hostmetrics.DiskForecast
-	Alerts               []domain.AlertEvent
 	MissingObservations  []Observation
 }
 
@@ -128,18 +123,6 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 	b.addIngestDiagnostics(ctx, now, &out)
 	if err := b.addHosts(ctx, nodeID, now, &out); err != nil {
 		out.MissingObservations = append(out.MissingObservations, Observation{Kind: "host", NodeID: nodeID, Status: "UNKNOWN", Summary: "host resource history unavailable"})
-	}
-	if b.Alerts != nil {
-		events, listErr := b.Alerts.ListRecentEvents(ctx, MaxAlerts)
-		err = listErr
-		if err != nil {
-			return Context{}, err
-		}
-		for _, event := range events {
-			if event.EventType == domain.AlertEventTriggered || event.EventType == domain.AlertEventReminder {
-				out.Alerts = append(out.Alerts, event)
-			}
-		}
 	}
 	if err := enforceBounds(out); err != nil {
 		return Context{}, err
@@ -279,7 +262,7 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		status := "FRESH"
 		if service.LastSeenAt.IsZero() || age > 120 {
 			status = "FAIL"
-		} else if age > 60 {
+		} else if service.IsStale {
 			status = "WARN"
 		}
 		out.ReporterObservations = append(out.ReporterObservations, Observation{Kind: "reporter", ComponentID: component.ComponentID, ServiceName: service.ServiceName, InstanceID: service.InstanceID, NodeID: service.NodeID, BootID: service.BootID, Status: status, ObservedAt: service.LastSeenAt, Stale: status != "FRESH", AgeSeconds: age, IntervalSeconds: 30, Summary: "latest Reporter snapshot"})
@@ -329,7 +312,7 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		if component.FunctionalObservability != doctor.FunctionalObservabilityActive {
 			continue
 		}
-		module := componentModule(component.ComponentID)
+		module := doctor.ComponentModule(component.ComponentID)
 		lastSuccessMetric := report.ModuleMetricName(module, report.ModuleMetricLastSuccess)
 		lastErrorMetric := report.ModuleMetricName(module, report.ModuleMetricLastError)
 		businessWatermarkMetric := report.ModuleMetricName(module, report.ModuleMetricBusinessWatermark)
@@ -501,21 +484,9 @@ func enforceBounds(context Context) error {
 			return fmt.Errorf("%s exceeds limit %d", name, limit)
 		}
 	}
-	if len(context.Alerts) > MaxAlerts {
-		return fmt.Errorf("active_alerts exceeds limit %d", MaxAlerts)
-	}
 	sort.Slice(context.Watermarks, func(i, j int) bool {
 		return context.Watermarks[i].Module+context.Watermarks[i].HealthCheckID <
 			context.Watermarks[j].Module+context.Watermarks[j].HealthCheckID
 	})
 	return nil
-}
-
-// componentModule maps a component id to the module name used in module
-// metrics; factor-mgr reports its metrics as module "factor".
-func componentModule(componentID string) string {
-	if componentID == "factor-mgr" {
-		return "factor"
-	}
-	return componentID
 }

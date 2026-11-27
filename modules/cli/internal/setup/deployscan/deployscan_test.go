@@ -81,7 +81,7 @@ func TestScanSendsRootAsJSONAndKeepsHostOrderAndVersionBytes(t *testing.T) {
 	encode := func(installed bool, text string, units ...string) string {
 		raw, _ := json.Marshal(map[string]any{
 			"root": "/data/moox", "root_exists": true, "entries": []string{"bin", "version.json"}, "installed": installed,
-			"version_text": text, "units": units, "active": units, "processes": 2, "archive_kb": -1, "seaweedfs_kb": -1,
+			"version_text": text, "units": units, "active": units, "processes": 2, "archive_kb": -1,
 			"disk_free_kb": 1024, "linger": true, "journald": false,
 		})
 		return string(raw)
@@ -130,9 +130,9 @@ func TestScanRejectsUnreadableOutput(t *testing.T) {
 
 func TestBuildPlanListsOnlyHostsWithContentAndHasStableDigest(t *testing.T) {
 	reports := []HostReport{
-		{Host: "control", Root: "/data/moox", Entries: []string{"bin", "data"}, Units: []string{"moox-admin.service"}, ArchiveKB: -1, SeaweedFSKB: -1},
+		{Host: "control", Root: "/data/moox", Entries: []string{"bin", "data"}, Units: []string{"moox-admin.service"}, ArchiveKB: -1},
 		{Host: "storage", Root: "/data/moox", Entries: []string{}, Units: []string{}},
-		{Host: "factor", Root: "/data/moox", Entries: []string{"archive"}, Processes: 1, ArchiveKB: 4096, SeaweedFSKB: 128},
+		{Host: "factor", Root: "/data/moox", Entries: []string{"archive"}, Processes: 1, ArchiveKB: 4096},
 	}
 	plan := BuildPlan(reports)
 	require.Equal(t, Notice, plan.Notice)
@@ -158,7 +158,7 @@ func TestBuildPlanListsOnlyHostsWithContentAndHasStableDigest(t *testing.T) {
 	require.Empty(t, empty.Hosts)
 	raw, err := json.Marshal(plan)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), `"seaweedfs_kb":128`)
+	require.NotContains(t, string(raw), "seaweedfs_kb")
 }
 
 func TestWipeParsesResult(t *testing.T) {
@@ -235,11 +235,10 @@ func snapshotTree(t *testing.T, root string) []string {
 
 func seedDeployment(t *testing.T, env scriptEnv) string {
 	t.Helper()
-	for _, dir := range []string{"bin", "config/admin", "data/seaweedfs/volume", "archive/2026", "secrets"} {
+	for _, dir := range []string{"bin", "config/admin", "data/admin", "archive/2026", "secrets"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(env.root, dir), 0o700))
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(env.root, "archive/2026/part.csv"), make([]byte, 8192), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(env.root, "data/seaweedfs/volume/1.dat"), make([]byte, 4096), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(env.root, "version.json"), []byte(`{"version":"dev"}`), 0o600))
 	units := filepath.Join(env.home, ".config", "systemd", "user")
 	for _, unit := range []string{"moox-admin.service", "moox-monitor.service"} {
@@ -273,7 +272,6 @@ func TestInspectScriptIsReadOnlyAndReportsLayout(t *testing.T) {
 		require.Equal(t, `{"version":"dev"}`, result.VersionText)
 		require.Equal(t, []string{"moox-admin.service", "moox-monitor.service"}, result.Units)
 		require.GreaterOrEqual(t, result.ArchiveKB, int64(8))
-		require.GreaterOrEqual(t, result.SeaweedFSKB, int64(4))
 		require.Positive(t, result.DiskFreeKB)
 		if withSystemd {
 			require.Equal(t, []string{"moox-admin.service"}, result.Active)
@@ -365,7 +363,7 @@ control = ["admin", "monitor", "storage-primary", "storage-view", "eventbus"]
 factor = ["factor-engine"]
 `))
 	require.NoError(t, err)
-	encoded, _ := json.Marshal(map[string]any{"root": "/data/moox", "installed": true, "archive_kb": -1, "seaweedfs_kb": -1, "disk_free_kb": -1})
+	encoded, _ := json.Marshal(map[string]any{"root": "/data/moox", "installed": true, "archive_kb": -1, "disk_free_kb": -1})
 	var dialed []string
 	dial := func(_ context.Context, host topology.Host) (setupssh.Client, error) {
 		dialed = append(dialed, host.Name)
@@ -401,7 +399,7 @@ control = ["admin", "monitor", "storage-primary", "storage-view", "eventbus"]
 factor = ["factor-engine"]
 `))
 	require.NoError(t, err)
-	encoded, _ := json.Marshal(map[string]any{"root": cfg.Paths.DeployRoot, "installed": true, "archive_kb": -1, "seaweedfs_kb": -1, "disk_free_kb": -1})
+	encoded, _ := json.Marshal(map[string]any{"root": cfg.Paths.DeployRoot, "installed": true, "archive_kb": -1, "disk_free_kb": -1})
 	reachable := true
 	dial := func(_ context.Context, host topology.Host) (setupssh.Client, error) {
 		if host.Name == "factor" && !reachable {

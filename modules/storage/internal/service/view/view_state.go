@@ -27,17 +27,19 @@ func (s *Service) GetViewState(ctx context.Context, req *pb.GetViewStateReq) (*p
 		return &pb.GetViewStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("数据集不存在、已停用或还没有开始建索引"))}, nil
 	}
 	state := runtime.queryState()
-	rsp := &pb.GetViewStateRsp{RetInfo: retinfo.Success("success"), IndexId: state.active}
-	if state.active == "" {
-		return rsp, nil
+	if !state.active() {
+		return &pb.GetViewStateRsp{RetInfo: retinfo.Success("success")}, nil
 	}
-	rsp.ViewRevision, rsp.ViewSchemaHash, rsp.Columns = state.schema.ViewVersion, state.schema.SchemaHash, resultColumns(state.schema.Columns, state.spec)
-	stats, err := restoreIndexStats(ctx, runtime.engine, state.active)
+	rsp := &pb.GetViewStateRsp{
+		RetInfo: retinfo.Success("success"), IndexId: runtime.indexID,
+		ViewRevision: state.schema.ViewVersion, ViewSchemaHash: state.schema.SchemaHash, Columns: resultColumns(state.schema.Columns, state.spec),
+	}
+	stats, err := restoreIndexStats(ctx, runtime.engine, runtime.indexID)
 	if err != nil {
 		return &pb.GetViewStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	rsp.IndexedFrom, rsp.IndexedTo = stats.IndexedFrom, stats.IndexedTo
-	if cached, ok := cachedActiveIndexStats(runtime, state.active); ok && cached.IndexedFrom != "" {
+	if cached, ok := cachedActiveIndexStats(runtime, runtime.indexID); ok && cached.IndexedFrom != "" {
 		rsp.IndexedFrom, rsp.IndexedTo = cached.IndexedFrom, cached.IndexedTo
 	}
 	followState := stats.Follow

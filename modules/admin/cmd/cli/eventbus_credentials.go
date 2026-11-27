@@ -57,7 +57,8 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	if server && sub != "export-clients" {
 		return errors.New("--server is only valid for export-clients")
 	}
-	if err := loadCLIKey(dbPath, keyFile); err != nil {
+	encryptionKey, err := loadCLIKey(keyFile)
+	if err != nil {
 		return err
 	}
 	db, err := openAdminCLIDB(dbPath)
@@ -65,14 +66,14 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	defer closeAdminCLIDB(db)
-	secretDAO := dao.NewSecretDAO(db)
+	secretDAO := dao.NewSecretDAO(db, encryptionKey)
 	switch sub {
 	case "export-clients":
-		return exportEventBusClients(context.Background(), db, nodeID, outputDir, roles, server, stdout)
+		return exportEventBusClients(context.Background(), db, encryptionKey, nodeID, outputDir, roles, server, stdout)
 	case "ensure":
 		var metadata bytes.Buffer
 		if err := db.Transaction(func(tx *gorm.DB) error {
-			return ensureEventBus(dao.NewSecretDAO(tx), &metadata)
+			return ensureEventBus(dao.NewSecretDAO(tx, encryptionKey), &metadata)
 		}); err != nil {
 			return err
 		}
@@ -113,41 +114,28 @@ func closeAdminCLIDB(db *gorm.DB) {
 		}
 	}
 }
-func loadCLIKey(dbPath, keyFile string) error {
-	if keyFile == "" {
-		return errors.New("--encryption-key-file is required")
+
+// loadCLIKey 读取已由 bootstrap 生成的 0600 主密钥文件并显式返回；不生成第二套主密钥，也不写进程环境变量。
+func loadCLIKey(keyFile string) (string, error) {
+	if strings.TrimSpace(keyFile) == "" {
+		return "", errors.New("--encryption-key-file is required")
 	}
-	info, err := os.Stat(dbPath)
-	if err != nil && !os.IsNotExist(err) {
-		return err
+	info, err := os.Lstat(keyFile)
+	if err != nil {
+		return "", fmt.Errorf("stat encryption key file: %w", err)
 	}
-	if err := os.Chmod(keyFile, 0o600); err != nil && !os.IsNotExist(err) {
-		return err
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return "", errors.New("encryption key file must be a regular 0600 file")
 	}
-	raw, err := os.ReadFile(keyFile)
-	if os.IsNotExist(err) {
-		if info != nil {
-			return errors.New("admin database exists but encryption key is missing")
-		}
-		keyBytes := make([]byte, 32)
-		if _, err := rand.Read(keyBytes); err != nil {
-			return err
-		}
-		key := []byte(base64.RawStdEncoding.EncodeToString(keyBytes))
-		if err := os.MkdirAll(filepath.Dir(keyFile), 0o700); err != nil {
-			return err
-		}
-		if err := os.WriteFile(keyFile, key, 0o600); err != nil {
-			return err
-		}
-		raw = key
-	} else if err != nil {
-		return err
+	raw, err := os.ReadFile(filepath.Clean(keyFile))
+	if err != nil {
+		return "", err
 	}
-	if len(strings.TrimSpace(string(raw))) == 0 {
-		return errors.New("encryption key file is empty")
+	key := strings.TrimSpace(string(raw))
+	if key == "" {
+		return "", errors.New("encryption key file is empty")
 	}
-	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))
+	return key, nil
 }
 
 // ensureEventBus 给缺少的角色生成令牌，已有的原样保留。EventBus 没有自己的证书：服务端用所在主机的主机证书。

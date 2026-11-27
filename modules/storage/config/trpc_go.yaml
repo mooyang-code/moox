@@ -8,11 +8,6 @@ server:
     - validation
     - prometheus
   timeout: 5000
-  admin:
-    ip: 127.0.0.1
-    port: 20000
-    read_timeout: 3000   #ms. 请求被接受到请求信息被完全读取的超时时间设置，防止慢客户端
-    write_timeout: 60000 #ms. 处理的超时时间
   service:
     - name: trpc.moox.storage.Health
       ip: 127.0.0.1

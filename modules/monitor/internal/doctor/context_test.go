@@ -92,7 +92,7 @@ func (s deploymentSourceStub) Snapshot(context.Context) (deployment.Snapshot, er
 	return snapshot, s.err
 }
 
-func TestBuilderMarksDisabledAsNotExpectedAndStorageDeferred(t *testing.T) {
+func TestBuilderMarksDisabledAsNotExpectedAndStorageActive(t *testing.T) {
 	builder := Builder{
 		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{
 			{ComponentId: "factor-mgr", HostId: "node-a", Status: "disabled"},
@@ -109,7 +109,7 @@ func TestBuilderMarksDisabledAsNotExpectedAndStorageDeferred(t *testing.T) {
 		byID[component.ComponentID] = component
 	}
 	require.False(t, byID["factor-mgr"].Expected)
-	require.Equal(t, "deferred", byID["storage-primary"].FunctionalObservability)
+	require.Equal(t, "active", byID["storage-primary"].FunctionalObservability)
 	require.Empty(t, got.Watermarks)
 }
 

@@ -62,6 +62,8 @@ func TestDiagnoseSpecsOnlyCreateChecksSupportedByBuiltInSignals(t *testing.T) {
 		ids[spec.ID] = true
 	}
 	require.True(t, ids["module.freshness:monitor@node-a"])
+	require.True(t, ids["module.freshness:strategy@node-a"])
+	require.True(t, ids["module.freshness:trade@node-a"])
 	require.False(t, ids["module.freshness:collector@node-a"])
 	require.False(t, ids["module.freshness:factor-mgr@node-a"])
 	for _, id := range []string{
@@ -262,5 +264,96 @@ func TestRunDiagnoseStaleReportWithReadyProbeIsNotHealthy(t *testing.T) {
 				require.Equal(t, core.ConclusionHealthy, reportValue.Conclusion, component.id)
 			}
 		}
+	}
+}
+
+type recordingContextClient struct {
+	rsp     *monitorpb.GetDoctorContextRsp
+	lastReq *monitorpb.GetDoctorContextReq
+}
+
+func (c *recordingContextClient) GetDoctorContext(_ context.Context, req *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
+	c.lastReq = req
+	return c.rsp, nil
+}
+
+// strategy-targets 与 trade-rebalance 只启用运行健康检查（CheckFreshness=false、CheckWatermark=false）：
+// - 必须进入 GetDoctorContextReq.HealthCheckIds；
+// - 持续出错（last_error > last_success 且超出 MaxLag、未闲置）必须判 StatusFail；
+// - 无运行历史（no_run）判 StatusSkipped，不误报 StatusUnknown；
+// - 失败后已闲置（超过 max(MaxLag, ModuleIdleAfter)）与 Monitor 一致判 StatusPass。
+func TestRunDiagnoseEvaluatesRunOnlyModulesStrategyAndTrade(t *testing.T) {
+	now := time.Unix(20_000, 0).UTC()
+	checks := report.BuiltInModuleHealthChecks()
+
+	for _, tc := range []struct {
+		componentID string
+		module      string
+		checkID     string
+	}{
+		{"strategy", "strategy", "strategy-targets"},
+		{"trade", "trade", "trade-rebalance"},
+	} {
+		t.Run(tc.module+"/no_run_skips_instead_of_unknown", func(t *testing.T) {
+			client := &recordingContextClient{rsp: &monitorpb.GetDoctorContextRsp{
+				ManifestChecksum:     embeddedManifestChecksum(t),
+				ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: tc.componentID, NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
+				HealthObservations:   []*monitorpb.DoctorObservation{{Kind: "health", ComponentId: tc.componentID, Status: "OK", ObservedAt: now.UnixMilli()}},
+				ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: tc.componentID, Status: "FRESH", ObservedAt: now.UnixMilli()}},
+			}}
+			checkKey := "module.freshness:" + tc.componentID + "@node-a"
+			result, err := RunDiagnose(context.Background(), DiagnoseOptions{
+				NodeID: "node-a", CheckIDs: []string{checkKey}, Client: client, HealthChecks: checks, Now: func() time.Time { return now },
+			})
+			require.NoError(t, err)
+			require.ElementsMatch(t, []string{"strategy-targets", "trade-rebalance", "monitor-metrics"}, client.lastReq.GetHealthCheckIds())
+			check := result.CheckByID(checkKey)
+			require.NotNil(t, check)
+			require.Equal(t, core.StatusSkipped, check.Status)
+			require.Equal(t, core.ConclusionHealthy, result.Conclusion)
+		})
+
+		t.Run(tc.module+"/continuous_error_fails", func(t *testing.T) {
+			client := &recordingContextClient{rsp: &monitorpb.GetDoctorContextRsp{
+				ManifestChecksum:     embeddedManifestChecksum(t),
+				ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: tc.componentID, NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
+				HealthObservations:   []*monitorpb.DoctorObservation{{Kind: "health", ComponentId: tc.componentID, Status: "OK", ObservedAt: now.UnixMilli()}},
+				ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: tc.componentID, Status: "FRESH", ObservedAt: now.UnixMilli()}},
+				ModuleObservations: []*monitorpb.DoctorObservation{
+					{Kind: "module", ComponentId: tc.componentID, Summary: report.ModuleMetricName(tc.module, report.ModuleMetricLastSuccess), Value: float64(now.Add(-20 * time.Minute).Unix()), DetailsJson: `{"health_check":"` + tc.checkID + `"}`},
+					{Kind: "module", ComponentId: tc.componentID, Summary: report.ModuleMetricName(tc.module, report.ModuleMetricLastError), Value: float64(now.Add(-2 * time.Minute).Unix()), DetailsJson: `{"health_check":"` + tc.checkID + `"}`},
+				},
+			}}
+			checkKey := "module.freshness:" + tc.componentID + "@node-a"
+			result, err := RunDiagnose(context.Background(), DiagnoseOptions{
+				NodeID: "node-a", CheckIDs: []string{checkKey}, Client: client, HealthChecks: checks, Now: func() time.Time { return now },
+			})
+			require.NoError(t, err)
+			check := result.CheckByID(checkKey)
+			require.NotNil(t, check)
+			require.Equal(t, core.StatusFail, check.Status)
+			require.Contains(t, check.Summary, core.ModuleRunFailingOverMaxLag)
+			require.Equal(t, core.ConclusionUnhealthy, result.Conclusion)
+		})
+
+		t.Run(tc.module+"/idle_after_error_passes", func(t *testing.T) {
+			client := &recordingContextClient{rsp: &monitorpb.GetDoctorContextRsp{
+				ManifestChecksum:     embeddedManifestChecksum(t),
+				ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: tc.componentID, NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
+				HealthObservations:   []*monitorpb.DoctorObservation{{Kind: "health", ComponentId: tc.componentID, Status: "OK", ObservedAt: now.UnixMilli()}},
+				ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: tc.componentID, Status: "FRESH", ObservedAt: now.UnixMilli()}},
+				ModuleObservations: []*monitorpb.DoctorObservation{
+					{Kind: "module", ComponentId: tc.componentID, Summary: report.ModuleMetricName(tc.module, report.ModuleMetricLastError), Value: float64(now.Add(-2 * time.Hour).Unix()), DetailsJson: `{"health_check":"` + tc.checkID + `"}`},
+				},
+			}}
+			checkKey := "module.freshness:" + tc.componentID + "@node-a"
+			result, err := RunDiagnose(context.Background(), DiagnoseOptions{
+				NodeID: "node-a", CheckIDs: []string{checkKey}, Client: client, HealthChecks: checks, Now: func() time.Time { return now },
+			})
+			require.NoError(t, err)
+			check := result.CheckByID(checkKey)
+			require.NotNil(t, check)
+			require.Equal(t, core.StatusPass, check.Status)
+		})
 	}
 }

@@ -20,13 +20,6 @@ func main() {
 		}
 		return
 	}
-	if isPKICommand(os.Args) {
-		if err := runPKICommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-			printInitError(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
 	if isKeysCommand(os.Args) {
 		if err := runKeysCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 			printInitError(os.Stderr, err)
@@ -41,13 +34,6 @@ func main() {
 		}
 		return
 	}
-	if isRandomSecretCommand(os.Args) {
-		if err := runRandomSecretCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-			printInitError(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
 	if isEventBusCredentialsCommand(os.Args) {
 		if err := runEventBusCredentialsCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 			printInitError(os.Stderr, err)
@@ -56,12 +42,6 @@ func main() {
 		return
 	}
 
-	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host-bundle, init, user, random-secret, eventbus-credentials, keys, pki"))
-		os.Exit(2)
-	}
-	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		printInitError(os.Stderr, err)
-		os.Exit(1)
-	}
+	printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host-bundle, user, eventbus-credentials, keys"))
+	os.Exit(2)
 }

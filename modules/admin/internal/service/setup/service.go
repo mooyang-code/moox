@@ -2,12 +2,14 @@ package setup
 
 import (
 	"errors"
+	"strings"
 	"sync"
 
+	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"gorm.io/gorm"
 )
 
-const tencentSecretID = "tencent-default"
+const tencentSecretID = secretmodel.TencentDefaultSecretID
 
 var (
 	ErrStorage = errors.New("setup_storage_failed")
@@ -37,7 +39,7 @@ type ExchangeKey struct {
 	ReadOnly    bool
 }
 
-// 交易所密钥在 SecretMgr 里的状态。交易所密钥只建不改：库里有这个 ID（包括已在管理台软删除的）就不再写入。
+// 交易所密钥在 SecretMgr 里的状态。交易所密钥只建不改：库里有这个 ID 或已在管理台硬删除（记录于墓碑表）就不再写入。
 const (
 	ExchangeKeyCreated = "created" // 本次新建
 	ExchangeKeyExists  = "exists"  // 已存在，以管理台为准，不覆盖
@@ -88,5 +90,5 @@ type Service struct {
 }
 
 func NewService(db *gorm.DB, encryptionKey string) *Service {
-	return &Service{db: db, encryptionKey: encryptionKey}
+	return &Service{db: db, encryptionKey: strings.TrimSpace(encryptionKey)}
 }

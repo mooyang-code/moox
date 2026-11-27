@@ -69,7 +69,7 @@ func (s *Store) Heartbeat(ctx context.Context, w Worker, now time.Time) error {
 		}
 		_, err := tx.ExecContext(ctx, upsertWorker,
 			w.WorkerID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.DiskUsedBytes, w.MinFreeBytes, w.StagingBytes, maintaining, w.PacingJSON,
-			string(running), fmtTime(now), objectStore)
+			string(running), millisOf(now), objectStore)
 		return err
 	})
 }

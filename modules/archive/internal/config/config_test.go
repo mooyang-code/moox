@@ -32,11 +32,11 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		cfg.StagingRetention != 72*time.Hour || cfg.Database.Path != "./data/archive-mgr/archive.db" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
-	if cn := cfg.Space("StockCN"); cn.TZ != "Asia/Shanghai" || cn.LocalClose != "15:00" {
+	if cn := cfg.Space("StockCN"); cn.LocalClose != "15:00" {
 		t.Fatalf("stockcn = %+v", cn)
 	}
-	if unknown := cfg.Space("newspace"); unknown.TZ != "UTC" || unknown.LocalClose != "" {
-		t.Fatalf("未配置的空间按 UTC、全天交易: %+v", unknown)
+	if unknown := cfg.Space("newspace"); unknown.LocalClose != "" {
+		t.Fatalf("未配置的空间按全天交易: %+v", unknown)
 	}
 }
 
@@ -49,9 +49,9 @@ func TestLoadRejectsUnknownKeysMultipleDocumentsAndBadValues(t *testing.T) {
 		"low lateness":   minimal + "allowed_lateness: 5m\n",
 		"bad retention":  minimal + "retention:\n  other: 24h\n",
 		"short staging":  minimal + "staging_retention: 1h\n",
-		"bad tz":         minimal + "spaces:\n  crypto:\n    tz: Mars/Base\n",
-		"bad close":      minimal + "spaces:\n  stockcn:\n    tz: Asia/Shanghai\n    local_close: \"25:61\"\n",
-		"upper space id": minimal + "spaces:\n  Crypto:\n    tz: UTC\n",
+		"legacy tz key":  minimal + "spaces:\n  crypto:\n    tz: UTC\n",
+		"bad close":      minimal + "spaces:\n  stockcn:\n    local_close: \"25:61\"\n",
+		"upper space id": minimal + "spaces:\n  Crypto:\n    local_close: \"15:00\"\n",
 	} {
 		if _, err := Load(writeConfig(t, body)); err == nil {
 			t.Fatalf("%s: Load 应报错", name)
@@ -67,7 +67,7 @@ func TestShippedConfigIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GatewayClient.Caller != Caller || cfg.Space("stockus").TZ != "America/New_York" {
+	if cfg.GatewayClient.Caller != Caller || cfg.Space("stockus").LocalClose != "16:00" {
 		t.Fatalf("shipped config = %+v", cfg)
 	}
 }

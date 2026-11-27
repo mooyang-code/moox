@@ -17,9 +17,13 @@ import (
 )
 
 type fakeDatasets struct {
-	mu       sync.Mutex
-	datasets map[string]Dataset
-	calls    int
+	mu         sync.Mutex
+	datasets   map[string]Dataset
+	spaces     map[string]string
+	calls      int
+	spaceCalls int
+	spaceErr   error
+	spaceErrs  map[string]error
 }
 
 func (f *fakeDatasets) GetDataset(_ context.Context, space, dataset string) (Dataset, error) {
@@ -31,6 +35,31 @@ func (f *fakeDatasets) GetDataset(_ context.Context, space, dataset string) (Dat
 		return Dataset{}, fmt.Errorf("%w: %s/%s", ErrDatasetNotFound, space, dataset)
 	}
 	return ds, nil
+}
+
+func (f *fakeDatasets) GetSpaceTimezone(_ context.Context, space string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.spaceCalls++
+	if err, ok := f.spaceErrs[space]; ok && err != nil {
+		return "", err
+	}
+	if f.spaceErr != nil {
+		return "", f.spaceErr
+	}
+	if tz, ok := f.spaces[space]; ok {
+		return tz, nil
+	}
+	switch space {
+	case "stockcn":
+		return "Asia/Shanghai", nil
+	case "stockhk":
+		return "Asia/Hong_Kong", nil
+	case "stockus":
+		return "America/New_York", nil
+	default:
+		return "UTC", nil
+	}
 }
 
 type harness struct {
@@ -329,9 +358,19 @@ func TestBackfillAndRunNowRules(t *testing.T) {
 
 func (h *harness) heartbeat(worker string, running ...string) *archivepb.ArchiveWorkerHeartbeatRsp {
 	h.t.Helper()
+	return h.heartbeatOpts(worker, false, running...)
+}
+
+func (h *harness) heartbeatWithTasks(worker string, running ...string) *archivepb.ArchiveWorkerHeartbeatRsp {
+	h.t.Helper()
+	return h.heartbeatOpts(worker, true, running...)
+}
+
+func (h *harness) heartbeatOpts(worker string, includeTasks bool, running ...string) *archivepb.ArchiveWorkerHeartbeatRsp {
+	h.t.Helper()
 	rsp, err := h.worker.ArchiveWorkerHeartbeat(context.Background(), &archivepb.ArchiveWorkerHeartbeatReq{
 		WorkerId: worker, Version: "test", RootDir: "/data/archive", DiskTotalBytes: 100, DiskFreeBytes: 60, DiskUsedBytes: 35,
-		MinFreeBytes: 20, RunningRunIds: running,
+		MinFreeBytes: 20, RunningRunIds: running, IncludeTasks: includeTasks,
 	})
 	if err != nil {
 		h.t.Fatal(err)
@@ -373,7 +412,7 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 	}
 
 	progress, _ := h.worker.ReportArchiveRunProgress(context.Background(), &archivepb.ReportArchiveRunProgressReq{
-		RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), SubjectsTotal: 5, SubjectsDone: 2, RequestCount: 3, BytesRead: 100, RowsRead: 40,
+		RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), SubjectsDone: 2, RequestCount: 3, BytesRead: 100, RowsRead: 40,
 	})
 	requireOK(t, progress.GetRetInfo())
 	if progress.GetCanceled() {
@@ -440,7 +479,7 @@ func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T)
 		t.Fatal("已导出的分区没有文件路径必须被拒绝")
 	}
 	good := base()
-	good.SubjectsTotal, good.SubjectsDone, good.RowsRead, good.RowsAdded, good.PartitionsExported = 2, 2, 100, 90, 1
+	good.SubjectsDone, good.RowsRead, good.RowsAdded, good.PartitionsExported = 2, 100, 90, 1
 	good.FinalUntil = "2026-10-14T00:00:00Z"
 	good.Unrecoverable = []*archivepb.UnrecoverableRange{{SubjectId: "BTC-USDT", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}}
 	good.Partitions = []*archivepb.PartitionReport{{
@@ -520,8 +559,11 @@ func TestDeleteArchiveTaskNotifiesTheWorkerAndKeepsPartitionedTasks(t *testing.T
 	// 另一个任务还有排队中的运行但没有分区：可以删除。
 	deleted, _ := h.mgr.DeleteArchiveTask(ctx, &archivepb.DeleteArchiveTaskReq{SpaceId: "crypto", DatasetId: other})
 	requireOK(t, deleted.GetRetInfo())
-	// 心跳带回当前全部任务：被删的任务不在列表里，worker 维护时据此清理它的暂存状态。
-	hb := h.heartbeat("w1")
+	// 常规心跳不查全量任务列表；对账心跳（include_tasks=true）带回当前全部任务，worker 据此清理已删除任务的暂存状态。
+	if plain := h.heartbeat("w1"); len(plain.GetTasks()) != 0 {
+		t.Fatalf("常规心跳不应返回任务列表: %v", plain.GetTasks())
+	}
+	hb := h.heartbeatWithTasks("w1")
 	if len(hb.GetTasks()) != 1 || hb.GetTasks()[0].GetDatasetId() != partitioned || hb.GetTasks()[0].GetTaskId() == "" {
 		t.Fatalf("heartbeat = %v", hb)
 	}
@@ -827,14 +869,14 @@ func TestRecreatedTaskGetsANewTaskID(t *testing.T) {
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
 	h.heartbeat("w1")
-	first := h.heartbeat("w1").GetTasks()[0].GetTaskId()
+	first := h.heartbeatWithTasks("w1").GetTasks()[0].GetTaskId()
 	deleted, _ := h.mgr.DeleteArchiveTask(ctx, &archivepb.DeleteArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, deleted.GetRetInfo())
-	if hb := h.heartbeat("w1"); len(hb.GetTasks()) != 0 {
+	if hb := h.heartbeatWithTasks("w1"); len(hb.GetTasks()) != 0 {
 		t.Fatalf("删除后任务列表应为空: %v", hb)
 	}
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
-	hb := h.heartbeat("w1")
+	hb := h.heartbeatWithTasks("w1")
 	if len(hb.GetTasks()) != 1 || hb.GetTasks()[0].GetTaskId() == first {
 		t.Fatalf("重建的任务必须换新的 task_id，worker 才会丢弃旧状态: %v（旧 %s）", hb.GetTasks(), first)
 	}
@@ -934,7 +976,7 @@ func TestTaskCarriesDatasetMetadataToTheWorkerAndRefreshesIt(t *testing.T) {
 			t.Fatalf("meta_json 缺少 %s: %s", want, task.MetaJSON)
 		}
 	}
-	if got := h.svc.assignment(store.Claimed{Task: task}, nil).GetDatasetMetaJson(); got != task.MetaJSON {
+	if got := h.svc.assignment(store.Claimed{Task: task}, nil, "UTC").GetDatasetMetaJson(); got != task.MetaJSON {
 		t.Fatalf("assignment meta = %q", got)
 	}
 	// 数据集简介改了：每小时维护刷新任务里的元数据。
@@ -996,11 +1038,11 @@ func TestImportRunCarriesAllPartitionsAndDoesNotAdvanceLastSuccess(t *testing.T)
 	requireOK(t, r.GetRetInfo())
 	before, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
 
-	// follow 只下发保留期内的登记（没启用对象存储）。
+	// 未同步（如暂存库新建/丢失）时 follow 一次性下发全部已登记分区（含超保留期的历史分区），避免重建后旧分区下载 404。
 	h.trigger(h.now.Add(time.Minute))
 	follow := h.pull(1)[0]
-	if follow.GetKind() != store.KindFollow || len(follow.GetRegisteredPartitions()) != 1 {
-		t.Fatalf("follow 应只带保留期内的登记: %v", follow.GetRegisteredPartitions())
+	if follow.GetKind() != store.KindFollow || len(follow.GetRegisteredPartitions()) != 2 || follow.GetRegisteredPartitions()[0].GetPartitionKey() != "2026-01-05" {
+		t.Fatalf("未同步 follow 应下发全部历史登记: %v", follow.GetRegisteredPartitions())
 	}
 	r, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: follow.GetRunId(), LeaseToken: follow.GetLeaseToken(), Status: "canceled"})
 	requireOK(t, r.GetRetInfo())
@@ -1009,7 +1051,16 @@ func TestImportRunCarriesAllPartitionsAndDoesNotAdvanceLastSuccess(t *testing.T)
 	h.heartbeat("w1")
 	imp, _ := h.mgr.StartArchiveImport(ctx, &archivepb.StartArchiveImportReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, imp.GetRetInfo())
-	assigned := h.pull(1)
+	// 导入即使在 synced_tasks 匹配时也始终下发全部已登记分区。
+	impRsp, err := h.worker.PullArchiveRun(ctx, &archivepb.PullArchiveRunReq{
+		FreeSlots: 1, MaxStorageRuns: 2,
+		SyncedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: first.GetTaskId()}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, impRsp.GetRetInfo())
+	assigned := impRsp.GetRuns()
 	if len(assigned) != 1 || assigned[0].GetKind() != store.KindImport {
 		t.Fatalf("assignment = %v", assigned)
 	}
@@ -1037,7 +1088,7 @@ func TestClearArchiveUnrecoverableRemovesOnlyWholeRangesInside(t *testing.T) {
 	run := h.pull(1)[0]
 	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
 		Unrecoverable: []*archivepb.UnrecoverableRange{
-			{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"},
+			{StartTime: "2026-10-02T00:00:00Z", EndTime: "2026-10-02T12:00:00Z"},
 			{StartTime: "2026-10-03T00:00:00Z", EndTime: "2026-10-05T00:00:00Z"},
 			{StartTime: "2026-09-30T00:00:00Z", EndTime: "2026-10-01T12:00:00Z"},
 		}})
@@ -1064,4 +1115,224 @@ func rfcMillis(text string) int64 {
 		panic(err)
 	}
 	return at.UnixMilli()
+}
+
+func TestPullArchiveRunSendsRegisteredPartitionsOnlyOnDemand(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	h.heartbeat("w1")
+	first := h.pull(1)[0]
+	taskID := first.GetTaskId()
+	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{
+		RunId: first.GetRunId(), LeaseToken: first.GetLeaseToken(), Status: "succeeded",
+		Partitions: []*archivepb.PartitionReport{{
+			PartitionKey: "2026-10-16", Status: "final", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
+			FilePath: "f", FileSha256: "abc", RowCount: 10, SubjectCount: 1, FinalizedAt: rfcMillis("2026-10-17T00:30:00Z"),
+		}},
+	})
+	requireOK(t, r.GetRetInfo())
+
+	// 1. 暂存库已同步且 task_id 匹配：follow 不再重复下发 registered_partitions。
+	h.trigger(h.now.Add(time.Minute))
+	syncedPull, err := h.worker.PullArchiveRun(ctx, &archivepb.PullArchiveRunReq{
+		FreeSlots: 1, MaxStorageRuns: 2,
+		SyncedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: taskID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, syncedPull.GetRetInfo())
+	if len(syncedPull.GetRuns()) != 1 || len(syncedPull.GetRuns()[0].GetRegisteredPartitions()) != 0 {
+		t.Fatalf("已同步任务不应下发 registered_partitions: %v", syncedPull.GetRuns())
+	}
+	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{
+		RunId: syncedPull.GetRuns()[0].GetRunId(), LeaseToken: syncedPull.GetRuns()[0].GetLeaseToken(), Status: "succeeded",
+	})
+	requireOK(t, done.GetRetInfo())
+
+	// 2. 暂存库丢失（未报 synced_tasks）或 task_id 不匹配：按需补发 registered_partitions。
+	h.trigger(h.now.Add(time.Minute))
+	stalePull, err := h.worker.PullArchiveRun(ctx, &archivepb.PullArchiveRunReq{
+		FreeSlots: 1, MaxStorageRuns: 2,
+		SyncedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "old-task-id"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, stalePull.GetRetInfo())
+	if regs := stalePull.GetRuns()[0].GetRegisteredPartitions(); len(regs) != 1 || regs[0].GetPartitionKey() != "2026-10-16" {
+		t.Fatalf("task_id 不匹配应补发 registered_partitions: %v", regs)
+	}
+	done, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{
+		RunId: stalePull.GetRuns()[0].GetRunId(), LeaseToken: stalePull.GetRuns()[0].GetLeaseToken(), Status: "succeeded",
+	})
+	requireOK(t, done.GetRetInfo())
+
+	// 3. 导入运行始终下发全部已登记分区，即使 synced_tasks 匹配。
+	h.heartbeat("w1")
+	imp, _ := h.mgr.StartArchiveImport(ctx, &archivepb.StartArchiveImportReq{SpaceId: "crypto", DatasetId: "ds_1m"})
+	requireOK(t, imp.GetRetInfo())
+	impPull, err := h.worker.PullArchiveRun(ctx, &archivepb.PullArchiveRunReq{
+		FreeSlots: 1, MaxStorageRuns: 2,
+		SyncedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: taskID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, impPull.GetRetInfo())
+	if regs := impPull.GetRuns()[0].GetRegisteredPartitions(); len(regs) != 1 {
+		t.Fatalf("导入运行应始终下发全部登记: %v", regs)
+	}
+}
+
+func TestSpaceTimezoneReadsFromStorageAndCaches(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.datasets.datasets["stockjp/jp_1m"] = Dataset{SpaceID: "stockjp", DatasetID: "jp_1m", DataKind: "time_series", Freq: "1m", Status: "active", Retention: "168h"}
+	h.datasets.spaces = map[string]string{"stockjp": "Asia/Tokyo"}
+	requireOK(t, h.create("jp_1m", func(r *archivepb.CreateArchiveTaskReq) { r.SpaceId = "stockjp" }).GetRetInfo())
+	h.heartbeat("w1")
+
+	runs := h.pull(1)
+	if len(runs) != 1 || runs[0].GetSpaceTz() != "Asia/Tokyo" {
+		t.Fatalf("assignment space_tz = %q, want Asia/Tokyo", runs[0].GetSpaceTz())
+	}
+	if h.datasets.spaceCalls != 1 {
+		t.Fatalf("spaceCalls = %d, want 1", h.datasets.spaceCalls)
+	}
+
+	// 5 分钟内 ListArchiveTasks 命中缓存，不重复查 Storage。
+	list, _ := h.mgr.ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "stockjp"})
+	requireOK(t, list.GetRetInfo())
+	if h.datasets.spaceCalls != 1 {
+		t.Fatalf("缓存有效期内不应重复查 Storage: spaceCalls=%d", h.datasets.spaceCalls)
+	}
+
+	// 超过 5 分钟且 Storage 临时报错：沿用旧缓存，不中断下发。
+	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{
+		RunId: runs[0].GetRunId(), LeaseToken: runs[0].GetLeaseToken(), Status: "succeeded",
+	})
+	requireOK(t, done.GetRetInfo())
+	h.now = h.now.Add(6 * time.Minute)
+	h.datasets.spaceErr = fmt.Errorf("storage temporarily unavailable")
+	h.trigger(h.now)
+	runs = h.pull(1)
+	if len(runs) != 1 || runs[0].GetSpaceTz() != "Asia/Tokyo" {
+		t.Fatalf("Storage 抖动时应沿用缓存时区: %v", runs)
+	}
+	if h.datasets.spaceCalls != 2 {
+		t.Fatalf("缓存过期后应尝试刷新一次: spaceCalls=%d", h.datasets.spaceCalls)
+	}
+}
+
+func TestPullArchiveRunSyncsAllHistoricalPartitionsAfterStagingLoss(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo()) // 保留期 168h
+	h.heartbeat("w1")                                 // 纯本地模式：未配置对象存储
+	first := h.pull(1)[0]
+	old := &archivepb.PartitionReport{
+		PartitionKey: "2026-01-05", Status: "final", RangeStart: "2026-01-05T00:00:00Z", RangeEnd: "2026-01-06T00:00:00Z",
+		FilePath: "crypto/collect/x/2026/20260105.csv.gz", FileSha256: "oldsha", RowCount: 5, SubjectCount: 1,
+		ExportedAt: rfcMillis("2026-01-06T00:30:00Z"), FinalizedAt: rfcMillis("2026-01-09T00:30:00Z"),
+	}
+	recent := &archivepb.PartitionReport{
+		PartitionKey: "2026-10-16", Status: "final", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
+		FilePath: "crypto/collect/x/2026/20261016.csv.gz", FileSha256: "newsha", RowCount: 8, SubjectCount: 2,
+		ExportedAt: rfcMillis("2026-10-17T00:30:00Z"), FinalizedAt: rfcMillis("2026-10-17T00:45:00Z"),
+	}
+	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{
+		RunId: first.GetRunId(), LeaseToken: first.GetLeaseToken(), Status: "succeeded",
+		Partitions: []*archivepb.PartitionReport{old, recent},
+	})
+	requireOK(t, done.GetRetInfo())
+
+	// 1. 纯本地模式下暂存库重建（SyncedTasks 为空）：超出 168h 保留期的 2026-01-05 与近期分区都完整下发。
+	h.trigger(h.now.Add(time.Minute))
+	rebuiltLocal := h.pull(1)[0]
+	if regs := rebuiltLocal.GetRegisteredPartitions(); len(regs) != 2 || regs[0].GetPartitionKey() != "2026-01-05" || regs[1].GetPartitionKey() != "2026-10-16" {
+		t.Fatalf("纯本地重建暂存库应完整同步超保留期历史分区: %v", regs)
+	}
+	done, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{
+		RunId: rebuiltLocal.GetRunId(), LeaseToken: rebuiltLocal.GetLeaseToken(), Status: "succeeded",
+	})
+	requireOK(t, done.GetRetInfo())
+
+	// 2. 日后启用外部 S3 且再次重建暂存库：历史未上传分区 2026-01-05 同样完整同步，不会漏传。
+	hbRsp, err := h.worker.ArchiveWorkerHeartbeat(ctx, &archivepb.ArchiveWorkerHeartbeatReq{
+		WorkerId: "w1", RootDir: "/data/archive",
+		ObjectStore: &archivepb.ObjectStoreInfo{Endpoint: "cos.ap-nanjing.myqcloud.com", Bucket: "b-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, hbRsp.GetRetInfo())
+	h.trigger(h.now.Add(2 * time.Minute))
+	rebuiltRemote := h.pull(1)[0]
+	if regs := rebuiltRemote.GetRegisteredPartitions(); len(regs) != 2 || regs[0].GetPartitionKey() != "2026-01-05" {
+		t.Fatalf("启用外部 S3 后重建暂存库应同步全部历史未上传分区: %v", regs)
+	}
+}
+
+func TestPullArchiveRunDoesNotLockLeaseWhenSpaceTimezoneFails(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.datasets.datasets["stockjp/jp_1m"] = Dataset{SpaceID: "stockjp", DatasetID: "jp_1m", DataKind: "time_series", Freq: "1m", Status: "active", Retention: "168h"}
+	h.datasets.spaces = map[string]string{"stockjp": "Asia/Tokyo"}
+	requireOK(t, h.create("jp_1m", func(r *archivepb.CreateArchiveTaskReq) { r.SpaceId = "stockjp" }).GetRetInfo())
+	h.heartbeat("w1")
+
+	// 1. 冷缓存下 Storage 不可用：PullArchiveRun 返回错误，且待领运行保持 queued，不会锁成 running。
+	h.datasets.spaceErr = fmt.Errorf("storage down")
+	rsp, err := h.worker.PullArchiveRun(ctx, &archivepb.PullArchiveRunReq{FreeSlots: 2, MaxStorageRuns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireCode(t, rsp.GetRetInfo(), commonpb.ErrorCode_INNER_ERR, "storage down")
+	active, err := h.store.ListActiveRuns(ctx, "stockjp")
+	if err != nil || len(active) != 1 || active[0].Status != store.RunQueued || active[0].LeaseToken != "" {
+		t.Fatalf("时区解析失败不能锁定租约，实际 active = %+v err=%v", active, err)
+	}
+
+	// Storage 恢复后可立即领取，无需等待 10 分钟租约过期。
+	h.datasets.spaceErr = nil
+	runs := h.pull(1)
+	if len(runs) != 1 || runs[0].GetSpaceTz() != "Asia/Tokyo" {
+		t.Fatalf("Storage 恢复后应立即领到运行: %v", runs)
+	}
+	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{
+		RunId: runs[0].GetRunId(), LeaseToken: runs[0].GetLeaseToken(), Status: "succeeded",
+	})
+	requireOK(t, done.GetRetInfo())
+
+	// 2. 缓存过期后仅 stockjp 被删（ErrSpaceNotFound）：清除 stockjp 失效缓存项、不锁 stockjp 租约，
+	// 同时健康空间 crypto 仍能正常被领取，不被失效空间阻塞。
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	h.now = h.now.Add(6 * time.Minute)
+	h.trigger(h.now)
+	h.datasets.spaceErrs = map[string]error{"stockjp": fmt.Errorf("%w: stockjp", ErrSpaceNotFound)}
+
+	mixed := h.pull(2)
+	if len(mixed) != 1 || mixed[0].GetSpaceId() != "crypto" {
+		t.Fatalf("健康空间 crypto 应被领取且跳过已删空间 stockjp: %v", mixed)
+	}
+	h.svc.mu.Lock()
+	_, stillCached := h.svc.spaceTZ["stockjp"]
+	h.svc.mu.Unlock()
+	if stillCached {
+		t.Fatal("ErrSpaceNotFound 时必须从缓存中删除失效空间")
+	}
+	active, _ = h.store.ListActiveRuns(ctx, "stockjp")
+	if len(active) != 1 || active[0].Status != store.RunQueued || active[0].LeaseToken != "" {
+		t.Fatalf("已删空间 stockjp 不能锁定租约: %+v", active)
+	}
+
+	// 3. 仅剩已删空间 stockjp 排队时：PullArchiveRun 返回错误且仍保持 queued。
+	rsp, _ = h.worker.PullArchiveRun(ctx, &archivepb.PullArchiveRunReq{FreeSlots: 2, MaxStorageRuns: 2})
+	requireCode(t, rsp.GetRetInfo(), commonpb.ErrorCode_INNER_ERR, "space not found")
+	active, _ = h.store.ListActiveRuns(ctx, "stockjp")
+	if len(active) != 1 || active[0].Status != store.RunQueued {
+		t.Fatalf("仅剩已删空间时不能锁定租约: %+v", active)
+	}
 }

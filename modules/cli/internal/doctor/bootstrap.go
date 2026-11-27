@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -58,12 +59,26 @@ type bootstrapRunner struct {
 	deliveryErr            error
 }
 
+func isRemoteNode(options BootstrapOptions) bool {
+	return options.LocalNodeID == "" || options.NodeID != options.LocalNodeID
+}
+
+func joinNodePath(remote bool, elem ...string) string {
+	if remote {
+		return path.Join(elem...)
+	}
+	return filepath.Join(elem...)
+}
+
 func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, error) {
 	if options.NodeID == "" {
 		options.NodeID = options.LocalNodeID
 	}
-	if options.NodeID == "" || options.LocalNodeID == "" || options.NodeID != options.LocalNodeID {
-		return core.Report{}, fmt.Errorf("bootstrap only accepts the local node %q", options.LocalNodeID)
+	if options.NodeID == "" {
+		return core.Report{}, fmt.Errorf("bootstrap requires a target node ID")
+	}
+	if isRemoteNode(options) && (options.ReadFile == nil || options.Probe == nil || options.ProbeWritable == nil) {
+		return core.Report{}, fmt.Errorf("bootstrap for remote node %q requires remote SSH capabilities (load moox.toml)", options.NodeID)
 	}
 	manifest, err := core.LoadEmbeddedManifest()
 	if err != nil {
@@ -252,7 +267,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if probeWritable == nil {
 			probeWritable = ProbeWritablePath
 		}
-		if err := probeWritable(ctx, r.options.DeployRoot, filepath.Join("data", component.ComponentID)); err != nil {
+		if err := probeWritable(ctx, r.options.DeployRoot, joinNodePath(isRemoteNode(r.options), "data", component.ComponentID)); err != nil {
 			return checkResult(spec.ID, core.StatusFail, "data directory probe failed", err, "repair_path_permissions")
 		}
 		return checkResult(spec.ID, core.StatusPass, "data directory accepts bounded temporary probes", nil)
@@ -407,23 +422,23 @@ func selectSpecs(specs []core.CheckSpec, selected []string) ([]core.CheckSpec, e
 // verifyDeployedCatalog 核对节点上 <部署根>/version.json 记的服务目录摘要与这个 moox-cli 内嵌的一致：
 // 不一致说明节点上的组件和这个 CLI 不是同一版本，按 CLI 的目录诊断会得出错误的结论。
 func verifyDeployedCatalog(ctx context.Context, options BootstrapOptions, checksum string) error {
-	path := filepath.Join(options.DeployRoot, "version.json")
+	versionPath := joinNodePath(isRemoteNode(options), options.DeployRoot, "version.json")
 	read := options.ReadFile
 	if read == nil {
-		read = func(_ context.Context, _ string, path string) ([]byte, error) { return os.ReadFile(path) }
+		read = func(_ context.Context, _ string, target string) ([]byte, error) { return os.ReadFile(target) }
 	}
-	raw, err := read(ctx, options.NodeID, path)
+	raw, err := read(ctx, options.NodeID, versionPath)
 	if err != nil {
-		return fmt.Errorf("读不到部署记录 %s（这台主机还没用 setup deploy 装过？）: %w", path, err)
+		return fmt.Errorf("读不到部署记录 %s（这台主机还没用 setup deploy 装过？）: %w", versionPath, err)
 	}
 	if len(raw) > 64<<10 {
-		return fmt.Errorf("部署记录 %s 超过 64 KiB", path)
+		return fmt.Errorf("部署记录 %s 超过 64 KiB", versionPath)
 	}
 	var version struct {
 		CatalogSHA256 string `json:"catalog_sha256"`
 	}
 	if err := json.Unmarshal(raw, &version); err != nil {
-		return fmt.Errorf("部署记录 %s 不是合法的 JSON: %w", path, err)
+		return fmt.Errorf("部署记录 %s 不是合法的 JSON: %w", versionPath, err)
 	}
 	if version.CatalogSHA256 != checksum {
 		return fmt.Errorf("节点上部署的服务目录摘要 %q 与这个 moox-cli 内嵌的 %s 不一致：重新部署这台主机，或换成同一版本的 CLI", version.CatalogSHA256, checksum)

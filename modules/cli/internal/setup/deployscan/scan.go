@@ -63,9 +63,8 @@ type HostReport struct {
 	Disabled []string `json:"disabled"`
 	// Processes 是可执行文件在部署根里的进程数。
 	Processes int `json:"processes"`
-	// ArchiveKB、SeaweedFSKB 是 <部署根>/archive 与 <部署根>/data/seaweedfs 的占用；-1 表示不存在或没有统计（Options.Sizes 为假）。
-	ArchiveKB   int64 `json:"archive_kb"`
-	SeaweedFSKB int64 `json:"seaweedfs_kb"`
+	// ArchiveKB 是 <部署根>/archive 的占用；-1 表示不存在或没有统计（Options.Sizes 为假）。
+	ArchiveKB int64 `json:"archive_kb"`
 	// DiskFreeKB 是部署根所在盘的可用空间（部署根不存在时取最近的上级目录），-1 表示查不到。
 	DiskFreeKB int64 `json:"disk_free_kb"`
 	// Linger 表示部署用户开了 linger（loginctl show-user <用户> -p Linger 为 yes）；没开时用户登出后服务会被停掉。
@@ -78,7 +77,7 @@ type HostReport struct {
 type Options struct {
 	// Host 非空时只检测这一台主机（停用的主机也检测）；为空时检测全部启用的主机。
 	Host string
-	// Sizes 为真时统计归档目录与 SeaweedFS 数据的大小，只在清空预览里需要。
+	// Sizes 为真时统计归档目录的大小，只在清空预览里需要。
 	Sizes bool
 	// Wipe 为真时是为清空检测：清空针对 moox.toml 所列的全部主机，停用的主机（上面仍留着 host-gateway 等部署）也检测，连不上照常报错。
 	Wipe bool
@@ -99,7 +98,6 @@ type inspectResult struct {
 	Disabled    []string `json:"disabled"`
 	Processes   int      `json:"processes"`
 	ArchiveKB   int64    `json:"archive_kb"`
-	SeaweedFSKB int64    `json:"seaweedfs_kb"`
 	DiskFreeKB  int64    `json:"disk_free_kb"`
 	Linger      bool     `json:"linger"`
 	Journald    bool     `json:"journald"`
@@ -166,7 +164,7 @@ func inspect(ctx context.Context, dial Dial, host topology.Host, root string, si
 		report.Version = json.RawMessage(text)
 	}
 	report.Units, report.Active, report.Disabled, report.Processes = nonNil(result.Units), nonNil(result.Active), nonNil(result.Disabled), result.Processes
-	report.ArchiveKB, report.SeaweedFSKB, report.DiskFreeKB = result.ArchiveKB, result.SeaweedFSKB, result.DiskFreeKB
+	report.ArchiveKB, report.DiskFreeKB = result.ArchiveKB, result.DiskFreeKB
 	report.Linger, report.Journald = result.Linger, result.Journald
 	return report, nil
 }
@@ -181,13 +179,12 @@ func Route(reports []HostReport) string {
 
 // PlanHost 是清空范围里的一台主机。
 type PlanHost struct {
-	Host        string   `json:"host"`
-	Root        string   `json:"root"`
-	Units       []string `json:"units"`
-	Processes   int      `json:"processes"`
-	Entries     []string `json:"entries"`
-	ArchiveKB   int64    `json:"archive_kb"`
-	SeaweedFSKB int64    `json:"seaweedfs_kb"`
+	Host      string   `json:"host"`
+	Root      string   `json:"root"`
+	Units     []string `json:"units"`
+	Processes int      `json:"processes"`
+	Entries   []string `json:"entries"`
+	ArchiveKB int64    `json:"archive_kb"`
 }
 
 // Plan 是清空预览：Digest 是清空范围的摘要，执行时要和预览一致（--expect）。
@@ -207,7 +204,7 @@ func BuildPlan(reports []HostReport) Plan {
 		}
 		plan.Hosts = append(plan.Hosts, PlanHost{
 			Host: report.Host, Root: report.Root, Units: nonNil(report.Units), Processes: report.Processes,
-			Entries: nonNil(report.Entries), ArchiveKB: report.ArchiveKB, SeaweedFSKB: report.SeaweedFSKB,
+			Entries: nonNil(report.Entries), ArchiveKB: report.ArchiveKB,
 		})
 	}
 	type scope struct {

@@ -72,9 +72,6 @@ func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
 			rsp.DiskForecasts = append(rsp.DiskForecasts, &monitorpb.DoctorDiskForecast{NodeId: host.HostID, Mountpoint: forecast.Mountpoint, Status: forecast.Status, GrowthBytesPerDay: forecast.GrowthBytesPerDay, RemainingDays: forecast.RemainingDays, ValidIntervals: uint32(forecast.ValidIntervals), Summary: forecast.Summary})
 		}
 	}
-	for _, event := range value.Alerts {
-		rsp.ActiveAlerts = append(rsp.ActiveAlerts, eventToPB(event))
-	}
 	return rsp
 }
 

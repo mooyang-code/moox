@@ -59,9 +59,6 @@ func (c Catalog) validateDeployFields(ids map[string]bool) error {
 		if component.StopTimeoutSec < 0 || component.StopTimeoutSec > 1800 {
 			return fmt.Errorf("%s stop_timeout_sec must be 0..1800", where)
 		}
-		if component.ThirdParty && len(component.Credentials) != 0 {
-			return fmt.Errorf("%s is third-party and cannot receive credentials", where)
-		}
 		credentials := map[string]bool{}
 		for _, credential := range component.Credentials {
 			role, isRole := strings.CutPrefix(credential, "eventbus:")

@@ -32,12 +32,7 @@ func (c Catalog) Validate() error {
 		return err
 	}
 	for _, component := range c.Components {
-		binaryOK := component.Binary == "moox-"+component.ID
-		if component.ThirdParty {
-			// 第三方程序的二进制保留原名（weed），只要求是一个普通文件名。
-			binaryOK = binaryName.MatchString(component.Binary) && !strings.HasPrefix(component.Binary, "moox-")
-		}
-		if !identifier.MatchString(component.ID) || component.Name == "" || !binaryOK {
+		if !identifier.MatchString(component.ID) || component.Name == "" || component.Binary != "moox-"+component.ID {
 			return fmt.Errorf("component %q requires a canonical ID, name and binary", component.ID)
 		}
 		if ids[component.ID] || binaries[component.Binary] {
@@ -59,12 +54,8 @@ func (c Catalog) Validate() error {
 			ports[port] = true
 			return nil
 		}
-		// 每个组件都有健康端口；第三方程序没有 /healthz、/readyz，不声明健康端口，也不能声明服务。
-		if component.ThirdParty {
-			if component.Health.Port != 0 || len(component.Services) != 0 || component.ExternalProgram || component.RelayHTTP != nil || component.Scope != ScopeAny {
-				return fmt.Errorf("third-party component %q cannot declare health, services, relay or a non-any scope", component.ID)
-			}
-		} else if err := addPort(component.Health.Port); err != nil {
+		// 每个组件都有健康端口。
+		if err := addPort(component.Health.Port); err != nil {
 			return err
 		}
 		for _, port := range component.Ports {
@@ -88,7 +79,11 @@ func (c Catalog) Validate() error {
 				return fmt.Errorf("invalid or duplicate service %q", service.Path)
 			}
 			paths[service.Path] = true
-			if err := addPort(service.Port); err != nil {
+			if service.Port == 0 {
+				if component.ID != adminComponent || service.ConsoleName == "" || !isConsoleOnlyService(service) {
+					return fmt.Errorf("component %q service %q can use port 0 only for admin console-only services", component.ID, service.Path)
+				}
+			} else if err := addPort(service.Port); err != nil {
 				return err
 			}
 			if service.TimeoutMS < 0 || service.TimeoutMS > 960000 || service.MaxBodyBytes < 0 || service.MaxBodyBytes > 64<<20 {
@@ -121,9 +116,6 @@ func (c Catalog) Validate() error {
 		return err
 	}
 	for _, component := range c.Components {
-		if component.ThirdParty {
-			continue
-		}
 		if err := validateDoctor(component); err != nil {
 			return err
 		}
@@ -239,6 +231,20 @@ func (c Catalog) validateRelayHTTP(component Component, ids, external map[string
 		}
 	}
 	return nil
+}
+
+// isConsoleOnlyService 报告服务是否无机器调用方且全部方法的 operators 仅为 console。
+// 只有这类纯控制台内部服务允许声明 port: 0（仅走 Admin 进程内 LocalDispatcher，不监听 TCP 端口）。
+func isConsoleOnlyService(service Service) bool {
+	if len(service.Methods) == 0 {
+		return false
+	}
+	for _, method := range service.Methods {
+		if len(method.Callers) > 0 || !slices.Equal(method.OperatorList(), []string{OperatorConsole}) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateDoctor(component Component) error {

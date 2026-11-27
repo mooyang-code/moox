@@ -73,10 +73,6 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 	}
 	manifest := Manifest{Version: ManifestVersion, Components: make([]Component, 0, len(catalog.Components))}
 	for _, component := range catalog.Components {
-		// 第三方程序（内置 SeaweedFS）没有健康端口、不上报，不在诊断范围内。
-		if component.ThirdParty {
-			continue
-		}
 		manifest.Components = append(manifest.Components, Component{
 			ComponentID: component.ID, ServiceName: component.ID,
 			Transport:               Transport(component.Doctor.Transport),
@@ -136,9 +132,6 @@ func (c Component) validate() error {
 	case FunctionalObservabilityActive, FunctionalObservabilityDeferred, FunctionalObservabilityNotApplicable:
 	default:
 		return fmt.Errorf("invalid functional_observability %q", c.FunctionalObservability)
-	}
-	if strings.HasPrefix(c.ServiceName, "storage-") && c.FunctionalObservability != FunctionalObservabilityDeferred {
-		return fmt.Errorf("storage service %q must remain deferred", c.ServiceName)
 	}
 	if c.HealthPort <= 0 || c.HealthPort > 65535 {
 		return fmt.Errorf("invalid health_port %d", c.HealthPort)

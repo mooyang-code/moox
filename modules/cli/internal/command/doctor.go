@@ -2,13 +2,11 @@ package command
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	core "github.com/mooyang-code/moox/packages/doctor"
@@ -17,20 +15,38 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const defaultDatasetHealthPolicyPath = "config/setup/dataset-health-policy.yaml"
+
 type doctorExitError struct{ code int }
 
 func (e doctorExitError) Error() string { return fmt.Sprintf("doctor exited with status %d", e.code) }
 func (e doctorExitError) ExitCode() int { return e.code }
 
 type doctorCommandDeps struct {
-	loadConfig func() (*config.Config, error)
-	newClient  func(gatewayclient.Invoker) *doctorcli.Client
+	newClient func(gatewayclient.Invoker) *doctorcli.Client
+}
+
+type doctorEnv struct {
+	nodeID                  string
+	deployRoot              string
+	datasetHealthPolicyPath string
+}
+
+func resolveDoctorEnv() doctorEnv {
+	nodeID := strings.TrimSpace(os.Getenv("MOOX_NODE_ID"))
+	if nodeID == "" {
+		nodeID, _ = os.Hostname()
+	}
+	return doctorEnv{
+		nodeID:                  nodeID,
+		deployRoot:              strings.TrimSpace(os.Getenv("MOOX_DEPLOY_ROOT")),
+		datasetHealthPolicyPath: firstNonEmpty(strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")), defaultDatasetHealthPolicyPath),
+	}
 }
 
 func init() {
 	rootCmd.AddCommand(newDoctorCommand(doctorCommandDeps{
-		loadConfig: config.LoadConfig,
-		newClient:  doctorcli.New,
+		newClient: doctorcli.New,
 	}))
 }
 
@@ -96,45 +112,41 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 	var checks []string
 	cmd := &cobra.Command{
 		Use:          mode,
-		Short:        map[string]string{"bootstrap": "检查新部署各模块的安装与配置", "diagnose": "按 Monitor 的事实诊断一台主机上的模块：--node 指定主机（默认本机），远端经 SSH 读健康端口与服务状态"}[mode],
+		Short:        map[string]string{"bootstrap": "检查新部署各模块的安装与配置：--node 指定主机（默认本机），远端经 SSH 核对", "diagnose": "按 Monitor 的事实诊断一台主机上的模块：--node 指定主机（默认本机），远端经 SSH 读健康端口与服务状态"}[mode],
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		PreRunE: func(_ *cobra.Command, _ []string) error {
 			return validateDoctorFlags(format, output, checks)
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := deps.loadConfig()
-			if err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-				cfg = &config.Config{}
-			}
-			doctorCfg := cfg.EffectiveDoctor()
+			env := resolveDoctorEnv()
 			if nodeID == "" {
-				nodeID = doctorCfg.NodeID
+				nodeID = env.nodeID
 			}
 			gateway, err := openCommandGateway(cmd.Context(), file, nil)
 			if err != nil {
 				return err
 			}
 			defer gateway.Close()
-			client := deps.newClient(gateway)
+			newClient := deps.newClient
+			if newClient == nil {
+				newClient = doctorcli.New
+			}
+			client := newClient(gateway)
 			// 健康端口只听本机：本节点直接请求 127.0.0.1，其他主机经 SSH 在目标机上请求；
-			// 外部程序（systemd 用户服务）的状态同样经 SSH（本机则直接执行）读取。读不到 moox.toml 时只能查本机。
-			probe := doctorcli.LocalHealthProbe(doctorCfg.NodeID)
+			// 外部程序（systemd 用户服务）的状态与目录可写探测同样经 SSH（本机则直接执行）完成。读不到 moox.toml 时只能查本机。
+			probe := doctorcli.LocalHealthProbe(env.nodeID)
 			var systemd doctorcli.SystemdChecker
 			var readFile func(context.Context, string, string) ([]byte, error)
-			deployRoot := firstNonEmpty(doctorCfg.DeployRoot, topology.DefaultDeployRoot)
-			remote := loadHostRemote(file, doctorCfg.NodeID)
+			var probeWritable func(context.Context, string, string) error
+			deployRoot := firstNonEmpty(env.deployRoot, topology.DefaultDeployRoot)
+			remote := loadHostRemote(file, env.nodeID)
 			if remote != nil {
 				defer remote.Close()
 				systemd, probe = remote.Systemd(), remote.HealthProbe()
-				readFile = func(ctx context.Context, node, path string) ([]byte, error) {
-					out, err := remote.Run(ctx, node, []string{"cat", "--", path})
-					return []byte(out), err
-				}
-				if doctorCfg.DeployRoot == "" {
+				readFile = remote.ReadFile
+				probeWritable = remote.ProbeWritable(nodeID)
+				if env.deployRoot == "" {
 					deployRoot = remote.manifest.Paths.DeployRoot
 				}
 			}
@@ -142,9 +154,9 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			switch mode {
 			case "bootstrap":
 				reportValue, err = doctorcli.RunBootstrap(cmd.Context(), doctorcli.BootstrapOptions{
-					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, DatasetHealthPolicyPath: doctorCfg.DatasetHealthPolicyPath,
+					NodeID: nodeID, LocalNodeID: env.nodeID, DatasetHealthPolicyPath: env.datasetHealthPolicyPath,
 					CheckIDs: checks, Client: client, MonitorClient: client, Probe: probe,
-					Systemd: systemd, DeployRoot: deployRoot, ReadFile: readFile,
+					Systemd: systemd, DeployRoot: deployRoot, ReadFile: readFile, ProbeWritable: probeWritable,
 				})
 			case "diagnose":
 				if remote == nil {

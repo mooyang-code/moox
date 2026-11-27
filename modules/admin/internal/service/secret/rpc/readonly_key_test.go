@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	secret "github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/stretchr/testify/require"
@@ -12,12 +11,12 @@ import (
 )
 
 type readonlyKeyFake struct {
-	secret.Service
+	secretStore
 	records map[string]*model.Secret
 	asked   []string
 }
 
-func (f *readonlyKeyFake) GetSecret(_ context.Context, secretID string) (*model.Secret, error) {
+func (f *readonlyKeyFake) FindByID(_ context.Context, secretID string) (*model.Secret, error) {
 	f.asked = append(f.asked, secretID)
 	if record, ok := f.records[secretID]; ok {
 		return record, nil

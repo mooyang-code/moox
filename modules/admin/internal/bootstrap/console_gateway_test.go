@@ -41,7 +41,7 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 	require.NoError(t, os.WriteFile(keyFile, []byte(gatewayauth.EncodeSigningKey(authtest.Key("host/control"))+"\n"), 0o600))
 	watch, _ := certificateWatchFixture(t, 365*24*time.Hour, 365*24*time.Hour)
 	t.Setenv("MOOX_ADMIN_PKI_DIR", watch.PKIDir)
-	client, err := newConsoleGateway(db, "control", keyFile)
+	client, err := newConsoleGateway(db, topology, "control", keyFile)
 	require.NoError(t, err, "startup must not contact 127.0.0.1:11002")
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	first := client.Directory()
@@ -77,7 +77,7 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 	cancel()
 	_, err = source.Fetch(canceled, "")
 	require.Error(t, err)
-	_, err = newConsoleGateway(db, "control", filepath.Join(t.TempDir(), "missing.key"))
+	_, err = newConsoleGateway(db, topology, "control", filepath.Join(t.TempDir(), "missing.key"))
 	require.Error(t, err, "没有主机私钥时不启动，也不会另造一个签名身份")
 	t.Setenv("MOOX_ADMIN_HOST_KEY_FILE", "")
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE", "/data/moox/secrets/admin-master.key")
@@ -101,9 +101,9 @@ func TestLocalServiceFiltersPreserveGlobalAndServiceOrder(t *testing.T) {
 	previous := cfg.Server.Filter
 	previousServices := cfg.Server.Service
 	cfg.Server.Filter = []string{globalName}
-	cfg.Server.Service = []*trpc.ServiceConfig{{Name: "trpc.moox.infra.Auth", Filter: []string{localName}}}
+	cfg.Server.Service = []*trpc.ServiceConfig{{Name: "trpc.moox.ops.SecretMgr", Filter: []string{localName}}}
 	t.Cleanup(func() { cfg.Server.Filter = previous; cfg.Server.Service = previousServices })
-	chain, err := localServiceFilters("trpc.moox.infra.Auth")
+	chain, err := localServiceFilters("trpc.moox.ops.SecretMgr")
 	require.NoError(t, err)
 	require.Len(t, chain, 2)
 	_, err = filter.ServerChain(chain).Filter(context.Background(), struct{}{}, func(context.Context, any) (any, error) {
@@ -113,6 +113,6 @@ func TestLocalServiceFiltersPreserveGlobalAndServiceOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"global", "service", "handler"}, visited)
 	cfg.Server.Filter = []string{"unregistered-console-filter"}
-	_, err = localServiceFilters("trpc.moox.infra.Auth")
+	_, err = localServiceFilters("trpc.moox.ops.SecretMgr")
 	require.ErrorContains(t, err, "not registered")
 }

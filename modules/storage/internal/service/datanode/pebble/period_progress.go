@@ -42,10 +42,13 @@ type DatasetPeriodSeries struct {
 
 // DatasetPeriodExpectation 是一次周期提交声明的周期身份；DeadlineAt 与 SeriesSnapshot 由 Storage 按生效快照补全。
 type DatasetPeriodExpectation struct {
-	SpaceID        string
-	DatasetID      string
-	Frequency      string
-	PeriodTime     int64
+	SpaceID    string
+	DatasetID  string
+	Frequency  string
+	PeriodTime int64
+	// PeriodEndAt 可选指定该周期的真实收盘时刻（Unix 秒），供 session 1d 按市场收盘时刻（含半日市）计算截止时间；
+	// 为 0 时由存储层按 frequency.BarEnd(PeriodTime) 计算。
+	PeriodEndAt    int64
 	SeriesHash     string
 	ExpectedCount  uint32
 	DeadlineAt     int64

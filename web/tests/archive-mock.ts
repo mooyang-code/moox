@@ -179,7 +179,7 @@ async function gateway(route: Route) {
             disk_free_bytes: String(1570 * GiB),
             min_free_bytes: String(5 * GiB),
             staging_bytes: "12288",
-            object_store: { endpoint: "127.0.0.1:11473", bucket: "moox-archive", prefix: "moox-archive/", url_style: "path" }
+            object_store: { endpoint: "https://cos.ap-shanghai.myqcloud.com", bucket: "moox-archive", prefix: "moox-archive/", url_style: "path" }
           },
           running_runs: [],
           queued_run_count: 1,

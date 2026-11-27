@@ -7,7 +7,8 @@ import (
 	"strings"
 	"time"
 
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
+	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
@@ -39,12 +40,12 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 		case recordKept:
 			result.Kept = append(result.Kept, keptAdmin)
 		}
-		n, kept, err := s.ensureTencentSecret(ctx, tx, manifest.TencentCloud)
+		n, tencentState, err := s.ensureTencentSecret(ctx, tx, manifest.TencentCloud)
 		if err != nil {
 			return err
 		}
 		created += n
-		if kept {
+		if tencentState == recordKept {
 			result.Kept = append(result.Kept, keptTencentCloud)
 		}
 		// 交易所密钥只建不改，不进整体冲突判断：已存在或已在管理台删除的都原样保留。
@@ -57,7 +58,7 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			created += n
 			result.ExchangeKeys = append(result.ExchangeKeys, keyResult)
 		}
-		result.Secrets = secretsPresent(len(keys), result.ExchangeKeys)
+		result.Secrets = secretsPresent(tencentState != recordDeleted, len(keys), result.ExchangeKeys)
 		return nil
 	})
 	if err != nil {
@@ -66,6 +67,7 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			status, inspectErr := s.Inspect(ctx, manifest)
 			if inspectErr == nil && status.State == "completed" {
 				result.Action = "unchanged"
+				result.Secrets = status.Secrets
 				result.ExchangeKeys = status.ExchangeKeys
 				result.Kept = status.Kept
 				return result, nil
@@ -95,11 +97,11 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 			return err
 		}
 		status.add(state, keptAdmin)
-		state, err = s.inspectTencentSecret(ctx, tx, manifest.TencentCloud)
+		tencentState, err := s.inspectTencentSecret(ctx, tx, manifest.TencentCloud)
 		if err != nil {
 			return err
 		}
-		status.add(state, keptTencentCloud)
+		status.add(tencentState, keptTencentCloud)
 		for _, key := range keys {
 			keyState, err := s.inspectExchangeKey(ctx, tx, key)
 			if err != nil {
@@ -111,7 +113,7 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 			}
 			status.ExchangeKeys = append(status.ExchangeKeys, ExchangeKeyResult{SecretID: exchangeKeyID(key), State: keyState, ReadOnly: key.ReadOnly})
 		}
-		status.Secrets = secretsPresent(len(keys), status.ExchangeKeys)
+		status.Secrets = secretsPresent(tencentState != recordDeleted, len(keys), status.ExchangeKeys)
 		return nil
 	})
 	if err != nil {
@@ -123,10 +125,13 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 	return status, nil
 }
 
-// secretsPresent 是应当存在的密钥数：腾讯云一把加每把交易所密钥，已在管理台删除的交易所密钥不再算
-// （setup 不会重建它们，计入会让数量永远对不上）。
-func secretsPresent(keyCount int, results []ExchangeKeyResult) int {
-	present := 1 + keyCount
+// secretsPresent 是应当存在的密钥数：未在管理台删除的腾讯云密钥加每把未删除的交易所密钥
+// （已在管理台删除的初始密钥不会由 setup 重建，计入会让数量永远对不上）。
+func secretsPresent(tencentPresent bool, keyCount int, results []ExchangeKeyResult) int {
+	present := keyCount
+	if tencentPresent {
+		present++
+	}
 	for _, result := range results {
 		if result.State == ExchangeKeyDeleted {
 			present--
@@ -158,6 +163,8 @@ const (
 	recordMissing
 	// recordKept 是库里已有、但与 moox.toml 不一致：以管理台为准保留，不改写。
 	recordKept
+	// recordDeleted 是已在管理台硬删除并记录在墓碑表的初始密钥：setup 不再静默复活。
+	recordDeleted
 )
 
 // Kept 里的名称：管理员、腾讯云密钥。
@@ -176,7 +183,7 @@ func (s *Status) add(state recordState, name string) {
 }
 
 func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (recordState, error) {
-	var user authmodel.User
+	var user auth.User
 	err := tx.WithContext(ctx).Where("c_username = ?", strings.TrimSpace(input.Username)).First(&user).Error
 	if err == nil {
 		if mooxsecurity.VerifyPassword(input.Password, user.PasswordHash) {
@@ -189,7 +196,7 @@ func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (r
 	}
 	// 系统只有一个超级用户：库里已有别的用户就是冲突。
 	var otherUsers int64
-	if err := tx.WithContext(ctx).Model(&authmodel.User{}).Count(&otherUsers).Error; err != nil {
+	if err := tx.WithContext(ctx).Model(&auth.User{}).Count(&otherUsers).Error; err != nil {
 		return recordKept, ErrStorage
 	}
 	if otherUsers > 0 {
@@ -198,46 +205,54 @@ func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (r
 	return recordMissing, nil
 }
 
-func (s *Service) ensureTencentSecret(ctx context.Context, tx *gorm.DB, input TencentCloud) (int, bool, error) {
+func (s *Service) ensureTencentSecret(ctx context.Context, tx *gorm.DB, input TencentCloud) (int, recordState, error) {
 	state, err := s.inspectTencentSecret(ctx, tx, input)
-	if err != nil || state == recordMatch || state == recordKept {
-		return 0, state == recordKept, err
-	}
-	encrypted, err := mooxsecurity.Encrypt(input.SecretKey, s.encryptionKey)
-	if err != nil {
-		return 0, false, ErrStorage
+	if err != nil || state == recordMatch || state == recordKept || state == recordDeleted {
+		return 0, state, err
 	}
 	now := time.Now()
 	secret := &secretmodel.Secret{
 		SecretID: tencentSecretID, Name: "Tencent Cloud Default", Category: "cloud", Provider: "tencent",
-		SecretType: "api_key", KeyID: strings.TrimSpace(input.SecretID), SecretValue: encrypted,
+		SecretType: "api_key", KeyID: strings.TrimSpace(input.SecretID), SecretValue: input.SecretKey,
 		ExtraConfig: "{}", Status: "active", Creator: "setup", CreateTime: now, ModifyTime: now,
 	}
+	if err := secretdao.EncryptSecretFields(secret, s.encryptionKey); err != nil {
+		return 0, recordKept, ErrStorage
+	}
 	if err := tx.WithContext(ctx).Create(secret).Error; err != nil {
-		return 0, false, ErrStorage
+		return 0, recordKept, ErrStorage
+	}
+	if err := tx.WithContext(ctx).Where("c_secret_id = ?", tencentSecretID).Delete(&secretmodel.DeletedInitialSecret{}).Error; err != nil {
+		return 0, recordKept, ErrStorage
 	}
 	if err := s.afterWrite("secret"); err != nil {
-		return 0, false, err
+		return 0, recordKept, err
 	}
-	return 1, false, nil
+	return 1, recordMatch, nil
 }
 
 func (s *Service) inspectTencentSecret(ctx context.Context, tx *gorm.DB, input TencentCloud) (recordState, error) {
 	var secret secretmodel.Secret
-	err := tx.WithContext(ctx).Where("c_secret_id = ? AND c_is_deleted = 0", tencentSecretID).First(&secret).Error
+	err := tx.WithContext(ctx).Where("c_secret_id = ?", tencentSecretID).First(&secret).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		deleted, tombstoneErr := secretdao.IsDeletedInitialSecret(ctx, tx, tencentSecretID)
+		if tombstoneErr != nil {
+			return recordKept, ErrStorage
+		}
+		if deleted {
+			return recordDeleted, nil
+		}
 		return recordMissing, nil
 	}
 	if err != nil {
 		return recordKept, ErrStorage
 	}
-	plain, err := mooxsecurity.Decrypt(secret.SecretValue, s.encryptionKey)
-	if err != nil {
+	if err := secretdao.DecryptSecretFields(&secret, s.encryptionKey); err != nil {
 		return recordKept, ErrStorage
 	}
 	metadataMatches := secret.Name == "Tencent Cloud Default" && secret.Category == "cloud" && secret.Provider == "tencent" &&
 		secret.SecretType == "api_key" && secret.KeyID == strings.TrimSpace(input.SecretID) && secret.Status == "active"
-	if metadataMatches && secretEqual(plain, input.SecretKey) {
+	if metadataMatches && secretEqual(secret.SecretValue, input.SecretKey) {
 		return recordMatch, nil
 	}
 	return recordKept, nil

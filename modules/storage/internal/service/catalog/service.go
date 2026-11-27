@@ -3,13 +3,11 @@ package catalog
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
-	"github.com/mooyang-code/snapshotcache"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -21,8 +19,8 @@ type DatasetRows interface {
 
 type Service struct {
 	pb.UnimplementedMetadata
-	metadata      metadata.Store
-	metadataCache *metacache.Store
+	metadata     metadata.Store
+	datasetCache *metacache.DatasetCache
 	// refreshOverride 仅供测试替换缓存刷新实现
 	refreshOverride func(context.Context) error
 	rows            DatasetRows
@@ -37,14 +35,14 @@ type Options struct {
 	Retention storagepolicy.Retention
 }
 
-func NewMetadataService(store metadata.Store, cache *metacache.Store, options Options) (*Service, error) {
+func NewMetadataService(store metadata.Store, cache *metacache.DatasetCache, options Options) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("metadata store is required")
 	}
 	if options.Retention.Defaults == nil {
 		options.Retention = storagepolicy.Default().Retention
 	}
-	return &Service{metadata: store, metadataCache: cache, rows: options.Rows, retention: options.Retention}, nil
+	return &Service{metadata: store, datasetCache: cache, rows: options.Rows, retention: options.Retention}, nil
 }
 
 // withRetention returns a copy of dataset carrying its effective retention.
@@ -79,56 +77,17 @@ func (s *Service) datasetRetention(dataset *pb.Dataset) (string, string) {
 	return period.String(), source
 }
 
-func (s *Service) refreshMetadataCache(ctx context.Context) error {
-	err := s.refreshMetadataCacheStrict(ctx)
-	if errors.Is(err, snapshotcache.ErrRefreshInProgress) {
-		// A committed mutation can race with the cache's periodic full refresh.
-		// The in-flight refresh will publish the latest committed metadata (or
-		// the next tick will retry it), so it must not turn a successful write
-		// into a false failure.
-		return nil
-	}
-	return err
-}
-
-// refreshMetadataCacheStrict 不吞掉 ErrRefreshInProgress：进行中的刷新可能读取的是提交前的快照，
-// 需要同步发布点的调用方必须等它结束后重新刷新。
-func (s *Service) refreshMetadataCacheStrict(ctx context.Context) error {
-	if s != nil && s.refreshOverride != nil {
-		return s.refreshOverride(ctx)
-	}
-	if s == nil || s.metadataCache == nil {
-		return nil
-	}
-	return s.metadataCache.Refresh(ctx)
-}
-
-func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation string) {
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		log.ErrorContextf(ctx, "%s committed but metadata cache refresh failed: %v", operation, err)
-	}
-}
-
-// refreshMetadataCacheSynchronously 让启停、删除数据集这类变更在返回前把元数据缓存发布出去；
-// 有限次重试都失败时返回错误，调用方重试即可（这些变更都是幂等的）。
-func (s *Service) refreshMetadataCacheSynchronously(ctx context.Context, operation string) error {
+// refreshDatasetCache 在数据集或其列定义变更提交后同步发布最新的 DatasetCache。
+func (s *Service) refreshDatasetCache(ctx context.Context, operation string) error {
 	var err error
-	const attempts = 5
-	for attempt := 0; attempt < attempts; attempt++ {
-		if err = s.refreshMetadataCacheStrict(ctx); err == nil {
-			return nil
-		}
-		if attempt < attempts-1 {
-			timer := time.NewTimer(time.Duration(25<<attempt) * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-			}
-		}
+	if s != nil && s.refreshOverride != nil {
+		err = s.refreshOverride(ctx)
+	} else if s != nil && s.datasetCache != nil {
+		err = s.datasetCache.Refresh(ctx)
 	}
-	log.ErrorContextf(ctx, "%s committed but metadata cache publication is pending: %v", operation, err)
+	if err != nil {
+		log.ErrorContextf(ctx, "%s committed but dataset cache refresh failed: %v", operation, err)
+	}
 	return err
 }
 

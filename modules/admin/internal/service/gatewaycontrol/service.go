@@ -21,6 +21,7 @@ import (
 
 type Service struct {
 	db            *gorm.DB
+	topology      *sysdeploy.TopologyDAO
 	controlHostID string
 	now           func() time.Time
 }
@@ -32,7 +33,11 @@ func NewService(db *gorm.DB, controlHostID string) (*Service, error) {
 	if db == nil || !servicecatalog.ValidHostID(controlHostID) {
 		return nil, errors.New("gateway control requires the Admin database and a canonical control host")
 	}
-	return &Service{db: db, controlHostID: controlHostID, now: time.Now}, nil
+	topology, err := sysdeploy.NewTopologyDAO(db, controlHostID)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{db: db, topology: topology, controlHostID: controlHostID, now: time.Now}, nil
 }
 
 type verifiedHost struct{}
@@ -82,15 +87,12 @@ func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*p
 	}
 	var snapshot *pb.HostGatewaySnapshot
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 先取写锁，与拓扑、密钥的写入串行：期望哈希与状态描述的是同一份库内状态。
+		// 先取写锁，与拓扑、密钥的写入串行：快照与状态描述的是同一份库内状态。
 		if err := tx.Exec("UPDATE t_host_gateway_status SET c_host_id = c_host_id WHERE 0").Error; err != nil {
 			return err
 		}
-		dao, err := sysdeploy.NewTopologyDAO(tx, s.controlHostID)
-		if err != nil {
-			return err
-		}
-		if snapshot, err = dao.Snapshot(ctx); err != nil {
+		var err error
+		if snapshot, err = s.topology.SnapshotTx(ctx, tx); err != nil {
 			return err
 		}
 		// 快照对全部主机相同；没登记的主机拿不到。
@@ -98,7 +100,7 @@ func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*p
 			return gorm.ErrRecordNotFound
 		}
 		now := s.now().UTC()
-		status := sysdeploy.HostGatewayStatus{HostID: req.GetHostId(), ExpectedHash: snapshot.Hash, AppliedHash: req.GetCurrentHash(), LastSeenAt: &now, RelaySessions: relaySessions}
+		status := sysdeploy.HostGatewayStatus{HostID: req.GetHostId(), AppliedHash: req.GetCurrentHash(), LastSeenAt: &now, RelaySessions: relaySessions}
 		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, UpdateAll: true}).Create(&status).Error
 	})
 	if err != nil {

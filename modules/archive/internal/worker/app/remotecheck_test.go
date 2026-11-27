@@ -40,12 +40,12 @@ func withRemote(t *testing.T, h *harness) *fakes3.Server {
 func TestHeartbeatCarriesTheObjectStoreSummaryAndRunsReportUploads(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	if got := h.mgr.heartbeats[0].GetObjectStore(); got.GetEndpoint() != "" {
 		t.Fatalf("没配对象存储时心跳里的摘要应为空: %v", got)
 	}
 	withRemote(t, h)
-	h.app.heartbeatOnce(ctx)
+	h.app.heartbeatOnce(ctx, false)
 	got := h.mgr.heartbeats[1].GetObjectStore()
 	if got.GetEndpoint() != "cos.ap-nanjing.myqcloud.com" || got.GetBucket() != checkBucket || got.GetPrefix() != "moox-archive/" || got.GetStorageClass() != "STANDARD_IA" || got.GetUrlStyle() != "path" {
 		t.Fatalf("心跳里的对象存储摘要 = %v", got)

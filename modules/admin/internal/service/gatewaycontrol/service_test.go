@@ -344,13 +344,12 @@ func (f *controlFixture) status(t *testing.T) sysdeploy.HostGatewayStatus {
 	return status
 }
 
-// 每次拉取都记下期望快照、网关带来的已应用快照与时间，哈希没变也写（拉取兼作心跳）。
-func TestPullRecordsExpectedAppliedAndHeartbeat(t *testing.T) {
+// 每次拉取都记下网关带来的已应用快照与时间，哈希没变也写（拉取兼作心跳）。
+func TestPullRecordsAppliedAndHeartbeat(t *testing.T) {
 	f := newControlFixture(t)
 	first := f.pull(t, "storage", "", nil)
 	require.True(t, first.Changed)
 	status := f.status(t)
-	require.Equal(t, first.Snapshot.Hash, status.ExpectedHash)
 	require.Empty(t, status.AppliedHash)
 	require.NotNil(t, status.LastSeenAt)
 	f.clock.Add(int64(5 * time.Second))
@@ -400,7 +399,6 @@ func TestIndependentStatusWritersSerialize(t *testing.T) {
 		require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 	}
 	status := f.status(t)
-	require.Equal(t, hash, status.ExpectedHash)
 	require.Equal(t, hash, status.AppliedHash)
 }
 

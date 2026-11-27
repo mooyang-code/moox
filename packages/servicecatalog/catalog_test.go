@@ -59,7 +59,7 @@ func operators(ids ...string) *[]string { return &ids }
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "factor-engine": 11417, "archive-worker": 11418, "seaweedfs": 0}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "factor-engine": 11417, "archive-worker": 11418}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -188,9 +188,18 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"explicit metrics publisher", func(c *Catalog) {
 			componentPtr(c, "monitor").Credentials = []string{"eventbus:metrics-publisher"}
 		}},
-		{"third party with credentials", func(c *Catalog) { componentPtr(c, "seaweedfs").Credentials = []string{"cls"} }},
-		{"third party with health port", func(c *Catalog) { componentPtr(c, "seaweedfs").Health.Port = 11474 }},
-		{"third party with moox binary", func(c *Catalog) { componentPtr(c, "seaweedfs").Binary = "moox-seaweedfs" }},
+		{"port 0 service with machine caller", func(c *Catalog) {
+			methodPtr(c, "trpc.moox.infra.Auth", "Login").Callers = []string{"monitor"}
+		}},
+		{"port 0 service with moox-cli operator", func(c *Catalog) {
+			methodPtr(c, "trpc.moox.infra.Auth", "Login").Operators = operators("console", "moox-cli")
+		}},
+		{"port 0 service with default operators", func(c *Catalog) {
+			methodPtr(c, "trpc.moox.infra.Auth", "Login").Operators = nil
+		}},
+		{"port 0 service without console_name", func(c *Catalog) {
+			servicePtr(c, "trpc.moox.infra.Auth").ConsoleName = ""
+		}},
 		{"moox component with foreign binary", func(c *Catalog) { componentPtr(c, "monitor").Binary = "monitor" }},
 	}
 	for _, tc := range cases {
@@ -214,6 +223,11 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"moox-cli", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", true},
 		{"console", "trpc.moox.ops.SecretMgr", "GetSecretValue", false},
 		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", true},
+		{"trade", "trpc.moox.ops.SecretMgr", "ListSecrets", false},
+		{"console", "trpc.moox.admin.Setup", "ApplySetup", false},
+		{"console", "trpc.moox.admin.Setup", "GetSetupStatus", false},
+		{"moox-cli", "trpc.moox.admin.Setup", "ApplySetup", true},
+		{"moox-cli", "trpc.moox.admin.Setup", "GetSetupStatus", true},
 		{"console", "trpc.moox.ops.SysDeploy", "SyncTopology", false},
 		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncTopology", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", true},
@@ -510,7 +524,7 @@ func TestExternalProgramComponents(t *testing.T) {
 	}
 }
 
-// 部署字段：启动顺序按 after 排，同一台主机上依赖在前；第三方程序只有 SeaweedFS，不拿凭据、不进隐含的指标角色。
+// 部署字段：启动顺序按 after 排，同一台主机上依赖在前。
 func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 	c := mustCatalog(t)
 	order, err := c.StartOrder([]string{"strategy", "host-agent", "collector", "host-gateway", "admin", "monitor", "factor-mgr", "archive-mgr"})
@@ -521,7 +535,7 @@ func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 	if !slices.Equal(order, want) {
 		t.Fatalf("control order = %v, want %v", order, want)
 	}
-	if order, err = c.StartOrder([]string{"archive-worker", "seaweedfs", "host-gateway"}); err != nil || !slices.Equal(order, []string{"host-gateway", "seaweedfs", "archive-worker"}) {
+	if order, err = c.StartOrder([]string{"archive-worker", "host-gateway"}); err != nil || !slices.Equal(order, []string{"host-gateway", "archive-worker"}) {
 		t.Fatalf("factor order = %v, %v", order, err)
 	}
 	for _, component := range c.Components {
@@ -532,9 +546,8 @@ func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 			t.Fatalf("%s stop timeout = %d", component.ID, component.StopTimeout())
 		}
 	}
-	weed, _ := c.Component("seaweedfs")
-	if !weed.ThirdParty || weed.Binary != "weed" || len(weed.EventBusRoles()) != 0 || weed.Health.Port != 0 {
-		t.Fatalf("seaweedfs = %+v", weed)
+	if _, ok := c.Component("seaweedfs"); ok {
+		t.Fatal("seaweedfs component must be removed")
 	}
 	collector, _ := c.Component("collector")
 	if !slices.Equal(collector.EventBusRoles(), []string{"collector-eventbus", "metrics-publisher"}) || !collector.HasCredential("cls") {
@@ -736,5 +749,47 @@ func TestLoadEmbeddedCachesDecodeAndReturnsIsolatedClones(t *testing.T) {
 	}
 	if got := decodeCalls.Load(); got != 1 {
 		t.Fatalf("embedded catalog decoded %d times after reload, want 1", got)
+	}
+}
+
+func TestValidatePortZeroRestrictedToAdminConsoleOnlyServices(t *testing.T) {
+	consoleOnly := []string{OperatorConsole}
+
+	// 非 admin 组件即使声明纯 console 服务，也不允许 port: 0（仅 admin 有进程内 LocalDispatcher）。
+	c := mustCatalog(t)
+	monitor := componentPtr(&c, "monitor")
+	monitor.Services = append(monitor.Services, Service{
+		Path:        "trpc.moox.monitor.ConsoleOnly",
+		Port:        0,
+		ConsoleName: "monitor-local",
+		Methods:     []Method{{Name: "Ping", ReadOnly: true, Operators: &consoleOnly}},
+	})
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "admin console-only") {
+		t.Fatalf("non-admin port 0 service must fail validation, got: %v", err)
+	}
+
+	// admin 的纯 console 服务但缺少 console_name 同样拒绝。
+	c = mustCatalog(t)
+	admin := componentPtr(&c, "admin")
+	admin.Services = append(admin.Services, Service{
+		Path:    "trpc.moox.admin.NoConsoleName",
+		Port:    0,
+		Methods: []Method{{Name: "Ping", ReadOnly: true, Operators: &consoleOnly}},
+	})
+	if err := c.Validate(); err == nil {
+		t.Fatal("admin port 0 service without console_name must fail validation")
+	}
+
+	// admin 服务若存在机器调用方，不允许 port: 0。
+	c = mustCatalog(t)
+	admin = componentPtr(&c, "admin")
+	admin.Services = append(admin.Services, Service{
+		Path:        "trpc.moox.admin.WithCaller",
+		Port:        0,
+		ConsoleName: "with-caller",
+		Methods:     []Method{{Name: "Ping", ReadOnly: true, Callers: []string{"monitor"}, Operators: &consoleOnly}},
+	})
+	if err := c.Validate(); err == nil {
+		t.Fatal("admin port 0 service with machine callers must fail validation")
 	}
 }

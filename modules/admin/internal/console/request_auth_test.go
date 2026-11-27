@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,10 +19,10 @@ const (
 )
 
 // setupSessionTest 建一张会话表并登录一个用户 u1。
-func setupSessionTest(t *testing.T) (*session.Store, session.Session) {
+func setupSessionTest(t *testing.T) (*auth.SessionStore, auth.Session) {
 	t.Helper()
 	SetConfig(&Config{})
-	store, err := session.NewStore(time.Hour)
+	store, err := auth.NewSessionStore(time.Hour)
 	require.NoError(t, err)
 	created, err := store.Create("u1", "admin")
 	require.NoError(t, err)
@@ -30,13 +30,13 @@ func setupSessionTest(t *testing.T) (*session.Store, session.Session) {
 }
 
 // browserRequest 是浏览器从管理台页面发出的 POST：同源 Origin，带会话 Cookie。
-func browserRequest(t *testing.T, current session.Session, path, space string, body []byte) *http.Request {
+func browserRequest(t *testing.T, current auth.Session, path, space string, body []byte) *http.Request {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	r.Host = testHost
 	r.Header.Set("Origin", testOrigin)
 	if current.ID != "" {
-		r.AddCookie(&http.Cookie{Name: session.CookieName, Value: current.ID})
+		r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: current.ID})
 	}
 	if space != "" {
 		r.Header.Set("X-Space-Id", space)
@@ -91,7 +91,7 @@ func TestClientIPUsesConnectionPeerOnly(t *testing.T) {
 func TestSessionCookieAttributes(t *testing.T) {
 	rr := httptest.NewRecorder()
 	expires := time.Now().Add(24 * time.Hour)
-	setSessionCookie(rr, session.Session{ID: "sid-value", ExpiresAt: expires}, 86400)
+	setSessionCookie(rr, auth.Session{ID: "sid-value", ExpiresAt: expires}, 86400)
 	cookie := rr.Result().Cookies()[0]
 	assert.Equal(t, "__Host-moox_session", cookie.Name, "__Host- 前缀：只认 Secure、Path=/、不带 Domain 的 Cookie")
 	assert.Empty(t, cookie.Domain)
@@ -106,7 +106,7 @@ func TestSessionCookieAttributes(t *testing.T) {
 	rr = httptest.NewRecorder()
 	clearSessionCookie(rr)
 	cleared := rr.Result().Cookies()[0]
-	assert.Equal(t, session.CookieName, cleared.Name)
+	assert.Equal(t, auth.CookieName, cleared.Name)
 	assert.Empty(t, cleared.Value)
 	assert.Equal(t, -1, cleared.MaxAge, "Max-Age=0")
 	assert.True(t, cleared.HttpOnly)
@@ -125,7 +125,7 @@ func TestRequestSessionReadsOnlyTheCookie(t *testing.T) {
 	r.Header.Set("X-Access-Token", current.ID)
 	_, ok = router.requestSession(r)
 	assert.False(t, ok, "请求头里的令牌不再认")
-	r.AddCookie(&http.Cookie{Name: session.CookieName, Value: current.ID})
+	r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: current.ID})
 	got, ok := router.requestSession(r)
 	require.True(t, ok)
 	assert.Equal(t, "u1", got.UserID)

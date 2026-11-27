@@ -6,8 +6,10 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,6 +127,80 @@ func (r *hostRemote) Download(ctx context.Context, hostID, src string, dst io.Wr
 // Systemd 返回读取 systemd 用户服务状态的检查器。
 func (r *hostRemote) Systemd() doctorcli.SystemdChecker {
 	return doctorcli.NewSystemdChecker(r.Run)
+}
+
+// ReadFile 读取节点上的文件：本机直接 os.ReadFile（避免吞掉退出码），远端经 SSH 读取。
+func (r *hostRemote) ReadFile(ctx context.Context, nodeID, filePath string) ([]byte, error) {
+	if nodeID == r.localNodeID {
+		return os.ReadFile(filePath)
+	}
+	result, err := r.Exec(ctx, nodeID, []string{"cat", "--", filePath}, nil)
+	if err != nil {
+		if detail := lastNonEmptyLine(result.Stderr); detail != "" {
+			return nil, fmt.Errorf("%w: %s", err, detail)
+		}
+		return nil, err
+	}
+	return []byte(result.Stdout), nil
+}
+
+const remoteWritableProbeScript = `import os, sys, tempfile
+root, rel = sys.argv[1], sys.argv[2]
+if not rel or os.path.isabs(rel) or os.path.normpath(rel) != rel or rel == ".." or rel.startswith(".." + os.sep):
+    sys.exit("probe path must be a clean release-relative path")
+abs_root = os.path.abspath(root)
+cur = abs_root
+for part in rel.split(os.sep):
+    cur = os.path.join(cur, part)
+    if os.path.islink(cur):
+        sys.exit("probe path escapes release root: symlink component")
+res_root = os.path.realpath(abs_root)
+res_target = os.path.realpath(os.path.join(abs_root, rel))
+if os.path.commonpath([res_root, res_target]) != res_root:
+    sys.exit("probe path escapes release root")
+if not os.path.isdir(res_target):
+    sys.exit("probe path is not an existing directory")
+fd, path = tempfile.mkstemp(prefix=".moox-doctor-probe-", dir=res_target)
+try:
+    os.write(fd, b"moox doctor permission probe\n")
+    os.fsync(fd)
+finally:
+    os.close(fd)
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+`
+
+const remoteWritableProbeTimeout = 15 * time.Second
+
+// ProbeWritable 返回目录可写探测函数：本机直接探测，远端主机经 SSH 在目标部署根内做有界临时文件探测。
+func (r *hostRemote) ProbeWritable(nodeID string) func(context.Context, string, string) error {
+	return func(ctx context.Context, releaseRoot, relativePath string) error {
+		if nodeID == r.localNodeID {
+			return doctorcli.ProbeWritablePath(ctx, releaseRoot, relativePath)
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, remoteWritableProbeTimeout)
+		defer cancel()
+		result, err := r.Exec(probeCtx, nodeID, []string{"python3", "-c", remoteWritableProbeScript, releaseRoot, relativePath}, nil)
+		if err != nil {
+			if detail := lastNonEmptyLine(result.Stderr); detail != "" {
+				return fmt.Errorf("%w: %s", err, detail)
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func lastNonEmptyLine(text string) string {
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if trimmed := strings.TrimSpace(lines[i]); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // HealthProbe 返回请求组件健康端口的探测器：健康端口只听 127.0.0.1，本节点直接请求，

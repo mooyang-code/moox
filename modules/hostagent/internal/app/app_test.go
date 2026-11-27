@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,18 +124,6 @@ func TestAgent_GetStatus_ShouldExposeCountersAndLatest(t *testing.T) {
 	assert.NotEmpty(t, rsp.GetLastReportAt())
 }
 
-func TestAgent_GetSnapshot_ShouldReturnLatestSnapshot(t *testing.T) {
-	a := testAgent(t)
-	now := time.Now().UTC()
-	a.latest = testSnapshot()
-	a.lastCollect = now
-
-	rsp, err := a.GetSnapshot(context.Background(), &hostagentpb.GetSnapshotReq{})
-	require.NoError(t, err)
-	assert.NotNil(t, rsp.GetSnapshot())
-	assert.Equal(t, now.UnixMilli(), rsp.GetCollectedAt())
-}
-
 func TestTruncate_ShouldCapLongStrings(t *testing.T) {
 	assert.Equal(t, "abc", truncate("abc", 5))
 	assert.Equal(t, "hello", truncate("hello-world", 5))
@@ -155,7 +144,9 @@ func TestAgent_RunOnce_CollectError_StillPullsPolicy(t *testing.T) {
 	a.report = reporter.report
 	a.collector = fakeSnapshotCollector{err: errors.New("collect failed")}
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
-	assert.Error(t, err)
+	require.NoError(t, err)
+	assert.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "collect failed")
 	assert.NotEmpty(t, rsp.GetReportError())
 	assert.Equal(t, uint64(1), a.collected.Load())
 	assert.Equal(t, uint64(1), a.dropped.Load())
@@ -167,7 +158,8 @@ func TestAgent_RunOnceGuarded_ConcurrentCall_ShouldSkip(t *testing.T) {
 	a := testAgent(t)
 	a.running.Store(true)
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
-	assert.Error(t, err)
+	require.NoError(t, err)
+	assert.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
 	assert.Equal(t, "collection already running", rsp.GetReportError())
 	assert.Equal(t, uint64(1), a.skipped.Load())
 }
@@ -180,6 +172,7 @@ func TestAgent_RunOnce_ReportSuccess_ShouldUpdateCounters(t *testing.T) {
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	require.NoError(t, err)
+	assert.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	assert.True(t, rsp.GetReported())
 	assert.NotEmpty(t, rsp.GetReportId())
 	assert.NotNil(t, rsp.GetSnapshot())
@@ -212,8 +205,11 @@ func TestAgent_RunOnce_ReportError_ShouldRecordFailure(t *testing.T) {
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
-	assert.Error(t, err)
+	require.NoError(t, err)
+	assert.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "monitor unreachable")
 	assert.Contains(t, rsp.GetReportError(), "monitor unreachable")
+	assert.NotNil(t, rsp.GetSnapshot())
 	assert.Equal(t, uint64(1), a.dropped.Load())
 	assert.Contains(t, a.lastErr, "monitor unreachable")
 }
@@ -249,6 +245,8 @@ func (c completionSnapshotCollector) Collect(context.Context) (*hostmetricpb.Hos
 
 func TestHostAgentNativeRPCPreservesSnapshot(t *testing.T) {
 	agent := testAgent(t)
+	agent.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
+	agent.report = (&fakeReporter{err: errors.New("monitor unreachable")}).report
 	agent.latest = testSnapshot()
 	agent.lastCollect = time.Now().UTC()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -271,9 +269,14 @@ func TestHostAgentNativeRPCPreservesSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, agent.cfg.HostID, status.GetHostId())
 		require.Equal(t, agent.hostname, status.GetHostname())
-		snapshot, err := proxy.GetSnapshot(t.Context(), &hostagentpb.GetSnapshotReq{})
+		require.Equal(t, agent.latest.GetCpu().GetLogicalCores(), status.GetLatest().GetCpu().GetLogicalCores())
+
+		// 上报失败时 RunOnce 通过 RetInfo 返回错误且回 nil Go error，响应体中的快照与错误信息不会被 tRPC 丢弃。
+		runRsp, err := proxy.RunOnce(t.Context(), &hostagentpb.RunOnceReq{})
 		require.NoError(t, err)
-		require.Equal(t, agent.lastCollect.UnixMilli(), snapshot.GetCollectedAt())
-		require.Equal(t, agent.latest.GetCpu().GetLogicalCores(), snapshot.GetSnapshot().GetCpu().GetLogicalCores())
+		require.Equal(t, commonpb.ErrorCode_INNER_ERR, runRsp.GetRetInfo().GetCode())
+		require.Contains(t, runRsp.GetReportError(), "monitor unreachable")
+		require.NotEmpty(t, runRsp.GetReportId())
+		require.Equal(t, uint32(2), runRsp.GetSnapshot().GetCpu().GetLogicalCores())
 	}
 }

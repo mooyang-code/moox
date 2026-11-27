@@ -98,8 +98,9 @@ func newBackfillService(engine *primaryHistoryBackfillEngine) (*Service, *viewSp
 	spec := timeSeriesSpec("space", "market", "1m", "close")
 	svc := newBuildService(engine)
 	runtime := testRuntime(svc, spec)
-	runtime.building = runtime.indexID
+	runtime.phase = viewPhaseBuilding
 	runtime.schema = backfillSchema()
+	runtime.publishReadStateLocked()
 	return svc, spec, runtime
 }
 
@@ -154,7 +155,8 @@ func TestBackfillRequiresPrimaryReaderForTimeSeriesView(t *testing.T) {
 
 func TestBackfillStopsWhenBuildIsCancelled(t *testing.T) {
 	svc, spec, runtime := newBackfillService(&primaryHistoryBackfillEngine{})
-	runtime.building = ""
+	runtime.phase = viewPhaseEmpty
+	runtime.publishReadStateLocked()
 	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{historyRow("A", "2026-08-18T00:00:00Z", "")}}
 	if err := svc.backfillInitialIndex(context.Background(), runtime, spec, backfillSchema(), MaintenanceOptions{PrimaryRange: reader}, 2); !errors.Is(err, errViewBuildCancelled) {
 		t.Fatalf("err=%v", err)

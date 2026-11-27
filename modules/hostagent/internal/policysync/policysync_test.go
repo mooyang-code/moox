@@ -69,8 +69,6 @@ func TestSyncOverridesCacheAndKeepsItOnFailure(t *testing.T) {
 	kept, err := hostpolicy.Read(path)
 	require.NoError(t, err)
 	require.Equal(t, saved, kept, "失败时旧文件不变")
-	_, lastErr := syncer.Status()
-	require.NotEmpty(t, lastErr)
 }
 
 // Monitor 删光渠道时也同步（主机侧随之停止推送），缓存不存在时从版本 1 开始。

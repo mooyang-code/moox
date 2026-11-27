@@ -199,6 +199,18 @@ func TestInstallScriptInstallsHostGatewayAndHostAgent(t *testing.T) {
 	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 0 1\nhost-agent 0 1\n"), nil)
 	require.NoError(t, err, output.Stderr)
 	require.Equal(t, "component host-gateway started\ncomponent host-agent unchanged\n", output.Stdout)
+
+	// 即使局部重部署（不带 units.keep），历史残留的 moox-seaweedfs.service 也会被停用并删除。
+	legacyUnit := filepath.Join(units, "moox-seaweedfs.service")
+	require.NoError(t, os.WriteFile(legacyUnit, []byte("[Unit]\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(state, "calls.log"), nil, 0o600))
+	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 0 1\nhost-agent 0 1\n"), nil)
+	require.NoError(t, err, output.Stderr)
+	require.Equal(t, "removed moox-seaweedfs\ncomponent host-gateway unchanged\ncomponent host-agent unchanged\n", output.Stdout)
+	require.NoFileExists(t, legacyUnit)
+	calls, err = os.ReadFile(filepath.Join(state, "calls.log"))
+	require.NoError(t, err)
+	require.Contains(t, string(calls), "disable --now moox-seaweedfs.service")
 }
 
 func TestInstallScriptRejectsUnsafeRootAndUnknownStep(t *testing.T) {

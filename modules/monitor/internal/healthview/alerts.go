@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -37,10 +38,7 @@ func alertObject(spaceID, checkID string) *pb.HealthObject {
 	if len(parts) == 2 && parts[0] == "module" {
 		for _, check := range report.BuiltInModuleHealthChecks() {
 			if check.ID == parts[1] {
-				object.ComponentId = check.Module
-				if check.Module == "factor" {
-					object.ComponentId = "factor-mgr"
-				}
+				object.ComponentId = doctor.ModuleComponent(check.Module)
 				break
 			}
 		}

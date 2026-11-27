@@ -36,10 +36,9 @@ func (DeploymentRecord) TableName() string { return "t_deployments" }
 
 // HostGatewayStatus 是网关最近一次拉取快照时记下的状态：拉取兼作心跳，每次都写。
 type HostGatewayStatus struct {
-	HostID       string     `gorm:"column:c_host_id;primaryKey"`
-	ExpectedHash string     `gorm:"column:c_expected_hash"`
-	AppliedHash  string     `gorm:"column:c_applied_hash"`
-	LastSeenAt   *time.Time `gorm:"column:c_last_seen_at"`
+	HostID      string     `gorm:"column:c_host_id;primaryKey"`
+	AppliedHash string     `gorm:"column:c_applied_hash"`
+	LastSeenAt  *time.Time `gorm:"column:c_last_seen_at"`
 	// RelaySessions 是 control 网关带来的反向连接会话（JSON 数组），其他主机为空。
 	RelaySessions string `gorm:"column:c_relay_sessions"`
 }

@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -85,7 +85,7 @@ func (s *Service) ImportSecrets(ctx context.Context, req *pb.ImportSecretsReq) (
 			rsp.Failed = append(rsp.Failed, label+"："+reason)
 			continue
 		}
-		existing, err := s.svc.GetSecret(ctx, record.SecretID)
+		existing, err := s.store.FindByID(ctx, record.SecretID)
 		switch {
 		case err == nil && !req.GetOverwrite():
 			rsp.Skipped = append(rsp.Skipped, label)
@@ -93,7 +93,7 @@ func (s *Service) ImportSecrets(ctx context.Context, req *pb.ImportSecretsReq) (
 			existing.Name, existing.Description, existing.Category, existing.Provider = record.Name, record.Description, record.Category, record.Provider
 			existing.SecretType, existing.KeyID, existing.SecretValue = record.SecretType, record.KeyID, record.SecretValue
 			existing.ExtraConfig, existing.Status = record.ExtraConfig, record.Status
-			if err := s.svc.UpdateSecret(ctx, existing); err != nil {
+			if err := s.store.Update(ctx, existing); err != nil {
 				log.ErrorContextf(ctx, "[Secret] ImportSecrets update %s failed: %v", record.SecretID, err)
 				rsp.Failed = append(rsp.Failed, label+"：覆盖失败")
 				continue
@@ -101,7 +101,7 @@ func (s *Service) ImportSecrets(ctx context.Context, req *pb.ImportSecretsReq) (
 			rsp.Updated++
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			record.Creator = user
-			if err := s.svc.CreateSecret(ctx, record); err != nil {
+			if err := s.store.Create(ctx, record); err != nil {
 				log.ErrorContextf(ctx, "[Secret] ImportSecrets create %s failed: %v", record.SecretID, err)
 				rsp.Failed = append(rsp.Failed, label+"：创建失败")
 				continue
@@ -119,7 +119,7 @@ func (s *Service) ImportSecrets(ctx context.Context, req *pb.ImportSecretsReq) (
 
 // currentUser 返回当前用户名（没有用户名时是用户 ID）；没有登录身份时 ok 为 false。
 func currentUser(ctx context.Context) (string, bool) {
-	userID, username, err := utils.GetUserInfoFromCtx(ctx)
+	userID, username, err := auth.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return "", false
 	}
@@ -134,7 +134,7 @@ func (s *Service) allSecrets(ctx context.Context) ([]model.Secret, error) {
 	var out []model.Secret
 	seen := make(map[string]struct{})
 	for offset := 0; ; offset += exportPageSize {
-		page, total, err := s.svc.ListSecrets(ctx, offset, exportPageSize, &dao.SecretFilters{})
+		page, total, err := s.store.List(ctx, offset, exportPageSize, &dao.SecretFilters{})
 		if err != nil {
 			return nil, err
 		}

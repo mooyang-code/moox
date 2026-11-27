@@ -26,7 +26,6 @@ message ArchiveRun {
   int64 started_at = 9;
   int64 finished_at = 10;
   int64 lease_until = 12;
-  uint64 subjects_total = 13;
   uint64 subjects_done = 14;
   uint64 request_count = 15;
   uint64 bytes_read = 16;
@@ -394,12 +393,14 @@ message ArchiveWorkerHeartbeatReq {
   ObjectStoreInfo object_store = 12;
   // worker 配置的可用空间下限（worker.min_free_bytes）。
   uint64 min_free_bytes = 13;
+  // include_tasks：仅在维护对账时置为 true，要求 mgr 返回当前全部任务列表；普通心跳不查任务表。
+  bool include_tasks = 14;
 }
 message ArchiveWorkerHeartbeatRsp {
   common.RetInfo ret_info = 1;
   // 需要取消的运行（用户取消，或运行已结束）。
   repeated string cancel_run_ids = 4;
-  // 当前全部任务：worker 维护时删掉不在列表里的数据集的暂存状态。
+  // 当前全部任务：仅在请求 include_tasks 为 true 时返回，worker 维护时删掉不在列表里的数据集的暂存状态。
   repeated TaskRef tasks = 5;
 }
 
@@ -409,6 +410,9 @@ message PullArchiveRunReq {
   // 读 Storage 的运行（导入除外）同时运行的全局上限，以及 worker 当前正在运行的这类运行数。
   uint32 max_storage_runs = 4;
   uint32 busy_storage_runs = 5;
+  // worker 本地暂存库已完成分区同步的任务列表（含 task_id）；不在此列表或 task_id 变化时（暂存库新建/丢失或任务重建），
+  // mgr 才下发 registered_partitions。
+  repeated TaskRef synced_tasks = 6;
 }
 
 // RunAssignment 是下发给 worker 的一次运行的全部参数。
@@ -459,7 +463,6 @@ message PullArchiveRunRsp {
 message ReportArchiveRunProgressReq {
   string run_id = 2;
   string lease_token = 3;
-  uint64 subjects_total = 4;
   uint64 subjects_done = 5;
   uint64 request_count = 6;
   uint64 bytes_read = 7;
@@ -507,7 +510,6 @@ message CompleteArchiveRunReq {
   // status：succeeded、failed、canceled。
   string status = 4;
   string message = 5;
-  uint64 subjects_total = 6;
   uint64 subjects_done = 7;
   uint64 request_count = 8;
   uint64 bytes_read = 9;

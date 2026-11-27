@@ -34,7 +34,7 @@
 | 交易管理 | 账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者；写操作默认只预览 | `trade account list|show|create|update|leverage|sync|reinspect|flatten`、`trade logical list|show|target|create|update|order-settings|fund-settings|add-member|remove-member|pause|resume|flatten`、`trade order list|show|submit|cancel`、`trade paper create|close`、`trade fills|positions|holdings|equity|ledger|instruments|capabilities|inspect-credential|action|actions|pnl|holders`、`trade shadow list`、`trade blocked list`、`trade delist list` |
 | 数据归档 | 归档任务、运行、分区、历史导入 | `archive overview`、`archive tasks list|prepare|create|update|run|backfill|delete|clear-unrecoverable`、`archive runs list|get|cancel`、`archive partitions list|get`、`import --target archive` |
 | 资源与运维 › 监控告警 | 总览、到达历史、主机资源、重要日志、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|logs|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
-| 资源与运维 › 主机工作台、服务管理 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host`、`setup hosts|deploy …`（启停与移除改 `moox.toml` 后部署） |
+| 资源与运维 › 主机工作台、服务管理 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog`、`host agent status|run-once --host`、`setup hosts|deploy …`（启停与移除改 `moox.toml` 后部署） |
 | 资源与运维 › 日志中心（“活动日志”页签） | 活动日志 | `activity list` |
 
 常用写法：

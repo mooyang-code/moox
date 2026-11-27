@@ -13,9 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/glebarez/sqlite"
+	_ "github.com/glebarez/go-sqlite"
 	archiveschema "github.com/mooyang-code/moox/modules/archive/schema"
-	"gorm.io/gorm"
 )
 
 var (
@@ -33,9 +32,6 @@ type DirNameTakenError struct{ DirName, DatasetID string }
 func (e *DirNameTakenError) Error() string {
 	return fmt.Sprintf("目录名 %s 已被 %s 使用，请改一个", e.DirName, e.DatasetID)
 }
-
-// timeLayout 是库内统一的时间文本格式（UTC，定宽，字典序即时间序）。
-const timeLayout = "2006-01-02 15:04:05.000"
 
 const (
 	StatusEnabled = "enabled"
@@ -62,8 +58,7 @@ const (
 
 // Store 持有 mgr 的 SQLite 连接。
 type Store struct {
-	gdb *gorm.DB
-	db  *sql.DB
+	db *sql.DB
 }
 
 // Open 打开（必要时创建）SQLite 库。新库以 auto_vacuum = INCREMENTAL 创建。
@@ -74,17 +69,17 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create archive database directory: %w", err)
 	}
-	gdb, err := gorm.Open(sqlite.Open(buildDSN(path)), &gorm.Config{})
+	db, err := sql.Open("sqlite", buildDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open archive database: %w", err)
 	}
-	db, err := gdb.DB()
-	if err != nil {
-		return nil, err
-	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	s := &Store{gdb: gdb, db: db}
+	s := &Store{db: db}
+	if err := db.Ping(); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("open archive database: %w", err)
+	}
 	// auto_vacuum 只对尚未建表的新库生效，必须在建表之前设置。
 	if _, err := db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
 		_ = s.Close()
@@ -163,50 +158,32 @@ func isUnique(err error) bool {
 	return strings.Contains(text, "UNIQUE constraint failed") || strings.Contains(text, "constraint failed: UNIQUE")
 }
 
-// ---- 时间列 ----
+// ---- 时间列（Unix 毫秒整数，0 表示没有） ----
 
-func fmtTime(t time.Time) string { return t.UTC().Format(timeLayout) }
-
-// nullTime 把零值时间写成 NULL。
-func nullTime(t time.Time) any {
+func millisOf(t time.Time) int64 {
 	if t.IsZero() {
-		return nil
+		return 0
 	}
-	return fmtTime(t)
+	return t.UTC().UnixMilli()
 }
 
-// timeValue 扫描可空的时间列；零值表示 NULL。驱动可能把 DATETIME 列解析成 time.Time，也可能给出文本。
+// timeValue 扫描 Unix 毫秒整数时间列；0 或 NULL 表示零值时间。
 type timeValue struct{ time.Time }
 
 func (v *timeValue) Scan(src any) error {
 	switch value := src.(type) {
 	case nil:
 		v.Time = time.Time{}
-	case time.Time:
-		v.Time = value.UTC()
-	case string:
-		return v.parse(value)
-	case []byte:
-		return v.parse(string(value))
+	case int64:
+		if value == 0 {
+			v.Time = time.Time{}
+		} else {
+			v.Time = time.UnixMilli(value).UTC()
+		}
 	default:
 		return fmt.Errorf("unsupported time column type %T", src)
 	}
 	return nil
-}
-
-func (v *timeValue) parse(text string) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		v.Time = time.Time{}
-		return nil
-	}
-	for _, layout := range []string{timeLayout, "2006-01-02 15:04:05", time.RFC3339Nano, "2006-01-02T15:04:05Z"} {
-		if parsed, err := time.ParseInLocation(layout, text, time.UTC); err == nil {
-			v.Time = parsed.UTC()
-			return nil
-		}
-	}
-	return fmt.Errorf("invalid time %q", text)
 }
 
 func newID(prefix string) string {

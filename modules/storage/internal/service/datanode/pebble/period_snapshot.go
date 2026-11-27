@@ -344,7 +344,17 @@ func (s *Store) planLazyPeriod(exp DatasetPeriodExpectation, allowedLatenessSeco
 	if uint32(len(snapshot)) != exp.ExpectedCount {
 		return exp, invalid("expected_count does not match the registered series snapshot")
 	}
-	deadline := frequency.BarEnd(time.Unix(exp.PeriodTime, 0).UTC()).Add(time.Duration(allowedLatenessSeconds) * time.Second).Unix()
+	if exp.PeriodEndAt < 0 {
+		return exp, invalid("period_end_at must be non-negative")
+	}
+	periodEnd := frequency.BarEnd(time.Unix(exp.PeriodTime, 0).UTC())
+	if exp.PeriodEndAt > 0 {
+		if exp.PeriodEndAt < exp.PeriodTime {
+			return exp, invalid("period_end_at must not precede period_time")
+		}
+		periodEnd = time.Unix(exp.PeriodEndAt, 0).UTC()
+	}
+	deadline := periodEnd.Add(time.Duration(allowedLatenessSeconds) * time.Second).Unix()
 	if now.Unix() >= deadline {
 		return exp, PeriodDeadlinePassedError{Deadline: deadline}
 	}

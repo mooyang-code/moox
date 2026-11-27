@@ -7,9 +7,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
-	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go"
@@ -42,13 +40,13 @@ type HTTPRouter struct {
 	catalog        servicecatalog.Catalog
 	local          *LocalDispatcher
 	gateway        RPCForwarder
-	sessions       *session.Store
+	sessions       *auth.SessionStore
 	limiters       methodLimiters
 	allowedOrigins []string
 }
 
 // NewHTTPRouter 创建控制台路由；sessions 是与认证服务共用的会话表，限额与开发来源取 SetConfig 设置的配置。
-func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store) (*HTTPRouter, error) {
+func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, sessions *auth.SessionStore) (*HTTPRouter, error) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return nil, err
@@ -69,7 +67,7 @@ func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCFo
 
 // NewHandler 在两个分派器都就绪后建浏览器接口 /api/admin/{服务}/{方法} 的处理器，交给 Admin 的浏览器入口（9527）；
 // sessions 是与认证服务共用的会话表。
-func NewHandler(local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store) (http.Handler, error) {
+func NewHandler(local *LocalDispatcher, gateway RPCForwarder, sessions *auth.SessionStore) (http.Handler, error) {
 	if GetConfig() == nil {
 		return nil, errors.New("控制台配置未初始化")
 	}
@@ -132,7 +130,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var current session.Session
+	var current auth.Session
 	if route != loginRoute {
 		found, ok := hr.requestSession(r)
 		if !ok {
@@ -140,15 +138,11 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		current = found
-		ctx = context.WithValue(ctx, authmodel.CtxUserID, current.UserID)
+		ctx = context.WithValue(ctx, auth.CtxUserID, current.UserID)
 		r = r.WithContext(ctx)
-		trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte(current.UserID))
-		trpc.SetMetaData(ctx, authmodel.CtxUsername, []byte(current.Username))
-		trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(current.ID))
-	}
-	if rawRoute && serviceID == "ssh" && !rawSessionBelongsToUser(r.URL.Query().Get("session_id"), current.UserID) {
-		http.Error(w, "access denied", http.StatusForbidden)
-		return
+		trpc.SetMetaData(ctx, auth.CtxUserID, []byte(current.UserID))
+		trpc.SetMetaData(ctx, auth.CtxUsername, []byte(current.Username))
+		trpc.SetMetaData(ctx, auth.CtxSessionID, []byte(current.ID))
 	}
 	headers := handler.extractGatewayHeaders(r)
 	if current.UserID != "" {
@@ -156,12 +150,11 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		headers["user_id"] = current.UserID
 	}
 
-	ctx = spacecontext.InjectFromHeaders(ctx, headers)
 	ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{
 		SpaceID: headers["space_id"], UserID: headers["user_id"], TraceID: headers["trace_id"],
 	})
 	if rawRoute {
-		if !rawAndServe(ctx, w, r, serviceID, method, headers) {
+		if !rawAndServe(ctx, w, r, serviceID, method) {
 			http.NotFound(w, r)
 		}
 		return
@@ -187,7 +180,6 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	// 请求头没有空间而由请求体声明时，把授权通过的空间写回下游元数据。
 	if authorizedSpace != "" && headers["space_id"] != authorizedSpace {
 		headers["space_id"] = authorizedSpace
-		ctx = spacecontext.InjectFromHeaders(ctx, headers)
 		ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{
 			SpaceID: authorizedSpace, UserID: headers["user_id"], TraceID: headers["trace_id"],
 		})
@@ -216,10 +208,10 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		}
 		body = injected
 	}
-	var login *session.Login
+	var login *auth.LoginContext
 	if route == loginRoute {
-		login = &session.Login{ClientIP: clientIP(r), UserAgent: r.UserAgent()}
-		ctx = session.WithLogin(ctx, login)
+		login = &auth.LoginContext{ClientIP: clientIP(r), UserAgent: r.UserAgent()}
+		ctx = auth.WithLogin(ctx, login)
 	}
 	response, err := target.Forward(ctx, spec.Path, method, codec.SerializationTypeJSON, body)
 	if route == logoutRoute {
@@ -316,7 +308,7 @@ func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]s
 	if acceptEncoding := r.Header.Get("Accept-Encoding"); acceptEncoding != "" {
 		headers["accept_encoding"] = acceptEncoding
 	}
-	// space_id：硬隔离维度，透传给已迁移的 RPC 服务（spacecontext 从 ctx 读取）
+	// space_id：硬隔离维度，经 gatewayclient 元数据透传给下游业务服务
 	if spaceID := r.Header.Get("X-Space-Id"); spaceID != "" {
 		headers["space_id"] = spaceID
 	}

@@ -193,10 +193,10 @@ cd moox-${VER}
 ./bin/moox-cli setup wipe
 ```
 
-再这样问用户，不能只问“要覆盖吗”。主机来自预览的 `plan.hosts`，其中 `archive_kb`、`seaweedfs_kb` 是归档文件与内置对象存储数据的大小（-1 表示没有）；不会动的东西来自 `left_behind`：
+再这样问用户，不能只问“要覆盖吗”。主机来自预览的 `plan.hosts`，其中 `archive_kb` 是归档文件的大小（-1 表示没有）；不会动的东西来自 `left_behind`：
 
 > 卸载会停掉并删除这些机器上全部 MooX 服务：`<主机、IP>`，删除部署目录里的全部内容：程序、配置、K 线、因子、策略、任务、交易记录、管理台账号与操作记录，
-> 以及归档文件（`<大小>`）和内置对象存储里的归档副本（`<大小>`；配了 `[archive_object_store]` 外部对象存储时，那里的归档不删）。删除后无法恢复。
+> 以及本地归档文件（`<大小>`；配了 `[archive_object_store]` 外部对象存储时，远端桶里的归档不删）。删除后无法恢复。
 > 管理台里后来改过或新加的密钥（交易所密钥、告警渠道、云账号）只在线上有，卸载前请先在管理台里导出或记下来。
 > 如果启用过云函数采集，请你到腾讯云控制台删除 `moox-fetch-plan-` 开头的函数（或者让我带 `--clean-functions` 一起删）；不删会继续运行并产生费用，以后启用云函数时同名函数也会创建失败。
 > 卸载不会动这些：`<left_behind>`，需要时你自己处理。
@@ -342,7 +342,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `linger_required`、`manual_steps_required` | 目标机的部署用户没开 linger | 把报错里的 `sudo loginctl enable-linger <用户>` 交给用户在那台机器上执行，再重跑 |
 | `target_prepare_failed` | 目标机上建不了部署目录（上级目录不可写、部署根不属于 SSH 用户或是符号链接） | 把报错里的 `sudo install -d -o <用户> <部署根>` 交给用户执行 |
 | `ssh_unreachable`，且是因子机 | 这台电脑和因子机不在同一网络 | 换到同一网络后重新运行 |
-| `install_failed` | 目标机上的安装脚本失败，后面是最后一行原因（启动某个服务失败、Storage 元数据库初始化失败、内置对象存储没有就绪等） | 按原因用 `setup logs --host <主机> --component <组件> --journal` 看启动输出；修好后重跑 |
+| `install_failed` | 目标机上的安装脚本失败，后面是最后一行原因（启动某个服务失败、Storage 元数据库初始化失败等） | 按原因用 `setup logs --host <主机> --component <组件> --journal` 看启动输出；修好后重跑 |
 | `not_ready` | 这次装的组件到时限还没就绪，括号里是原因（`readyz 503`、健康端口连不上、服务状态） | 用 `setup logs` 看日志。多半是它依赖的组件还没装（按安装顺序补上）或配置有误；什么都没变就不要反复重试 |
 | `control_admin_failed` | 控制机上的 `moox-admin-cli` 执行失败（初始化 Admin、导出身份材料） | 看报错的最后一行；控制机还没装过时先 `setup deploy --host <控制机>` |
 | `control_not_ready` | 这台电脑没有记下控制机的根证书指纹 | 先 `setup deploy --host <控制机>`；换了电脑见“保留数据与换电脑” |

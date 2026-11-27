@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/require"
@@ -59,8 +59,8 @@ func TestLocalDispatcherRunsConfiguredFiltersWithRPCNameAndDeadline(t *testing.T
 	require.NoError(t, d.Register(&pb.AuthServer_ServiceDesc, implementation, interceptor))
 	implementation.sid = "sid-filter"
 	ctx := trpc.BackgroundContext()
-	trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte("u1"))
-	trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte("sid-filter"))
+	trpc.SetMetaData(ctx, auth.CtxUserID, []byte("u1"))
+	trpc.SetMetaData(ctx, auth.CtxSessionID, []byte("sid-filter"))
 	ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{UserID: "u1"})
 	response, err := d.Forward(ctx, "trpc.moox.infra.Auth", "GetUserInfo", codec.SerializationTypeJSON, []byte(`{}`))
 	require.NoError(t, err)

@@ -84,7 +84,7 @@
                     </td>
                     <td>
                       <div v-for="service in row.definition?.services || []" :key="service.path">
-                        {{ service.path }} :{{ service.port }}
+                        {{ service.path }}{{ service.port > 0 ? ` :${service.port}` : "（进程内）" }}
                       </div>
                       <small>端口：{{ componentPorts(row.definition).join(", ") || "无监听端口" }}</small>
                     </td>
@@ -235,7 +235,7 @@
             <RawError :value="detail.row.health.reporter.raw_error" />
           </section>
           <section v-for="service in detail.row.definition?.services || []" :key="service.path" class="service-detail">
-            <h4>{{ service.path }} :{{ service.port }}</h4>
+            <h4>{{ service.path }}{{ service.port > 0 ? ` :${service.port}` : "（进程内）" }}</h4>
             <p v-for="method in service.methods" :key="method.name">
               {{ method.name }}{{ method.read_only ? "（只读）" : "" }} →
               {{ methodCallerIds(method).join(", ") || "无调用方" }}

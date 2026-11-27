@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -387,7 +389,7 @@ func TestCompleteRunRegistersPartitionsAndAdvancesTaskState(t *testing.T) {
 	final := t0.Add(-72 * time.Hour)
 	err := s.CompleteRun(ctx, CompleteRequest{
 		RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(time.Minute),
-		Stats:         RunStats{SubjectsTotal: 2, SubjectsDone: 2, RequestCount: 3, BytesRead: 10, RowsRead: 20, RowsAdded: 18, RowsChanged: 2, PartitionsExported: 1, PartitionsFinalized: 1},
+		Stats:         RunStats{SubjectsDone: 2, RequestCount: 3, BytesRead: 10, RowsRead: 20, RowsAdded: 18, RowsChanged: 2, PartitionsExported: 1, PartitionsFinalized: 1},
 		Unrecoverable: []Unrecoverable{{SubjectID: "BTC", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}},
 		Partitions:    []Partition{finishedPartition("2026-10-16", PartitionExported), finishedPartition("2026-10-14", PartitionFinal), finishedPartition("2026-10-17", PartitionOpen)},
 		FinalUntil:    final,
@@ -621,8 +623,9 @@ func TestRemoteBacklogsCountsUnreplicatedPartitionsAndTheLatestError(t *testing.
 			t.Fatal(err)
 		}
 	}
-	// 让 b 的错误更新得更晚（c_mtime 精确到秒）。
-	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_partitions SET c_mtime = '2000-01-01 00:00:00' WHERE c_partition_key = '2026-10-14'`); err != nil {
+	// 让 b 的错误更新得更晚（c_mtime 为 Unix 毫秒）。
+	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_partitions SET c_mtime = ? WHERE c_partition_key = '2026-10-14'`,
+		time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	b.Remote.Error = "新错误"
@@ -738,7 +741,7 @@ func TestProgressRenewsLeaseAndSignalsCancellation(t *testing.T) {
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
 	c := mustClaim(t, s, t0)
-	canceled, err := s.Progress(ctx, c.Run.RunID, c.Run.LeaseToken, RunStats{SubjectsTotal: 5, SubjectsDone: 2, RequestCount: 7, BytesRead: 99, RowsRead: 12}, t0.Add(5*time.Minute), 10*time.Minute)
+	canceled, err := s.Progress(ctx, c.Run.RunID, c.Run.LeaseToken, RunStats{SubjectsDone: 2, RequestCount: 7, BytesRead: 99, RowsRead: 12}, t0.Add(5*time.Minute), 10*time.Minute)
 	if err != nil || canceled {
 		t.Fatalf("canceled=%v err=%v", canceled, err)
 	}
@@ -969,17 +972,21 @@ func TestLastRunsStayFastWithManyFollowRuns(t *testing.T) {
 		mustTask(t, s, "crypto", ds, false)
 	}
 	// 每个任务 1.5 万条成功的 follow（约 10 天），最后一条 follow 失败、再之后一条 range 在排队。
+	base := time.Date(2026, 10, 17, 0, 40, 25, 0, time.UTC).UnixMilli()
 	_, err := s.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 15000)
 INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at)
-SELECT 'follow_' || t.c_dataset_id || '_' || n.i, t.c_space_id, t.c_dataset_id, 'follow', 'succeeded',
-strftime('%Y-%m-%d %H:%M:%S.000', '2026-10-17 00:40:25', '+' || n.i || ' minutes')
-FROM n, t_archive_tasks t`)
+SELECT 'follow_' || t.c_dataset_id || '_' || n.i, t.c_space_id, t.c_dataset_id, 'follow', 'succeeded', ? + n.i * 60000
+FROM n, t_archive_tasks t`, base)
 	if err != nil {
 		t.Fatal(err)
 	}
+	failedAt := time.Date(2026, 11, 30, 0, 0, 25, 0, time.UTC).UnixMilli()
+	rangeAt := time.Date(2026, 11, 30, 0, 1, 25, 0, time.UTC).UnixMilli()
+	rangeStart := time.Date(2026, 11, 29, 0, 0, 0, 0, time.UTC).UnixMilli()
+	rangeEnd := time.Date(2026, 11, 29, 1, 0, 0, 0, time.UTC).UnixMilli()
 	_, err = s.db.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at, c_range_start, c_range_end)
-SELECT 'failed_' || c_dataset_id, c_space_id, c_dataset_id, 'follow', 'failed', '2026-11-30 00:00:25.000', NULL, NULL FROM t_archive_tasks
-UNION ALL SELECT 'range_' || c_dataset_id, c_space_id, c_dataset_id, 'range', 'queued', '2026-11-30 00:01:25.000', '2026-11-29 00:00:00.000', '2026-11-29 01:00:00.000' FROM t_archive_tasks`)
+SELECT 'failed_' || c_dataset_id, c_space_id, c_dataset_id, 'follow', 'failed', ?, 0, 0 FROM t_archive_tasks
+UNION ALL SELECT 'range_' || c_dataset_id, c_space_id, c_dataset_id, 'range', 'queued', ?, ?, ? FROM t_archive_tasks`, failedAt, rangeAt, rangeStart, rangeEnd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1010,7 +1017,7 @@ func TestImportRunsAreKeptLikeOtherRuns(t *testing.T) {
 	if got, err := s.GetRun(ctx, run.RunID); err != nil || got.Kind != KindImport || got.Status != RunQueued {
 		t.Fatalf("run = %+v, %v", got, err)
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'succeeded', c_finished_at = ? WHERE c_run_id = ?`, fmtTime(t0), run.RunID); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'succeeded', c_finished_at = ? WHERE c_run_id = ?`, millisOf(t0), run.RunID); err != nil {
 		t.Fatal(err)
 	}
 	day := 24 * time.Hour
@@ -1071,5 +1078,110 @@ func TestHeartbeatKeepsOnlyTheLatestWorker(t *testing.T) {
 	}
 	if got, _, _ := s.GetWorker(ctx); got.WorkerID != "w2" || !got.LastHeartbeat.Equal(t0.Add(time.Minute)) {
 		t.Fatalf("worker = %+v", got)
+	}
+}
+
+func TestMergeUnrecoverableMergesOverlappingAndAdjacentIntervals(t *testing.T) {
+	items := []Unrecoverable{
+		// BTC: 乱序 + 重叠 + 相邻 + 被包含，应合并为一条 [10-01T00:00Z, 10-04T00:00Z) 与一条独立区间 [10-06, 10-07)
+		{SubjectID: "BTC", SeriesTag: "", StartTime: "2026-10-02T00:00:00Z", EndTime: "2026-10-03T12:00:00Z"},
+		{SubjectID: "BTC", SeriesTag: "", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}, // 相邻
+		{SubjectID: "BTC", SeriesTag: "", StartTime: "2026-10-03T00:00:00Z", EndTime: "2026-10-04T00:00:00Z"}, // 重叠
+		{SubjectID: "BTC", SeriesTag: "", StartTime: "2026-10-01T12:00:00Z", EndTime: "2026-10-02T12:00:00Z"}, // 被包含
+		{SubjectID: "BTC", SeriesTag: "", StartTime: "2026-10-06T00:00:00Z", EndTime: "2026-10-07T00:00:00Z"},
+		// 不同 series_tag 不合并
+		{SubjectID: "BTC", SeriesTag: "raw", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"},
+		// 不同 subject_id 不合并
+		{SubjectID: "ETH", SeriesTag: "", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"},
+		// 全局（SubjectID=""）重叠合并
+		{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"},
+		{StartTime: "2026-10-01T12:00:00Z", EndTime: "2026-10-03T00:00:00Z"},
+	}
+	var got []Unrecoverable
+	if err := json.Unmarshal([]byte(mergeUnrecoverable(items)), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []Unrecoverable{
+		{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-03T00:00:00Z"},
+		{SubjectID: "BTC", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-04T00:00:00Z"},
+		{SubjectID: "BTC", StartTime: "2026-10-06T00:00:00Z", EndTime: "2026-10-07T00:00:00Z"},
+		{SubjectID: "BTC", SeriesTag: "raw", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"},
+		{SubjectID: "ETH", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d items = %+v, want %+v", len(got), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("item[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMergeUnrecoverableCapsAfterMergingAndAccumulatesAcrossRuns(t *testing.T) {
+	// 归并后再截断：超过上限的相邻小时块应合并为 1 条，不会在归并前被截断。
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	adjacentCount := maxUnrecoverable + 50
+	adjacent := make([]Unrecoverable, 0, adjacentCount)
+	for i := range adjacentCount {
+		adjacent = append(adjacent, Unrecoverable{
+			SubjectID: "BTC",
+			StartTime: base.Add(time.Duration(i) * time.Hour).Format(time.RFC3339),
+			EndTime:   base.Add(time.Duration(i+1) * time.Hour).Format(time.RFC3339),
+		})
+	}
+	var merged []Unrecoverable
+	if err := json.Unmarshal([]byte(mergeUnrecoverable(adjacent)), &merged); err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) != 1 || merged[0].StartTime != "2026-01-01T00:00:00Z" || merged[0].EndTime != base.Add(time.Duration(adjacentCount)*time.Hour).Format(time.RFC3339) {
+		t.Fatalf("merged = %+v", merged)
+	}
+
+	// 超过上限的互不重叠区间截断到 maxUnrecoverable。
+	disjointCount := maxUnrecoverable + 20
+	disjoint := make([]Unrecoverable, 0, disjointCount)
+	for i := range disjointCount {
+		disjoint = append(disjoint, Unrecoverable{
+			SubjectID: fmt.Sprintf("S%03d", i),
+			StartTime: base.Format(time.RFC3339),
+			EndTime:   base.Add(time.Hour).Format(time.RFC3339),
+		})
+	}
+	merged = nil
+	if err := json.Unmarshal([]byte(mergeUnrecoverable(disjoint)), &merged); err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) != maxUnrecoverable {
+		t.Fatalf("len(merged) = %d, want %d", len(merged), maxUnrecoverable)
+	}
+
+	// 跨运行累积也会把新上报的重叠/相邻区间合并进任务。
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", true)
+	c1 := mustClaim(t, s, t0)
+	if err := s.CompleteRun(ctx, CompleteRequest{
+		RunID: c1.Run.RunID, LeaseToken: c1.Run.LeaseToken, Status: RunSucceeded, Now: t0,
+		Unrecoverable: []Unrecoverable{{SubjectID: "BTC", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	c2 := mustClaim(t, s, t0.Add(time.Minute))
+	if err := s.CompleteRun(ctx, CompleteRequest{
+		RunID: c2.Run.RunID, LeaseToken: c2.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Minute),
+		Unrecoverable: []Unrecoverable{{SubjectID: "BTC", StartTime: "2026-10-02T00:00:00Z", EndTime: "2026-10-03T00:00:00Z"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetTask(ctx, "crypto", "ds1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Unrecoverable) != 1 || got.Unrecoverable[0].StartTime != "2026-10-01T00:00:00Z" || got.Unrecoverable[0].EndTime != "2026-10-03T00:00:00Z" {
+		t.Fatalf("跨运行累积应归并相邻区间: %+v", got.Unrecoverable)
 	}
 }

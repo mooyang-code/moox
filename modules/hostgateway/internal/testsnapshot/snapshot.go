@@ -51,7 +51,7 @@ func build(t testing.TB, hostID, outbound string, components []string) *pb.HostG
 			for _, h := range raw.Hosts {
 				raw.Deployments = append(raw.Deployments, &pb.SnapshotDeployment{HostId: h.HostId, ComponentId: c.ID, Enabled: true})
 			}
-		case !c.ThirdParty && !slices.Contains(components, c.ID):
+		case !slices.Contains(components, c.ID):
 			raw.Deployments = append(raw.Deployments, &pb.SnapshotDeployment{HostId: "control", ComponentId: c.ID, Enabled: true})
 		}
 	}

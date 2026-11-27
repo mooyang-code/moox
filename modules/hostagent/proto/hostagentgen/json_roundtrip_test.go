@@ -15,7 +15,6 @@ func TestHostAgentTRPCJSONRoundTrip(t *testing.T) {
 	const at = int64(1700000000123)
 	assertTRPCJSONRoundTrip(t, &GetStatusRsp{HostId: "control", LastCollectAt: at, LastReportAt: at + 1}, new(GetStatusRsp),
 		map[string]int64{"last_collect_at": at, "last_report_at": at + 1})
-	assertTRPCJSONRoundTrip(t, &GetSnapshotRsp{CollectedAt: at}, new(GetSnapshotRsp), map[string]int64{"collected_at": at})
 }
 
 // assertTRPCJSONRoundTrip 用服务端实际使用的 JSON 序列化（trpc-go 注册的 SerializationTypeJSON，即 protojson）编码再解码：

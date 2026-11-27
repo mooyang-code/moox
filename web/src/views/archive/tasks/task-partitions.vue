@@ -81,22 +81,20 @@
             <span :title="remoteTitle(record)">{{ remoteStateLabel(record.remote_state, record.remote_key) }}</span>
           </template>
         </a-table-column>
-        <a-table-column title="操作" :width="remoteEnabled ? 150 : 70" fixed="right">
+        <a-table-column title="操作" :width="150" fixed="right">
           <template #cell="{ record }">
             <a-space :size="4">
               <a-button size="mini" @click="emit('update:query', { partition: record.partition_key })">预览</a-button>
-              <template v-if="remoteEnabled">
-                <!-- 置灰的按钮收不到悬停事件，原因写在外层的 title 上 -->
-                <span :title="downloadBlockedReason(record) || undefined">
-                  <a-button
-                    size="mini"
-                    :disabled="Boolean(downloadBlockedReason(record)) && !isDownloading(record)"
-                    :title="isDownloading(record) ? '点击取消下载' : undefined"
-                    @click="isDownloading(record) ? cancelDownload(record) : download(record)"
-                    >{{ downloadLabel(record) }}</a-button
-                  >
-                </span>
-              </template>
+              <!-- 置灰的按钮收不到悬停事件，原因写在外层的 title 上 -->
+              <span :title="downloadBlockedReason(record) || undefined">
+                <a-button
+                  size="mini"
+                  :disabled="Boolean(downloadBlockedReason(record)) && !isDownloading(record)"
+                  :title="isDownloading(record) ? '点击取消下载' : undefined"
+                  @click="isDownloading(record) ? cancelDownload(record) : download(record)"
+                  >{{ downloadLabel(record) }}</a-button
+                >
+              </span>
             </a-space>
           </template>
         </a-table-column>
@@ -133,7 +131,7 @@ import PartitionPreview from "./partition-preview.vue";
 
 /**
  * 分区页签：后端按分区键倒序；起止月份、页码、预览的分区都在 URL 里。不轮询，切到页签、翻页、改筛选时读取。
- * 远端副本已校验的分区可以下载（经 Admin 转给执行器，从对象存储读出），其余置灰并在悬停里写原因。
+ * 启用对象存储时下载已校验的远端副本，未启用对象存储时直接对本地已导出文件做 SHA-256 校验下载，未就绪的置灰并在悬停里写原因。
  */
 const PAGE_SIZE = 50;
 

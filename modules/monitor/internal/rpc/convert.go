@@ -3,8 +3,6 @@ package rpc
 import (
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
@@ -19,33 +17,6 @@ func invalid(err error) *commonpb.RetInfo {
 }
 
 func inner(err error) *commonpb.RetInfo { return retInfo(commonpb.ErrorCode_INNER_ERR, err.Error()) }
-
-func eventToPB(event domain.AlertEvent) *monitorpb.AlertEvent {
-	return &monitorpb.AlertEvent{
-		EventId:     event.EventID,
-		SpaceId:     event.SpaceID,
-		CheckId:     event.CheckID,
-		EventType:   alertEventTypeToPB(event.EventType),
-		Title:       event.Title,
-		Severity:    event.Severity,
-		Message:     event.Message,
-		PayloadJson: event.Payload,
-		CreatedAt:   millis(event.CreatedAt),
-	}
-}
-
-func alertEventTypeToPB(eventType string) monitorpb.AlertEventType {
-	switch eventType {
-	case domain.AlertEventTriggered:
-		return monitorpb.AlertEventType_ALERT_EVENT_TYPE_TRIGGERED
-	case domain.AlertEventReminder:
-		return monitorpb.AlertEventType_ALERT_EVENT_TYPE_REMINDER
-	case domain.AlertEventResolved:
-		return monitorpb.AlertEventType_ALERT_EVENT_TYPE_RESOLVED
-	default:
-		return monitorpb.AlertEventType_ALERT_EVENT_TYPE_UNSPECIFIED
-	}
-}
 
 // millis 把墙钟时刻转成接口用的毫秒；零值是 0。
 func millis(t time.Time) int64 {

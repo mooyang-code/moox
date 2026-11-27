@@ -1,8 +1,8 @@
 // Package rpc 提供 ssh 直连端点（WebSocket 终端、SFTP 流式上传/下载）的裸 HTTP 处理器，
 // 经统一 HTTP 转发层 rawhandler 分派。
 //
-// 鉴权在控制台入口完成：按会话 Cookie 查登录用户，核对 session_id 是这个用户建的 SSH 会话；
-// WebSocket 握手另外要求 Origin 是本站。这里只用 session_id 找到 SSH 连接。
+// 会话 Cookie 与 Origin 鉴权在控制台入口完成并把用户 ID 写入 ctx；
+// 每个 SSH 裸处理器在进入前统一核对 query.session_id 归属于当前登录用户。
 package rpc
 
 import (
@@ -11,16 +11,30 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 
 	"golang.org/x/net/websocket"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// requireSessionOwner 在执行任何 SSH 裸请求前校验 session_id 归属于当前登录用户。
+func requireSessionOwner(svc ssh.Service, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, _ := r.Context().Value(auth.CtxUserID).(string)
+		sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" || userID == "" || !svc.SessionBelongsToUser(sessionID, userID) {
+			http.Error(w, "access denied", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // WebSocketConnectHandler 返回 SSH 终端 WebSocket 处理器。
 // query: session_id, w, h
 func WebSocketConnectHandler(svc ssh.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requireSessionOwner(svc, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		query := r.URL.Query()
 		log.Infof("[SSH WebSocket] 收到握手请求: path=%s upgrade=%s session=%s w=%s h=%s origin=%s",
@@ -74,13 +88,13 @@ func WebSocketConnectHandler(svc ssh.Service) http.HandlerFunc {
 			},
 		}
 		wsServer.ServeHTTP(w, r)
-	}
+	})
 }
 
 // SftpDownloadHandler 返回 SFTP 文件下载处理器（流式）。
 // query: session_id, path
 func SftpDownloadHandler(svc ssh.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requireSessionOwner(svc, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		sessionID := r.URL.Query().Get("session_id")
 		// Query().Get 已经完成一次解码；再解码会把 + 变成空格、让含 % 的文件名报错。
@@ -105,14 +119,14 @@ func SftpDownloadHandler(svc ssh.Service) http.HandlerFunc {
 		if _, err := file.WriteTo(w); err != nil {
 			log.ErrorContextf(ctx, "[SSH SFTP] 下载文件写入失败: %v", err)
 		}
-	}
+	})
 }
 
 // SftpUploadHandler 返回 SFTP 文件上传处理器（multipart）。
 // query: session_id；form: path, file[]（multipart 文件）。
-// 会话 ID 只认地址栏参数：控制台入口核对归属的就是它，表单里的同名字段一概不看。
+// 会话 ID 只认地址栏参数，表单里的同名字段一概不看。
 func SftpUploadHandler(svc ssh.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requireSessionOwner(svc, func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
 			writeRawError(w, http.StatusBadRequest, "获取上传文件失败")
@@ -140,21 +154,20 @@ func SftpUploadHandler(svc ssh.Service) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		body, _ := json.Marshal(map[string]interface{}{
+		body, _ := json.Marshal(map[string]any{
 			"code":    0,
 			"msg":     fmt.Sprintf("%d 个文件上传成功", len(uploaded)),
 			"files":   uploaded,
 			"success": true,
 		})
 		w.Write(body)
-	}
+	})
 }
 
-// writeRawError 写入 JSON 错误响应。
 func writeRawError(w http.ResponseWriter, statusCode int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"code":    statusCode,
 		"msg":     message,
 		"success": false,

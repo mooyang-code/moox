@@ -81,7 +81,6 @@ func TestRealTRPCSnapshotHeartbeatAndHostIsolation(t *testing.T) {
 	require.Nil(t, unchanged.Snapshot)
 	status := f.status(t)
 	require.Equal(t, response.Snapshot.Hash, status.AppliedHash)
-	require.Equal(t, response.Snapshot.Hash, status.ExpectedHash)
 	_, err = proxy.PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "control"})
 	require.Error(t, err)
 }

@@ -5,9 +5,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 )
 
@@ -30,25 +29,6 @@ const logoutRoute = "auth/Logout"
 var rawRoutes = map[string]bool{
 	"ssh/WsConnect": true, "ssh/SftpDownload": true, "ssh/SftpUpload": true,
 	"archive/PartitionDownload": true, "archive/RecentRows": true,
-}
-
-var rawSessionOwnerState struct {
-	sync.RWMutex
-	verify func(sessionID, userID string) bool
-}
-
-// SetRawSessionOwnerVerifier 登记 SSH 会话归属的判断：SSH 裸路由的 session_id 必须是当前登录用户建的。
-func SetRawSessionOwnerVerifier(verify func(sessionID, userID string) bool) {
-	rawSessionOwnerState.Lock()
-	rawSessionOwnerState.verify = verify
-	rawSessionOwnerState.Unlock()
-}
-
-func rawSessionBelongsToUser(sessionID, userID string) bool {
-	rawSessionOwnerState.RLock()
-	verify := rawSessionOwnerState.verify
-	rawSessionOwnerState.RUnlock()
-	return verify != nil && sessionID != "" && verify(sessionID, userID)
 }
 
 // needsOriginCheck 判断请求是否要核对 Origin：非 GET 请求与 WebSocket 握手（握手是 GET，按升级头和路由判断）。
@@ -76,13 +56,13 @@ func originAllowed(r *http.Request, allowed []string) bool {
 }
 
 // requestSession 按 Cookie 查会话。Cookie 的值不写日志。
-func (hr *HTTPRouter) requestSession(r *http.Request) (session.Session, bool) {
+func (hr *HTTPRouter) requestSession(r *http.Request) (auth.Session, bool) {
 	if hr.sessions == nil {
-		return session.Session{}, false
+		return auth.Session{}, false
 	}
-	cookie, err := r.Cookie(session.CookieName)
+	cookie, err := r.Cookie(auth.CookieName)
 	if err != nil {
-		return session.Session{}, false
+		return auth.Session{}, false
 	}
 	return hr.sessions.Get(cookie.Value)
 }
@@ -95,9 +75,9 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func setSessionCookie(w http.ResponseWriter, created session.Session, ttl int) {
+func setSessionCookie(w http.ResponseWriter, created auth.Session, ttl int) {
 	http.SetCookie(w, &http.Cookie{
-		Name: session.CookieName, Value: created.ID, Path: "/",
+		Name: auth.CookieName, Value: created.ID, Path: "/",
 		Expires: created.ExpiresAt, MaxAge: ttl,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
@@ -106,7 +86,7 @@ func setSessionCookie(w http.ResponseWriter, created session.Session, ttl int) {
 // clearSessionCookie 让浏览器删掉会话 Cookie（属性与下发时相同）。
 func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name: session.CookieName, Value: "", Path: "/", MaxAge: -1,
+		Name: auth.CookieName, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
 }

@@ -1,4 +1,5 @@
 # MooX Admin 配置文件
+# 时间格式支持: ns, us, ms, s, m, h，例如 "30s"、"15m"、"24h"。
 
 database:
   path: /data/moox/data/admin/admin.db
@@ -6,3 +7,31 @@ database:
   max_open_conns: 8
   conn_max_lifetime: 1h
   conn_max_idle_time: 10m
+# 浏览器会话：登录后下发 HttpOnly Cookie，会话只放在 Admin 进程内存里，Admin 重启后要重新登录。
+session:
+  ttl: "24h" # 会话有效期，从登录时算起，不随使用顺延
+# 登录失败锁定：同一用户名加来源 IP 连续失败 5 次锁定 15 分钟（用户不存在也算）；
+# 没到 5 次时，最后一次失败满 30 分钟计数清零。
+security:
+  max_login_attempt: 5
+  lock_duration: "15m"
+console:
+  # 非 GET 请求与终端 WebSocket 要求 Origin 等于本站。这里只在本机开发经开发服务器代理时
+  # 填开发服务器的来源（例如 http://localhost:9527），生产留空；不能写 *。
+  allowed_origins: []
+  # /api/admin/{console_name}/{method} 从共享 servicecatalog 解析服务和 console ACL。
+  # Admin 自身服务进程内调用；其余服务由 gatewayclient 透传原始 JSON。
+  # 目录直接读取 Admin 的主机/部署表，启动不依赖本机网关。
+  # console 调用用控制机的主机签名私钥签名：MOOX_ADMIN_HOST_KEY_FILE，没设时是 Admin 主密钥同目录的 host.key；不在此配置密钥。
+  # 私有 CA 使用 MOOX_ADMIN_PKI_DIR/ca.crt；默认位于 Admin 主密钥同目录的 pki/。
+  # 浏览器入口（HTTPS 9527）不在这个文件里配置：控制机地址取 MOOX_ADMIN_WEB_ADDRESS，监听地址取 MOOX_ADMIN_WEB_LISTEN
+  # （默认 0.0.0.0:9527）；网页证书由 Admin 用上面的 MooX CA 签，放在数据目录的 web-cert/。
+# 接口级限流：只限这里列出的接口，没列出的不限。
+rate_limit:
+  method_limits:
+    "/api/admin/auth/Login":
+      qps: 1
+      burst: 2
+    "/api/admin/auth/GetUserInfo":
+      qps: 2
+      burst: 5

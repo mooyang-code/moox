@@ -729,3 +729,49 @@ func TestTimesOutsideTheNanosecondRangeAreRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSyncedTasksTracksRestoreAndResetsOnTaskRebind(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	task := klineTask()
+	if err := s.BindTask(ctx, task, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if synced, err := s.SyncedTasks(ctx); err != nil || len(synced) != 0 {
+		t.Fatalf("刚绑定尚未同步分区时应为空: %+v %v", synced, err)
+	}
+	// 空登记同步后也应记为已同步，避免后续 follow 重复拉取。
+	if inserted, err := s.RestorePartitions(ctx, task.SpaceID, task.DatasetID, nil, now0); err != nil || inserted != 0 {
+		t.Fatalf("inserted=%d err=%v", inserted, err)
+	}
+	synced, err := s.SyncedTasks(ctx)
+	if err != nil || len(synced) != 1 || synced[0] != (SyncedTask{SpaceID: task.SpaceID, DatasetID: task.DatasetID, TaskID: "1"}) {
+		t.Fatalf("synced = %+v err=%v", synced, err)
+	}
+	// 相同 task_id 重新绑定不重置已同步标记。
+	if err := s.BindTask(ctx, task, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if synced, err := s.SyncedTasks(ctx); err != nil || len(synced) != 1 {
+		t.Fatalf("同 task_id 不应重置: %+v %v", synced, err)
+	}
+	// task_id 变化（任务重建）后重置为未同步。
+	if err := s.BindTask(ctx, task, "2"); err != nil {
+		t.Fatal(err)
+	}
+	if synced, err := s.SyncedTasks(ctx); err != nil || len(synced) != 0 {
+		t.Fatalf("新 task_id 应重置同步状态: %+v %v", synced, err)
+	}
+}
+
+func TestRestorePartitionsRejectsNonLocalFilePaths(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	for _, bad := range []string{"../../etc/passwd", "/etc/passwd", `crypto\ds\2026.csv.gz`, ".", "./../escape.csv.gz"} {
+		_, err := s.RestorePartitions(ctx, "crypto", "ds_1m", []PartitionState{{
+			Key: "2026-10-15", Start: day0, End: day1, Status: StatusFinal,
+			FilePath: bad, SHA256: "abc", ExportedAt: now0, FinalizedAt: now0,
+		}}, now0)
+		if err == nil || !strings.Contains(err.Error(), "非法") {
+			t.Fatalf("path %q 应被拒绝，实际 err=%v", bad, err)
+		}
+	}
+}

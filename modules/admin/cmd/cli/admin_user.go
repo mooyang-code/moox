@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,17 +13,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	maxBcryptPasswordBytes = 72
-	maxRandomSecretBytes   = 4096
-)
+const maxBcryptPasswordBytes = 72
 
 func isAdminUserCommand(args []string) bool {
 	return len(args) > 1 && args[1] == "user"
-}
-
-func isRandomSecretCommand(args []string) bool {
-	return len(args) > 1 && args[1] == "random-secret"
 }
 
 func runAdminUserCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -138,37 +129,5 @@ func setAdminPassword(db *gorm.DB, username, password string, stdout io.Writer) 
 	}
 	return json.NewEncoder(stdout).Encode(map[string]any{
 		"status": "ok", "command": "user.set-password", "action": "updated", "username": username,
-	})
-}
-
-func runRandomSecretCommand(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "random-secret" {
-		return errors.New("expected random-secret command")
-	}
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
-	}
-	fs := flag.NewFlagSet("random-secret", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	size := 32
-	fs.IntVar(&size, "bytes", size, "number of random bytes")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected random-secret arguments: %s", strings.Join(fs.Args(), " "))
-	}
-	if size < 1 || size > maxRandomSecretBytes {
-		return fmt.Errorf("--bytes must be between 1 and %d", maxRandomSecretBytes)
-	}
-	raw := make([]byte, size)
-	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
-		return fmt.Errorf("generate random secret: %w", err)
-	}
-	return json.NewEncoder(stdout).Encode(map[string]any{
-		"status": "ok", "bytes": size, "secret": hex.EncodeToString(raw),
 	})
 }

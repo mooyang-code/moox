@@ -19,7 +19,6 @@ const (
 	maxFieldBytes       = 200
 	defaultPageSize     = 50
 	maxPageSize         = 200
-	timeLayout          = "2006-01-02 15:04:05"
 )
 
 // Entry 是一条待写入的活动日志。
@@ -70,7 +69,7 @@ type logRow struct {
 	Detail   string `gorm:"column:c_detail"`
 	RefID    string `gorm:"column:c_ref_id"`
 	DedupKey string `gorm:"column:c_dedup_key"`
-	CTime    string `gorm:"column:c_ctime"`
+	CTime    int64  `gorm:"column:c_ctime"`
 }
 
 func (logRow) TableName() string { return "t_activity_logs" }
@@ -110,7 +109,7 @@ func (d *DAO) Append(ctx context.Context, entries []Entry, now time.Time) (int, 
 		return 0, fmt.Errorf("activity log append requires 1..%d entries", maxEntriesPerAppend)
 	}
 	rows := make([]logRow, 0, len(entries))
-	stamp := now.UTC().Format(timeLayout)
+	stamp := now.UTC().UnixMilli()
 	for _, entry := range entries {
 		normalized, err := normalizeEntry(entry)
 		if err != nil {
@@ -150,10 +149,10 @@ func (d *DAO) List(ctx context.Context, filter Filter) ([]Item, int64, error) {
 		query = query.Where("c_ref_id = ?", filter.RefID)
 	}
 	if !filter.Since.IsZero() {
-		query = query.Where("c_ctime >= ?", filter.Since.UTC().Format(timeLayout))
+		query = query.Where("c_ctime >= ?", filter.Since.UTC().UnixMilli())
 	}
 	if !filter.Until.IsZero() {
-		query = query.Where("c_ctime < ?", filter.Until.UTC().Format(timeLayout))
+		query = query.Where("c_ctime < ?", filter.Until.UTC().UnixMilli())
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -173,18 +172,11 @@ func (d *DAO) List(ctx context.Context, filter Filter) ([]Item, int64, error) {
 	}
 	items := make([]Item, 0, len(rows))
 	for _, row := range rows {
-		created := parseStoredTime(row.CTime)
-		items = append(items, Item{ID: row.ID, SpaceID: row.SpaceID, Source: row.Source, Category: row.Category, Level: row.Level, Title: row.Title, Detail: row.Detail, RefID: row.RefID, CreatedAt: created})
+		items = append(items, Item{
+			ID: row.ID, SpaceID: row.SpaceID, Source: row.Source, Category: row.Category,
+			Level: row.Level, Title: row.Title, Detail: row.Detail, RefID: row.RefID,
+			CreatedAt: time.UnixMilli(row.CTime).UTC(),
+		})
 	}
 	return items, total, nil
-}
-
-// parseStoredTime 解析驱动返回的 DATETIME 文本，兼容 RFC3339 与 SQLite 默认格式。
-func parseStoredTime(raw string) time.Time {
-	for _, layout := range []string{time.RFC3339Nano, timeLayout, "2006-01-02 15:04:05.999999999-07:00"} {
-		if parsed, err := time.ParseInLocation(layout, raw, time.UTC); err == nil {
-			return parsed.UTC()
-		}
-	}
-	return time.Time{}
 }

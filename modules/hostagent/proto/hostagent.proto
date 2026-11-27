@@ -3,6 +3,7 @@ syntax = "proto3";
 package trpc.moox.hostagent;
 
 import "host_metric.proto";
+import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen;hostagentpb";
 
@@ -23,15 +24,17 @@ message GetStatusRsp {
   uint64 skipped = 11;
   HostSnapshot latest = 12;
 }
-message GetSnapshotReq {}
-// collected_at 是这份快照采集完成的时刻（Unix 毫秒），没采集过为 0。
-message GetSnapshotRsp { HostSnapshot snapshot = 1; int64 collected_at = 2; }
 message RunOnceReq {}
 // RunOnce 立即采集一次，并随拉取主机策略报给 Monitor。
-message RunOnceRsp { string report_id = 1; bool reported = 2; string report_error = 3; HostSnapshot snapshot = 4; }
+message RunOnceRsp {
+  string report_id = 1;
+  bool reported = 2;
+  string report_error = 3;
+  HostSnapshot snapshot = 4;
+  common.RetInfo ret_info = 5;
+}
 
 service HostAgentMgr {
   rpc GetStatus(GetStatusReq) returns (GetStatusRsp);
-  rpc GetSnapshot(GetSnapshotReq) returns (GetSnapshotRsp);
   rpc RunOnce(RunOnceReq) returns (RunOnceRsp);
 }

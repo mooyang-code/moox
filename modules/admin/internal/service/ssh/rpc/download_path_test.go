@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +27,22 @@ func TestSftpDownloadHandlerDecodesPathOnce(t *testing.T) {
 	for _, original := range []string{"/tmp/a+b.txt", "/tmp/100%.txt", "/tmp/a%2Fb.txt", "/tmp/空 格.txt"} {
 		svc := &pathCapture{}
 		request := httptest.NewRequest(http.MethodGet, "/x?session_id=s&path="+url.QueryEscape(original), nil)
+		request = request.WithContext(context.WithValue(request.Context(), auth.CtxUserID, "u1"))
 		SftpDownloadHandler(svc)(httptest.NewRecorder(), request)
 		require.Equal(t, original, svc.path)
+	}
+}
+
+func TestSftpDownloadAndWebSocketRejectForeignSession(t *testing.T) {
+	svc := &pathCapture{}
+	for name, handler := range map[string]http.HandlerFunc{
+		"download":  SftpDownloadHandler(svc),
+		"websocket": WebSocketConnectHandler(svc),
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/x?session_id=someone-else&path=/tmp/a", nil)
+		req = req.WithContext(context.WithValue(req.Context(), auth.CtxUserID, "u1"))
+		rr := httptest.NewRecorder()
+		handler(rr, req)
+		require.Equal(t, http.StatusForbidden, rr.Code, name)
 	}
 }

@@ -12,9 +12,6 @@ const (
 var handWrittenCoverage = map[string]string{
 	"trpc.moox.admin.ActivityLog/ListActivityLogs": "activity list",
 
-	"trpc.moox.admin.Setup/ApplySetup":     "setup init",
-	"trpc.moox.admin.Setup/GetSetupStatus": "setup status",
-
 	"trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance": "strategy instance delete",
 
 	"trpc.moox.archive.ArchiveMgr/GetArchiveOverview":    "archive overview",
@@ -79,6 +76,9 @@ var handWrittenCoverage = map[string]string{
 
 // cliOnlyCoverage 记录管理台不开放、只有 moox-cli 能调用的方法由哪个手写命令覆盖（接口 → 命令路径）。
 var cliOnlyCoverage = map[string]string{
+	"trpc.moox.admin.Setup/ApplySetup":     "setup init",
+	"trpc.moox.admin.Setup/GetSetupStatus": "setup status",
+
 	"trpc.moox.collector.CollectMgr/DeleteCloudFunctions": "collector function delete",
 	"trpc.moox.collector.CollectMgr/ProbeFunctionEgress":  "collector function probe-egress",
 

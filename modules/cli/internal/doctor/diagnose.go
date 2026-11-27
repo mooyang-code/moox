@@ -124,8 +124,8 @@ func diagnoseSpecs(manifest core.Manifest, snapshot *monitorpb.GetDoctorContextR
 			reporterDependencies = []string{"diagnose.context"}
 		}
 		specs = append(specs, core.CheckSpec{ID: reporterID, RequiredDependencies: reporterDependencies, OptionalDependencies: []string{health[component.GetComponentId()]}})
-		module := componentModule(component.GetComponentId())
-		freshnessEnabled := component.GetFunctionalObservability() == "deferred" || moduleFreshnessEnabled(healthChecks, module)
+		module := core.ComponentModule(component.GetComponentId())
+		freshnessEnabled := component.GetFunctionalObservability() == "deferred" || moduleHasEnabledHealthCheck(healthChecks, module)
 		if component.GetFunctionalObservability() != "not_applicable" && freshnessEnabled {
 			freshnessDependencies := []string{reporterID}
 			if component.GetFunctionalObservability() == "deferred" {
@@ -219,7 +219,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		if component.GetTransport() != "reporter" {
 			return checkResult(spec.ID, core.StatusSkipped, "component does not use Reporter transport", nil)
 		}
-		module := componentModule(component.GetComponentId())
+		module := core.ComponentModule(component.GetComponentId())
 		metricErrorsName := report.ModuleMetricName(module, report.ModuleMetricErrors)
 		for _, metric := range r.context.GetModuleObservations() {
 			if metric.GetComponentId() == component.GetComponentId() && metric.GetSummary() == metricErrorsName && metric.GetValue() > 0 && recentMetricError(r.context.GetModuleObservations(), component.GetComponentId(), r.now()) {
@@ -257,47 +257,57 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		if component.GetFunctionalObservability() == "deferred" {
 			return checkResult(spec.ID, core.StatusSkipped, "storage_observability_deferred", nil)
 		}
-		observations := r.moduleSuccessObservations(component.GetComponentId())
-		if len(observations) == 0 {
+		module := core.ComponentModule(component.GetComponentId())
+		bySuccess := r.moduleMetricTimes(component.GetComponentId(), report.ModuleMetricLastSuccess)
+		byError := r.moduleMetricTimes(component.GetComponentId(), report.ModuleMetricLastError)
+		if len(bySuccess) == 0 && len(byError) == 0 {
+			if len(r.options.HealthChecks) > 0 && !moduleFreshnessEnabled(r.options.HealthChecks, module) {
+				return checkResult(spec.ID, core.StatusSkipped, core.ModuleRunNoRun, nil)
+			}
 			return checkResult(spec.ID, core.StatusUnknown, "no functional observation exists for an enabled workload", nil, "inspect_health_check_input")
 		}
-		module := componentModule(component.GetComponentId())
-		byHealthCheck := map[string]time.Time{}
-		for _, observation := range observations {
-			labels := map[string]string{}
-			if json.Unmarshal([]byte(observation.GetDetailsJson()), &labels) != nil {
-				continue
-			}
-			at := time.Unix(int64(observation.GetValue()), 0).UTC()
-			if at.IsZero() {
-				continue
-			}
-			byHealthCheck[labels["health_check"]] = at
-		}
-		if len(byHealthCheck) == 0 {
-			return checkResult(spec.ID, core.StatusUnknown, "functional last-success timestamp is invalid", nil, "inspect_health_check_input")
-		}
 		if len(r.options.HealthChecks) > 0 {
+			evaluated := false
 			for _, healthCheck := range r.options.HealthChecks {
 				if !healthCheck.Enabled || healthCheck.Module != module {
 					continue
 				}
-				at, ok := byHealthCheck[healthCheck.ID]
-				if !ok {
+				lastSuccess := bySuccess[healthCheck.ID]
+				lastError := byError[healthCheck.ID]
+				verdict := core.EvaluateModuleRunHealth(core.ModuleRunSignals{
+					LastSuccess: lastSuccess, LastError: lastError, MaxLag: healthCheck.MaxLag,
+				}, r.now())
+				if verdict.Status != core.StatusSkipped {
+					evaluated = true
+				}
+				if verdict.Status == core.StatusFail {
+					return checkResult(spec.ID, core.StatusFail, "module health check is failing: "+verdict.Reason, nil, "inspect_health_check_input")
+				}
+				if !healthCheck.CheckFreshness {
+					continue
+				}
+				evaluated = true
+				if lastSuccess.IsZero() {
 					return checkResult(spec.ID, core.StatusUnknown, "functional last-success timestamp is missing for an enabled health check", nil, "inspect_health_check_input")
 				}
 				threshold := r.moduleFreshnessThreshold(module)
 				if healthCheck.MaxLag > threshold {
 					threshold = healthCheck.MaxLag
 				}
-				if at.After(r.now().Add(time.Minute)) || r.now().Sub(at) > threshold {
+				if lastSuccess.After(r.now().Add(time.Minute)) || r.now().Sub(lastSuccess) > threshold {
 					return checkResult(spec.ID, core.StatusFail, "functional last-success timestamp is stale", nil, "inspect_health_check_input")
 				}
 			}
+			if !evaluated {
+				return checkResult(spec.ID, core.StatusSkipped, core.ModuleRunNoRun, nil)
+			}
 			return checkResult(spec.ID, core.StatusPass, "functional last-success timestamps are current", nil)
 		}
+		if len(bySuccess) == 0 {
+			return checkResult(spec.ID, core.StatusUnknown, "functional last-success timestamp is invalid", nil, "inspect_health_check_input")
+		}
 		freshest := time.Time{}
-		for _, at := range byHealthCheck {
+		for _, at := range bySuccess {
 			if at.After(freshest) {
 				freshest = at
 			}
@@ -408,7 +418,7 @@ func (r *diagnoseRunner) probeHealth(ctx context.Context, id string, component *
 }
 
 func recentMetricError(observations []*monitorpb.DoctorObservation, componentID string, now time.Time) bool {
-	module := componentModule(componentID)
+	module := core.ComponentModule(componentID)
 	metricName := report.ModuleMetricName(module, report.ModuleMetricLastMetricsError)
 	for _, metric := range observations {
 		if metric.GetComponentId() != componentID || metric.GetSummary() != metricName {
@@ -479,12 +489,12 @@ func findObservation(items []*monitorpb.DoctorObservation, componentID string) *
 	return nil
 }
 
-func (r *diagnoseRunner) moduleSuccessObservations(componentID string) []*monitorpb.DoctorObservation {
-	result := make([]*monitorpb.DoctorObservation, 0)
-	module := componentModule(componentID)
-	metricName := report.ModuleMetricName(module, report.ModuleMetricLastSuccess)
+func (r *diagnoseRunner) moduleMetricTimes(componentID, metricKind string) map[string]time.Time {
+	result := map[string]time.Time{}
+	module := core.ComponentModule(componentID)
+	metricName := report.ModuleMetricName(module, metricKind)
 	for _, item := range r.context.GetModuleObservations() {
-		if item.GetComponentId() != componentID || item.GetSummary() != metricName {
+		if item.GetComponentId() != componentID || item.GetSummary() != metricName || item.GetValue() <= 0 {
 			continue
 		}
 		labels := map[string]string{}
@@ -492,8 +502,12 @@ func (r *diagnoseRunner) moduleSuccessObservations(componentID string) []*monito
 			continue
 		}
 		healthCheck := labels["health_check"]
-		if healthCheck == "" || r.healthCheckEnabled(module, healthCheck) {
-			result = append(result, item)
+		if healthCheck != "" && !r.healthCheckEnabled(module, healthCheck) {
+			continue
+		}
+		at := time.Unix(int64(item.GetValue()), 0).UTC()
+		if at.After(result[healthCheck]) {
+			result[healthCheck] = at
 		}
 	}
 	return result
@@ -519,7 +533,7 @@ func (r *diagnoseRunner) moduleExpected(module string) bool {
 		return true
 	}
 	for _, component := range r.context.GetExpectedComponents() {
-		if componentModule(component.GetComponentId()) == module {
+		if core.ComponentModule(component.GetComponentId()) == module {
 			return component.GetExpected()
 		}
 	}
@@ -548,20 +562,20 @@ func findObservationKind(items []*monitorpb.DoctorObservation, componentID, kind
 func healthCheckIDs(config []report.ModuleHealthCheck) []string {
 	ids := make([]string, 0, len(config))
 	for _, healthCheck := range config {
-		if healthCheck.Enabled && healthCheck.CheckWatermark {
+		if healthCheck.Enabled {
 			ids = append(ids, healthCheck.ID)
 		}
 	}
 	return ids
 }
 
-// componentModule maps a component id to the module name used by module
-// health checks; factor-mgr reports its metrics as module "factor".
-func componentModule(componentID string) string {
-	if componentID == "factor-mgr" {
-		return "factor"
+func moduleHasEnabledHealthCheck(config []report.ModuleHealthCheck, module string) bool {
+	for _, healthCheck := range config {
+		if healthCheck.Enabled && healthCheck.Module == module {
+			return true
+		}
 	}
-	return componentID
+	return false
 }
 
 func moduleFreshnessEnabled(config []report.ModuleHealthCheck, module string) bool {

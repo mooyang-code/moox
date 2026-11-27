@@ -99,21 +99,13 @@ func TestCheckCLI(t *testing.T) {
 	}
 }
 
-// packageFixture 写好服务目录里全部组件的假二进制和第三方许可证。
+// packageFixture 写好服务目录里全部组件的假二进制。
 func packageFixture(t *testing.T, catalog servicecatalog.Catalog) (string, string) {
 	t.Helper()
 	repository, binaries := t.TempDir(), t.TempDir()
 	for _, component := range catalog.Components {
 		for _, name := range Binaries(component) {
 			if err := os.WriteFile(filepath.Join(binaries, name), []byte("binary "+name), 0o755); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if component.ThirdParty {
-			if err := os.MkdirAll(filepath.Join(repository, "third_party", component.ID), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(repository, "third_party", component.ID, "LICENSE"), []byte("license"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -208,29 +200,18 @@ func TestPackageComponentsIsDeterministic(t *testing.T) {
 				t.Fatalf("%s 的清单缺 %s 的摘要", component.ID, name)
 			}
 		}
-		if component.ThirdParty {
-			wantNames = append(wantNames, "LICENSE")
-		}
 		slices.Sort(wantNames)
 		entries := readPackage(t, filepath.Join(first, artifact.File))
 		gotNames := []string{}
 		for _, entry := range entries {
 			gotNames = append(gotNames, entry.name)
-			wantMode := int64(0o755)
-			if entry.name == "LICENSE" {
-				wantMode = 0o644
-			}
-			if entry.mode != wantMode {
+			if entry.mode != int64(0o755) {
 				t.Fatalf("%s 的 %s 权限是 %o", component.ID, entry.name, entry.mode)
 			}
 		}
 		if !slices.Equal(gotNames, wantNames) {
 			t.Fatalf("%s 的包内容是 %v，应为 %v", component.ID, gotNames, wantNames)
 		}
-	}
-	weed := one["seaweedfs"]
-	if len(weed.Binaries) != 1 || weed.Binaries["weed"] == "" {
-		t.Fatalf("seaweedfs 的包应只有 weed：%+v", weed)
 	}
 	collector := one["collector"]
 	if collector.Binaries["moox-collector-cli"] == "" {
@@ -271,11 +252,5 @@ func TestPackageComponentsRejectsBadInputs(t *testing.T) {
 	}
 	if _, err := PackageComponents(catalog, repository, binaries, t.TempDir(), "v9.9.9", "386"); err == nil {
 		t.Fatal("不支持的架构应拒绝")
-	}
-	if err := os.Remove(filepath.Join(repository, "third_party", "seaweedfs", "LICENSE")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := PackageComponents(catalog, repository, binaries, t.TempDir(), "v9.9.9", "amd64"); err == nil || !strings.Contains(err.Error(), "seaweedfs") {
-		t.Fatalf("第三方组件缺许可证应拒绝：%v", err)
 	}
 }

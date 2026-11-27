@@ -18,8 +18,8 @@ import (
 // QueryTimeSeriesRows pushes the complete predicate, ordering, and pagination
 // into the DuckDB engine. The service only owns routing and response shaping.
 func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
-	if req == nil || req.GetDatasetId() == "" {
-		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
 	if len(req.GetSelectors()) == 0 && req.GetTimeRange() == nil && req.GetFilter() == nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
@@ -132,8 +132,8 @@ func readIndexRevision(runtime *viewRuntime, indexID string) uint64 {
 // SearchRecordRows pushes full-text, structured filters, sorting, and paging
 // into the Bleve engine.
 func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
-	if req == nil || req.GetDatasetId() == "" {
-		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
 	if len(req.GetKeys()) == 0 && strings.TrimSpace(req.GetTextQuery()) == "" && req.GetFilter() == nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
@@ -320,7 +320,7 @@ func runtimeCoverageComplete(runtime *viewRuntime, rng *pb.TimeRange, stats view
 	if runtime == nil {
 		return false
 	}
-	return runtime.queryState().active != "" && queryCoverageComplete(rng, stats)
+	return runtime.queryState().active() && queryCoverageComplete(rng, stats)
 }
 
 // timeSeriesSelectors 校验并转换时序选择器：每个选择器的空间与数据集都必须等于请求的空间与数据集。

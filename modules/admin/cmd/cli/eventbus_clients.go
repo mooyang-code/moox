@@ -30,7 +30,7 @@ func eventBusClientDigest(raw []byte) string {
 // exportEventBusClients 在一次数据库快照里导出选定的客户端角色文件；server 为真时（只给 EventBus 所在主机）
 // 另带 broker 的用户表。导出里没有任何证书：EventBus 的服务端证书就是所在主机的主机证书，
 // 客户端用身份包里的 MooX CA 根证书校验。这条命令不生成也不轮换凭据。
-func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, requested string, server bool, stdout io.Writer) error {
+func exportEventBusClients(ctx context.Context, db *gorm.DB, encryptionKey, nodeID, directory, requested string, server bool, stdout io.Writer) error {
 	roles := strings.Split(requested, ",")
 	files := eventBusRoleFiles()
 	canonical := map[string]string{}
@@ -52,7 +52,7 @@ func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, 
 		if err != nil {
 			return err
 		}
-		rows, err := listEventbus(dao.NewSecretDAO(tx), ctx)
+		rows, err := listEventbus(dao.NewSecretDAO(tx, encryptionKey), ctx)
 		if err != nil {
 			return err
 		}

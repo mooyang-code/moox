@@ -63,7 +63,7 @@ describe("分区下载", () => {
     create: ""
   } as const;
 
-  async function mountPartitions(partitions: ArchivePartition[]) {
+  async function mountPartitions(partitions: ArchivePartition[], remoteEnabled = true) {
     api.listArchivePartitions.mockResolvedValue({ partitions, page_result: { total: partitions.length } });
     wrapper = mount(TaskPartitions, {
       props: {
@@ -71,7 +71,7 @@ describe("分区下载", () => {
         spaceId: "crypto",
         query,
         zone: "UTC",
-        remoteEnabled: true
+        remoteEnabled
       },
       global: { plugins: [ArcoVue] },
       attachTo: document.body
@@ -89,6 +89,29 @@ describe("分区下载", () => {
     expect(ready.attributes("disabled")).toBeUndefined();
     expect(pending.attributes("disabled")).toBeDefined();
     expect(pending.element.parentElement?.getAttribute("title")).toBe("远端副本还没有上传或校验");
+  });
+
+  it("未配置对象存储时，本地已导出的分区可直接下载，未导出的置灰", async () => {
+    const blob = new Blob(["local"]);
+    api.downloadArchivePartition.mockResolvedValueOnce({ blob, fileName: "local.csv.gz" });
+    const [exported, open] = await mountPartitions(
+      [
+        partition({ remote_state: "off" }),
+        partition({ partition_key: "2026-11-08", status: "open", file_path: "", remote_state: "off" })
+      ],
+      false
+    );
+    expect(exported.attributes("disabled")).toBeUndefined();
+    expect(open.attributes("disabled")).toBeDefined();
+    expect(open.element.parentElement?.getAttribute("title")).toBe("分区还没有导出文件");
+    await exported.trigger("click");
+    await flushPromises();
+    expect(api.downloadArchivePartition).toHaveBeenCalledWith(
+      { space: "crypto", dataset: "ds", partition: "2026-11-07", fallbackName: "binance-spot-kline-1m_2026-11-07.csv.gz" },
+      expect.any(Function),
+      expect.any(AbortSignal)
+    );
+    expect(api.saveBlob).toHaveBeenCalledWith(blob, "local.csv.gz");
   });
 
   it("点下载：按空间、数据集、分区下载，交给浏览器保存；失败时提示执行器给的原因", async () => {

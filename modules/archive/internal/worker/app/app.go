@@ -143,7 +143,7 @@ func (a *App) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	loop(func() time.Duration { return a.opts.Config.Worker.HeartbeatInterval }, func(ctx context.Context) { a.heartbeatOnce(ctx) })
+	loop(func() time.Duration { return a.opts.Config.Worker.HeartbeatInterval }, func(ctx context.Context) { a.heartbeatOnce(ctx, false) })
 	loop(func() time.Duration { return a.opts.Config.Worker.PullInterval }, a.pullOnce)
 	if a.opts.Remote != nil {
 		// 单独一个循环：探测可能因超时与重试卡几十秒，不能拖住心跳。启动后立即做第一次探测。
@@ -189,8 +189,8 @@ func (a *App) runningIDs() []string {
 	return ids
 }
 
-// HeartbeatOnce 发送一次心跳（主循环按配置的间隔调用；测试也直接调用）。
-func (a *App) HeartbeatOnce(ctx context.Context) { a.heartbeatOnce(ctx) }
+// HeartbeatOnce 发送一次常规心跳（主循环按配置的间隔调用；测试也直接调用）。
+func (a *App) HeartbeatOnce(ctx context.Context) { a.heartbeatOnce(ctx, false) }
 
 // MaintainOnce 执行一次维护（同上）。
 func (a *App) MaintainOnce(ctx context.Context) { a.maintainOnce(ctx) }
@@ -223,8 +223,8 @@ func (a *App) probeOnce(ctx context.Context) {
 	}
 }
 
-// heartbeatOnce 发送一次心跳。mgr 回包带当前全部任务，返回它们（键 "space/dataset"，值 task_id）；心跳失败返回 nil。
-func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
+// heartbeatOnce 发送一次心跳。includeTasks 为真时（每日维护对账）向 mgr 请求当前全部任务并返回（键 "space/dataset"，值 task_id）；心跳失败返回 nil。
+func (a *App) heartbeatOnce(ctx context.Context, includeTasks bool) map[string]string {
 	cfg := a.opts.Config
 	total, used, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
 	a.mu.Lock()
@@ -244,7 +244,7 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 		WorkerId: cfg.Worker.WorkerID, Version: a.opts.Version, RootDir: cfg.Worker.RootDir,
 		DiskTotalBytes: total, DiskFreeBytes: free, DiskUsedBytes: used, MinFreeBytes: uint64(cfg.Worker.MinFreeBytes),
 		StagingBytes: uint64(a.opts.Staging.FileBytes()), Maintaining: maintaining, PacingJson: string(pacingJSON), RunningRunIds: a.runningIDs(),
-		ObjectStore: a.objectStoreInfo(),
+		ObjectStore: a.objectStoreInfo(), IncludeTasks: includeTasks,
 	})
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -311,9 +311,18 @@ func (a *App) pullOnce(ctx context.Context) {
 	}()
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
+	synced, err := a.opts.Staging.SyncedTasks(callCtx)
+	if err != nil {
+		log.Warnf("archive worker list synced tasks failed: %v", err)
+	}
+	syncedRefs := make([]*archivepb.TaskRef, 0, len(synced))
+	for _, t := range synced {
+		syncedRefs = append(syncedRefs, &archivepb.TaskRef{SpaceId: t.SpaceID, DatasetId: t.DatasetID, TaskId: t.TaskID})
+	}
 	rsp, err := a.opts.Manager.Pull(callCtx, &archivepb.PullArchiveRunReq{
 		FreeSlots:      uint32(free),
 		MaxStorageRuns: uint32(cfg.Pacing.MaxStorageRuns), BusyStorageRuns: busy,
+		SyncedTasks: syncedRefs,
 	})
 	if err != nil {
 		log.Warnf("archive worker pull failed: %v", err)
@@ -594,8 +603,8 @@ func (a *App) maintainOnce(ctx context.Context) {
 			return
 		}
 	}
-	// 用这次心跳自己的结果：缓存的旧列表可能早已过时。
-	if keep := a.heartbeatOnce(ctx); keep == nil {
+	// 用这次心跳自己的结果：缓存的旧列表可能早已过时；只在对账时请求任务列表，常规 10s 心跳不查任务表。
+	if keep := a.heartbeatOnce(ctx, true); keep == nil {
 		log.Warnf("archive worker maintenance: 没有拿到当前任务列表，跳过对账")
 	} else if dropped, err := a.opts.Staging.Reconcile(ctx, keep); err != nil {
 		log.Warnf("archive worker reconcile staging: %v", err)

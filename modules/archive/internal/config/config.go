@@ -28,7 +28,7 @@ type Config struct {
 	Retention       RetentionConfig `yaml:"retention"`
 	// StagingRetention 是 worker 暂存区保留最近多久的数据，之后分区定稿。
 	StagingRetention time.Duration `yaml:"staging_retention"`
-	// Spaces 是各空间的时区与本地收盘时刻；没有配置的空间按 UTC、全天交易处理。
+	// Spaces 是各空间的本地收盘时刻；空间时区统一由 Storage 的空间元数据提供，没有配置的空间按全天交易处理。
 	Spaces map[string]SpaceConfig `yaml:"spaces"`
 }
 
@@ -48,9 +48,8 @@ type RetentionConfig struct {
 	Other time.Duration `yaml:"other"`
 }
 
-// SpaceConfig 描述一个空间的交易日历属性。
+// SpaceConfig 描述一个空间的归档交易收盘时刻（时区从 Storage 空间元数据获取）。
 type SpaceConfig struct {
-	TZ         string `yaml:"tz"`
 	LocalClose string `yaml:"local_close"`
 }
 
@@ -92,10 +91,9 @@ func Default() *Config {
 		Retention:        RetentionConfig{Other: 90 * 24 * time.Hour},
 		StagingRetention: 72 * time.Hour,
 		Spaces: map[string]SpaceConfig{
-			"crypto":  {TZ: "UTC"},
-			"stockcn": {TZ: "Asia/Shanghai", LocalClose: "15:00"},
-			"stockhk": {TZ: "Asia/Hong_Kong", LocalClose: "16:10"},
-			"stockus": {TZ: "America/New_York", LocalClose: "16:00"},
+			"stockcn": {LocalClose: "15:00"},
+			"stockhk": {LocalClose: "16:10"},
+			"stockus": {LocalClose: "16:00"},
 		},
 	}
 }
@@ -136,9 +134,6 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(space) != strings.ToLower(strings.TrimSpace(space)) || space == "" {
 			return fmt.Errorf("spaces 的键必须是小写空间 ID: %q", space)
 		}
-		if _, err := time.LoadLocation(cfg.TZ); err != nil || cfg.TZ == "" {
-			return fmt.Errorf("spaces.%s.tz %q 无效", space, cfg.TZ)
-		}
 		if cfg.LocalClose != "" {
 			if _, err := time.Parse("15:04", cfg.LocalClose); err != nil {
 				return fmt.Errorf("spaces.%s.local_close %q 必须是 HH:MM", space, cfg.LocalClose)
@@ -148,12 +143,12 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// Space 返回空间的时区与本地收盘时刻；没有配置时按 UTC、全天交易。
+// Space 返回空间的本地收盘时刻配置；没有配置时按全天交易处理。
 func (c *Config) Space(spaceID string) SpaceConfig {
 	if cfg, ok := c.Spaces[strings.ToLower(strings.TrimSpace(spaceID))]; ok {
 		return cfg
 	}
-	return SpaceConfig{TZ: "UTC"}
+	return SpaceConfig{}
 }
 
 // OpenGateway 载入 mgr 的进程级签名身份与服务目录。

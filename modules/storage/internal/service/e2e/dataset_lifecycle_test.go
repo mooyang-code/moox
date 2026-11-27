@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
@@ -22,28 +21,21 @@ import (
 // primaryProcess 按 cmd/server 的 primary 角色装配：元数据、元数据缓存、Pebble 库、PrimaryStore 与 Metadata 服务在同一进程。
 type primaryProcess struct {
 	store    *pebble.Store
-	cache    *metacache.Store
+	cache    *metacache.DatasetCache
 	primary  *primarystore.Service
 	metadata *catalog.Service
 }
 
 func newPrimaryProcess(t *testing.T, ctx context.Context, meta coremetadata.Store, reader coremetadata.Reader) *primaryProcess {
 	t.Helper()
-	cache, err := metacache.New(ctx, reader, metacache.Options{
-		RefreshInterval:    metacache.RefreshDisabled,
-		RefreshTimeout:     5 * time.Second,
-		InitialLoadTimeout: 5 * time.Second,
-	})
+	cache, err := metacache.NewDatasetCache(ctx, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 	store, err := pebble.Open(pebble.Options{
-		Path: filepath.Join(t.TempDir(), "pebble"),
-		DatasetExists: func(spaceID, datasetID string) bool {
-			_, err := cache.GetDataset(context.Background(), spaceID, datasetID)
-			return err == nil
-		},
+		Path:          filepath.Join(t.TempDir(), "pebble"),
+		DatasetExists: cache.HasDataset,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +199,7 @@ func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Servi
 	return rsp
 }
 
-// countingPanicStore guards the Reader methods used by snapshotcache. The
+// countingPanicStore guards the Reader methods used by DatasetCache. The
 // cache is the only metadata reader given to PrimaryStore; enabling the guard
 // after publication therefore proves that runtime reads do not reach SQLite.
 type countingPanicStore struct {

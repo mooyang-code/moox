@@ -7,27 +7,37 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type remoteSSH struct {
 	setupssh.Client
-	ran    [][]string
-	stdout string
-	closed bool
+	ran      [][]string
+	stdout   string
+	stderr   string
+	err      error
+	deadLine time.Time
+	hasDL    bool
+	closed   bool
 }
 
-func (r *remoteSSH) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
+func (r *remoteSSH) Run(ctx context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	r.ran = append(r.ran, argv)
-	return setupssh.Result{Stdout: r.stdout}, nil
+	r.deadLine, r.hasDL = ctx.Deadline()
+	return setupssh.Result{Stdout: r.stdout, Stderr: r.stderr}, r.err
 }
 func (r *remoteSSH) Close() error { r.closed = true; return nil }
 
@@ -155,4 +165,80 @@ func TestHostRemoteExplainsOutboundHostsAreLANOnly(t *testing.T) {
 	_, err = remote.HealthProbe()(t.Context(), "storage", 20210, "/readyz")
 	require.ErrorIs(t, err, doctorcli.ErrNodeUnreachable)
 	assert.NotContains(t, err.Error(), "局域网", "直连主机不加出站提示")
+}
+
+func TestHostRemoteProbeWritableSetsTimeoutSurfacesStderrAndDistinguishesErrors(t *testing.T) {
+	remote, ssh, _ := hostRemoteFixture()
+	defer remote.Close()
+
+	// 1. 远端执行带超时且将 stderr 最后一行非空信息拼进错误。
+	ssh.stderr = "Traceback...\nprobe path is not an existing directory\n\n"
+	ssh.err = errors.New("exit status 1")
+	err := remote.ProbeWritable("factor")(t.Context(), "/data/moox", "data/archive-worker")
+	require.ErrorContains(t, err, "exit status 1")
+	require.ErrorContains(t, err, "probe path is not an existing directory")
+	require.True(t, ssh.hasDL, "远端目录可写探测必须设置超时")
+	require.LessOrEqual(t, time.Until(ssh.deadLine), remoteWritableProbeTimeout+time.Second)
+
+	// 2. 用本机 python3 实测 remoteWritableProbeScript：正常可写、目录缺失、越界符号链接三类分支区分明确。
+	python, lookErr := exec.LookPath("python3")
+	if lookErr != nil {
+		t.Skip("本机没有 python3")
+	}
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "data", "archive-worker"), 0o700))
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "data", "escaped")))
+
+	runScript := func(rel string) (string, error) {
+		cmd := exec.Command(python, "-I", "-c", remoteWritableProbeScript, root, rel)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := runScript("data/archive-worker")
+	require.NoError(t, err, out)
+	entries, err := os.ReadDir(filepath.Join(root, "data", "archive-worker"))
+	require.NoError(t, err)
+	require.Empty(t, entries, "探测临时文件必须清理干净")
+
+	out, err = runScript("data/missing-component")
+	require.Error(t, err)
+	require.Contains(t, out, "probe path is not an existing directory")
+
+	out, err = runScript("data/escaped")
+	require.Error(t, err)
+	require.Contains(t, out, "probe path escapes release root")
+}
+
+func TestHostRemoteReadFileReadsLocalDirectlyWithoutSwallowingNotExist(t *testing.T) {
+	remote, ssh, _ := hostRemoteFixture()
+	defer remote.Close()
+
+	// 本机缺 version.json 必须返回 ErrNotExist，让 bootstrap 报“读不到部署记录”而不是“不是合法的 JSON”。
+	root := t.TempDir()
+	_, err := remote.ReadFile(t.Context(), "control", filepath.Join(root, "version.json"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	policyPath := filepath.Join(root, "dataset-health-policy.yaml")
+	require.NoError(t, os.WriteFile(policyPath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    minute_lateness: 30s\n    hour_lateness: 1m\n  overrides: []\n"), 0o600))
+	report, err := doctorcli.RunBootstrap(t.Context(), doctorcli.BootstrapOptions{
+		NodeID:                  "control",
+		LocalNodeID:             "control",
+		DeployRoot:              root,
+		DatasetHealthPolicyPath: policyPath,
+		CheckIDs:                []string{"bootstrap.release_contract"},
+		ReadFile:                remote.ReadFile,
+	})
+	require.NoError(t, err)
+	check := report.CheckByID("bootstrap.release_contract")
+	require.NotNil(t, check)
+	require.Equal(t, core.StatusFail, check.Status)
+	require.Contains(t, check.Error, "读不到部署记录")
+	require.NotContains(t, check.Error, "不是合法的 JSON")
+
+	// 远端节点经 SSH 读取，并透传错误。
+	ssh.stdout = `{"version":"dev"}`
+	data, err := remote.ReadFile(t.Context(), "factor", "/data/moox/version.json")
+	require.NoError(t, err)
+	require.Equal(t, `{"version":"dev"}`, string(data))
 }

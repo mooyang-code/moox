@@ -21,7 +21,7 @@
 | 控制机 | `admin` `monitor` `collector` `factor-mgr` `archive-mgr` `strategy` |
 | 存储机 | `storage-primary` `storage-view`（各一份二进制）`eventbus` |
 | 海外机 | `trade` `egress-proxy` `collector-stream` |
-| 因子机 | `factor-engine` `archive-worker`，没配外部对象存储时还有内置的 `seaweedfs`（二进制 `weed`） |
+| 因子机 | `factor-engine` `archive-worker` |
 
 组件要哪些二进制与配套命令行、启动参数、配置模板、启动顺序都登记在服务目录（`packages/servicecatalog/catalog.yaml` 的 `binary`、`tools`、`args`、`config_files`、`after`）。
 
@@ -42,7 +42,7 @@ $CLI setup status --file <moox.toml> --host <主机>
 
 - `--binary-dir` 里要有这次部署的每个组件的二进制和配套命令行（例如 `admin` 要 `moox-admin` 与 `moox-admin-cli`），缺了会报 `binary_missing` 并指出是哪个文件。
   构建目标和组件基本同名：`host-gateway`、`admin`、`collector`、`factor-mgr`、`strategy` 目标同时产出对应的 `-cli`，`hostagent` 目标产出 `moox-host-agent`，
-  `storage` 目标产出两个 Storage 二进制，`storage-cli` 是独立目标，`archive-worker` 目标带上 `weed`。
+  `storage` 目标产出两个 Storage 二进制，`storage-cli` 是独立目标，`archive-worker` 目标产出 `moox-archive-worker`。
 - 部署按二进制摘要和渲染出的配置判断变化：**只有变了的组件会重启**，没变的只核对在运行。结果里每个组件是 `started`、`restarted`、`unchanged` 或 `disabled`（`moox.toml` 声明停用的，只更新文件、单元停掉）。
 - 部署最后等这次装的组件就绪（本机 `/readyz`），到时限没就绪会列出来并返回失败：先看 `setup logs --host <主机> --component <组件> --journal`。
 - 控制机每次部署都会先执行 `moox-admin-cli bootstrap`（CA、主密钥、已登记的公钥只建不改；主机与部署连同启停状态按 `moox.toml` 整份覆盖），再执行 `eventbus-credentials ensure` 与 `user ensure`（EventBus 凭据、管理员只建不改）；其余主机每次先把登记同步到 Admin，再向控制机要身份材料。

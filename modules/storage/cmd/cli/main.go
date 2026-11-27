@@ -100,14 +100,14 @@ func registerCommonFlags(fs *flag.FlagSet, opts *commandOptions) {
 }
 
 func loadStorage(configPath string) (storageconfig.StorageConfig, error) {
-	cfg, err := loadRuntimeConfig(configPath)
+	loaded, err := storageconfig.Load(configPath)
 	if err != nil {
-		return cfg.Storage, err
+		return storageconfig.StorageConfig{}, err
 	}
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
-		cfg.Storage.ApplyHomeRoot(root)
+		loaded.Storage.ApplyHomeRoot(root)
 	}
-	return cfg.Storage, nil
+	return loaded.Storage, nil
 }
 
 func metadataDBPath(storage storageconfig.StorageConfig) string {
@@ -168,16 +168,4 @@ func exitCode(err error) int {
 		return 0
 	}
 	return 1
-}
-
-func loadRuntimeConfig(configPath string) (storageconfig.RuntimeConfig, error) {
-	var cfg storageconfig.RuntimeConfig
-	if configPath == "" {
-		cfg.ApplyDefaults()
-		return cfg, nil
-	}
-	if err := storageconfig.NewConfigLoader(filepath.Dir(configPath)).LoadConfigWithDefaults(filepath.Base(configPath), &cfg, cfg.ApplyDefaults); err != nil {
-		return cfg, fmt.Errorf("load storage config %s: %w", configPath, err)
-	}
-	return cfg, nil
 }

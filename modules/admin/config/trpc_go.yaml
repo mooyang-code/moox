@@ -22,20 +22,6 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.infra.Auth
-      ip: 127.0.0.1
-      port: 11100
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 10000
-    - name: trpc.moox.ops.Ssh
-      ip: 127.0.0.1
-      port: 11106
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 30000
     - name: trpc.moox.ops.SecretMgr
       ip: 127.0.0.1
       port: 11108

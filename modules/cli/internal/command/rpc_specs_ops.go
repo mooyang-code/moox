@@ -44,7 +44,6 @@ func init() {
 		rpcSpec{Path: []string{"host", "catalog"}, Short: "服务目录：组件、端口与服务", Service: sysDeploySvc, Method: "GetCatalog", NoSpace: true},
 
 		rpcSpec{Path: []string{"host", "agent", "status"}, HostRequired: true, Short: "主机代理的采集与上报状态", Service: hostAgentSvc, Method: "GetStatus", NoSpace: true, Host: true},
-		rpcSpec{Path: []string{"host", "agent", "snapshot"}, HostRequired: true, Short: "主机代理最近一次的资源快照", Service: hostAgentSvc, Method: "GetSnapshot", NoSpace: true, Host: true},
 		rpcSpec{Path: []string{"host", "agent", "run-once"}, HostRequired: true, Short: "让主机代理立即采集并上报一次", Service: hostAgentSvc, Method: "RunOnce", NoSpace: true, Host: true},
 
 		rpcSpec{Path: []string{"secret", "list"}, Short: "列出密钥（只含打码后的信息）", Service: secretMgrSvc, Method: "ListSecrets", NoSpace: true,

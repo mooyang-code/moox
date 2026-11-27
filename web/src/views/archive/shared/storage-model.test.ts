@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ComponentDeployment, DeploymentHost } from "@/api/admin/types";
+import type { ArchiveRemoteState } from "@/api/archive";
 import {
   archiveQueryFor,
   dirNameError,
@@ -7,7 +8,6 @@ import {
   diskStatus,
   downloadBlockedReason,
   hostText,
-  isBuiltinObjectStore,
   parseArchiveQuery,
   partitionPathPreview,
   recentCellText,
@@ -18,13 +18,28 @@ import {
 const GiB = 1024 ** 3;
 
 describe("分区下载按钮", () => {
-  it("只有远端已校验可下载，其余给出原因", () => {
+  it("远端已校验或本地已导出可下载，未知状态与未就绪给出原因", () => {
     expect(downloadBlockedReason({ remote_state: "verified" })).toBe("");
     expect(downloadBlockedReason({ remote_state: "pending" })).toBe("远端副本还没有上传或校验");
     expect(downloadBlockedReason({ remote_state: "pending", remote_key: "k" })).toBe("远端只有旧版本，当前版本还没有上传或校验");
     expect(downloadBlockedReason({ remote_state: "failed", remote_error: "超时" })).toBe("远端副本上传失败：超时");
-    expect(downloadBlockedReason({ remote_state: "none" })).toBe("还没有远端副本");
-    expect(downloadBlockedReason({ remote_state: "off" })).toContain("没有配置对象存储");
+    expect(downloadBlockedReason({ remote_state: "none" })).toBe("分区还没有导出文件");
+    expect(downloadBlockedReason({ remote_state: "off", file_path: "crypto/collect/x/2026/20261107.csv.gz" })).toBe("");
+    expect(downloadBlockedReason({ remote_state: "off", file_path: "" })).toBe("分区还没有导出文件");
+    expect(downloadBlockedReason({ remote_state: "off" })).toBe("分区还没有导出文件");
+    expect(downloadBlockedReason({ file_path: "crypto/collect/x/2026/20261107.csv.gz" })).toBe("");
+    expect(
+      downloadBlockedReason({
+        remote_state: "" as ArchiveRemoteState,
+        file_path: "crypto/collect/x/2026/20261107.csv.gz"
+      })
+    ).toBe("");
+    expect(
+      downloadBlockedReason({
+        remote_state: "unexpected" as ArchiveRemoteState,
+        file_path: "crypto/collect/x/2026/20261107.csv.gz"
+      })
+    ).toBe("当前状态不可下载");
   });
 });
 
@@ -95,15 +110,6 @@ describe("磁盘", () => {
     expect(diskStatus({ disk_total_bytes: 100, disk_free_bytes: 0 })?.insufficient).toBe(false);
     expect(diskStatus({ disk_total_bytes: 0 })).toBeNull();
     expect(diskStatus(undefined)).toBeNull();
-  });
-});
-
-describe("对象存储", () => {
-  it("内置 SeaweedFS 按地址判断", () => {
-    expect(isBuiltinObjectStore("127.0.0.1:11473")).toBe(true);
-    expect(isBuiltinObjectStore("http://127.0.0.1:11473/")).toBe(true);
-    expect(isBuiltinObjectStore("cos.ap-shanghai.myqcloud.com")).toBe(false);
-    expect(isBuiltinObjectStore("")).toBe(false);
   });
 });
 

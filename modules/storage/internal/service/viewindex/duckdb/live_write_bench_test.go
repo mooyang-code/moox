@@ -83,9 +83,8 @@ func TestLiveWriteBaseline(t *testing.T) {
 				fields = append(fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(s) + 0.5}}})
 			}
 			writes = append(writes, viewindex.RowWrite{
-				Key:        viewindex.RowKey{Key: duckRowKey("space", schema.DatasetID, fmt.Sprintf("SYM%04d-USDT", s), "1m", barTime(bar).Format(time.RFC3339Nano), "")},
-				Fields:     fields,
-				Attributes: map[string]*pb.TypedValue{"factor.source_hash": {Value: &pb.TypedValue_StringValue{StringValue: "sha256:abcdef"}}},
+				Key:    viewindex.RowKey{Key: duckRowKey("space", schema.DatasetID, fmt.Sprintf("SYM%04d-USDT", s), "1m", barTime(bar).Format(time.RFC3339Nano), "")},
+				Fields: fields,
 			})
 		}
 		return writes
@@ -116,8 +115,7 @@ func TestLiveWriteBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	namesWith := append(append([]string{"subject_id", "freq", "data_time", "series_tag"}, factorCols...), internalAttributesColumn)
-	namesNoAttr := append([]string{"subject_id", "freq", "data_time", "series_tag"}, factorCols...)
+	names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, factorCols...)
 	runRaw := func(name string, bar int, names []string, chunk int, build func(names []string, rows int) string) {
 		timeIt(name, func() error {
 			writes := factorWrites(bar)
@@ -147,16 +145,14 @@ func TestLiveWriteBaseline(t *testing.T) {
 	plain := func(names []string, rows int) string {
 		return upsertSQLPlainInsert(names, rows)
 	}
-	runRaw("D1 现状 SQL（256 行/条，含 JSON 属性）", bars+20, namesWith, 256, upsert)
-	runRaw("D2 同上但不带 JSON 属性列", bars+21, namesNoAttr, 256, upsert)
-	runRaw("D3 纯 INSERT（无 ON CONFLICT），含 JSON", bars+22, namesWith, 256, plain)
-	runRaw("D4 纯 INSERT，不带 JSON", bars+23, namesNoAttr, 256, plain)
-	runRaw("D5 UPSERT 每条 32 行", bars+24, namesWith, 32, upsert)
-	runRaw("D6 UPSERT 每条 500 行（一条语句）", bars+25, namesWith, 500, upsert)
-	runRaw("D7 UPSERT 每条 1 行", bars+26, namesWith, 1, upsert)
+	runRaw("D1 UPSERT（256 行/条）", bars+20, names, 256, upsert)
+	runRaw("D2 纯 INSERT（无 ON CONFLICT）", bars+22, names, 256, plain)
+	runRaw("D3 UPSERT 每条 32 行", bars+24, names, 32, upsert)
+	runRaw("D4 UPSERT 每条 500 行（一条语句）", bars+25, names, 500, upsert)
+	runRaw("D5 UPSERT 每条 1 行", bars+26, names, 1, upsert)
 	// 扫描每条语句的行数，找出拐点。
 	for i, chunk := range []int{4, 8, 16, 24, 32, 48, 64, 100, 128} {
-		runRaw(fmt.Sprintf("E 扫描 UPSERT 每条 %d 行", chunk), bars+30+i, namesWith, chunk, upsert)
+		runRaw(fmt.Sprintf("E 扫描 UPSERT 每条 %d 行", chunk), bars+30+i, names, chunk, upsert)
 	}
 }
 

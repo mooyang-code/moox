@@ -26,7 +26,7 @@ func TestDatasetColumnNameRules(t *testing.T) {
 	for _, name := range []string{"close", "bias__20", "__params", "Close_1"} {
 		require.NoError(t, validateDatasetColumnName(name), name)
 	}
-	for _, name := range []string{"subject_id", "Data_Time", "series_tag", "freq", "__moox_attributes", "1close", "a.b", "a-b", ""} {
+	for _, name := range []string{"subject_id", "Data_Time", "series_tag", "freq", "1close", "a.b", "a-b", ""} {
 		require.Error(t, validateDatasetColumnName(name), name)
 	}
 }

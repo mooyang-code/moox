@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -32,7 +32,7 @@ func newMemSecrets(records ...model.Secret) *memSecrets {
 	return m
 }
 
-func (m *memSecrets) CreateSecret(_ context.Context, secret *model.Secret) error {
+func (m *memSecrets) Create(_ context.Context, secret *model.Secret) error {
 	if m.createErr != nil {
 		return m.createErr
 	}
@@ -40,17 +40,17 @@ func (m *memSecrets) CreateSecret(_ context.Context, secret *model.Secret) error
 	return nil
 }
 
-func (m *memSecrets) UpdateSecret(_ context.Context, secret *model.Secret) error {
+func (m *memSecrets) Update(_ context.Context, secret *model.Secret) error {
 	m.byID[secret.SecretID] = *secret
 	return nil
 }
 
-func (m *memSecrets) DeleteSecret(_ context.Context, secretID string) error {
+func (m *memSecrets) Delete(_ context.Context, secretID string) error {
 	delete(m.byID, secretID)
 	return nil
 }
 
-func (m *memSecrets) GetSecret(_ context.Context, secretID string) (*model.Secret, error) {
+func (m *memSecrets) FindByID(_ context.Context, secretID string) (*model.Secret, error) {
 	record, ok := m.byID[secretID]
 	if !ok {
 		return nil, gorm.ErrRecordNotFound
@@ -58,7 +58,7 @@ func (m *memSecrets) GetSecret(_ context.Context, secretID string) (*model.Secre
 	return &record, nil
 }
 
-func (m *memSecrets) ListSecrets(_ context.Context, offset, limit int, _ *dao.SecretFilters) ([]model.Secret, int64, error) {
+func (m *memSecrets) List(_ context.Context, offset, limit int, _ *dao.SecretFilters) ([]model.Secret, int64, error) {
 	ids := make([]string, 0, len(m.byID))
 	for id := range m.byID {
 		ids = append(ids, id)
@@ -71,7 +71,7 @@ func (m *memSecrets) ListSecrets(_ context.Context, offset, limit int, _ *dao.Se
 	return out, int64(len(ids)), nil
 }
 
-func (m *memSecrets) ToggleSecretStatus(_ context.Context, secretID, status string) error {
+func (m *memSecrets) UpdateStatus(_ context.Context, secretID, status string) error {
 	record := m.byID[secretID]
 	record.Status = status
 	m.byID[secretID] = record
@@ -80,8 +80,8 @@ func (m *memSecrets) ToggleSecretStatus(_ context.Context, secretID, status stri
 
 func userCtx() context.Context {
 	ctx := trpc.BackgroundContext()
-	trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte("u-1"))
-	trpc.SetMetaData(ctx, authmodel.CtxUsername, []byte("ops"))
+	trpc.SetMetaData(ctx, auth.CtxUserID, []byte("u-1"))
+	trpc.SetMetaData(ctx, auth.CtxUsername, []byte("ops"))
 	return ctx
 }
 

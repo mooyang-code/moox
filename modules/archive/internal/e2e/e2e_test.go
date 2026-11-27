@@ -28,7 +28,11 @@ import (
 )
 
 // inProcess 让 worker 的 manager.Client 直接调用 mgr 的 ArchiveWorker 实现，行为与网关客户端一致（冲突映射成 ErrConflict）。
-type inProcess struct{ svc *service.WorkerService }
+type inProcess struct {
+	svc        *service.WorkerService
+	lastSynced int
+	lastRegs   int
+}
 
 func check(info *commonpb.RetInfo) error {
 	switch info.GetCode() {
@@ -41,19 +45,25 @@ func check(info *commonpb.RetInfo) error {
 	}
 }
 
-func (p inProcess) Heartbeat(ctx context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
+func (p *inProcess) Heartbeat(ctx context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
 	rsp, _ := p.svc.ArchiveWorkerHeartbeat(ctx, req)
 	return rsp, check(rsp.GetRetInfo())
 }
-func (p inProcess) Pull(ctx context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error) {
+func (p *inProcess) Pull(ctx context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error) {
 	rsp, _ := p.svc.PullArchiveRun(ctx, req)
+	p.lastSynced = len(req.GetSyncedTasks())
+	if len(rsp.GetRuns()) > 0 {
+		p.lastRegs = len(rsp.GetRuns()[0].GetRegisteredPartitions())
+	} else {
+		p.lastRegs = 0
+	}
 	return rsp, check(rsp.GetRetInfo())
 }
-func (p inProcess) Progress(ctx context.Context, req *archivepb.ReportArchiveRunProgressReq) (*archivepb.ReportArchiveRunProgressRsp, error) {
+func (p *inProcess) Progress(ctx context.Context, req *archivepb.ReportArchiveRunProgressReq) (*archivepb.ReportArchiveRunProgressRsp, error) {
 	rsp, _ := p.svc.ReportArchiveRunProgress(ctx, req)
 	return rsp, check(rsp.GetRetInfo())
 }
-func (p inProcess) Complete(ctx context.Context, req *archivepb.CompleteArchiveRunReq) (*archivepb.CompleteArchiveRunRsp, error) {
+func (p *inProcess) Complete(ctx context.Context, req *archivepb.CompleteArchiveRunReq) (*archivepb.CompleteArchiveRunRsp, error) {
 	rsp, _ := p.svc.CompleteArchiveRun(ctx, req)
 	return rsp, check(rsp.GetRetInfo())
 }
@@ -67,6 +77,8 @@ func (datasets) GetDataset(_ context.Context, space, dataset string) (service.Da
 	return service.Dataset{SpaceID: space, DatasetID: dataset, Name: "现货分钟K线", DataKind: "time_series", Freq: "1m", Status: "active", Retention: "forever",
 		DataSourceID: "binance", Attributes: map[string]string{"dataset_role": "raw_collection", "market_type": "spot"}}, nil
 }
+
+func (datasets) GetSpaceTimezone(context.Context, string) (string, error) { return "UTC", nil }
 
 type fakeStorage struct {
 	rows     []staging.Row
@@ -139,9 +151,10 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	wcfg := workerconfig.Default()
 	wcfg.Worker.WorkerID, wcfg.Worker.RootDir = "archive-worker@e2e", root
 	files := export.Files{Root: root, Format: export.FormatCSV}
+	link := &inProcess{svc: svc.Worker()}
 	newWorker := func() *app.App {
 		return app.New(app.Options{
-			Config: wcfg, Manager: inProcess{svc.Worker()}, Staging: stage, Files: files, Version: "e2e", Now: clock,
+			Config: wcfg, Manager: link, Staging: stage, Files: files, Version: "e2e", Now: clock,
 			Runner:    &runner.Runner{Source: storage, Staging: stage, Files: files, Pace: instant{}, PageRows: 2000, Now: clock, ReadAttempts: 1},
 			DiskUsage: func(string) (uint64, uint64, uint64, error) { return 1 << 40, 1 << 38, 1 << 39, nil },
 		})
@@ -209,6 +222,9 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	requestsBefore := len(storage.requests)
 	runOnce()
+	if link.lastSynced != 1 || link.lastRegs != 0 {
+		t.Fatalf("稳态 follow 应携带 synced_tasks 且 mgr 不重传 registered_partitions: synced=%d regs=%d", link.lastSynced, link.lastRegs)
+	}
 	if hidden, _ := svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto"}); len(hidden.GetRuns()) != 0 {
 		t.Fatalf("成功的 follow 默认不列出: %v", hidden.GetRuns())
 	}
@@ -254,6 +270,9 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	runOnce()
+	if link.lastSynced != 0 || link.lastRegs != 1 {
+		t.Fatalf("暂存库丢失后应按需下发全部已登记分区: synced=%d regs=%d", link.lastSynced, link.lastRegs)
+	}
 	rebuilt, _ := svc.Mgr().GetArchivePartition(ctx, &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
 	if rp := rebuilt.GetPartition(); rp.GetRowCount() != 481 || rp.GetSubjectCount() != 3 || rp.GetExportCount() != 2 || rp.GetFilePath() != p.GetFilePath() {
 		t.Fatalf("暂存库重建后: %v", rp)

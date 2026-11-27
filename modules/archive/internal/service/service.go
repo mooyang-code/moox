@@ -38,16 +38,29 @@ type Dataset struct {
 	Revision  uint64
 }
 
-// DatasetProvider 读取数据集信息；数据集不存在时返回 ErrDatasetNotFound。
+// DatasetProvider 读取数据集与空间信息；数据集或空间不存在时分别返回 ErrDatasetNotFound、ErrSpaceNotFound。
 type DatasetProvider interface {
 	GetDataset(ctx context.Context, spaceID, datasetID string) (Dataset, error)
+	GetSpaceTimezone(ctx context.Context, spaceID string) (string, error)
 }
 
 // maxListedTasks 是一次列出全部任务时的上限（单用户系统的任务数远小于它）。
 const maxListedTasks = 100000
 
-// ErrDatasetNotFound 表示数据集在 Storage 中不存在。
-var ErrDatasetNotFound = errors.New("dataset not found")
+// spaceTZCacheTTL 是空间时区缓存的有效期（空间时区几乎不变，5 分钟刷新一次，Storage 抖动时沿用旧值）。
+const spaceTZCacheTTL = 5 * time.Minute
+
+var (
+	// ErrDatasetNotFound 表示数据集在 Storage 中不存在。
+	ErrDatasetNotFound = errors.New("dataset not found")
+	// ErrSpaceNotFound 表示空间在 Storage 中不存在。
+	ErrSpaceNotFound = errors.New("space not found")
+)
+
+type spaceTZEntry struct {
+	tz        string
+	fetchedAt time.Time
+}
 
 // Service 持有 ArchiveMgr 与 ArchiveWorker 共用的状态。
 type Service struct {
@@ -62,6 +75,7 @@ type Service struct {
 	lastRefresh time.Time
 	lastCleanup time.Time
 	lastVacuum  time.Time
+	spaceTZ     map[string]spaceTZEntry
 }
 
 // Option 调整 Service。
@@ -116,13 +130,58 @@ func notFound(err error) *commonpb.RetInfo {
 // fail 把 store 错误映射成返回码。
 func fail(err error) *commonpb.RetInfo {
 	switch {
-	case errors.Is(err, store.ErrNotFound), errors.Is(err, ErrDatasetNotFound):
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, ErrDatasetNotFound), errors.Is(err, ErrSpaceNotFound):
 		return notFound(err)
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrHasPartitions):
 		return conflict(err)
 	default:
 		return inner(err)
 	}
+}
+
+// spaceTimezone 从 Storage 的空间元数据读取空间时区并按 spaceTZCacheTTL 缓存；
+// Storage 临时不可用且有缓存时沿用旧值，避免抖动中断任务下发与总览。
+func (s *Service) spaceTimezone(ctx context.Context, spaceID string) (string, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return "UTC", nil
+	}
+	now := s.clock()
+	s.mu.Lock()
+	entry, hasCached := s.spaceTZ[spaceID]
+	s.mu.Unlock()
+	if hasCached && now.Sub(entry.fetchedAt) < spaceTZCacheTTL {
+		return entry.tz, nil
+	}
+	tz, err := s.datasets.GetSpaceTimezone(ctx, spaceID)
+	if err != nil {
+		if errors.Is(err, ErrSpaceNotFound) {
+			if hasCached {
+				s.mu.Lock()
+				delete(s.spaceTZ, spaceID)
+				s.mu.Unlock()
+			}
+			return "", err
+		}
+		if hasCached {
+			return entry.tz, nil
+		}
+		return "", err
+	}
+	tz = strings.TrimSpace(tz)
+	if tz == "" {
+		tz = "UTC"
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return "", fmt.Errorf("空间 %s 的时区 %q 无效: %w", spaceID, tz, err)
+	}
+	s.mu.Lock()
+	if s.spaceTZ == nil {
+		s.spaceTZ = map[string]spaceTZEntry{}
+	}
+	s.spaceTZ[spaceID] = spaceTZEntry{tz: tz, fetchedAt: now}
+	s.mu.Unlock()
+	return tz, nil
 }
 
 const spaceIDMetadata = "X-Space-Id"

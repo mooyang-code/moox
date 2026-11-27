@@ -30,14 +30,6 @@ data_api:
   max_bytes_per_second: 2MB # 全部下载共享，与 pacing 的带宽分开计
 maintenance:
   at: "04:17:43" # 每天维护时刻（本机时区）
-object_store:
-  bucket: moox-archive
-  credentials_file: /data/moox/secrets/archive-object-store.env
-  endpoint: 127.0.0.1:11473
-  prefix: moox-archive/
-  region: us-east-1
-  url_style: path
-  use_tls: false
 
 # 对象存储副本（可选，整段省略表示不使用）：每次导出后把分区文件单次 PUT 到标准 S3 接口的对象存储，
 # 读回已定稿分区时本地缺文件或校验不符就从这里取回。只用标准 S3 接口，后端可替换（COS、R2、自建）。

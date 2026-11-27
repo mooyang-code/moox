@@ -1,12 +1,12 @@
 {
   "note": "批 4 T0 记下的服务目录访问控制基线：callers 是 Allowed(调用方, 服务, 方法) 为真的“服务/方法”集合，principals 是 PrincipalAllowed 为真的集合；host-gateway 是每台主机的网关（签名主机另由签名头给出）。改服务目录后重新生成并人工看差异，访问控制不得变宽。",
   "summary": {
-    "components": 17,
+    "components": 16,
     "services": 24,
-    "methods": 298,
-    "read_only_methods": 138,
-    "retryable_methods": 140,
-    "callers": 21,
+    "methods": 297,
+    "read_only_methods": 137,
+    "retryable_methods": 139,
+    "callers": 20,
     "principals": 2
   },
   "services": [
@@ -44,7 +44,6 @@
     {
       "path": "trpc.moox.admin.Setup",
       "component": "admin",
-      "console_name": "setup",
       "methods": [
         {
           "name": "ApplySetup",
@@ -933,22 +932,16 @@
       "component": "host-agent",
       "methods": [
         {
-          "name": "GetSnapshot",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetStatus",
           "read_only": true,
           "retryable": true,
-          "timeout_ms": 5000
+          "timeout_ms": 30000
         },
         {
           "name": "RunOnce",
           "read_only": false,
           "retryable": false,
-          "timeout_ms": 5000
+          "timeout_ms": 30000
         }
       ]
     },
@@ -1962,7 +1955,8 @@
   "callers": {
     "admin": [],
     "archive-mgr": [
-      "trpc.moox.storage.Metadata/GetDataset"
+      "trpc.moox.storage.Metadata/GetDataset",
+      "trpc.moox.storage.Metadata/GetSpace"
     ],
     "archive-worker": [
       "trpc.moox.archive.ArchiveWorker/ArchiveWorkerHeartbeat",
@@ -2023,8 +2017,6 @@
     ],
     "console": [
       "trpc.moox.admin.ActivityLog/ListActivityLogs",
-      "trpc.moox.admin.Setup/ApplySetup",
-      "trpc.moox.admin.Setup/GetSetupStatus",
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
       "trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
@@ -2309,13 +2301,6 @@
       "trpc.moox.admin.GatewayControl/PullSnapshot"
     ],
     "monitor": [
-      "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
-      "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
-      "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
-      "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
-      "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
-      "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
-      "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
       "trpc.moox.collector.CollectMgr/GetTaskResultInventory",
       "trpc.moox.collector.CollectMgr/ListTagSyncStatus",
       "trpc.moox.ops.SysDeploy/GetCatalog",
@@ -2462,7 +2447,6 @@
       "trpc.moox.factor.FactorMgr/UpdateFactor",
       "trpc.moox.factor.FactorMgr/UpsertFactorCategory",
       "trpc.moox.factor.FactorMgr/ValidateFactorSpec",
-      "trpc.moox.hostagent.HostAgentMgr/GetSnapshot",
       "trpc.moox.hostagent.HostAgentMgr/GetStatus",
       "trpc.moox.hostagent.HostAgentMgr/RunOnce",
       "trpc.moox.monitor.MonitorMgr/AddNotificationChannel",
@@ -2604,7 +2588,6 @@
     ],
     "moox-skill": [],
     "scf-collector": [],
-    "seaweedfs": [],
     "storage-primary": [],
     "storage-view": [],
     "strategy": [
@@ -2616,13 +2599,8 @@
       "trpc.moox.factor.FactorMgr/BindFactorTask",
       "trpc.moox.factor.FactorMgr/DeleteBoundTask",
       "trpc.moox.factor.FactorMgr/GetFactor",
-      "trpc.moox.factor.FactorMgr/GetFactorParams",
       "trpc.moox.factor.FactorMgr/GetFactorTask",
-      "trpc.moox.factor.FactorMgr/GetStatus",
-      "trpc.moox.factor.FactorMgr/ListFactorCategories",
       "trpc.moox.factor.FactorMgr/ListFactorTasks",
-      "trpc.moox.factor.FactorMgr/ListFactors",
-      "trpc.moox.factor.FactorMgr/ListRecalcJobs",
       "trpc.moox.factor.FactorMgr/SubmitFactorParams",
       "trpc.moox.storage.DataView/CountTimeSeriesRows",
       "trpc.moox.storage.DataView/GetViewState",
@@ -2651,8 +2629,7 @@
       "trpc.moox.trade.TradeConsoleService/GetLogicalAccount"
     ],
     "trade": [
-      "trpc.moox.ops.SecretMgr/GetSecretValue",
-      "trpc.moox.ops.SecretMgr/ListSecrets"
+      "trpc.moox.ops.SecretMgr/GetSecretValue"
     ]
   },
   "principals": {

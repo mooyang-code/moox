@@ -32,7 +32,7 @@ func (s doctorContextDeployments) Snapshot(context.Context) (deployment.Snapshot
 	return snapshot, nil
 }
 
-func TestDoctorContextEndToEndDisabledAndDeferredFacts(t *testing.T) {
+func TestDoctorContextEndToEndDisabledAndActiveFacts(t *testing.T) {
 	builder := &monitordoctor.Builder{Deployments: doctorContextDeployments{rows: []*adminpb.ComponentDeployment{
 		{ComponentId: "factor-mgr", HostId: "node-a", Status: "disabled"},
 		{ComponentId: "storage-primary", HostId: "node-a", Status: "enabled"},
@@ -47,7 +47,7 @@ func TestDoctorContextEndToEndDisabledAndDeferredFacts(t *testing.T) {
 		byID[component.GetComponentId()] = component
 	}
 	require.False(t, byID["factor-mgr"].GetExpected())
-	require.Equal(t, "deferred", byID["storage-primary"].GetFunctionalObservability())
+	require.Equal(t, "active", byID["storage-primary"].GetFunctionalObservability())
 	require.Empty(t, rsp.GetWatermarks(), "Storage must not receive a synthesized success watermark")
 }
 

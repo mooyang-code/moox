@@ -71,7 +71,7 @@ fi
 systemctl_user() { systemctl --user "$@"; }
 
 # ---------------------------------------------------------------- 配置、秘密文件、单元文件
-# 配置按组件整目录替换；秘密文件逐个写，目标机自己生成的（admin-master.key、pki/、seaweedfs/）不碰。
+# 配置按组件整目录替换；秘密文件逐个写，目标机自己生成的（admin-master.key、pki/）不碰。
 if [[ -d "${stage}/config" ]]; then
   for directory in "${stage}/config"/*; do
     [[ -d "${directory}" ]] || continue
@@ -107,76 +107,18 @@ if [[ -f "${stage}/units.keep" ]]; then
     fi
   done
 fi
+# 历史残留清理：早期版本在因子机随 archive-worker 安装过内置 moox-seaweedfs.service，重部署时自动停用并删掉旧单元。
+cleanup_legacy_seaweedfs() {
+  local legacy_unit="moox-seaweedfs.service"
+  if [[ -f "${units_dir}/${legacy_unit}" ]] || systemctl_user is-active --quiet "${legacy_unit}" >/dev/null 2>&1; then
+    systemctl_user disable --now "${legacy_unit}" >/dev/null 2>&1 || true
+    rm -f -- "${units_dir}/${legacy_unit}"
+    echo "removed moox-seaweedfs"
+  fi
+}
+
+cleanup_legacy_seaweedfs
 systemctl_user daemon-reload
-
-# ---------------------------------------------------------------- 内置对象存储（SeaweedFS）
-# 端口固定、只听 127.0.0.1。访问密钥只在本机生成一次，之后一直沿用；s3.json 与归档 worker 的凭据都由它派生。
-sw_master=11470
-sw_filer=11472
-sw_s3=11473
-sw_bucket=moox-archive
-sw_prefix=moox-archive/
-
-seaweedfs_prepare() {
-  local dir="${root}/secrets/seaweedfs" keys access secret
-  mkdir -p "${dir}"
-  keys="${dir}/s3-credentials.env"
-  if [[ ! -s "${keys}" ]]; then
-    printf 'ACCESS_KEY_ID=MOOX%s\nSECRET_ACCESS_KEY=%s\n' \
-      "$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n' | tr 'a-f' 'A-F')" "$(od -An -tx1 -N20 /dev/urandom | tr -d ' \n')" >"${keys}.new"
-    mv -f "${keys}.new" "${keys}"
-  fi
-  access="$(sed -n 's/^ACCESS_KEY_ID=//p' "${keys}")"
-  secret="$(sed -n 's/^SECRET_ACCESS_KEY=//p' "${keys}")"
-  [[ "${access}" =~ ^[A-Za-z0-9]+$ && "${secret}" =~ ^[A-Za-z0-9]+$ ]] || fail "内置对象存储的密钥文件 ${keys} 不合法"
-  # SeaweedFS 的简单动作 Write 含删除，所以身份不给动作、只挂策略：在前缀下读写、列举桶，不能删除。
-  cat >"${dir}/s3.json.new" <<EOF
-{
-  "identities": [
-    {
-      "name": "moox-archive-worker",
-      "credentials": [{"accessKey": "${access}", "secretKey": "${secret}"}],
-      "actions": [],
-      "policy_names": ["moox-archive-writer"]
-    }
-  ],
-  "policies": [
-    {
-      "name": "moox-archive-writer",
-      "content": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\",\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::${sw_bucket}/${sw_prefix}*\"]},{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::${sw_bucket}\"]}]}"
-    }
-  ]
-}
-EOF
-  mv -f "${dir}/s3.json.new" "${dir}/s3.json"
-  place "${keys}" "${root}/secrets/archive-object-store.env" 0600
-}
-
-# weed shell 的退出码不可信、master 连不上会卡住：外层限时，按输出文本判断。
-sw_shell() {
-  printf '%s\n' "$1" | timeout 20 "${root}/bin/weed" -logtostderr=true shell -master="127.0.0.1:${sw_master}" -filer="127.0.0.1:${sw_filer}" 2>&1 || true
-}
-
-seaweedfs_ready() {
-  local ready=0 out
-  for _ in $(seq 1 45); do
-    if [[ -n "$(ss -ltnH "sport = :${sw_s3}" 2>/dev/null)" ]] && sw_shell cluster.check | grep -q 'volume server .* \.\.\. ok'; then
-      ready=1
-      break
-    fi
-    sleep 2
-  done
-  if [[ "${ready}" -ne 1 ]]; then
-    journalctl --user -u moox-seaweedfs.service -n 30 --no-pager >&2 || true
-    fail "内置对象存储没有就绪"
-  fi
-  if ! sw_shell s3.bucket.list | grep -Eq "^[[:space:]]*${sw_bucket}[[:space:]]"; then
-    out="$(sw_shell "s3.bucket.create -name ${sw_bucket}")"
-    if ! grep -Eq 'already exists' <<<"${out}" && ! sw_shell s3.bucket.list | grep -Eq "^[[:space:]]*${sw_bucket}[[:space:]]"; then
-      fail "建不了桶 ${sw_bucket}：${out}"
-    fi
-  fi
-}
 
 # Storage 主库启动前建好元数据库（已有时只补缺的表）。
 storage_init() {
@@ -208,7 +150,6 @@ while read -r component changed wanted; do
   unit="moox-${component}.service"
   [[ -f "${units_dir}/${unit}" ]] || fail "缺单元文件 ${unit}"
   mkdir -p "${root}/data/${component}" "${root}/logs/${component}"
-  [[ "${component}" != "seaweedfs" ]] || seaweedfs_prepare
   # 声明停用的组件只装文件：停掉单元、不开机自启。声明启用的照常启用，setup stop 临时停掉的也在这里重新拉起。
   if [[ "${wanted}" != "1" ]]; then
     systemctl_user disable --now "${unit}" >/dev/null 2>&1 || true
@@ -227,7 +168,6 @@ while read -r component changed wanted; do
     systemctl_user enable "${unit}" >/dev/null 2>&1 || true
     echo "component ${component} unchanged"
   fi
-  [[ "${component}" != "seaweedfs" ]] || seaweedfs_ready
 done <"${stage}/components.list"
 
 place "${stage}/version.json" "${root}/version.json" 0600

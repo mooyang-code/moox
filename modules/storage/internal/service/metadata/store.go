@@ -7,7 +7,7 @@ import (
 )
 
 // DatasetQuery contains the server-side Dataset filters shared by the
-// persistent store, snapshot cache, and catalog aggregation paths.
+// persistent store, dataset cache, and catalog aggregation paths.
 type DatasetQuery struct {
 	SpaceID      string
 	DataSourceID string

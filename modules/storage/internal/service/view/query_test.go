@@ -381,7 +381,7 @@ func TestQueryTimeSeriesRowsUsesRuntimeStatsForNoTotal(t *testing.T) {
 	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: stats}
 	svc := queryTestService(engine, true)
 	runtime := svc.runtimeOf(marketRef)
-	runtime.statsIndexID = marketIndexID
+	runtime.hasStats = true
 	runtime.stats = stats
 	runtime.publishReadStateLocked()
 
@@ -414,7 +414,7 @@ func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing
 	}
 	svc := queryTestService(engine, true)
 	runtime := svc.runtimeOf(marketRef)
-	runtime.statsIndexID = marketIndexID
+	runtime.hasStats = true
 	runtime.stats = stats
 	runtime.publishReadStateLocked()
 
@@ -878,14 +878,14 @@ func TestViewRevisionSeqlockWriteInProgressFailureAndSwitching(t *testing.T) {
 		rt.mu.Unlock()
 	})
 	checkEvenStep("prepareIndex", func() {
-		if _, err := svc.prepareIndex(context.Background(), rt, func(r *viewRuntime) (viewindex.ViewIndexSchema, error) {
+		if _, err := svc.prepareIndex(context.Background(), rt, viewPhaseBuilding, func(r *viewRuntime) (viewindex.ViewIndexSchema, error) {
 			return r.schema, nil
 		}); err != nil {
 			t.Fatalf("prepareIndex: %v", err)
 		}
 	})
 	checkEvenStep("buildIndex", func() {
-		if _, err := svc.buildIndex(context.Background(), MaintenanceOptions{PrimaryRange: &pagedRangeReader{}}, rt, extendedSpec, func(r *viewRuntime) (viewindex.ViewIndexSchema, error) {
+		if _, err := svc.buildIndex(context.Background(), MaintenanceOptions{PrimaryRange: &pagedRangeReader{}}, rt, extendedSpec, viewPhaseBuilding, func(r *viewRuntime) (viewindex.ViewIndexSchema, error) {
 			return r.schema, nil
 		}); err != nil {
 			t.Fatalf("buildIndex: %v", err)
@@ -1018,5 +1018,103 @@ func TestViewRevisionSeqlockConcurrentReadWriteNeverReturnsTornSnapshot(t *testi
 	wantTag := fmt.Sprintf("%d:%d", totalWrites, totalWrites)
 	if got := finalRsp.GetRows()[0].GetKey().GetSeriesTag(); got != wantTag {
 		t.Fatalf("最终快照不一致：got=%q want=%q", got, wantTag)
+	}
+}
+
+// 验证删除 storagegen/validation.go 后，查询请求不再实现 Validate() error，
+// 避免 tRPC validation 过滤器将参数错误包装为框架错误而破坏 RetInfo 契约。
+func TestQueryRequestsDoNotImplementProtoValidate(t *testing.T) {
+	type validator interface{ Validate() error }
+	if _, ok := any(&pb.QueryTimeSeriesRowsReq{}).(validator); ok {
+		t.Fatal("QueryTimeSeriesRowsReq 不应实现 Validate() error")
+	}
+	if _, ok := any(&pb.SearchRecordRowsReq{}).(validator); ok {
+		t.Fatal("SearchRecordRowsReq 不应实现 Validate() error")
+	}
+}
+
+// 显式参数校验须返回 nil Go error 与 RetInfo{Code: INVALID_PARAM}。
+func TestQueryEndpointsValidateSpaceAndDatasetID(t *testing.T) {
+	svc := queryTestService(&queryEngine{}, true)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name      string
+		spaceID   string
+		datasetID string
+	}{
+		{name: "empty space", spaceID: "", datasetID: "market"},
+		{name: "blank space", spaceID: "   ", datasetID: "market"},
+		{name: "empty dataset", spaceID: "space", datasetID: ""},
+		{name: "blank dataset", spaceID: "space", datasetID: " \t "},
+	} {
+		t.Run("timeseries/"+tc.name, func(t *testing.T) {
+			rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
+				SpaceId: tc.spaceID, DatasetId: tc.datasetID,
+				TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
+			})
+			if err != nil {
+				t.Fatalf("期望 nil Go error，实际=%v", err)
+			}
+			if rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
+				t.Fatalf("期望 INVALID_PARAM，实际=%v", rsp.GetRetInfo())
+			}
+		})
+		t.Run("record/"+tc.name, func(t *testing.T) {
+			rsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{
+				SpaceId: tc.spaceID, DatasetId: tc.datasetID, TextQuery: "hello",
+			})
+			if err != nil {
+				t.Fatalf("期望 nil Go error，实际=%v", err)
+			}
+			if rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
+				t.Fatalf("期望 INVALID_PARAM，实际=%v", rsp.GetRetInfo())
+			}
+		})
+	}
+}
+
+// 验证显式 viewPhase 状态机：仅 viewPhaseRebuilding 报告 needsRebuild()，
+// viewPhaseBuilding 与 viewPhaseRebuilding 语义明确分离，且激活与清空均递增 Seqlock 偶数修订号。
+func TestViewRuntimePhaseTransitions(t *testing.T) {
+	spec := timeSeriesSpec("space", "market", "1m", "close")
+	rt := newViewRuntime(spec, &queryEngine{})
+	if rt.queryState().phase != viewPhaseEmpty || rt.queryState().active() || rt.needsRebuild() {
+		t.Fatalf("初始状态异常：phase=%d needsRebuild=%v", rt.queryState().phase, rt.needsRebuild())
+	}
+	rev0 := rt.revision.Load()
+	if rev0 == 0 || rev0&1 != 0 {
+		t.Fatalf("初始 revision 应为非零偶数：%d", rev0)
+	}
+
+	rt.mu.Lock()
+	rt.phase = viewPhaseBuilding
+	rt.publishReadStateLocked()
+	rt.mu.Unlock()
+	if rt.needsRebuild() || rt.queryState().active() {
+		t.Fatalf("首次建索引阶段不应被视为断档重建或活动：phase=%d", rt.queryState().phase)
+	}
+
+	rt.mu.Lock()
+	attachActiveLocked(rt, spec, viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "market", ViewVersion: 1, SchemaHash: "h1"})
+	rt.mu.Unlock()
+	revActive := rt.revision.Load()
+	if !rt.queryState().active() || rt.needsRebuild() || revActive != rev0+2 {
+		t.Fatalf("激活后状态异常：phase=%d rev=%d (want %d)", rt.queryState().phase, revActive, rev0+2)
+	}
+
+	rt.mu.Lock()
+	rt.phase = viewPhaseRebuilding
+	rt.publishReadStateLocked()
+	rt.mu.Unlock()
+	if !rt.needsRebuild() || rt.queryState().active() {
+		t.Fatalf("断档重建阶段应报告 needsRebuild 且不可读：phase=%d", rt.queryState().phase)
+	}
+
+	rt.mu.Lock()
+	rt.clearActiveLocked()
+	rt.mu.Unlock()
+	if rt.queryState().phase != viewPhaseEmpty || rt.needsRebuild() || rt.queryState().hasStats {
+		t.Fatalf("清空后应回到 Empty 且无缓存统计：state=%+v", rt.queryState())
 	}
 }

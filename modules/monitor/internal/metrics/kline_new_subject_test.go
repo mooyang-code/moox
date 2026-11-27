@@ -8,6 +8,7 @@ import (
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/stretchr/testify/require"
 )
 
@@ -310,4 +311,76 @@ func TestKlineFreshnessNewStockDatasetWaitsForTheFirstBar(t *testing.T) {
 
 	unknown := evaluate(time.Date(2026, 11, 4, 22, 0, 0, 0, cst), &fakeFirstSeenStore{})
 	require.Equal(t, "no_observation", unknown.Reason, "没有首次出现记录时不推测")
+}
+
+type fakePruningFirstSeenStore struct {
+	fakeFirstSeenStore
+	pruneCalls int
+	lastActive map[[2]string]struct{}
+}
+
+func (f *fakePruningFirstSeenStore) PruneDatasets(_ context.Context, active map[[2]string]struct{}) (int64, error) {
+	f.pruneCalls++
+	f.lastActive = active
+	return 0, nil
+}
+
+type staticInventorySource struct {
+	snapshot TaskResultInventorySnapshot
+	err      error
+}
+
+func (s *staticInventorySource) FetchTaskResultInventory(context.Context) (TaskResultInventorySnapshot, error) {
+	if s.err != nil {
+		return TaskResultInventorySnapshot{}, s.err
+	}
+	return s.snapshot, nil
+}
+
+func TestKlineFreshnessPrunesDeletedDatasetsOnFreshInventoryChange(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	source := &staticInventorySource{
+		snapshot: TaskResultInventorySnapshot{
+			ID:         "snap-1",
+			ObservedAt: now,
+			Entries: []TaskResultInventoryEntry{
+				{SpaceID: "crypto", TaskID: "t_a", DatasetID: "ds_a", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", MarketID: "crypto", CalendarID: "crypto_24x7", Timezone: "UTC", ObservedAt: now},
+				{SpaceID: "crypto", TaskID: "t_b", DatasetID: "ds_b", Frequency: "1m", Enabled: false, OwnershipVerified: true, ResultStatus: "ready", MarketID: "crypto", CalendarID: "crypto_24x7", Timezone: "UTC", ObservedAt: now},
+			},
+		},
+	}
+	cache, err := NewTaskResultInventoryCache(source, time.Minute, 100)
+	require.NoError(t, err)
+	query := newViewSummaryQuery(t, nil)
+	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("BTC-USDT")})
+	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{MinuteLateness: time.Minute}}, 20)
+	pruner := &fakePruningFirstSeenStore{}
+	evaluator.SetSubjectFirstSeenStore(pruner)
+
+	// 首次新鲜清单：触发对账，保留 ds_a 与已停用的 ds_b。
+	_, err = evaluator.Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Equal(t, 1, pruner.pruneCalls)
+	require.Contains(t, pruner.lastActive, [2]string{"crypto", "ds_a"})
+	require.Contains(t, pruner.lastActive, [2]string{"crypto", "ds_b"})
+
+	// 清单集合未变：不重复触发清理。
+	_, err = evaluator.Evaluate(context.Background(), now.Add(30*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, 1, pruner.pruneCalls)
+
+	// 清单刷新失败进入过期状态（stale）：不得触发清理，防止误删。
+	source.err = errors.New("collector unavailable")
+	_, err = evaluator.Evaluate(context.Background(), now.Add(2*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, 1, pruner.pruneCalls)
+
+	// 清单恢复且 ds_b 已删除：重新触发清理，仅保留 ds_a。
+	source.err = nil
+	source.snapshot.Entries = source.snapshot.Entries[:1]
+	_, err = evaluator.Evaluate(context.Background(), now.Add(4*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, 2, pruner.pruneCalls)
+	require.Contains(t, pruner.lastActive, [2]string{"crypto", "ds_a"})
+	require.NotContains(t, pruner.lastActive, [2]string{"crypto", "ds_b"})
 }

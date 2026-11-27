@@ -48,16 +48,18 @@ func TestValidateSetupListenerRequiresDedicatedService(t *testing.T) {
 	assert.Contains(t, err.Error(), "trpc.moox.admin.Setup")
 }
 
-func TestLoadEncryptionKey_FromEnv_ShouldPass(t *testing.T) {
+func TestLoadEncryptionKey_FromEnv_ShouldReturnKey(t *testing.T) {
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE", "")
-	require.NoError(t, loadEncryptionKey())
+	key, err := loadEncryptionKey()
+	require.NoError(t, err)
+	assert.Equal(t, "0123456789abcdef0123456789abcdef", key)
 }
 
 func TestLoadEncryptionKey_MissingFileEnv_ShouldError(t *testing.T) {
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "")
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE", "")
-	err := loadEncryptionKey()
+	_, err := loadEncryptionKey()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MOOX_ADMIN_ENCRYPTION_KEY_FILE is required")
 }
@@ -68,19 +70,21 @@ func TestLoadEncryptionKey_InvalidFileMode_ShouldError(t *testing.T) {
 	require.NoError(t, os.WriteFile(keyPath, []byte("secret-key-value-32bytes-long!!"), 0o644))
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE", keyPath)
 
-	err := loadEncryptionKey()
+	_, err := loadEncryptionKey()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "regular 0600 file")
 }
 
-func TestLoadEncryptionKey_ValidFile_ShouldSetEnv(t *testing.T) {
+func TestLoadEncryptionKey_ValidFile_ShouldReturnKeyWithoutMutatingEnv(t *testing.T) {
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "")
 	keyPath := filepath.Join(t.TempDir(), "good-key")
 	require.NoError(t, os.WriteFile(keyPath, []byte("0123456789abcdef0123456789abcdef"), 0o600))
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE", keyPath)
 
-	require.NoError(t, loadEncryptionKey())
-	assert.Equal(t, "0123456789abcdef0123456789abcdef", os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY"))
+	key, err := loadEncryptionKey()
+	require.NoError(t, err)
+	assert.Equal(t, "0123456789abcdef0123456789abcdef", key)
+	assert.Empty(t, os.Getenv("MOOX_ADMIN_ENCRYPTION_KEY"), "主密钥不得回写进进程环境变量")
 }
 
 func setupBootstrapConfigDir(t *testing.T) string {
@@ -91,8 +95,7 @@ func setupBootstrapConfigDir(t *testing.T) string {
 
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "app.yaml"), []byte(`database:
   path: ./data/admin.db
-`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "console.yaml"), []byte(`session:
+session:
   ttl: 12h
 console:
   allowed_origins:
@@ -133,6 +136,7 @@ func TestLoadConfigs_ValidFiles_ShouldLoadAllModules(t *testing.T) {
 	assert.NotNil(t, cfg.Auth)
 	assert.NotNil(t, cfg.Console)
 	assert.Equal(t, "admin-node-test", cfg.AdminNodeID)
+	assert.Equal(t, "0123456789abcdef0123456789abcdef", cfg.EncryptionKey)
 	assert.Equal(t, 12*time.Hour, cfg.Auth.Session.TTL)
 	assert.Equal(t, []string{"http://localhost:9527"}, cfg.Console.Console.AllowedOrigins)
 	assert.Equal(t, "0.0.0.0:9527", cfg.Web.Listen, "浏览器入口默认监听 9527")
@@ -168,7 +172,7 @@ func TestLoadConfigs_MissingAdminNodeID_ShouldFailAtStartup(t *testing.T) {
 
 func TestLoadConfigs_RejectsWildcardDevelopmentOrigin(t *testing.T) {
 	dir := setupBootstrapConfigDir(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "console.yaml"), []byte("console:\n  allowed_origins:\n    - \"*\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config", "app.yaml"), []byte("database:\n  path: ./data/admin.db\nconsole:\n  allowed_origins:\n    - \"*\"\n"), 0o644))
 	_, err := loadConfigsForTest(t)
 	require.ErrorContains(t, err, "console.allowed_origins")
 }
@@ -213,7 +217,7 @@ func TestGatewayControlListenerRequiresOneDedicatedLoopbackEndpoint(t *testing.T
 func TestSetupListenerRejectsHTTP(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trpc_go.yaml")
 	body := "server:\n  service:\n    - name: trpc.moox.admin.Setup\n      ip: 127.0.0.1\n      port: 11110\n      network: tcp\n      protocol: http\n"
-	require.NoError(t, os.WriteFile(path, []byte(body), 0600))
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	require.ErrorContains(t, validateSetupListener(path), "tcp trpc")
 }
 

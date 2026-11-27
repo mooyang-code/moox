@@ -13,7 +13,7 @@ func TestStrategyInstanceDeleteCallerBoundary(t *testing.T) {
 	}{
 		{"trpc.moox.strategy.StrategyMgr", "DeleteStrategyInstance", map[string]bool{"console": true, "moox-cli": true}, false},
 		{"trpc.moox.factor.FactorMgr", "DeleteBoundTask", map[string]bool{"strategy": true}, false},
-		{"trpc.moox.archive.ArchiveMgr", "ListArchiveTasks", map[string]bool{"console": true, "moox-cli": true, "monitor": true, "strategy": true}, true},
+		{"trpc.moox.archive.ArchiveMgr", "ListArchiveTasks", map[string]bool{"console": true, "moox-cli": true, "strategy": true}, true},
 	}
 	for _, tc := range cases {
 		for _, caller := range []string{"console", "moox-cli", "strategy", "monitor", "collector", "trade"} {

@@ -7,7 +7,8 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
+	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
@@ -35,7 +36,7 @@ func setupDB(t *testing.T) *gorm.DB {
 	manifest := testManifest()
 	hash, err := mooxsecurity.HashPassword(manifest.Admin.Password)
 	require.NoError(t, err)
-	require.NoError(t, db.Where("c_username = ?", manifest.Admin.Username).FirstOrCreate(&authmodel.User{UserID: "admin-user", Username: manifest.Admin.Username, PasswordHash: hash}).Error)
+	require.NoError(t, db.Where("c_username = ?", manifest.Admin.Username).FirstOrCreate(&auth.User{UserID: "admin-user", Username: manifest.Admin.Username, PasswordHash: hash}).Error)
 	return db
 }
 
@@ -52,7 +53,7 @@ func TestApplyRequiresDeployedAdmin(t *testing.T) {
 	_, err := NewService(db, testEncryptionKey).Apply(context.Background(), testManifest())
 	require.ErrorIs(t, err, ErrAdminMissing)
 	var users, secrets int64
-	require.NoError(t, db.Model(&authmodel.User{}).Count(&users).Error)
+	require.NoError(t, db.Model(&auth.User{}).Count(&users).Error)
 	require.NoError(t, db.Model(&secretmodel.Secret{}).Count(&secrets).Error)
 	assert.Zero(t, users)
 	assert.Zero(t, secrets)
@@ -69,19 +70,20 @@ func TestApplyCreatesAllRecordsAndInspectCompletes(t *testing.T) {
 	assert.Equal(t, 1, result.Users)
 	assert.Equal(t, 1, result.Secrets)
 
-	var user authmodel.User
+	var user auth.User
 	require.NoError(t, db.Where("c_username = ?", manifest.Admin.Username).First(&user).Error)
 	assert.True(t, mooxsecurity.VerifyPassword(manifest.Admin.Password, user.PasswordHash))
 
 	var secret secretmodel.Secret
-	require.NoError(t, db.Where("c_secret_id = ? AND c_is_deleted = 0", tencentSecretID).First(&secret).Error)
+	require.NoError(t, db.Where("c_secret_id = ?", tencentSecretID).First(&secret).Error)
 	assert.Equal(t, "cloud", secret.Category)
 	assert.Equal(t, "tencent", secret.Provider)
 	assert.Equal(t, manifest.TencentCloud.SecretID, secret.KeyID)
 	assert.NotEqual(t, manifest.TencentCloud.SecretKey, secret.SecretValue)
-	secretValue, err := mooxsecurity.Decrypt(secret.SecretValue, testEncryptionKey)
-	require.NoError(t, err)
-	assert.Equal(t, manifest.TencentCloud.SecretKey, secretValue)
+	assert.NotEqual(t, "{}", secret.ExtraConfig)
+	require.NoError(t, secretdao.DecryptSecretFields(&secret, testEncryptionKey))
+	assert.Equal(t, manifest.TencentCloud.SecretKey, secret.SecretValue)
+	assert.Equal(t, "{}", secret.ExtraConfig)
 
 	status, err := service.Inspect(context.Background(), manifest)
 	require.NoError(t, err)
@@ -142,7 +144,7 @@ func TestApplyConcurrentCallsConvergeToOneCreated(t *testing.T) {
 
 // 管理台改过管理员密码、或库里已有别的超级用户：以管理台为准，不改写，其余照常写入。
 func TestApplyKeepsTheConsoleAdministrator(t *testing.T) {
-	for name, user := range map[string]authmodel.User{
+	for name, user := range map[string]auth.User{
 		"changed_password": {UserID: "u1", Username: testManifest().Admin.Username},
 		"other_user":       {UserID: "u2", Username: "other-admin"},
 	} {
@@ -156,11 +158,11 @@ func TestApplyKeepsTheConsoleAdministrator(t *testing.T) {
 			result, err := NewService(db, testEncryptionKey).Apply(context.Background(), testManifest())
 			require.NoError(t, err)
 			assert.Equal(t, []string{"admin"}, result.Kept)
-			var stored authmodel.User
+			var stored auth.User
 			require.NoError(t, db.Where("c_user_id = ?", user.UserID).First(&stored).Error)
 			assert.True(t, mooxsecurity.VerifyPassword("changed-in-console", stored.PasswordHash), "管理台的密码不能被改写")
 			var users, secrets int64
-			require.NoError(t, db.Model(&authmodel.User{}).Count(&users).Error)
+			require.NoError(t, db.Model(&auth.User{}).Count(&users).Error)
 			require.NoError(t, db.Model(&secretmodel.Secret{}).Count(&secrets).Error)
 			assert.Equal(t, int64(1), users)
 			assert.Equal(t, int64(1), secrets, "腾讯云密钥照常写入")
@@ -176,12 +178,12 @@ func TestApplyKeepsTheConsoleAdministrator(t *testing.T) {
 // 管理台换过腾讯云密钥：保留管理台的，交易所密钥照常写入（本来的问题：一项不一致就整体回滚，交易所密钥写不进去）。
 func TestApplyKeepsTheConsoleTencentSecretAndStillWritesTheRest(t *testing.T) {
 	db := setupDB(t)
-	encrypted, err := mooxsecurity.Encrypt("different-secret", testEncryptionKey)
-	require.NoError(t, err)
-	require.NoError(t, db.Create(&secretmodel.Secret{
+	record := &secretmodel.Secret{
 		SecretID: tencentSecretID, Name: "Tencent Cloud Default", Category: "cloud", Provider: "tencent",
-		SecretType: "api_key", KeyID: "different-id", SecretValue: encrypted, ExtraConfig: "{}", Status: "active",
-	}).Error)
+		SecretType: "api_key", KeyID: "different-id", SecretValue: "different-secret", ExtraConfig: "{}", Status: "active",
+	}
+	require.NoError(t, secretdao.EncryptSecretFields(record, testEncryptionKey))
+	require.NoError(t, db.Create(record).Error)
 
 	result, err := NewService(db, testEncryptionKey).Apply(context.Background(), testManifest())
 	require.NoError(t, err)
@@ -191,7 +193,7 @@ func TestApplyKeepsTheConsoleTencentSecretAndStillWritesTheRest(t *testing.T) {
 	require.NoError(t, db.Where("c_secret_id = ?", tencentSecretID).First(&stored).Error)
 	assert.Equal(t, "different-id", stored.KeyID, "管理台的腾讯云密钥不能被改写")
 	var users int64
-	require.NoError(t, db.Model(&authmodel.User{}).Count(&users).Error)
+	require.NoError(t, db.Model(&auth.User{}).Count(&users).Error)
 	assert.Equal(t, int64(1), users)
 }
 
@@ -203,6 +205,47 @@ func TestInspectReportsIncompleteWithoutWriting(t *testing.T) {
 	assert.Equal(t, 2, status.Missing)
 
 	var users int64
-	require.NoError(t, db.Model(&authmodel.User{}).Count(&users).Error)
+	require.NoError(t, db.Model(&auth.User{}).Count(&users).Error)
 	assert.Zero(t, users)
+}
+
+// 管理台主动硬删除默认腾讯云密钥后写入墓碑，setup init 不会静默复活；手工新建同 ID 后清除墓碑恢复可见。
+func TestApplyDoesNotRecreateTencentSecretDeletedInConsole(t *testing.T) {
+	db := setupDB(t)
+	service := NewService(db, "  "+testEncryptionKey+"  ")
+	manifest := testManifest()
+
+	result, err := service.Apply(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, "created", result.Action)
+	assert.Equal(t, 1, result.Secrets)
+
+	dao := secretdao.NewSecretDAO(db, testEncryptionKey)
+	require.NoError(t, dao.Delete(context.Background(), tencentSecretID))
+
+	result, err = service.Apply(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, "unchanged", result.Action)
+	assert.Equal(t, 0, result.Secrets)
+	assert.Empty(t, result.Kept)
+	var count int64
+	require.NoError(t, db.Model(&secretmodel.Secret{}).Where("c_secret_id = ?", tencentSecretID).Count(&count).Error)
+	assert.Zero(t, count, "已硬删除的 tencent-default 不得被 setup init 静默复活")
+
+	status, err := service.Inspect(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", status.State)
+	assert.Zero(t, status.Missing)
+	assert.Equal(t, 0, status.Secrets)
+
+	// 手工新建同 ID 清除墓碑，后续 inspect 恢复以管理台为准。
+	require.NoError(t, dao.Create(context.Background(), &secretmodel.Secret{
+		SecretID: tencentSecretID, Name: "Tencent Cloud Default", Category: "cloud", Provider: "tencent",
+		SecretType: "api_key", KeyID: "manual-id", SecretValue: "manual-secret", ExtraConfig: "{}", Status: "active",
+	}))
+	status, err = service.Inspect(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", status.State)
+	assert.Equal(t, 1, status.Secrets)
+	assert.Equal(t, []string{keptTencentCloud}, status.Kept)
 }

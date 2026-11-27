@@ -230,6 +230,7 @@ CREATE TABLE IF NOT EXISTS task_state (
     change_sequence INTEGER NOT NULL DEFAULT 0,
     rescan_from INTEGER,
     rescan_until INTEGER,
+    partitions_synced INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (space_id, dataset_id)
 ) WITHOUT ROWID`
 	partitionStateDDL = `

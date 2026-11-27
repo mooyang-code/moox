@@ -45,7 +45,7 @@ func (s *Service) extendViewSchema(ctx context.Context, spec *viewSpec) (uint64,
 	}
 	// 先按原子副本判断有没有要加的列：每分钟都要检查所有 View，绝大多数没有新列，不用等运行时锁。
 	state := runtime.queryState()
-	if state.active == "" {
+	if !state.active() {
 		return 0, nil
 	}
 	if _, ok := viewSchemaExtensionTarget(state.schema, spec.Columns); !ok {
@@ -57,7 +57,7 @@ func (s *Service) extendViewSchema(ctx context.Context, spec *viewSpec) (uint64,
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.active != runtime.indexID {
+	if !runtime.phase.isActive() {
 		return 0, nil
 	}
 	release, err := runtime.gate.lock(ctx)
