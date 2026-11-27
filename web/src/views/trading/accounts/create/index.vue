@@ -14,7 +14,7 @@
       <EnvMark v-if="form.kind !== 'paper'" :env="form.kind" class="title-env" />
     </template>
 
-    <a-steps :current="form.step + 1" size="small" class="steps">
+    <a-steps :current="form.step + 1" small class="steps">
       <a-step v-for="title in stepTitles(form.kind)" :key="title">{{ title }}</a-step>
     </a-steps>
 

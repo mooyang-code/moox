@@ -9,7 +9,7 @@
     "checkJs": true, // 报告 javascript 文件中的错误
 
     /* 模块解析 */
-    "moduleResolution": "node", //模块解析策略。默认使用node的模块解析策略
+    "moduleResolution": "bundler", // 使用 bundler 模块解析策略，支持 package.json exports 与 vue-tsc 严格检查
     "allowImportingTsExtensions": true, // 允许导入包含 TypeScript 文档扩展名。
     "resolveJsonModule": true, //允许导入扩展名为".json"的模块
     "sourceMap": true, // 是否生成相应的Map映射的文件，默认：false
@@ -44,5 +44,10 @@
     "vite.config.ts"
   ], // 指定被编译文件所在的目录
   // exclude表示要排除的、不编译的文件，它也可以指定一个列表，规则和include一样，可以是文件或文件夹，可以是相对路径或绝对路径，可以使用通配符
-  "exclude": ["node_modules", "dist", "**/*.js", "**/__tests__/**", "**/*.test.ts"] // 指定不需要被编译的目录
+  "exclude": ["node_modules", "dist", "**/*.js", "**/__tests__/**", "**/*.test.ts"], // 指定不需要被编译的目录
+  "vueCompilerOptions": {
+    // 仅启用实际生效的组件与指令检查；未开 checkUnknownProps/checkUnknownEvents 是因 Arco 与包装组件依赖 DOM 透传属性与事件
+    "checkUnknownComponents": true,
+    "checkUnknownDirectives": true
+  }
 }
