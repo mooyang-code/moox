@@ -9,10 +9,15 @@ const mocks = vi.hoisted(() => ({
   setFactorCategory: vi.fn(),
   deleteFactorCategory: vi.fn(),
   upsertFactorCategory: vi.fn(),
+  reloadTasks: vi.fn(),
   push: vi.fn(),
   replace: vi.fn(),
   route: undefined as { path: string; query: Record<string, string> } | undefined,
-  spaceId: undefined as { value: string } | undefined
+  spaceId: undefined as { value: string } | undefined,
+  storeTasks: undefined as { value: unknown[] } | undefined,
+  storeLoading: undefined as { value: boolean } | undefined,
+  storeLoadError: undefined as { value: string } | undefined,
+  storeLoaded: undefined as { value: boolean } | undefined
 }));
 
 vi.mock("@/api/factor", () => ({
@@ -24,11 +29,30 @@ vi.mock("@/api/factor", () => ({
   deleteFactor: vi.fn()
 }));
 vi.mock("@/views/factor/shared/use-factor-scope", async () => {
-  const { ref: vueRef } = await import("vue");
+  const { ref: vueRef, reactive: vueReactive } = await import("vue");
   mocks.spaceId = vueRef("");
+  mocks.storeTasks = vueRef<unknown[]>([]);
+  mocks.storeLoading = vueRef(false);
+  mocks.storeLoadError = vueRef("");
+  mocks.storeLoaded = vueRef(true);
+  const store = vueReactive({
+    get tasks() {
+      return mocks.storeTasks!.value;
+    },
+    get loading() {
+      return mocks.storeLoading!.value;
+    },
+    get loadError() {
+      return mocks.storeLoadError!.value;
+    },
+    reload: mocks.reloadTasks,
+    isLoadedFor: () => mocks.storeLoaded!.value,
+    taskLabel: (set: { name?: string; freq?: string; task_id: string }) =>
+      set.name ? `${set.name} · ${set.freq || ""}` : set.task_id
+  });
   return {
     useFactorScope: () => ({
-      store: { tasks: [], reload: vi.fn(), taskLabel: (set: { task_id: string }) => set.task_id },
+      store,
       spaceId: mocks.spaceId
     })
   };
@@ -71,18 +95,22 @@ const RowProvider = defineComponent({
   }
 });
 const TableStub = defineComponent({
-  props: { data: { type: Array, default: () => [] } },
-  emits: ["row-click"],
+  name: "TableStub",
+  props: {
+    data: { type: Array, default: () => [] },
+    pagination: { type: Object, default: undefined }
+  },
+  emits: ["row-click", "page-change"],
   setup(props, { slots, emit }) {
     return () =>
-      h(
-        "div",
-        (props.data as FactorInfo[]).map(record =>
+      h("div", [
+        ...(props.data as FactorInfo[]).map(record =>
           h("div", { class: "row", onClick: () => emit("row-click", record) }, [
             h(RowProvider, { record }, () => slots.columns?.())
           ])
-        )
-      );
+        ),
+        !(props.data as unknown[]).length ? h("div", { class: "empty-slot" }, slots.empty?.()) : null
+      ]);
   }
 });
 const ColumnStub = defineComponent({
@@ -145,6 +173,11 @@ describe("factor definitions page", () => {
     ]);
     mocks.setFactorCategory.mockReset().mockResolvedValue(undefined);
     mocks.deleteFactorCategory.mockReset().mockResolvedValue(undefined);
+    mocks.reloadTasks.mockReset().mockResolvedValue(undefined);
+    if (mocks.storeTasks) mocks.storeTasks.value = [];
+    if (mocks.storeLoading) mocks.storeLoading.value = false;
+    if (mocks.storeLoadError) mocks.storeLoadError.value = "";
+    if (mocks.storeLoaded) mocks.storeLoaded.value = true;
     mocks.push.mockReset();
     mocks.route!.query = {};
     mocks.replace.mockReset().mockImplementation(({ query }: { query: Record<string, string> }) => {
@@ -284,5 +317,207 @@ describe("factor definitions page", () => {
     await flushPromises();
     expect(mocks.setFactorCategory).toHaveBeenCalledTimes(1);
     expect(mocks.deleteFactorCategory).not.toHaveBeenCalled();
+  });
+
+  it("切到产出字段页签展示当前空间计算任务展开的结果列名，点因子打开详情，详情可联动回产出字段", async () => {
+    mocks.storeTasks!.value = [
+      {
+        factor_task: {
+          task_id: "ftask_swap_1m",
+          space_id: "crypto",
+          source_dataset_id: "ds_1",
+          freq: "1m",
+          name: "合约一分钟",
+          result_dataset_id: "dataset_factor_swap_1m",
+          status: "enabled"
+        },
+        members: [
+          {
+            task_id: "ftask_swap_1m",
+            factor_id: "Ma",
+            status: "enabled",
+            factor: info("Ma", "trend").factor,
+            created_at: "0",
+            updated_at: "0",
+            member_key: "ma__5",
+            output_columns: ["ma__5"],
+            params: { window: 5 },
+            kind: "fixed"
+          }
+        ]
+      }
+    ];
+    mocks.spaceId!.value = "crypto";
+    mocks.route!.query = { tab: "fields" };
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("ma__5");
+    expect(wrapper.text()).toContain("合约一分钟 · 1m");
+
+    const factorLink = wrapper.findAll("a").find(link => link.text().includes("Ma_module"));
+    expect(factorLink).toBeDefined();
+    await factorLink!.trigger("click");
+    await flushPromises();
+    expect(mocks.route!.query.detail).toBe("Ma");
+
+    wrapper.findComponent(DrawerStub).vm.$emit("viewOutputs", "ftask_swap_1m", "ma__5");
+    await flushPromises();
+    expect(mocks.route!.query).toEqual({ tab: "fields", task: "ftask_swap_1m", keyword: "ma__5" });
+    wrapper.unmount();
+  });
+
+  it("批量移动分类和删除分类后会静默刷新计算任务，保持产出字段分类同步", async () => {
+    mocks.spaceId!.value = "crypto";
+    const wrapper = mountPage();
+    await flushPromises();
+
+    wrapper.findComponent({ name: "DefinitionTable" }).vm.$emit("select", ["Ma"]);
+    await flushPromises();
+    wrapper.findComponent(BatchBarStub).vm.$emit("move", "momentum");
+    await flushPromises();
+    expect(mocks.reloadTasks).toHaveBeenCalledWith({ silent: true });
+
+    mocks.reloadTasks.mockClear();
+    wrapper.findComponent(TreeStub).vm.$emit("delete", { category_id: "trend", name: "趋势类", sort_order: 1 });
+    await flushPromises();
+    expect(mocks.reloadTasks).toHaveBeenCalledWith({ silent: true });
+    wrapper.unmount();
+  });
+
+  it("产出字段页签打开或关闭详情抽屉不重置页码；切空间后从详情跳入保留任务与关键词筛选", async () => {
+    const taskCrypto = {
+      factor_task: {
+        task_id: "ftask_crypto",
+        space_id: "crypto",
+        source_dataset_id: "ds_1",
+        freq: "1m",
+        name: "币安一分钟",
+        result_dataset_id: "dataset_factor_crypto",
+        status: "enabled"
+      },
+      members: Array.from({ length: 25 }, (_, i) => ({
+        task_id: "ftask_crypto",
+        factor_id: "Ma",
+        status: "enabled",
+        factor: info("Ma", "trend").factor,
+        created_at: "0",
+        updated_at: "0",
+        member_key: `ma__${i + 1}`,
+        output_columns: [`ma__${i + 1}`],
+        params: { window: i + 1 },
+        kind: "fixed"
+      }))
+    };
+    const taskStock = {
+      factor_task: {
+        task_id: "ftask_stock",
+        space_id: "stockcn",
+        source_dataset_id: "ds_2",
+        freq: "1d",
+        name: "A股日线",
+        result_dataset_id: "dataset_factor_stock",
+        status: "enabled"
+      },
+      members: [
+        {
+          task_id: "ftask_stock",
+          factor_id: "Rsi",
+          status: "enabled",
+          factor: info("Rsi", "momentum").factor,
+          created_at: "0",
+          updated_at: "0",
+          member_key: "rsi__14",
+          output_columns: ["rsi__14"],
+          params: { window: 14 },
+          kind: "fixed"
+        }
+      ]
+    };
+
+    const taskStockOther = {
+      factor_task: {
+        task_id: "ftask_stock_other",
+        space_id: "stockcn",
+        source_dataset_id: "ds_3",
+        freq: "1w",
+        name: "A股周线",
+        result_dataset_id: "dataset_factor_stock_other",
+        status: "enabled"
+      },
+      members: [
+        {
+          task_id: "ftask_stock_other",
+          factor_id: "Ma",
+          status: "enabled",
+          factor: info("Ma", "trend").factor,
+          created_at: "0",
+          updated_at: "0",
+          member_key: "bias__20",
+          output_columns: ["bias__20"],
+          params: { window: 20 },
+          kind: "fixed"
+        }
+      ]
+    };
+
+    mocks.storeTasks!.value = [taskCrypto];
+    mocks.spaceId!.value = "crypto";
+    mocks.route!.query = { tab: "fields" };
+    const wrapper = mountPage();
+    await flushPromises();
+
+    // 翻至第 2 页后打开与关闭因子详情抽屉，页码保持第 2 页
+    const table = wrapper.findComponent({ name: "TableStub" });
+    table.vm.$emit("page-change", 2);
+    await flushPromises();
+    expect((table.props("pagination") as { current: number }).current).toBe(2);
+
+    const factorLink = wrapper.findAll("a").find(link => link.text().includes("Ma_module"));
+    await factorLink!.trigger("click");
+    await flushPromises();
+    expect(mocks.route!.query.detail).toBe("Ma");
+    expect((table.props("pagination") as { current: number }).current).toBe(2);
+
+    wrapper.findComponent(DrawerStub).vm.$emit("close");
+    await flushPromises();
+    expect(mocks.route!.query.detail).toBeUndefined();
+    expect((table.props("pagination") as { current: number }).current).toBe(2);
+
+    // 切回因子定义页签（使 OutputFieldsTab 失活），再切到 stockcn，最后从详情抽屉点「产出字段」跳入
+    const defTab = wrapper.findAll("[role='tab']").find(btn => btn.text().includes("因子定义"));
+    await defTab!.trigger("click");
+    await flushPromises();
+
+    mocks.storeTasks!.value = [taskStock, taskStockOther];
+    mocks.spaceId!.value = "stockcn";
+    await flushPromises();
+
+    wrapper.findComponent(DrawerStub).vm.$emit("viewOutputs", "ftask_stock", "rsi__14");
+    await flushPromises();
+    expect(mocks.route!.query).toEqual({ tab: "fields", task: "ftask_stock", keyword: "rsi__14" });
+    expect(wrapper.text()).toContain("rsi__14");
+    expect(wrapper.text()).not.toContain("bias__20");
+    wrapper.unmount();
+  });
+
+  it("产出字段页签自动清理无效分类参数，且加载失败时不误显前往计算任务按钮", async () => {
+    mocks.spaceId!.value = "crypto";
+    mocks.route!.query = { tab: "fields", category: "ghost_cat" };
+    mocks.storeLoadError!.value = "rpc timeout";
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("计算任务加载失败");
+    expect(wrapper.text()).not.toContain("前往计算任务");
+    wrapper.unmount();
+
+    mocks.storeLoadError!.value = "";
+    mocks.route!.query = { tab: "fields", category: "ghost_cat", task: "ghost_task" };
+    const wrapper2 = mountPage();
+    await flushPromises();
+    expect(mocks.route!.query.category).toBeUndefined();
+    expect(mocks.route!.query.task).toBeUndefined();
+    wrapper2.unmount();
   });
 });

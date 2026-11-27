@@ -58,13 +58,16 @@ describe("page layout standards", () => {
   it("keeps the compute task host and its tabs in one layout", () => {
     const host = read("factor/task-management/index.vue");
     const computeTasks = read("factor/compute-tasks/index.vue");
-    const definitions = read("factor/definitions/index.vue");
+    const definitionsHost = read("factor/definitions/index.vue");
+    const definitionsTab = read("factor/definitions/definitions-tab.vue");
 
     expect(host).toContain("PageTitleTabs");
     expect(host).toContain("<keep-alive>");
     expect(computeTasks).toContain("新建计算任务");
-    expect(definitions).toContain("新建因子");
-    expect(definitions).not.toContain('class="filters"');
+    expect(definitionsHost).toContain("PageTitleTabs");
+    expect(definitionsHost).toContain("<keep-alive>");
+    expect(definitionsTab).toContain("新建因子");
+    expect(definitionsTab).not.toContain('class="filters"');
   });
 
   it("keeps the strategy run host, its tabs and the results tab aligned with the factor workbench", () => {
@@ -93,14 +96,18 @@ describe("page layout standards", () => {
   });
 
   it("uses the multi-tab spacing standard", () => {
+    const sources = read("data/sources/index.vue");
     const subjects = read("data/subjects/index.vue");
+    const definitions = read("factor/definitions/index.vue");
     const taskManagement = read("collector/task-management/index.vue");
     const runtimeStatus = read("collector/runtime-status/runtime-status.vue");
     const collectorTasks = read("collector/collection-tasks/collection-tasks.vue");
     const taskResults = read("collector/task-results/index.vue");
     const deployments = read("ops/deployments/index.vue");
 
+    expectMargin(sources, ".sources-content", "margin-top", 12);
     expectMargin(subjects, ".subjects-content", "margin-top", 12);
+    expectMargin(definitions, ".definitions-content", "margin-top", 12);
     expectMargin(taskManagement, ".task-management-content", "margin-top", 12);
     expectMargin(runtimeStatus, ".block-header", "margin-bottom", 8);
     expect(collectorTasks).toContain('class="task-toolbar"');

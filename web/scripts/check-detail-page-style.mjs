@@ -29,6 +29,10 @@ const pageShellFiles = [
 
 const tableFiles = [
   ...pageShellFiles,
+  "src/views/data/sources/sources-tab.vue",
+  "src/views/data/sources/components/FieldCatalogTable.vue",
+  "src/views/data/sources/components/FieldDetailDrawer.vue",
+  "src/views/factor/definitions/output-fields-tab.vue",
   "src/views/collector/cloud-account/cloud-account-manage.vue",
   // 代码包只以抽屉方式打开，不套页面外壳，只查表格样式
   "src/views/collector/cloud-function/function-package-manage.vue",

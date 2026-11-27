@@ -16,7 +16,9 @@ import computeTasks from "@/views/factor/compute-tasks/index.vue?raw";
 import memberSection from "@/views/factor/compute-tasks/member-section.vue?raw";
 import memberModel from "@/views/factor/compute-tasks/compute-tasks-model.ts?raw";
 import addFactorModal from "@/views/factor/compute-tasks/add-factor-modal.vue?raw";
-import definitionsPage from "@/views/factor/definitions/index.vue?raw";
+import definitionsHost from "@/views/factor/definitions/index.vue?raw";
+import definitionsPage from "@/views/factor/definitions/definitions-tab.vue?raw";
+import outputFieldsTab from "@/views/factor/definitions/output-fields-tab.vue?raw";
 import factorEditor from "@/views/factor/editor/index.vue?raw";
 import recalcTab from "@/views/factor/recalc/index.vue?raw";
 import recalcModel from "@/views/factor/recalc/recalc-model.ts?raw";
@@ -136,14 +138,17 @@ describe("factor pages contract", () => {
     expect(factorEditor).not.toContain('v-model="form.status"');
   });
 
-  it("lays out the definitions page like the fields workbench", () => {
-    // 与字段管理一致：标题、搜索、筛选、查询在左，新增在右；下方提示条；左侧分类树，右侧批量栏加表格
+  it("lays out the definitions page as a two-tab host with definitions workbench and output fields tab", () => {
+    expect(definitionsHost).toContain("PageTitleTabs");
+    expect(definitionsHost).toContain("route.query.tab");
+    expect(definitionsHost).toContain('label: "因子定义"');
+    expect(definitionsHost).toContain('label: "产出字段"');
+    // 因子定义页签保持搜索、筛选、查询在左，新增在右；下方提示条；左侧分类树，右侧批量栏加表格
     const toolbar = definitionsPage.slice(
       definitionsPage.indexOf('class="toolbar"'),
       definitionsPage.indexOf("definitions-policy-alert")
     );
     const positions = [
-      'class="page-title"',
       "a-input-search",
       'v-model="filters.type"',
       'v-model="usageFilter"',
@@ -157,6 +162,8 @@ describe("factor pages contract", () => {
       expect(definitionsPage).toContain(text);
     }
     expect(definitionsPage).toContain('filterDefinitions(items.value, { ...filters, category: "" })');
+    expect(outputFieldsTab).toContain("GroupFilterPanel");
+    expect(outputFieldsTab).toContain("expandFactorOutputFields");
   });
 
   it("derives the factor type from the compiled spec and shows partial universe only for cross sections", () => {

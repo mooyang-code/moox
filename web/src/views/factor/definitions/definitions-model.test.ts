@@ -152,10 +152,11 @@ describe("definitions model", () => {
 
 describe("definitions page contract", () => {
   const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
+  const definitionsTab = fs.readFileSync(path.resolve(__dirname, "definitions-tab.vue"), "utf8");
   const table = fs.readFileSync(path.resolve(__dirname, "definition-table.vue"), "utf8");
 
   it("definitions page has no enable/disable action and no status column", () => {
-    for (const source of [page, table]) {
+    for (const source of [page, definitionsTab, table]) {
       expect(source).not.toContain("setFactorMemberStatus");
       expect(source).not.toContain('title="状态"');
       expect(source).not.toContain('title="最近周期"');
@@ -165,8 +166,8 @@ describe("definitions page contract", () => {
   });
 
   it("reads definitions without the spec and fetches it only for the detail view", () => {
-    expect(page).toContain("listFactors");
-    expect(page).not.toContain("include_spec");
+    expect(definitionsTab).toContain("listFactors");
+    expect(definitionsTab).not.toContain("include_spec");
     expect(fs.readFileSync(path.resolve(__dirname, "factor-detail-drawer.vue"), "utf8")).toContain("getFactor");
   });
 });

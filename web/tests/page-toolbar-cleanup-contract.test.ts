@@ -22,9 +22,15 @@ describe("page toolbar cleanup contract", () => {
     expect(secrets).not.toContain("<icon-refresh />");
     expect(secrets.indexOf("<h2>密钥管理</h2>")).toBeLessThan(secrets.indexOf('placeholder="搜索名称或描述"'));
 
-    const sources = read("data/sources/index.vue");
-    expect(sources).not.toContain("<icon-refresh />");
-    expect(sources).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
+    const sourcesTab = read("data/sources/sources-tab.vue");
+    expect(sourcesTab).not.toContain("<icon-refresh />");
+    expect(sourcesTab).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
+    const fieldsTab = read("data/sources/fields-tab.vue");
+    expect(fieldsTab).not.toContain("<icon-refresh />");
+    expect(fieldsTab).toMatch(/\.toolbar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
+    const outputFieldsTab = read("factor/definitions/output-fields-tab.vue");
+    expect(outputFieldsTab).not.toContain("<icon-refresh />");
+    expect(outputFieldsTab).toMatch(/\.toolbar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
   });
 
   it("removes refresh and reset controls reviewed beside create or query actions", () => {

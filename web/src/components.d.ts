@@ -13,6 +13,7 @@ declare module 'vue' {
     CodeEditor: typeof import('./components/code-editor/index.vue')['default']
     ConfirmDialog: typeof import('./components/trade-confirm/confirm-dialog.vue')['default']
     EnvMark: typeof import('./components/trade-confirm/env-mark.vue')['default']
+    GroupFilterPanel: typeof import('./components/group-filter-panel/index.vue')['default']
     InfoTip: typeof import('./components/info-tip/index.vue')['default']
     InspectionPreview: typeof import('./components/trade-inspection/inspection-preview.vue')['default']
     InspectionResult: typeof import('./components/trade-inspection/inspection-result.vue')['default']

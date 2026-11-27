@@ -11,6 +11,13 @@ const PROVIDER_NAMES: Record<string, string> = {
   binance: "资金费率（币安）"
 };
 
+/** 附加字段提供方 ID 对应的中文名；未登记时原样返回 ID（忽略大小写查表）。 */
+export function extraFieldProviderName(providerId?: string): string {
+  const key = (providerId || "").trim();
+  if (!key) return "";
+  return PROVIDER_NAMES[key.toLowerCase()] || key;
+}
+
 export interface ExtraFieldSourceRow {
   provider_id: string;
   name: string;
@@ -38,7 +45,7 @@ export function buildExtraFieldSources(options: ReadonlyArray<ExtraFieldOption>,
   }
   return [...grouped.entries()].map(([providerId, group]) => ({
     provider_id: providerId,
-    name: PROVIDER_NAMES[providerId] || providerId,
+    name: extraFieldProviderName(providerId),
     instruments: [...group.instruments].map(item => marketLabel(item)).join("、"),
     frequencies: [...group.frequencies].join("、"),
     fields: [...group.fields].map(([field_id, name]) => ({ field_id, name }))

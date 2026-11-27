@@ -33,6 +33,8 @@ type Member = {
   member_key: string;
   factor_id: string;
   status: "enabled" | "disabled";
+  kind: "fixed" | "var";
+  output_columns: string[];
   factor: Def;
   created_at: string;
   updated_at: string;
@@ -48,6 +50,8 @@ function member(def: Def, status: Member["status"]): Member {
     member_key: def.factor_id,
     factor_id: def.factor_id,
     status,
+    kind: "fixed",
+    output_columns: def.outputs,
     factor: def,
     created_at: baseDef.created_at,
     updated_at: baseDef.updated_at
@@ -262,6 +266,19 @@ test("definitions page shows usage chips and locks edit and delete", async ({ pa
   const rsi = page.getByRole("row").filter({ hasText: "rsi" });
   await expect(rsi.getByText("未被使用")).toBeVisible();
   await expect(rsi.getByRole("button", { name: "编辑" })).toBeEnabled();
+});
+
+test("definitions page hosts output fields tab with task columns and factor detail drawer", async ({ page }) => {
+  await page.goto("/#/factor/definitions");
+  await page.getByRole("tab", { name: "产出字段" }).click();
+  await expect(page).toHaveURL(/tab=fields/);
+  await expect(page.getByText("bias_5", { exact: true })).toBeVisible();
+  await expect(page.getByText("共 1 个产出字段")).toBeVisible();
+
+  await page.getByRole("row").filter({ hasText: "bias_5" }).getByText("Bias", { exact: true }).click();
+  const drawer = page.locator(".arco-drawer");
+  await expect(drawer.getByText("因子详情")).toBeVisible();
+  await expect(drawer.getByText("产出字段", { exact: true })).toBeVisible();
 });
 
 test("results tab embeds the result dataset", async ({ page }) => {

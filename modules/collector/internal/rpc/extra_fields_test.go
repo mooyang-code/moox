@@ -119,9 +119,26 @@ func TestGetDataTypeConfigWithFieldsListsExtraFields(t *testing.T) {
 	require.Equal(t, "swap", options[0].GetInstrumentType())
 	require.Equal(t, []string{"1h", "1d"}, options[0].GetFrequencies())
 	require.Equal(t, "binance", options[0].GetProviderId())
-	// 显示名与分组取自字段规格。
+	// 显示名、分组、值类型与填充策略取自字段规格。
 	require.Equal(t, "资金费率", options[0].GetDisplayName())
 	require.Equal(t, marketdata.GroupDerivatives, options[0].GetGroup())
+	require.Equal(t, "double", options[0].GetValueType())
+	require.Equal(t, "zero", options[0].GetFill())
+	require.Equal(t, "double", options[1].GetValueType())
+	require.Equal(t, "prev", options[1].GetFill())
+
+	// 验证整型字段与空填充策略原样透传。
+	intService := &Service{fieldOffers: marketdata.FieldOffers{
+		{MarketID: "stockcn", Instrument: "equity", ProviderID: "swsresearch", Spec: marketdata.FieldSpec{
+			ID: "sw_l1_code", Name: "申万一级代码", Group: marketdata.GroupIndustry, Type: marketdata.FieldTypeInt, Fill: "", Frequencies: []string{"1d"},
+		}},
+	}}
+	intRsp, err := intService.GetDataTypeConfigWithFields(context.Background(), &pb.GetDataTypeConfigWithFieldsReq{DataType: "kline"})
+	require.NoError(t, err)
+	intOptions := intRsp.GetDetail().GetExtraFields()
+	require.Len(t, intOptions, 1)
+	require.Equal(t, "int", intOptions[0].GetValueType())
+	require.Empty(t, intOptions[0].GetFill())
 
 	// 基础输出字段与建结果数据集列是同一份定义，管理台不另抄。
 	base := rsp.GetDetail().GetBaseOutputFields()

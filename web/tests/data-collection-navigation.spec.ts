@@ -132,6 +132,31 @@ async function mockGateway(route: Route) {
       })
     });
   }
+  if (method === "GetDataTypeConfigWithFields") {
+    return route.fulfill({
+      json: ok({
+        detail: {
+          base_output_fields: [
+            { field_id: "open", display_name: "开盘价", group: "行情价格", value_type: "double" },
+            { field_id: "close", display_name: "收盘价", group: "行情价格", value_type: "double" }
+          ],
+          extra_fields: [
+            {
+              field_id: "funding_rate",
+              display_name: "资金费率",
+              group: "合约指标",
+              market_id: "crypto",
+              instrument_type: "swap",
+              frequencies: ["1h", "1d"],
+              provider_id: "binance",
+              value_type: "double",
+              fill: "zero"
+            }
+          ]
+        }
+      })
+    });
+  }
   if (method === "GetViewState") {
     return route.fulfill({ json: ok({ index_id: "index-a", generation: "1", columns: [] }) });
   }
@@ -177,7 +202,7 @@ test("data collection owns base assets and has no top-level data assets menu", a
   await expect(page.getByText("数据采集", { exact: true })).toBeVisible();
 
   await page.goto("/#/data/sources");
-  await expect(page.getByRole("heading", { name: "数据源" })).toBeVisible();
+  await expect(page.getByLabel("数据源")).toBeVisible();
   await page.goto("/#/data/subjects");
   await expect(page.getByLabel("数据对象")).toBeVisible();
   await page.goto("/#/collector/tasks");
@@ -188,11 +213,30 @@ test("data collection owns base assets and has no top-level data assets menu", a
 
 test("refresh and direct routes stay available for collection pages", async ({ page }) => {
   await page.goto("/#/data/sources");
-  await expect(page.getByRole("heading", { name: "数据源" })).toBeVisible();
+  await expect(page.getByLabel("数据源")).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("heading", { name: "数据源" })).toBeVisible();
+  await expect(page.getByLabel("数据源")).toBeVisible();
   await page.goto("/#/collector/tasks?tab=results");
   await expect(page.getByText("Binance 现货 K 线 1m", { exact: true }).first()).toBeVisible();
+});
+
+test("data sources hosts field definitions tab with sidebar groups and provider link", async ({ page }) => {
+  await page.goto("/#/data/sources");
+  await expect(page.getByText("资金费率（币安）", { exact: true })).toBeVisible();
+  await page.getByText(/共 1 个字段/).click();
+
+  await expect(page).toHaveURL(/tab=fields/);
+  await expect(page.getByText("来源：资金费率（币安）")).toBeVisible();
+  await expect(page.getByText("funding_rate", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /全部字段/ }).click();
+  await page.locator(".arco-tag-close-btn").click();
+  await expect(page.getByText("开盘价", { exact: true })).toBeVisible();
+
+  await page.getByRole("row").filter({ hasText: "funding_rate" }).click();
+  const drawer = page.locator(".arco-drawer");
+  await expect(drawer.getByText("字段详情")).toBeVisible();
+  await expect(drawer.getByText("补零")).toBeVisible();
 });
 
 test("runtime status hosts cloud accounts and code packages, not an executors tab", async ({ page }) => {

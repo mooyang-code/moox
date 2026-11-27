@@ -818,6 +818,7 @@ func (s *Service) extraFieldOptions(dataType string) []*pb.ExtraFieldOption {
 		options = append(options, &pb.ExtraFieldOption{
 			FieldId: offer.Spec.ID, DisplayName: offer.Spec.Name, Group: offer.Spec.Group, MarketId: string(offer.MarketID), InstrumentType: string(offer.Instrument),
 			Frequencies: append([]string(nil), offer.Spec.Frequencies...), ProviderId: offer.ProviderID,
+			ValueType: string(offer.Spec.Type), Fill: offer.Spec.Fill,
 		})
 	}
 	return options

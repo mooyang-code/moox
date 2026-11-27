@@ -55,6 +55,7 @@
                 >{{ chip.memberKey ? ` · ${chip.memberKey}` : "" }}{{ chip.paramsText ? ` · ${chip.paramsText}` : "" }} ·
                 {{ chip.statusLabel }}</span
               >
+              <a-link @click="emit('viewOutputs', chip.taskId, chip.memberKey || factor.factor_id)">产出字段</a-link>
               <a-link @click="openResults(chip.taskId)">结果</a-link>
             </li>
           </ul>
@@ -96,7 +97,12 @@ const displayZone = useDisplayZone();
 defineOptions({ name: "FactorDetailDrawer" });
 
 const props = defineProps<{ factorId: string; categories?: FactorCategory[] }>();
-const emit = defineEmits<{ (e: "close"): void; (e: "openTask", taskId: string): void; (e: "edit", factorId: string): void }>();
+const emit = defineEmits<{
+  (e: "close"): void;
+  (e: "openTask", taskId: string): void;
+  (e: "edit", factorId: string): void;
+  (e: "viewOutputs", taskId: string, keyword: string): void;
+}>();
 const router = useRouter();
 
 /** 复制为新因子：带着这个定义进入新建页，ID 预填 <原 ID>_v2。 */

@@ -224,6 +224,8 @@ message ExtraFieldOption {
   string instrument_type = 5;       // 适用的品种，对应标签的 market_type
   repeated string frequencies = 6;  // 适用的 K 线频率
   string provider_id = 7;           // 来源提供方
+  string value_type = 8;            // 值类型：double 或 int（与 OutputFieldOption 一致）
+  string fill = 9;                  // 缺失填充策略：prev（前值填充）、zero（补零）或空
 }
 
 message GetDataTypeConfigsReq {}
