@@ -3,12 +3,10 @@ package rpc
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	holdingapp "github.com/mooyang-code/moox/modules/trade/internal/application/holding"
-	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -29,7 +27,6 @@ type ConsoleServer struct {
 	*LogicalAccountServer
 	*ExecutionServer
 	Store              *store.Store
-	Paper              *papersimulation.Service
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService
@@ -44,93 +41,6 @@ type ConsoleServer struct {
 
 type HoldingQueryService interface {
 	List(context.Context, string, string) ([]holdingapp.Holding, error)
-}
-
-func (s *ConsoleServer) CreatePaperSimulation(
-	ctx context.Context,
-	req *tradepb.CreatePaperSimulationReq,
-) (*tradepb.CreatePaperSimulationRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.CreatePaperSimulationRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if s.Paper == nil {
-		return &tradepb.CreatePaperSimulationRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
-	}
-	parse := func(raw string) (shared.Decimal, error) {
-		if strings.TrimSpace(raw) == "" {
-			return shared.Zero(), nil
-		}
-		return shared.ParseDecimal(raw)
-	}
-	initial, err := parse(req.GetInitialBalance())
-	if err != nil {
-		return &tradepb.CreatePaperSimulationRsp{RetInfo: invalidInfo(err)}, nil
-	}
-	maker, err := parse(req.GetMakerFeeRate())
-	if err != nil {
-		return &tradepb.CreatePaperSimulationRsp{RetInfo: invalidInfo(err)}, nil
-	}
-	taker, err := parse(req.GetTakerFeeRate())
-	if err != nil {
-		return &tradepb.CreatePaperSimulationRsp{RetInfo: invalidInfo(err)}, nil
-	}
-	slippage, err := parse(req.GetSlippageBps())
-	if err != nil {
-		return &tradepb.CreatePaperSimulationRsp{RetInfo: invalidInfo(err)}, nil
-	}
-	result, err := s.Paper.Create(ctx, papersimulation.CreateCommand{
-		SpaceID: spaceID, AccountName: strings.TrimSpace(req.GetAccountName()),
-		LogicalAccountName: strings.TrimSpace(req.GetLogicalAccountName()),
-		LogicalAccountID:   strings.TrimSpace(req.GetLogicalAccountId()), Priority: int(req.GetPriority()),
-		ControlMode: controlModeFromPB(req.GetControlMode()),
-		Exchange:    exchange.Exchange(req.GetExchange()), Markets: marketTypes(req.GetMarkets()),
-		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
-		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,
-		OrderRetentionDays: optionalInt(req.OrderRetentionDays),
-	})
-	rsp := &tradepb.CreatePaperSimulationRsp{RetInfo: errorInfo(err), Account: accountToPB(result.Account)}
-	if result.LogicalAccount.LogicalAccountID != "" {
-		rsp.LogicalAccount = s.logicalAccount(ctx, s.Store, result.LogicalAccount)
-	}
-	return rsp, nil
-}
-
-func (s *ConsoleServer) ClosePaperSimulation(
-	ctx context.Context,
-	req *tradepb.ClosePaperSimulationReq,
-) (*tradepb.ClosePaperSimulationRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.ClosePaperSimulationRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if s.Paper == nil || s.Store == nil {
-		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
-	}
-	// 关闭会把账户移出成员，要先取组合账户。
-	var logical *store.LogicalAccountRecord
-	if record, _, findErr := s.Store.FindLogicalAccountByTradingAccount(ctx, spaceID, req.GetTradingAccountId()); findErr == nil {
-		logical = &record
-	}
-	err = s.Paper.Close(ctx, spaceID, req.GetTradingAccountId())
-	if err != nil {
-		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(err)}, nil
-	}
-	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
-	if err != nil {
-		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(err)}, nil
-	}
-	rsp := &tradepb.ClosePaperSimulationRsp{RetInfo: success(), Account: accountToPB(account)}
-	if logical != nil {
-		rsp.LogicalAccount = s.logicalAccount(ctx, s.Store, *logical)
-	}
-	return rsp, nil
 }
 
 func (s *ConsoleServer) GetExecutionCapabilities(
@@ -163,7 +73,7 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	value := ResolveExecutionCapabilities(account, descriptor, s.LiveTradingEnabled, matcherReady)
 	capabilities := &tradepb.ExecutionCapabilities{
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,
-		CanClosePaperSimulation: value.CanClosePaperSimulation,
+		CanClosePaperAccount: value.CanClosePaperAccount,
 	}
 	_, ledgerErr := s.ledgerSource(accountRecord.TradingAccountID)
 	capabilities.Ledger = ledgerCapability(ledgerErr)

@@ -9,16 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // BuildSCFPackageOptions configures a Tencent SCF package build.
 type BuildSCFPackageOptions struct {
 	BinaryPath string
-	ConfigDir  string
 	OutPath    string
 }
 
@@ -28,25 +24,15 @@ type BuildSCFPackageResult struct {
 	Entries []string
 }
 
-// BuildSCFPackage 打出只含云函数运行二进制、运行配置与行情源定义的 zip。各市场的 market.yaml、route.yaml、
-// 数据源运行参数和交易日历都编在二进制里，不随包分发。CLS 凭据以云函数环境变量注入，不写进包里。
+// BuildSCFPackage 打出仅含单一 Linux ELF 可执行文件 main 的 SCF 代码包 zip。
+// 各市场的 market.yaml、route.yaml、数据源运行参数（含 binance.yaml）和交易日历均内嵌在二进制内，
+// 不随包分发任何外部配置文件；CLS 与网关凭据由云函数环境变量注入。
 func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error) {
 	if opts.BinaryPath == "" {
 		return nil, fmt.Errorf("binary path is required")
 	}
-	if opts.ConfigDir == "" {
-		return nil, fmt.Errorf("config dir is required")
-	}
 	if opts.OutPath == "" {
 		return nil, fmt.Errorf("output path is required")
-	}
-	configDir := filepath.Clean(opts.ConfigDir)
-	configInfo, err := os.Lstat(configDir)
-	if err != nil {
-		return nil, fmt.Errorf("config dir: %w", err)
-	}
-	if configInfo.Mode()&os.ModeSymlink != 0 || !configInfo.IsDir() {
-		return nil, fmt.Errorf("config dir must be a directory and not a symlink")
 	}
 	if err := os.MkdirAll(filepath.Dir(opts.OutPath), 0o755); err != nil {
 		return nil, err
@@ -63,42 +49,9 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	}
 
 	zw := zip.NewWriter(out)
-
-	var entries []string
-	addFile := func(src, dst string) error {
-		if err := addZipFile(zw, src, dst); err != nil {
-			return err
-		}
-		entries = append(entries, filepath.ToSlash(dst))
-		return nil
-	}
-
-	if err := addFile(opts.BinaryPath, "main"); err != nil {
+	if err := addZipFile(zw, opts.BinaryPath, "main"); err != nil {
 		return nil, err
 	}
-
-	sourcesDir := filepath.Join(configDir, "sources")
-	if info, err := os.Lstat(sourcesDir); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("SCF sources must be a regular directory: %s", sourcesDir)
-	}
-	err = filepath.WalkDir(sourcesDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(configDir, path)
-		if err != nil {
-			return err
-		}
-		return addFile(path, rel)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// 市场数据文件（market.yaml、route.yaml、数据源运行参数）编在函数二进制里，代码包不再带。
 	if err := zw.Close(); err != nil {
 		return nil, err
 	}
@@ -111,11 +64,11 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	if err := os.Rename(tempPath, opts.OutPath); err != nil {
 		return nil, err
 	}
-	sort.Strings(entries)
-	return &BuildSCFPackageResult{Path: opts.OutPath, Entries: entries}, nil
+	return &BuildSCFPackageResult{Path: opts.OutPath, Entries: []string{"main"}}, nil
 }
 
-// ValidateSCFPackageZip gates built and external packages before upload.
+// ValidateSCFPackageZip gates built and external packages before upload:
+// only a single executable Linux amd64/arm64 ELF binary named "main" is permitted.
 func ValidateSCFPackageZip(zipPath string) error {
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -134,6 +87,9 @@ func ValidateSCFPackageZip(zipPath string) error {
 			return fmt.Errorf("duplicate scf package entry %s", name)
 		}
 		seen[name] = true
+		if file.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("scf package symlinks are not permitted")
+		}
 		if name == "main" {
 			if err := validateSCFMain(file); err != nil {
 				return err
@@ -144,24 +100,7 @@ func ValidateSCFPackageZip(zipPath string) error {
 		if file.FileInfo().IsDir() {
 			continue
 		}
-		if file.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("scf package symlinks are not permitted")
-		}
-		if !((strings.HasPrefix(name, "sources/") || strings.HasPrefix(name, "markets/")) && (strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml"))) {
-			return fmt.Errorf("unexpected scf package payload %s", name)
-		}
-		rc, err := file.Open()
-		if err != nil {
-			return fmt.Errorf("read scf package entry %s: %w", name, err)
-		}
-		content, err := io.ReadAll(io.LimitReader(rc, 4*1024*1024+1))
-		_ = rc.Close()
-		if err != nil || len(content) > 4*1024*1024 {
-			return fmt.Errorf("cannot validate scf package entry %s", name)
-		}
-		if err := validateCredentialFreeYAML(content); err != nil {
-			return fmt.Errorf("scf package entry %s: %w", name, err)
-		}
+		return fmt.Errorf("unexpected scf package payload %s", name)
 	}
 	if !validMain {
 		return fmt.Errorf("scf package requires an executable Linux main")
@@ -171,9 +110,6 @@ func ValidateSCFPackageZip(zipPath string) error {
 
 var scfBinaryPrivateMaterial = regexp.MustCompile(`-----BEGIN (?:(?:[A-Z0-9]+ )?PRIVATE KEY|NATS USER JWT|USER NKEY SEED)-----[\r\n]`)
 var scfBinaryCredentialAssignment = regexp.MustCompile(`(?mi)(?:^|[\x00\r\n])[ \t]*(?:MOOX_EVENTBUS_NATS_PASSWORD|MOOX_GATEWAY_SERVICE_SECRET_KEY|MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY|TENCENTCLOUD_SECRET_KEY|TENCENT_SECRET_KEY)[ \t]*[:=][ \t]*[^\x00\r\n \t]`)
-var scfYAMLNATSPrivateMaterial = regexp.MustCompile(`(?i)-----BEGIN (?:NATS USER JWT|USER NKEY SEED)-----`)
-var scfYAMLCredentialAssignment = regexp.MustCompile(`(?im)(^|[^A-Za-z0-9_])["']?(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))["']?[ \t]*[:=][ \t]*`)
-var scfYAMLCredentialEnvironmentName = regexp.MustCompile(`(?i)^(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))$`)
 
 func validateSCFMain(file *zip.File) error {
 	if !file.Mode().IsRegular() || file.Mode().Perm()&0o111 == 0 {
@@ -214,134 +150,6 @@ func validateSCFMain(file *zip.File) error {
 		}
 	}
 	return fmt.Errorf("scf package main ELF entry point must be in an executable load segment")
-}
-
-func validateCredentialFreeYAML(content []byte) error {
-	if strings.Contains(strings.ToUpper(string(content)), "PRIVATE KEY") {
-		return fmt.Errorf("private key payload is not permitted")
-	}
-	if scfYAMLNATSPrivateMaterial.Match(content) {
-		return fmt.Errorf("NATS credential material is not permitted")
-	}
-	if hasNonemptySCFCredentialAssignment(content) {
-		return fmt.Errorf("credential assignment is not permitted")
-	}
-	decoder := yaml.NewDecoder(bytes.NewReader(content))
-	for {
-		var document yaml.Node
-		if err := decoder.Decode(&document); err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return fmt.Errorf("invalid configuration YAML")
-		}
-		var visit func(*yaml.Node, string) error
-		visit = func(node *yaml.Node, path string) error {
-			if node.Kind == yaml.AliasNode {
-				return fmt.Errorf("configuration YAML aliases are not permitted")
-			}
-			if node.Kind == yaml.ScalarNode {
-				if strings.Contains(strings.ToUpper(node.Value), "PRIVATE KEY") {
-					return fmt.Errorf("private key payload is not permitted")
-				}
-				if scfYAMLNATSPrivateMaterial.MatchString(node.Value) {
-					return fmt.Errorf("NATS credential material is not permitted")
-				}
-			}
-			if node.Kind == yaml.MappingNode {
-				keys := make(map[string]bool)
-				var environmentName, environmentValue *yaml.Node
-				for i := 0; i+1 < len(node.Content); i += 2 {
-					key, value := node.Content[i], node.Content[i+1]
-					if keys[key.Value] {
-						return fmt.Errorf("duplicate configuration key")
-					}
-					keys[key.Value] = true
-					if strings.EqualFold(key.Value, "name") {
-						if environmentName != nil {
-							return fmt.Errorf("duplicate credential environment name field")
-						}
-						environmentName = value
-					}
-					if strings.EqualFold(key.Value, "value") {
-						if environmentValue != nil {
-							return fmt.Errorf("duplicate credential environment value field")
-						}
-						environmentValue = value
-					}
-					name := strings.ToLower(strings.ReplaceAll(key.Value, "-", "_"))
-					fieldPath := path + "." + key.Value
-					sensitive := name == "app_key" || name == "key" || name == "token" ||
-						strings.Contains(name, "secret") || strings.Contains(name, "password") ||
-						strings.Contains(name, "jwt") || strings.Contains(name, "nkey") || strings.Contains(name, "credential") || name == "seed" || strings.HasSuffix(name, "_seed") ||
-						strings.Contains(name, "private_key") || strings.HasSuffix(name, "api_key") ||
-						strings.HasSuffix(name, "hmac_key_file") ||
-						strings.HasSuffix(name, "_token") || (strings.HasSuffix(name, "access_key") && fieldPath != ".system.service_auth.access_key")
-					if sensitive && (value.Kind != yaml.ScalarNode || strings.TrimSpace(value.Value) != "" && value.Tag != "!!null") {
-						return fmt.Errorf("nonempty credential field %s is not permitted", key.Value)
-					}
-					if err := visit(value, fieldPath); err != nil {
-						return err
-					}
-				}
-				if environmentName != nil && environmentName.Kind == yaml.ScalarNode &&
-					scfYAMLCredentialEnvironmentName.MatchString(strings.TrimSpace(environmentName.Value)) &&
-					environmentValue != nil && (environmentValue.Kind != yaml.ScalarNode || (strings.TrimSpace(environmentValue.Value) != "" && environmentValue.Tag != "!!null")) {
-					return fmt.Errorf("credential environment variable value is not permitted")
-				}
-				return nil
-			}
-			for _, child := range node.Content {
-				if err := visit(child, path); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		if err := visit(&document, ""); err != nil {
-			return err
-		}
-	}
-}
-
-func hasNonemptySCFCredentialAssignment(content []byte) bool {
-	for _, match := range scfYAMLCredentialAssignment.FindAllIndex(content, -1) {
-		if len(match) < 2 {
-			continue
-		}
-		valueBytes := content[match[1]:]
-		if lineEnd := bytes.IndexByte(valueBytes, '\n'); lineEnd >= 0 {
-			valueBytes = valueBytes[:lineEnd]
-		}
-		value := strings.TrimSpace(strings.TrimSuffix(string(valueBytes), "\r"))
-		if value == "" || strings.HasPrefix(value, "#") {
-			continue
-		}
-		if value[0] == '"' || value[0] == '\'' {
-			closing := strings.IndexByte(value[1:], value[0])
-			if closing < 0 {
-				return true
-			}
-			remainder := strings.TrimSpace(value[closing+2:])
-			if strings.TrimSpace(value[1:1+closing]) != "" || remainder != "" && !strings.HasPrefix(remainder, "#") {
-				return true
-			}
-			continue
-		}
-		fields := strings.Fields(value)
-		if len(fields) == 0 {
-			continue
-		}
-		if fields[0] == "~" || strings.EqualFold(fields[0], "null") {
-			remainder := strings.TrimSpace(strings.TrimPrefix(value, fields[0]))
-			if remainder != "" && !strings.HasPrefix(remainder, "#") {
-				return true
-			}
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func addZipFile(zw *zip.Writer, src, dst string) error {

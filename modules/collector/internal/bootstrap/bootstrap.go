@@ -27,7 +27,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
-	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -370,7 +369,7 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State)
 }
 
 // registerCollectorBackground 启动 Collector 的后台任务：K 线重采样与保留期清理。
-// 维护与清理每轮现取管理集合（managedSpaces，与采集计划同一份名单）；合成覆盖 barclock 登记的全部市场。
+// 维护与清理每轮现取管理集合（managedSpaces，与采集计划同一份名单）；合成跨空间通配消费事件，兜底检查覆盖全部已启用的合成任务。
 // 实时行情采集已全部由 SCF 定时器按采集计划触发（见 registerFetchPlanManager），这里不再有任何行情调度。
 func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *fetchplan.ControlMetrics, process *Runtime, bus *eventBusRuntime) {
 	if s == nil || cfg == nil || dbm == nil {
@@ -379,7 +378,7 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	metadataSource := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
 	var resample *resampleRuntime
 	if cfg.KlineResample.Enabled {
-		runtime, resampleErr := newResampleRuntime(process, dbm, cfg, metadataSource, resampleSpaceIDs(), bus)
+		runtime, resampleErr := newResampleRuntime(process, dbm, cfg, metadataSource, bus)
 		if resampleErr != nil {
 			log.WarnContextf(process.ctx, "collector kline resample disabled: %v", resampleErr)
 		} else {
@@ -492,15 +491,4 @@ func nextMaintenanceSpaceCursor(current, spaces int) int {
 		return 0
 	}
 	return (current + 1) % spaces
-}
-
-// resampleSpaceIDs 返回 K 线合成的消费者与兜底检查覆盖的空间：barclock 登记的全部市场（没有登记交易日历的空间本来就不能合成）。
-// 名单是固定的，新建合成任务不需要重启；Collector 的 EventBus 凭据也按这份名单授权。
-func resampleSpaceIDs() []string {
-	markets := barclock.Markets()
-	spaceIDs := make([]string, 0, len(markets))
-	for _, market := range markets {
-		spaceIDs = append(spaceIDs, market.ID)
-	}
-	return spaceIDs
 }

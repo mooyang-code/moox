@@ -49,19 +49,29 @@ describe("Trade public API", () => {
     await trade.createLogicalAccount(logical);
     expect(call).toHaveBeenLastCalledWith("trade", "CreateLogicalAccount", logical);
     const paper = {
-      account_name: "paper",
+      name: "paper",
       logical_account_name: "manual",
       exchange: "binance" as const,
       markets: ["spot", "swap"] as ("spot" | "swap")[],
       settlement_asset: "USDT",
-      initial_balance: "1000",
-      maker_fee_rate: "0",
-      taker_fee_rate: "0",
-      slippage_bps: "0",
+      paper: {
+        initial_balance: "1000",
+        maker_fee_rate: "0",
+        taker_fee_rate: "0",
+        slippage_bps: "0"
+      },
       control_mode: 2 as const
     };
-    await trade.createPaperSimulation(paper);
-    expect(call).toHaveBeenLastCalledWith("trade", "CreatePaperSimulation", paper);
+    await trade.createTradingAccount(paper);
+    expect(call).toHaveBeenLastCalledWith("trade", "CreateTradingAccount", paper);
+
+    await trade.updateTradingAccount({ trading_account_id: "ta-paper-1", status: "DISABLED" });
+    expect(call).toHaveBeenLastCalledWith("trade", "UpdateTradingAccount", {
+      trading_account_id: "ta-paper-1",
+      status: "DISABLED"
+    });
+    expect(trade).not.toHaveProperty("createPaperSimulation");
+    expect(trade).not.toHaveProperty("closePaperSimulation");
   });
 
   it("文案键与后端状态一一对应", () => {

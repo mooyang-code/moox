@@ -64,6 +64,60 @@ func MarketForCalendar(calendarID string) (Market, bool) {
 	return Market{}, false
 }
 
+// MarketForDataset 按数据集的 alignment 与 calendar 属性解析分桶方式，不依赖 space_id == market_id 静态绑定：
+//   - epoch_utc（或 alignment 与 calendar 均为空、或 calendar 为 crypto_24x7）：24 小时连续分桶；
+//   - session：按 calendar_id 查找已登记交易时段市场（cn_stock / hk_stock / us_stock 等）；
+//   - alignment 为空但给了交易时段 calendar_id 时，同样按该交易日历解析。
+func MarketForDataset(alignment, calendarID string) (Market, error) {
+	alignment = strings.ToLower(strings.TrimSpace(alignment))
+	calendarID = strings.ToLower(strings.TrimSpace(calendarID))
+	switch alignment {
+	case "":
+		if calendarID == "" || calendarID == "crypto_24x7" {
+			return Market{Alignment: AlignmentEpochUTC, Timezone: "UTC"}, nil
+		}
+		market, ok := MarketForCalendar(calendarID)
+		if !ok {
+			return Market{}, fmt.Errorf("%w：未登记的交易日历 %q", ErrNoCalendar, calendarID)
+		}
+		return market, nil
+	case AlignmentEpochUTC:
+		if calendarID != "" && calendarID != "crypto_24x7" {
+			return Market{}, fmt.Errorf("alignment %q 不能搭配交易时段日历 %q", AlignmentEpochUTC, calendarID)
+		}
+		return Market{Alignment: AlignmentEpochUTC, Timezone: "UTC"}, nil
+	case AlignmentSession:
+		if calendarID == "" {
+			return Market{}, fmt.Errorf("%w：session 数据集缺少 calendar 属性", ErrNoCalendar)
+		}
+		market, ok := MarketForCalendar(calendarID)
+		if !ok {
+			return Market{}, fmt.Errorf("%w：未登记的交易日历 %q", ErrNoCalendar, calendarID)
+		}
+		return market, nil
+	default:
+		return Market{}, fmt.Errorf("未知的 alignment %q（仅支持 %s、%s）", alignment, AlignmentEpochUTC, AlignmentSession)
+	}
+}
+
+// ClockForDataset 按数据集的 alignment 与 calendar 属性直接构造周期时钟。
+func ClockForDataset(alignment, calendarID string, period time.Duration) (Clock, error) {
+	market, err := MarketForDataset(alignment, calendarID)
+	if err != nil {
+		return nil, err
+	}
+	return market.Clock(period)
+}
+
+// AllowedIntradayForDataset 返回数据集 (alignment, calendar_id) 允许的日内周期（规范频率，不含 1d）。
+func AllowedIntradayForDataset(alignment, calendarID string) ([]string, error) {
+	market, err := MarketForDataset(alignment, calendarID)
+	if err != nil {
+		return nil, err
+	}
+	return market.AllowedIntraday(), nil
+}
+
 // RegularClose 返回 session 市场完整交易日的收市时刻（距本地零点的时长），即最后一个交易时段的收盘。
 func (m Market) RegularClose() (time.Duration, error) {
 	spans, err := parseSpans(m.Sessions)

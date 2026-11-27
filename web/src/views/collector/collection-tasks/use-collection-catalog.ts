@@ -9,7 +9,6 @@ import { tagMarketType, tagSource } from "@/views/data/shared/catalog-attributes
 import {
   buildOutputFieldCatalog,
   normalizeCollectionTask,
-  parseCollectionTaskInput,
   taskFrequency,
   type CollectionTaskRecord,
   type OutputFieldEntry
@@ -146,12 +145,14 @@ function createCollectionCatalog() {
     return (task.tag_ids || []).join("、") || "-";
   }
 
-  function taskRouteSummary(task: CollectionTaskRecord): string {
+  function taskRouteSummary(task: CollectionTaskRecord, visited = new Set<string>()): string {
     const routes = [...new Set(tagsForTask(task).map(tag => `${tagSource(tag) || "-"} / ${tagMarketType(tag) || "-"}`))];
     if (routes.length) return routes.join("；");
-    if (task.data_type === "kline_resample") {
-      const input = parseCollectionTaskInput(task);
-      if (input.provider || input.market) return `${input.provider || "-"} / ${input.market || "-"}`;
+    if (task.data_type === "kline_resample" && !visited.has(task.task_id)) {
+      visited.add(task.task_id);
+      const sourceId = stringParam(task, "source_task_id");
+      const source = sourceTasks.value.find(item => item.task_id === sourceId);
+      if (source) return taskRouteSummary(source, visited);
     }
     return "-";
   }

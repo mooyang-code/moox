@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // 交易（TradeConsoleService）写操作：账户与组合的创建、修改，杠杆，成员，暂停与恢复，人工下单、撤单、清仓，模拟账户的开关。
@@ -94,16 +95,46 @@ func init() {
 			Flags: []rpcFlag{reqFlag("order-id", "order_id", "订单 ID"), reason}},
 
 		// ---- 模拟账户 ----
-		rpcSpec{Path: []string{"trade", "paper", "create"}, Destructive: true, Short: "新建模拟账户，并新建或加入一个组合（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CreatePaperSimulation",
-			Flags: []rpcFlag{reqFlag("account-name", "account_name", "模拟账户名称"), strFlag("logical-account-name", "logical_account_name", "新建组合的名称（与 --logical-account-id 二选一）"),
+		rpcSpec{Path: []string{"trade", "paper", "create"}, Destructive: true, Short: "新建模拟账户，并新建或加入一个组合（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CreateTradingAccount",
+			Flags: []rpcFlag{reqFlag("account-name", "name", "模拟账户名称"), strFlag("logical-account-name", "logical_account_name", "新建组合的名称（与 --logical-account-id 二选一）"),
 				strFlag("logical-account-id", "logical_account_id", "加入已有组合"), reqFlag("exchange", "exchange", "模拟的交易所（binance、okx、ashare 或 hkex）"),
 				{Name: "markets", Field: "markets", Kind: rpcJSON, Required: true, Usage: "开通的市场，JSON 数组，如 [\"swap\"]"}, usdt,
-				strFlag("margin-mode", "margin_mode", "保证金模式（开永续时写 CROSS）"), reqFlag("initial-balance", "initial_balance", "初始资金"),
-				{Name: "maker-fee-rate", Field: "maker_fee_rate", Kind: rpcString, Default: "0.0002", Usage: "挂单费率"},
-				{Name: "taker-fee-rate", Field: "taker_fee_rate", Kind: rpcString, Default: "0.0005", Usage: "吃单费率"},
-				{Name: "slippage-bps", Field: "slippage_bps", Kind: rpcString, Default: "1", Usage: "滑点（基点）"},
+				strFlag("margin-mode", "margin_mode", "保证金模式（开永续时写 CROSS）"), reqFlag("initial-balance", "paper.initial_balance", "初始资金"),
+				{Name: "maker-fee-rate", Field: "paper.maker_fee_rate", Kind: rpcString, Default: "0.0002", Usage: "挂单费率"},
+				{Name: "taker-fee-rate", Field: "paper.taker_fee_rate", Kind: rpcString, Default: "0.0005", Usage: "吃单费率"},
+				{Name: "slippage-bps", Field: "paper.slippage_bps", Kind: rpcString, Default: "1", Usage: "滑点（基点）"},
 				strFlag("control-mode", "control_mode", "控制方式（CONTROL_MODE_STRATEGY 或 CONTROL_MODE_MANUAL）"), intFlag("priority", "priority", "在组合里的优先级"),
-				intFlag("order-retention-days", "order_retention_days", "订单与成交明细保留天数（0 不清理，默认 5）")}},
-		rpcSpec{Path: []string{"trade", "paper", "close"}, Destructive: true, Short: "关闭模拟账户（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "ClosePaperSimulation", Flags: []rpcFlag{accountID}},
+				intFlag("order-retention-days", "paper.order_retention_days", "订单与成交明细保留天数（0 不清理，默认 5）")}},
+		rpcSpec{Path: []string{"trade", "paper", "close"}, Destructive: true, Short: "关闭模拟账户（仅限模拟盘账户，不可逆；默认只预览，--yes 才执行）", Service: tradeConsole, Method: "UpdateTradingAccount", Fixed: map[string]any{"status": "DISABLED"}, Flags: []rpcFlag{accountID}, Merge: requirePaperTradingAccount},
 	)
+}
+
+// requirePaperTradingAccount 在预览与执行关闭模拟账户前校验目标账户确为模拟盘，
+// 防止通过 trade paper close 误操作停用实盘账户。
+func requirePaperTradingAccount(ctx context.Context, inv rpcInvocation, request map[string]any) error {
+	id, ok := lookupRequestString(request, "trading_account_id")
+	if !ok || strings.TrimSpace(id) == "" {
+		return nil
+	}
+	account, err := fetchObject(ctx, inv, "GetTradingAccount", map[string]any{"trading_account_id": id}, "account")
+	if err != nil {
+		return fmt.Errorf("查询执行账户失败：%w", err)
+	}
+	mode := account["execution_mode"]
+	if !isPaperExecutionMode(mode) {
+		return fmt.Errorf("账户 %s 不是模拟盘账户（execution_mode=%v），停用实盘账户请改用 trade account update", id, mode)
+	}
+	return nil
+}
+
+func isPaperExecutionMode(mode any) bool {
+	switch value := mode.(type) {
+	case string:
+		upper := strings.ToUpper(strings.TrimSpace(value))
+		return upper == "EXECUTION_MODE_PAPER" || upper == "PAPER" || upper == "1"
+	case float64:
+		return value == 1
+	default:
+		return false
+	}
 }

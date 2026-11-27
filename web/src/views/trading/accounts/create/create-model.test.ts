@@ -42,8 +42,10 @@ describe("A 股模拟账户", () => {
       markets: ["equity"],
       settlement_asset: "CNY",
       margin_mode: "",
-      maker_fee_rate: "0.0003",
-      taker_fee_rate: "0.0003"
+      paper: {
+        maker_fee_rate: "0.0003",
+        taker_fee_rate: "0.0003"
+      }
     });
     expect(validateStep(form, 2)).toBe("");
   });
@@ -89,9 +91,11 @@ describe("港股模拟账户", () => {
       markets: ["equity"],
       settlement_asset: "HKD",
       margin_mode: "",
-      initial_balance: "10000000",
-      maker_fee_rate: "0.0003",
-      taker_fee_rate: "0.0003"
+      paper: {
+        initial_balance: "10000000",
+        maker_fee_rate: "0.0003",
+        taker_fee_rate: "0.0003"
+      }
     });
   });
 
@@ -135,7 +139,7 @@ describe("新建账户", () => {
   it("模拟盘请求带市场集合，永续固定全仓，新建组合时组合名称缺省取账户名", () => {
     const form = { ...createDefaultForm(), name: " 演示 ", markets: ["spot", "swap"] as (1 | 2)[], controlMode: 2 as const };
     expect(buildPaperRequest(form)).toMatchObject({
-      account_name: "演示",
+      name: "演示",
       logical_account_name: "演示",
       control_mode: 2,
       markets: ["spot", "swap"],
@@ -152,8 +156,8 @@ describe("新建账户", () => {
     expect(request.logical_account_name).toBe("");
     expect(request.logical_account_id).toBe("l");
     expect(request.margin_mode).toBe("");
-    expect(request.order_retention_days).toBe(5);
-    expect(buildPaperRequest({ ...form, orderRetentionDays: " 0 " }).order_retention_days).toBe(0);
+    expect(request.paper.order_retention_days).toBe(5);
+    expect(buildPaperRequest({ ...form, orderRetentionDays: " 0 " }).paper.order_retention_days).toBe(0);
   });
 
   it("实盘请求带环境和密钥", () => {

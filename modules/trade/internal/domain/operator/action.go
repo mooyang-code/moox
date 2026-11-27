@@ -21,6 +21,15 @@ const (
 	ActionDelistFlatten ActionType = "DELIST_FLATTEN"
 )
 
+// ActionSource 标识操作动作的触发来源；程序按本字段识别风控/下架/人工动作，不依赖 ActionID 前缀。
+type ActionSource string
+
+const (
+	SourceUser   ActionSource = "USER"
+	SourceMargin ActionSource = "MARGIN"
+	SourceDelist ActionSource = "DELIST"
+)
+
 type Status string
 
 const (
@@ -35,6 +44,7 @@ type Action struct {
 	ID               string
 	LogicalAccountID string
 	Type             ActionType
+	Source           ActionSource
 	Reason           string
 	RequestJSON      string
 	Status           Status
@@ -45,7 +55,8 @@ type Action struct {
 func (a Action) Validate() error {
 	if blank(a.SpaceID) || blank(a.ID) || blank(a.LogicalAccountID) ||
 		blank(a.Reason) || blank(a.RequestJSON) ||
-		!validType(a.Type) || !validStatus(a.Status) {
+		!validType(a.Type) || !validStatus(a.Status) ||
+		(a.Source != "" && !validSource(a.Source)) {
 		return fmt.Errorf("%w: 缺少必填字段或取值不受支持", ErrInvalidAction)
 	}
 	return nil
@@ -57,6 +68,10 @@ func validType(value ActionType) bool {
 		value == ActionFlatten ||
 		value == ActionReduce ||
 		value == ActionDelistFlatten
+}
+
+func validSource(value ActionSource) bool {
+	return value == SourceUser || value == SourceMargin || value == SourceDelist
 }
 
 func validStatus(value Status) bool {

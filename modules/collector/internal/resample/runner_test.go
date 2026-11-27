@@ -12,10 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type fakeSource struct{ subjects []string }
+type fakeSource struct {
+	subjects []string
+	info     storagesource.DatasetInfo
+}
 
-func (f fakeSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{SubjectTags: []string{"tag"}}, nil
+func (f fakeSource) GetDataset(_ context.Context, spaceID, _ string) (storagesource.DatasetInfo, error) {
+	if f.info.Alignment != "" || f.info.ColumnTypes != nil || len(f.info.SubjectTags) > 0 {
+		out := f.info
+		if len(out.SubjectTags) == 0 {
+			out.SubjectTags = []string{"tag"}
+		}
+		return out, nil
+	}
+	info := sourceInfoForSpace(spaceID)
+	info.SubjectTags = []string{"tag"}
+	return info, nil
 }
 
 func (f fakeSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
@@ -87,6 +99,25 @@ func TestFallbackSkipsGraceWindowAndUnpreparedTasks(t *testing.T) {
 	require.Empty(t, storage.upserts, "没有就绪的任务不检查")
 }
 
+// SpaceID 为空时兜底检查自动覆盖全部存在启用重采样任务的空间（含自定义空间），不再写死 4 个市场。
+func TestFallbackAcrossAllSpacesCoversCustomSpace(t *testing.T) {
+	mgr := openState(t)
+	storage := newFakeStorage()
+	now := utc("2026-10-21T10:36:30Z")
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"5m","source_series_tag":"venue:ext","target_dataset_id":"dataset_sandbox_15m","target_frequency":"15m"}`
+	require.NoError(t, mgr.Tasks().Create(context.Background(), domain.CollectionTask{
+		SpaceID: "sandbox", TaskID: "task-sandbox", DataType: "kline_resample", CollectParams: params, Enabled: true,
+		ResultDatasetID: "dataset_sandbox_15m", PrepareState: domain.PrepareStateReady,
+	}))
+	for at := utc("2026-10-21T10:00:00Z"); at.Before(utc("2026-10-21T10:30:00Z")); at = at.Add(5 * time.Minute) {
+		storage.putSource("sandbox", "dataset_src", "EXT", "5m", "venue:ext", at, 1, 2, 0.5, 1.5, 10, 0, 0)
+	}
+	engine := &Engine{Primary: storage, State: mgr.Resample(), Now: func() time.Time { return now }}
+	fallback := &Fallback{Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"EXT"}}, Engine: engine, Config: FallbackConfig{LookbackBars: 2}}
+	require.NoError(t, fallback.Tick(context.Background(), now))
+	require.NotNil(t, storage.target("sandbox", "dataset_sandbox_15m", "EXT", "15m", "venue:ext", utc("2026-10-21T10:15:00Z")))
+}
+
 func submit(t *testing.T, mgr *store.Store, task *Task, start, end time.Time, subjects []string, now time.Time) store.ResampleJob {
 	t.Helper()
 	n := 0
@@ -138,15 +169,11 @@ func TestJobRunnerBackfillsRangeWithCursorSyncAndSkips(t *testing.T) {
 
 	require.NoError(t, runner.Tick(context.Background(), now))
 	progress, _ = mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
-	require.Equal(t, store.ResampleJobSyncing, progress.Status, "范围推进完成后进入同步")
+	require.Equal(t, store.ResampleJobSucceeded, progress.Status, "范围推进完成后直接冲刷通知并标记成功")
 	require.EqualValues(t, 7, progress.Written, "4 个桶 × 2 个标的，减去 ETH 跳过的 1 个")
 	require.EqualValues(t, 1, progress.Skipped)
 	require.Len(t, progress.SkippedSamples, 1)
 	require.Contains(t, progress.SkippedSamples[0], "ETH")
-
-	require.NoError(t, runner.Tick(context.Background(), now))
-	progress, _ = mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
-	require.Equal(t, store.ResampleJobSucceeded, progress.Status)
 	require.GreaterOrEqual(t, flushed, 1)
 
 	// 历史作业的普通写入都记为补写通知，作业 ID 在通知里。
@@ -167,9 +194,8 @@ func TestJobRunnerClipsToLatestClosedBucketAndHonorsCancelAndNotBefore(t *testin
 	task := makeTask(t, "crypto", "5m", "15m")
 	job := submit(t, mgr, task, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T11:00:00Z"), nil, now)
 	require.NoError(t, runner.Tick(context.Background(), now))
-	require.NoError(t, runner.Tick(context.Background(), now))
 	progress, _ := mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
-	require.Equal(t, store.ResampleJobSucceeded, progress.Status, "没有同步点存储时直接成功")
+	require.Equal(t, store.ResampleJobSucceeded, progress.Status, "所有已收盘桶完成后直接标记成功")
 	require.EqualValues(t, 2, progress.Written, "只合成已收盘的 10:00 与 10:15 两个桶")
 	require.Nil(t, storage.target("crypto", "dataset_task", "BTC", "15m", "venue:binance", utc("2026-10-21T10:30:00Z")))
 
@@ -206,7 +232,6 @@ func TestJobRunnerFailsJobsWithoutTaskAndRetriesTransientErrors(t *testing.T) {
 	require.Equal(t, store.ResampleJobRunning, progress.Status, "瞬时错误保留状态等待重试")
 	require.Contains(t, progress.LastError, "storage down")
 	storage.readErr = nil
-	require.NoError(t, runner.Tick(context.Background(), now))
 	require.NoError(t, runner.Tick(context.Background(), now))
 	progress, _ = mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
 	require.Equal(t, store.ResampleJobSucceeded, progress.Status)

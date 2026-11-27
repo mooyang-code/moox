@@ -172,7 +172,10 @@ func TestEveryFailureReasonUsedByTheReconcilerIsWhitelisted(t *testing.T) {
 		allowed[reason] = true
 	}
 	used := map[string]int{}
-	for _, name := range []string{"plan_reconciler.go", "plan_manager.go", "plan_cloud.go", "plan_package.go"} {
+	for _, name := range []string{
+		"plan_reconciler.go", "plan_change.go", "plan_advance.go", "plan_fleet_verify.go", "plan_backfill_func.go",
+		"plan_manager.go", "plan_cloud.go", "plan_package.go",
+	} {
 		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		require.NoError(t, err)
 		ast.Inspect(file, func(node ast.Node) bool {

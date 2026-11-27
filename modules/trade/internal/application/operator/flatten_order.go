@@ -433,6 +433,7 @@ func (s *Service) flattenChild(
 ) (store.OrderRecord, bool, error) {
 	records, err := s.Store.ListOrdersForLane(
 		ctx, spaceID, tradingAccountID, key,
+		string(orderdomain.OwnerOperator), actionID,
 	)
 	if err != nil {
 		return store.OrderRecord{}, false, err

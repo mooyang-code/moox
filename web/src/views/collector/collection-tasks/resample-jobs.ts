@@ -5,7 +5,6 @@ import { frequencyMinutes } from "@/utils/frequency";
 export const RESAMPLE_JOB_STATUS_LABELS: Record<string, string> = {
   queued: "排队中",
   running: "运行中",
-  syncing: "同步中",
   succeeded: "已完成",
   failed: "失败",
   cancelled: "已取消"
@@ -22,9 +21,9 @@ export function resampleJobStatusColor(status: string): string {
   return "arcoblue";
 }
 
-/** 作业还会继续推进（排队、运行、同步），可以取消、需要轮询。 */
+/** 作业还会继续推进（排队、运行），可以取消、需要轮询。 */
 export function isActiveResampleJob(status: string): boolean {
-  return status === "queued" || status === "running" || status === "syncing";
+  return status === "queued" || status === "running";
 }
 
 export function resampleJobOriginLabel(origin: string): string {

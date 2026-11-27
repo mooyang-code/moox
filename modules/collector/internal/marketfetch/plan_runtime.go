@@ -11,7 +11,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -221,20 +220,20 @@ func applyPlanFetchEnvironment(fetch PlanFetch) {
 // summarizeBatchFailures 把批次里失败条目的错误按（类型、摘要）归并，取出现最多的几类，
 // 写进返回值与日志，方便从一次调用的结果直接看出失败原因。没有失败时返回空串。
 func summarizeBatchFailures(data any) string {
-	payload, ok := data.(*marketfetchpb.MarketFetchBatchCompleted)
+	payload, ok := data.(*BatchCompleted)
 	if !ok || payload == nil {
 		return ""
 	}
 	counts := map[string]int{}
-	for _, item := range payload.GetItems() {
-		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) {
+	for _, item := range payload.Items {
+		if item.Outcome == string(domain.ItemOutcomeSuccess) {
 			continue
 		}
-		summary := item.GetErrorSummary()
+		summary := item.ErrorSummary
 		if len(summary) > 120 {
 			summary = summary[:120]
 		}
-		counts[item.GetOutcome()+"/"+item.GetErrorType()+": "+summary]++
+		counts[item.Outcome+"/"+item.ErrorType+": "+summary]++
 	}
 	if len(counts) == 0 {
 		return ""

@@ -7,7 +7,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 )
 
 // SymbolCollector 标的同步采集器
@@ -15,7 +14,7 @@ type SymbolCollector struct {
 	client          *binanceapi.Client
 	spotAPI         *binanceapi.SpotAPI
 	swapAPI         *binanceapi.SwapAPI
-	fetchSymbolPage func(context.Context, *sources.CollectParams) ([]*exchange.SymbolInfo, error)
+	fetchSymbolPage func(context.Context, *sources.CollectParams) ([]*binanceapi.SymbolInfo, error)
 }
 
 // NewSymbolCollector returns a configured Binance symbol protocol client.
@@ -31,7 +30,7 @@ func NewSymbolCollector(clients ...*binanceapi.Client) *SymbolCollector {
 }
 
 // fetchSymbols 获取标的列表
-func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
+func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.CollectParams) ([]*binanceapi.SymbolInfo, error) {
 	if c.fetchSymbolPage != nil {
 		return c.fetchSymbolPage(ctx, params)
 	}
@@ -75,8 +74,8 @@ func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.Coll
 
 // filterSymbols 只保留 USDT 计价的交易对，交易状态不限（带在 TradingStatus 里）：标签同步只新增 TRADING 的，
 // 已是成员、临时 BREAK 的留着交给交易状态检测，见 subjectsync.TagRunner。
-func (c *SymbolCollector) filterSymbols(symbols []*exchange.SymbolInfo) []*exchange.SymbolInfo {
-	filtered := make([]*exchange.SymbolInfo, 0, len(symbols))
+func (c *SymbolCollector) filterSymbols(symbols []*binanceapi.SymbolInfo) []*binanceapi.SymbolInfo {
+	filtered := make([]*binanceapi.SymbolInfo, 0, len(symbols))
 
 	for _, symbol := range symbols {
 		if symbol != nil && symbol.QuoteAsset == "USDT" {
@@ -87,7 +86,7 @@ func (c *SymbolCollector) filterSymbols(symbols []*exchange.SymbolInfo) []*excha
 	return filtered
 }
 
-func externalSymbol(symbol *exchange.SymbolInfo) string {
+func externalSymbol(symbol *binanceapi.SymbolInfo) string {
 	if symbol == nil {
 		return ""
 	}

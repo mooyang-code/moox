@@ -16,8 +16,9 @@ import (
 
 // TaskIndex 按（空间、源数据集、源频率）找出就绪的合成任务；任务清单按 TTL 缓存，任务变化最多延迟一个 TTL 生效。
 type TaskIndex struct {
-	Tasks *store.TaskRepository
-	TTL   time.Duration
+	Tasks  *store.TaskRepository
+	Source subjectSource
+	TTL    time.Duration
 
 	mu      sync.Mutex
 	cached  map[string]cachedTasks
@@ -70,7 +71,19 @@ func (i *TaskIndex) space(ctx context.Context, spaceID string) ([]*Task, error) 
 		if !strings.EqualFold(collection.DataType, "kline_resample") || collection.PrepareState != domain.PrepareStateReady {
 			continue
 		}
-		task, err := NewTask(collection)
+		if i.Source == nil {
+			return nil, fmt.Errorf("resample task index source is required")
+		}
+		params, parseErr := domain.ParseCollectParams(collection.CollectParams, "", "", collection.DataType)
+		if parseErr != nil {
+			log.WarnContextf(ctx, "[Collector] resample task %s has invalid params, skipped: %v", collection.TaskID, parseErr)
+			continue
+		}
+		sourceInfo, sourceErr := i.Source.GetDataset(ctx, collection.SpaceID, params.SourceDatasetID)
+		if sourceErr != nil {
+			return nil, fmt.Errorf("load resample source dataset %s/%s: %w", collection.SpaceID, params.SourceDatasetID, sourceErr)
+		}
+		task, err := NewTaskForSource(collection, sourceInfo)
 		if err != nil {
 			log.WarnContextf(ctx, "[Collector] resample task %s is invalid, skipped: %v", collection.TaskID, err)
 			continue

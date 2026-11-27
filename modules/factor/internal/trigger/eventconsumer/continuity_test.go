@@ -410,3 +410,32 @@ func TestNotReadyEventIsNotedAndCaughtUpAfterReady(t *testing.T) {
 	require.Equal(t, []time.Time{minuteAt(0), minuteAt(1), minuteAt(2)}, h.computed(), "就绪后追赶循环补算载入期间到达的周期")
 	require.Equal(t, minuteAt(2), h.state().CommittedThrough)
 }
+
+// DeleteTask 与 RetainTasks 同步清理任务的水位记录（含落盘）和内存中的缺席表。
+func TestContinuityDeleteAndRetainTasksCleanWatermarkAndAbsences(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(5)
+	require.Equal(t, jetstream.ACK, h.event(0, universe, nil).Decision)
+	require.NoError(t, h.store.Put(watermark.State{TaskID: "ftask_other", CommittedThrough: minuteAt(0), Target: minuteAt(0)}))
+	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, []string{"S00"})
+	h.cont.NoteAbsent("ftask_other", minuteAt(1), minuteAt(2), time.Minute, []string{"S01"})
+	h.cont.NoteAbsent("ftask_absent_only", minuteAt(1), minuteAt(2), time.Minute, []string{"S02"})
+
+	deleted, err := h.cont.DeleteTask(h.taskID)
+	require.NoError(t, err)
+	require.True(t, deleted)
+	_, ok := h.store.Get(h.taskID)
+	require.False(t, ok)
+	require.Empty(t, h.cont.absentAt(h.taskID, minuteAt(1)))
+
+	removed, err := h.cont.RetainTasks(map[string]struct{}{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"ftask_other"}, removed)
+	require.Empty(t, h.store.All())
+	require.Empty(t, h.cont.absentAt("ftask_other", minuteAt(1)))
+	require.Empty(t, h.cont.absentAt("ftask_absent_only", minuteAt(1)))
+
+	reopened, err := watermark.Open(h.store.Path())
+	require.NoError(t, err)
+	require.Empty(t, reopened.All())
+}

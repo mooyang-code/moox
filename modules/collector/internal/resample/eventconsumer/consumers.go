@@ -85,13 +85,12 @@ func nakDelay(configured time.Duration) time.Duration {
 
 // ConsumersConfig 是事件消费者的参数；连接由 Collector 级的 eventbus.Hub 提供。
 type ConsumersConfig struct {
-	SpaceIDs      []string
 	FetchMaxWait  time.Duration
 	AckWait       time.Duration
 	MaxAckPending int
 }
 
-// Consumers 持有每个空间的两个持久消费者；JetStream 连接是共享的，由 Collector 级的 Hub 管理，这里不关闭它。
+// Consumers 持有跨空间的源周期完成与补采完成两个持久消费者；JetStream 连接是共享的，由 Collector 级的 Hub 管理，这里不关闭它。
 type Consumers struct {
 	consumers []*events.Consumer
 	cancel    context.CancelFunc
@@ -99,12 +98,9 @@ type Consumers struct {
 	closeOnce sync.Once
 }
 
-// Start 在已有连接上启动源周期完成与补采完成两个消费者（每个空间各一个持久消费者）。
+// Start 在已有连接上启动跨空间通配的源周期完成与补采完成两个持久消费者。
 // 任一消费者创建失败就关掉已建的并返回错误：由 Hub 整体重试，连续失败后上报关注项，不留下缺了一部分消费者的状态。
 func Start(ctx context.Context, client *jetstream.Client, cfg ConsumersConfig, registry *events.Registry, period *PeriodHandler, backfilled *BackfilledHandler) (*Consumers, error) {
-	if len(cfg.SpaceIDs) == 0 {
-		return nil, errors.New("resample consumers need at least one space")
-	}
 	if client == nil {
 		return nil, errors.New("resample consumers need an EventBus connection")
 	}
@@ -120,47 +116,42 @@ func Start(ctx context.Context, client *jetstream.Client, cfg ConsumersConfig, r
 	if pending <= 0 {
 		pending = 16
 	}
-	for _, spaceID := range cfg.SpaceIDs {
-		for _, spec := range []struct {
-			name    string
-			event   events.Event
-			handler jetstream.DeliveryHandler
-		}{
-			{events.CollectorResamplePeriodConsumer.NameFor(spaceID), events.DatasetPeriodCompleted, period},
-			{events.CollectorResampleBackfilledConsumer.NameFor(spaceID), events.CollectorKlineBackfilled, backfilled},
-		} {
-			consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{
-				ConsumerConfig: events.ConsumerConfig{
-					Name: spec.name, Event: spec.event, AckWait: ackWait, MaxDeliver: 10, MaxAckPending: pending,
-					FetchMaxWait: fetchWait, DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true,
-				},
-				SpaceID: spaceID,
-			})
-			if err != nil {
-				_ = c.Close()
-				return nil, fmt.Errorf("start consumer %s: %w", spec.name, err)
-			}
-			c.consumers = append(c.consumers, consumer)
-			runner := jetstream.NewRunner(consumer, spec.handler, jetstream.RunnerConfig{
-				BatchSize: pending, InProgressInterval: ackWait / 4,
-				ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-					log.ErrorContextf(runCtx, "[Collector] resample consumer %s error: %v", spec.name, err)
-				}),
-			})
-			c.wg.Add(1)
-			go func(name string) {
-				defer c.wg.Done()
-				for runCtx.Err() == nil {
-					if err := runner.Run(runCtx); err != nil && runCtx.Err() == nil {
-						log.ErrorContextf(runCtx, "[Collector] resample consumer %s stopped: %v", name, err)
-					}
-					select {
-					case <-runCtx.Done():
-					case <-time.After(time.Second):
-					}
-				}
-			}(spec.name)
+	for _, spec := range []struct {
+		name    string
+		event   events.Event
+		handler jetstream.DeliveryHandler
+	}{
+		{events.CollectorResamplePeriodConsumer.Name(), events.DatasetPeriodCompleted, period},
+		{events.CollectorResampleBackfilledConsumer.Name(), events.CollectorKlineBackfilled, backfilled},
+	} {
+		consumer, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
+			Name: spec.name, Event: spec.event, AckWait: ackWait, MaxDeliver: 10, MaxAckPending: pending,
+			FetchMaxWait: fetchWait, DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true,
+		})
+		if err != nil {
+			_ = c.Close()
+			return nil, fmt.Errorf("start consumer %s: %w", spec.name, err)
 		}
+		c.consumers = append(c.consumers, consumer)
+		runner := jetstream.NewRunner(consumer, spec.handler, jetstream.RunnerConfig{
+			BatchSize: pending, InProgressInterval: ackWait / 4,
+			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+				log.ErrorContextf(runCtx, "[Collector] resample consumer %s error: %v", spec.name, err)
+			}),
+		})
+		c.wg.Add(1)
+		go func(name string) {
+			defer c.wg.Done()
+			for runCtx.Err() == nil {
+				if err := runner.Run(runCtx); err != nil && runCtx.Err() == nil {
+					log.ErrorContextf(runCtx, "[Collector] resample consumer %s stopped: %v", name, err)
+				}
+				select {
+				case <-runCtx.Done():
+				case <-time.After(time.Second):
+				}
+			}
+		}(spec.name)
 	}
 	return c, nil
 }

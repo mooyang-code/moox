@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -53,8 +54,8 @@ func (b *Backfiller) RefetchAfterClose(ctx context.Context, spaceID string) erro
 	sort.Strings(ids)
 	var failed error
 	for _, datasetID := range ids {
-		// 来源写 manual：自动补采遇到未结束的 auto 作业会跳过本轮，监控也把 auto 作业的分块算作实时采集漏掉的根。
-		jobID, chunks, err := b.Submit(ctx, JobRequest{SpaceID: spaceID, DatasetID: datasetID, From: from, To: to, Force: true}, recoverySource)
+		// 来源写 close_refetch：与自动补采（auto）、恢复追赶（catchup）、历史补齐（seed）正交隔离。
+		jobID, chunks, err := b.Submit(ctx, JobRequest{SpaceID: spaceID, DatasetID: datasetID, From: from, To: to, Force: true}, store.BackfillSourceCloseRefetch)
 		if err != nil {
 			failed = errors.Join(failed, err)
 			continue

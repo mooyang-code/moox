@@ -37,68 +37,6 @@ type Catalog struct {
 	View ViewWaiter
 }
 
-// klineField 是合成任务取的一列与它是否必填；类型、显示名与分组取自 taskresult.KlineOutputFields。
-type klineField struct {
-	name     string
-	required bool
-}
-
-var priceFields = []klineField{
-	{"open", true},
-	{"high", true},
-	{"low", true},
-	{"close", true},
-	{"volume", true},
-}
-
-// fieldsFor 返回市场的合成结果字段：加密货币带计价币成交额和成交笔数；A 股只有成交额，且可以为空。
-func fieldsFor(tradeCount bool) []klineField {
-	if tradeCount {
-		return append(append([]klineField(nil), priceFields...),
-			klineField{"quote_volume", true},
-			klineField{"trade_num", true})
-	}
-	return append(append([]klineField(nil), priceFields...),
-		klineField{"amount", false})
-}
-
-// AllOutputFieldNames 按 K 线基础字段顺序返回重采样可输出的所有基础字段名（供管理台任务表单展示）。
-func AllOutputFieldNames() []string {
-	return []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num", "amount"}
-}
-
-// ValidateOutputFields 校验重采样任务指定的输出字段是否均属于该市场可合成的字段集合。
-func ValidateOutputFields(spaceID string, outputFields []string) error {
-	if len(outputFields) == 0 {
-		return nil
-	}
-	// 保留对资金费率的明确提示，源数据集带这一列不影响合成，但不能显式要求输出它。
-	if domain.HasOutputField(outputFields, domain.FieldFundingRate) {
-		return fmt.Errorf("重采样不能合成输出字段 %s，请从输出字段里去掉它", domain.FieldFundingRate)
-	}
-	tradeCount, err := hasTradeCount(spaceID)
-	if err != nil {
-		return err
-	}
-	allowed := fieldsFor(tradeCount)
-	allowedSet := make(map[string]struct{}, len(allowed))
-	allowedNames := make([]string, 0, len(allowed))
-	for _, field := range allowed {
-		allowedSet[field.name] = struct{}{}
-		allowedNames = append(allowedNames, field.name)
-	}
-	for _, raw := range outputFields {
-		name := strings.ToLower(strings.TrimSpace(raw))
-		if name == "" {
-			continue
-		}
-		if _, ok := allowedSet[name]; !ok {
-			return fmt.Errorf("重采样不能合成输出字段 %s（当前市场可选：%s）", name, strings.Join(allowedNames, "、"))
-		}
-	}
-	return nil
-}
-
 // PrepareTarget creates or validates the target Dataset and its columns. Existing resources with a mismatched immutable contract
 // are rejected instead of being silently overwritten.
 func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.Subject) error {
@@ -112,17 +50,17 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if err != nil {
 		return err
 	}
-	tradeCount, err := hasTradeCount(task.SpaceID)
+	market, err := barclock.MarketForDataset(source.Alignment, source.Attributes["calendar"])
 	if err != nil {
 		return err
 	}
-	market, err := barclock.MarketFor(task.SpaceID)
+	rules, err := ResolveTaskRules(source.ColumnTypes, params.OutputFields)
 	if err != nil {
 		return err
 	}
-	sessionAttrs, _, err := taskresult.SessionAttributes(task.SpaceID)
-	if err != nil {
-		return err
+	sessionAttrs := map[string]string{}
+	if market.CalendarID != "" {
+		sessionAttrs["calendar"] = market.CalendarID
 	}
 	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
 	params.TargetDatasetID = ids.DatasetID
@@ -133,14 +71,14 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		sourceDataSourceID = source.Attributes["source_data_source_id"]
 	}
 	immutableAttrs := map[string]string{
-		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "market_type": strings.ToLower(params.MarketType),
+		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID,
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": sourceDataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
 		"target_freq": targetFreq.Storage,
 	}
 	attrs := cloneStringMap(immutableAttrs)
-	// 交易时段市场写入与原始采集一致的 calendar 属性，避免下游策略因缺省回退到 crypto_24x7 日历。
+	// 交易时段数据集透传源数据集的 calendar 属性，避免下游策略因缺省回退到 crypto_24x7 日历。
 	for key, value := range sessionAttrs {
 		attrs[key] = value
 	}
@@ -165,7 +103,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if target.GetRetInfo() == nil {
 		return errors.New("get target Dataset: empty ret_info")
 	}
-	columns := targetDatasetColumns(tradeCount, params.OutputFields)
+	columns := targetDatasetColumns(rules)
 	if taskresult.IsDatasetNotFound(target.GetRetInfo().GetCode()) {
 		// 数据集连同列在一次调用里建好，建好即可写入。
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: &storagepb.Dataset{
@@ -191,13 +129,13 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(errors.New("target Dataset is empty"))
 	}
 	if target.GetDataset().GetAlignment() != market.Alignment {
-		return compensate(fmt.Errorf("目标数据集的 alignment %q 与市场的 %q 不一致", target.GetDataset().GetAlignment(), market.Alignment))
+		return compensate(fmt.Errorf("目标数据集的 alignment %q 与源数据集的 %q 不一致", target.GetDataset().GetAlignment(), market.Alignment))
 	}
 	// 先校验除派生属性（如 calendar）外的全部不可变血缘契约，确保不会误修改其他任务的数据集。
 	if err := validateTargetDataset(target.GetDataset(), immutableAttrs, targetFreq.Storage); err != nil {
 		return compensate(err)
 	}
-	// 存量交易时段市场目标数据集仅缺失 calendar 时原地回填；非空且不匹配时按血缘冲突拒绝。
+	// 存量交易时段目标数据集仅缺失 calendar 时原地回填；非空且不匹配时按血缘冲突拒绝。
 	if !createdDataset && len(sessionAttrs) > 0 {
 		missing := map[string]string{}
 		for key, expected := range sessionAttrs {
@@ -254,30 +192,26 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	return compensate(err)
 }
 
-// targetDatasetColumns 返回目标数据集的列定义：市场的合成字段，指定了输出字段时只取选中的那些。
+// targetDatasetColumns 按解析出的列规则生成目标数据集的列定义。
 // 显示名与分组按字段名取自采集结果的基础字段（taskresult.KlineOutputFields），合成任务不另起名字。
-func targetDatasetColumns(tradeCount bool, outputFields []string) []*storagepb.DatasetColumn {
-	var columns []*storagepb.DatasetColumn
-	for _, field := range fieldsFor(tradeCount) {
-		if len(outputFields) > 0 && !containsOutputField(outputFields, field.name) {
-			continue
+func targetDatasetColumns(rules []FieldRule) []*storagepb.DatasetColumn {
+	columns := make([]*storagepb.DatasetColumn, 0, len(rules))
+	for _, rule := range rules {
+		spec, ok := taskresult.KlineOutputField(rule.Name)
+		valueType := rule.ValueType
+		displayName := rule.Name
+		group := taskresult.GroupTrading
+		if ok {
+			valueType = spec.Kind
+			displayName = spec.DisplayName
+			group = spec.Group
 		}
-		spec, _ := taskresult.KlineOutputField(field.name)
 		columns = append(columns, &storagepb.DatasetColumn{
-			ColumnName: field.name, ValueType: spec.Kind, DisplayName: spec.DisplayName, Group: spec.Group,
-			Required: field.required, Status: "active",
+			ColumnName: rule.Name, ValueType: valueType, DisplayName: displayName, Group: group,
+			Required: !rule.Nullable, Status: "active",
 		})
 	}
 	return columns
-}
-
-func containsOutputField(fields []string, name string) bool {
-	for _, field := range fields {
-		if strings.EqualFold(strings.TrimSpace(field), name) {
-			return true
-		}
-	}
-	return false
 }
 
 // cleanupCreatedTarget 删掉本轮刚建的目标数据集；它的查询索引由 storage-view 随之摘掉。

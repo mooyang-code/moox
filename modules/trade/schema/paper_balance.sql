@@ -4,9 +4,9 @@ CREATE TABLE IF NOT EXISTS t_paper_asset_balances (
     c_trading_account_id TEXT NOT NULL,
     c_asset TEXT NOT NULL,
     c_total TEXT NOT NULL,
-    PRIMARY KEY (c_space_id, c_trading_account_id, c_asset),
+    CHECK (c_asset <> ''),
+    CHECK (c_total <> ''),
     FOREIGN KEY (c_space_id, c_trading_account_id)
         REFERENCES t_paper_account_configs (c_space_id, c_trading_account_id),
-    CHECK (c_asset <> ''),
-    CHECK (c_total <> '')
+    PRIMARY KEY (c_space_id, c_trading_account_id, c_asset)
 );

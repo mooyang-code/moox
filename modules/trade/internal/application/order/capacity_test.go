@@ -272,9 +272,9 @@ func TestCheckPaperFundsLetsReduceOnlyCloseNearFullMargin(t *testing.T) {
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 		now := time.Unix(1_700_000_000, 0)
 		reduce := Validation{Account: account, ReservedAsset: "USDT", ReservedQuantity: fee, ReduceOnly: true}
-		require.NoError(t, checkPaperFunds(tx, reduce, usedMarginAdjustment, fee, "", "", now), "减仓单现金覆盖手续费即可")
+		require.NoError(t, checkLocalLedgerFunds(tx, reduce, usedMarginAdjustment, fee, "", "", now), "减仓单现金覆盖手续费即可")
 		open := Validation{Account: account, ReservedAsset: "USDT", ReservedQuantity: fee}
-		require.ErrorIs(t, checkPaperFunds(tx, open, usedMarginAdjustment, fee, "", "", now), ErrInsufficientFunds, "开仓单仍然不能占用已被占满的保证金")
+		require.ErrorIs(t, checkLocalLedgerFunds(tx, open, usedMarginAdjustment, fee, "", "", now), ErrInsufficientFunds, "开仓单仍然不能占用已被占满的保证金")
 		return nil
 	}))
 }

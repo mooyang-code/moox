@@ -18,7 +18,8 @@ describe("resample jobs", () => {
     expect(resampleJobStatusLabel("")).toBe("-");
     expect(resampleJobOriginLabel("source_backfill")).toBe("补采触发");
     expect(resampleJobOriginLabel("manual")).toBe("手动");
-    expect(isActiveResampleJob("syncing")).toBe(true);
+    expect(isActiveResampleJob("running")).toBe(true);
+    expect(isActiveResampleJob("queued")).toBe(true);
     expect(isActiveResampleJob("succeeded")).toBe(false);
   });
 

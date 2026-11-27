@@ -19,11 +19,11 @@ import (
 )
 
 // resampleRuntime 汇总本地 K 线合成的各个部分：准备目标数据集、兜底检查、历史作业与补写通知发布。
-// 事件主路径（订阅源数据集的周期完成事件与补采完成事件）由 consumers 承担，没有配置事件总线时只靠兜底检查。
+// 事件主路径（订阅源数据集的周期完成事件与补采完成事件）由跨空间通配 consumers 承担，没有配置事件总线时只靠兜底检查。
 type resampleRuntime struct {
 	cfg       KlineResampleConfig
 	preparer  *collectorresample.Preparer
-	fallbacks []*collectorresample.Fallback
+	fallback  *collectorresample.Fallback
 	jobs      *collectorresample.JobRunner
 	publisher *collectorresample.NoticePublisher
 }
@@ -32,7 +32,7 @@ type resampleRuntime struct {
 const jobDrainBudget = 40 * time.Second
 
 // newResampleRuntime 构造合成运行时；元数据或存储客户端不可用时返回错误，调用方按“合成关闭”处理。
-func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source *storagesource.DatasetSource, spaceIDs []string, bus *eventBusRuntime) (*resampleRuntime, error) {
+func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source *storagesource.DatasetSource, bus *eventBusRuntime) (*resampleRuntime, error) {
 	metadataClient, err := marketstorage.NewGatewayResampleMetadataClient(process.gateway)
 	if err != nil {
 		return nil, fmt.Errorf("metadata client: %w", err)
@@ -63,12 +63,10 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	runtime := &resampleRuntime{
 		cfg:      k,
 		preparer: &collectorresample.Preparer{Tasks: dbm.Tasks(), Source: source, Catalog: catalog, Limit: 50},
-	}
-	for _, spaceID := range spaceIDs {
-		runtime.fallbacks = append(runtime.fallbacks, &collectorresample.Fallback{
+		fallback: &collectorresample.Fallback{
 			Tasks: dbm.Tasks(), Source: source, Engine: engine, Metrics: metrics,
-			Config: collectorresample.FallbackConfig{SpaceID: spaceID, LookbackBars: k.FallbackLookbackBars, Grace: k.FallbackGrace, MaxBucketsPerTick: k.FallbackMaxBuckets},
-		})
+			Config: collectorresample.FallbackConfig{LookbackBars: k.FallbackLookbackBars, Grace: k.FallbackGrace, MaxBucketsPerTick: k.FallbackMaxBuckets},
+		},
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
@@ -87,10 +85,10 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	runtime.jobs = jobs
 
 	if bus != nil {
-		index := &collectorresample.TaskIndex{Tasks: dbm.Tasks()}
+		index := &collectorresample.TaskIndex{Tasks: dbm.Tasks(), Source: source}
 		// 启动时事件总线可能还没起来：Collector 级的连接管理器每分钟重试，连上之后才创建消费者。
 		bus.hub.OnConnected("K 线合成消费者", func(_ context.Context, client *jetstream.Client) (func() error, error) {
-			consumers, startErr := eventconsumer.Start(process.ctx, client, eventconsumer.ConsumersConfig{SpaceIDs: spaceIDs}, registry,
+			consumers, startErr := eventconsumer.Start(process.ctx, client, eventconsumer.ConsumersConfig{}, registry,
 				&eventconsumer.PeriodHandler{Registry: registry, Trigger: &collectorresample.PeriodTrigger{Index: index, Engine: engine, Metrics: metrics}},
 				&eventconsumer.BackfilledHandler{
 					Registry: registry,
@@ -127,17 +125,14 @@ func (r *resampleRuntime) tick(ctx context.Context) {
 		}
 	}
 	step("preparation", r.preparer.RunOnce)
-	for _, fallback := range r.fallbacks {
-		fallback := fallback
-		step("fallback check space="+fallback.Config.SpaceID, func(c context.Context) error { return fallback.Tick(c, time.Now().UTC()) })
-	}
+	step("fallback check", func(c context.Context) error { return r.fallback.Tick(c, time.Now().UTC()) })
 	step("notice publish", r.publisher.Flush)
 	if err := r.jobs.Drain(ctx, jobDrainBudget); err != nil {
 		log.WarnContextf(ctx, "collector kline resample jobs failed: %v", err)
 	}
 }
 
-// cleanupNoticeState 清理过期的补写通知、已发布事件与已结束的历史合成作业。补写通知也由补采写入，
+// cleanupNoticeState 清理过期的补写通知、已发布事件、已结束的历史合成作业与被替代的旧目标快照。补写通知也由补采写入，
 // 所以每个维护轮都做，不看合成开没开。
 func cleanupNoticeState(ctx context.Context, state *store.ResampleStateRepository, now time.Time) error {
 	var errs []error
@@ -146,6 +141,9 @@ func cleanupNoticeState(ctx context.Context, state *store.ResampleStateRepositor
 	}
 	if _, err := state.CleanupFinishedJobs(ctx, now.Add(-resampleJobRetention)); err != nil {
 		errs = append(errs, fmt.Errorf("cleanup resample jobs: %w", err))
+	}
+	if _, err := state.CleanupSnapshots(ctx, now.Add(-resampleSnapshotRetention)); err != nil {
+		errs = append(errs, fmt.Errorf("cleanup resample snapshots: %w", err))
 	}
 	return errors.Join(errs...)
 }
@@ -157,9 +155,10 @@ func sealStaleNotices(ctx context.Context, publisher *collectorresample.NoticePu
 	return publisher.FlushOlderThan(ctx, now.Add(-noticeSealAfter))
 }
 
-// 补写通知（含未成批的）与已结束历史作业的保留期；noticeSealAfter 是维护轮兜底封存的通知最小年龄。
+// 补写通知（含未成批的）、已结束历史作业与历史标的快照的保留期；noticeSealAfter 是维护轮兜底封存的通知最小年龄。
 const (
-	noticeSealAfter      = time.Hour
-	noticeRetention      = 7 * 24 * time.Hour
-	resampleJobRetention = 30 * 24 * time.Hour
+	noticeSealAfter           = time.Hour
+	noticeRetention           = 7 * 24 * time.Hour
+	resampleJobRetention      = 30 * 24 * time.Hour
+	resampleSnapshotRetention = 30 * 24 * time.Hour
 )

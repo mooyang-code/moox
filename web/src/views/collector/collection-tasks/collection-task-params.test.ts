@@ -8,6 +8,7 @@ import {
   INGEST_OPTIONS,
   ingestLabel,
   parseKlineResampleParams,
+  resampleOutputFieldOptions,
   collectionTaskNameError,
   availableExtraFieldIds,
   baseOutputFieldIds,
@@ -90,13 +91,11 @@ describe("collection task params", () => {
     expect(payload.collect_params).toEqual({ source_task_id: "task-1m", target_frequency: "5m" });
   });
 
-  it("parses resample routing from collect_params", () => {
+  it("parses resample params without coercing provider or market_type", () => {
     const task = normalizeCollectionTask({
       task_id: "resample-routing",
       data_type: "kline_resample",
       collect_params: {
-        provider: "moox",
-        market_type: "spot",
         source_dataset_id: "source-bars",
         source_frequency: "1m",
         source_series_tag: "venue:binance",
@@ -105,15 +104,41 @@ describe("collection task params", () => {
       }
     });
 
-    expect(parseKlineResampleParams(task.collect_params)).toMatchObject({
-      provider: "moox",
-      market_type: "spot",
+    const parsed = parseKlineResampleParams(task.collect_params);
+    expect(parsed).toEqual({
       source_dataset_id: "source-bars",
+      source_frequency: "1m",
       source_series_tag: "venue:binance",
       target_frequency: "5m",
       source_task_id: "task-1m"
     });
-    expect(parseCollectionTaskInput(task)).toMatchObject({ provider: "moox", market: "spot", sourceTaskId: "task-1m" });
+    expect(parsed).not.toHaveProperty("provider");
+    expect(parsed).not.toHaveProperty("market_type");
+    const input = parseCollectionTaskInput(task);
+    expect(input).toMatchObject({ sourceTaskId: "task-1m", frequency: "5m" });
+    expect(input.market).toBeUndefined();
+    expect(input.provider).toBeUndefined();
+  });
+
+  it("drives resample output fields from source dataset preview columns", () => {
+    const fallback = [
+      { field_id: "open", display_name: "开盘价" },
+      { field_id: "close", display_name: "收盘价" },
+      { field_id: "quote_volume", display_name: "计价币成交额" },
+      { field_id: "amount", display_name: "成交额" }
+    ];
+    const sourceFiveCols = [
+      { field_id: "open", display_name: "开盘价", group: "行情价格" },
+      { field_id: "high", display_name: "最高价", group: "行情价格" },
+      { field_id: "low", display_name: "最低价", group: "行情价格" },
+      { field_id: "close", display_name: "收盘价", group: "行情价格" },
+      { field_id: "volume", display_name: "成交量", group: "成交估值" }
+    ];
+    expect(resampleOutputFieldOptions(null, fallback)).toEqual(fallback);
+    expect(resampleOutputFieldOptions({ allowed_output_fields: sourceFiveCols }, fallback)).toEqual(sourceFiveCols);
+    // 切换源数据集后，源数据集不含的 quote_volume 自动被裁剪。
+    const allowedBase = baseOutputFieldIds(resampleOutputFieldOptions({ allowed_output_fields: sourceFiveCols }, fallback));
+    expect(pruneUnavailableFields(["open", "close", "quote_volume"], new Set(), true, allowedBase)).toEqual(["open", "close"]);
   });
 
   it("emits result_config separately from the task payload", () => {
@@ -195,8 +220,7 @@ describe("collection task params", () => {
     expect(taskFrequency(task)).toBe("5m");
     expect(parseCollectionTaskInput(task)).toMatchObject({
       dataType: "kline_resample",
-      frequency: "5m",
-      provider: "moox"
+      frequency: "5m"
     });
   });
 });

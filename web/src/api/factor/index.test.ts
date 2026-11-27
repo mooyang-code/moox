@@ -16,6 +16,7 @@ import {
   deleteFactorTask,
   getFactor,
   getFactorStatus,
+  listAllFactorTasks,
   listFactors,
   listFactorTasks,
   recalcFactors,
@@ -44,8 +45,20 @@ describe("FactorMgr factor-set API", () => {
 
   it("lists sets and factor definitions with their new request fields", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_tasks: [] });
-    await listFactorTasks({ status: "enabled", page: { page: 1, size: 20 } });
-    expect(call).toHaveBeenLastCalledWith("ListFactorTasks", { status: "enabled", page: { page: 1, size: 20 } });
+    await listFactorTasks({ status: "enabled", space_id: "crypto", page: { page: 1, size: 20 } });
+    expect(call).toHaveBeenLastCalledWith("ListFactorTasks", {
+      status: "enabled",
+      space_id: "crypto",
+      page: { page: 1, size: 20 }
+    });
+
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_tasks: [], page_result: { has_more: false } });
+    await listAllFactorTasks();
+    expect(call).toHaveBeenLastCalledWith("ListFactorTasks", { page: { page: 1, size: 200 } });
+
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_tasks: [], page_result: { has_more: false } });
+    await listAllFactorTasks("crypto");
+    expect(call).toHaveBeenLastCalledWith("ListFactorTasks", { space_id: "crypto", page: { page: 1, size: 200 } });
 
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factors: [] });
     await listFactors({ task_id: "set-1", status: "enabled", page: { page: 1, size: 20 } });

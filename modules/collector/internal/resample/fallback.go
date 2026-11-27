@@ -60,7 +60,15 @@ func (f *Fallback) Tick(ctx context.Context, now time.Time) error {
 	}
 	defer f.mu.Unlock()
 	cfg := f.Config.withDefaults()
-	tasks, err := f.Tasks.ListEnabled(ctx, cfg.SpaceID)
+	var (
+		tasks []domain.CollectionTask
+		err   error
+	)
+	if strings.TrimSpace(cfg.SpaceID) == "" {
+		tasks, err = f.Tasks.ListEnabledResample(ctx)
+	} else {
+		tasks, err = f.Tasks.ListEnabled(ctx, cfg.SpaceID)
+	}
 	if err != nil {
 		return err
 	}
@@ -87,11 +95,19 @@ func (f *Fallback) Tick(ctx context.Context, now time.Time) error {
 
 // checkTask 检查并补齐一个任务；返回用掉的桶数。
 func (f *Fallback) checkTask(ctx context.Context, collection domain.CollectionTask, now time.Time, cfg FallbackConfig, budget int) (int, error) {
-	task, err := NewTask(collection)
+	params, err := domain.ParseCollectParams(collection.CollectParams, "", "", collection.DataType)
 	if err != nil {
 		return 0, err
 	}
-	subjects, err := SourceSubjects(ctx, f.Source, task)
+	sourceInfo, err := f.Source.GetDataset(ctx, collection.SpaceID, params.SourceDatasetID)
+	if err != nil {
+		return 0, fmt.Errorf("get resample source Dataset: %w", err)
+	}
+	task, err := NewTaskForSource(collection, sourceInfo)
+	if err != nil {
+		return 0, err
+	}
+	subjects, err := resolveSubjectIDs(ctx, f.Source, task.Spec.SpaceID, sourceInfo.SubjectTags)
 	if err != nil || len(subjects) == 0 {
 		return 0, err
 	}
@@ -144,8 +160,12 @@ func (f *Fallback) missing(ctx context.Context, task *Task, buckets []barclock.B
 	if limit <= 0 {
 		limit = defaultMaxReadKeys
 	}
+	probeField := fieldClose
+	if len(task.Spec.Rules) > 0 {
+		probeField = task.Spec.Rules[0].Name
+	}
 	for start := 0; start < len(keys); start += limit {
-		rows, err := f.Engine.Primary.ReadRows(ctx, keys[start:min(start+limit, len(keys))], []string{fieldClose}, nil)
+		rows, err := f.Engine.Primary.ReadRows(ctx, keys[start:min(start+limit, len(keys))], []string{probeField}, nil)
 		if err != nil {
 			return nil, fmt.Errorf("read target rows: %w", err)
 		}

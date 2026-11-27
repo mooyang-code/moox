@@ -13,8 +13,6 @@ gateway_client:
 space_id: ""
 instance_id: ""
 data_dir: ../data
-# 相对本文件所在目录。
-market_config: sources/market/binance.yaml
 storage_timeout_ms: 4000
 local_executor:
   concurrency: 4

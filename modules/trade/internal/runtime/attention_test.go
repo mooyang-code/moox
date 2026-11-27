@@ -7,6 +7,7 @@ import (
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
@@ -65,7 +66,11 @@ func TestAttentionFundsShortageIsReportedOnlyAsTransferShortfall(t *testing.T) {
 	worker.blockedSince["logical-1"] = start
 	target := store.LogicalAccountTargetRecord{
 		Status: targetapp.StatusBlocked, ValidUntil: 120_000,
-		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SPOT", Reason: "合约钱包可划转的资金不足，现货买入按现有资金缩小"}},
+		BlockedTargets: []store.BlockedTarget{{
+			InstrumentID: "BTC-USDT-SPOT",
+			ReasonCode:   store.BlockedReasonTransferShortfall,
+			Reason:       "合约钱包可划转的资金不足，现货买入按现有资金缩小",
+		}},
 	}
 	items := map[string][]string{}
 	require.NoError(t, worker.noteTarget(context.Background(), logical, target, now, items, map[string]time.Time{}))
@@ -75,6 +80,16 @@ func TestAttentionFundsShortageIsReportedOnlyAsTransferShortfall(t *testing.T) {
 	require.NoError(t, worker.noteTarget(context.Background(), logical, target, now, items, map[string]time.Time{}))
 	require.Len(t, items[telemetry.AttentionTargetBlocked], 1)
 	require.Contains(t, items[telemetry.AttentionTargetBlocked][0], "ETH-USDT-SPOT")
+
+	// 仅携带中文文案但缺少 ReasonCode 时不再被误判为划转资金缺口（D6 消除文案前缀状态机）。
+	textOnly := store.LogicalAccountTargetRecord{
+		Status: targetapp.StatusBlocked, ValidUntil: 120_000,
+		BlockedTargets: []store.BlockedTarget{{InstrumentID: "SOL-USDT-SPOT", Reason: "合约钱包可划转的资金不足，现货买入按现有资金缩小"}},
+	}
+	textOnlyItems := map[string][]string{}
+	require.NoError(t, worker.noteTarget(context.Background(), logical, textOnly, now, textOnlyItems, map[string]time.Time{}))
+	require.Empty(t, textOnlyItems[telemetry.AttentionTransferShortfall])
+	require.Len(t, textOnlyItems[telemetry.AttentionTargetBlocked], 1)
 }
 
 // 资金缺口是持续状态：目标 BLOCKED 且带着资金不足的项，每次扫描都上报（不等阻塞超过一根 K 线，也不依赖事件窗口）；
@@ -85,7 +100,12 @@ func TestAttentionFundsShortageIsDerivedFromCurrentTargetState(t *testing.T) {
 	logical := store.LogicalAccountRecord{LogicalAccountID: "logical-1", Name: "组合"}
 	target := store.LogicalAccountTargetRecord{
 		Status: targetapp.StatusBlocked, ValidUntil: 3_600_000,
-		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.005", Reason: "合约钱包可划转的资金不足，现货买入按现有资金缩小"}},
+		BlockedTargets: []store.BlockedTarget{{
+			InstrumentID: "BTC-USDT-SPOT",
+			Quantity:     "0.005",
+			ReasonCode:   store.BlockedReasonTransferShortfall,
+			Reason:       "合约钱包可划转的资金不足，现货买入按现有资金缩小",
+		}},
 	}
 	for range 2 {
 		items := map[string][]string{}
@@ -147,9 +167,13 @@ func TestAttentionReportsMarginReduceOfAManualGroupOnlyWhileRecent(t *testing.T)
 	}
 
 	require.Empty(t, scan(time.Now()), "没有风控减仓")
+	now := time.Now().UTC()
 	_, _, err = tradeStore.CreateOperatorAction(ctx, store.OperatorActionRecord{
-		SpaceID: "space-1", ActionID: store.MarginActionIDPrefix + "logical-1-1", LogicalAccountID: "logical-1", ActionType: "REDUCE",
-		Reason: store.MarginPause(store.MarginReduced).Reason, RequestJSON: `{"logical_account_id":"logical-1","reduce_ratio":"0.1"}`, Status: "RUNNING",
+		SpaceID: "space-1", ActionID: "margin-logical-1-1", LogicalAccountID: "logical-1", ActionType: "REDUCE",
+		Source:      string(operatordomain.SourceMargin),
+		Reason:      store.MarginPause(store.MarginReduced).Reason,
+		RequestJSON: `{"logical_account_id":"logical-1","reduce_ratio":"0.1"}`, Status: "RUNNING",
+		CreatedAt: now, UpdatedAt: now,
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"自主组合：保证金率过低，风控正在或刚刚按比例减仓"}, scan(time.Now().Add(time.Hour)), "还在跑就一直报")

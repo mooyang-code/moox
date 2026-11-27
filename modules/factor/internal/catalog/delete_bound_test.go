@@ -23,14 +23,17 @@ func boundTaskWithEnabledMember(t *testing.T) (*Service, *store.Store, *metadata
 	return svc, db, meta
 }
 
-// 关联的任务连同已启用的成员、结果数据集一起删除；重复调用仍然成功。
+// 关联的任务连同已启用的成员、结果数据集一起删除；重复调用仍然成功，并同步清除结果就绪状态。
 func TestDeleteBoundTaskRemovesMembersDatasetAndTask(t *testing.T) {
 	ctx := context.Background()
 	svc, db, meta := boundTaskWithEnabledMember(t)
+	ready := map[string]bool{testTaskID(): true}
+	svc.recordReady = func(taskID string, isReady bool) { ready[taskID] = isReady }
 	task, err := db.GetTask(ctx, testTaskID())
 	require.NoError(t, err)
 
 	require.NoError(t, svc.DeleteBoundTask(ctx, testTaskID(), "inst-1"))
+	require.False(t, ready[testTaskID()], "DeleteBoundTask 必须通知清除 ready 状态")
 	_, err = db.GetTask(ctx, testTaskID())
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	members, err := db.ListMembers(ctx, testTaskID(), "")

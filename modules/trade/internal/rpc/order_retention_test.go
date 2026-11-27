@@ -6,7 +6,6 @@ import (
 	"time"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
@@ -18,7 +17,6 @@ import (
 func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 	tradeStore := openRPCStore(t)
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	console := &ConsoleServer{Paper: &papersimulation.Service{Store: tradeStore}}
 	accounts := &AccountServer{
 		Accounts: &accountapp.Service{
 			Store: accountapp.Repository{Store: tradeStore}, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
@@ -27,11 +25,14 @@ func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 	}
 	create := func(name string, days *int32) *tradepb.TradingAccount {
 		t.Helper()
-		rsp, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
-			AccountName: name, Exchange: "binance",
+		rsp, err := accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
+			Name: name, Exchange: "binance",
 			Markets:         []string{"swap"},
-			SettlementAsset: "USDT", MarginMode: "CROSS", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
-			OrderRetentionDays: days,
+			SettlementAsset: "USDT", MarginMode: "CROSS",
+			Paper: &tradepb.PaperConfig{
+				InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+				OrderRetentionDays: days,
+			},
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS {
 			t.Fatalf("创建 %s：%v %+v", name, err, rsp.GetRetInfo())
@@ -48,10 +49,13 @@ func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 	if got := kept.GetPaper().GetOrderRetentionDays(); got != 0 || kept.GetPaper().OrderRetentionDays == nil {
 		t.Fatalf("传 0 应存 0，得到 %v", kept.GetPaper().OrderRetentionDays)
 	}
-	if rsp, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
-		AccountName: "越界", Exchange: "binance",
+	if rsp, err := accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
+		Name: "越界", Exchange: "binance",
 		Markets: []string{"swap"}, SettlementAsset: "USDT",
-		InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", OrderRetentionDays: days(366),
+		Paper: &tradepb.PaperConfig{
+			InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+			OrderRetentionDays: days(366),
+		},
 	}); err != nil || rsp.GetRetInfo().GetCode() != tradepb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("创建时 366 天应被拒绝：%v %+v", err, rsp.GetRetInfo())
 	}

@@ -8,6 +8,7 @@ import (
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -203,6 +204,7 @@ func TestFlattenLocallyRejectedChildRetries(t *testing.T) {
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	local := endedChild(fixture, "REJECTED", "0")
 	local.SubmittedAt = 0
+	local.RejectCode = string(orderdomain.RejectCodeInsufficientFunds)
 	local.RejectReason = orderapp.ErrInsufficientFunds.Error()
 	fixture.order(t, local)
 	currentRoundOrders(t, fixture, "flatten-1")
@@ -223,6 +225,7 @@ func TestFlattenOtherLocalRejectionStillEnds(t *testing.T) {
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	local := endedChild(fixture, "REJECTED", "0")
 	local.SubmittedAt = 0
+	local.RejectCode = string(orderdomain.RejectCodeQuantityRule)
 	local.RejectReason = orderapp.ErrQuantityRule.Error()
 	fixture.order(t, local)
 	currentRoundOrders(t, fixture, "flatten-1")

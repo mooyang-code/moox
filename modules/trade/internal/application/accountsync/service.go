@@ -407,7 +407,7 @@ func (s *Service) closeInstrumentGone(ctx context.Context, local store.OrderReco
 			return nil
 		}
 		closed = true
-		return s.Fills.FinishOrderTx(tx, record, orderdomain.Expired, InstrumentGoneReason)
+		return s.Fills.FinishOrderTx(tx, record, orderdomain.Expired, orderdomain.RejectCodeInstrumentGone, InstrumentGoneReason)
 	})
 	return closed && err == nil, err
 }
@@ -1406,15 +1406,18 @@ func (s *Service) terminalize(
 	status exchange.OrderStatus,
 ) error {
 	// 唯一调用方 applyOrderState 已对终态订单提前返回，这里只处理未结束的订单。
-	next, reason := orderdomain.Expired, ""
+	next, code, reason := orderdomain.Expired, orderdomain.RejectCodeNone, ""
 	if status == exchange.OrderStatusRejected {
-		next, reason = orderdomain.Rejected, record.RejectReason
+		next, code, reason = orderdomain.Rejected, orderdomain.RejectCodeExchangeRejected, record.RejectReason
+		if record.RejectCode != "" {
+			code = orderdomain.RejectCode(record.RejectCode)
+		}
 		if reason == "" {
 			reason = "交易所拒单"
 		}
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return s.Fills.FinishOrderTx(tx, record, next, reason)
+		return s.Fills.FinishOrderTx(tx, record, next, code, reason)
 	})
 }
 

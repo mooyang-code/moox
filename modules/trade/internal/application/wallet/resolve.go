@@ -37,17 +37,18 @@ func Resolve(ctx context.Context, st *store.Store, spaceID, transferID, result, 
 		return ResolveResult{}, fmt.Errorf("%w：这笔划转 %d 分钟前才发出，不到 %d 分钟先等自动对账",
 			store.ErrInvalidRecord, int(age/time.Minute), int(pendingAlertAfter/time.Minute))
 	}
-	state, lastError, completedAt := result, "", int64(0)
+	state, failureKind, lastError, completedAt := result, store.TransferFailureNone, "", int64(0)
 	if result == store.TransferStateCompleted {
 		completedAt = now.UnixMilli()
 	} else {
-		lastError = softNotArrive + "人工核对交易所划转记录后确认没到账"
+		failureKind = store.TransferFailureNotArrived
+		lastError = "人工核对交易所划转记录后确认没到账"
 		if note = strings.TrimSpace(note); note != "" {
 			lastError += "：" + note
 		}
 	}
 	err = st.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateWalletTransfer(spaceID, transferID, row.ExchangeTransferID, state, lastError, completedAt)
+		return tx.UpdateWalletTransfer(spaceID, transferID, row.ExchangeTransferID, state, failureKind, lastError, completedAt)
 	})
 	if errors.Is(err, store.ErrNotPending) {
 		// 提交前被自动对账抢先：以最新状态为准。

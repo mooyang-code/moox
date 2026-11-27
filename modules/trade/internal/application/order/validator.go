@@ -57,12 +57,15 @@ type AccountPositionSource interface {
 }
 
 type Validation struct {
-	Account          tradingaccount.Account
-	Instrument       exchange.Instrument
-	Notional         shared.Decimal
-	Leverage         shared.Decimal
-	ReservedAsset    string
-	ReservedQuantity shared.Decimal
+	Account           tradingaccount.Account
+	Instrument        exchange.Instrument
+	Notional          shared.Decimal
+	Leverage          shared.Decimal
+	ReservedAsset     string
+	ReservedQuantity  shared.Decimal
+	ExecutionPrice    *shared.Decimal
+	FirstMatchPending bool
+	Policy            execution.OrderPolicy
 	// ReduceOnly：减仓单只预留手续费，不占用新保证金。
 	ReduceOnly bool
 }
@@ -173,49 +176,28 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		return Validation{}, ErrNotionalLimit
 	}
 
+	var adapter execution.ExecutionAdapter
+	if v.Quotes != nil {
+		if resolved, adapterErr := v.Quotes.Adapter(account.ID); adapterErr == nil {
+			adapter = resolved
+		}
+	}
+	policy := execution.ResolveOrderPolicy(adapter, account)
+
 	result := Validation{
-		Account: account, Instrument: instrument, Notional: referenceNotional,
-		Leverage: shared.MustDecimal("1"),
+		Account:    account,
+		Instrument: instrument,
+		Notional:   referenceNotional,
+		Leverage:   shared.MustDecimal("1"),
+		Policy:     policy,
 	}
-	feeRate := v.FeeBufferRate
-	if account.ExecutionMode == exchange.ExecutionModePaper && account.Paper != nil {
-		// Paper reservations use the configured worst-case fee rather than the
-		// process-wide live safety buffer. A first MARKET/LIMIT match may be
-		// taker, while a resting GTC LIMIT may later be maker.
-		feeRate = maxDecimal(account.Paper.MakerFeeRate, account.Paper.TakerFeeRate)
-	}
-	if rule := exchange.RuleFor(market); !rule.UsesMargin {
-		if spec.Side == exchange.SideBuy {
-			result.ReservedAsset = instrument.QuoteAsset
-			reserveNotional := referenceNotional
-			if account.ExecutionMode == exchange.ExecutionModePaper && spec.Type == exchange.OrderTypeMarket && account.Paper != nil {
-				reserveNotional = paperSlippagePrice(referenceNotional, spec.Side, account.Paper.SlippageBPS)
-			}
-			result.ReservedQuantity = buyReservation(account, market, reserveNotional, feeRate)
-			if spec.Type == exchange.OrderTypeLimit {
-				result.ReservedQuantity = orderNotional
-				if account.ExecutionMode == exchange.ExecutionModePaper {
-					result.ReservedQuantity = buyReservation(account, market, orderNotional, feeRate)
-				}
-			}
-		} else {
-			result.ReservedAsset = instrument.BaseAsset
-			result.ReservedQuantity = spec.Quantity
-		}
-		if !capacity && !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
-			availableFunds(account, market, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
-			return Validation{}, ErrInsufficientFunds
-		}
-	} else {
+	if rule := exchange.RuleFor(market); rule.UsesMargin {
 		leverage, found := account.LeverageSettings[spec.InstrumentID]
 		if !found {
 			leverage, found = account.LeverageSettings["*"]
 		}
-		// Paper simulations intentionally keep the lifecycle small: when no
-		// per-symbol leverage was configured, use conservative 1x CROSS
-		// margin instead of creating an account that can never place an order.
-		if !found && account.ExecutionMode == exchange.ExecutionModePaper {
-			leverage, found = shared.MustDecimal("1"), true
+		if !found {
+			leverage, found = policy.DefaultLeverage()
 		}
 		if !found || leverage.Cmp(shared.Zero()) <= 0 {
 			return Validation{}, fmt.Errorf("%w：该标的没有配置杠杆", ErrLeverageLimit)
@@ -224,55 +206,38 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			return Validation{}, ErrLeverageLimit
 		}
 		result.Leverage = leverage
-		result.ReservedAsset = account.SettlementAsset
-		reserveNotional := referenceNotional
-		if account.ExecutionMode == exchange.ExecutionModePaper && spec.Type == exchange.OrderTypeLimit && spec.LimitPrice != nil {
-			reserveNotional = orderNotional
-		}
-		if account.ExecutionMode == exchange.ExecutionModePaper && spec.Type == exchange.OrderTypeMarket && account.Paper != nil {
-			reserveNotional = paperSlippagePrice(referenceNotional, spec.Side, account.Paper.SlippageBPS)
-		}
 		if spec.ReducePositionOnly {
 			if err := v.validateReduceOnly(ctx, spec); err != nil {
 				return Validation{}, err
 			}
 			result.ReduceOnly = true
-			if account.ExecutionMode == exchange.ExecutionModePaper {
-				result.ReservedQuantity = reserveNotional.Mul(feeRate)
-			}
-		} else {
-			margin := reserveNotional.Div(leverage)
-			result.ReservedQuantity = margin
-			if account.ExecutionMode == exchange.ExecutionModePaper {
-				result.ReservedQuantity = margin.Add(reserveNotional.Mul(feeRate))
-			} else {
-				result.ReservedQuantity = withFeeBuffer(margin, feeRate)
-			}
 		}
-		if !capacity && !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
-			availableFunds(account, market, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
-			return Validation{}, ErrInsufficientFunds
-		}
+	}
+	reservation, err := policy.ComputeReservation(execution.ReservationRequest{
+		Account:          account,
+		Instrument:       instrument,
+		OrderType:        spec.Type,
+		Side:             spec.Side,
+		Quantity:         spec.Quantity,
+		ReferencePrice:   spec.ReferencePrice,
+		LimitPrice:       spec.LimitPrice,
+		ReduceOnly:       result.ReduceOnly,
+		Leverage:         result.Leverage,
+		DefaultFeeBuffer: v.FeeBufferRate,
+	})
+	if err != nil {
+		return Validation{}, err
+	}
+	result.ReservedAsset = reservation.ReservedAsset
+	result.ReservedQuantity = reservation.ReservedQuantity
+	result.ExecutionPrice = reservation.ExecutionPrice
+	result.FirstMatchPending = reservation.FirstMatchPending
+	if !capacity && !(deferPaperFunds && policy.UsesLocalFundsLedger()) &&
+		!result.ReservedQuantity.IsZero() &&
+		availableFunds(account, market, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
+		return Validation{}, ErrInsufficientFunds
 	}
 	return result, nil
-}
-
-func maxDecimal(left, right shared.Decimal) shared.Decimal {
-	if left.Cmp(right) >= 0 {
-		return left
-	}
-	return right
-}
-
-func paperSlippagePrice(notional shared.Decimal, side exchange.Side, slippage shared.Decimal) shared.Decimal {
-	if slippage.Cmp(shared.Zero()) <= 0 {
-		return notional
-	}
-	factor := shared.MustDecimal("1").Add(slippage.Div(shared.MustDecimal("10000")))
-	if side == exchange.SideSell {
-		factor = shared.MustDecimal("1").Sub(slippage.Div(shared.MustDecimal("10000")))
-	}
-	return notional.Mul(factor)
 }
 
 func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.OrderSpec) error {
@@ -298,15 +263,6 @@ func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.Orde
 		return ErrReduceOnly
 	}
 	return nil
-}
-
-// buyReservation 是买入要预留的结算资产：成交额加费用。模拟盘里有自己费用函数的场所（A 股、港股）按场所的费用函数算
-// （佣金复用 taker 费率字段，有最低佣金），和撮合扣费、下单容量是同一个函数；其余按费率比例加缓冲。
-func buyReservation(account tradingaccount.Account, market exchange.MarketType, notional, feeRate shared.Decimal) shared.Decimal {
-	if rule := exchange.RuleAt(account.Exchange, market); account.ExecutionMode == exchange.ExecutionModePaper && account.Paper != nil && rule.Fee != nil {
-		return rule.BuyCost(notional, account.Paper.TakerFeeRate)
-	}
-	return withFeeBuffer(notional, feeRate)
 }
 
 // oddLotSell 报告一笔不满足整手规则的卖单是不是合规的零股卖出：只对整手交易的市场（股票），
@@ -367,13 +323,6 @@ func validQuantity(quantity, step, minimum shared.Decimal) bool {
 		return false
 	}
 	return quantity.Div(step).IsInteger()
-}
-
-func withFeeBuffer(amount, rate shared.Decimal) shared.Decimal {
-	if rate.Cmp(shared.Zero()) <= 0 {
-		return amount
-	}
-	return amount.Add(amount.Mul(rate))
 }
 
 // availableFunds 返回订单所在钱包里某个资产的可用资金。普通账户的现货、合约钱包分开算；

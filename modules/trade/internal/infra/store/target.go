@@ -26,12 +26,36 @@ type InstrumentQuantity struct {
 	Hold bool `json:"hold,omitempty"`
 }
 
+// BlockedTarget 的结构化阻断原因码：状态机、归集判定与关注项归类一律按本字段判断，不解析中文 Reason 文案。
+const (
+	BlockedReasonNone                  = ""
+	BlockedReasonTransferShortfall     = "TRANSFER_SHORTFALL"
+	BlockedReasonTransferFailed        = "TRANSFER_FAILED"
+	BlockedReasonTransferWaiting       = "TRANSFER_WAITING"
+	BlockedReasonHourlyCap             = "HOURLY_CAP"
+	BlockedReasonPositionUnreflected   = "POSITION_UNREFLECTED"
+	BlockedReasonMarketDeferred        = "MARKET_DEFERRED"
+	BlockedReasonInsufficientFunds     = "INSUFFICIENT_FUNDS"
+	BlockedReasonExchangeRejected      = "EXCHANGE_REJECTED"
+	BlockedReasonOrderRule             = "ORDER_RULE"
+	BlockedReasonInstrumentUnavailable = "INSTRUMENT_UNAVAILABLE"
+	BlockedReasonUnfilled              = "UNFILLED"
+	BlockedReasonReversal              = "REVERSAL"
+)
+
 type BlockedTarget struct {
 	InstrumentID string `json:"instrument_id"`
 	Quantity     string `json:"quantity"`
 	Reason       string `json:"reason"`
+	// ReasonCode 是结构化原因码，供程序分支判断；展示给用户看 Reason。
+	ReasonCode string `json:"reason_code,omitempty"`
 	// Deferred 为真表示这一项不是被拦下，而是被单币每小时上限顺延到下一个整点。
 	Deferred bool `json:"deferred,omitempty"`
+}
+
+// IsTransferShortfall 报告该阻断项是否由合约钱包可划转资金不足引起。
+func (b BlockedTarget) IsTransferShortfall() bool {
+	return b.ReasonCode == BlockedReasonTransferShortfall
 }
 
 type LogicalAccountTargetRecord struct {

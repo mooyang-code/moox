@@ -4,12 +4,13 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/stretchr/testify/require"
 )
 
 func parseResampleParams(t *testing.T, source, target string, overrides string) *domain.CollectParams {
 	t.Helper()
-	raw := `{"provider":"moox","market_type":"spot","source_dataset_id":"dataset_source","source_frequency":"` + source + `","source_series_tag":"venue:binance","target_dataset_id":"dataset_target","target_frequency":"` + target + `"` + overrides + `}`
+	raw := `{"source_dataset_id":"dataset_source","source_frequency":"` + source + `","source_series_tag":"venue:binance","target_dataset_id":"dataset_target","target_frequency":"` + target + `"` + overrides + `}`
 	params, err := domain.ParseCollectParams(raw, "", "", "kline_resample")
 	require.NoError(t, err)
 	return params
@@ -17,13 +18,13 @@ func parseResampleParams(t *testing.T, source, target string, overrides string) 
 
 func TestValidateTaskParamsAcceptsTaskOwnedTargetWithoutFrequencySuffix(t *testing.T) {
 	// 结果 Dataset ID 由任务派生，不带频率后缀；这是启动时清单刷新曾因后缀检查失败的场景。
-	require.NoError(t, ValidateTaskParams("crypto", parseResampleParams(t, "1h", "4h", "")))
+	require.NoError(t, ValidateTaskParamsForSource(sourceInfoForSpace("crypto"), parseResampleParams(t, "1h", "4h", "")))
 }
 
-// 重采样不合成资金费率：只有输出字段显式要这一列时才拒绝，源数据集带这一列不影响。
-func TestValidateTaskParamsRejectsExplicitFundingRate(t *testing.T) {
-	require.NoError(t, ValidateTaskParams("crypto", parseResampleParams(t, "1h", "4h", `,"output_fields":["close"]`)))
-	err := ValidateTaskParams("crypto", parseResampleParams(t, "1h", "4h", `,"output_fields":["close","funding_rate"]`))
+// 归约规则表之外的字段（如资金费率）只有输出字段显式要这一列时才拒绝，源数据集带这一列不影响。
+func TestValidateTaskParamsRejectsNonReducibleField(t *testing.T) {
+	require.NoError(t, ValidateTaskParamsForSource(sourceInfoForSpace("crypto"), parseResampleParams(t, "1h", "4h", `,"output_fields":["close"]`)))
+	err := ValidateTaskParamsForSource(sourceInfoForSpace("crypto"), parseResampleParams(t, "1h", "4h", `,"output_fields":["close","funding_rate"]`))
 	require.ErrorContains(t, err, "funding_rate")
 }
 
@@ -41,50 +42,59 @@ func TestValidateTaskParamsRejectsInvalidPairAndIdentity(t *testing.T) {
 		{name: "target not larger", source: "1h", target: "1h", want: "greater"},
 		{name: "bad dataset id", source: "1h", target: "4h", overrides: `,"target_dataset_id":"target"`, want: "dataset_"},
 		{name: "not a multiple", source: "30m", target: "45m", want: "whole multiple"},
-		{name: "wrong alignment for crypto", source: "1m", target: "5m", overrides: `,"alignment":"session"`, want: "alignment must be epoch_utc"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.ErrorContains(t, ValidateTaskParams("crypto", parseResampleParams(t, tt.source, tt.target, tt.overrides)), tt.want)
+			require.ErrorContains(t, ValidateTaskParamsForSource(sourceInfoForSpace("crypto"), parseResampleParams(t, tt.source, tt.target, tt.overrides)), tt.want)
 		})
 	}
 }
 
-func TestValidateTaskParamsCryptoAcceptsNonStandardDivisorsOfOneDay(t *testing.T) {
+func TestValidateTaskParamsEpochAcceptsNonStandardDivisorsOfOneDay(t *testing.T) {
+	src := sourceInfoForSpace("crypto")
 	for _, pair := range [][2]string{{"5m", "45m"}, {"15m", "45m"}, {"1m", "45m"}, {"5m", "2h"}, {"1h", "12h"}, {"15m", "1d"}} {
-		require.NoError(t, ValidateTaskParams("crypto", parseResampleParams(t, pair[0], pair[1], "")), "%s→%s", pair[0], pair[1])
+		require.NoError(t, ValidateTaskParamsForSource(src, parseResampleParams(t, pair[0], pair[1], "")), "%s→%s", pair[0], pair[1])
 	}
-	require.NoError(t, ValidateTaskParams("crypto", parseResampleParams(t, "5m", "45m", `,"alignment":"epoch_utc"`)))
 }
 
-func TestValidateTaskParamsStockSessionMarketRejectsPeriodsThatDoNotDivideSessions(t *testing.T) {
-	err := ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "45m", ""))
+func TestValidateTaskParamsSessionDatasetRejectsPeriodsThatDoNotDivideSessions(t *testing.T) {
+	src := sourceInfoForSpace("stockcn")
+	err := ValidateTaskParamsForSource(src, parseResampleParams(t, "1m", "45m", ""))
 	require.ErrorContains(t, err, "09:30–11:30")
 	require.ErrorContains(t, err, "可选的日内周期")
-	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "4h", "")), "不能整除")
+	require.ErrorContains(t, ValidateTaskParamsForSource(src, parseResampleParams(t, "1m", "4h", "")), "不能整除")
 	// 源周期除不尽时段同样拒绝。
-	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "45m", "1d", "")), "不能整除")
+	require.ErrorContains(t, ValidateTaskParamsForSource(src, parseResampleParams(t, "45m", "1d", "")), "不能整除")
 
 	for _, pair := range [][2]string{{"1m", "5m"}, {"1m", "1h"}, {"5m", "30m"}, {"15m", "2h"}, {"1m", "1d"}, {"1h", "1d"}} {
-		require.NoError(t, ValidateTaskParams("stockcn", parseResampleParams(t, pair[0], pair[1], "")), "%s→%s", pair[0], pair[1])
+		require.NoError(t, ValidateTaskParamsForSource(src, parseResampleParams(t, pair[0], pair[1], "")), "%s→%s", pair[0], pair[1])
 	}
-	require.NoError(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "1h", `,"alignment":"session"`)))
-	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "1h", `,"alignment":"epoch_utc"`)), "alignment must be session")
 }
 
-func TestValidateTaskParamsRejectsMarketsWithoutCalendar(t *testing.T) {
-	require.ErrorContains(t, ValidateTaskParams("stockjp", parseResampleParams(t, "1m", "5m", "")), "没有登记交易日历")
+func TestValidateTaskParamsRejectsUnknownSessionCalendar(t *testing.T) {
+	unknownCal := storagesource.DatasetInfo{
+		Alignment:   "session",
+		Attributes:  map[string]string{"calendar": "jp_stock"},
+		ColumnTypes: ohlcvColumnTypes(),
+	}
+	require.ErrorContains(t, ValidateTaskParamsForSource(unknownCal, parseResampleParams(t, "1m", "5m", "")), "交易日历")
 }
 
-// 重采样只允许选择当前市场可合成的输出字段：拒绝 close_time、跨市场字段与未知字段。
+// 重采样只允许选择“标准归约规则表 ∩ 源数据集活跃列”内的输出字段：拒绝 close_time、源数据集缺失的可选列与未知字段。
 func TestValidateTaskParamsRejectsUnsupportedOutputFields(t *testing.T) {
-	require.NoError(t, ValidateTaskParams("crypto", parseResampleParams(t, "1m", "5m", `,"output_fields":["open","close","quote_volume","trade_num"]`)))
-	require.NoError(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "5m", `,"output_fields":["open","close","volume","amount"]`)))
+	cryptoSrc := sourceInfoForSpace("crypto")
+	stockSrc := sourceInfoForSpace("stockcn")
+	ohlcvSrc := storagesource.DatasetInfo{Alignment: "epoch_utc", ColumnTypes: ohlcvColumnTypes()}
 
-	require.ErrorContains(t, ValidateTaskParams("crypto", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","close_time"]`)), "close_time")
-	require.ErrorContains(t, ValidateTaskParams("crypto", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","amount"]`)), "amount")
-	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","close_time"]`)), "close_time")
-	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","quote_volume"]`)), "quote_volume")
-	require.ErrorContains(t, ValidateTaskParams("stockcn", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","trade_num"]`)), "trade_num")
-	require.ErrorContains(t, ValidateTaskParams("crypto", parseResampleParams(t, "1m", "5m", `,"output_fields":["close","unknown_col"]`)), "unknown_col")
+	require.NoError(t, ValidateTaskParamsForSource(cryptoSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["open","close","quote_volume","trade_num"]`)))
+	require.NoError(t, ValidateTaskParamsForSource(stockSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["open","close","volume","amount"]`)))
+	require.NoError(t, ValidateTaskParamsForSource(ohlcvSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["open","high","low","close","volume"]`)))
+
+	require.ErrorContains(t, ValidateTaskParamsForSource(cryptoSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["close","close_time"]`)), "close_time")
+	require.ErrorContains(t, ValidateTaskParamsForSource(cryptoSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["close","amount"]`)), "amount")
+	require.ErrorContains(t, ValidateTaskParamsForSource(stockSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["close","close_time"]`)), "close_time")
+	require.ErrorContains(t, ValidateTaskParamsForSource(stockSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["close","quote_volume"]`)), "quote_volume")
+	require.ErrorContains(t, ValidateTaskParamsForSource(stockSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["close","trade_num"]`)), "trade_num")
+	require.ErrorContains(t, ValidateTaskParamsForSource(ohlcvSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["close","amount"]`)), "amount")
+	require.ErrorContains(t, ValidateTaskParamsForSource(cryptoSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["close","unknown_col"]`)), "unknown_col")
 }

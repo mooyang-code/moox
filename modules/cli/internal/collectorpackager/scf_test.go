@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
@@ -14,66 +13,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildSCFPackageRequiresBinaryAndConfig(t *testing.T) {
-	_, err := BuildSCFPackage(BuildSCFPackageOptions{ConfigDir: "cfg", OutPath: "out.zip"})
+func TestBuildSCFPackageRequiresBinaryAndOutPath(t *testing.T) {
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{OutPath: "out.zip"})
 	require.ErrorContains(t, err, "binary path is required")
+	_, err = BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: "main"})
+	require.ErrorContains(t, err, "output path is required")
 }
 
-func TestBuildSCFPackageExcludesTRPCAndCLSCredentials(t *testing.T) {
+// 市场数据文件与 binance.yaml 全部内嵌在二进制中，SCF 代码包只包含单一 main 可执行文件。
+func TestBuildSCFPackageProducesSingleMainBinary(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
 	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
-	config := filepath.Join(tmp, "config")
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources", "example"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(config, "trpc_go.yaml"), []byte("secret: should-not-package\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(config, "sources", "example", "source.yaml"), []byte("kind: example\n"), 0o644))
 	out := filepath.Join(tmp, "package.zip")
-	result, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"main", "sources/example/source.yaml"}, result.Entries)
-	reader, err := zip.OpenReader(out)
-	require.NoError(t, err)
-	defer reader.Close()
-	for _, file := range reader.File {
-		assert.NotContains(t, file.Name, "trpc_go.yaml")
-		assert.NotContains(t, file.Name, "secret")
-	}
-}
 
-// 市场数据文件（路由、数据源运行参数、交易日历）都编在函数二进制里：代码包不带，仓库里有没有路由文件也不影响打包。
-func TestBuildSCFPackageDoesNotCarryMarketFiles(t *testing.T) {
-	tmp := t.TempDir()
-	binary := filepath.Join(tmp, "main")
-	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
-	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stockcn")
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	route := filepath.Join(tmp, "modules", "collector", "config", "markets", "stockcn", "route.yaml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(route), 0o755))
-	require.NoError(t, os.WriteFile(route, []byte("market_id: stockcn\n"), 0o644))
-
-	out := filepath.Join(tmp, "package.zip")
-	result, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
+	result, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, OutPath: out})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"main"}, result.Entries)
+	require.NoError(t, ValidateSCFPackageZip(out))
 
-	require.NoError(t, os.RemoveAll(filepath.Join(tmp, "modules", "collector", "config")))
-	_, err = BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
-	require.NoError(t, err)
-}
-
-func TestBuildSCFPackageSetsOutputMode0600(t *testing.T) {
-	tmp := t.TempDir()
-	binary := filepath.Join(tmp, "main")
-	config := filepath.Join(tmp, "config")
-	out := filepath.Join(tmp, "package.zip")
-	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
-	require.NoError(t, os.MkdirAll(config, 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	require.NoError(t, os.WriteFile(out, []byte("old"), 0o644))
-
-	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
-	require.NoError(t, err)
 	info, err := os.Stat(out)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
@@ -83,130 +41,37 @@ func TestBuildSCFPackageSetsOutputMode0600(t *testing.T) {
 func TestBuildSCFPackageDoesNotEmbedEnvironmentSecrets(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
-	config := filepath.Join(tmp, "config")
 	out := filepath.Join(tmp, "package.zip")
 	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources", "market"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(config, "sources", "market", "binance.yaml"), []byte(`
-storage:
-  bindings:
-    spot:
-      data_source_id: "binance"
-`), 0o644))
-
-	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
-	require.NoError(t, err)
 	t.Setenv("MOOX_EVENTBUS_NATS_PASSWORD", "test-eventbus-password")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-gateway-secret")
 
-	_, err = BuildSCFPackage(BuildSCFPackageOptions{
-		BinaryPath: binary,
-		ConfigDir:  config,
-		OutPath:    out,
-	})
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, OutPath: out})
 	require.NoError(t, err)
 	require.NoError(t, ValidateSCFPackageZip(out))
+
 	reader, err := zip.OpenReader(out)
 	require.NoError(t, err)
 	defer reader.Close()
-	for _, entry := range reader.File {
-		rc, err := entry.Open()
-		require.NoError(t, err)
-		content, err := io.ReadAll(rc)
-		require.NoError(t, err)
-		require.NoError(t, rc.Close())
-		assert.NotContains(t, string(content), "test-eventbus-password")
-	}
+	require.Len(t, reader.File, 1)
+	rc, err := reader.File[0].Open()
+	require.NoError(t, err)
+	content, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	require.NoError(t, rc.Close())
+	assert.NotContains(t, string(content), "test-eventbus-password")
+	assert.NotContains(t, string(content), "test-gateway-secret")
 }
 
-func TestValidateSCFPackageZipRejectsSecrets(t *testing.T) {
-	for _, tc := range []struct{ name, path, payload string }{
-		{"secret", "sources/market/extra.yaml", "secret: test-secret\n"},
-		{"password", "sources/market/extra.yaml", "password: test-password\n"},
-		{"nats jwt block scalar", "sources/market/extra.yaml", "credentials: |\n  -----BEGIN NATS USER JWT-----\n  test-user-jwt\n  ------END NATS USER JWT------\n"},
-		{"nkey seed", "sources/market/extra.yaml", "nats:\n  user_nkey_seed: SUABCDEF1234567890\n"},
-		{"nats jwt scalar", "sources/market/extra.yaml", "nats_user_jwt: eyJ0eXAiOiJKV1Qi.signature.payload\n"},
-		{"hmac", "sources/market/binance.yaml", "app_key: " + strings.Repeat("a", 64) + "\n"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := writeTestPackage(t, map[string][]byte{"main": testfixture.LinuxExecutable(elf.EM_X86_64), tc.path: []byte(tc.payload)})
-			err := ValidateSCFPackageZip(path)
-			require.Error(t, err)
-			assert.NotContains(t, err.Error(), "test-secret")
-			assert.NotContains(t, err.Error(), "test-password")
-		})
-	}
-}
-
-func TestValidateSCFPackageZipRejectsCredentialAssignmentsInScalarsAndLists(t *testing.T) {
-	for _, payload := range []string{
-		"note: MOOX_GATEWAY_SERVICE_SECRET_KEY=topsecret\n",
-		"notes:\n  - MOOX_EVENTBUS_NATS_PASSWORD=secret\n",
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY=topsecret:\n",
-		"# MOOX_GATEWAY_SERVICE_SECRET_KEY=topsecret\n",
-		"# \"MOOX_GATEWAY_SERVICE_SECRET_KEY\": \"topsecret\"\n",
-		"# \"MOOX_GATEWAY_SERVICE_SECRET_KEY\": \",topsecret\"\n",
-		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: \"\"topsecret\n",
-		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: null topsecret\n",
-		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: ~ topsecret\n",
-		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: null # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n",
-		"# MOOX_GATEWAY_SERVICE_SECRET_KEY: \"\" # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n",
-		"env:\n  - name: MOOX_GATEWAY_SERVICE_SECRET_KEY\n    value: topsecret\n",
-		"env:\n  - Name: MOOX_EVENTBUS_NATS_PASSWORD\n    Value: topsecret\n",
-	} {
-		path := writeTestPackage(t, map[string][]byte{
-			"main":                      testfixture.LinuxExecutable(elf.EM_X86_64),
-			"sources/market/extra.yaml": []byte(payload),
-		})
-		require.ErrorContains(t, ValidateSCFPackageZip(path), "credential")
-	}
-}
-
-func TestValidateSCFPackageZipAllowsEmptyCredentialPlaceholders(t *testing.T) {
-	for _, payload := range []string{
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY: null\n",
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY: ~\n",
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY: \"\"\n",
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY: '  '\n",
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY:",
-	} {
-		path := writeTestPackage(t, map[string][]byte{
-			"main":                      testfixture.LinuxExecutable(elf.EM_X86_64),
-			"sources/market/extra.yaml": []byte(payload),
-		})
-		require.NoError(t, ValidateSCFPackageZip(path), "placeholder %q should remain non-sensitive", payload)
-	}
-}
-
-func TestBuildSCFPackageRejectsSymlinkedConfigDirectory(t *testing.T) {
+func TestBuildSCFPackageRejectsSymlinkedBinary(t *testing.T) {
 	tmp := t.TempDir()
-	config := filepath.Join(tmp, "config")
-	linkedConfig := filepath.Join(tmp, "linked-config")
-	binary := filepath.Join(tmp, "main")
+	target := filepath.Join(tmp, "real-main")
+	linked := filepath.Join(tmp, "main")
 	out := filepath.Join(tmp, "package.zip")
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
-	require.NoError(t, os.Symlink(config, linkedConfig))
+	require.NoError(t, os.WriteFile(target, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
+	require.NoError(t, os.Symlink(target, linked))
 
-	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: linkedConfig + string(filepath.Separator), OutPath: out})
-	require.ErrorContains(t, err, "config dir")
-	_, statErr := os.Stat(out)
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
-}
-
-func TestBuildSCFPackageRejectsSymlinkedSourceFiles(t *testing.T) {
-	tmp := t.TempDir()
-	config := filepath.Join(tmp, "config")
-	secret := filepath.Join(tmp, "outside.yaml")
-	binary := filepath.Join(tmp, "main")
-	out := filepath.Join(tmp, "package.zip")
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources", "market"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	require.NoError(t, os.WriteFile(secret, []byte("note: external-private-data\n"), 0o600))
-	require.NoError(t, os.Symlink(secret, filepath.Join(config, "sources", "market", "leak.yaml")))
-	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
-
-	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: linked, OutPath: out})
 	require.ErrorContains(t, err, "symlink")
 	_, statErr := os.Stat(out)
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
@@ -214,55 +79,26 @@ func TestBuildSCFPackageRejectsSymlinkedSourceFiles(t *testing.T) {
 
 func TestBuildSCFPackageDoesNotLeaveInvalidOutput(t *testing.T) {
 	tmp := t.TempDir()
-	config := filepath.Join(tmp, "config")
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(config, "sources", "credentials.yaml"), []byte("credentials: |\n  -----BEGIN NATS USER JWT-----\n  test-user-jwt\n  ------END NATS USER JWT------\n"), 0o644))
 	binary := filepath.Join(tmp, "main")
-	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
+	require.NoError(t, os.WriteFile(binary, []byte("not-an-elf"), 0o755))
 	out := filepath.Join(tmp, "invalid.zip")
 
-	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
-	require.ErrorContains(t, err, "credential")
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, OutPath: out})
+	require.ErrorContains(t, err, "main")
 	_, statErr := os.Stat(out)
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "failed validation must not leave a publishable ZIP")
 }
 
-// 函数不连 EventBus：代码包里只能有 main 与行情源定义，带证书文件的包被拒。
-func TestValidateSCFPackageZipRejectsCertificateEntry(t *testing.T) {
+// 代码包只允许单一 main 二进制：任何额外 YAML 配置、证书或目录外载荷都会被拒绝。
+func TestValidateSCFPackageZipRejectsUnexpectedPayload(t *testing.T) {
 	require.NoError(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{"main": testfixture.LinuxExecutable(elf.EM_X86_64)})))
-	path := writeTestPackage(t, map[string][]byte{
-		"main":                  testfixture.LinuxExecutable(elf.EM_X86_64),
-		"certs/eventbus-ca.pem": []byte("-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n"),
-	})
-	require.ErrorContains(t, ValidateSCFPackageZip(path), "unexpected scf package payload")
-}
 
-func TestBuildSCFPackageRealProfilesAreCredentialFree(t *testing.T) {
-	for _, profile := range []string{"market_data", "stockcn"} {
-		t.Run(profile, func(t *testing.T) {
-			t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-profile-gateway-secret")
-			t.Setenv("MOOX_EVENTBUS_NATS_PASSWORD", "test-profile-eventbus-password")
-			tmp := t.TempDir()
-			binary := filepath.Join(tmp, "main")
-			require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
-			config := filepath.Join("..", "..", "..", "collector", "configs", "scf", profile)
-			result, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: filepath.Join(tmp, "package.zip")})
-			require.NoError(t, err)
-			require.NoError(t, ValidateSCFPackageZip(result.Path))
-			reader, err := zip.OpenReader(result.Path)
-			require.NoError(t, err)
-			defer reader.Close()
-			for _, file := range reader.File {
-				rc, err := file.Open()
-				require.NoError(t, err)
-				content, err := io.ReadAll(rc)
-				require.NoError(t, err)
-				require.NoError(t, rc.Close())
-				assert.NotContains(t, string(content), "test-profile-gateway-secret")
-				assert.NotContains(t, string(content), "test-profile-eventbus-password")
-			}
+	for _, extra := range []string{"sources/market/binance.yaml", "certs/eventbus-ca.pem", "trpc_go.yaml"} {
+		path := writeTestPackage(t, map[string][]byte{
+			"main": testfixture.LinuxExecutable(elf.EM_X86_64),
+			extra:  []byte("payload: true\n"),
 		})
+		require.ErrorContains(t, ValidateSCFPackageZip(path), "unexpected scf package payload", extra)
 	}
 }
 
@@ -272,15 +108,11 @@ func TestValidateSCFPackageZipRejectsDuplicatePaths(t *testing.T) {
 	require.NoError(t, err)
 	zw := zip.NewWriter(file)
 	for range 2 {
-		require.NoError(t, addZipBytes(zw, []byte("kind: example\n"), "sources/example/source.yaml", 0o644))
+		require.NoError(t, addZipBytes(zw, testfixture.LinuxExecutable(elf.EM_X86_64), "main", 0o755))
 	}
 	require.NoError(t, zw.Close())
 	require.NoError(t, file.Close())
 	require.ErrorContains(t, ValidateSCFPackageZip(path), "duplicate")
-}
-
-func TestValidateSCFPackageZipRejectsAccessKeyOutsideServiceIdentity(t *testing.T) {
-	require.Error(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{"main": testfixture.LinuxExecutable(elf.EM_X86_64), "sources/market/extra.yaml": []byte("access_key: test-credential\n")})))
 }
 
 func TestValidateSCFPackageZipRequiresExecutableLinuxMain(t *testing.T) {
@@ -325,7 +157,7 @@ func TestValidateSCFPackageZipRequiresExecutableLinuxMain(t *testing.T) {
 }
 
 func TestValidateSCFPackageZipRequiresMain(t *testing.T) {
-	require.ErrorContains(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{"sources/example/source.yaml": []byte("kind: example\n")})), "main")
+	require.ErrorContains(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{})), "main")
 }
 
 func writeTestPackage(t *testing.T, files map[string][]byte) string {

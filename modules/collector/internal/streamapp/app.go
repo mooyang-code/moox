@@ -34,9 +34,11 @@ type App struct {
 
 // New 打开网关客户端并装配运行时、同步代理与本地执行端（不启动）。
 func New(cfg *Config, version string, registerer prometheus.Registerer) (*App, error) {
-	// 数据源适配器从这个文件读 WS 地址与限额、REST 端点。
-	if err := os.Setenv("MOOX_STORAGE_MARKET_CONFIG", cfg.MarketConfig); err != nil {
-		return nil, err
+	// 若显式提供了存在的外部覆盖文件则通过环境变量透传；否则默认读取二进制内嵌的 crypto/sources/binance.yaml。
+	if cfg.MarketConfig != "" {
+		if err := os.Setenv("MOOX_STORAGE_MARKET_CONFIG", cfg.MarketConfig); err != nil {
+			return nil, err
+		}
 	}
 	gateway, err := cfg.GatewayClient.OpenInternal(cfg.SourcePath(), cfg.DataDir, func(err error) { log.Warnf("collector-stream directory refresh failed: %v", err) })
 	if err != nil {

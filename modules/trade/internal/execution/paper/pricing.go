@@ -25,11 +25,7 @@ func MarketExecutionPrice(side exchange.Side, quote execution.MarketQuote, slipp
 	if base.IsZero() || quote.SourceTime.IsZero() {
 		return shared.Decimal{}, fmt.Errorf("paper: quote is unavailable")
 	}
-	factor := shared.MustDecimal("1").Add(slippageBPS.Div(shared.MustDecimal("10000")))
-	if side == exchange.SideSell {
-		factor = shared.MustDecimal("1").Sub(slippageBPS.Div(shared.MustDecimal("10000")))
-	}
-	return base.Mul(factor), nil
+	return execution.ApplySlippage(base, side, slippageBPS), nil
 }
 
 func LimitMarketable(side exchange.Side, limit, last shared.Decimal) bool {

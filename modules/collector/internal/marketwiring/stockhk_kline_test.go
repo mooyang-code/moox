@@ -139,7 +139,7 @@ func TestStockHKScheduledRequestWritesTheTargetBar(t *testing.T) {
 	})
 	payload, err := pipeline.Execute(context.Background(), request())
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 	require.Contains(t, query, "secid=116.00836&klt=5&fqt=0&beg=20261112&end=20261112&lmt=1205")
 	require.Len(t, storage.committed, 1, "只写目标那一根")
 	key := storage.committed[0].GetRow().GetKey()
@@ -163,7 +163,7 @@ func TestStockHKScheduledRequestWritesTheTargetBar(t *testing.T) {
 	pipeline = stockHKPipeline(t, early, hkTime("2026-11-12 14:50:04"), nil, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
 	payload, err = pipeline.Execute(context.Background(), request())
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
+	require.Equal(t, "failed", payload.Status)
 	require.Empty(t, early.committed)
 }
 
@@ -190,7 +190,7 @@ func TestStockHKBackfillRequestWritesEveryBarInTheRange(t *testing.T) {
 			}},
 		})
 		require.NoError(t, err)
-		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+		require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 		times := make([]string, 0, len(storage.rows))
 		for _, row := range storage.rows {
 			times = append(times, row.GetKey().GetTimeSeries().GetDataTime())
@@ -279,7 +279,7 @@ func TestStockHKDisconnectsAtTheStartDoNotFailTheWholeBatch(t *testing.T) {
 		DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "disconnect", Concurrency: 16, FetchLimits: limits, Items: items,
 	})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 	subjects := map[string]bool{}
 	for _, row := range storage.rows {
 		subjects[row.GetKey().GetTimeSeries().GetSubjectId()] = true
@@ -324,7 +324,7 @@ func TestStockHKFallsBackToTencentWhenEastMoneyDisconnects(t *testing.T) {
 		DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "fallback", Concurrency: 4, FetchLimits: limits, Items: items,
 	})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 	require.Len(t, storage.rows, 3)
 	for _, row := range storage.rows {
 		require.Equal(t, "2026-11-23T02:00:00Z", row.GetKey().GetTimeSeries().GetDataTime())
@@ -376,12 +376,12 @@ func TestStockHKForcedBackfillSkipsTheApproximateFallback(t *testing.T) {
 		require.NoError(t, err)
 		require.EqualValues(t, 3, eastmoney.Load())
 		if completeOnly {
-			require.Equal(t, "failed", payload.GetStatus())
+			require.Equal(t, "failed", payload.Status)
 			require.Empty(t, storage.rows)
 			require.Zero(t, tencent.Load(), "强制补采不请求备源")
 			continue
 		}
-		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+		require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 		require.Len(t, storage.rows, 2)
 		require.EqualValues(t, 1, tencent.Load())
 	}

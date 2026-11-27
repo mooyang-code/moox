@@ -9,7 +9,6 @@ import (
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
-	walletapp "github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
@@ -250,7 +249,7 @@ func (w *AttentionWorker) noteTarget(
 		// 资金缺口是持续状态：目标一直 BLOCKED 且带着资金不足的项就一直上报，不依赖 5 分钟的事件窗口
 		// （已阻塞的目标不会被定时重新收敛，策略周期长于窗口时事件早就过期了）。固定文字、不带会变的数字。
 		for _, item := range target.BlockedTargets {
-			if !item.Deferred && walletapp.IsFundsShortage(item.Reason) {
+			if !item.Deferred && item.IsTransferShortfall() {
 				items[telemetry.AttentionTransferShortfall] = append(items[telemetry.AttentionTransferShortfall],
 					logical.Name+"：合约钱包可划转的资金不足，现货买入被缩小或挡下")
 				break
@@ -260,7 +259,7 @@ func (w *AttentionWorker) noteTarget(
 			// 合约钱包可划转资金不足同时有 transfer_shortfall 在报，这里跳过它，同一个缺口不发两条告警；
 			// 只有别的原因的阻塞才算目标持续阻塞。
 			for _, blocked := range target.BlockedTargets {
-				if blocked.Deferred || walletapp.IsFundsShortage(blocked.Reason) {
+				if blocked.Deferred || blocked.IsTransferShortfall() {
 					continue
 				}
 				items[telemetry.AttentionTargetBlocked] = append(items[telemetry.AttentionTargetBlocked],

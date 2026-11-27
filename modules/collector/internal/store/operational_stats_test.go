@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/stretchr/testify/require"
@@ -44,10 +45,12 @@ func TestOperationalStatsSpaceCapped(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	require.NoError(t, s.ApplySchema(schema.AllSQL()))
+	start := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC).UnixMilli()
+	end := time.Date(2026, 10, 21, 11, 0, 0, 0, time.UTC).UnixMilli()
 	for _, subject := range []string{"a", "b", "c"} {
-		require.NoError(t, s.db.Exec(`INSERT INTO t_collector_backfill_notices (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_start, c_end, c_origin) VALUES ('crypto', 'd', '1m', ?, '2026-10-21 10:00:00', '2026-10-21 11:00:00', 'auto')`, subject).Error)
+		require.NoError(t, s.db.Exec(`INSERT INTO t_collector_backfill_notices (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_start, c_end, c_origin) VALUES ('crypto', 'd', '1m', ?, ?, ?, 'auto')`, subject, start, end).Error)
 	}
-	require.NoError(t, s.db.Exec(`INSERT INTO t_collector_backfill_notices (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_start, c_end, c_origin) VALUES ('other', 'd', '1m', 'x', '2026-10-21 10:00:00', '2026-10-21 11:00:00', 'auto')`).Error)
+	require.NoError(t, s.db.Exec(`INSERT INTO t_collector_backfill_notices (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_start, c_end, c_origin) VALUES ('other', 'd', '1m', 'x', ?, ?, 'auto')`, start, end).Error)
 	stats, err := s.OperationalStats(context.Background(), "crypto", 2)
 	require.NoError(t, err)
 	require.Equal(t, OperationalRowCount{Count: 2, Capped: true}, stats.Rows["backfill_notices"])

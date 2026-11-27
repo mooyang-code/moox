@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/crypto"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 )
 
 // ToSymbol maps the suffix-free BASE-QUOTE subject to the Binance wire symbol.
@@ -24,7 +24,7 @@ func ToSymbol(subjectID string) (string, error) {
 }
 
 // ToSubjectID converts only structured exchange assets into a durable subject ID.
-func ToSubjectID(symbol *exchange.SymbolInfo) (string, error) {
+func ToSubjectID(symbol *binanceapi.SymbolInfo) (string, error) {
 	if symbol == nil {
 		return "", fmt.Errorf("%w: nil symbol", marketdata.ErrUnsupportedSymbol)
 	}

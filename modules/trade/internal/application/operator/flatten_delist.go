@@ -8,11 +8,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
-	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -114,14 +112,16 @@ type delistHistory struct {
 // loadDelistHistory 读本动作在这个标的上已结束的子单。被拒和连续未成交只统计这一轮起点之后创建的子单：
 // 同一个动作号在 FAILED、PARTIAL 之后重试会重新记起点，让重试真的重新来过；起点之前的子单只影响号和间隔。
 func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand, tradingAccountID string, key exchange.SymbolKey) (delistHistory, error) {
-	records, err := s.Store.ListOrdersForLane(ctx, command.SpaceID, tradingAccountID, key)
+	records, err := s.Store.ListOrdersForLane(
+		ctx, command.SpaceID, tradingAccountID, key,
+		string(orderdomain.OwnerOperator), command.ActionID,
+	)
 	if err != nil {
 		return delistHistory{}, err
 	}
 	var finished []store.OrderRecord
 	for _, current := range records {
-		if current.OwnerType == string(orderdomain.OwnerOperator) && current.OwnerID == command.ActionID &&
-			orderdomain.State(current.State).Terminal() {
+		if orderdomain.State(current.State).Terminal() {
 			finished = append(finished, current)
 		}
 	}
@@ -159,7 +159,7 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 			break
 		}
 		// 休市前一刻发出、休市时被模拟撮合撤掉的单不是一次真正的尝试，下个时段继续。
-		if thisRound[index].RejectReason == paper.OutOfSessionReason {
+		if thisRound[index].RejectCode == string(orderdomain.RejectCodeOutOfSession) {
 			continue
 		}
 		history.unfilled++
@@ -167,11 +167,12 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 	return history, nil
 }
 
-// localCapacityReject 报告拒单是否是提交前在本地判定的资金不足、只减仓无效（还没发给交易所，SubmittedAt 为 0；原因文字就是这两个错误的原文）。
+// localCapacityReject 报告拒单是否是提交前在本地判定的资金不足、只减仓无效（还没发给交易所，SubmittedAt 为 0；按结构化 RejectCode 判断）。
 // 它们与 Place 的口径一致：持仓、余额可能只是还没同步，按零成交换号重试、到上限才终结，不当成交易所的确定性拒绝。
 func localCapacityReject(record store.OrderRecord) bool {
 	return record.SubmittedAt == 0 &&
-		(record.RejectReason == orderapp.ErrInsufficientFunds.Error() || record.RejectReason == orderapp.ErrReduceOnly.Error())
+		(record.RejectCode == string(orderdomain.RejectCodeInsufficientFunds) ||
+			record.RejectCode == string(orderdomain.RejectCodeReduceOnly))
 }
 
 // flattenMaxUnfilled 是清仓、减仓、下架清仓在一个标的上连续零成交的子单上限，到了就按终结处理、要人工看，不无限下单。

@@ -677,7 +677,116 @@ func TestCatchupSubmitsOneJobAndReportsWhenGapsAreFilled(t *testing.T) {
 
 	job, _, err := backfiller.Store.GetJob(ctx, state.JobID)
 	require.NoError(t, err)
+	require.Equal(t, store.BackfillSourceCatchup, job.Source, "恢复追赶作业来源必须是 catchup")
 	require.Equal(t, store.BackfillSucceeded, job.Status)
+}
+
+// 慢速历史补齐（seed）或人工/自动/收市重取作业运行中时，不阻塞 system resume 追赶：
+// Catchup 只跟踪 catchup 来源的未结束作业，追赶窗口补完即立刻放行。
+func TestCatchupIgnoresActiveSeedAndNonCatchupJobs(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	ctx := context.Background()
+	// 先放一个长时间未结束的历史补齐作业（seed）和一个手动作业（manual）。
+	rows.mu.Lock()
+	rows.missing["BTC-USDT"][base.Add(-20*time.Minute).Unix()] = true
+	rows.mu.Unlock()
+	seedJob := store.BackfillJob{
+		JobID: "seed-long-job", SpaceID: "crypto", Source: store.BackfillSourceSeed, Kind: store.BackfillKindGap,
+		DatasetID: "ds", Frequency: "1m", From: base.Add(-30 * time.Minute), To: base,
+	}
+	require.NoError(t, backfiller.Store.CreateJob(ctx, seedJob, []store.BackfillChunk{{
+		DatasetID: "ds", Frequency: "1m", SubjectID: "BTC-USDT",
+		From: base.Add(-20 * time.Minute), To: base.Add(-19 * time.Minute), ChunkID: "seed-chunk-1",
+	}}))
+	manualJob := store.BackfillJob{
+		JobID: "manual-other-job", SpaceID: "crypto", Source: store.BackfillSourceManual, Kind: store.BackfillKindGap,
+		DatasetID: "ds", Frequency: "1m", From: base.Add(-40 * time.Minute), To: base.Add(-30 * time.Minute),
+	}
+	require.NoError(t, backfiller.Store.CreateJob(ctx, manualJob, []store.BackfillChunk{{
+		DatasetID: "ds", Frequency: "1m", SubjectID: "BTC-USDT",
+		From: base.Add(-40 * time.Minute), To: base.Add(-39 * time.Minute), ChunkID: "manual-chunk-1",
+	}}))
+
+	// Catchup 不被 seed/manual 阻塞，立即提交自己的 catchup 作业。
+	state, err := backfiller.Catchup(ctx, "crypto", base, base.Add(time.Hour))
+	require.NoError(t, err)
+	require.Positive(t, state.Missing)
+	require.NotEmpty(t, state.JobID)
+	require.Equal(t, 1, state.ActiveJobs)
+	require.False(t, state.CaughtUp())
+
+	catchupJob, _, err := backfiller.Store.GetJob(ctx, state.JobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSourceCatchup, catchupJob.Source)
+
+	// 仅把 catchup 作业标成成功并补齐暂停区间缺口（seed-long-job 和 manual-other-job 仍未结束）：
+	// Catchup 立即判定追平，不陪着慢速 seed 阻塞。
+	require.NoError(t, backfiller.Store.SetJobStatus(ctx, state.JobID, store.BackfillSucceeded, ""))
+	rows.mu.Lock()
+	for _, minute := range []int{3, 4, 5} {
+		delete(rows.missing["BTC-USDT"], base.Add(time.Duration(minute)*time.Minute).Unix())
+	}
+	delete(rows.missing["ETH-USDT"], base.Add(10*time.Minute).Unix())
+	rows.mu.Unlock()
+
+	final, err := backfiller.Catchup(ctx, "crypto", base, base.Add(time.Hour))
+	require.NoError(t, err)
+	require.Zero(t, final.ActiveJobs, "非 catchup 作业不计入追赶活跃作业")
+	require.True(t, final.CaughtUp(), "seed 与 manual 仍在跑时，追赶窗口补完即放行")
+}
+
+// AutoScan 按 (dataset_id, frequency) 粒度互斥：数据集 A 有未结束的 auto 作业时，
+// 只跳过数据集 A，不阻塞同空间数据集 B 的自动扫描与建单。
+func TestAutoScanMutexIsScopedPerDatasetFrequency(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = db.Close() })
+
+	const slot = 5 * time.Minute
+	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
+	base := now.Add(-48*time.Hour - 3*time.Minute)
+	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{
+		{Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds_a", Frequency: "1m", Subjects: []string{"BTC-USDT"}},
+		{Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds_b", Frequency: "1m", Subjects: []string{"BTC-USDT"}},
+	}, nil)
+	require.NoError(t, err)
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: base})
+	require.NoError(t, err)
+	raw, err := json.Marshal(content)
+	require.NoError(t, err)
+	record, err := db.FetchPlans().Create(ctx, "crypto", string(raw), "{}")
+	require.NoError(t, err)
+	require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanApplied, "{}", "", appliedTimeline("crypto", string(raw))...))
+
+	rows := &fakeRows{missing: map[string]map[int64]bool{
+		"BTC-USDT": {base.Add(3 * time.Minute).Unix(): true},
+	}}
+	checker := &Checker{Timeline: db.SeriesTimeline(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }}
+	backfiller := &Backfiller{
+		Checker: checker, Store: db.Backfill(), Routes: fakeRoutes{}, Invoker: &healingInvoker{rows: rows}, BaseCtx: ctx,
+		Now: func() time.Time { return now }, Functions: func(string) FunctionProvider { return fakeFunctions{} },
+	}
+
+	// 先为 ds_a|1m 建一个未结束的 auto 作业。
+	require.NoError(t, db.Backfill().CreateJob(ctx, store.BackfillJob{
+		JobID: "auto-ds-a", SpaceID: "crypto", Source: store.BackfillSourceAuto, Kind: store.BackfillKindGap,
+		DatasetID: "ds_a", Frequency: "1m", From: base, To: base.Add(time.Hour), AdvanceWatermark: true,
+	}, []store.BackfillChunk{{
+		DatasetID: "ds_a", Frequency: "1m", SubjectID: "BTC-USDT",
+		From: base.Add(3 * time.Minute), To: base.Add(4 * time.Minute), ChunkID: "chunk-a",
+	}}))
+
+	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
+	active, err := db.Backfill().ActiveJobs(ctx, "crypto")
+	require.NoError(t, err)
+	byDataset := map[string]int{}
+	for _, job := range active {
+		byDataset[job.DatasetID]++
+	}
+	require.Equal(t, map[string]int{"ds_a": 1, "ds_b": 1}, byDataset, "ds_a 不叠加，ds_b 不受 ds_a 阻塞照常建自动作业")
 }
 
 func TestCatchupWithoutGapsIsImmediatelyCaughtUp(t *testing.T) {

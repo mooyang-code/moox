@@ -12,6 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -122,10 +123,36 @@ func openState(t *testing.T) *store.Store {
 	return mgr
 }
 
+func sourceInfoForSpace(space string) storagesource.DatasetInfo {
+	switch space {
+	case "stockcn":
+		return storagesource.DatasetInfo{
+			Alignment:   "session",
+			Attributes:  map[string]string{"calendar": "cn_stock"},
+			ColumnTypes: stockColumnTypes(),
+		}
+	case "crypto":
+		return storagesource.DatasetInfo{
+			Alignment:   "epoch_utc",
+			ColumnTypes: cryptoColumnTypes(),
+		}
+	default:
+		return storagesource.DatasetInfo{
+			Alignment:   "epoch_utc",
+			ColumnTypes: ohlcvColumnTypes(),
+		}
+	}
+}
+
 func makeTask(t *testing.T, space, source, target string) *Task {
 	t.Helper()
-	params := `{"provider":"binance","market_type":"spot","source_dataset_id":"dataset_src","source_frequency":"` + source + `","source_series_tag":"venue:binance","target_dataset_id":"dataset_task","target_frequency":"` + target + `"}`
-	task, err := NewTask(domain.CollectionTask{SpaceID: space, TaskID: "task", DataType: "kline_resample", CollectParams: params, Enabled: true, ResultDatasetID: "dataset_task"})
+	return makeTaskWithSource(t, space, source, target, sourceInfoForSpace(space))
+}
+
+func makeTaskWithSource(t *testing.T, space, source, target string, info storagesource.DatasetInfo) *Task {
+	t.Helper()
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"` + source + `","source_series_tag":"venue:binance","target_dataset_id":"dataset_task","target_frequency":"` + target + `"}`
+	task, err := NewTaskForSource(domain.CollectionTask{SpaceID: space, TaskID: "task", DataType: "kline_resample", CollectParams: params, Enabled: true, ResultDatasetID: "dataset_task"}, info)
 	require.NoError(t, err)
 	return task
 }
@@ -395,11 +422,97 @@ func TestEnsureSnapshotSkipsAStockHolidayBeyondStorageLimit(t *testing.T) {
 }
 
 func TestNewTaskRejectsPeriodsThatDoNotDivideTheSession(t *testing.T) {
-	params := `{"provider":"eastmoney","market_type":"equity","source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:x","target_dataset_id":"dataset_task","target_frequency":"45m"}`
-	_, err := NewTask(domain.CollectionTask{SpaceID: "stockcn", TaskID: "task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_task"})
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:x","target_dataset_id":"dataset_task","target_frequency":"45m"}`
+	_, err := NewTaskForSource(
+		domain.CollectionTask{SpaceID: "stockcn", TaskID: "task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_task"},
+		storagesource.DatasetInfo{Alignment: "session", Attributes: map[string]string{"calendar": "cn_stock"}, ColumnTypes: stockColumnTypes()},
+	)
 	require.ErrorContains(t, err, "不能整除")
-	_, err = NewTask(domain.CollectionTask{SpaceID: "stockjp", TaskID: "task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_task"})
-	require.ErrorContains(t, err, "没有登记交易日历")
+	_, err = NewTaskForSource(
+		domain.CollectionTask{SpaceID: "stockjp", TaskID: "task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_task"},
+		storagesource.DatasetInfo{Alignment: "session", Attributes: map[string]string{"calendar": "jp_stock"}, ColumnTypes: ohlcvColumnTypes()},
+	)
+	require.ErrorContains(t, err, "交易日历")
+}
+
+// 任意 5 列 OHLCV 外部导入数据集（位于自定义空间，无 quote_volume/trade_num/amount）均可直接合成。
+func TestRunBucketResamplesPlainFiveColumnOHLCVInCustomSpace(t *testing.T) {
+	storage := newFakeStorage()
+	task := makeTaskWithSource(t, "sandbox", "5m", "15m", storagesource.DatasetInfo{
+		Alignment:   "epoch_utc",
+		ColumnTypes: ohlcvColumnTypes(),
+	})
+	bucket, _, err := task.Clock.BucketAt(utc("2026-10-21T10:01:00Z"))
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		at := bucket.Start.Add(time.Duration(i) * 5 * time.Minute)
+		row := &storagepb.RowFieldUpsert{
+			Key: rowKey("sandbox", "dataset_src", "EXT1", "5m", at, "venue:binance"),
+			Fields: []*storagepb.FieldValue{
+				doubleField("open", 10+float64(i)), doubleField("high", 15+float64(i)),
+				doubleField("low", 8-float64(i)), doubleField("close", 11+float64(i)),
+				doubleField("volume", 100),
+			},
+		}
+		storage.rows[keyText(row.GetKey())] = row
+	}
+	engine := &Engine{Primary: storage}
+	result, err := engine.RunBucket(context.Background(), task, bucket, []string{"EXT1"}, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Written)
+
+	target := storage.target("sandbox", "dataset_task", "EXT1", "15m", "venue:binance", bucket.Key)
+	require.NotNil(t, target)
+	require.Len(t, target.GetFields(), 5, "目标只输出源数据集实际具备的 5 列 OHLCV")
+	require.Equal(t, 13.0, closeOf(target))
+}
+
+// session 1d 桶的周期提交截止时间必须对齐真实收盘时刻（bucket.End + TargetLatenessSeconds），
+// 不能按 UTC 自然日（bucket.Key + 24h）多算 17 小时。
+func TestSplitForCommitSessionDailyUsesRealCloseDeadline(t *testing.T) {
+	mgr := openState(t)
+	storage := newFakeStorage()
+	task := makeTask(t, "stockcn", "1h", "1d")
+	// 2026-10-21 周三 A 股日线：Key = 00:00Z，真实收盘 End = 07:00Z（北京时间 15:00）。
+	bucket, ok, err := task.Clock.BucketAt(utc("2026-10-21T02:00:00Z"))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, utc("2026-10-21T00:00:00Z"), bucket.Key)
+	require.Equal(t, utc("2026-10-21T07:00:00Z"), bucket.End)
+
+	ctx := context.Background()
+	set, err := seriesset.Canonicalize(snapshotSeries(task, []string{"600000"}))
+	require.NoError(t, err)
+	require.NoError(t, mgr.Resample().AddSnapshot(ctx, store.ResampleSnapshot{
+		SpaceID: "stockcn", TaskID: "task", EffectiveFrom: bucket.Key.Add(-24 * time.Hour).Unix(), SeriesHash: set.Hash, Subjects: []string{"600000"},
+	}))
+	for _, at := range []time.Time{
+		utc("2026-10-21T01:30:00Z"), utc("2026-10-21T02:30:00Z"),
+		utc("2026-10-21T05:00:00Z"), utc("2026-10-21T06:00:00Z"),
+	} {
+		row := &storagepb.RowFieldUpsert{
+			Key: rowKey("stockcn", "dataset_src", "600000", "1h", at, "venue:binance"),
+			Fields: []*storagepb.FieldValue{
+				doubleField("open", 10), doubleField("high", 11), doubleField("low", 9),
+				doubleField("close", 10.5), doubleField("volume", 100), doubleField("amount", 1000),
+			},
+		}
+		storage.rows[keyText(row.GetKey())] = row
+	}
+
+	// 收盘后 60s（在 120s 容忍内）→ 走周期提交。
+	inTime := &Engine{Primary: storage, Period: storage, State: mgr.Resample(), Now: func() time.Time { return bucket.End.Add(60 * time.Second) }}
+	res, err := inTime.RunBucket(ctx, task, bucket, []string{"600000"}, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Committed)
+
+	// 收盘后 180s（超过 120s 容忍，但仍远早于次日 UTC 00:00）→ 必须退回普通写入，不尝试周期提交。
+	storage.commits = nil
+	afterClose := &Engine{Primary: storage, Period: storage, State: mgr.Resample(), Now: func() time.Time { return bucket.End.Add(180 * time.Second) }}
+	res, err = afterClose.RunBucket(ctx, task, bucket, []string{"600000"}, "")
+	require.NoError(t, err)
+	require.Zero(t, res.Committed)
+	require.Empty(t, storage.commits)
 }
 
 func TestWithoutTimes(t *testing.T) {

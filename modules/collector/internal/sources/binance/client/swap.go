@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -24,28 +23,17 @@ func NewSwapAPI(client *Client) *SwapAPI {
 	return &SwapAPI{client: client}
 }
 
-// GetRecentTrades 获取永续合约最近成交。
-func (api *SwapAPI) GetRecentTrades(ctx context.Context, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
-	return getRecentTrades(ctx, api.client, api.client.SwapDomain(), SwapTradesEndpoint, "SwapAPI", true, req)
-}
-
-// GetRecentTradesWithIPs uses the Collector DNS snapshot when available and
-// falls back to the hostname resolver when every snapshot address fails.
-func (api *SwapAPI) GetRecentTradesWithIPs(ctx context.Context, req *exchange.TradeRequest, ips []string) ([]*exchange.Trade, error) {
-	return getRecentTradesWithIPs(ctx, api.client, api.client.SwapDomain(), ips, SwapTradesEndpoint, "SwapAPI", true, req)
-}
-
 // GetKline 获取永续合约K线数据
 // API: GET https://fapi.binance.com/fapi/v1/klines
-func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+func (api *SwapAPI) GetKline(ctx context.Context, req *KlineRequest) ([]*Kline, error) {
 	return api.GetKlineWithIPs(ctx, req, nil)
 }
 
-func (api *SwapAPI) GetKlineWithIPs(ctx context.Context, req *exchange.KlineRequest, ips []string) ([]*exchange.Kline, error) {
+func (api *SwapAPI) GetKlineWithIPs(ctx context.Context, req *KlineRequest, ips []string) ([]*Kline, error) {
 	return api.GetKlineWithDomainIPs(ctx, req, api.client.SwapDomain(), ips)
 }
 
-func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *exchange.KlineRequest, domain string, ips []string) ([]*exchange.Kline, error) {
+func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *KlineRequest, domain string, ips []string) ([]*Kline, error) {
 	if api == nil || api.client == nil || req == nil {
 		return nil, fmt.Errorf("永续合约 K 线请求无效")
 	}
@@ -55,7 +43,6 @@ func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *exchange.Kli
 		domain = api.client.SwapDomain()
 	}
 
-	// 转换交易对格式
 	symbol := FormatSymbol(req.Symbol)
 	params.Set("symbol", symbol)
 	params.Set("interval", req.Interval)
@@ -63,18 +50,14 @@ func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *exchange.Kli
 	if req.Limit > 0 {
 		params.Set("limit", strconv.Itoa(req.Limit))
 	}
-
 	if !req.StartTime.IsZero() {
 		params.Set("startTime", strconv.FormatInt(req.StartTime.UnixMilli(), 10))
 	}
-
 	if !req.EndTime.IsZero() {
 		params.Set("endTime", strconv.FormatInt(req.EndTime.UnixMilli(), 10))
 	}
 
-	// GetDirectWithIPs falls back to hostname DNS after the supplied addresses.
 	var rawKlines []CandleStick
-
 	err := retryBinance(ctx,
 		func() error {
 			return api.client.GetDirectWithIPs(ctx, domain, ips, SwapKlineEndpoint, params, &rawKlines)
@@ -84,8 +67,7 @@ func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *exchange.Kli
 		return nil, fmt.Errorf("获取永续合约K线失败: %w", err)
 	}
 
-	// 转换为通用格式
-	klines := make([]*exchange.Kline, 0, len(rawKlines))
+	klines := make([]*Kline, 0, len(rawKlines))
 	for _, raw := range rawKlines {
 		kline, err := raw.ToKline()
 		if err != nil {
@@ -99,31 +81,29 @@ func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *exchange.Kli
 
 // GetExchangeInfo 获取永续合约交易所信息（交易规则和交易对）
 // API: GET https://fapi.binance.com/fapi/v1/exchangeInfo
-func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo, error) {
+func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*SymbolInfo, error) {
 	return api.getExchangeInfo(ctx, nil)
 }
 
-func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*exchange.SymbolInfo, error) {
+func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*SymbolInfo, error) {
 	return api.getExchangeInfoWithIPs(ctx, query, nil)
 }
 
-func (api *SwapAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*exchange.SymbolInfo, error) {
+func (api *SwapAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*SymbolInfo, error) {
 	return api.GetExchangeInfoWithDomainIPs(ctx, api.client.SwapDomain(), ips)
 }
 
-// GetExchangeInfoWithDomainIPs requests swap exchange metadata from the
-// explicitly selected official endpoint. The caller owns endpoint fallback so
-// each configured domain can use its own DNS snapshot.
-func (api *SwapAPI) GetExchangeInfoWithDomainIPs(ctx context.Context, domain string, ips []string) ([]*exchange.SymbolInfo, error) {
+// GetExchangeInfoWithDomainIPs requests swap exchange metadata from the explicitly selected official endpoint.
+func (api *SwapAPI) GetExchangeInfoWithDomainIPs(ctx context.Context, domain string, ips []string) ([]*SymbolInfo, error) {
 	return api.getExchangeInfoWithDomainIPs(ctx, domain, nil, ips)
 }
 
-func (api *SwapAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
+func (api *SwapAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*SymbolInfo, error) {
 	return api.getExchangeInfoWithDomainIPs(ctx, api.client.SwapDomain(), query, ips)
 }
 
-func (api *SwapAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain string, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
-	var symbols []*exchange.SymbolInfo
+func (api *SwapAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain string, query url.Values, ips []string) ([]*SymbolInfo, error) {
+	var symbols []*SymbolInfo
 	var total int
 	domain = strings.TrimSpace(domain)
 	if domain == "" {

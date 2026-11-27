@@ -343,6 +343,61 @@ func TestNewTablesRejectInvalidRows(t *testing.T) {
 			c_direction, c_asset, c_amount, c_client_ref, c_capped, c_state, c_requested_at
 		) VALUES ('s', 't5', 'a', 'l', 'target-1', 'TO_SPOT', 'USDT', '100', 'ref-t5', 2, 'PENDING', 1)
 	`).Error, "封顶标记只能是 0 或 1")
+	require.NoError(t, db.Exec(`
+		INSERT INTO t_trade_wallet_transfers (
+			c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
+			c_direction, c_asset, c_amount, c_client_ref, c_state, c_failure_kind, c_requested_at
+		) VALUES ('s', 't6', 'a', 'l', 'target-1', 'TO_SPOT', 'USDT', '100', 'ref-t6', 'FAILED', 'NOT_SENT', 1)
+	`).Error)
+	require.Error(t, db.Exec(`
+		INSERT INTO t_trade_wallet_transfers (
+			c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
+			c_direction, c_asset, c_amount, c_client_ref, c_state, c_failure_kind, c_requested_at
+		) VALUES ('s', 't7', 'a', 'l', 'target-1', 'TO_SPOT', 'USDT', '100', 'ref-t7', 'PENDING', 'NOT_SENT', 1)
+	`).Error, "非失败状态不能写 failure_kind")
+}
+
+func TestAllSQLDefinesMtimeTriggersAndNewIndexes(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(AllSQL()).Error)
+
+	var triggers []string
+	require.NoError(t, db.Raw(`
+		SELECT name
+		FROM sqlite_master
+		WHERE type = 'trigger'
+		ORDER BY name
+	`).Scan(&triggers).Error)
+	wantTriggers := []string{
+		"trg_t_account_equity_points_mtime",
+		"trg_t_logical_account_equity_points_mtime",
+		"trg_t_logical_account_members_mtime",
+		"trg_t_logical_account_targets_mtime",
+		"trg_t_logical_accounts_mtime",
+		"trg_t_trade_instruments_mtime",
+		"trg_t_trade_orders_mtime",
+		"trg_t_trade_wallet_transfers_mtime",
+		"trg_t_trading_accounts_mtime",
+		"trg_t_trading_positions_mtime",
+	}
+	require.Equal(t, wantTriggers, triggers)
+
+	var indexes []string
+	require.NoError(t, db.Raw(`
+		SELECT name
+		FROM sqlite_master
+		WHERE type = 'index' AND name IN ('idx_target_history_valid_until', 'idx_operator_actions_logical_source')
+		ORDER BY name
+	`).Scan(&indexes).Error)
+	require.Equal(t, []string{"idx_operator_actions_logical_source", "idx_target_history_valid_until"}, indexes)
+
+	sql := AllSQL()
+	require.Contains(t, sql, "c_created_at INTEGER NOT NULL")
+	require.Contains(t, sql, "c_updated_at INTEGER NOT NULL")
+	require.Contains(t, sql, "c_acked_margin_action_id TEXT NOT NULL DEFAULT ''")
+	require.Contains(t, sql, "c_reject_code TEXT NOT NULL DEFAULT ''")
+	require.Contains(t, sql, "c_failure_kind TEXT NOT NULL DEFAULT ''")
 }
 
 func hasUniqueIndex(t *testing.T, db *gorm.DB, table string, want []string) bool {

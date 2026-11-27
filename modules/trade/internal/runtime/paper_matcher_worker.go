@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -13,6 +14,9 @@ type PaperMatcherWorker struct {
 	wake      chan struct{}
 	ready     atomic.Bool
 	lastError atomic.Value
+
+	subsMu sync.Mutex
+	subs   map[chan struct{}]struct{}
 }
 
 func NewPaperMatcherWorker(m MatcherScanner, interval time.Duration) *PaperMatcherWorker {
@@ -21,6 +25,54 @@ func NewPaperMatcherWorker(m MatcherScanner, interval time.Duration) *PaperMatch
 	}
 	return &PaperMatcherWorker{Matcher: m, Interval: interval, wake: make(chan struct{}, 1)}
 }
+
+// SubscribeState 订阅撮合工人就绪状态变化，用于模拟盘会话事件唤醒。
+func (w *PaperMatcherWorker) SubscribeState() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	if w == nil {
+		return ch, func() {}
+	}
+	w.subsMu.Lock()
+	if w.subs == nil {
+		w.subs = make(map[chan struct{}]struct{})
+	}
+	w.subs[ch] = struct{}{}
+	w.subsMu.Unlock()
+	return ch, func() {
+		w.subsMu.Lock()
+		delete(w.subs, ch)
+		w.subsMu.Unlock()
+	}
+}
+
+func (w *PaperMatcherWorker) notifyState() {
+	if w == nil {
+		return
+	}
+	w.subsMu.Lock()
+	for ch := range w.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	w.subsMu.Unlock()
+}
+
+func (w *PaperMatcherWorker) setReady(ready bool) {
+	if w.ready.Swap(ready) != ready {
+		w.notifyState()
+	}
+}
+
+func (w *PaperMatcherWorker) setState(ready bool, lastError string) {
+	prevReady := w.ready.Swap(ready)
+	prevErr, _ := w.lastError.Swap(lastError).(string)
+	if prevReady != ready || prevErr != lastError {
+		w.notifyState()
+	}
+}
+
 func (w *PaperMatcherWorker) Wake() {
 	if w == nil {
 		return
@@ -42,8 +94,8 @@ func (w *PaperMatcherWorker) Run(ctx context.Context) error {
 	if w == nil || w.Matcher == nil {
 		return context.Canceled
 	}
-	w.ready.Store(false)
-	defer w.ready.Store(false)
+	w.setReady(false)
+	defer w.setReady(false)
 	ticker := time.NewTicker(w.Interval)
 	defer ticker.Stop()
 	for {
@@ -60,15 +112,12 @@ func (w *PaperMatcherWorker) Run(ctx context.Context) error {
 
 func (w *PaperMatcherWorker) scan(ctx context.Context) {
 	if err := w.Matcher.Scan(ctx); err != nil {
-		w.ready.Store(false)
-		w.lastError.Store(err.Error())
+		w.setState(false, err.Error())
 		return
 	}
 	if err := ctx.Err(); err != nil {
-		w.ready.Store(false)
-		w.lastError.Store(err.Error())
+		w.setState(false, err.Error())
 		return
 	}
-	w.ready.Store(true)
-	w.lastError.Store("")
+	w.setState(true, "")
 }

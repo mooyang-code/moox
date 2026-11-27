@@ -461,21 +461,19 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return err
 	}
-	// 历史补齐的作业排在最后、按自己的上限（seedSlots）认领：它量大、不急，实时缺口的补采不能因它排队。
+	// 历史补齐的作业排在最后、按自己的上限（seedSlots）认领：直接按作业来源 c_source == 'seed' 识别，无需反查补齐记录表。
 	// 认领只管空间里同时执行的分块数；调用补采函数前，同一个函数上的各类分块还共用一份并发名额（见 runChunk）。
-	seedJobs, err := b.seedJobIDs(ctx, spaceID)
-	if err != nil {
-		return err
-	}
-	seedIDList := make([]string, 0, len(seedJobs))
-	for id := range seedJobs {
-		seedIDList = append(seedIDList, id)
+	var seedIDList []string
+	for _, job := range jobs {
+		if job.Source == store.BackfillSourceSeed {
+			seedIDList = append(seedIDList, job.JobID)
+		}
 	}
 	// 强制重拉的作业排在补缺口之后：它重写的是已有的行，不急；行情源不可用时它的分块每块都失败、退回重试，
 	// 排在前面会每轮占满名额，补缺口的作业只能捡空档（2026-11-23 港股收市后整天重取拖慢了自动补采）。
 	rank := func(job store.BackfillJob) int {
 		switch {
-		case seedJobs[job.JobID]:
+		case job.Source == store.BackfillSourceSeed:
 			return 2
 		case job.Kind == store.BackfillKindForce:
 			return 1
@@ -484,7 +482,7 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	}
 	sort.SliceStable(jobs, func(i, j int) bool { return rank(jobs[i]) < rank(jobs[j]) })
 	for _, job := range jobs {
-		isSeed := seedJobs[job.JobID]
+		isSeed := job.Source == store.BackfillSourceSeed
 		inFlight, err := b.Store.InFlightChunks(ctx, spaceID)
 		if err != nil {
 			return err
@@ -919,10 +917,16 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return err
 	}
+	// 按 (dataset_id, frequency) 粒度互斥：单个数据集的自动补采作业未结束时，只跳过该数据集，不阻塞同空间其他数据集的自动扫描。
+	busyAuto := make(map[string]bool)
 	for _, job := range active {
-		if job.Source == "auto" {
-			return nil // 上一次自动作业还没结束，不叠加
+		if job.Source != store.BackfillSourceAuto {
+			continue
 		}
+		if job.DatasetID == "" {
+			return nil // 整空间范围的自动作业尚未结束，不叠加
+		}
+		busyAuto[DatasetKey(job.DatasetID, job.Frequency)] = true
 	}
 	timeline, err := b.loadTimeline(ctx, spaceID)
 	if err != nil {
@@ -936,6 +940,9 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 	now = b.now()
 	for _, key := range keys {
 		datasetID, frequencyName, _ := strings.Cut(key, "|")
+		if busyAuto[key] || busyAuto[DatasetKey(datasetID, "")] {
+			continue
+		}
 		segments := timeline[key]
 		if !timeline.Active(key) {
 			continue
@@ -969,7 +976,7 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 		var submitErr error
 		for {
 			request := JobRequest{SpaceID: spaceID, DatasetID: datasetID, From: from, To: windowTo, Watermark: &WatermarkTarget{DatasetID: datasetID, Frequency: frequencyName}}
-			jobID, chunks, submitErr = b.submit(ctx, request, "auto", autoMaxChunks)
+			jobID, chunks, submitErr = b.submit(ctx, request, store.BackfillSourceAuto, autoMaxChunks)
 			if submitErr == nil || !errors.Is(submitErr, errTooManyChunks) || windowTo.Sub(from) <= 10*time.Minute {
 				break
 			}

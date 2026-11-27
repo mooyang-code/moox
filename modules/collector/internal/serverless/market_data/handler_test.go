@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
@@ -39,9 +38,9 @@ func planHandler(observed *[]marketfetch.Request, now *time.Time) *Handler {
 		return &marketfetch.Handler{
 			Now:        func() time.Time { return *now },
 			NewStorage: func() (marketfetch.Storage, error) { return timerStorage{}, nil },
-			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetch.BatchCompleted, error) {
 				*observed = append(*observed, request)
-				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
+				return &marketfetch.BatchCompleted{BatchID: request.BatchID, Status: "succeeded"}, nil
 			},
 		}
 	}}
@@ -135,9 +134,9 @@ func TestHandlerManualInvokeWritesRowsOnly(t *testing.T) {
 	handler := &Handler{NewMarketFetch: func() *marketfetch.Handler {
 		return &marketfetch.Handler{
 			NewStorage: func() (marketfetch.Storage, error) { return timerStorage{}, nil },
-			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetch.BatchCompleted, error) {
 				observed = request
-				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
+				return &marketfetch.BatchCompleted{BatchID: request.BatchID, Status: "succeeded"}, nil
 			},
 		}
 	}}

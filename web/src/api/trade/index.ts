@@ -19,7 +19,6 @@ import type {
   AddLogicalAccountMemberReq,
   BlockedInstrument,
   CreateTradingAccountReq,
-  CreatePaperSimulationReq,
   CreateLogicalAccountReq,
   TradingAccount,
   ExchangeInspection,
@@ -108,22 +107,6 @@ export function reinspectTradingAccount(trading_account_id: string) {
     { trading_account_id: string },
     { ret_info: RetInfo; inspection: ExchangeInspection; account: TradingAccount; mode_changed: boolean }
   >("trade", "ReinspectTradingAccount", { trading_account_id });
-}
-
-export function createPaperSimulation(req: CreatePaperSimulationReq) {
-  return call<CreatePaperSimulationReq, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
-    "trade",
-    "CreatePaperSimulation",
-    req
-  );
-}
-
-export function closePaperSimulation(trading_account_id: string) {
-  return call<{ trading_account_id: string }, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
-    "trade",
-    "ClosePaperSimulation",
-    { trading_account_id }
-  );
 }
 
 export function getExecutionCapabilities(trading_account_id: string) {

@@ -1,5 +1,8 @@
 PRAGMA foreign_keys = ON;
 
+-- 时间列除 t_collector_series_timeline.c_effective_from 与 t_collector_resample_snapshots.c_effective_from（与 Storage 对齐的 Unix 秒）外，
+-- 包括 t_collector_history_seeds.c_effective_from 在内均统一存 Unix 毫秒整数（INTEGER）。
+
 -- c_ingest 是 K 线任务的采集方式：stream（collector-stream 接收推送，补采走它的本地执行端）、
 -- scf（云函数定时拉取，补采走云函数）、local（collector-stream 本地定时拉取与补采）；合成任务为空。
 CREATE TABLE IF NOT EXISTS t_collector_tasks (
@@ -17,8 +20,8 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_prepare_state TEXT NOT NULL DEFAULT 'ready',
     c_last_error TEXT NOT NULL DEFAULT '',
     c_result_dataset_id TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_ingest IN ('', 'stream', 'scf', 'local')),
     CHECK ((c_data_type = 'kline') = (c_ingest <> ''))
 );
@@ -29,30 +32,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_definition
 ON t_collector_tasks (c_space_id, c_definition_hash)
 WHERE c_definition_hash <> '';
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_space ON t_collector_tasks (c_space_id);
-
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_type ON t_collector_tasks (c_data_type);
-
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_enabled ON t_collector_tasks (c_enabled);
-
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_prepare ON t_collector_tasks (c_data_type, c_prepare_state, c_enabled);
+CREATE INDEX IF NOT EXISTS idx_collector_tasks_result
+ON t_collector_tasks (c_space_id, c_result_dataset_id)
+WHERE c_result_dataset_id <> '';
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_tasks_mtime
+AFTER UPDATE ON t_collector_tasks
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_tasks SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
+END;
 
 CREATE TABLE IF NOT EXISTS t_collector_task_tags (
     c_space_id TEXT NOT NULL,
     c_task_id TEXT NOT NULL,
     c_tag_id TEXT NOT NULL,
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_task_id, c_tag_id),
-    FOREIGN KEY (c_space_id, c_task_id) REFERENCES t_collector_tasks (c_space_id, c_task_id) ON DELETE CASCADE
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    FOREIGN KEY (c_space_id, c_task_id) REFERENCES t_collector_tasks (c_space_id, c_task_id) ON DELETE CASCADE,
+    PRIMARY KEY (c_space_id, c_task_id, c_tag_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_collector_task_tags_tag ON t_collector_task_tags (c_space_id, c_tag_id);
-
-CREATE TRIGGER IF NOT EXISTS update_collector_tasks_mtime
-AFTER UPDATE ON t_collector_tasks
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_collector_tasks SET c_mtime = STRFTIME('%Y-%m-%d %H:%M:%f', 'now') WHERE rowid = NEW.rowid;
-END;
 
 -- 采集计划：每个空间同一时间最多一份未生效的计划，通常几分钟内生效；最近一份已生效的计划即已生效状态
 -- （每个数据集可能还带未过窗口的旧份）。一份计划生效时删掉同空间更早的已生效计划，表里每个空间至多两份。
@@ -63,8 +67,8 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_plans (
     c_plan TEXT NOT NULL,
     c_progress TEXT NOT NULL DEFAULT '{}',
     c_last_error TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_status IN ('pending', 'applying', 'applied'))
 );
 
@@ -78,7 +82,7 @@ AFTER UPDATE ON t_collector_fetch_plans
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_fetch_plans SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_collector_fetch_plans SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
 END;
 
 -- 标的时间线：一个采集数据集的一个频率从 c_effective_from（K 线开始时间，Unix 秒）起应有的序列。
@@ -98,19 +102,24 @@ CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
     c_external_symbols TEXT NOT NULL DEFAULT '{}',
     c_lateness_s INTEGER NOT NULL DEFAULT 0,
     c_output_fields TEXT NOT NULL DEFAULT '[]',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     UNIQUE (c_space_id, c_dataset_id, c_frequency, c_effective_from)
 );
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_series_timeline_space ON t_collector_series_timeline (c_space_id, c_id);
 
 -- 空间的采集暂停开关：暂停期间 Collector 不对账、不推进补采，并已停用该空间的 SCF 定时器；重启后保持。
 -- c_paused 是手工暂停，c_system_paused 是模块生命周期的系统暂停，任一个为 1 空间就是暂停的，两者各自恢复、互不覆盖。
 CREATE TABLE IF NOT EXISTS t_collector_fetch_plan_pauses (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL UNIQUE,
-    c_paused INTEGER NOT NULL DEFAULT 0 CHECK (c_paused IN (0, 1)),
-    c_system_paused INTEGER NOT NULL DEFAULT 0 CHECK (c_system_paused IN (0, 1)),
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_space_id TEXT NOT NULL,
+    c_paused INTEGER NOT NULL DEFAULT 0,
+    c_system_paused INTEGER NOT NULL DEFAULT 0,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    CHECK (c_paused IN (0, 1)),
+    CHECK (c_system_paused IN (0, 1)),
+    UNIQUE (c_space_id)
 );
 
 CREATE TRIGGER IF NOT EXISTS trg_t_collector_fetch_plan_pauses_mtime
@@ -118,7 +127,7 @@ AFTER UPDATE ON t_collector_fetch_plan_pauses
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_fetch_plan_pauses SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_collector_fetch_plan_pauses SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
 END;
 
 -- K 线补采作业：一个作业拆成若干（数据集、标的、时间段）分块。
@@ -132,20 +141,22 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_jobs (
     c_dataset_id TEXT NOT NULL DEFAULT '',
     c_frequency TEXT NOT NULL DEFAULT '',
     c_subject_id TEXT NOT NULL DEFAULT '',
-    c_from DATETIME NOT NULL,
-    c_to DATETIME NOT NULL,
+    c_from INTEGER NOT NULL,
+    c_to INTEGER NOT NULL,
     c_advance_watermark INTEGER NOT NULL DEFAULT 0,
     c_status TEXT NOT NULL DEFAULT 'pending',
     c_last_error TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_source IN ('manual', 'auto')),
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    CHECK (c_source IN ('manual', 'auto', 'seed', 'close_refetch', 'catchup')),
     CHECK (c_kind IN ('gap', 'force')),
     CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
     UNIQUE (c_job_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_jobs_space ON t_collector_kline_backfill_jobs (c_space_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_jobs_dataset
+ON t_collector_kline_backfill_jobs (c_space_id, c_dataset_id, c_frequency);
 CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_jobs_source
 ON t_collector_kline_backfill_jobs (c_space_id, c_source, c_ctime);
 CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_jobs_retention
@@ -156,7 +167,7 @@ AFTER UPDATE ON t_collector_kline_backfill_jobs
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_kline_backfill_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_collector_kline_backfill_jobs SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
 END;
 
 -- c_missing 是上一次执行后复查仍缺的 K 线（规范化区间串）：连续两次一致才确认是行情源没有。
@@ -166,18 +177,19 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
-    c_from DATETIME NOT NULL,
-    c_to DATETIME NOT NULL,
+    c_from INTEGER NOT NULL,
+    c_to INTEGER NOT NULL,
     c_chunk_id TEXT NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'pending',
     c_attempts INTEGER NOT NULL DEFAULT 0,
     c_rows INTEGER NOT NULL DEFAULT 0,
     c_missing TEXT NOT NULL DEFAULT '',
-    c_started_at DATETIME,
-    c_latest_end_at DATETIME,
+    c_started_at INTEGER,
+    c_latest_end_at INTEGER,
     c_last_error TEXT NOT NULL DEFAULT '',
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
+    FOREIGN KEY (c_job_id) REFERENCES t_collector_kline_backfill_jobs (c_job_id) ON DELETE CASCADE,
     UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from)
 );
 
@@ -189,7 +201,7 @@ AFTER UPDATE ON t_collector_kline_backfill_chunks
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_kline_backfill_chunks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_collector_kline_backfill_chunks SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
 END;
 
 -- 已确认“行情源没有”的 K 线：补采成功后复查仍缺且结果一致的连续区间，检查与补采都扣除。
@@ -198,10 +210,10 @@ CREATE TABLE IF NOT EXISTS t_collector_source_absences (
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
-    c_from DATETIME NOT NULL,
-    c_to DATETIME NOT NULL,
+    c_from INTEGER NOT NULL,
+    c_to INTEGER NOT NULL,
     c_bars INTEGER NOT NULL DEFAULT 0,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from)
 );
 
@@ -212,29 +224,47 @@ CREATE TABLE IF NOT EXISTS t_collector_history_seeds (
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_status TEXT NOT NULL,
-    c_target_from DATETIME NOT NULL,
-    c_effective_from DATETIME NOT NULL,
+    c_target_from INTEGER NOT NULL,
+    c_effective_from INTEGER NOT NULL,
     c_job_ids TEXT NOT NULL DEFAULT '[]',
     c_retried INTEGER NOT NULL DEFAULT 0,
     c_note TEXT NOT NULL DEFAULT '',
-    c_started_at DATETIME NOT NULL,
-    c_finished_at DATETIME,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_started_at INTEGER NOT NULL,
+    c_finished_at INTEGER,
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_status IN ('preparing', 'running', 'done', 'skipped', 'failed')),
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_collector_history_seeds_status ON t_collector_history_seeds (c_status);
+CREATE INDEX IF NOT EXISTS idx_t_collector_history_seeds_status ON t_collector_history_seeds (c_space_id, c_status);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_history_seeds_mtime
+AFTER UPDATE ON t_collector_history_seeds
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_history_seeds SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE c_space_id = OLD.c_space_id AND c_dataset_id = OLD.c_dataset_id AND c_frequency = OLD.c_frequency;
+END;
 
 -- 自动补采的扫描水位：已扫描到哪个时间点。
 CREATE TABLE IF NOT EXISTS t_collector_backfill_watermarks (
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
-    c_scanned_until DATETIME NOT NULL,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_scanned_until INTEGER NOT NULL,
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
 );
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_backfill_watermarks_mtime
+AFTER UPDATE ON t_collector_backfill_watermarks
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_backfill_watermarks SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE c_space_id = OLD.c_space_id AND c_dataset_id = OLD.c_dataset_id AND c_frequency = OLD.c_frequency;
+END;
 
 -- collector-stream 实例的心跳与已应用的计划：c_applied 是已应用的计划记录 ID 与阶段，c_status 是连接状态；
 -- 同一空间只部署一个实例，一空间一行，不设租约与写权限到期。
@@ -243,7 +273,7 @@ CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
     c_instance_id TEXT NOT NULL,
     c_applied TEXT NOT NULL DEFAULT '{}',
     c_status TEXT NOT NULL DEFAULT '{}',
-    c_heartbeat_at DATETIME NOT NULL,
+    c_heartbeat_at INTEGER NOT NULL,
     PRIMARY KEY (c_space_id)
 );
 
@@ -255,8 +285,8 @@ CREATE TABLE IF NOT EXISTS t_collector_subject_exclusions (
     c_market_type TEXT NOT NULL DEFAULT '',
     c_reason TEXT NOT NULL DEFAULT '',
     c_caller TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_expires_at DATETIME,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    c_expires_at INTEGER,
     PRIMARY KEY (c_space_id, c_subject_id, c_market_type)
 );
 
@@ -265,14 +295,23 @@ CREATE TABLE IF NOT EXISTS t_collector_subject_exclusions (
 CREATE TABLE IF NOT EXISTS t_collector_tag_sync_runs (
     c_space_id TEXT NOT NULL,
     c_tag_id TEXT NOT NULL,
-    c_last_run_at DATETIME NOT NULL,
+    c_last_run_at INTEGER NOT NULL,
     c_last_status TEXT NOT NULL,
     c_last_error TEXT NOT NULL DEFAULT '',
-    c_last_success_at DATETIME,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_last_success_at INTEGER,
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_last_status IN ('success', 'failed')),
     PRIMARY KEY (c_space_id, c_tag_id)
 );
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_tag_sync_runs_mtime
+AFTER UPDATE ON t_collector_tag_sync_runs
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_tag_sync_runs SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE c_space_id = OLD.c_space_id AND c_tag_id = OLD.c_tag_id;
+END;
 
 -- 合成目标数据集的标的快照（按生效点追加）：一个目标桶落在哪份快照内，用周期提交写入；
 -- 生效点之前的桶和快照之外的标的用普通写入。c_effective_from 是 Unix 秒，等于 Storage 登记的生效点。
@@ -283,7 +322,7 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (
     c_effective_from INTEGER NOT NULL,
     c_series_hash TEXT NOT NULL,
     c_subjects TEXT NOT NULL DEFAULT '[]',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     UNIQUE (c_space_id, c_task_id, c_effective_from)
 );
 
@@ -297,10 +336,10 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
     c_request_id TEXT NOT NULL,
     c_origin TEXT NOT NULL DEFAULT 'manual',
     c_subjects TEXT NOT NULL DEFAULT '[]',
-    c_start DATETIME NOT NULL,
-    c_end DATETIME NOT NULL,
-    c_next_bucket DATETIME NOT NULL,
-    c_not_before DATETIME NOT NULL,
+    c_start INTEGER NOT NULL,
+    c_end INTEGER NOT NULL,
+    c_next_bucket INTEGER NOT NULL,
+    c_not_before INTEGER NOT NULL DEFAULT 0,
     c_status TEXT NOT NULL DEFAULT 'queued',
     c_total_buckets INTEGER NOT NULL DEFAULT 0,
     c_done_buckets INTEGER NOT NULL DEFAULT 0,
@@ -308,10 +347,10 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
     c_skipped INTEGER NOT NULL DEFAULT 0,
     c_skipped_samples TEXT NOT NULL DEFAULT '[]',
     c_last_error TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_origin IN ('manual', 'source_backfill')),
-    CHECK (c_status IN ('queued', 'running', 'syncing', 'succeeded', 'failed', 'cancelled')),
+    CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
     UNIQUE (c_job_id),
     UNIQUE (c_space_id, c_task_id, c_request_id)
 );
@@ -324,7 +363,7 @@ AFTER UPDATE ON t_collector_resample_jobs
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_resample_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_collector_resample_jobs SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
 END;
 
 -- 补写通知：补采分块读回确认成功（以及合成在周期结束后的补写）时，与状态更新在同一事务里记录。
@@ -335,15 +374,17 @@ CREATE TABLE IF NOT EXISTS t_collector_backfill_notices (
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
-    c_start DATETIME NOT NULL,
-    c_end DATETIME NOT NULL,
+    c_start INTEGER NOT NULL,
+    c_end INTEGER NOT NULL,
     c_origin TEXT NOT NULL,
     c_job_id TEXT NOT NULL DEFAULT '',
     c_batch_id TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER))
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_notices_batch ON t_collector_backfill_notices (c_batch_id, c_id);
+CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_notices_space ON t_collector_backfill_notices (c_space_id, c_dataset_id);
+CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_notices_ctime ON t_collector_backfill_notices (c_ctime);
 
 -- Collector 本地事件发件箱：事件成批后与通知的封存在同一事务里写入，发布协程推送到 JetStream，
 -- 以 c_event_id 作为 Msg-Id 去重；发布成功才标记 c_published。
@@ -356,11 +397,12 @@ CREATE TABLE IF NOT EXISTS t_collector_event_outbox (
     c_subject_token TEXT NOT NULL,
     c_payload BLOB NOT NULL,
     c_published INTEGER NOT NULL DEFAULT 0,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     UNIQUE (c_event_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_event_outbox_pending ON t_collector_event_outbox (c_published, c_id);
+CREATE INDEX IF NOT EXISTS idx_t_collector_event_outbox_ctime ON t_collector_event_outbox (c_published, c_ctime);
 
 -- 下架检测发现（或手工登记）的下架通知：与该标的（交易所、市场、代码、范围）最近一次发布的下架时间相同时只更新最后报告时间，
 -- 不同（包括改回以前出现过的时间）就是一次新的发布，所以同一标的可以有多行；事件经上面的发件箱发布。
@@ -371,15 +413,16 @@ CREATE TABLE IF NOT EXISTS t_collector_delist_notices (
     c_market TEXT NOT NULL,
     c_symbol TEXT NOT NULL,
     c_scope TEXT NOT NULL,
-    c_delist_at DATETIME NOT NULL,
+    c_delist_at INTEGER NOT NULL,
     c_source TEXT NOT NULL,
     c_event_id TEXT NOT NULL,
-    c_first_seen_at DATETIME NOT NULL,
-    c_last_seen_at DATETIME NOT NULL,
+    c_first_seen_at INTEGER NOT NULL,
+    c_last_seen_at INTEGER NOT NULL,
     UNIQUE (c_event_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_collector_delist_notices_instrument ON t_collector_delist_notices (c_exchange, c_market, c_symbol, c_scope, c_id);
+CREATE INDEX IF NOT EXISTS idx_t_collector_delist_notices_instrument
+ON t_collector_delist_notices (c_exchange, c_market, c_symbol, c_scope, c_id);
 
 -- 云账号：Collector 调腾讯云用的账号，密钥本身在 Admin 的 SecretMgr（c_credential_secret_id 指向它，类别 cloud、厂商 tencent）。
 -- c_cos_region、c_cos_bucket 是代码包上传用的 COS 桶。重置时保留。
@@ -392,10 +435,18 @@ CREATE TABLE IF NOT EXISTS t_collector_cloud_accounts (
     c_app_id TEXT NOT NULL DEFAULT '',
     c_cos_region TEXT NOT NULL DEFAULT '',
     c_cos_bucket TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     UNIQUE (c_account_id)
 );
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_cloud_accounts_mtime
+AFTER UPDATE ON t_collector_cloud_accounts
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_cloud_accounts SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
+END;
 
 -- 云函数代码包：每次上传一行，c_status 从 pending（已发上传地址）变成 available（COS 对象已核对）。
 -- 函数总是滚动到同一包名的最新可用包；每个（空间、包名）只留最新 3 个可用包，更早的连同 COS 对象删除，
@@ -414,11 +465,19 @@ CREATE TABLE IF NOT EXISTS t_collector_function_packages (
     c_cos_bucket TEXT NOT NULL DEFAULT '',
     c_cos_path TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'pending',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+    c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_status IN ('pending', 'available')),
     UNIQUE (c_space_id, c_package_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_function_packages_name
 ON t_collector_function_packages (c_space_id, c_package_name, c_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_function_packages_mtime
+AFTER UPDATE ON t_collector_function_packages
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_function_packages SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
+END;

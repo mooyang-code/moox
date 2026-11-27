@@ -344,9 +344,6 @@ var ErrNameTaken = errors.New("名称已被使用，请换一个（已关闭的�
 const (
 	uniqueConstraintFailed   = "UNIQUE constraint failed"
 	uniqueTradingAccountName = "t_trading_accounts.c_space_id, t_trading_accounts.c_name"
-	// 模拟账户的编号由空间、账户名和组合名算出，编号重复就是这对名称已经用过（模拟账户不能改名）。
-	// 主键和全局编号唯一索引报的列不同，都含这一段。
-	uniqueTradingAccountID   = "t_trading_accounts.c_trading_account_id"
 	uniqueLogicalAccountName = "t_logical_accounts.c_space_id, t_logical_accounts.c_name"
 )
 
@@ -432,9 +429,6 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 		row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt, row.LastError, createdAt,
 	).Error
 	if err != nil {
-		if record.ExecutionMode == "PAPER" {
-			return nameWriteError(err, uniqueTradingAccountName, uniqueTradingAccountID)
-		}
 		return nameWriteError(err, uniqueTradingAccountName)
 	}
 	if record.ExecutionMode == "PAPER" && record.PaperConfig != nil {

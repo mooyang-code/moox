@@ -129,8 +129,8 @@ func TestRenderedConfigsUseAbsolutePaths(t *testing.T) {
 			if !strings.HasPrefix(name, "config/") || path.Ext(name) != ".yaml" {
 				continue
 			}
-			// 这三份是原样带上的业务种子与数据源参数，不含本机路径。
-			if slices.Contains([]string{"collection-tasks.yaml", "dataset-health-policy.yaml", "binance.yaml"}, path.Base(name)) {
+			// 这两份是原样带上的业务种子与健康策略，不含本机路径。
+			if slices.Contains([]string{"collection-tasks.yaml", "dataset-health-policy.yaml"}, path.Base(name)) {
 				continue
 			}
 			var document yaml.Node

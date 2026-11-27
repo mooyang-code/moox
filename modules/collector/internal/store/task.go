@@ -6,11 +6,81 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"gorm.io/gorm"
 )
+
+type taskRow struct {
+	ID              int                               `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID         string                            `gorm:"column:c_space_id"`
+	TaskID          string                            `gorm:"column:c_task_id"`
+	TaskName        string                            `gorm:"column:c_task_name"`
+	Description     string                            `gorm:"column:c_description"`
+	DataType        string                            `gorm:"column:c_data_type"`
+	Ingest          string                            `gorm:"column:c_ingest"`
+	DefinitionHash  string                            `gorm:"column:c_definition_hash"`
+	CollectParams   string                            `gorm:"column:c_collect_params"`
+	Enabled         bool                              `gorm:"column:c_enabled"`
+	Creator         string                            `gorm:"column:c_creator"`
+	PrepareState    domain.CollectionTaskPrepareState `gorm:"column:c_prepare_state"`
+	LastError       string                            `gorm:"column:c_last_error"`
+	ResultDatasetID string                            `gorm:"column:c_result_dataset_id"`
+	CreateTime      int64                             `gorm:"column:c_ctime"`
+	ModifyTime      int64                             `gorm:"column:c_mtime"`
+}
+
+func (taskRow) TableName() string { return "t_collector_tasks" }
+
+func (row taskRow) domain() domain.CollectionTask {
+	return domain.CollectionTask{
+		ID:              row.ID,
+		SpaceID:         row.SpaceID,
+		TaskID:          row.TaskID,
+		TaskName:        row.TaskName,
+		Description:     row.Description,
+		DataType:        row.DataType,
+		Ingest:          row.Ingest,
+		DefinitionHash:  row.DefinitionHash,
+		CollectParams:   row.CollectParams,
+		Enabled:         row.Enabled,
+		Creator:         row.Creator,
+		PrepareState:    row.PrepareState,
+		LastError:       row.LastError,
+		ResultDatasetID: row.ResultDatasetID,
+		CreateTime:      fromUnixMilli(row.CreateTime),
+		ModifyTime:      fromUnixMilli(row.ModifyTime),
+	}
+}
+
+func newTaskRow(task domain.CollectionTask, ctime, mtime int64) taskRow {
+	return taskRow{
+		ID:              task.ID,
+		SpaceID:         task.SpaceID,
+		TaskID:          task.TaskID,
+		TaskName:        task.TaskName,
+		Description:     task.Description,
+		DataType:        task.DataType,
+		Ingest:          task.Ingest,
+		DefinitionHash:  task.DefinitionHash,
+		CollectParams:   task.CollectParams,
+		Enabled:         task.Enabled,
+		Creator:         task.Creator,
+		PrepareState:    task.PrepareState,
+		LastError:       task.LastError,
+		ResultDatasetID: task.ResultDatasetID,
+		CreateTime:      ctime,
+		ModifyTime:      mtime,
+	}
+}
+
+func tasksFromRows(rows []taskRow) []domain.CollectionTask {
+	out := make([]domain.CollectionTask, len(rows))
+	for i, row := range rows {
+		out[i] = row.domain()
+	}
+	return out
+}
 
 const MaxEnabledTasks = 1000
 
@@ -79,16 +149,17 @@ func (r *TaskRepository) ResolveIngest(task domain.CollectionTask) (string, erro
 
 // List returns tasks matching filters.
 func (r *TaskRepository) List(ctx context.Context, filter TaskFilter) ([]domain.CollectionTask, int64, error) {
-	q := r.applyFilter(r.db.WithContext(ctx).Model(&domain.CollectionTask{}), filter)
+	q := r.applyFilter(r.db.WithContext(ctx).Model(&taskRow{}), filter)
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	page, size := normalizePage(filter.Page, filter.PageSize)
-	var tasks []domain.CollectionTask
-	if err := q.Order("c_id DESC").Limit(size).Offset((page - 1) * size).Find(&tasks).Error; err != nil {
+	var rows []taskRow
+	if err := q.Order("c_id DESC").Limit(size).Offset((page - 1) * size).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
+	tasks := tasksFromRows(rows)
 	if err := r.attachTaskTags(ctx, tasks); err != nil {
 		return nil, 0, err
 	}
@@ -102,7 +173,7 @@ func (r *TaskRepository) ResultDatasetNames(ctx context.Context, spaceID string)
 		Name      string `gorm:"column:c_task_name"`
 	}
 	var rows []row
-	if err := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Select("c_result_dataset_id, c_task_name").
+	if err := r.db.WithContext(ctx).Model(&taskRow{}).Select("c_result_dataset_id, c_task_name").
 		Where("c_space_id = ? AND c_result_dataset_id <> ''", spaceID).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -115,25 +186,50 @@ func (r *TaskRepository) ResultDatasetNames(ctx context.Context, spaceID string)
 
 // ListEnabled returns enabled tasks in one space.
 func (r *TaskRepository) ListEnabled(ctx context.Context, spaceID string) ([]domain.CollectionTask, error) {
-	var tasks []domain.CollectionTask
+	var rows []taskRow
 	err := r.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_enabled = ?", strings.TrimSpace(spaceID), true).
 		Order("c_id ASC").
 		Limit(MaxEnabledTasks + 1).
-		Find(&tasks).Error
-	if err == nil && len(tasks) > MaxEnabledTasks {
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > MaxEnabledTasks {
 		return nil, fmt.Errorf("enabled task count exceeds limit %d", MaxEnabledTasks)
 	}
-	if err == nil {
-		err = r.attachTaskTags(ctx, tasks)
+	tasks := tasksFromRows(rows)
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, err
 	}
-	return tasks, err
+	return tasks, nil
+}
+
+// ListEnabledResample 返回全部空间中已启用且已就绪的 K 线重采样任务（按空间与 ID 升序）。
+func (r *TaskRepository) ListEnabledResample(ctx context.Context) ([]domain.CollectionTask, error) {
+	var rows []taskRow
+	err := r.db.WithContext(ctx).
+		Where("c_data_type = ? AND c_enabled = ? AND c_prepare_state = ?", "kline_resample", true, domain.PrepareStateReady).
+		Order("c_space_id ASC, c_id ASC").
+		Limit(MaxEnabledTasks + 1).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > MaxEnabledTasks {
+		return nil, fmt.Errorf("enabled resample task count exceeds limit %d", MaxEnabledTasks)
+	}
+	tasks := tasksFromRows(rows)
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 // EnabledSpaces 返回有启用任务的空间。
 func (r *TaskRepository) EnabledSpaces(ctx context.Context) ([]string, error) {
 	var spaces []string
-	err := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+	err := r.db.WithContext(ctx).Model(&taskRow{}).
 		Where("c_enabled = ?", true).
 		Distinct("c_space_id").
 		Pluck("c_space_id", &spaces).Error
@@ -147,17 +243,18 @@ func (r *TaskRepository) ListEnabledAll(ctx context.Context, limit int) ([]domai
 	if limit <= 0 || limit > MaxEnabledTasks {
 		return nil, fmt.Errorf("enabled task limit must be between 1 and %d", MaxEnabledTasks)
 	}
-	var tasks []domain.CollectionTask
+	var rows []taskRow
 	if err := r.db.WithContext(ctx).
 		Where("c_enabled = ?", true).
 		Order("c_id ASC").
 		Limit(limit + 1).
-		Find(&tasks).Error; err != nil {
+		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	if len(tasks) > limit {
+	if len(rows) > limit {
 		return nil, fmt.Errorf("enabled task count exceeds limit %d", limit)
 	}
+	tasks := tasksFromRows(rows)
 	if err := r.attachTaskTags(ctx, tasks); err != nil {
 		return nil, err
 	}
@@ -176,18 +273,19 @@ func (r *TaskRepository) ListKlineResultTasks(ctx context.Context, spaceID strin
 	if limit <= 0 || limit > MaxEnabledTasks {
 		return nil, fmt.Errorf("kline task inventory limit must be between 1 and %d", MaxEnabledTasks)
 	}
-	var tasks []domain.CollectionTask
+	var rows []taskRow
 	err := r.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_data_type IN ?", spaceID, []string{"kline", "kline_resample"}).
 		Order("c_id ASC").
 		Limit(limit + 1).
-		Find(&tasks).Error
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	if len(tasks) > limit {
+	if len(rows) > limit {
 		return nil, fmt.Errorf("kline task inventory exceeds limit %d", limit)
 	}
+	tasks := tasksFromRows(rows)
 	if err := r.attachTaskTags(ctx, tasks); err != nil {
 		return nil, err
 	}
@@ -196,15 +294,15 @@ func (r *TaskRepository) ListKlineResultTasks(ctx context.Context, spaceID strin
 
 // GetByTaskID returns a task by its business id within a space.
 func (r *TaskRepository) GetByTaskID(ctx context.Context, spaceID string, taskID string) (*domain.CollectionTask, error) {
-	var task domain.CollectionTask
+	var row taskRow
 	q := r.db.WithContext(ctx).Where("c_task_id = ?", taskID)
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
 	}
-	if err := q.First(&task).Error; err != nil {
+	if err := q.First(&row).Error; err != nil {
 		return nil, err
 	}
-	tasks := []domain.CollectionTask{task}
+	tasks := []domain.CollectionTask{row.domain()}
 	if err := r.attachTaskTags(ctx, tasks); err != nil {
 		return nil, err
 	}
@@ -213,14 +311,14 @@ func (r *TaskRepository) GetByTaskID(ctx context.Context, spaceID string, taskID
 
 // GetByTaskName returns a task by its display name within a space.
 func (r *TaskRepository) GetByTaskName(ctx context.Context, spaceID string, taskName string) (*domain.CollectionTask, error) {
-	var task domain.CollectionTask
+	var row taskRow
 	err := r.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_task_name = ?", strings.TrimSpace(spaceID), domain.NormalizeCollectionTaskName(taskName)).
-		First(&task).Error
+		First(&row).Error
 	if err != nil {
 		return nil, err
 	}
-	tasks := []domain.CollectionTask{task}
+	tasks := []domain.CollectionTask{row.domain()}
 	if err := r.attachTaskTags(ctx, tasks); err != nil {
 		return nil, err
 	}
@@ -231,14 +329,14 @@ func (r *TaskRepository) GetByTaskName(ctx context.Context, spaceID string, task
 // collection definition in a space. It is used before provisioning result
 // metadata so duplicate requests cannot leave orphan datasets or views.
 func (r *TaskRepository) GetByDefinitionHash(ctx context.Context, spaceID, definitionHash string) (*domain.CollectionTask, error) {
-	var task domain.CollectionTask
+	var row taskRow
 	err := r.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_definition_hash = ?", strings.TrimSpace(spaceID), strings.TrimSpace(definitionHash)).
-		First(&task).Error
+		First(&row).Error
 	if err != nil {
 		return nil, err
 	}
-	tasks := []domain.CollectionTask{task}
+	tasks := []domain.CollectionTask{row.domain()}
 	if err := r.attachTaskTags(ctx, tasks); err != nil {
 		return nil, err
 	}
@@ -247,7 +345,7 @@ func (r *TaskRepository) GetByDefinitionHash(ctx context.Context, spaceID, defin
 
 // Create inserts a new collection task.
 func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask) error {
-	now := time.Now().UTC()
+	now := nowUnixMilli()
 	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
 	if task.TaskName != "" {
 		if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
@@ -265,15 +363,13 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask)
 		return err
 	}
 	task.Ingest = ingest
-	task.CreateTime = now
-	task.ModifyTime = now
 	tags := normalizeTaskTagIDs(task.TagIDs)
-	task.TagIDs = nil
+	row := newTaskRow(task, now, now)
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := validateTaskResultIdentityConflict(ctx, tx, task, ""); err != nil {
 			return err
 		}
-		if err := tx.Create(&task).Error; err != nil {
+		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
 		return insertTaskTags(tx, task.SpaceID, task.TaskID, tags)
@@ -286,10 +382,11 @@ func (r *TaskRepository) ListKline(ctx context.Context, spaceID, datasetID strin
 	if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
 		query = query.Where("c_result_dataset_id = ?", datasetID)
 	}
-	var tasks []domain.CollectionTask
-	if err := query.Order("c_task_id ASC").Limit(MaxEnabledTasks).Find(&tasks).Error; err != nil {
+	var rows []taskRow
+	if err := query.Order("c_task_id ASC").Limit(MaxEnabledTasks).Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	tasks := tasksFromRows(rows)
 	// 标签不在任务表里（gorm:"-"），补采路由要靠它推出来源与市场。
 	if err := r.attachTaskTags(ctx, tasks); err != nil {
 		return nil, err
@@ -303,12 +400,12 @@ func (r *TaskRepository) SetIngest(ctx context.Context, spaceID, datasetID, inge
 	if err := domain.ValidateIngest(ingest); err != nil {
 		return 0, err
 	}
-	query := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+	query := r.db.WithContext(ctx).Model(&taskRow{}).
 		Where("c_space_id = ? AND c_data_type = ?", strings.TrimSpace(spaceID), domain.DataTypeKline)
 	if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
 		query = query.Where("c_result_dataset_id = ?", datasetID)
 	}
-	result := query.Updates(map[string]any{"c_ingest": ingest, "c_mtime": time.Now().UTC()})
+	result := query.Updates(map[string]any{"c_ingest": ingest, "c_mtime": nowUnixMilli()})
 	return result.RowsAffected, result.Error
 }
 
@@ -327,17 +424,21 @@ func (r *TaskRepository) ListResampleByPrepareStates(ctx context.Context, states
 	if len(values) == 0 {
 		return nil, fmt.Errorf("at least one task prepare state is required")
 	}
-	var tasks []domain.CollectionTask
+	var rows []taskRow
 	err := r.db.WithContext(ctx).
 		Where("c_data_type = ? AND c_enabled = ? AND c_prepare_state IN ?", "kline_resample", true, values).
 		// Always service tasks that are not ready before refreshing already-ready
 		// catalogs. Otherwise a stable prefix of ready tasks can starve new or
 		// failed tasks once the inventory exceeds the per-tick bound.
-		Order("CASE WHEN c_prepare_state = 'ready' THEN 1 ELSE 0 END ASC, c_mtime ASC, c_id ASC").Limit(limit).Find(&tasks).Error
-	if err == nil {
-		err = r.attachTaskTags(ctx, tasks)
+		Order("CASE WHEN c_prepare_state = 'ready' THEN 1 ELSE 0 END ASC, c_mtime ASC, c_id ASC").Limit(limit).Find(&rows).Error
+	if err != nil {
+		return nil, err
 	}
-	return tasks, err
+	tasks := tasksFromRows(rows)
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 // SetPrepareState advances asynchronous target preparation without changing
@@ -349,9 +450,9 @@ func (r *TaskRepository) SetPrepareState(ctx context.Context, spaceID, taskID st
 	if !state.Valid() {
 		return fmt.Errorf("invalid collection task prepare state: %s", state)
 	}
-	result := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+	result := r.db.WithContext(ctx).Model(&taskRow{}).
 		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID), "kline_resample").
-		Updates(map[string]any{"c_prepare_state": state, "c_last_error": strings.TrimSpace(lastError), "c_mtime": time.Now().UTC()})
+		Updates(map[string]any{"c_prepare_state": state, "c_last_error": strings.TrimSpace(lastError), "c_mtime": nowUnixMilli()})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -452,7 +553,7 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 			task.TaskName = existing.TaskName
 		}
 	}
-	now := time.Now().UTC()
+	now := nowUnixMilli()
 	updates := map[string]any{
 		"c_space_id":          task.SpaceID,
 		"c_task_name":         task.TaskName,
@@ -468,7 +569,7 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 		if err := validateTaskResultIdentityConflict(ctx, tx, task, taskID); err != nil {
 			return err
 		}
-		q := tx.Model(&domain.CollectionTask{}).Where("c_task_id = ?", taskID)
+		q := tx.Model(&taskRow{}).Where("c_task_id = ?", taskID)
 		if strings.TrimSpace(spaceID) != "" {
 			q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
 		}
@@ -490,7 +591,7 @@ func validateTaskResultIdentityConflict(ctx context.Context, tx *gorm.DB, task d
 	if strings.TrimSpace(excludeTaskID) != "" {
 		query = query.Where("c_task_id <> ?", strings.TrimSpace(excludeTaskID))
 	}
-	var conflict domain.CollectionTask
+	var conflict taskRow
 	err := query.Where("c_result_dataset_id = ?", datasetID).Limit(1).Find(&conflict).Error
 	if err != nil {
 		return fmt.Errorf("check task result identity: %w", err)
@@ -523,7 +624,7 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 	if !domain.CollectionTaskPrepareState(task.PrepareState).Valid() {
 		return nil, fmt.Errorf("invalid collection task prepare state: %s", task.PrepareState)
 	}
-	now := time.Now().UTC()
+	now := nowUnixMilli()
 	updates := map[string]any{
 		"c_task_name":   task.TaskName,
 		"c_description": task.Description,
@@ -534,7 +635,7 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 		updates["c_collect_params"] = task.CollectParams
 		updates["c_definition_hash"] = task.DefinitionHash
 	}
-	query := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+	query := r.db.WithContext(ctx).Model(&taskRow{}).
 		Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID))
 	result := query.Updates(updates)
 	if result.Error != nil {
@@ -548,8 +649,8 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 
 // SetEnabled changes a task enabled flag.
 func (r *TaskRepository) SetEnabled(ctx context.Context, spaceID, taskID string, enabled bool) error {
-	updates := map[string]any{"c_enabled": enabled, "c_mtime": time.Now().UTC()}
-	q := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Where("c_task_id = ?", taskID)
+	updates := map[string]any{"c_enabled": enabled, "c_mtime": nowUnixMilli()}
+	q := r.db.WithContext(ctx).Model(&taskRow{}).Where("c_task_id = ?", taskID)
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
 	}
@@ -558,7 +659,7 @@ func (r *TaskRepository) SetEnabled(ctx context.Context, spaceID, taskID string,
 
 func (r *TaskRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
-	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).Delete(&domain.CollectionTask{})
+	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).Delete(&taskRow{})
 	if result.Error != nil {
 		return result.Error
 	}

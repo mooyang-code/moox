@@ -398,6 +398,7 @@ type OrderRecord struct {
 	RemainingReservedQuantity string
 	PaperExecutionPrice       *string
 	FirstMatchPending         bool
+	RejectCode                string
 	RejectReason              string
 	ExchangeUpdatedAt         int64
 	Version                   uint64
@@ -440,6 +441,7 @@ type orderRow struct {
 	RemainingReservedQuantity string    `gorm:"column:c_remaining_reserved_quantity"`
 	PaperExecutionPrice       *string   `gorm:"column:c_paper_execution_price"`
 	FirstMatchPending         bool      `gorm:"column:c_first_match_pending"`
+	RejectCode                string    `gorm:"column:c_reject_code"`
 	RejectReason              string    `gorm:"column:c_reject_reason"`
 	ExchangeUpdatedAt         int64     `gorm:"column:c_exchange_updated_at"`
 	Version                   uint64    `gorm:"column:c_version"`
@@ -502,7 +504,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 		record.Attempt, record.FilledQuantity, record.AveragePrice,
 		record.ReservedAsset, record.ReservedQuantity,
 		record.RemainingReservedQuantity, record.PaperExecutionPrice, record.FirstMatchPending,
-		record.RejectReason, record.ExchangeUpdatedAt, record.Version, record.SubmittedAt, record.FinishedAt,
+		record.RejectCode, record.RejectReason, record.ExchangeUpdatedAt, record.Version, record.SubmittedAt, record.FinishedAt,
 	).Error)
 }
 
@@ -761,6 +763,7 @@ type TargetChildOrder struct {
 	Attempt          int    `gorm:"column:c_attempt"`
 	// ExchangeOrderID 为空表示交易所从没确认收到这笔单（例如查无此单退回待提交、随后丢弃）。
 	ExchangeOrderID string `gorm:"column:c_exchange_order_id"`
+	RejectCode      string `gorm:"column:c_reject_code"`
 	RejectReason    string `gorm:"column:c_reject_reason"`
 }
 
@@ -769,7 +772,7 @@ type TargetChildOrder struct {
 // 走 idx_trade_orders_logical_owner_state 只扫这一份目标的子单。
 const sqlTargetChildOrders = `
 	SELECT c_trading_account_id, c_side, c_order_type, c_time_in_force, c_state, c_quantity, c_filled_quantity, c_attempt,
-		c_exchange_order_id, c_reject_reason
+		c_exchange_order_id, c_reject_code, c_reject_reason
 	FROM t_trade_orders
 	WHERE c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
 		AND c_instrument_id = ? AND +c_submitted_at > 0
@@ -846,22 +849,32 @@ func (s *Store) ListSubmittedTargetOrders(
 	return rows, err
 }
 
+// ListOrdersForLane 列出账户在某个标的上的订单；ownerType、ownerID 非空时在 SQL 层直接过滤，
+// 避免拉回全量历史订单再在内存筛选。
 func (s *Store) ListOrdersForLane(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
 	key exchange.SymbolKey,
+	ownerType string,
+	ownerID string,
 ) ([]OrderRecord, error) {
-	var rows []orderRow
-	if err := s.db.WithContext(ctx).Table("t_trade_orders").
+	db := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(
 			"c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?",
 			spaceID,
 			tradingAccountID,
 			key.Market,
 			key.Symbol,
-		).
-		Find(&rows).Error; err != nil {
+		)
+	if ownerType != "" {
+		db = db.Where("c_owner_type = ?", ownerType)
+	}
+	if ownerID != "" {
+		db = db.Where("c_owner_id = ?", ownerID)
+	}
+	var rows []orderRow
+	if err := db.Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	return sortedOrderRecords(rows), nil
@@ -1059,7 +1072,7 @@ func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
 		record.ExchangeOrderID, record.State, record.Attempt, record.Quantity, record.FilledQuantity,
 		record.AveragePrice, record.ReduceOnly, record.ReservedAsset,
 		record.ReservedQuantity, record.RemainingReservedQuantity,
-		record.RejectReason, record.ExchangeUpdatedAt, record.Version,
+		record.RejectCode, record.RejectReason, record.ExchangeUpdatedAt, record.Version,
 		record.SubmittedAt, record.FinishedAt, record.SpaceID, record.OrderID, expectedVersion,
 	)
 	if result.Error != nil {
@@ -1088,7 +1101,7 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		ReservedAsset: row.ReservedAsset, ReservedQuantity: row.ReservedQuantity,
 		RemainingReservedQuantity: row.RemainingReservedQuantity,
 		PaperExecutionPrice:       row.PaperExecutionPrice, FirstMatchPending: row.FirstMatchPending,
-		RejectReason: row.RejectReason, ExchangeUpdatedAt: row.ExchangeUpdatedAt,
+		RejectCode: row.RejectCode, RejectReason: row.RejectReason, ExchangeUpdatedAt: row.ExchangeUpdatedAt,
 		Version:     row.Version,
 		SubmittedAt: row.SubmittedAt, FinishedAt: row.FinishedAt,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
@@ -1925,15 +1938,15 @@ const (
 			c_owner_id, c_logical_account_id, c_instance_id, c_position_before,
 			c_state, c_attempt, c_filled_quantity, c_average_price,
 			c_reserved_asset, c_reserved_quantity, c_remaining_reserved_quantity,
-			c_paper_execution_price, c_first_match_pending, c_reject_reason,
+			c_paper_execution_price, c_first_match_pending, c_reject_code, c_reject_reason,
 			c_exchange_updated_at, c_version, c_submitted_at, c_finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	// 按版本号更新订单。
 	execUpdateOrderVersioned = `UPDATE t_trade_orders
 		SET c_exchange_order_id = ?, c_state = ?, c_attempt = ?, c_quantity = ?, c_filled_quantity = ?,
 			c_average_price = ?, c_reduce_only = ?, c_reserved_asset = ?,
 			c_reserved_quantity = ?, c_remaining_reserved_quantity = ?,
-			c_reject_reason = ?, c_exchange_updated_at = ?, c_version = ?,
+			c_reject_code = ?, c_reject_reason = ?, c_exchange_updated_at = ?, c_version = ?,
 			c_submitted_at = ?, c_finished_at = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?`
 	queryCountLogicalMember = `SELECT COUNT(*) FROM t_logical_account_members

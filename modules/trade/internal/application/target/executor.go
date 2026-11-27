@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
@@ -131,10 +130,11 @@ type memberState struct {
 
 // placement 是一次下单尝试的结果。tooSmall 表示全部成员都因最小量或最小金额下不了单。
 type placement struct {
-	placed   bool
-	orderID  string
-	reason   string
-	tooSmall bool
+	placed     bool
+	orderID    string
+	reason     string
+	reasonCode string
+	tooSmall   bool
 	// deferred 表示本批这个执行账户的额度用完，留到下一批。
 	deferred bool
 	// capDeferred 表示单币每小时上限的剩余额度不够下一单，这个标的顺延到下一个整点。
@@ -161,10 +161,11 @@ type laneAction struct {
 	// rested 表示本目标在这个标的上挂过单、挂单已经结束：不再挂单。
 	rested bool
 	// scaled 表示现货买入被划转额度缩小过：delta 是缩小后的数量，fullDelta 是缩小前的原始差额，
-	// scaleReason 是缩小的原因。blocked_targets 记原始差额；缩小后太小下不了单也要记原因，不能当“已满足”悄悄跳过。
-	scaled      bool
-	fullDelta   shared.Decimal
-	scaleReason string
+	// scaleReason / scaleReasonCode 是缩小的原因和结构化原因码。blocked_targets 记原始差额；缩小后太小下不了单也要记原因，不能当“已满足”悄悄跳过。
+	scaled          bool
+	fullDelta       shared.Decimal
+	scaleReason     string
+	scaleReasonCode string
 	// noTransfer 表示这笔现货买入不向钱包要资金：这个成员（首选成员）在本目标已经下不了单，
 	// 但别的成员能下，下单时会换成员，给它划转没有意义。
 	noTransfer bool
@@ -357,8 +358,9 @@ func (e *Executor) Converge(
 type spotBuyVerdict struct {
 	// satisfied：视为已满足，不下单、不划转。
 	satisfied bool
-	// blockedReason 非空：因为非资金原因注定下不了单，直接记 BLOCKED，不划转。
-	blockedReason string
+	// blockedReason / blockedReasonCode 非空：因为非资金原因注定下不了单，直接记 BLOCKED，不划转。
+	blockedReason     string
+	blockedReasonCode string
 	// capDeferred：单币每小时上限已经用完，这个标的顺延到下一个整点；这个小时一笔都下不了，不划转。
 	capDeferred bool
 	// noTransfer：首选成员下不了单、别的成员能下：照常进入下单，只是不为首选成员划转。
@@ -386,7 +388,7 @@ func (e *Executor) spotBuyPrecheck(
 	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
 		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
 	if err != nil {
-		if paper.IsInfrastructureError(err) {
+		if execution.IsInfrastructureError(err) {
 			return spotBuyVerdict{}, err
 		}
 		return spotBuyVerdict{}, nil
@@ -426,7 +428,7 @@ func (e *Executor) spotBuyPrecheck(
 	case probe.belowConfiguredMin, probe.tooSmall && finished:
 		return spotBuyVerdict{satisfied: true}, nil
 	}
-	return spotBuyVerdict{blockedReason: probe.reason}, nil
+	return spotBuyVerdict{blockedReason: probe.reason, blockedReasonCode: probe.reasonCode}, nil
 }
 
 // dryRunPlacement 试算：只有账户级的问题（取不到报价等）交给后面的流程（按“能下”处理）；
@@ -600,6 +602,7 @@ func (e *Executor) loadMembers(
 						Quantity:     quantity.String(),
 						Reason: account.TradingAccountID +
 							"：资产没有唯一可交易的标的",
+						ReasonCode: store.BlockedReasonInstrumentUnavailable,
 					})
 					continue
 				}
@@ -656,6 +659,7 @@ func (e *Executor) loadMembers(
 						Quantity:     quantity.String(),
 						Reason: account.TradingAccountID +
 							"：持仓没有对应的可交易标的",
+						ReasonCode: store.BlockedReasonInstrumentUnavailable,
 					})
 					continue
 				}
@@ -801,14 +805,14 @@ func (e *Executor) laneAction(
 	instrumentID string,
 	desired desiredTarget,
 	members []memberState,
-) (laneAction, bool, string, error) {
+) (laneAction, bool, string, string, error) {
 	if !desired.Hold {
 		confirmed := shared.Zero()
 		for _, member := range members {
 			confirmed = confirmed.Add(member.positions[instrumentID])
 		}
 		if env.withinRebalanceThreshold(desired.Quantity, confirmed, members, instrumentID) {
-			return laneAction{}, true, "", nil
+			return laneAction{}, true, "", "", nil
 		}
 	}
 	return nextLaneAction(instrumentID, desired, members)
@@ -818,10 +822,10 @@ func nextLaneAction(
 	instrumentID string,
 	desired desiredTarget,
 	members []memberState,
-) (laneAction, bool, string, error) {
+) (laneAction, bool, string, string, error) {
 	// 保持标的：既不加仓也不减仓。
 	if desired.Hold {
-		return laneAction{}, true, "", nil
+		return laneAction{}, true, "", "", nil
 	}
 	confirmed := shared.Zero()
 	for _, member := range members {
@@ -837,7 +841,7 @@ func nextLaneAction(
 			instrument, ok := member.instruments[instrumentID]
 			if !ok {
 				return laneAction{}, false,
-					"持仓没有对应的可交易标的", nil
+					"持仓没有对应的可交易标的", store.BlockedReasonInstrumentUnavailable, nil
 			}
 			// 反向零头下不了单，跳过这个成员继续判断；整手市场（A 股）还有可卖的零股就一次卖掉。
 			if belowMinimumQuantity(position, instrument) &&
@@ -847,11 +851,11 @@ func nextLaneAction(
 			return laneAction{
 				member: member, instrument: instrument,
 				delta: position.Neg(), reducing: true,
-			}, false, "", nil
+			}, false, "", "", nil
 		}
 	}
 	if desired.Quantity.IsZero() || confirmed.Cmp(desired.Quantity) == 0 {
-		return laneAction{}, true, "", nil
+		return laneAction{}, true, "", "", nil
 	}
 	delta := desired.Quantity.Sub(confirmed)
 	if sameSign(confirmed, desired.Quantity) && confirmed.Abs().Cmp(desired.Quantity.Abs()) > 0 {
@@ -871,12 +875,12 @@ func nextLaneAction(
 			instrument, ok := member.instruments[instrumentID]
 			if !ok {
 				return laneAction{}, false,
-					"持仓没有对应的可交易标的", nil
+					"持仓没有对应的可交易标的", store.BlockedReasonInstrumentUnavailable, nil
 			}
 			return laneAction{
 				member: member, instrument: instrument,
 				delta: quantity, reducing: true,
-			}, false, "", nil
+			}, false, "", "", nil
 		}
 	}
 	for _, member := range members {
@@ -887,10 +891,10 @@ func nextLaneAction(
 			return laneAction{
 				member: member, instrument: instrument,
 				delta: delta,
-			}, false, "", nil
+			}, false, "", "", nil
 		}
 	}
-	return laneAction{}, false, "没有启用的成员支持该标的", nil
+	return laneAction{}, false, "没有启用的成员支持该标的", store.BlockedReasonInstrumentUnavailable, nil
 }
 
 // belowMinimumQuantity 判断数量按步长取整后是否下不了单。
@@ -980,11 +984,20 @@ func (e *Executor) placeActionMode(
 	}
 	if len(tally.capacityErrors) == 0 {
 		result.reason = "数量低于交易所最小值"
+		result.reasonCode = store.BlockedReasonOrderRule
 		return result, nil
 	}
 	result.reason = "成员容量不足：" + strings.Join(tally.capacityErrors, "; ")
-	if tally.unfilled {
+	switch {
+	case tally.unfilled:
 		result.reason = "未到位：" + strings.Join(tally.capacityErrors, "; ")
+		result.reasonCode = store.BlockedReasonUnfilled
+	case tally.exchangeRejected:
+		result.reasonCode = store.BlockedReasonExchangeRejected
+	case tally.insufficientFunds:
+		result.reasonCode = store.BlockedReasonInsufficientFunds
+	default:
+		result.reasonCode = store.BlockedReasonOrderRule
 	}
 	return result, nil
 }
@@ -998,6 +1011,10 @@ type candidateTally struct {
 	configuredSmall int
 	// unfilled 表示有成员的伪市价单用满了尝试次数。
 	unfilled bool
+	// exchangeRejected 表示有成员在本目标上已被交易所拒单而排除。
+	exchangeRejected bool
+	// insufficientFunds 表示有成员因可用资金/可卖量不足无法下单。
+	insufficientFunds bool
 	// t1Deferred 表示有成员只因为 T+1 卖不出。
 	t1Deferred bool
 }
@@ -1042,7 +1059,7 @@ func (e *Executor) checkCandidate(
 		exchange.NewSymbolKey(candidate.instrument.MarketType, candidate.instrument.ExchangeSymbol),
 	)
 	if err != nil {
-		if paper.IsInfrastructureError(err) {
+		if execution.IsInfrastructureError(err) {
 			return candidateCheck{}, placement{}, true, err
 		}
 		return candidateCheck{}, placement{}, true, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: err}
@@ -1089,6 +1106,7 @@ func (e *Executor) checkCandidate(
 	if reason, excluded := rejected[accountID]; excluded {
 		// 同一目标不再向拒过单的账户下单，下一个目标自然重试。
 		tally.capacityErrors = append(tally.capacityErrors, accountID+": "+reason)
+		tally.exchangeRejected = true
 		return candidateCheck{skip: true}, placement{}, false, nil
 	}
 	// oddFull：整手市场卖出全部可卖数量，零股一次卖完，不受最小数量限制。
@@ -1107,6 +1125,7 @@ func (e *Executor) checkCandidate(
 				return candidateCheck{skip: true}, placement{}, false, nil
 			}
 			tally.capacityErrors = append(tally.capacityErrors, accountID+": 可卖量不足")
+			tally.insufficientFunds = true
 			return candidateCheck{skip: true}, placement{}, false, nil
 		}
 	}
@@ -1184,7 +1203,7 @@ func (e *Executor) submitCandidate(
 		if e.Observe != nil && !dryRun {
 			e.Observe.Blocked(candidate.member.account.TradingAccountID, "reversal_blocked")
 		}
-		return placement{reason: reasonTargetReversal}, true, nil
+		return placement{reason: reasonTargetReversal, reasonCode: store.BlockedReasonReversal}, true, nil
 	}
 	if dryRun {
 		return placement{viable: true}, true, nil
@@ -1233,12 +1252,16 @@ func (e *Executor) submitCandidate(
 		if err != nil {
 			if capacityError(err) {
 				tally.capacityErrors = append(tally.capacityErrors, candidate.member.account.TradingAccountID+": "+err.Error())
+				if errors.Is(err, orderapp.ErrInsufficientFunds) {
+					tally.insufficientFunds = true
+				}
 				return placement{}, false, nil
 			}
 			return placement{}, true, err
 		}
 		if capacity.Cmp(shared.Zero()) <= 0 {
 			tally.capacityErrors = append(tally.capacityErrors, candidate.member.account.TradingAccountID+": 没有可用资金")
+			tally.insufficientFunds = true
 			return placement{}, false, nil
 		}
 		if capacity.Cmp(spec.Quantity) < 0 {
@@ -1256,6 +1279,9 @@ func (e *Executor) submitCandidate(
 				tally.capacityErrors,
 				candidate.member.account.TradingAccountID+": "+err.Error(),
 			)
+			if errors.Is(err, orderapp.ErrInsufficientFunds) {
+				tally.insufficientFunds = true
+			}
 			return placement{}, false, nil
 		}
 		return placement{}, true, err
@@ -1984,7 +2010,7 @@ func (e *Executor) handlePendingChild(
 		}
 		return Result{Status: StatusPaused}, true, err
 	}
-	action, complete, _, err := e.laneAction(env, current.InstrumentID, desired[current.InstrumentID], members)
+	action, complete, _, _, err := e.laneAction(env, current.InstrumentID, desired[current.InstrumentID], members)
 	if err != nil {
 		return Result{}, false, err
 	}

@@ -116,8 +116,9 @@ func TestScaledBuyTooSmallWithExistingPositionIsBlockedNotSkipped(t *testing.T) 
 	f.setSpotBalance("BTC", "0.005")
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
 	transfer := &fakeTransfer{
-		scale:   map[string]shared.Decimal{"account-a": mustDecimal("0.01")},
-		reasons: map[string]string{"account-a": wallet.ReasonShortfallScaled},
+		scale:       map[string]shared.Decimal{"account-a": mustDecimal("0.01")},
+		reasons:     map[string]string{"account-a": wallet.ReasonShortfallScaled},
+		reasonCodes: map[string]string{"account-a": store.BlockedReasonTransferShortfall},
 	}
 	executor := f.executor()
 	executor.Transfers = transfer
@@ -130,7 +131,7 @@ func TestScaledBuyTooSmallWithExistingPositionIsBlockedNotSkipped(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, stored.BlockedTargets, 1)
 	require.Equal(t, "0.005", stored.BlockedTargets[0].Quantity)
-	require.True(t, wallet.IsFundsShortage(stored.BlockedTargets[0].Reason))
+	require.True(t, stored.BlockedTargets[0].IsTransferShortfall())
 	require.Zero(t, transfer.collectCalls, "买单在等资金，不归集")
 }
 

@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
@@ -14,6 +15,7 @@ type LogicalAccountServer struct {
 	LogicalAccounts *logicalapp.Service
 	Store           *store.Store
 	NewID           func() string
+	Now             func() time.Time
 	Flatten         func(
 		context.Context,
 		string,
@@ -70,9 +72,17 @@ func (h *LogicalAccountServer) GetLogicalAccount(
 		spaceID,
 		req.GetLogicalAccountId(),
 	)
+	pb := h.logicalAccount(ctx, st, record)
+	if err == nil && pb != nil {
+		summaries, summaryErr := st.BatchLogicalAccountSummaries(ctx, spaceID, []string{record.LogicalAccountID}, h.now())
+		if summaryErr != nil {
+			return &tradepb.GetLogicalAccountRsp{RetInfo: errorInfo(summaryErr)}, nil
+		}
+		applyLogicalAccountSummary(pb, summaries[record.LogicalAccountID])
+	}
 	return &tradepb.GetLogicalAccountRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, st, record),
+		LogicalAccount: pb,
 	}, nil
 }
 
@@ -103,9 +113,20 @@ func (h *LogicalAccountServer) ListLogicalAccounts(
 	if end > len(records) {
 		end = len(records)
 	}
-	values := make([]*tradepb.LogicalAccount, 0, end-start)
-	for _, record := range records[start:end] {
-		values = append(values, h.logicalAccount(ctx, st, record))
+	slice := records[start:end]
+	ids := make([]string, len(slice))
+	for index, record := range slice {
+		ids[index] = record.LogicalAccountID
+	}
+	summaries, summaryErr := st.BatchLogicalAccountSummaries(ctx, spaceID, ids, h.now())
+	if summaryErr != nil {
+		return &tradepb.ListLogicalAccountsRsp{RetInfo: errorInfo(summaryErr)}, nil
+	}
+	values := make([]*tradepb.LogicalAccount, 0, len(slice))
+	for _, record := range slice {
+		pb := h.logicalAccount(ctx, st, record)
+		applyLogicalAccountSummary(pb, summaries[record.LogicalAccountID])
+		values = append(values, pb)
 	}
 	return &tradepb.ListLogicalAccountsRsp{
 		RetInfo: success(), LogicalAccounts: values,
@@ -342,6 +363,31 @@ func (h *LogicalAccountServer) logicalAccount(
 		readiness = logicalapp.Readiness{Reasons: []string{err.Error()}}
 	}
 	return logicalAccountToPB(record, members, markets, readiness)
+}
+
+func (h *LogicalAccountServer) now() time.Time {
+	if h != nil && h.Now != nil {
+		return h.Now()
+	}
+	return time.Now()
+}
+
+func applyLogicalAccountSummary(pb *tradepb.LogicalAccount, summary store.LogicalAccountSummary) {
+	if pb == nil {
+		return
+	}
+	pb.PositionCount = summary.PositionCount
+	pb.EquityChange_24H = summary.EquityChange24h
+	pb.EquityChangePct_24H = summary.EquityChangePct24h
+}
+
+func logicalAccountReadinessFallback(st *store.Store, ctx context.Context, record store.LogicalAccountRecord) logicalapp.Readiness {
+	svc := &logicalapp.Service{Store: st}
+	readiness, err := svc.Readiness(ctx, st, record.SpaceID, record.LogicalAccountID)
+	if err != nil {
+		return logicalapp.Readiness{Reasons: []string{err.Error()}}
+	}
+	return readiness
 }
 
 func (h *LogicalAccountServer) logicalAccountID() string {

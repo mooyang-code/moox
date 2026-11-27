@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/stretchr/testify/require"
@@ -43,13 +43,22 @@ func TestLogicalAccountControlModeRPC(t *testing.T) {
 	require.Equal(t, tradepb.ControlMode_CONTROL_MODE_UNSPECIFIED, controlModeToPB("unknown"))
 }
 
-func TestPaperSimulationControlModeRPC(t *testing.T) {
+func TestPaperAccountControlModeRPC(t *testing.T) {
 	for _, mode := range []tradepb.ControlMode{0, 1, 2, 99} {
 		t.Run(mode.String(), func(t *testing.T) {
 			s := openRPCStore(t)
-			h := &ConsoleServer{Store: s, LogicalAccountServer: &LogicalAccountServer{Store: s, LogicalAccounts: &logicalapp.Service{Store: s}}, Paper: &papersimulation.Service{Store: s}}
+			logicalSrv := &LogicalAccountServer{Store: s, LogicalAccounts: &logicalapp.Service{Store: s}}
+			h := &AccountServer{
+				Store:    s,
+				Logical:  logicalSrv,
+				Accounts: &accountapp.Service{Store: accountapp.Repository{Store: s}},
+			}
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-			rsp, err := h.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "paper", LogicalAccountName: "logical", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: mode})
+			rsp, err := h.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
+				Name: "paper", LogicalAccountName: "logical", Exchange: "binance",
+				Markets: []string{"spot"}, SettlementAsset: "USDT", ControlMode: mode,
+				Paper: &tradepb.PaperConfig{InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
+			})
 			require.NoError(t, err)
 			if mode == 99 {
 				require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())

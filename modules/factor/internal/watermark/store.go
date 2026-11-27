@@ -106,6 +106,40 @@ func (s *Store) RaiseTarget(taskID string, period time.Time) error {
 	return s.flushLocked()
 }
 
+// Delete 删除单个任务的水位记录并原子落盘；任务本来就不存在时直接返回 false, nil。
+func (s *Store) Delete(taskID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.states[taskID]; !ok {
+		return false, nil
+	}
+	delete(s.states, taskID)
+	return true, s.flushLocked()
+}
+
+// Retain 只保留 keep 中的任务水位记录，删除已消失的任务并原子落盘；返回被删除的任务 ID（按字典序）。
+func (s *Store) Retain(keep map[string]struct{}) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var removed []string
+	for taskID := range s.states {
+		if _, ok := keep[taskID]; !ok {
+			removed = append(removed, taskID)
+		}
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	sort.Strings(removed)
+	for _, taskID := range removed {
+		delete(s.states, taskID)
+	}
+	if err := s.flushLocked(); err != nil {
+		return removed, err
+	}
+	return removed, nil
+}
+
 // All 返回全部状态（按任务 ID 排序）。
 func (s *Store) All() []State {
 	s.mu.Lock()

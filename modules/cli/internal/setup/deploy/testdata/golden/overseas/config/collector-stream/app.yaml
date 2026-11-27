@@ -12,8 +12,6 @@ gateway_client:
 space_id: ""
 instance_id: ""
 data_dir: /data/moox/data/collector-stream
-# 相对本文件所在目录。
-market_config: /data/moox/config/collector-stream/sources/market/binance.yaml
 storage_timeout_ms: 4000
 local_executor:
   concurrency: 4

@@ -135,13 +135,17 @@ func (s *Service) CancelOrder(
 				return err
 			}
 		}
+		now := s.clock().UTC()
 		var ensureErr error
 		action, _, ensureErr = tx.EnsureOperatorAction(
 			store.OperatorActionRecord{
 				SpaceID: command.SpaceID, ActionID: command.ActionID,
 				LogicalAccountID: orderRecord.LogicalAccountID,
-				ActionType:       string(operatordomain.ActionCancelOrder), Reason: strings.TrimSpace(command.Reason),
-				RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
+				ActionType:       string(operatordomain.ActionCancelOrder),
+				Source:           string(operatordomain.SourceUser),
+				Reason:           strings.TrimSpace(command.Reason),
+				RequestJSON:      requestJSON, Status: string(operatordomain.StatusRunning),
+				CreatedAt: now, UpdatedAt: now,
 			},
 		)
 		return ensureErr

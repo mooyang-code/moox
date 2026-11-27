@@ -119,15 +119,88 @@ func TestManagerClientCallsLocalManagerDirectlyWithoutSignature(t *testing.T) {
 		require.NoError(t, proto.Unmarshal(body, &req))
 		require.Equal(t, "hash-0", req.GetKnownHash())
 		require.Equal(t, "factor-engine@mac", req.GetEngine().GetEngineId())
-		return &factorpb.SyncEngineCatalogRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1", Tasks: []*factorpb.EngineTask{{FactorTask: &factorpb.FactorTask{TaskId: "ftask_a"}, ResultReady: true, Members: []*factorpb.EngineMember{{MemberKey: "bias", Factor: &factorpb.FactorDef{FactorId: "bias", Name: "bias", Spec: "output: close\n"}}}}}}, nil
+		return &factorpb.SyncEngineCatalogRsp{
+			RetInfo:            &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+			CatalogHash:        "hash-1",
+			ExistingTaskIds:    []string{"ftask_a", "ftask_disabled"},
+			HasExistingTaskIds: true,
+			Tasks:              []*factorpb.EngineTask{{FactorTask: &factorpb.FactorTask{TaskId: "ftask_a"}, ResultReady: true, Members: []*factorpb.EngineMember{{MemberKey: "bias", Factor: &factorpb.FactorDef{FactorId: "bias", Name: "bias", Spec: "output: close\n"}}}}},
+		}, nil
 	})
 	snapshot, err := client.SyncCatalog(t.Context(), "hash-0")
 	require.NoError(t, err)
 	require.Equal(t, "hash-1", snapshot.Hash)
+	require.True(t, snapshot.HasExistingTaskIDs)
+	require.Equal(t, []string{"ftask_a", "ftask_disabled"}, snapshot.ExistingTaskIDs)
 	require.Len(t, snapshot.Sets, 1)
 	require.True(t, snapshot.Sets[0].ResultReady)
 	require.Equal(t, "output: close\n", snapshot.Sets[0].Members[0].Factor.Spec)
 	require.Equal(t, []string{"bias"}, snapshot.Sets[0].Members[0].Factor.Outputs, "接收方编译得到派生字段")
+}
+
+// 显式 has_existing_task_ids 保护与客户端一致性防呆：
+// - 服务端未置 has_existing_task_ids=true（如旧版响应或异常空包）时，不视为权威清单；
+// - 服务端置真且 tasks 与 existing_task_ids 均为空（合法的全量删除场景）时保留权威标记；
+// - 服务端置真但存在启用任务不在 existing_task_ids 中时，降级为 HasExistingTaskIDs=false 防止误清活跃任务。
+func TestManagerClientSyncCatalogExistingTaskIDsGuard(t *testing.T) {
+	taskPB := []*factorpb.EngineTask{{
+		FactorTask:  &factorpb.FactorTask{TaskId: "ftask_a"},
+		ResultReady: true,
+		Members:     []*factorpb.EngineMember{{MemberKey: "bias", Factor: &factorpb.FactorDef{FactorId: "bias", Name: "bias", Spec: "output: close\n"}}},
+	}}
+
+	cases := []struct {
+		name            string
+		rsp             *factorpb.SyncEngineCatalogRsp
+		wantHasExisting bool
+		wantExisting    []string
+	}{
+		{
+			name: "missing flag is not authoritative",
+			rsp: &factorpb.SyncEngineCatalogRsp{
+				RetInfo:     &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+				CatalogHash: "hash-legacy",
+				Tasks:       taskPB,
+			},
+			wantHasExisting: false,
+			wantExisting:    nil,
+		},
+		{
+			name: "empty catalog with explicit flag is authoritative",
+			rsp: &factorpb.SyncEngineCatalogRsp{
+				RetInfo:            &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+				CatalogHash:        "hash-empty",
+				HasExistingTaskIds: true,
+			},
+			wantHasExisting: true,
+			wantExisting:    nil,
+		},
+		{
+			name: "inconsistent tasks missing from existing downgrades to false",
+			rsp: &factorpb.SyncEngineCatalogRsp{
+				RetInfo:            &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+				CatalogHash:        "hash-bad",
+				Tasks:              taskPB,
+				ExistingTaskIds:    []string{"ftask_other"},
+				HasExistingTaskIds: true,
+			},
+			wantHasExisting: false,
+			wantExisting:    nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := managerClientFor(t, func(_ context.Context, method string, _ []byte) (proto.Message, error) {
+				require.Equal(t, "SyncEngineCatalog", method)
+				return tc.rsp, nil
+			})
+			snapshot, err := client.SyncCatalog(t.Context(), "")
+			require.NoError(t, err)
+			require.Equal(t, tc.wantHasExisting, snapshot.HasExistingTaskIDs)
+			require.Equal(t, tc.wantExisting, snapshot.ExistingTaskIDs)
+		})
+	}
 }
 
 func TestManagerClientUsesNativeTransportAndMapsLeaseConflict(t *testing.T) {

@@ -13,9 +13,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
+	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -217,7 +216,7 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 		SubjectID: strings.TrimSpace(req.SubjectID),
 		Interval:  providerInterval,
 	}
-	exchangeKlines, err := a.klineCollector.fetchKlinesOnce(ctx, params, &exchange.KlineRequest{
+	rawKlines, err := a.klineCollector.fetchKlinesOnce(ctx, params, &binanceapi.KlineRequest{
 		Symbol:    params.Symbol,
 		Interval:  providerInterval,
 		Limit:     req.Limit,
@@ -229,7 +228,7 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	}
 
 	now := a.now().UTC()
-	closed, _ := filterClosedKlines(convertExchangeKlines(exchangeKlines, params.Symbol, req.Frequency), now)
+	closed, _ := filterClosedKlines(rawKlines, now)
 	if len(closed) == 0 {
 		return nil, marketdata.ErrNoClosedBar
 	}
@@ -273,7 +272,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 	if req.SnapshotAt.IsZero() {
 		fetchedAt = a.now().UTC()
 	}
-	var symbols []*exchange.SymbolInfo
+	var symbols []*binanceapi.SymbolInfo
 	fetched, fetchErr := a.symbolCollector.fetchSymbols(ctx, &sources.CollectParams{
 		SpaceID:   marketID,
 		DatasetID: "instruments",
@@ -388,33 +387,9 @@ func validateInstrumentType(productType marketdata.InstrumentType, instrumentTyp
 	return nil
 }
 
-func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, fetchedAt time.Time) (marketdata.NormalizedKline, error) {
+func normalizeMarketDataKline(req marketdata.KlineRequest, kline *binanceapi.Kline, fetchedAt time.Time) (marketdata.NormalizedKline, error) {
 	if kline == nil {
 		return marketdata.NormalizedKline{}, fmt.Errorf("%w: nil Binance kline", marketdata.ErrProtocol)
-	}
-	openValue, err := decimalToFloat64(kline.Open)
-	if err != nil {
-		return marketdata.NormalizedKline{}, err
-	}
-	highValue, err := decimalToFloat64(kline.High)
-	if err != nil {
-		return marketdata.NormalizedKline{}, err
-	}
-	lowValue, err := decimalToFloat64(kline.Low)
-	if err != nil {
-		return marketdata.NormalizedKline{}, err
-	}
-	closeValue, err := decimalToFloat64(kline.Close)
-	if err != nil {
-		return marketdata.NormalizedKline{}, err
-	}
-	volumeValue, err := decimalToFloat64(kline.Volume)
-	if err != nil {
-		return marketdata.NormalizedKline{}, err
-	}
-	amountValue, err := decimalToFloat64(kline.QuoteVolume)
-	if err != nil {
-		return marketdata.NormalizedKline{}, err
 	}
 	frequency, err := req.FrequencyValue()
 	if err != nil {
@@ -444,12 +419,12 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 		Frequency:         string(frequency),
 		BarStart:          barStart,
 		BarEnd:            frequency.BarEnd(barStart),
-		Open:              openValue,
-		High:              highValue,
-		Low:               lowValue,
-		Close:             closeValue,
-		Volume:            volumeValue,
-		Amount:            amountValue,
+		Open:              kline.Open,
+		High:              kline.High,
+		Low:               kline.Low,
+		Close:             kline.Close,
+		Volume:            kline.Volume,
+		Amount:            kline.QuoteVolume,
 		TradeCount:        kline.TradeCount,
 		ProviderTimestamp: kline.CloseTime.UTC(),
 		FetchedAt:         fetchedAt,
@@ -475,14 +450,6 @@ func normalizeBarStart(openTime time.Time, frequency marketdata.Frequency) time.
 	day := time.Date(openTime.Year(), openTime.Month(), openTime.Day(), 0, 0, 0, 0, time.UTC)
 	daysSinceMonday := (int(day.Weekday()) + 6) % 7
 	return day.AddDate(0, 0, -daysSinceMonday)
-}
-
-func decimalToFloat64(value interface{ Float64() (float64, error) }) (float64, error) {
-	floatValue, err := value.Float64()
-	if err != nil {
-		return 0, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
-	}
-	return floatValue, nil
 }
 
 func classifyProviderError(err error) error {

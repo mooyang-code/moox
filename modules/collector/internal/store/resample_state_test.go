@@ -46,6 +46,43 @@ func TestResampleSnapshotsResolveByEffectiveFrom(t *testing.T) {
 	require.Equal(t, int64(2000), latest.EffectiveFrom)
 }
 
+func TestCleanupSnapshotsKeepsBaselineBeforeCutoff(t *testing.T) {
+	repo := openResampleStore(t).Resample()
+	ctx := context.Background()
+	for _, snap := range []ResampleSnapshot{
+		{SpaceID: "crypto", TaskID: "t1", EffectiveFrom: 100, SeriesHash: "h1", Subjects: []string{"A"}},
+		{SpaceID: "crypto", TaskID: "t1", EffectiveFrom: 200, SeriesHash: "h2", Subjects: []string{"A", "B"}},
+		{SpaceID: "crypto", TaskID: "t1", EffectiveFrom: 300, SeriesHash: "h3", Subjects: []string{"A", "B", "C"}},
+		{SpaceID: "crypto", TaskID: "t1", EffectiveFrom: 500, SeriesHash: "h4", Subjects: []string{"A", "B", "C", "D"}},
+		// 仅有一份早于 cutoff 的快照时必须保留，不能把唯一基线删光。
+		{SpaceID: "crypto", TaskID: "t2", EffectiveFrom: 100, SeriesHash: "solo", Subjects: []string{"X"}},
+	} {
+		require.NoError(t, repo.AddSnapshot(ctx, snap))
+	}
+
+	removed, err := repo.CleanupSnapshots(ctx, time.Unix(350, 0).UTC())
+	require.NoError(t, err)
+	require.EqualValues(t, 2, removed, "只删 t1 已被 300 替代的 100 与 200 两份旧快照")
+
+	// [350, +∞) 的查询结果不受影响：t1 在 350 命中 300，在 500 命中 500；t2 仍保留 100。
+	got, ok, err := repo.SnapshotFor(ctx, "crypto", "t1", 350)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "h3", got.SeriesHash)
+	got, ok, err = repo.SnapshotFor(ctx, "crypto", "t1", 500)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "h4", got.SeriesHash)
+	_, ok, err = repo.SnapshotFor(ctx, "crypto", "t1", 250)
+	require.NoError(t, err)
+	require.False(t, ok, "250 之前的旧快照已被清理")
+
+	solo, ok, err := repo.SnapshotFor(ctx, "crypto", "t2", 350)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "solo", solo.SeriesHash)
+}
+
 func TestSubmitJobIsIdempotentByRequestID(t *testing.T) {
 	repo := openResampleStore(t).Resample()
 	ctx := context.Background()
@@ -189,8 +226,9 @@ func TestFinishChunkRecordsNoticeInSameTransaction(t *testing.T) {
 	mgr := openResampleStore(t)
 	ctx := context.Background()
 	start := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_kline_backfill_jobs (c_job_id, c_space_id, c_source, c_kind, c_from, c_to, c_status) VALUES ('job', 'crypto', 'manual', 'force', ?, ?, 'running')`, start, start.Add(time.Hour)).Error)
-	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_kline_backfill_chunks (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from, c_to, c_chunk_id, c_status, c_attempts) VALUES ('job', 'dataset_src', '5m', 'BTC', ?, ?, 'chunk', 'running', 1)`, start, start.Add(time.Hour)).Error)
+	end := start.Add(time.Hour)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_kline_backfill_jobs (c_job_id, c_space_id, c_source, c_kind, c_from, c_to, c_status) VALUES ('job', 'crypto', 'manual', 'force', ?, ?, 'running')`, start.UnixMilli(), end.UnixMilli()).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_kline_backfill_chunks (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from, c_to, c_chunk_id, c_status, c_attempts) VALUES ('job', 'dataset_src', '5m', 'BTC', ?, ?, 'chunk', 'running', 1)`, start.UnixMilli(), end.UnixMilli()).Error)
 	var id int64
 	require.NoError(t, mgr.db.Raw(`SELECT c_id FROM t_collector_kline_backfill_chunks WHERE c_chunk_id = 'chunk'`).Scan(&id).Error)
 
@@ -209,7 +247,7 @@ func TestFinishChunkRecordsNoticeInSameTransaction(t *testing.T) {
 	require.Len(t, left, 1)
 
 	// FinishChunkWithoutNotice 更新分块成功状态但不写入 backfill_notices（例如越界空分块跳过）。
-	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_kline_backfill_chunks (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from, c_to, c_chunk_id, c_status, c_attempts) VALUES ('job', 'dataset_src', '5m', 'ETH', ?, ?, 'chunk-skip', 'running', 1)`, start, start.Add(time.Hour)).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_kline_backfill_chunks (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from, c_to, c_chunk_id, c_status, c_attempts) VALUES ('job', 'dataset_src', '5m', 'ETH', ?, ?, 'chunk-skip', 'running', 1)`, start.UnixMilli(), end.UnixMilli()).Error)
 	var skipID int64
 	require.NoError(t, mgr.db.Raw(`SELECT c_id FROM t_collector_kline_backfill_chunks WHERE c_chunk_id = 'chunk-skip'`).Scan(&skipID).Error)
 	require.NoError(t, mgr.Backfill().FinishChunkWithoutNotice(ctx, skipID, 1, BackfillSucceeded, 0, "早于回看上限，不补"))

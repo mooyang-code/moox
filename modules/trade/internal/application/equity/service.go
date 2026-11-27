@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -288,7 +289,7 @@ func (s *Service) unifiedSnapshot(ctx context.Context, account store.TradingAcco
 		}
 	}
 	// 保证金币的配置值是组合层的数，在组合层只加一次，不在每个成员里各加一遍。
-	equity := settlementNet.Add(unrealized).Add(stableValue)
+	heldValues := shared.Zero()
 	if len(held) > 0 {
 		if prices == nil {
 			if s.Adapters == nil {
@@ -324,7 +325,7 @@ func (s *Service) unifiedSnapshot(ctx context.Context, account store.TradingAcco
 			if err != nil {
 				return store.TradingAccountSnapshot{}, err
 			}
-			equity = equity.Add(decimal(balance.Total).Mul(price))
+			heldValues = heldValues.Add(decimal(balance.Total).Mul(price))
 			// 新鲜度取决于最旧的输入：新报价不能让旧余额看起来是最新的。降级估值（quoteTime 为 0）不参与，
 			// 否则一个下架零头会让整个组合的权益一直判为过期。时段外（A 股夜里、午休、周末）有效的收盘价也不参与：
 			// 它本来就早于余额同步时间，拉低后整个组合的权益会判为过期，账户整夜未就绪。
@@ -333,6 +334,12 @@ func (s *Service) unifiedSnapshot(ctx context.Context, account store.TradingAcco
 			}
 		}
 	}
+	equity := tradingaccount.ComputeAccountEquity(tradingaccount.AccountEquityInput{
+		SettlementNet: settlementNet,
+		UnrealizedPnL: unrealized,
+		StableValue:   stableValue,
+		HeldValues:    heldValues,
+	})
 	snapshot.Equity = equity.String()
 	if !account.HasPositionMarket() {
 		snapshot.AvailableFunds = settlementAvailable.String()

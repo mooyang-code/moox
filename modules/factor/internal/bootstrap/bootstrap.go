@@ -29,15 +29,17 @@ const (
 	factorMgrService       = "trpc.moox.factor.FactorMgr"
 	factorEngineService    = "trpc.moox.factor.FactorEngine"
 	catalogReconcilePeriod = 5 * time.Minute
+	recalcPrunePeriod      = time.Hour
 )
 
 // Runtime owns every long-lived resource created while assembling
 // moox-factor-mgr: the SQLite catalog, result-dataset reconciliation and the
 // engine hub. Factor computation runs in moox-factor-engine.
 type Runtime struct {
-	gateway     *gatewayclient.Client
-	store       *store.Store
-	stopCatalog func() error
+	gateway         *gatewayclient.Client
+	store           *store.Store
+	stopCatalog     func() error
+	stopRecalcPrune func() error
 	// stopSeeds 等历史补齐状态的取数协程退出（appCtx 取消之后）。
 	stopSeeds   func()
 	cancel      context.CancelFunc
@@ -126,6 +128,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 		return nil, err
 	}
 	runtime.stopCatalog = stopCatalog
+	stopRecalcPrune, err := startRecalcJobPruner(appCtx, db, recalcPrunePeriod, store.DefaultRecalcJobRetention, store.DefaultRecalcJobKeepPerTask)
+	if err != nil {
+		return nil, err
+	}
+	runtime.stopRecalcPrune = stopRecalcPrune
 
 	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)), factorrpc.WithLifecycle(life),
 		factorrpc.WithPreviewer(preview.New(storageio.NewAxis(storage), previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))))
@@ -171,6 +178,9 @@ func (r *Runtime) Close() error {
 		}
 		if r.stopCatalog != nil {
 			r.err = errors.Join(r.err, r.stopCatalog())
+		}
+		if r.stopRecalcPrune != nil {
+			r.err = errors.Join(r.err, r.stopRecalcPrune())
 		}
 		if r.stopSeeds != nil {
 			r.stopSeeds()
@@ -262,6 +272,43 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 				if err := service.Reconcile(reconcileCtx); err != nil && reconcileCtx.Err() == nil {
 					log.ErrorContextf(reconcileCtx, "factor catalog reconciliation failed: %v", err)
 				}
+			}
+		}
+	}()
+	return func() error {
+		cancel()
+		<-done
+		return nil
+	}, nil
+}
+
+func startRecalcJobPruner(ctx context.Context, db *store.Store, interval, retention time.Duration, keepPerTask int) (func() error, error) {
+	if ctx == nil || db == nil || interval <= 0 {
+		return nil, errors.New("recalc job pruner context, store and interval are required")
+	}
+	pruneCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	pruneOnce := func() {
+		deleted, err := db.PruneRecalcJobs(pruneCtx, time.Now().UTC(), retention, keepPerTask)
+		if err != nil && pruneCtx.Err() == nil {
+			log.WarnContextf(pruneCtx, "factor_recalc_jobs_periodic_prune_failed error=%v", err)
+			return
+		}
+		if deleted > 0 {
+			log.InfoContextf(pruneCtx, "factor_recalc_jobs_pruned deleted=%d", deleted)
+		}
+	}
+	go func() {
+		defer close(done)
+		pruneOnce()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pruneCtx.Done():
+				return
+			case <-ticker.C:
+				pruneOnce()
 			}
 		}
 	}()

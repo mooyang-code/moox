@@ -44,16 +44,14 @@ func TestResultDisplayNameUsesShortChinese(t *testing.T) {
 	require.False(t, isChineseDisplayName("Binance 现货 K 线 1m"))
 }
 
-// 基础字段、记录型字段都带中文显示名与一级分组；基础 K 线字段的名字按种子写法。
+// 基础 K 线字段都带中文显示名与一级分组；基础 K 线字段的名字按种子写法。
 func TestOutputFieldsCarryDisplayNameAndGroup(t *testing.T) {
-	for _, fields := range [][]OutputField{KlineOutputFields, recordOutputFields} {
-		seen := map[string]bool{}
-		for _, field := range fields {
-			require.NotEmpty(t, field.DisplayName, field.Name)
-			require.Contains(t, []string{GroupIdentity, GroupQuote, GroupTrading}, field.Group, field.Name)
-			require.False(t, seen[field.Name], "字段 %s 重复", field.Name)
-			seen[field.Name] = true
-		}
+	seen := map[string]bool{}
+	for _, field := range KlineOutputFields {
+		require.NotEmpty(t, field.DisplayName, field.Name)
+		require.Contains(t, []string{GroupIdentity, GroupQuote, GroupTrading}, field.Group, field.Name)
+		require.False(t, seen[field.Name], "字段 %s 重复", field.Name)
+		seen[field.Name] = true
 	}
 	for name, want := range map[string][2]string{
 		"open": {"开盘价", GroupQuote}, "close": {"收盘价", GroupQuote},
@@ -462,11 +460,11 @@ func TestEnsureColumnsCreatesExtraFieldFromSpecOnlyWhenSelected(t *testing.T) {
 	manager := NewManagerWithAPI(fake)
 	spec := marketdata.FieldSpec{ID: "funding_rate", Name: "资金费率", Group: marketdata.GroupDerivatives, Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}
 	manager.SetFieldOffers(marketdata.FieldOffers{{MarketID: "crypto", Instrument: "swap", ProviderID: "binance", Spec: spec}})
-	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", storagepb.DataKind_DATA_KIND_TIME_SERIES, nil))
+	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", nil))
 	require.NotContains(t, fake.columnNames, "funding_rate", "默认字段不含资金费率")
 
 	fake.columnNames, fake.columns = nil, nil
-	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", storagepb.DataKind_DATA_KIND_TIME_SERIES, []string{"close", "funding_rate"}))
+	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", []string{"close", "funding_rate"}))
 	require.Equal(t, []string{"close", "funding_rate"}, fake.columnNames)
 	funding := fake.columns[1]
 	require.Equal(t, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, funding.GetValueType())

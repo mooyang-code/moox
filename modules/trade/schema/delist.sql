@@ -64,6 +64,6 @@ CREATE TABLE IF NOT EXISTS t_trade_delist_flattens (
     c_action_id TEXT NOT NULL,
     c_created_at INTEGER NOT NULL,
     CHECK (c_round IN (1, 2)),
-    PRIMARY KEY (c_delist_id, c_round, c_space_id, c_logical_account_id),
-    FOREIGN KEY (c_delist_id) REFERENCES t_trade_delists (c_delist_id) ON DELETE CASCADE
+    FOREIGN KEY (c_delist_id) REFERENCES t_trade_delists (c_delist_id) ON DELETE CASCADE,
+    PRIMARY KEY (c_delist_id, c_round, c_space_id, c_logical_account_id)
 );

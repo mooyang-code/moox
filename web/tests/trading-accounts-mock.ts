@@ -87,7 +87,10 @@ const logicals = [
     automation_state: "ACTIVE",
     ready: true,
     readiness_reasons: [],
-    members: [{ trading_account_id: "ta-paper-1", enabled: true, priority: 1 }]
+    members: [{ trading_account_id: "ta-paper-1", enabled: true, priority: 1 }],
+    position_count: 2,
+    equity_change_24h: "850.12",
+    equity_change_pct_24h: "0.0085012"
   },
   {
     logical_account_id: "la-paper-manual",
@@ -397,10 +400,14 @@ async function gateway(route: Route) {
       });
     case "ListStrategies":
       return route.fulfill({ json: ok({ strategies: [{ strategy_id: "st-1", name: "动量轮动" }], total: "1" }) });
-    case "CreatePaperSimulation":
-      calls.paper.push(body);
+    case "CreateTradingAccount":
+      if (body.paper) calls.paper.push(body);
       return route.fulfill({
         json: ok({ account: accounts[0], logical_account: { ...logicals[1], logical_account_id: "la-new", name: "新模拟" } })
+      });
+    case "UpdateTradingAccount":
+      return route.fulfill({
+        json: ok({ account: accounts[0], logical_account: logicals[0] })
       });
     case "AddLogicalAccountMember":
       calls.members.push(body);
@@ -438,7 +445,7 @@ async function gateway(route: Route) {
             can_place_order: true,
             order_types: [1, 2],
             fill_policies: [1, 2, 3],
-            can_close_paper_simulation: true,
+            can_close_paper_account: true,
             // 生产账户的交易所没有流水接口，用来测“不支持”的展示
             ledger: body.trading_account_id !== "ta-prod-1"
           }

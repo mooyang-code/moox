@@ -1,7 +1,6 @@
 package events
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,8 +43,7 @@ func TestTopologyIsConsistent(t *testing.T) {
 			require.NotEmpty(t, consumer.Events(), consumer.name)
 			require.NotContains(t, consumers, consumer.name, "消费者 %s 声明了两次", consumer.name)
 			consumers[consumer.name] = role.Username
-			require.Regexp(t, `^[a-z0-9_]+$`, strings.ReplaceAll(consumer.name, "%s", "x"))
-			require.Equal(t, consumer.perSpace, strings.Contains(consumer.name, "%s"), consumer.name)
+			require.Regexp(t, `^[a-z0-9_]+$`, consumer.name)
 			for _, event := range consumer.Events() {
 				require.Equal(t, consumer.Stream(), event.Stream(), "消费者 %s 的事件不在同一个 Stream", consumer.name)
 			}
@@ -77,9 +75,7 @@ func TestTradeRoleConsumesTargetsAndDelists(t *testing.T) {
 	require.Len(t, Roles, 8, "内置管理、指标、Monitor、Storage、因子、策略、Trade、Collector 八个账号")
 }
 
-func TestPerSpaceConsumerNames(t *testing.T) {
-	require.Equal(t, "collector_resample_period_crypto_v1", CollectorResamplePeriodConsumer.NameFor("crypto"))
-	require.Equal(t, "collector_resample_backfilled_stockhk_v1", CollectorResampleBackfilledConsumer.NameFor("stockhk"))
-	require.Panics(t, func() { _ = CollectorResamplePeriodConsumer.Name() })
-	require.Equal(t, "factor_collector_period_v1", FactorPeriodConsumer.NameFor("crypto"))
+func TestCollectorResampleConsumersAreWildcard(t *testing.T) {
+	require.Equal(t, "collector_resample_period_v1", CollectorResamplePeriodConsumer.Name())
+	require.Equal(t, "collector_resample_backfilled_v1", CollectorResampleBackfilledConsumer.Name())
 }

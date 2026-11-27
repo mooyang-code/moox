@@ -158,8 +158,8 @@ func (s *Service) ListKlineBackfills(ctx context.Context, req *pb.ListKlineBackf
 		size = 50
 	}
 	source := strings.TrimSpace(req.GetSource())
-	if source != "" && source != store.BackfillSourceManual && source != store.BackfillSourceAuto {
-		return &pb.ListKlineBackfillsRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "source must be manual or auto")}, nil
+	if source != "" && !store.IsValidBackfillSource(source) {
+		return &pb.ListKlineBackfillsRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "source must be manual, auto, seed, close_refetch, or catchup")}, nil
 	}
 	filter := store.BackfillJobFilter{Source: source, Attention: req.GetAttention(), DatasetID: strings.TrimSpace(req.GetDatasetId())}
 	items, total, err := s.klineOps.List(ctx, strings.TrimSpace(req.GetSpaceId()), filter, page, size)

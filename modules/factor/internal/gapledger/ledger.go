@@ -350,6 +350,46 @@ func (l *Ledger) MarkGaveUp(refs []Ref, reason string) error {
 	return l.terminate(EventGaveUp, reason, refs)
 }
 
+// CancelTask 立即取消指定任务的全部待恢复项并追加 cancelled 落盘（任务被删除时使用，无需等待 Settle）。
+// 返回本次取消的条目数。
+func (l *Ledger) CancelTask(taskID, reason string) (int, error) {
+	l.mu.Lock()
+	entries := l.pendingLocked(func(e Entry) bool { return e.Set == taskID })
+	l.mu.Unlock()
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	refs := make([]Ref, 0, len(entries))
+	for _, entry := range entries {
+		refs = append(refs, entry.Ref())
+	}
+	if err := l.MarkCancelled(refs, reason); err != nil {
+		return len(refs), err
+	}
+	return len(refs), nil
+}
+
+// CancelMissingTasks 立即取消所有不在 keep 中的任务的待恢复项并落盘，返回本次取消的条目数。
+func (l *Ledger) CancelMissingTasks(keep map[string]struct{}, reason string) (int, error) {
+	l.mu.Lock()
+	entries := l.pendingLocked(func(e Entry) bool {
+		_, ok := keep[e.Set]
+		return !ok
+	})
+	l.mu.Unlock()
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	refs := make([]Ref, 0, len(entries))
+	for _, entry := range entries {
+		refs = append(refs, entry.Ref())
+	}
+	if err := l.MarkCancelled(refs, reason); err != nil {
+		return len(refs), err
+	}
+	return len(refs), nil
+}
+
 func (l *Ledger) terminate(event, reason string, refs []Ref) error {
 	if len(refs) == 0 {
 		return nil

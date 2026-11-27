@@ -186,13 +186,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import {
-  addLogicalAccountMember,
-  createLogicalAccount,
-  createPaperSimulation,
-  createTradingAccount,
-  isTradeAdoptionRequired
-} from "@/api/trade";
+import { addLogicalAccountMember, createLogicalAccount, createTradingAccount, isTradeAdoptionRequired } from "@/api/trade";
 import type { LogicalAccount, MarketType } from "@/api/trade";
 import InspectionPreview from "@/components/trade-inspection/inspection-preview.vue";
 import type { InspectionView } from "@/components/trade-inspection/inspection";
@@ -415,7 +409,7 @@ async function submit() {
     if (!state.accountId) {
       if (form.kind === "paper") {
         // 模拟盘一次请求完成：新建组合或加入已有组合都由后端在同一个事务里做，中途失败不会留下孤立的账户
-        state.accountId = (await createPaperSimulation(buildPaperRequest(form))).account.trading_account_id;
+        state.accountId = (await createTradingAccount(buildPaperRequest(form))).account.trading_account_id;
         state.joined = true;
       } else {
         state.accountId = (await createTradingAccount(buildLiveRequest(form))).account.trading_account_id;

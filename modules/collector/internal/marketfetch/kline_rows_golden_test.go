@@ -125,7 +125,7 @@ func goldenRealtimeRows(t *testing.T, frequency string, now, start time.Time) []
 		Frequency: frequency, MarketType: "equity", RequestID: "golden-request-" + frequency, Concurrency: 8, Items: items,
 	})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	return storage.rows
 }
 
@@ -178,7 +178,7 @@ func TestKlineRowsMatchGolden(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	out.WriteString(dumpRows("stockcn equity 5m 补采（选字段）", backfillStorage.rows))
 
 	// 直接构造行：A 股指数、可转债的普通行，以及 crypto 现货、永续的行。

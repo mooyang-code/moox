@@ -148,6 +148,11 @@ message LogicalAccount {
   // 存的设置读不出来时的说明（此时对应的设置为空）：界面要提示并禁止保存，不能按默认值显示，否则一保存就覆盖了原设置。
   string order_settings_error = 22;
   string fund_settings_error = 23;
+  // 只读：当前持仓标的数（启用成员的永续持仓与现货/股票余额按币去重汇总）。
+  int32 position_count = 24;
+  // 只读：近 24 小时净值绝对变化与变化比例（小数字符串，例如 0.05 表示 +5%）；窗口内不足两个采样点时为空。
+  optional string equity_change_24h = 25;
+  optional string equity_change_pct_24h = 26;
 }
 
 // 组合账户的下单设置，数值用字符串；写入时的校验见 domain/ordersettings。
@@ -233,6 +238,8 @@ message Order {
   int64 updated_at = 33;
   // 伪市价单的第几次尝试，从 0 开始。
   int32 attempt = 34;
+  // 结构化拒单/结束错误码；程序判断只看本字段，不解析展示文案 reject_reason。
+  string reject_code = 35;
 }
 
 message Fill {
@@ -292,6 +299,8 @@ message BlockedTarget {
   string reason = 3;
   // true 表示不是被拦下，而是被单币每小时上限顺延到下一个整点：界面用中性色显示“顺延”，不计入“被拦下”。
   bool deferred = 4;
+  // 结构化原因码，供程序分支判断；展示给用户看 reason。
+  string reason_code = 5;
 }
 
 message LogicalAccountTarget {
@@ -330,10 +339,21 @@ message CreateTradingAccountReq {
   string settlement_asset = 4;
   string margin_mode = 5;
   LiveConfig live = 7;
+  // 模拟盘配置（与 live 二选一）；模拟账户用一个资金池同时撮合开通的各个市场。
+  PaperConfig paper = 8;
+  // 仅模拟盘可选：建账户的同时新建一个组合账户并加入成为启用成员（与 logical_account_id 互斥）。
+  string logical_account_name = 9;
+  // 仅模拟盘同时新建组合账户时有效；创建后不可更改。
+  ControlMode control_mode = 10;
+  // 仅模拟盘可选：建账户的同时加入已有组合账户（组合须已暂停、同为模拟盘且结算资产一致；与 logical_account_name 互斥）。
+  string logical_account_id = 11;
+  // 仅模拟盘加入已有组合账户时的优先级；不填排在现有成员之后。
+  int32 priority = 12;
 }
 message CreateTradingAccountRsp {
   common.RetInfo ret_info = 1;
   TradingAccount account = 2;
+  LogicalAccount logical_account = 3;
 }
 
 message UpdateTradingAccountReq {
@@ -342,6 +362,7 @@ message UpdateTradingAccountReq {
   string credential_secret_id = 3;
   string settlement_asset = 4;
   string margin_mode = 5;
+  // 停用模拟盘执行账户（status = DISABLED）会原子撤消未结订单、刷新余额快照、停用账户并移出所属组合。
   string status = 6;
   // 模拟账户的订单保留天数：0 表示不清理，1～365 天；不传表示不改。只有模拟账户能改（创建后唯一能改的模拟配置），
   // 实盘账户传了会被拒绝；所有模拟账户都按它清理（见 PaperConfig）。
@@ -350,6 +371,8 @@ message UpdateTradingAccountReq {
 message UpdateTradingAccountRsp {
   common.RetInfo ret_info = 1;
   TradingAccount account = 2;
+  // 停用模拟盘执行账户并移出所属组合时返回更新后的组合账户。
+  LogicalAccount logical_account = 3;
 }
 
 // 交易所密钥检测发现的一条问题（阻断项或提醒）。code 取值见 exchange.Finding* 常量。
@@ -782,45 +805,6 @@ message ListPositionsRsp {
   repeated Position positions = 2;
 }
 
-message CreatePaperSimulationReq {
-  string account_name = 1;
-  string logical_account_name = 2;
-  string exchange = 3;
-  // 要开通的市场集合；模拟账户用一个资金池同时撮合开通的各个市场。
-  repeated string markets = 4;
-  string settlement_asset = 5;
-  string margin_mode = 6;
-  string initial_balance = 7;
-  string maker_fee_rate = 8;
-  string taker_fee_rate = 9;
-  string slippage_bps = 10;
-  // Independent of PAPER/LIVE execution mode; immutable after creation.
-  ControlMode control_mode = 11;
-  // 加入已有的组合账户：给了编号，就在创建账户的同一个事务里把新账户加成启用成员，
-  // 此时 logical_account_name 必须为空。组合必须已暂停、是模拟盘、结算资产一致。
-  string logical_account_id = 12;
-  // 加入已有组合时的优先级；不填就排在现有成员之后。
-  int32 priority = 13;
-  // 订单保留天数：0 表示不清理，1～365 天，不传取 5。所有模拟账户都按它清理（见 PaperConfig）。
-  optional int32 order_retention_days = 14;
-}
-
-message CreatePaperSimulationRsp {
-  common.RetInfo ret_info = 1;
-  TradingAccount account = 2;
-  LogicalAccount logical_account = 3;
-}
-
-message ClosePaperSimulationReq {
-  string trading_account_id = 1;
-}
-
-message ClosePaperSimulationRsp {
-  common.RetInfo ret_info = 1;
-  TradingAccount account = 2;
-  LogicalAccount logical_account = 3;
-}
-
 message GetExecutionCapabilitiesReq {
   string trading_account_id = 1;
 }
@@ -830,7 +814,7 @@ message ExecutionCapabilities {
   string unavailable_reason = 2;
   repeated OrderType order_types = 3;
   repeated FillPolicy fill_policies = 4;
-  bool can_close_paper_simulation = 5;
+  bool can_close_paper_account = 5;
   // 是否能查询资金流水（币安现货没有统一流水接口）。
   bool ledger = 6;
 }
@@ -934,8 +918,6 @@ service TradeConsoleService {
   rpc ListOrders(ListOrdersReq) returns (ListOrdersRsp);
   rpc ListFills(ListFillsReq) returns (ListFillsRsp);
   rpc ListPositions(ListPositionsReq) returns (ListPositionsRsp);
-  rpc CreatePaperSimulation(CreatePaperSimulationReq) returns (CreatePaperSimulationRsp);
-  rpc ClosePaperSimulation(ClosePaperSimulationReq) returns (ClosePaperSimulationRsp);
   rpc GetExecutionCapabilities(GetExecutionCapabilitiesReq) returns (GetExecutionCapabilitiesRsp);
   rpc ListTradableInstruments(ListTradableInstrumentsReq) returns (ListTradableInstrumentsRsp);
   rpc QueryEquityCurve(QueryEquityCurveReq) returns (QueryEquityCurveRsp);

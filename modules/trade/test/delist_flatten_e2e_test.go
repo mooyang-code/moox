@@ -67,7 +67,7 @@ func TestDelistFlattenThroughTheRealOrderPath(t *testing.T) {
 	require.NotNil(t, closing.LimitPrice)
 
 	// 子单按（市场、代码）找得回，归属是 OPERATOR。
-	orders, err := f.store.ListOrdersForLane(ctx, testSpace, testAccount, exchange.NewSymbolKey(exchange.MarketTypeSwap, testSymbol))
+	orders, err := f.store.ListOrdersForLane(ctx, testSpace, testAccount, exchange.NewSymbolKey(exchange.MarketTypeSwap, testSymbol), "OPERATOR", "delist-e2e")
 	require.NoError(t, err)
 	var child bool
 	for _, order := range orders {

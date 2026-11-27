@@ -64,7 +64,7 @@ func TestStockHKPlanToFunctionRequests(t *testing.T) {
 		pipeline := stockHKPipeline(t, storage, hkTime("2026-11-12 14:50:05"), request.FetchLimits, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
 		payload, err := pipeline.Execute(context.Background(), request)
 		require.NoError(t, err)
-		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+		require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sizes)))
 	require.Equal(t, []int{25, 25, 25, 20}, sizes)

@@ -244,7 +244,7 @@ func TestDeciderStorageFailureIsInfrastructureError(t *testing.T) {
 	require.NoError(t, db.Close())
 	d := Decider{Store: db, Adapters: deciderAdapters{&deciderAdapter{}}}
 	_, err = d.Decide(context.Background(), store.OrderRecord{SpaceID: "space", TradingAccountID: "paper"})
-	var infrastructure InfrastructureError
+	var infrastructure execution.InfrastructureError
 	require.ErrorAs(t, err, &infrastructure)
 	require.ErrorContains(t, infrastructure.Err, "database is closed")
 }

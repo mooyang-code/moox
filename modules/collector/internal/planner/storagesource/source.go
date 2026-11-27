@@ -34,6 +34,7 @@ type DatasetInfo struct {
 	DataKind     storagepb.DataKind
 	Status       string
 	Freq         string
+	Alignment    string
 	SubjectTags  []string
 	Columns      []string
 	ColumnTypes  map[string]storagepb.FieldValueType
@@ -105,13 +106,14 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 		DataKind:     dataset.GetDataKind(),
 		Status:       strings.ToLower(strings.TrimSpace(dataset.GetStatus())),
 		Freq:         dataset.GetFreq(),
+		Alignment:    strings.TrimSpace(dataset.GetAlignment()),
 		SubjectTags:  append([]string(nil), dataset.GetSubjectTags()...),
 		Attributes:   cloneAttributes(dataset.GetAttributes()),
 		Retention:    dataset.GetRetention(),
 		Revision:     dataset.GetRevision(),
-		ColumnTypes:  make(map[string]storagepb.FieldValueType),
 	}
 	if columns, ok := s.metadata.(datasetColumnClient); ok {
+		info.ColumnTypes = make(map[string]storagepb.FieldValueType)
 		for page := uint32(1); page <= 100; page++ {
 			columnsRsp, callErr := columns.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{SpaceId: spaceID, DatasetId: datasetID, Page: &storagepb.Page{Page: page, Size: storagePageSize}})
 			if callErr != nil {

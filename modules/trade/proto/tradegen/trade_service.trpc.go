@@ -80,10 +80,6 @@ type TradeConsoleServiceService interface {
 
 	ListPositions(ctx context.Context, req *ListPositionsReq) (*ListPositionsRsp, error)
 
-	CreatePaperSimulation(ctx context.Context, req *CreatePaperSimulationReq) (*CreatePaperSimulationRsp, error)
-
-	ClosePaperSimulation(ctx context.Context, req *ClosePaperSimulationReq) (*ClosePaperSimulationRsp, error)
-
 	GetExecutionCapabilities(ctx context.Context, req *GetExecutionCapabilitiesReq) (*GetExecutionCapabilitiesRsp, error)
 
 	ListTradableInstruments(ctx context.Context, req *ListTradableInstrumentsReq) (*ListTradableInstrumentsRsp, error)
@@ -653,42 +649,6 @@ func TradeConsoleServiceService_ListPositions_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
-func TradeConsoleServiceService_CreatePaperSimulation_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreatePaperSimulationReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).CreatePaperSimulation(ctx, reqbody.(*CreatePaperSimulationReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func TradeConsoleServiceService_ClosePaperSimulation_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ClosePaperSimulationReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).ClosePaperSimulation(ctx, reqbody.(*ClosePaperSimulationReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func TradeConsoleServiceService_GetExecutionCapabilities_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetExecutionCapabilitiesReq{}
 	filters, err := f(req)
@@ -1067,14 +1027,6 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_ListPositions_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.TradeConsoleService/CreatePaperSimulation",
-			Func: TradeConsoleServiceService_CreatePaperSimulation_Handler,
-		},
-		{
-			Name: "/trpc.moox.trade.TradeConsoleService/ClosePaperSimulation",
-			Func: TradeConsoleServiceService_ClosePaperSimulation_Handler,
-		},
-		{
 			Name: "/trpc.moox.trade.TradeConsoleService/GetExecutionCapabilities",
 			Func: TradeConsoleServiceService_GetExecutionCapabilities_Handler,
 		},
@@ -1234,12 +1186,6 @@ func (s *UnimplementedTradeConsoleService) ListFills(ctx context.Context, req *L
 func (s *UnimplementedTradeConsoleService) ListPositions(ctx context.Context, req *ListPositionsReq) (*ListPositionsRsp, error) {
 	return nil, errors.New("rpc ListPositions of service TradeConsoleService is not implemented")
 }
-func (s *UnimplementedTradeConsoleService) CreatePaperSimulation(ctx context.Context, req *CreatePaperSimulationReq) (*CreatePaperSimulationRsp, error) {
-	return nil, errors.New("rpc CreatePaperSimulation of service TradeConsoleService is not implemented")
-}
-func (s *UnimplementedTradeConsoleService) ClosePaperSimulation(ctx context.Context, req *ClosePaperSimulationReq) (*ClosePaperSimulationRsp, error) {
-	return nil, errors.New("rpc ClosePaperSimulation of service TradeConsoleService is not implemented")
-}
 func (s *UnimplementedTradeConsoleService) GetExecutionCapabilities(ctx context.Context, req *GetExecutionCapabilitiesReq) (*GetExecutionCapabilitiesRsp, error) {
 	return nil, errors.New("rpc GetExecutionCapabilities of service TradeConsoleService is not implemented")
 }
@@ -1354,10 +1300,6 @@ type TradeConsoleServiceClientProxy interface {
 	ListFills(ctx context.Context, req *ListFillsReq, opts ...client.Option) (rsp *ListFillsRsp, err error)
 
 	ListPositions(ctx context.Context, req *ListPositionsReq, opts ...client.Option) (rsp *ListPositionsRsp, err error)
-
-	CreatePaperSimulation(ctx context.Context, req *CreatePaperSimulationReq, opts ...client.Option) (rsp *CreatePaperSimulationRsp, err error)
-
-	ClosePaperSimulation(ctx context.Context, req *ClosePaperSimulationReq, opts ...client.Option) (rsp *ClosePaperSimulationRsp, err error)
 
 	GetExecutionCapabilities(ctx context.Context, req *GetExecutionCapabilitiesReq, opts ...client.Option) (rsp *GetExecutionCapabilitiesRsp, err error)
 
@@ -1991,46 +1933,6 @@ func (c *TradeConsoleServiceClientProxyImpl) ListPositions(ctx context.Context, 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListPositionsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeConsoleServiceClientProxyImpl) CreatePaperSimulation(ctx context.Context, req *CreatePaperSimulationReq, opts ...client.Option) (*CreatePaperSimulationRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/CreatePaperSimulation")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("CreatePaperSimulation")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CreatePaperSimulationRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeConsoleServiceClientProxyImpl) ClosePaperSimulation(ctx context.Context, req *ClosePaperSimulationReq, opts ...client.Option) (*ClosePaperSimulationRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ClosePaperSimulation")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("ClosePaperSimulation")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ClosePaperSimulationRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

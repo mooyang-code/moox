@@ -28,6 +28,7 @@ type AccountServer struct {
 	Accounts *accountapp.Service
 	Sync     *accountsync.Service
 	Store    *store.Store
+	Logical  *LogicalAccountServer
 	NewID    func() string
 	// AfterInspection 处理重新检测的结果（暂停组合、告警）；为空时只写回结果。
 	AfterInspection InspectionFollowUp
@@ -43,6 +44,9 @@ func (h *AccountServer) CreateTradingAccount(
 	}
 	if err := validatePB(req); err != nil {
 		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
+	}
+	if req.GetPaper() != nil {
+		return h.createPaperAccount(ctx, spaceID, req)
 	}
 	markets, err := exchange.NormalizeMarkets(marketTypes(req.GetMarkets()))
 	if err != nil {
@@ -73,6 +77,61 @@ func (h *AccountServer) CreateTradingAccount(
 	}
 	record, err := h.Store.GetTradingAccount(ctx, spaceID, created.ID)
 	return &tradepb.CreateTradingAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
+}
+
+func (h *AccountServer) createPaperAccount(
+	ctx context.Context,
+	spaceID string,
+	req *tradepb.CreateTradingAccountReq,
+) (*tradepb.CreateTradingAccountRsp, error) {
+	if h.Accounts == nil {
+		return &tradepb.CreateTradingAccountRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
+	}
+	parse := func(raw string) (shared.Decimal, error) {
+		if strings.TrimSpace(raw) == "" {
+			return shared.Zero(), nil
+		}
+		return shared.ParseDecimal(raw)
+	}
+	paperCfg := req.GetPaper()
+	initial, err := parse(paperCfg.GetInitialBalance())
+	if err != nil {
+		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
+	}
+	maker, err := parse(paperCfg.GetMakerFeeRate())
+	if err != nil {
+		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
+	}
+	taker, err := parse(paperCfg.GetTakerFeeRate())
+	if err != nil {
+		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
+	}
+	slippage, err := parse(paperCfg.GetSlippageBps())
+	if err != nil {
+		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
+	}
+	result, err := h.Accounts.CreatePaperAccount(ctx, accountapp.CreatePaperCommand{
+		SpaceID:            spaceID,
+		AccountName:        strings.TrimSpace(req.GetName()),
+		LogicalAccountName: strings.TrimSpace(req.GetLogicalAccountName()),
+		LogicalAccountID:   strings.TrimSpace(req.GetLogicalAccountId()),
+		Priority:           int(req.GetPriority()),
+		ControlMode:        controlModeFromPB(req.GetControlMode()),
+		Exchange:           exchange.Exchange(req.GetExchange()),
+		Markets:            marketTypes(req.GetMarkets()),
+		SettlementAsset:    strings.TrimSpace(req.GetSettlementAsset()),
+		MarginMode:         exchange.MarginMode(req.GetMarginMode()),
+		InitialBalance:     initial,
+		MakerFeeRate:       maker,
+		TakerFeeRate:       taker,
+		SlippageBPS:        slippage,
+		OrderRetentionDays: optionalInt(paperCfg.OrderRetentionDays),
+	})
+	rsp := &tradepb.CreateTradingAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(result.Account)}
+	if err == nil && result.LogicalAccount.LogicalAccountID != "" {
+		rsp.LogicalAccount = h.logicalAccountPB(ctx, h.Store, result.LogicalAccount)
+	}
+	return rsp, nil
 }
 
 func (h *AccountServer) UpdateTradingAccount(
@@ -108,11 +167,34 @@ func (h *AccountServer) UpdateTradingAccount(
 		command.Status = &status
 	}
 	command.OrderRetentionDays = optionalInt(req.OrderRetentionDays)
-	if _, err := h.Accounts.Update(ctx, command); err != nil {
+	_, affectedLogical, err := h.Accounts.Update(ctx, command)
+	if err != nil {
 		return &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
 	record, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
-	return &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
+	rsp := &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}
+	if err == nil && affectedLogical != nil {
+		if logical, getErr := h.Store.GetLogicalAccount(ctx, spaceID, affectedLogical.ID); getErr == nil {
+			rsp.LogicalAccount = h.logicalAccountPB(ctx, h.Store, logical)
+		}
+	}
+	return rsp, nil
+}
+
+func (h *AccountServer) logicalAccountPB(
+	ctx context.Context,
+	st *store.Store,
+	record store.LogicalAccountRecord,
+) *tradepb.LogicalAccount {
+	if record.LogicalAccountID == "" {
+		return nil
+	}
+	if h.Logical != nil {
+		return h.Logical.logicalAccount(ctx, st, record)
+	}
+	members, _ := st.ListLogicalAccountMembers(ctx, record.SpaceID, record.LogicalAccountID, true)
+	markets, _ := st.LogicalAccountMarkets(ctx, record.SpaceID, record.LogicalAccountID)
+	return logicalAccountToPB(record, members, markets, logicalAccountReadinessFallback(st, ctx, record))
 }
 
 func (h *AccountServer) GetTradingAccount(

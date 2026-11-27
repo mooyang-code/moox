@@ -44,16 +44,3 @@
 `ex_classic_7727`、`ex_mac_7727`：只有请求构造和解析代码，没有拿到过完整的真实响应，没有通过上面“证据状态”的要求，Collector 没有接入。
 
 通达信数据源声明的限速默认是每秒 5 个请求、突发 2、单并发（`provider.go`）。云函数的公网出口是随机的，这是部署事实，不是规避上游限制的功能承诺。
-
-## Wire Spike 命令
-
-`modules/collector/internal/tdx/cmd/wire-spike` 用于对一条指定线路执行一次完整会话并保存原始字节流，不会遍历节点或重复重试：
-
-```bash
-# 从仓库根目录运行
-go run ./modules/collector/internal/tdx/cmd/wire-spike \
-  -host 113.105.73.88 -port 7709 -variant normal \
-  -timeout 8s -out /tmp/tdx-wire-spike-normal
-```
-
-`-variant` 支持 `normal`、`ex_classic` 和 `ex_mac`。输出目录包含 `request-stream.bin`、`response-stream.bin` 和 `report.json`；报告只列出每个响应帧的 16 字节头部摘要，原始内容仅写入本地文件。命令是 Wire Spike 的采集工具，不代表线路已经通过协议验收；在正式启用扩展 Source 前仍必须完成目标 SCF 地域的完整抓包、解压和人工对账。

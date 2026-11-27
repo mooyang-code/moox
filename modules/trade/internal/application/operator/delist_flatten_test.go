@@ -480,7 +480,7 @@ func TestDelistFlattenRetryDeadlineStartsAtTheRoundNotTheActionCreation(t *testi
 	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status)
 
 	// 动作是 40 分钟前创建的，且已经结束（FAILED）；同一个动作号重试。
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_ctime = datetime('now', '-40 minutes'), c_status = 'FAILED' WHERE c_action_id = 'delist-old'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_created_at = ?, c_status = 'FAILED' WHERE c_action_id = 'delist-old'`, time.Now().Add(-40*time.Minute).UTC().UnixMilli()).Error)
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status, "期限从这一轮的起点算，不是动作创建时间")

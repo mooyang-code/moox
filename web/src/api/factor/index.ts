@@ -56,10 +56,10 @@ export function listFactorTasks(params: ListFactorTasksReq = {}) {
   return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params);
 }
 
-/** 全部计算任务（翻完所有页，不限空间：调用方按 space_id 过滤）。 */
-export function listAllFactorTasks() {
+/** 全部计算任务（翻完所有页；传入 space_id 时仅拉取该空间任务）。 */
+export function listAllFactorTasks(space_id?: string) {
   return readAllPages(async page => {
-    const rsp = await listFactorTasks({ page: { page, size: 200 } });
+    const rsp = await listFactorTasks({ ...(space_id ? { space_id } : {}), page: { page, size: 200 } });
     return { items: rsp.factor_tasks || [], hasMore: Boolean(rsp.page_result?.has_more) };
   });
 }

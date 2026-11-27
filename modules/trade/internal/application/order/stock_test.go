@@ -143,12 +143,19 @@ func TestStockBuyCapacityCoversMinimumCommission(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	validation := Validation{Account: stockAccount("0"), Instrument: stockInstrumentForOrder(), ReservedQuantity: shared.MustDecimal("1")}
 	spec := stockSpec(exchange.SideBuy, "1000", "10", now)
+	clamp := func(qty, step, avail string) shared.Decimal {
+		return orderPolicyOf(validation, nil).ClampBuyCapacity(execution.CapacityClampRequest{
+			Account: validation.Account, Instrument: validation.Instrument,
+			OrderType: spec.Type, Side: spec.Side, ReferencePrice: spec.ReferencePrice, LimitPrice: spec.LimitPrice,
+			Quantity: shared.MustDecimal(qty), Step: shared.MustDecimal(step), Available: shared.MustDecimal(avail),
+		})
+	}
 	// 1000 股要 10000 + 5 + 0.1；只有 10004 元时减到 900 股（9000 + 5 + 0.09）。
-	got := stockBuyCapacity(validation, spec, shared.MustDecimal("1000"), shared.MustDecimal("100"), shared.MustDecimal("10004"))
+	got := clamp("1000", "100", "10004")
 	require.Equal(t, "900", got.String())
-	got = stockBuyCapacity(validation, spec, shared.MustDecimal("1000"), shared.MustDecimal("100"), shared.MustDecimal("10005.1"))
+	got = clamp("1000", "100", "10005.1")
 	require.Equal(t, "1000", got.String())
-	got = stockBuyCapacity(validation, spec, shared.MustDecimal("100"), shared.MustDecimal("100"), shared.MustDecimal("1004"))
+	got = clamp("100", "100", "1004")
 	require.True(t, got.IsZero(), "一手都付不起就是 0")
 }
 
@@ -206,7 +213,7 @@ func TestPaperFundsSubtractTodayBuysForStockSell(t *testing.T) {
 				ReservedAsset: "600519.XSHG", ReservedQuantity: shared.MustDecimal("100"),
 			}
 			err = db.Transaction(context.Background(), func(tx *store.Tx) error {
-				return checkPaperFunds(tx, validation, shared.Zero(), validation.ReservedQuantity, "", "", now)
+				return checkLocalLedgerFunds(tx, validation, shared.Zero(), validation.ReservedQuantity, "", "", now)
 			})
 			if tc.wantErr {
 				require.ErrorIs(t, err, ErrInsufficientFunds)

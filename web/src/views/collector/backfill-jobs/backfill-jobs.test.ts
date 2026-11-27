@@ -7,20 +7,31 @@ import {
   jobKindText,
   jobRetryable,
   jobSegments,
+  jobSourceInfo,
+  jobSourceText,
   jobStatusInfo,
   normalizeSegment,
   quickRange
 } from "./backfill-model";
 
 describe("collector backfill helpers", () => {
-  it("labels job states, kinds and datasets", () => {
+  it("labels job states, kinds, sources and datasets", () => {
     expect(jobStatusInfo("failed").color).toBe("red");
     expect(jobStatusInfo(undefined).text).toBe("未知");
     expect(jobKindText("force")).toBe("整段重拉");
+    expect(jobSourceText("manual")).toBe("手动");
+    expect(jobSourceText("auto")).toBe("自动");
+    expect(jobSourceText("seed")).toBe("历史补齐");
+    expect(jobSourceText("close_refetch")).toBe("收市重取");
+    expect(jobSourceText("catchup")).toBe("恢复追赶");
+    expect(jobSourceInfo("catchup").color).toBe("cyan");
     expect(jobDatasetText({ dataset_id: "ds", dataset_name: "Binance 现货 K 线 1m" })).toBe("Binance 现货 K 线 1m");
     expect(jobDatasetText({ dataset_id: "ds" })).toBe("ds");
     expect(jobDatasetText({})).toBe("全部数据集");
     expect(normalizeSegment("auto")).toBe("auto");
+    expect(normalizeSegment("seed")).toBe("seed");
+    expect(normalizeSegment("close_refetch")).toBe("close_refetch");
+    expect(normalizeSegment("catchup")).toBe("catchup");
     expect(normalizeSegment("x")).toBe("attention");
   });
 

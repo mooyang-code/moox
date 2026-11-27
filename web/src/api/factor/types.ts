@@ -286,6 +286,8 @@ export type FactorRetRsp<T extends object = Record<string, never>> = T & { ret_i
 export interface ListFactorTasksReq {
   status?: FactorTaskStatus;
   page?: Page;
+  /** 可选空间过滤：不传时按调用上下文空间或返回全量。 */
+  space_id?: string;
 }
 
 export interface ListFactorTasksRsp {

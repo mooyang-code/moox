@@ -24,6 +24,16 @@ const (
 	TransferStateFailed    = "FAILED"
 )
 
+// 划转失败分类：业务判断只看本枚举列，不解析 c_last_error 文案前缀。
+// NOT_SENT（限频等未发出）与 NOT_ARRIVED（宽限期后对账或人工确认未到账）为软失败，不计入连续硬失败；
+// HARD 为交易所明确拒绝等硬失败。非 FAILED 状态恒为空串。
+const (
+	TransferFailureNone       = ""
+	TransferFailureNotSent    = "NOT_SENT"
+	TransferFailureNotArrived = "NOT_ARRIVED"
+	TransferFailureHard       = "HARD"
+)
+
 // WalletTransferRecord 是 t_trade_wallet_transfers 的一行。
 type WalletTransferRecord struct {
 	SpaceID          string
@@ -42,17 +52,36 @@ type WalletTransferRecord struct {
 	// Capped 表示这笔划转被合约钱包的可划转额度封顶（金额小于现货买入需要的金额）：它完成后这个目标不再追加划转。
 	Capped      bool
 	State       string
+	FailureKind string
 	LastError   string
 	RequestedAt int64
 	CompletedAt int64
+}
+
+// IsSoftFailure 报告该划转失败是否属于不计入连续失败的软失败（未发出或确认未到账）。
+func (r WalletTransferRecord) IsSoftFailure() bool {
+	return r.State == TransferStateFailed &&
+		(r.FailureKind == TransferFailureNotSent || r.FailureKind == TransferFailureNotArrived)
+}
+
+// IsHardFailure 报告该划转记录是否属于硬失败（被交易所拒绝等）。
+func (r WalletTransferRecord) IsHardFailure() bool {
+	return r.State == TransferStateFailed && !r.IsSoftFailure()
+}
+
+func validTransferFailureKind(state, kind string) bool {
+	if state != TransferStateFailed {
+		return kind == TransferFailureNone
+	}
+	return kind == TransferFailureNotSent || kind == TransferFailureNotArrived || kind == TransferFailureHard
 }
 
 const insertWalletTransferSQL = `
 	INSERT INTO t_trade_wallet_transfers (
 		c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
 		c_direction, c_asset, c_amount, c_client_ref, c_exchange_transfer_id,
-		c_capped, c_state, c_last_error, c_requested_at, c_completed_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		c_capped, c_state, c_failure_kind, c_last_error, c_requested_at, c_completed_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 // InsertWalletTransfer 写入一条划转记录；本地引用号重复返回 ErrConflict。
@@ -65,28 +94,40 @@ func (tx *Tx) InsertWalletTransfer(record WalletTransferRecord) error {
 	if record.State == "" {
 		record.State = TransferStatePending
 	}
+	if record.State == TransferStateFailed && record.FailureKind == TransferFailureNone {
+		record.FailureKind = TransferFailureHard
+	}
+	if !validTransferFailureKind(record.State, record.FailureKind) {
+		return fmt.Errorf("%w: invalid wallet transfer failure kind", ErrInvalidRecord)
+	}
 	return writeError(tx.db.Exec(insertWalletTransferSQL,
 		record.SpaceID, record.TransferID, record.TradingAccountID, record.LogicalAccountID, record.TargetID,
 		record.Direction, record.Asset, record.Amount, record.ClientRef, record.ExchangeTransferID,
-		record.Capped, record.State, record.LastError, record.RequestedAt, record.CompletedAt,
+		record.Capped, record.State, record.FailureKind, record.LastError, record.RequestedAt, record.CompletedAt,
 	).Error)
 }
 
 const updateWalletTransferSQL = `
 	UPDATE t_trade_wallet_transfers
 	SET c_exchange_transfer_id = COALESCE(NULLIF(?, ''), c_exchange_transfer_id),
-		c_state = ?, c_last_error = ?, c_completed_at = ?, c_mtime = CURRENT_TIMESTAMP
+		c_state = ?, c_failure_kind = ?, c_last_error = ?, c_completed_at = ?, c_mtime = CURRENT_TIMESTAMP
 	WHERE c_space_id = ? AND c_transfer_id = ? AND c_state = ?
 `
 
 // UpdateWalletTransfer 把一条 PENDING 的划转记录推进到新状态（写入交易所流水号、完成或失败）；
 // 流水号传空串时保留已记下的流水号（例如结果不明后人工结束、对账失败收尾）；已经是终态的记录不再改动，更新不到返回 ErrNotPending。
-func (tx *Tx) UpdateWalletTransfer(spaceID, transferID, exchangeTransferID, state, lastError string, completedAt int64) error {
+func (tx *Tx) UpdateWalletTransfer(spaceID, transferID, exchangeTransferID, state, failureKind, lastError string, completedAt int64) error {
 	if blank(spaceID) || blank(transferID) ||
 		(state != TransferStatePending && state != TransferStateCompleted && state != TransferStateFailed) {
 		return fmt.Errorf("%w: incomplete wallet transfer update", ErrInvalidRecord)
 	}
-	result := tx.db.Exec(updateWalletTransferSQL, exchangeTransferID, state, lastError, completedAt, spaceID, transferID, TransferStatePending)
+	if state == TransferStateFailed && failureKind == TransferFailureNone {
+		failureKind = TransferFailureHard
+	}
+	if !validTransferFailureKind(state, failureKind) {
+		return fmt.Errorf("%w: invalid wallet transfer failure kind", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(updateWalletTransferSQL, exchangeTransferID, state, failureKind, lastError, completedAt, spaceID, transferID, TransferStatePending)
 	if result.Error != nil {
 		return writeError(result.Error)
 	}
@@ -130,6 +171,7 @@ type walletTransferRow struct {
 	ExchangeTransferID string `gorm:"column:c_exchange_transfer_id"`
 	Capped             bool   `gorm:"column:c_capped"`
 	State              string `gorm:"column:c_state"`
+	FailureKind        string `gorm:"column:c_failure_kind"`
 	LastError          string `gorm:"column:c_last_error"`
 	RequestedAt        int64  `gorm:"column:c_requested_at"`
 	CompletedAt        int64  `gorm:"column:c_completed_at"`
@@ -140,14 +182,14 @@ func (r walletTransferRow) record() WalletTransferRecord {
 		SpaceID: r.SpaceID, TransferID: r.TransferID, TradingAccountID: r.TradingAccountID,
 		LogicalAccountID: r.LogicalAccountID, TargetID: r.TargetID, Direction: r.Direction, Asset: r.Asset,
 		Amount: r.Amount, ClientRef: r.ClientRef, ExchangeTransferID: r.ExchangeTransferID, Capped: r.Capped, State: r.State,
-		LastError: r.LastError, RequestedAt: r.RequestedAt, CompletedAt: r.CompletedAt,
+		FailureKind: r.FailureKind, LastError: r.LastError, RequestedAt: r.RequestedAt, CompletedAt: r.CompletedAt,
 	}
 }
 
 const listWalletTransfersForTargetSQL = `
 	SELECT c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
 		c_direction, c_asset, c_amount, c_client_ref, c_exchange_transfer_id,
-		c_capped, c_state, c_last_error, c_requested_at, c_completed_at
+		c_capped, c_state, c_failure_kind, c_last_error, c_requested_at, c_completed_at
 	FROM t_trade_wallet_transfers
 	WHERE c_space_id = ? AND c_logical_account_id = ? AND c_target_id = ?
 		AND c_trading_account_id = ? AND c_direction = ?
@@ -171,7 +213,7 @@ func (s *Store) ListWalletTransfersForTarget(ctx context.Context, spaceID, logic
 const listWalletTransfersByAccountSQL = `
 	SELECT c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
 		c_direction, c_asset, c_amount, c_client_ref, c_exchange_transfer_id,
-		c_capped, c_state, c_last_error, c_requested_at, c_completed_at
+		c_capped, c_state, c_failure_kind, c_last_error, c_requested_at, c_completed_at
 	FROM t_trade_wallet_transfers
 	WHERE c_space_id = ? AND c_trading_account_id = ? AND c_requested_at >= ? AND c_requested_at <= ?
 	ORDER BY c_requested_at DESC, c_transfer_id DESC
@@ -193,7 +235,7 @@ func (s *Store) ListWalletTransfersByAccount(ctx context.Context, spaceID, tradi
 const listWalletTransfersByRefPrefixSQL = `
 	SELECT c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
 		c_direction, c_asset, c_amount, c_client_ref, c_exchange_transfer_id,
-		c_capped, c_state, c_last_error, c_requested_at, c_completed_at
+		c_capped, c_state, c_failure_kind, c_last_error, c_requested_at, c_completed_at
 	FROM t_trade_wallet_transfers
 	WHERE c_space_id = ? AND c_trading_account_id = ? AND substr(c_client_ref, 1, length(?)) = ?
 	ORDER BY c_requested_at, c_transfer_id
@@ -219,7 +261,7 @@ func (s *Store) ListWalletTransfersByRefPrefix(ctx context.Context, spaceID, tra
 const getWalletTransferSQL = `
 	SELECT c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
 		c_direction, c_asset, c_amount, c_client_ref, c_exchange_transfer_id,
-		c_capped, c_state, c_last_error, c_requested_at, c_completed_at
+		c_capped, c_state, c_failure_kind, c_last_error, c_requested_at, c_completed_at
 	FROM t_trade_wallet_transfers
 	WHERE c_space_id = ? AND c_transfer_id = ?
 `

@@ -1,7 +1,6 @@
 package events
 
 import (
-	"fmt"
 	"slices"
 	"time"
 )
@@ -67,8 +66,6 @@ func Streams() []StreamSpec {
 type DurableConsumer struct {
 	name   string
 	events []Event
-	// perSpace 为真时每个空间各建一个，名字里的 %s 换成空间 ID。
-	perSpace bool
 	// deletable 为真时消费者所属角色可以删掉它（配置冲突时删了重建）。
 	deletable bool
 }
@@ -77,23 +74,11 @@ func declareConsumer(name string, events ...Event) DurableConsumer {
 	return DurableConsumer{name: name, events: events}
 }
 
-// Name 返回消费者名；按空间建的消费者要用 NameFor。
+// Name 返回消费者名。
 func (c DurableConsumer) Name() string {
-	if c.perSpace {
-		panic(fmt.Sprintf("consumer %s is per-space; use NameFor", c.name))
-	}
 	return c.name
 }
 
-// NameFor 返回按空间建的消费者在某个空间下的名字。
-func (c DurableConsumer) NameFor(spaceID string) string {
-	if !c.perSpace {
-		return c.name
-	}
-	return fmt.Sprintf(c.name, spaceID)
-}
-
-func (c DurableConsumer) PerSpace() bool  { return c.perSpace }
 func (c DurableConsumer) Deletable() bool { return c.deletable }
 func (c DurableConsumer) Events() []Event { return append([]Event(nil), c.events...) }
 
@@ -129,9 +114,9 @@ var (
 	TradeTargetConsumer       = declareConsumer("trade_target_weight_v1", LogicalAccountTargetWeightRequested)
 	// TradeDelistConsumer 是 Trade 收 Collector 下架事件的消费者（在 MOOX_COLLECTOR 上）。
 	TradeDelistConsumer = declareConsumer("trade_instrument_delist_v1", InstrumentDelistScheduled)
-	// Collector 的 K 线合成在每个登记了交易日历的空间各建一个（空间集合见 barclock.Markets()）。
-	CollectorResamplePeriodConsumer     = DurableConsumer{name: "collector_resample_period_%s_v1", events: []Event{DatasetPeriodCompleted}, perSpace: true}
-	CollectorResampleBackfilledConsumer = DurableConsumer{name: "collector_resample_backfilled_%s_v1", events: []Event{CollectorKlineBackfilled}, perSpace: true}
+	// Collector 的 K 线合成跨空间消费源周期完成与补采完成事件，领域层按信封里的 space_id 匹配任务。
+	CollectorResamplePeriodConsumer     = declareConsumer("collector_resample_period_v1", DatasetPeriodCompleted)
+	CollectorResampleBackfilledConsumer = declareConsumer("collector_resample_backfilled_v1", CollectorKlineBackfilled)
 )
 
 // Role 是一个 EventBus 账号。

@@ -11,8 +11,50 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 )
+
+// BatchCompleted 是一次行情函数调用的批次结果（纯进程内结构，不再作为事件发布），
+// 包含已被 Storage 确认的逐项结果。
+type BatchCompleted struct {
+	BatchID              string       `json:"batch_id,omitempty"`
+	ScheduleID           string       `json:"schedule_id,omitempty"`
+	BatchKind            string       `json:"batch_kind,omitempty"`
+	DatasetID            string       `json:"dataset_id,omitempty"`
+	Frequency            string       `json:"frequency,omitempty"`
+	Region               string       `json:"region,omitempty"`
+	NodeID               string       `json:"node_id,omitempty"`
+	RequestID            string       `json:"request_id,omitempty"`
+	PlannedCount         int32        `json:"planned_count,omitempty"`
+	SuccessCount         int32        `json:"success_count,omitempty"`
+	RetryCount           int32        `json:"retry_count,omitempty"`
+	PermanentFailedCount int32        `json:"permanent_failed_count,omitempty"`
+	Status               string       `json:"status,omitempty"`
+	ErrorSummary         string       `json:"error_summary,omitempty"`
+	DurationMS           int64        `json:"duration_ms,omitempty"`
+	CompletedAt          int64        `json:"completed_at,omitempty"`
+	Items                []ItemResult `json:"items,omitempty"`
+}
+
+// ItemResult 是批次内单个采集项的结果。
+type ItemResult struct {
+	SubjectID      string         `json:"subject_id,omitempty"`
+	Symbol         string         `json:"symbol,omitempty"`
+	TargetDataTime string         `json:"target_data_time,omitempty"`
+	Outcome        string         `json:"outcome,omitempty"`
+	ErrorType      string         `json:"error_type,omitempty"`
+	ErrorSummary   string         `json:"error_summary,omitempty"`
+	SourceEventID  string         `json:"source_event_id,omitempty"`
+	InstanceID     string         `json:"instance_id,omitempty"`
+	Targets        []TargetResult `json:"targets,omitempty"`
+}
+
+// TargetResult 是单个写入目标的落库结果。
+type TargetResult struct {
+	WriteTargetID string `json:"write_target_id,omitempty"`
+	DatasetID     string `json:"dataset_id,omitempty"`
+	Status        string `json:"status,omitempty"`
+	ErrorSummary  string `json:"error_summary,omitempty"`
+}
 
 func isHistoricalBatchKind(kind domain.BatchKind) bool {
 	switch kind {
@@ -31,11 +73,11 @@ func failureResult(item domain.CollectionItem, outcome domain.ItemOutcome, error
 	return domain.ItemResult{CollectionItem: item, Outcome: outcome, ErrorType: errorType, ErrorSummary: truncateError(err)}
 }
 
-func buildCompletion(req Request, results []domain.ItemResult, completed time.Time, duration time.Duration) *marketfetchpb.MarketFetchBatchCompleted {
-	payload := &marketfetchpb.MarketFetchBatchCompleted{
-		BatchId: req.BatchID, ScheduleId: req.ScheduleID, BatchKind: string(req.BatchKind),
-		DatasetId: req.DatasetID, Frequency: req.Frequency, Region: req.Region, NodeId: req.NodeID,
-		RequestId: req.RequestID, PlannedCount: int32(len(results)), DurationMs: duration.Milliseconds(),
+func buildCompletion(req Request, results []domain.ItemResult, completed time.Time, duration time.Duration) *BatchCompleted {
+	payload := &BatchCompleted{
+		BatchID: req.BatchID, ScheduleID: req.ScheduleID, BatchKind: string(req.BatchKind),
+		DatasetID: req.DatasetID, Frequency: req.Frequency, Region: req.Region, NodeID: req.NodeID,
+		RequestID: req.RequestID, PlannedCount: int32(len(results)), DurationMS: duration.Milliseconds(),
 		CompletedAt: completed.UTC().UnixMilli(),
 	}
 	var firstError string
@@ -52,15 +94,15 @@ func buildCompletion(req Request, results []domain.ItemResult, completed time.Ti
 				firstError = result.ErrorSummary
 			}
 		}
-		payload.Items = append(payload.Items, &marketfetchpb.MarketFetchItemResult{
-			SubjectId: result.SubjectID, Symbol: result.Symbol, TargetDataTime: result.TargetDataTime,
+		item := ItemResult{
+			SubjectID: result.SubjectID, Symbol: result.Symbol, TargetDataTime: result.TargetDataTime,
 			Outcome: string(result.Outcome), ErrorType: result.ErrorType, ErrorSummary: result.ErrorSummary,
-			SourceEventId: result.SourceEventID, InstanceId: result.InstanceID,
-		})
-		itemPayload := payload.Items[len(payload.Items)-1]
-		for _, target := range result.TargetResults {
-			itemPayload.Targets = append(itemPayload.Targets, &marketfetchpb.MarketFetchTargetResult{WriteTargetId: target.WriteTargetID, DatasetId: target.DatasetID, Status: target.Status, ErrorSummary: target.ErrorSummary})
+			SourceEventID: result.SourceEventID, InstanceID: result.InstanceID,
 		}
+		for _, target := range result.TargetResults {
+			item.Targets = append(item.Targets, TargetResult{WriteTargetID: target.WriteTargetID, DatasetID: target.DatasetID, Status: target.Status, ErrorSummary: target.ErrorSummary})
+		}
+		payload.Items = append(payload.Items, item)
 	}
 	switch {
 	case payload.SuccessCount == payload.PlannedCount:

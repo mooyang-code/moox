@@ -5,7 +5,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 // AccountError identifies an account/quote or validation failure, not a failed
@@ -42,7 +42,7 @@ func accountExecutionError(err error) error {
 	if _, ok := err.(*AccountError); ok {
 		return err
 	}
-	if paper.IsInfrastructureError(err) {
+	if execution.IsInfrastructureError(err) {
 		return err
 	}
 	if accountID, ok := accountCause(err); ok {

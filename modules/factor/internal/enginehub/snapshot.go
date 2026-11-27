@@ -15,18 +15,27 @@ import (
 // (including source) and hashes them. When knownHash matches, notModified is
 // true and sets is nil.
 func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, error) {
+	hash, notModified, sets, _, err := h.SnapshotWithExisting(ctx, knownHash)
+	return hash, notModified, sets, err
+}
+
+// SnapshotWithExisting 组装已启用任务快照、库中当前存在的全部任务 ID（含停用与待创建）以及目录指纹。
+// knownHash 一致时 notModified 为 true，sets 与 existingTaskIDs 均为空。
+func (h *Hub) SnapshotWithExisting(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, []string, error) {
 	all, err := h.store.ListTasks(ctx)
 	if err != nil {
-		return "", false, nil, fmt.Errorf("list factor tasks: %w", err)
+		return "", false, nil, nil, fmt.Errorf("list factor tasks: %w", err)
 	}
+	existing := make([]string, 0, len(all))
 	sets := make([]domain.EngineTask, 0, len(all))
 	for _, set := range all {
+		existing = append(existing, set.TaskID)
 		if set.Status != domain.TaskStatusEnabled {
 			continue
 		}
 		members, err := h.store.ListMembers(ctx, set.TaskID, domain.MemberStatusEnabled)
 		if err != nil {
-			return "", false, nil, fmt.Errorf("list enabled members of %s: %w", set.TaskID, err)
+			return "", false, nil, nil, fmt.Errorf("list enabled members of %s: %w", set.TaskID, err)
 		}
 		defs := make([]domain.MemberDef, 0, len(members))
 		for _, member := range members {
@@ -35,15 +44,16 @@ func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []d
 		sort.Slice(defs, func(i, j int) bool { return defs[i].Key < defs[j].Key })
 		sets = append(sets, domain.EngineTask{Set: set, Members: defs, ResultReady: h.isReady(set.TaskID), SourceSeeding: h.sourceSeeding(set)})
 	}
+	sort.Strings(existing)
 	sort.Slice(sets, func(i, j int) bool { return sets[i].Set.TaskID < sets[j].Set.TaskID })
-	hash, err := CatalogHash(sets)
+	hash, err := CatalogHashWithExisting(sets, existing)
 	if err != nil {
-		return "", false, nil, err
+		return "", false, nil, nil, err
 	}
 	if knownHash != "" && knownHash == hash {
-		return hash, true, nil, nil
+		return hash, true, nil, nil, nil
 	}
-	return hash, false, sets, nil
+	return hash, false, sets, existing, nil
 }
 
 type hashedSet struct {
@@ -78,6 +88,17 @@ type hashedMember struct {
 // excluded so that a write without a semantic change does not force a resync;
 // the spec is covered by its content hash and the computation by definition_hash.
 func CatalogHash(sets []domain.EngineTask) (string, error) {
+	existing := make([]string, 0, len(sets))
+	for _, set := range sets {
+		existing = append(existing, set.Set.TaskID)
+	}
+	return CatalogHashWithExisting(sets, existing)
+}
+
+// CatalogHashWithExisting 把已启用任务与管理端库中当前存在的全部任务 ID 一并计入目录指纹：
+// 即使任务先停用再删除（启用任务集合未变），existingTaskIDs 缩短也会改变目录指纹，
+// 使引擎在下一次同步时及时清理已删除任务的本地 watermark 与 gapledger。
+func CatalogHashWithExisting(sets []domain.EngineTask, existingTaskIDs []string) (string, error) {
 	hashed := make([]hashedSet, 0, len(sets))
 	for _, set := range sets {
 		members := make([]hashedMember, 0, len(set.Members))
@@ -96,7 +117,13 @@ func CatalogHash(sets []domain.EngineTask) (string, error) {
 			ResultReady: set.ResultReady, SourceSeeding: set.SourceSeeding, Members: members,
 		})
 	}
-	raw, err := json.Marshal(hashed)
+	existing := append([]string(nil), existingTaskIDs...)
+	sort.Strings(existing)
+	payload := struct {
+		Sets            []hashedSet `json:"sets"`
+		ExistingTaskIDs []string    `json:"existing_task_ids,omitempty"`
+	}{Sets: hashed, ExistingTaskIDs: existing}
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("encode factor catalog: %w", err)
 	}

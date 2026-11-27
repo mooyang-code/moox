@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // maxPullAttempts bounds how many unrunnable jobs one pull may fail before it
@@ -39,6 +40,7 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 				store.RecalcStatusFailed, err.Error(), nil, now); failErr != nil {
 				return store.RecalcJob{}, domain.EngineTask{}, false, failErr
 			}
+			h.pruneFinishedRecalcJobs(ctx, now)
 			continue
 		}
 		return job, set, true, nil
@@ -61,11 +63,32 @@ func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID string
 		}
 		if job.Status == store.RecalcStatusRunning {
 			if _, runnableErr := h.runnableTask(ctx, job); runnableErr != nil {
-				return h.store.ReportRecalcProgress(ctx, jobID, progress.Unix(), store.RecalcStatusFailed, runnableErr.Error(), nil, now)
+				updated, reportErr := h.store.ReportRecalcProgress(ctx, jobID, progress.Unix(), store.RecalcStatusFailed, runnableErr.Error(), nil, now)
+				if reportErr == nil {
+					h.pruneFinishedRecalcJobs(ctx, now)
+				}
+				return updated, reportErr
 			}
 		}
 	}
-	return h.store.ReportRecalcProgress(ctx, jobID, progress.Unix(), status, errText, defaultFilled, now)
+	updated, err := h.store.ReportRecalcProgress(ctx, jobID, progress.Unix(), status, errText, defaultFilled, now)
+	if err == nil && isTerminalRecalcStatus(updated.Status) {
+		h.pruneFinishedRecalcJobs(ctx, now)
+	}
+	return updated, err
+}
+
+func (h *Hub) pruneFinishedRecalcJobs(ctx context.Context, now time.Time) {
+	if h.recalcRetention <= 0 && h.recalcKeepPerTask <= 0 {
+		return
+	}
+	if _, err := h.store.PruneRecalcJobs(ctx, now, h.recalcRetention, h.recalcKeepPerTask); err != nil {
+		log.WarnContextf(ctx, "factor_recalc_jobs_prune_failed error=%v", err)
+	}
+}
+
+func isTerminalRecalcStatus(status string) bool {
+	return status == store.RecalcStatusSucceeded || status == store.RecalcStatusFailed || status == store.RecalcStatusCancelled
 }
 
 func (h *Hub) runnableTask(ctx context.Context, job store.RecalcJob) (domain.EngineTask, error) {

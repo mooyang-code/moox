@@ -14,7 +14,7 @@ func TestPeriodTriggerResamplesBucketOnLastSourcePeriodOnly(t *testing.T) {
 	mgr := openState(t)
 	storage := newFakeStorage()
 	seedTask(t, mgr, storage, []string{"BTC", "ETH", "SOL"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T10:30:00Z"))
-	trigger := &PeriodTrigger{Index: &TaskIndex{Tasks: mgr.Tasks()}, Engine: &Engine{Primary: storage, State: mgr.Resample()}}
+	trigger := &PeriodTrigger{Index: &TaskIndex{Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC", "ETH", "SOL"}}}, Engine: &Engine{Primary: storage, State: mgr.Resample()}}
 
 	// XRP 的源任务换过主来源：源行记在另一个 tag 下，与合成任务的 SourceSeriesTag 不同。
 	for at := utc("2026-10-21T10:00:00Z"); at.Before(utc("2026-10-21T10:30:00Z")); at = at.Add(5 * time.Minute) {
@@ -47,7 +47,7 @@ func TestBackfillTriggerSubmitsSourceBackfillJobWithSettleDelay(t *testing.T) {
 	seedTask(t, mgr, newFakeStorage(), []string{"BTC"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T10:30:00Z"))
 	confirmed := utc("2026-10-21T11:00:00Z")
 	trigger := &BackfillTrigger{
-		Index: &TaskIndex{Tasks: mgr.Tasks()}, State: mgr.Resample(), SettleAfter: time.Minute,
+		Index: &TaskIndex{Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC"}}}, State: mgr.Resample(), SettleAfter: time.Minute,
 		Now: func() time.Time { return utc("2026-10-21T12:00:00Z") },
 	}
 	payload := &storagepb.CollectorKlineBackfilled{

@@ -97,7 +97,7 @@ func TestUpdateCredentialRequiresPassingInspectionAndStoresResult(t *testing.T) 
 		CanTradeSpot: true, CanTradeSwap: true, InspectedAt: time.Now().UTC(),
 	}}
 	service := inspectingService(store, inspector, secret)
-	updated, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, CredentialSecretID: &next})
+	updated, _, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, CredentialSecretID: &next})
 	require.NoError(t, err)
 	require.Equal(t, exchange.AccountModeBinancePortfolioMargin, updated.AccountMode)
 	require.NotEmpty(t, updated.InspectionJSON)
@@ -110,7 +110,7 @@ func TestUpdateCredentialRequiresPassingInspectionAndStoresResult(t *testing.T) 
 	before := store.updateCalls
 	third := "secret-3"
 	secret.SecretID = third
-	_, err = inspectingService(store, blocked, secret).Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, CredentialSecretID: &third})
+	_, _, err = inspectingService(store, blocked, secret).Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, CredentialSecretID: &third})
 	require.ErrorIs(t, err, ErrInspectionBlocked)
 	require.Equal(t, before, store.updateCalls)
 }

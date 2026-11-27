@@ -196,7 +196,7 @@ func init() {
 	collectorKlineBackfillCmd.Flags().BoolVar(&klineBackfillFlags.Force, "force", false, "不检查缺口，范围内应有的 K 线全部重拉")
 	bindRange(collectorKlineBackfillStatusCmd, &klineBackfillStatusFlags, false)
 	collectorKlineBackfillStatusCmd.Flags().StringVar(&klineBackfillStatusFlags.JobID, "job-id", "", "补采作业 ID")
-	collectorKlineBackfillStatusCmd.Flags().StringVar(&klineBackfillStatusFlags.Source, "source", "", "列表只看 manual 或 auto 作业")
+	collectorKlineBackfillStatusCmd.Flags().StringVar(&klineBackfillStatusFlags.Source, "source", "", "列表按来源筛选：manual、auto、seed、close_refetch 或 catchup")
 	collectorKlineBackfillStatusCmd.Flags().BoolVar(&klineBackfillStatusFlags.Attention, "attention", false, "列表只看未结束或有失败的作业")
 	collectorKlineBackfillStatusCmd.Flags().StringVar(&klineBackfillStatusFlags.DatasetID, "dataset-id", "", "列表只看涉及该数据集的作业")
 	bindRange(collectorKlineBackfillCancelCmd, &klineBackfillCancelFlags, false)

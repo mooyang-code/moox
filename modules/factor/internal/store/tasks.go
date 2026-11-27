@@ -149,13 +149,28 @@ func (s *Store) GetTask(ctx context.Context, taskID string) (domain.FactorTask, 
 
 // ListTasks returns all factor tasks in stable id order.
 func (s *Store) ListTasks(ctx context.Context) ([]domain.FactorTask, error) {
+	return s.ListTasksBySpace(ctx, "")
+}
+
+// ListTasksBySpace returns factor tasks in stable id order; when spaceID is
+// non-empty, only tasks belonging to that space are returned.
+func (s *Store) ListTasksBySpace(ctx context.Context, spaceID string) ([]domain.FactorTask, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
+	spaceID = strings.TrimSpace(spaceID)
 	var rows []factorTaskRow
-	if err := s.db.WithContext(ctx).Raw(`
-		SELECT ` + setColumns + ` FROM t_factor_tasks ORDER BY c_task_id
-	`).Scan(&rows).Error; err != nil {
+	var err error
+	if spaceID != "" {
+		err = s.db.WithContext(ctx).Raw(`
+			SELECT `+setColumns+` FROM t_factor_tasks WHERE c_space_id = ? ORDER BY c_task_id
+		`, spaceID).Scan(&rows).Error
+	} else {
+		err = s.db.WithContext(ctx).Raw(`
+			SELECT ` + setColumns + ` FROM t_factor_tasks ORDER BY c_task_id
+		`).Scan(&rows).Error
+	}
+	if err != nil {
 		return nil, err
 	}
 	tasks := make([]domain.FactorTask, 0, len(rows))

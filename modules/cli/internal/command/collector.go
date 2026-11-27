@@ -16,15 +16,13 @@ import (
 )
 
 type collectorPackageOptions struct {
-	CollectorRoot    string
-	SpaceID          string
-	PackageConfigDir string
-	Version          string
-	Out              string
-	ConfigDir        string
-	Entrypoint       string
-	CLSLogsetID      string
-	CLSTopicID       string
+	CollectorRoot string
+	SpaceID       string
+	Version       string
+	Out           string
+	Entrypoint    string
+	CLSLogsetID   string
+	CLSTopicID    string
 }
 
 var collectorPackageFlags collectorPackageOptions
@@ -63,14 +61,13 @@ func init() {
 	collectorCmd.AddCommand(collectorFunctionCmd)
 	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd)
 	addCollectorPackageFlags(collectorFunctionPackageCmd, &collectorPackageFlags)
-	collectorFunctionPackageCmd.Flags().StringVar(&collectorPackageFlags.SpaceID, "space-id", "", "space id; selects the matching SCF config directory")
+	collectorFunctionPackageCmd.Flags().StringVar(&collectorPackageFlags.SpaceID, "space-id", "", "space id; used to name the output zip when --out is omitted")
 }
 
 func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions) {
 	cmd.Flags().StringVar(&opts.CollectorRoot, "collector-root", "", "collector module root")
 	cmd.Flags().StringVar(&opts.Version, "version", "dev", "collector package version")
 	cmd.Flags().StringVar(&opts.Out, "out", "", "output zip path")
-	cmd.Flags().StringVar(&opts.ConfigDir, "config", "", "collector config directory")
 	cmd.Flags().StringVar(&opts.CLSTopicID, "cls-topic-id", "", "central CLS topic id used by SCF warning/error logs")
 }
 
@@ -91,14 +88,6 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		}
 		outPath = filepath.Join(collectorRoot, fmt.Sprintf("collector-scf-%s-%s.zip", spaceID, version))
 	}
-	configDir := opts.ConfigDir
-	if configDir == "" {
-		spaceID := strings.TrimSpace(opts.SpaceID)
-		if spaceID == "" {
-			return nil, fmt.Errorf("--space-id is required when --config is omitted")
-		}
-		configDir = filepath.Join(collectorRoot, "configs", filepath.FromSlash(defaultFlag(opts.PackageConfigDir, defaultCollectorPackageConfigDir(spaceID))))
-	}
 	binaryPath := filepath.Join(os.TempDir(), fmt.Sprintf("moox-collector-scf-%d", time.Now().UnixNano()), "main")
 	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
 		return nil, err
@@ -111,17 +100,8 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	}
 	return collectorpackager.BuildSCFPackage(collectorpackager.BuildSCFPackageOptions{
 		BinaryPath: binaryPath,
-		ConfigDir:  configDir,
 		OutPath:    outPath,
 	})
-}
-
-func defaultCollectorPackageConfigDir(spaceID string) string {
-	spaceID = strings.ToLower(strings.TrimSpace(spaceID))
-	if spaceID == "crypto" {
-		return filepath.ToSlash(filepath.Join("scf", "market_data"))
-	}
-	return filepath.ToSlash(filepath.Join("scf", spaceID))
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {

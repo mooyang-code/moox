@@ -7,10 +7,45 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 )
+
+// KlineRequest 是向币安请求 K 线的参数。
+type KlineRequest struct {
+	Symbol    string
+	Interval  string
+	Limit     int
+	StartTime time.Time
+	EndTime   time.Time
+}
+
+// Kline 是币安返回的单根原始 K 线（数值已解析为 float64）。
+type Kline struct {
+	OpenTime    time.Time
+	CloseTime   time.Time
+	Open        float64
+	High        float64
+	Low         float64
+	Close       float64
+	Volume      float64
+	QuoteVolume float64
+	TradeCount  int64
+}
+
+// SymbolInfo 是币安 exchangeInfo 解码出的交易对元数据。
+type SymbolInfo struct {
+	Symbol     string
+	BaseAsset  string
+	QuoteAsset string
+	Status     string
+	MinQty     string
+	MaxQty     string
+	TickSize   string
+	LotSize    string
+	// Pair 是永续合约的标的交易对（连续合约 K 线按它订阅），现货为空。
+	Pair string
+	// TradingStatus 是交易所给的原始交易状态（TRADING、BREAK、HALT、DELIVERING……）。
+	TradingStatus string
+}
 
 // CandleStick 币安K线原始数据
 // 币安返回的是数组格式：[openTime, open, high, low, close, volume, closeTime, quoteVolume, tradeCount, takerBuyVolume, takerBuyQuoteVolume, ignore]
@@ -26,32 +61,6 @@ type CandleStick struct {
 	TradeCount  int64  // 成交笔数
 }
 
-// AggregateTrade is the public aggregate-trade shape returned by Binance
-// spot and USD-M futures. It is the cursorable public REST source used by the
-// Tick collector when a WebSocket feed is unavailable.
-type AggregateTrade struct {
-	ID         int64  `json:"a"`
-	Price      string `json:"p"`
-	Quantity   string `json:"q"`
-	TradeTime  int64  `json:"T"`
-	BuyerMaker bool   `json:"m"`
-}
-
-func (t AggregateTrade) ToTrade() (*exchange.Trade, error) {
-	price := common.NewDecimal(t.Price)
-	if _, err := price.Float64(); err != nil {
-		return nil, fmt.Errorf("aggregate trade price: %w", err)
-	}
-	quantity := common.NewDecimal(t.Quantity)
-	if _, err := quantity.Float64(); err != nil {
-		return nil, fmt.Errorf("aggregate trade quantity: %w", err)
-	}
-	if t.ID <= 0 || t.TradeTime <= 0 {
-		return nil, fmt.Errorf("aggregate trade id and time are required")
-	}
-	return &exchange.Trade{ID: t.ID, Price: price, Quantity: quantity, TradeTime: time.UnixMilli(t.TradeTime).UTC(), BuyerMaker: t.BuyerMaker}, nil
-}
-
 // UnmarshalJSON 自定义 JSON 解析（处理数组格式）
 func (c *CandleStick) UnmarshalJSON(data []byte) error {
 	var raw []json.RawMessage
@@ -63,7 +72,6 @@ func (c *CandleStick) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("K线数据字段不足，期望至少9个，实际%d个", len(raw))
 	}
 
-	// 解析各字段
 	if err := json.Unmarshal(raw[0], &c.OpenTime); err != nil {
 		return fmt.Errorf("解析 openTime 失败: %w", err)
 	}
@@ -108,17 +116,41 @@ func (c *CandleStick) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ToKline 转换为通用 Kline 结构
-func (c *CandleStick) ToKline() (*exchange.Kline, error) {
-	return &exchange.Kline{
+// ToKline 将原始数组行解析为强类型 Kline。
+func (c *CandleStick) ToKline() (*Kline, error) {
+	open, err := strconv.ParseFloat(strings.TrimSpace(c.Open), 64)
+	if err != nil {
+		return nil, fmt.Errorf("解析 open 数值失败: %w", err)
+	}
+	high, err := strconv.ParseFloat(strings.TrimSpace(c.High), 64)
+	if err != nil {
+		return nil, fmt.Errorf("解析 high 数值失败: %w", err)
+	}
+	low, err := strconv.ParseFloat(strings.TrimSpace(c.Low), 64)
+	if err != nil {
+		return nil, fmt.Errorf("解析 low 数值失败: %w", err)
+	}
+	closePrice, err := strconv.ParseFloat(strings.TrimSpace(c.Close), 64)
+	if err != nil {
+		return nil, fmt.Errorf("解析 close 数值失败: %w", err)
+	}
+	volume, err := strconv.ParseFloat(strings.TrimSpace(c.Volume), 64)
+	if err != nil {
+		return nil, fmt.Errorf("解析 volume 数值失败: %w", err)
+	}
+	quoteVolume, err := strconv.ParseFloat(strings.TrimSpace(c.QuoteVolume), 64)
+	if err != nil {
+		return nil, fmt.Errorf("解析 quoteVolume 数值失败: %w", err)
+	}
+	return &Kline{
 		OpenTime:    time.UnixMilli(c.OpenTime),
 		CloseTime:   time.UnixMilli(c.CloseTime),
-		Open:        common.NewDecimal(c.Open),
-		High:        common.NewDecimal(c.High),
-		Low:         common.NewDecimal(c.Low),
-		Close:       common.NewDecimal(c.Close),
-		Volume:      common.NewDecimal(c.Volume),
-		QuoteVolume: common.NewDecimal(c.QuoteVolume),
+		Open:        open,
+		High:        high,
+		Low:         low,
+		Close:       closePrice,
+		Volume:      volume,
+		QuoteVolume: quoteVolume,
 		TradeCount:  c.TradeCount,
 	}, nil
 }
@@ -150,7 +182,7 @@ type exchangeInfoSymbolRaw struct {
 	Filters      []FilterInfo `json:"filters"`
 }
 
-func (s *exchangeInfoSymbolRaw) toSymbolInfo() *exchange.SymbolInfo {
+func (s *exchangeInfoSymbolRaw) toSymbolInfo() *SymbolInfo {
 	if s == nil {
 		return nil
 	}
@@ -163,7 +195,7 @@ func (s *exchangeInfoSymbolRaw) toSymbolInfo() *exchange.SymbolInfo {
 }
 
 // countTrading 数正常交易（TRADING）的交易对，用于日志。
-func countTrading(symbols []*exchange.SymbolInfo) int {
+func countTrading(symbols []*SymbolInfo) int {
 	n := 0
 	for _, symbol := range symbols {
 		if symbol != nil && symbol.TradingStatus == "TRADING" {
@@ -176,7 +208,7 @@ func countTrading(symbols []*exchange.SymbolInfo) int {
 // decodeExchangeInfo streams the large top-level symbols array. The callback
 // decides which entries to retain; the raw entry and its filters become
 // collectible before the next entry is decoded.
-func decodeExchangeInfo(reader io.Reader, keep func(*exchangeInfoSymbolRaw) bool) (int, []*exchange.SymbolInfo, error) {
+func decodeExchangeInfo(reader io.Reader, keep func(*exchangeInfoSymbolRaw) bool) (int, []*SymbolInfo, error) {
 	decoder := json.NewDecoder(reader)
 	start, err := decoder.Token()
 	if err != nil {
@@ -187,7 +219,7 @@ func decodeExchangeInfo(reader io.Reader, keep func(*exchangeInfoSymbolRaw) bool
 	}
 
 	var total int
-	var symbols []*exchange.SymbolInfo
+	var symbols []*SymbolInfo
 	for decoder.More() {
 		keyToken, err := decoder.Token()
 		if err != nil {
@@ -236,34 +268,33 @@ func decodeExchangeInfo(reader io.Reader, keep func(*exchangeInfoSymbolRaw) bool
 
 // SymbolInfoRaw 交易对原始信息（币安格式）
 type SymbolInfoRaw struct {
-	Symbol             string       `json:"symbol"`             // 交易对符号（如 BTCUSDT）
-	Status             string       `json:"status"`             // 交易状态：TRADING, HALT, BREAK
-	BaseAsset          string       `json:"baseAsset"`          // 基础资产（如 BTC）
-	BaseAssetPrecision int          `json:"baseAssetPrecision"` // 基础资产精度
-	QuoteAsset         string       `json:"quoteAsset"`         // 计价资产（如 USDT）
-	QuotePrecision     int          `json:"quotePrecision"`     // 计价资产精度
-	OrderTypes         []string     `json:"orderTypes"`         // 支持的订单类型
-	Filters            []FilterInfo `json:"filters"`            // 交易规则过滤器
-	Permissions        []string     `json:"permissions"`        // 权限（SPOT/MARGIN等）
-	ContractType       string       `json:"contractType"`       // 合约类型（仅永续合约）：PERPETUAL
-	Pair               string       `json:"pair"`               // 交易对（仅永续合约）
+	Symbol             string       `json:"symbol"`
+	Status             string       `json:"status"`
+	BaseAsset          string       `json:"baseAsset"`
+	BaseAssetPrecision int          `json:"baseAssetPrecision"`
+	QuoteAsset         string       `json:"quoteAsset"`
+	QuotePrecision     int          `json:"quotePrecision"`
+	OrderTypes         []string     `json:"orderTypes"`
+	Filters            []FilterInfo `json:"filters"`
+	Permissions        []string     `json:"permissions"`
+	ContractType       string       `json:"contractType"`
+	Pair               string       `json:"pair"`
 }
 
 // FilterInfo 交易规则过滤器
 type FilterInfo struct {
-	FilterType  string `json:"filterType"`  // PRICE_FILTER, LOT_SIZE, MIN_NOTIONAL等
-	MinPrice    string `json:"minPrice"`    // 最小价格
-	MaxPrice    string `json:"maxPrice"`    // 最大价格
-	TickSize    string `json:"tickSize"`    // 价格步长
-	MinQty      string `json:"minQty"`      // 最小数量
-	MaxQty      string `json:"maxQty"`      // 最大数量
-	StepSize    string `json:"stepSize"`    // 数量步长
-	MinNotional string `json:"minNotional"` // 最小名义价值
+	FilterType  string `json:"filterType"`
+	MinPrice    string `json:"minPrice"`
+	MaxPrice    string `json:"maxPrice"`
+	TickSize    string `json:"tickSize"`
+	MinQty      string `json:"minQty"`
+	MaxQty      string `json:"maxQty"`
+	StepSize    string `json:"stepSize"`
+	MinNotional string `json:"minNotional"`
 }
 
-// ToSymbolInfo 转换为通用交易对信息
-func (s *SymbolInfoRaw) ToSymbolInfo() *exchange.SymbolInfo {
-	// 提取交易规则
+// ToSymbolInfo 转换为客户端 SymbolInfo 结构。
+func (s *SymbolInfoRaw) ToSymbolInfo() *SymbolInfo {
 	var minQty, maxQty, tickSize, lotSize string
 	for _, filter := range s.Filters {
 		switch filter.FilterType {
@@ -275,17 +306,12 @@ func (s *SymbolInfoRaw) ToSymbolInfo() *exchange.SymbolInfo {
 			tickSize = filter.TickSize
 		}
 	}
-
-	// 将 BTCUSDT 格式转换为 BTC-USDT
 	formattedSymbol := s.BaseAsset + "-" + s.QuoteAsset
-
-	// 映射状态
 	status := "active"
 	if s.Status != "TRADING" {
 		status = "inactive"
 	}
-
-	return &exchange.SymbolInfo{
+	return &SymbolInfo{
 		TradingStatus: strings.ToUpper(strings.TrimSpace(s.Status)),
 		Symbol:        formattedSymbol,
 		BaseAsset:     s.BaseAsset,

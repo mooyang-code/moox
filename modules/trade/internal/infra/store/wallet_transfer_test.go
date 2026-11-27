@@ -56,14 +56,14 @@ func TestWalletTransferLifecycle(t *testing.T) {
 
 	// 写入交易所流水号后仍是 PENDING，再完成。
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStatePending, "", 0)
+		return tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStatePending, TransferFailureNone, "", 0)
 	}))
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStateCompleted, "", 3000)
+		return tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStateCompleted, TransferFailureNone, "", 3000)
 	}))
 	// 终态不再改动。
 	err = tradeStore.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStateFailed, "x", 0)
+		return tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStateFailed, TransferFailureHard, "x", 0)
 	})
 	require.ErrorIs(t, err, ErrNotPending)
 	rows, err = tradeStore.ListWalletTransfersForTarget(ctx, "space-1", "logical-1", "target-1", "account-1", TransferToSpot)

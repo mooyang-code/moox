@@ -10,7 +10,7 @@ cd "${ROOT}"
 files=("$@")
 if ((${#files[@]} == 0)); then
   while IFS= read -r file; do
-    files+=("${file}")
+    [[ -f "${file}" ]] && files+=("${file}")
   done < <(git ls-files '*.proto' | grep -v -e '^third_party/' -e '/google/protobuf/' -e '/node_modules/' | sort)
 fi
 

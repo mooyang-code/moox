@@ -107,7 +107,7 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 		}
 		var validateErr error
 		if params.Collector.DataType == "kline_resample" {
-			validateErr = resample.ValidateTaskParams(task.SpaceID, params)
+			validateErr = resample.ValidateTaskParamsBasic(params)
 		} else {
 			// Direct collection tasks derive Provider/market routing from their
 			// selected Tags. The task definition itself must therefore be valid

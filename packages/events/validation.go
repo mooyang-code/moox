@@ -184,7 +184,7 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 		}
 	}
 	switch payload.GetOrigin() {
-	case "auto", "manual", "force", "resample":
+	case "auto", "manual", "force", "resample", "seed", "catchup", "close_refetch":
 		return nil
 	default:
 		return fmt.Errorf("collector kline backfilled origin %q is invalid", payload.GetOrigin())

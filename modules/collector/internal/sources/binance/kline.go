@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 )
 
 // 产品类型常量
@@ -23,7 +21,7 @@ type KlineCollector struct {
 	client         *binanceapi.Client
 	spotAPI        *binanceapi.SpotAPI
 	swapAPI        *binanceapi.SwapAPI
-	fetchKlinePage func(context.Context, *sources.CollectParams, *exchange.KlineRequest) ([]*exchange.Kline, error)
+	fetchKlinePage func(context.Context, *sources.CollectParams, *binanceapi.KlineRequest) ([]*binanceapi.Kline, error)
 }
 
 // NewKlineCollector returns a configured Binance K-line collector for bounded
@@ -37,28 +35,26 @@ func NewKlineCollector(clients ...*binanceapi.Client) *KlineCollector {
 }
 
 // fetchKlines 从币安 API 获取一页 K 线数据。
-func (c *KlineCollector) fetchKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+func (c *KlineCollector) fetchKlines(ctx context.Context, params *sources.CollectParams, req *binanceapi.KlineRequest) ([]*binanceapi.Kline, error) {
 	if c.fetchKlinePage != nil {
 		return c.fetchKlinePage(ctx, params, req)
 	}
 	return c.fetchExchangeKlines(ctx, params, req)
 }
 
-// fetchKlinesOnce deliberately performs one physical provider request. The
-// common RouterSession owns the two-provider fallback budget and FeedGuard
-// owns the per-IP token/concurrency policy; retrying here would bypass both.
-func (c *KlineCollector) fetchKlinesOnce(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+// fetchKlinesOnce deliberately performs one physical provider request.
+func (c *KlineCollector) fetchKlinesOnce(ctx context.Context, params *sources.CollectParams, req *binanceapi.KlineRequest) ([]*binanceapi.Kline, error) {
 	return c.fetchKlines(binanceapi.SingleAttempt(ctx), params, req)
 }
 
-func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *sources.CollectParams, req *binanceapi.KlineRequest) ([]*binanceapi.Kline, error) {
 	switch params.InstType {
 	case InstTypeSPOT:
-		return tryEndpoints(ctx, c.client.SpotDomains(), func(attemptCtx context.Context, domain string) ([]*exchange.Kline, error) {
+		return tryEndpoints(ctx, c.client.SpotDomains(), func(attemptCtx context.Context, domain string) ([]*binanceapi.Kline, error) {
 			return c.spotAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, nil)
 		})
 	case InstTypeSWAP:
-		return tryEndpoints(ctx, c.client.SwapDomains(), func(attemptCtx context.Context, domain string) ([]*exchange.Kline, error) {
+		return tryEndpoints(ctx, c.client.SwapDomains(), func(attemptCtx context.Context, domain string) ([]*binanceapi.Kline, error) {
 			return c.swapAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, nil)
 		})
 	default:
@@ -67,7 +63,7 @@ func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *source
 }
 
 // tryEndpoints 按端点顺序请求，前一个失败才换下一个。
-func tryEndpoints(ctx context.Context, domains []string, call func(context.Context, string) ([]*exchange.Kline, error)) ([]*exchange.Kline, error) {
+func tryEndpoints(ctx context.Context, domains []string, call func(context.Context, string) ([]*binanceapi.Kline, error)) ([]*binanceapi.Kline, error) {
 	var lastErr error
 	for index := range domains {
 		if err := defaultWeightGovernor.Admit(ctx, domains[index]); err != nil {
@@ -102,8 +98,6 @@ func endpointAttemptContext(parent context.Context, remainingEndpoints int) (con
 	if remaining <= 0 {
 		return context.WithDeadline(parent, deadline)
 	}
-	// 每个端点至少有一段能容纳行情源延迟尖峰的时间：把剩余预算平均切给全部端点，
-	// 前几个端点只能拿到几百毫秒，慢一点的正常响应会被全部掐断，最后一个端点才有机会拿到较长时间。
 	slice := remaining / time.Duration(remainingEndpoints)
 	if slice < minEndpointAttempt {
 		slice = min(remaining, minEndpointAttempt)
@@ -111,30 +105,10 @@ func endpointAttemptContext(parent context.Context, remainingEndpoints int) (con
 	return context.WithTimeout(parent, slice)
 }
 
-// minEndpointAttempt 是单个端点一次尝试的最短时间。2026-10-20 的整点实测：币安现货、合约的响应在整点前后约 1 秒上下，
-// 原来的 1.2 秒上限把约一半的 1m 请求截断后换端点重发，级联 3 到 4 次累计 3.7～4.9 秒才成功；放宽到 2 秒让这类请求在一次尝试内完成。再放宽到 3 秒并不更好：整点停住的请求等多久都不会返回，重发在复用连接上 1.4～2.3 秒就成功，所以等得越久越亏。
 const minEndpointAttempt = 2 * time.Second
 
-func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, interval string) []*market.Kline {
-	klines := make([]*market.Kline, 0, len(exchangeKlines))
-	for _, ek := range exchangeKlines {
-		kline := market.NewKline("binance", symbol, interval)
-		kline.OpenTime = ek.OpenTime
-		kline.CloseTime = ek.CloseTime
-		kline.Open = ek.Open
-		kline.High = ek.High
-		kline.Low = ek.Low
-		kline.Close = ek.Close
-		kline.Volume = ek.Volume
-		kline.QuoteVolume = ek.QuoteVolume
-		kline.TradeCount = ek.TradeCount
-		klines = append(klines, kline)
-	}
-	return klines
-}
-
-func filterClosedKlines(klines []*market.Kline, now time.Time) ([]*market.Kline, int) {
-	closed := make([]*market.Kline, 0, len(klines))
+func filterClosedKlines(klines []*binanceapi.Kline, now time.Time) ([]*binanceapi.Kline, int) {
+	closed := make([]*binanceapi.Kline, 0, len(klines))
 	skipped := 0
 	for _, kline := range klines {
 		if isKlineClosed(kline, now) {
@@ -146,7 +120,7 @@ func filterClosedKlines(klines []*market.Kline, now time.Time) ([]*market.Kline,
 	return closed, skipped
 }
 
-func isKlineClosed(kline *market.Kline, now time.Time) bool {
+func isKlineClosed(kline *binanceapi.Kline, now time.Time) bool {
 	if kline == nil || kline.CloseTime.IsZero() {
 		return false
 	}

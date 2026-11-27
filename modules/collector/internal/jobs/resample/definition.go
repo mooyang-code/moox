@@ -7,7 +7,7 @@ import (
 
 // NewJobDefinition returns the local K-line resample job definition.
 func NewJobDefinition() jobdef.JobDefinition {
-	dataSources := jobdef.OptionList{Options: []jobdef.Option{{Value: "binance", Label: "币安"}, {Value: "moox", Label: "MooX"}}}
+	dataSources := jobdef.OptionList{Options: []jobdef.Option{{Value: "moox", Label: "MooX"}}}
 	return jobdef.JobDefinition{
 		ID:                3,
 		DataType:          "kline_resample",

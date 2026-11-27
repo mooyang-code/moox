@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -51,7 +50,7 @@ type KlinePipeline struct {
 	ExtraFieldIDs []string
 }
 
-func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchCompleted, error) {
 	if p == nil || p.Router == nil || p.Storage == nil {
 		return nil, fmt.Errorf("K 线流水线没有初始化")
 	}

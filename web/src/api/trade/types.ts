@@ -112,6 +112,12 @@ export interface LogicalAccount {
   readiness_reasons: string[];
   created_at: string;
   updated_at: string;
+  /** 当前非零持仓标的数（合并跨市场去重） */
+  position_count?: number;
+  /** 近 24 小时权益绝对变化，历史点不足时为空 */
+  equity_change_24h?: string;
+  /** 近 24 小时权益变化比例（如 0.05 表示 +5%），历史点不足或起点为 0 时为空 */
+  equity_change_pct_24h?: string;
 }
 
 export interface Order {
@@ -143,6 +149,7 @@ export interface Order {
   reserved_quantity: string;
   remaining_reserved_quantity: string;
   reject_reason: string;
+  reject_code?: string;
   version: string;
   submitted_at: string;
   finished_at: string;
@@ -236,6 +243,7 @@ export interface TradableInstrument {
 
 export interface BlockedTarget extends InstrumentQuantity {
   reason: string;
+  reason_code?: string;
   /** 不是未执行，而是被单币每小时上限顺延到下一个整点：用中性色显示“顺延”，不计入“未执行” */
   deferred?: boolean;
 }
@@ -328,11 +336,20 @@ export interface FlattenResult {
 export interface CreateTradingAccountReq {
   name: string;
   exchange: Exchange;
-  /** 要开通的市场：加密货币取现货、永续的子集 */
+  /** 要开通的市场：加密货币取现货、永续的子集，股票为 equity */
   markets: MarketType[];
   settlement_asset: string;
   margin_mode?: string;
-  live: LiveConfig;
+  live?: LiveConfig;
+  paper?: PaperConfig;
+  /** 模拟盘专用：在同一个事务里新建组合的名称（与 logical_account_id 互斥，均空则只建执行账户） */
+  logical_account_name?: string;
+  /** 模拟盘新建组合时的控制模式 */
+  control_mode?: ControlMode;
+  /** 模拟盘专用：在同一个事务里加入已有的已暂停模拟盘组合 */
+  logical_account_id?: string;
+  /** 加入已有组合时的优先级；不填排在现有成员之后 */
+  priority?: number;
 }
 
 export interface UpdateTradingAccountReq {
@@ -421,32 +438,12 @@ export interface ListPositionsReq {
 export interface AccountResponse {
   ret_info: RetInfo;
   account: TradingAccount;
+  logical_account?: LogicalAccount;
 }
 
 export interface LogicalAccountResponse {
   ret_info: RetInfo;
   logical_account: LogicalAccount;
-}
-
-export interface CreatePaperSimulationReq {
-  account_name: string;
-  control_mode?: ControlMode;
-  logical_account_name: string;
-  exchange: Exchange;
-  /** 要开通的市场集合；模拟账户用一个资金池同时撮合开通的各个市场 */
-  markets: MarketType[];
-  settlement_asset: string;
-  margin_mode?: string;
-  initial_balance: string;
-  maker_fee_rate: string;
-  taker_fee_rate: string;
-  slippage_bps: string;
-  /** 加入已有的组合账户：后端在创建账户的同一个事务里加成启用成员，此时 logical_account_name 必须为空 */
-  logical_account_id?: string;
-  /** 加入已有组合时的优先级；不填排在现有成员之后 */
-  priority?: number;
-  /** 订单保留天数（0～365，0 表示不清理），不传取 5；所有模拟账户都按它清理 */
-  order_retention_days?: number;
 }
 
 export interface EquityPoint {
@@ -478,7 +475,7 @@ export interface ExecutionCapabilities {
   unavailable_reason: string;
   order_types: OrderType[];
   fill_policies: FillPolicy[];
-  can_close_paper_simulation: boolean;
+  can_close_paper_account: boolean;
   /** 能否查询资金流水（币安现货没有统一流水接口） */
   ledger?: boolean;
 }

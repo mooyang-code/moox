@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
@@ -26,7 +25,7 @@ type Handler struct {
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
 	// contract without making an external exchange request.
-	Execute func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
+	Execute func(context.Context, Request, Storage) (*BatchCompleted, error)
 	// NewKlinePipeline 由组合根提供：按请求的（市场，品种，频率，数据源，限速）装一条 K 线流水线。
 	NewKlinePipeline PipelineFactory
 	ResolveSymbol    SymbolResolver
@@ -170,7 +169,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 	writeCtx, writeCancel := contextWithReserve(budgetCtx, commitReserve-storageTimeout)
 	defer writeCancel()
 	storage = &reservedDeadlineStorage{Storage: storage, parent: writeCtx, timeout: storageTimeout}
-	var payload *marketfetchpb.MarketFetchBatchCompleted
+	var payload *BatchCompleted
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
 	} else {
@@ -207,7 +206,11 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 	if err != nil {
 		return nil, err
 	}
-	return &model.Response{Success: payload.GetStatus() == "succeeded" || payload.GetStatus() == "partial_failed", Message: payload.GetStatus(), Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
+	status := ""
+	if payload != nil {
+		status = payload.Status
+	}
+	return &model.Response{Success: status == "succeeded" || status == "partial_failed", Message: status, Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
 }
 
 // reportMetrics 在调用结束前发出两类观测数据：CLS 失败明细与指标。两者共享同一个上报预算（CLSReserve，至少 750ms，

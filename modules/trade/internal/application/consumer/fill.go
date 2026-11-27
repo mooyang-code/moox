@@ -41,11 +41,14 @@ type Reducer struct {
 }
 
 // FinishOrderTx 在调用方的事务里按给定终态结束订单：写终态和结束时间、清零剩余资金预留、升版本；
-// reason 非空时覆盖订单的原因字段，为空则保持原值。
+// rejectCode / reason 非空时覆盖订单对应的结构化错误码与原因字段，为空则保持原值。
 // 本地强制结束订单（标的下架、交易所拒单或过期、收盘撤单）都走这里，调用方负责事先确认订单还没结束。
-func (r *Reducer) FinishOrderTx(tx *store.Tx, record store.OrderRecord, next order.State, reason string) error {
+func (r *Reducer) FinishOrderTx(tx *store.Tx, record store.OrderRecord, next order.State, rejectCode order.RejectCode, reason string) error {
 	expected := record.Version
 	record.State = string(next)
+	if rejectCode != order.RejectCodeNone {
+		record.RejectCode = string(rejectCode)
+	}
 	if reason != "" {
 		record.RejectReason = reason
 	}

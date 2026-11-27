@@ -3,7 +3,7 @@
   "summary": {
     "components": 16,
     "services": 24,
-    "methods": 297,
+    "methods": 295,
     "read_only_methods": 137,
     "retryable_methods": 139,
     "callers": 20,
@@ -1686,12 +1686,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "ClosePaperSimulation",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "CloseTargetSession",
           "read_only": false,
           "retryable": false,
@@ -1705,12 +1699,6 @@
         },
         {
           "name": "CreateLogicalAccount",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "CreatePaperSimulation",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -2201,9 +2189,7 @@
       "trpc.moox.strategy.StrategyMgr/ValidateStrategy",
       "trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember",
       "trpc.moox.trade.TradeConsoleService/CancelOrder",
-      "trpc.moox.trade.TradeConsoleService/ClosePaperSimulation",
       "trpc.moox.trade.TradeConsoleService/CreateLogicalAccount",
-      "trpc.moox.trade.TradeConsoleService/CreatePaperSimulation",
       "trpc.moox.trade.TradeConsoleService/CreateTradingAccount",
       "trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount",
       "trpc.moox.trade.TradeConsoleService/FlattenTradingAccount",
@@ -2543,10 +2529,8 @@
       "trpc.moox.strategy.StrategyMgr/ValidateStrategy",
       "trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember",
       "trpc.moox.trade.TradeConsoleService/CancelOrder",
-      "trpc.moox.trade.TradeConsoleService/ClosePaperSimulation",
       "trpc.moox.trade.TradeConsoleService/ControlLifecycle",
       "trpc.moox.trade.TradeConsoleService/CreateLogicalAccount",
-      "trpc.moox.trade.TradeConsoleService/CreatePaperSimulation",
       "trpc.moox.trade.TradeConsoleService/CreateTradingAccount",
       "trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount",
       "trpc.moox.trade.TradeConsoleService/FlattenTradingAccount",

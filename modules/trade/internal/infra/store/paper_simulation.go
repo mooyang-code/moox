@@ -2,23 +2,25 @@ package store
 
 import (
 	"fmt"
-	"sort"
 	"time"
 
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 )
 
-// ClosePaperSimulation atomically stops a paper account and its single logical
-// account membership. It is deliberately small: paper simulations are an
-// immutable fixture, not a second account-management system.
-func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
+// ClosePaperAccount 原子关停一个模拟盘执行账户：撤消全部未结订单、刷新关闭后余额快照、
+// 停用执行账户，并暂停所属组合账户同时移除该成员关系。
+func (tx *Tx) ClosePaperAccount(spaceID, tradingAccountID string, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	account, err := tx.GetTradingAccount(spaceID, tradingAccountID)
 	if err != nil {
 		return err
 	}
 	if account.ExecutionMode != "PAPER" {
-		return fmt.Errorf("%w: only PAPER accounts can be closed by simulation lifecycle", ErrInvalidRecord)
+		return fmt.Errorf("%w: only PAPER accounts can be closed by paper lifecycle", ErrInvalidRecord)
 	}
 	orders, err := tx.listOpenOrdersForAccount(spaceID, tradingAccountID)
 	if err != nil {
@@ -27,14 +29,17 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 	for _, current := range orders {
 		switch current.State {
 		case "OPEN":
-			if err := tx.CancelPaperOrder(current, current.Version, "模拟账户已关闭"); err != nil {
+			if err := tx.CancelPaperOrder(current, current.Version, orderdomain.RejectCodePaperClosed, "模拟账户已关闭"); err != nil {
 				return err
 			}
 		default:
-			// Closing is terminal for a Paper fixture. Orders that are still in
-			// submission/cancel handshakes are rejected and their reservation is
+			// Closing is terminal for a Paper account. Orders that are still in
+			// submission/cancel handshakes are canceled and their reservation is
 			// released rather than being retried through an exchange adapter.
-			result := tx.db.Exec(execCancelClosedPaperOrder, "模拟账户已关闭", time.Now().UTC().UnixMilli(), current.SpaceID, current.OrderID, current.Version)
+			result := tx.db.Exec(execCancelClosedPaperOrder,
+				string(orderdomain.RejectCodePaperClosed), "模拟账户已关闭", now.UTC().UnixMilli(),
+				current.SpaceID, current.OrderID, current.Version,
+			)
 			if result.Error != nil {
 				return result.Error
 			}
@@ -78,45 +83,51 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 		return err
 	}
 	snapshot := account.Snapshot
-	assets := make([]string, 0, len(projection.Totals))
-	for asset := range projection.Totals {
-		assets = append(assets, asset)
-	}
-	sort.Strings(assets)
-	snapshot.Balances = make([]AssetBalance, 0, len(assets))
-	for _, asset := range assets {
-		total := projection.Totals[asset].String()
-		snapshot.Balances = append(snapshot.Balances, AssetBalance{Wallet: string(exchange.WalletUnified), Asset: asset, Total: total, Available: total, Locked: "0", Borrowed: "0"})
-	}
-	// Closing must work without quotes. Cash is authoritative, but mark-based
-	// valuation remains cached and none of its freshness timestamps advance.
-	cash := projection.Totals[account.SettlementAsset]
-	snapshot.AvailableFunds = cash.String()
+	var usedMargin, unrealizedPnL shared.Decimal
+	valuedAt := snapshot.ExchangeUpdatedAt
 	if account.HasPositionMarket() {
-		margin, unrealized, valuedAt, err := tx.closedPaperPositionValuation(account)
+		usedMargin, unrealizedPnL, valuedAt, err = tx.closedPaperPositionValuation(account)
 		if err != nil {
 			return err
 		}
-		equity := cash.Add(unrealized)
-		snapshot.UsedMargin = margin.String()
-		snapshot.UnrealizedPnL = unrealized.String()
 		snapshot.ExchangeUpdatedAt = valuedAt
-		// 带现货市场的账户，净值里还有现货持仓按最后报价的市值，关闭时取不到报价，保留快照里已有的净值（与纯现货账户一致）；
-		// 只有合约的账户净值就是现金加浮盈亏。
+	}
+
+	// 关闭时无实时报价：含余额市场的账户保留快照里已有的净值（现货持仓按最后报价的市值不丢）；
+	// 只有合约的账户净值由唯一公式算作现金 + 浮盈亏。
+	var preserveEquity *shared.Decimal
+	if account.HasBalanceMarket() && snapshot.Equity != "" {
+		if cached, parseErr := shared.ParseDecimal(snapshot.Equity); parseErr == nil {
+			preserveEquity = &cached
+		}
+	}
+	computed := tradingaccount.ComputePaperEquity(tradingaccount.PaperEquityInput{
+		SettlementAsset:      account.SettlementAsset,
+		HasBalanceMarket:     account.HasBalanceMarket(),
+		HasPositionMarket:    account.HasPositionMarket(),
+		Totals:               projection.Totals,
+		UsedMargin:           usedMargin,
+		UnrealizedPnL:        unrealizedPnL,
+		PreserveCachedEquity: preserveEquity,
+	})
+
+	snapshot.Balances = make([]AssetBalance, 0, len(computed.Balances))
+	for _, row := range computed.Balances {
+		snapshot.Balances = append(snapshot.Balances, AssetBalance{
+			Wallet:    string(row.Wallet),
+			Asset:     row.Asset,
+			Available: row.Available.String(),
+			Locked:    "0",
+			Total:     row.Total.String(),
+			Borrowed:  "0",
+		})
+	}
+	snapshot.AvailableFunds = computed.AvailableFunds.String()
+	if account.HasPositionMarket() {
+		snapshot.UsedMargin = computed.UsedMargin.String()
+		snapshot.UnrealizedPnL = computed.UnrealizedPnL.String()
 		if !account.HasBalanceMarket() {
-			snapshot.Equity = equity.String()
-		}
-		snapshot.AvailableFunds = equity.Sub(margin).String()
-		// 单一资金池：结算币这一行是现货买单看的，扣保证金和浮亏、浮盈不能花在现货上，与模拟盘适配器的快照一致。
-		spotAvailable := cash.Sub(margin)
-		if unrealized.IsNegative() {
-			spotAvailable = spotAvailable.Add(unrealized)
-		}
-		// 只合约的账户没有现货买单，这一行保持原样（总额），不改显示。
-		for i := range snapshot.Balances {
-			if account.HasBalanceMarket() && snapshot.Balances[i].Asset == account.SettlementAsset {
-				snapshot.Balances[i].Available = spotAvailable.String()
-			}
+			snapshot.Equity = computed.Equity.String()
 		}
 	}
 	encoded, err := encodeSnapshot(snapshot)
@@ -200,9 +211,9 @@ func (tx *Tx) SetTradingAccountStatus(spaceID, tradingAccountID, status string) 
 const (
 	execCancelClosedPaperOrder = `UPDATE t_trade_orders
 		SET c_state = 'CANCELED', c_first_match_pending = 0,
-		    c_remaining_reserved_quantity = '0', c_reject_reason = ?,
-		    c_finished_at = ?,
-		    c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
+			c_remaining_reserved_quantity = '0', c_reject_code = ?, c_reject_reason = ?,
+			c_finished_at = ?,
+			c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?`
 	execUpdateClosedPaperSnapshot = `UPDATE t_trading_accounts SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_trading_account_id = ?`

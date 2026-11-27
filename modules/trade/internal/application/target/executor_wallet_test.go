@@ -142,7 +142,7 @@ func TestScaleBuysRoundsDownAndKeepsOriginalDelta(t *testing.T) {
 	buys := []laneAction{{member: member, delta: mustDec("0.01")}}
 	ratio := mustDec("1").Div(mustDec("510"))
 
-	scaled := scaleBuys(buys, map[string]shared.Decimal{"account-a": ratio}, nil)
+	scaled := scaleBuys(buys, map[string]shared.Decimal{"account-a": ratio}, nil, nil)
 	require.Len(t, scaled, 1)
 	require.True(t, scaled[0].scaled)
 	require.Equal(t, "0.01", scaled[0].blockedQuantity())
@@ -151,7 +151,7 @@ func TestScaleBuysRoundsDownAndKeepsOriginalDelta(t *testing.T) {
 	require.NoError(t, err)
 
 	// 向下取整后为 0 的按“这轮买不了”处理。
-	require.Empty(t, scaleBuys(buys, map[string]shared.Decimal{"account-a": mustDec("0.000000001")}, nil))
+	require.Empty(t, scaleBuys(buys, map[string]shared.Decimal{"account-a": mustDec("0.000000001")}, nil, nil))
 }
 
 // 账户的划转被交易所拒绝：这个账户的买入记 blocked 并写明原因，整轮收敛不报错，目标定终态 BLOCKED。

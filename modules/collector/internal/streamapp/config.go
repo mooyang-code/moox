@@ -22,7 +22,7 @@ type Config struct {
 	InstanceID string `yaml:"instance_id"`
 	// DataDir 保存网关目录缓存等本地状态。
 	DataDir string `yaml:"data_dir"`
-	// MarketConfig 是数据源配置（binance.yaml：WS 地址与限额、REST 端点）。
+	// MarketConfig 为可选的数据源覆盖配置路径；留空或文件不存在时默认使用编进二进制的 crypto/sources/binance.yaml。
 	MarketConfig string `yaml:"market_config"`
 	// StorageTimeoutMS 是本地执行端单次 Storage 写入的超时。
 	StorageTimeoutMS int `yaml:"storage_timeout_ms"`
@@ -39,7 +39,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read collector-stream config %s: %w", path, err)
 	}
-	cfg := &Config{DataDir: "../data", MarketConfig: "sources/market/binance.yaml", StorageTimeoutMS: 4000}
+	cfg := &Config{DataDir: "../data", StorageTimeoutMS: 4000}
 	cfg.LocalExecutor.Concurrency = 4
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
@@ -73,9 +73,15 @@ func Load(path string) (*Config, error) {
 	if cfg.StorageTimeoutMS < 500 || cfg.StorageTimeoutMS > 30000 || cfg.LocalExecutor.Concurrency < 1 || cfg.LocalExecutor.Concurrency > 32 {
 		return nil, fmt.Errorf("storage_timeout_ms 必须在 500～30000 之间，local_executor.concurrency 在 1～32 之间")
 	}
-	cfg.DataDir, cfg.MarketConfig = cfg.resolve(cfg.DataDir), cfg.resolve(cfg.MarketConfig)
-	if _, err := os.Stat(cfg.MarketConfig); err != nil {
-		return nil, fmt.Errorf("market_config: %w", err)
+	cfg.DataDir = cfg.resolve(cfg.DataDir)
+	if marketCfg := strings.TrimSpace(cfg.MarketConfig); marketCfg != "" {
+		resolved := cfg.resolve(marketCfg)
+		if _, err := os.Stat(resolved); err == nil {
+			cfg.MarketConfig = resolved
+		} else {
+			// 旧部署配置可能仍指向已内嵌裁撤的外部 binance.yaml，自动回退二进制内置配置。
+			cfg.MarketConfig = ""
+		}
 	}
 	return cfg, nil
 }

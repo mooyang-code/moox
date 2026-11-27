@@ -44,10 +44,10 @@ func TestUpdateWalletTransferKeepsExchangeIDWhenEmpty(t *testing.T) {
 		if err := tx.InsertWalletTransfer(transferRecord("t-1", "target-1:TO_SPOT:1", TransferToSpot, 1000)); err != nil {
 			return err
 		}
-		if err := tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStatePending, "", 0); err != nil {
+		if err := tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStatePending, TransferFailureNone, "", 0); err != nil {
 			return err
 		}
-		return tx.UpdateWalletTransfer("space-1", "t-1", "", TransferStateFailed, "人工结束", 2000)
+		return tx.UpdateWalletTransfer("space-1", "t-1", "", TransferStateFailed, TransferFailureNotArrived, "人工结束", 2000)
 	}))
 	rows, err := tradeStore.ListWalletTransfersForTarget(ctx, "space-1", "logical-1", "target-1", "account-1", TransferToSpot)
 	require.NoError(t, err)

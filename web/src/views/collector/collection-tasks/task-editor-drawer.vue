@@ -199,7 +199,11 @@
               >继承源任务，共 {{ resamplePreview.subject_count ?? 0 }} 个标的</a-descriptions-item
             >
             <a-descriptions-item v-if="resamplePreview.alignment" label="分桶方式" :span="2">
-              {{ resamplePreview.alignment === "session" ? "按交易时段从开盘起切分" : "按 UTC 固定网格切分" }}
+              {{
+                resamplePreview.alignment === "session"
+                  ? `按交易时段从开盘起切分${resamplePreview.calendar_id ? `（${resamplePreview.calendar_id}）` : ""}`
+                  : "按 UTC 固定网格切分"
+              }}
             </a-descriptions-item>
           </a-descriptions>
           <a-alert v-if="resampleError" type="error" show-icon class="resample-error">{{ resampleError }}</a-alert>
@@ -267,6 +271,7 @@ import {
   previewKlineResampleSource,
   type DataTypeFieldConfig,
   type ExtraFieldOption,
+  type OutputFieldOption,
   type ResampleSourcePreview
 } from "@/api/collector";
 import { getDataset } from "@/api/storage/metadata";
@@ -279,6 +284,7 @@ import {
   baseOutputFieldIds,
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
+  buildOutputFieldCatalog,
   collectionTaskNameError,
   INGEST_OPTIONS,
   isCrossMarketSelection,
@@ -286,15 +292,14 @@ import {
   parseCollectionTaskInput,
   planTaskGroups,
   pruneUnavailableFields,
+  resampleOutputFieldOptions,
   shouldDropUnavailableFields,
   splitTaskName,
   taskFrequency,
   taskTagSelectionError,
   type CollectionTaskDataType,
   type CollectionTaskInput,
-  type CollectionTaskMarket,
   type CollectionTaskRecord,
-  type OutputFieldEntry,
   type TaskEditorRequest,
   type TaskTagRoute
 } from "./collection-task-params";
@@ -310,8 +315,6 @@ type EditorForm = {
   description: string;
   space_id: string;
   data_type: CollectionTaskDataType | "";
-  provider: string;
-  market_type: CollectionTaskMarket;
   enabled: boolean;
   creator: string;
 };
@@ -336,8 +339,6 @@ const editor = reactive<EditorForm>({
   description: "",
   space_id: "",
   data_type: "",
-  provider: "",
-  market_type: "spot",
   enabled: true,
   creator: ""
 });
@@ -353,12 +354,19 @@ const taskTypeFields = ref<DataTypeFieldConfig[]>([]);
 const selectedOutputFields = ref<string[]>([]);
 // 编辑已有任务时任务原来的输出字段：输出字段只能减少，不在这里面的不能勾。
 const originalOutputFields = ref<string[]>([]);
-// 接口给出的附加字段清单（随执行任务类型读取）；读到之前不能判断已选的附加字段是否还可选。
+// 接口给出的基础/附加字段清单（随执行任务类型读取）；读到之前不能判断已选字段是否还可选。
+const typeBaseOutputOptions = ref<OutputFieldOption[]>([]);
 const extraFieldOptions = ref<ExtraFieldOption[]>([]);
 // 字段清单（基础输出字段与附加字段）读到了才按它清理已选字段
 const extraFieldOptionsLoaded = ref(false);
-const baseOutputFields = ref<Set<string>>(new Set());
-const outputFieldCatalog = ref<OutputFieldEntry[]>([]);
+// 重采样优先按源数据集实际可合成列驱动输出字段选择器；其余任务类型按数据类型基础输出字段驱动。
+const activeBaseOutputOptions = computed(() =>
+  editor.data_type === "kline_resample"
+    ? resampleOutputFieldOptions(resamplePreview.value, typeBaseOutputOptions.value)
+    : typeBaseOutputOptions.value
+);
+const baseOutputFields = computed(() => baseOutputFieldIds(activeBaseOutputOptions.value));
+const outputFieldCatalog = computed(() => buildOutputFieldCatalog(activeBaseOutputOptions.value, extraFieldOptions.value));
 const outputFieldsVisible = ref(false);
 const loadingTypeFields = ref(false);
 const typeFieldsLoadError = ref(false);
@@ -427,11 +435,11 @@ const availableExtraFields = computed(() =>
 const dropUnavailableFields = computed(() =>
   shouldDropUnavailableFields(editing.value, selectedTagRoutes.value.length, extraFieldOptionsLoaded.value)
 );
-// 同时监听已选字段：打开任务时判断值可能没变，已选字段换了也要按同一判断清理。
+// 同时监听已选字段与可用基础列：切换重采样源任务导致可合成列变化时也按同一判断清理。
 watch(
-  [dropUnavailableFields, availableExtraFields, selectedOutputFields],
-  ([drop, available]) => {
-    const selected = pruneUnavailableFields(selectedOutputFields.value, available, drop, baseOutputFields.value);
+  [dropUnavailableFields, availableExtraFields, baseOutputFields, selectedOutputFields],
+  ([drop, available, base]) => {
+    const selected = pruneUnavailableFields(selectedOutputFields.value, available, drop, base);
     if (selected !== selectedOutputFields.value) selectedOutputFields.value = selected;
   },
   { immediate: true }
@@ -443,8 +451,6 @@ function resetEditor() {
   editor.description = "";
   editor.space_id = selectedSpaceId.value || "";
   editor.data_type = "";
-  editor.provider = "";
-  editor.market_type = "spot";
   editor.enabled = true;
   editor.creator = account.value?.user?.userName || "";
   frequencyValue.value = "";
@@ -477,15 +483,13 @@ function openEdit(record: CollectionTaskRecord) {
   editor.description = record.description;
   editor.space_id = record.space_id || selectedSpaceId.value || "";
   editor.data_type = input.dataType;
-  editor.provider = input.provider;
-  editor.market_type = input.market;
   editor.enabled = record.enabled;
   editor.creator = record.creator;
   frequencyValue.value = input.frequency;
   subjectTagIds.value = input.subjectTags || [];
   sourceTaskId.value = input.sourceTaskId || "";
   resampleError.value = "";
-  // 已有合成任务：只读展示创建时由源任务推导并保存的源参数。
+  // 已有合成任务：先用持久化源参数占位，有 source_task_id 时异步刷新源数据集实际可合成列与分桶元信息。
   resamplePreview.value =
     input.dataType === "kline_resample"
       ? {
@@ -494,8 +498,6 @@ function openEdit(record: CollectionTaskRecord) {
           source_series_tag: input.sourceSeriesTag || "",
           subject_count: 0,
           market_id: "",
-          provider: input.provider,
-          market_type: input.market,
           alignment: ""
         }
       : null;
@@ -503,6 +505,9 @@ function openEdit(record: CollectionTaskRecord) {
   originalOutputFields.value = selectedOutputFields.value.slice();
   void loadTaskTypeFields();
   void loadTaskSubjectTags(record);
+  if (input.dataType === "kline_resample" && sourceTaskId.value) {
+    void refreshResamplePreview();
+  }
 }
 
 // 行操作“新建合成”：以这个任务作为源，打开新建表单。
@@ -530,7 +535,6 @@ watch(
 
 function onDataTypeChange() {
   if (editing.value) return;
-  editor.provider = "";
   frequencyValue.value = "";
   subjectTagIds.value = [];
   sourceTaskId.value = "";
@@ -547,10 +551,9 @@ function openOutputFieldPicker() {
 async function loadTaskTypeFields() {
   const token = ++taskTypeFieldRequestToken;
   const dataType = editor.data_type;
+  typeBaseOutputOptions.value = [];
   extraFieldOptions.value = [];
   extraFieldOptionsLoaded.value = false;
-  baseOutputFields.value = new Set();
-  outputFieldCatalog.value = [];
   taskTypeFields.value = [];
   typeFieldsLoadError.value = false;
   if (!dataType) return;
@@ -559,9 +562,8 @@ async function loadTaskTypeFields() {
     const detail = await catalog.loadDataTypeDetail(dataType);
     if (token !== taskTypeFieldRequestToken || editor.data_type !== dataType) return;
     taskTypeFields.value = [...(detail?.fields || [])].sort((a, b) => a.sort_order - b.sort_order);
+    typeBaseOutputOptions.value = detail?.base_output_fields || [];
     extraFieldOptions.value = detail?.extra_fields || [];
-    baseOutputFields.value = baseOutputFieldIds(detail?.base_output_fields);
-    outputFieldCatalog.value = catalog.outputFieldCatalogs.value[dataType] || [];
     extraFieldOptionsLoaded.value = true;
   } catch (error) {
     if (token === taskTypeFieldRequestToken) {
@@ -580,17 +582,13 @@ function afterClose() {
 
 function currentTaskInput(): CollectionTaskInput {
   if (!editor.data_type) throw new Error("请选择数据类型");
-  const selectedTags = tags.value.filter(tag => subjectTagIds.value.includes(tag.tag_id));
-  const firstTag = selectedTags[0];
   return {
     dataType: editor.data_type,
-    provider: (firstTag && tagSource(firstTag)) || editor.provider,
-    market: ((firstTag && tagMarketType(firstTag)) || editor.market_type) as CollectionTaskMarket,
     frequency: frequencyValue.value,
     subjectTags: subjectTagIds.value.slice(),
     sourceTaskId: sourceTaskId.value,
     ingest: ingest.value,
-    // 提交前按条件再过滤一次：条件不满足的附加字段不带。
+    // 提交前按条件再过滤一次：条件不满足的附加字段或源数据集缺失的可合成列不带。
     outputFields: pruneUnavailableFields(
       selectedOutputFields.value,
       availableExtraFields.value,
@@ -761,8 +759,12 @@ const PRESERVED_TASK_PARAM_KEYS = ["symbols_per_function", "allowed_lateness_sec
 
 function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
   const original = editingRecord.value?.collect_params ?? {};
-  // 合成任务的参数创建后不可修改：更新时原样回传，只改名称、描述和启用状态。
-  if (input.dataType === "kline_resample") return { ...original };
+  // 合成任务的源与频率创建后不可修改；输出字段允许缩减，其余参数原样回传。
+  if (input.dataType === "kline_resample") {
+    const next: Record<string, unknown> = { ...original };
+    if (input.outputFields?.length) next.output_fields = input.outputFields;
+    return next;
+  }
   const preserved: Record<string, unknown> = {};
   if (input.dataType === "kline") {
     for (const key of PRESERVED_TASK_PARAM_KEYS) {

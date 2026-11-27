@@ -154,7 +154,7 @@ func TestStockHKCloseBarPeriod(t *testing.T) {
 	storage := newHKRowStore()
 	payload, err := stockHKPipeline(t, storage, hkTime("2026-11-12 16:00:05"), nil, serve).Execute(context.Background(), request())
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 	require.Len(t, storage.rows, 2, "两只标的各写 15:55 开始的那一根")
 	require.Equal(t, [6]float64{93.7, 93.75, 93.5, 93.6, 2848000, 266640075}, storage.prices("09988.XHKG", "2026-11-12T07:55:00Z"), "第 1 段：连续交易时段的值")
 	require.Equal(t, [6]float64{141.1, 141.2, 141, 141.1, 88000, 12417320}, storage.prices("00005.XHKG", "2026-11-12T07:55:00Z"))
@@ -164,13 +164,13 @@ func TestStockHKCloseBarPeriod(t *testing.T) {
 	storage = newHKRowStore()
 	payload, err = stockHKPipeline(t, storage, hkTime("2026-11-12 16:00:05"), nil, serve).Execute(context.Background(), request())
 	require.NoError(t, err)
-	require.NotEqual(t, "succeeded", payload.GetStatus())
-	require.Contains(t, payload.GetErrorSummary(), "high must be >= open/close/low")
+	require.NotEqual(t, "succeeded", payload.Status)
+	require.Contains(t, payload.ErrorSummary, "high must be >= open/close/low")
 	require.Len(t, storage.rows, 1, "09988 整次失败，一根都不写")
 	require.Equal(t, [6]float64{141.1, 141.2, 141, 141.1, 88000, 12417320}, storage.prices("00005.XHKG", "2026-11-12T07:55:00Z"), "00005 照常写入")
 	outcomes := map[string]bool{}
-	for _, result := range payload.GetItems() {
-		outcomes[result.GetSubjectId()] = result.GetErrorSummary() == ""
+	for _, result := range payload.Items {
+		outcomes[result.SubjectID] = result.ErrorSummary == ""
 	}
 	require.Equal(t, map[string]bool{"00005.XHKG": true, "09988.XHKG": false}, outcomes)
 }
@@ -392,7 +392,7 @@ func TestStockHKRequestGoesToTheConfiguredEastmoneyAddress(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 	require.Len(t, storage.rows, 1)
 
 	require.Len(t, transport.urls, 1)

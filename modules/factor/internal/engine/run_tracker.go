@@ -213,6 +213,20 @@ func subjectsWithout(subjects []string, drop map[string]struct{}) []string {
 	return out
 }
 
+// retain 仅保留 keep 中的任务运行摘要，清理已删除任务的残留记录。
+func (t *runTracker) retain(keep map[string]struct{}) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for taskID := range t.runs {
+		if _, ok := keep[taskID]; !ok {
+			delete(t.runs, taskID)
+		}
+	}
+}
+
 func (t *runTracker) all(now time.Time) []domain.TaskRunSummary {
 	if t == nil {
 		return nil

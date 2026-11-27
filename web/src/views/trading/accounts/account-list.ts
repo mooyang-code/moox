@@ -1,4 +1,4 @@
-import type { EquityPoint, LogicalAccount, TradingAccount } from "@/api/trade/types";
+import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import { exchangeLabel } from "@/api/trade";
 import { logicalInEnvironment, accountEnvironment, type Environment } from "@/components/trade-confirm/environment";
 
@@ -57,6 +57,8 @@ export interface ComboRow {
   env: Environment;
   exchangesText: string;
   equity: number | null;
+  equityChangePct24h: number | null;
+  positionCount: number;
   settlementAsset: string;
   /** 组合里能找到的执行账户（含停用的成员） */
   members: TradingAccount[];
@@ -101,21 +103,10 @@ export function comboRows(
         env,
         exchangesText: exchanges.length ? exchanges.join("、") : "-",
         equity: sumEquity(enabled),
+        equityChangePct24h: snapshotNumber(logical.equity_change_pct_24h),
+        positionCount: logical.position_count ?? 0,
         settlementAsset: logical.settlement_asset,
         members
       };
     });
-}
-
-/**
- * 近 24 小时权益变化比例：取窗口内第一个点和最后一个点。窗口内不足两个点、起点权益为 0 时返回 null。
- * points 是 QueryEquityCurve 在 [now - 24h, now] 内返回的点。
- */
-export function equityChange(points: readonly EquityPoint[]): number | null {
-  const sorted = [...points].sort((a, b) => Number(a.bucket_time) - Number(b.bucket_time));
-  if (sorted.length < 2) return null;
-  const first = Number(sorted[0].equity);
-  const last = Number(sorted[sorted.length - 1].equity);
-  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return null;
-  return last / first - 1;
 }

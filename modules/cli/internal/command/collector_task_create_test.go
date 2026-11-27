@@ -8,9 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --all-output-fields 不带 output_fields：Collector 把空的输出字段当作该品种行的全部字段，与种子里不写 output_fields 的任务
-// （A 股 5m、港股 5m）建出的结果数据集相同。不带这个开关时仍发 --output-field 的值（默认是现货、永续行的字段）。
+// 未显式传 --output-field 时默认不带 output_fields，由服务端按市场或源数据集输出全部默认字段；不再写死 crypto 专属 7 列。
 func TestCollectorTaskCreateParamsOutputFields(t *testing.T) {
+	defaultFlag := collectorTaskCreateCmd.Flags().Lookup("output-field")
+	require.NotNil(t, defaultFlag)
+	require.Equal(t, "[]", defaultFlag.DefValue)
+
+	empty := collectorTaskCreateParams(collectorTaskCreateFlags{TagIDs: []string{"hk_hsi"}, Frequency: "5m"})
+	require.NotContains(t, empty, "output_fields")
+	require.Equal(t, "5m", empty["frequency"])
+
 	flags := collectorTaskCreateFlags{TagIDs: []string{"hk_hsi"}, Frequency: "5m", Fields: []string{"open", "close"}}
 	params := collectorTaskCreateParams(flags)
 	require.Equal(t, []any{"open", "close"}, params["output_fields"])
@@ -23,17 +30,6 @@ func TestCollectorTaskCreateParamsOutputFields(t *testing.T) {
 	require.Equal(t, "5m", params["frequency"])
 
 	require.NotNil(t, collectorTaskCreateCmd.Flags().Lookup("all-output-fields"))
-}
-
-// 两个字段参数都没给时提示用的是默认字段清单；给了任意一个就不提示。不看空间和市场。
-func TestCollectorTaskCreateFieldsHint(t *testing.T) {
-	flags := collectorTaskCreateFlags{Fields: []string{"close", "volume"}}
-	hint := collectorTaskCreateFieldsHint(flags, false)
-	require.Contains(t, hint, "默认字段清单（close,volume）")
-	require.Contains(t, hint, "--all-output-fields")
-	require.Empty(t, collectorTaskCreateFieldsHint(flags, true))
-	flags.AllFields = true
-	require.Empty(t, collectorTaskCreateFieldsHint(flags, false))
 }
 
 // 合成任务只发源任务与目标周期；没显式给 --output-field 时不带 output_fields，输出合成的全部固定字段（资金费率、股票附加字段不合成）。

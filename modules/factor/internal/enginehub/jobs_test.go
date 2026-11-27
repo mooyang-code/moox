@@ -335,3 +335,28 @@ func TestReportStopsJobWhenMemberOrTaskDisabledBetweenChunks(t *testing.T) {
 		})
 	}
 }
+
+func TestReportTerminalStatusPrunesRecalcJobHistory(t *testing.T) {
+	_, db, clock := newTestHub(t)
+	hub := New(db, WithClock(clock.Now), WithEngineLeaseTTL(45*time.Second), WithRecalcHistoryRetention(24*time.Hour, 2))
+	ctx := context.Background()
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("task_a", true)
+	leaseEngineA(t, hub)
+
+	for _, id := range []string{"job-1", "job-2", "job-3"} {
+		seedJob(t, db, id, "task_a")
+		time.Sleep(2 * time.Millisecond)
+		pulled, _, found, err := hub.Pull(ctx, engineA)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, id, pulled.JobID)
+		_, err = hub.Report(ctx, engineA, pulled.JobID, time.Unix(600, 0), store.RecalcStatusSucceeded, "", nil)
+		require.NoError(t, err)
+	}
+
+	remaining, err := db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: "task_a"})
+	require.NoError(t, err)
+	require.Len(t, remaining, 2, "补算作业进入终态后触发每任务上限清理")
+	require.Equal(t, []string{"job-3", "job-2"}, []string{remaining[0].JobID, remaining[1].JobID})
+}

@@ -209,11 +209,22 @@ func TestUpdateTaskValidatesResampleParamsAndOutputFields(t *testing.T) {
 		datasetSrc: validationDatasetSource{
 			"dataset_src_crypto": storagesource.DatasetInfo{
 				DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m",
-				SubjectTags: []string{"binance_spot"}, Attributes: map[string]string{"market_type": "spot"},
+				Alignment: "epoch_utc", SubjectTags: []string{"binance_spot"}, Attributes: map[string]string{"market_type": "spot"},
+				ColumnTypes: map[string]storagepb.FieldValueType{
+					"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"trade_num": storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
+				},
 			},
 			"dataset_src_stock": storagesource.DatasetInfo{
 				DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m",
-				SubjectTags: []string{"stockcn_all"}, Attributes: map[string]string{"market_type": "equity"},
+				Alignment: "session", SubjectTags: []string{"stockcn_all"}, Attributes: map[string]string{"market_type": "equity", "calendar": "cn_stock"},
+				ColumnTypes: map[string]storagepb.FieldValueType{
+					"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "amount": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+				},
 			},
 		},
 	}
@@ -253,9 +264,65 @@ func TestUpdateTaskValidatesResampleParamsAndOutputFields(t *testing.T) {
 	require.Equal(t, domain.PrepareStateReady, storedCrypto.PrepareState)
 	require.NotContains(t, storedCrypto.CollectParams, "close_time")
 
-	// 合法缩减到当前市场可合成字段子集时更新成功。
+	// 合法缩减到当前源数据集可合成字段子集时更新成功，且持久化参数中剥离 provider/market_type/alignment。
 	rsp := updateResample("crypto", "resample-crypto", "crypto 5m", "spot", "dataset_src_crypto", "venue:binance", "epoch_utc", []any{"open", "close", "quote_volume"})
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	updatedCrypto, err := db.Tasks().GetByTaskID(ctx, "crypto", "resample-crypto")
+	require.NoError(t, err)
+	require.NotContains(t, updatedCrypto.CollectParams, `"provider"`)
+	require.NotContains(t, updatedCrypto.CollectParams, `"market_type"`)
+	require.NotContains(t, updatedCrypto.CollectParams, `"alignment"`)
+
 	rsp = updateResample("stockcn", "resample-stock", "stockcn 5m", "equity", "dataset_src_stock", "default", "session", []any{"open", "close", "amount"})
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+}
+
+// PreviewKlineResampleSource 从源数据集元数据派生 alignment/calendar_id/allowed_output_fields，
+// 优先读源数据集属性中的序列标签，并支持自定义空间下的 5 列 OHLCV 数据集。
+func TestPreviewKlineResampleSourceUsesDatasetMetadataAndColumns(t *testing.T) {
+	ctx := context.Background()
+	db := openCollectorTestStore(t)
+	srcIDs := taskresult.ResultIDs("src-custom")
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
+		SpaceID: "sandbox", TaskID: "src-custom", TaskName: "外部导入 5m", DataType: "kline", Ingest: domain.IngestLocal,
+		TagIDs: []string{"ext_tag"}, CollectParams: `{"frequency":"5m"}`, Enabled: true, ResultDatasetID: srcIDs.DatasetID,
+	}))
+	service := &Service{
+		persistence: db,
+		taskRepo:    db.Tasks(),
+		datasetSrc: validationDatasetSource{
+			srcIDs.DatasetID: storagesource.DatasetInfo{
+				DataSourceID: "external_csv", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "5m",
+				Alignment: "session", SubjectTags: []string{"ext_tag"},
+				Attributes: map[string]string{"calendar": "cn_stock", "series_tag": "ext:csv"},
+				ColumnTypes: map[string]storagepb.FieldValueType{
+					"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+					"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+				},
+			},
+		},
+	}
+
+	rsp, err := service.PreviewKlineResampleSource(ctx, &pb.PreviewKlineResampleSourceReq{
+		SpaceId: "sandbox", SourceTaskId: "src-custom", TargetFrequency: "15m",
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.Equal(t, "ext:csv", rsp.GetSourceSeriesTag())
+	require.Equal(t, "session", rsp.GetAlignment())
+	require.Equal(t, "cn_stock", rsp.GetCalendarId())
+	require.Empty(t, rsp.GetValidationError())
+	var fieldIDs []string
+	for _, f := range rsp.GetAllowedOutputFields() {
+		fieldIDs = append(fieldIDs, f.GetFieldId())
+	}
+	require.Equal(t, []string{"open", "high", "low", "close", "volume"}, fieldIDs)
+
+	// 45m 不能整除 cn_stock 交易时段，预览报错。
+	badRsp, err := service.PreviewKlineResampleSource(ctx, &pb.PreviewKlineResampleSourceReq{
+		SpaceId: "sandbox", SourceTaskId: "src-custom", TargetFrequency: "45m",
+	})
+	require.NoError(t, err)
+	require.Contains(t, badRsp.GetValidationError(), "不能整除")
 }

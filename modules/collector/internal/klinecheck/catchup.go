@@ -5,14 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 )
 
 // 暂停恢复后的追赶（设计 2.2）：对暂停区间 [since, 现在) 补采全部数据集。
-// 追平的判定：区间内没有缺口（确认行情源缺失的周期已扣除，按「不可补」另外统计），并且没有未结束的补采作业。
-
-// recoverySource 是恢复追赶作业的来源：库里 c_source 只允许 manual 与 auto，自动补采会跳过叠加 auto 作业，
-// 恢复追赶用 manual，和自动补采互不影响。
-const recoverySource = "manual"
+// 追平的判定：区间内没有缺口（确认行情源缺失的周期已扣除，按「不可补」另外统计），并且没有未结束的恢复追赶（catchup）作业。
 
 // CatchupState 是一次追赶评估的结果。
 type CatchupState struct {
@@ -20,7 +18,7 @@ type CatchupState struct {
 	Expected   int
 	Missing    int
 	Unfillable int
-	// ActiveJobs 是未结束的补采作业数（含这次新提交的）。
+	// ActiveJobs 是未结束的恢复追赶（catchup）作业数（含这次新提交的）；不统计历史补齐、自动补采等其他来源的作业。
 	ActiveJobs int
 	// JobID 是这次评估新提交的作业（没有提交为空）。
 	JobID string
@@ -33,7 +31,7 @@ func (s CatchupState) CaughtUp() bool {
 	return s.Missing == 0 && s.ActiveJobs == 0 && !s.Truncated
 }
 
-// Catchup 评估空间在 [since, to) 内的补采进度：检查缺口，有缺口且没有未结束的作业时提交一个补采作业。
+// Catchup 评估空间在 [since, to) 内的补采进度：检查缺口，有缺口且没有未结束的追赶作业时提交一个 catchup 作业。
 // to 是**固定的追赶目标**（恢复开始的时刻）：恢复模式下实时采集仍然关闭，如果目标跟着当前时间走，
 // 补采的速度赶不上缺口增长的速度（每个标的至少一个分块，一个作业要跑十几分钟，这期间又多出新的缺口），永远追不平。
 // to 为零表示取当前时间。区间展开的分块太多时，把作业缩到最早的一个窗口，其余的后续评估再补。
@@ -55,13 +53,20 @@ func (b *Backfiller) Catchup(ctx context.Context, spaceID string, since, to time
 	if err != nil {
 		return CatchupState{}, err
 	}
-	state := CatchupState{Expected: result.Expected, Missing: result.Missing, Unfillable: result.Absent, ActiveJobs: len(active), Truncated: result.Truncated}
-	if result.Missing == 0 || len(active) > 0 {
+	// 只跟踪 catchup 来源的未结束作业：慢速历史补齐（seed）、收市重取（close_refetch）等不得阻塞系统恢复追赶。
+	catchupActive := 0
+	for _, job := range active {
+		if job.Source == store.BackfillSourceCatchup {
+			catchupActive++
+		}
+	}
+	state := CatchupState{Expected: result.Expected, Missing: result.Missing, Unfillable: result.Absent, ActiveJobs: catchupActive, Truncated: result.Truncated}
+	if result.Missing == 0 || catchupActive > 0 {
 		return state, nil
 	}
 	end := to
 	for {
-		jobID, _, err := b.submit(ctx, JobRequest{SpaceID: spaceID, From: since, To: end, IncludeOpenBar: true}, recoverySource, MaxChunksPerJob)
+		jobID, _, err := b.submit(ctx, JobRequest{SpaceID: spaceID, From: since, To: end, IncludeOpenBar: true}, store.BackfillSourceCatchup, MaxChunksPerJob)
 		if errors.Is(err, errTooManyChunks) && end.Sub(since) > autoScanWindow {
 			// 缺口太多：缩短区间，只提交最早的一段，追赶是逐窗口推进的。
 			end = since.Add(end.Sub(since) / 2)

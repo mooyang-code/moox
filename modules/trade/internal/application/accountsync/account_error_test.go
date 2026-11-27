@@ -10,7 +10,6 @@ import (
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
@@ -143,11 +142,11 @@ func TestSyncAccountPaperStorageErrorIsNotAccountDependency(t *testing.T) {
 	seedSyncAccount(t, db)
 	cause := errors.New("paper ledger read failed")
 	s := &Service{Store: db, Fills: &consumer.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{
-		syncAdapter: &syncAdapter{}, stage: "snapshot", cause: paper.InfrastructureError{Err: cause},
+		syncAdapter: &syncAdapter{}, stage: "snapshot", cause: execution.InfrastructureError{Err: cause},
 	}}}
 	_, err := s.SyncAccount(context.Background(), "account-1")
 	require.ErrorIs(t, err, cause)
-	require.True(t, paper.IsInfrastructureError(err))
+	require.True(t, execution.IsInfrastructureError(err))
 	var accountErr *orderapp.AccountExecutionError
 	require.False(t, errors.As(err, &accountErr))
 }

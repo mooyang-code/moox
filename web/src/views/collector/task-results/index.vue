@@ -165,7 +165,7 @@ async function refreshJobSummary() {
   try {
     const jobs = await listKlineResampleJobs(selectedSpaceId.value, task.task_id, "", 5);
     if (sequence !== jobSummarySequence) return;
-    const active = jobs.filter(job => ["queued", "running", "syncing"].includes(job.status));
+    const active = jobs.filter(job => ["queued", "running"].includes(job.status));
     if (active.length) {
       activeJobSummary.value = {
         done: active.reduce((sum, job) => sum + Number(job.done_buckets || 0), 0),

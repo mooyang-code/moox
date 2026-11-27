@@ -22,14 +22,14 @@ type SourceAbsence struct {
 }
 
 type sourceAbsenceRow struct {
-	SpaceID   string    `gorm:"column:c_space_id;primaryKey"`
-	DatasetID string    `gorm:"column:c_dataset_id;primaryKey"`
-	Frequency string    `gorm:"column:c_frequency;primaryKey"`
-	SubjectID string    `gorm:"column:c_subject_id;primaryKey"`
-	From      time.Time `gorm:"column:c_from;primaryKey"`
-	To        time.Time `gorm:"column:c_to"`
-	Bars      int       `gorm:"column:c_bars"`
-	CreatedAt time.Time `gorm:"column:c_ctime"`
+	SpaceID   string `gorm:"column:c_space_id;primaryKey"`
+	DatasetID string `gorm:"column:c_dataset_id;primaryKey"`
+	Frequency string `gorm:"column:c_frequency;primaryKey"`
+	SubjectID string `gorm:"column:c_subject_id;primaryKey"`
+	From      int64  `gorm:"column:c_from;primaryKey"`
+	To        int64  `gorm:"column:c_to"`
+	Bars      int    `gorm:"column:c_bars"`
+	CreatedAt int64  `gorm:"column:c_ctime"`
 }
 
 func (sourceAbsenceRow) TableName() string { return "t_collector_source_absences" }
@@ -47,14 +47,14 @@ func (r *BackfillRepository) AddAbsences(ctx context.Context, absences []SourceA
 	if len(absences) == 0 {
 		return nil
 	}
-	now := time.Now().UTC()
+	now := nowUnixMilli()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, absence := range absences {
 			if !absence.From.Before(absence.To) {
 				return fmt.Errorf("absence range of %s is empty", absence.SubjectID)
 			}
 			if err := tx.Exec(upsertSourceAbsence,
-				absence.SpaceID, absence.DatasetID, absence.Frequency, absence.SubjectID, absence.From.UTC(), absence.To.UTC(), absence.Bars, now).Error; err != nil {
+				absence.SpaceID, absence.DatasetID, absence.Frequency, absence.SubjectID, toUnixMilli(absence.From), toUnixMilli(absence.To), absence.Bars, now).Error; err != nil {
 				return err
 			}
 		}
@@ -67,7 +67,7 @@ func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID,
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
-	query := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_from < ? AND c_to > ?", spaceID, datasetID, frequency, to.UTC(), from.UTC())
+	query := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_from < ? AND c_to > ?", spaceID, datasetID, frequency, toUnixMilli(to), toUnixMilli(from))
 	if len(subjects) > 0 {
 		query = query.Where("c_subject_id IN ?", subjects)
 	}
@@ -77,7 +77,7 @@ func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID,
 	}
 	out := make([]SourceAbsence, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
+		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: fromUnixMilli(row.From), To: fromUnixMilli(row.To), Bars: row.Bars, CreatedAt: fromUnixMilli(row.CreatedAt)})
 	}
 	return out, nil
 }
@@ -88,13 +88,13 @@ func (r *BackfillRepository) LatestAbsencesIn(ctx context.Context, spaceID, data
 		return nil, err
 	}
 	var rows []sourceAbsenceRow
-	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_from < ? AND c_to > ?", spaceID, datasetID, frequency, to.UTC(), from.UTC()).
+	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_from < ? AND c_to > ?", spaceID, datasetID, frequency, toUnixMilli(to), toUnixMilli(from)).
 		Order("c_to DESC, c_subject_id").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]SourceAbsence, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
+		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: fromUnixMilli(row.From), To: fromUnixMilli(row.To), Bars: row.Bars, CreatedAt: fromUnixMilli(row.CreatedAt)})
 	}
 	return out, nil
 }

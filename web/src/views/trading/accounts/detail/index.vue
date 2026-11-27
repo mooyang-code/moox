@@ -305,7 +305,6 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
   actionStateLabels,
   cancelOrder,
-  closePaperSimulation,
   exchangeLabel,
   flattenLogicalAccount,
   flattenTradingAccount,
@@ -321,7 +320,8 @@ import {
   pauseLogicalAccount,
   queryEquityCurve,
   resumeLogicalAccount,
-  syncTradingAccount
+  syncTradingAccount,
+  updateTradingAccount
 } from "@/api/trade";
 import type { LogicalAccount, LogicalAccountTarget, Order, TargetLane, TradingAccount } from "@/api/trade";
 import { accountMapOf } from "../account-list";
@@ -694,7 +694,7 @@ async function submitClosePaper() {
   const account = closePaperTarget.value;
   if (!account) return false;
   const id = logicalId.value;
-  await closePaperSimulation(account.trading_account_id);
+  await updateTradingAccount({ trading_account_id: account.trading_account_id, status: "DISABLED" });
   Message.success("模拟账户已关闭");
   if (!abandoned(id)) afterAction();
   return true;

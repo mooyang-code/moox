@@ -7,12 +7,12 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/hkex"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
@@ -522,7 +522,7 @@ func TestStockOutOfSessionDoesNotRewritePendingTarget(t *testing.T) {
 func TestPseudoMarketAttemptsSkipOutOfSessionCancel(t *testing.T) {
 	children := []store.TargetChildOrder{
 		{OrderType: "LIMIT", TimeInForce: "IOC", State: "CANCELED", Quantity: "100", FilledQuantity: "0", ExchangeOrderID: "x1"},
-		{OrderType: "LIMIT", TimeInForce: "IOC", State: "CANCELED", Quantity: "100", FilledQuantity: "0", ExchangeOrderID: "x2", RejectReason: paper.OutOfSessionReason},
+		{OrderType: "LIMIT", TimeInForce: "IOC", State: "CANCELED", Quantity: "100", FilledQuantity: "0", ExchangeOrderID: "x2", RejectCode: string(orderdomain.RejectCodeOutOfSession), RejectReason: execution.ReasonOutOfSession},
 	}
 	require.Equal(t, 1, pseudoMarketAttempts(children))
 }

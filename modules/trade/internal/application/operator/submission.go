@@ -158,6 +158,7 @@ func (s *Service) deferActionLock(ctx context.Context, action store.OperatorActi
 			return nil
 		}
 		current.LastError = cause.Error()
+		current.UpdatedAt = s.clock().UTC()
 		if err := tx.UpdateOperatorAction(current); err != nil {
 			return err
 		}

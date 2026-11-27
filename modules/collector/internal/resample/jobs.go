@@ -125,7 +125,15 @@ func (r *JobRunner) advanceJob(ctx context.Context, job store.ResampleJob, now t
 		return nil // 任务停用或还没就绪：作业原地等待
 	}
 	*moved = true
-	task, err := NewTask(*collection)
+	params, err := domain.ParseCollectParams(collection.CollectParams, "", "", collection.DataType)
+	if err != nil {
+		return r.fail(ctx, job, err, true)
+	}
+	sourceInfo, err := r.Source.GetDataset(ctx, collection.SpaceID, params.SourceDatasetID)
+	if err != nil {
+		return r.fail(ctx, job, fmt.Errorf("get resample source Dataset: %w", err), false)
+	}
+	task, err := NewTaskForSource(*collection, sourceInfo)
 	if err != nil {
 		return r.fail(ctx, job, err, true)
 	}
@@ -154,22 +162,15 @@ func (r *JobRunner) advanceJob(ctx context.Context, job store.ResampleJob, now t
 	if err != nil {
 		return r.fail(ctx, job, err, false)
 	}
-	if job.Status == store.ResampleJobSyncing {
-		return r.finish(ctx, job, task, cfg)
-	}
 
 	buckets, err := task.Clock.Between(job.NextBucket, end, cfg.BucketsPerRound)
 	if err != nil {
 		return r.fail(ctx, job, err, false)
 	}
 	if len(buckets) == 0 {
-		if err := r.State.SetJobStatus(ctx, job.JobID, store.ResampleJobSyncing, ""); err != nil {
-			return err
-		}
-		job.Status = store.ResampleJobSyncing
 		return r.finish(ctx, job, task, cfg)
 	}
-	subjects, err := r.jobSubjects(ctx, task, job)
+	subjects, err := r.jobSubjects(ctx, task, sourceInfo.SubjectTags, job)
 	if err != nil {
 		return r.fail(ctx, job, err, false)
 	}
@@ -204,9 +205,7 @@ func (r *JobRunner) advanceJob(ctx context.Context, job store.ResampleJob, now t
 		return err
 	}
 	if !progress.NextBucket.Before(end) {
-		if err := r.State.SetJobStatus(ctx, job.JobID, store.ResampleJobSyncing, ""); err != nil {
-			return err
-		}
+		return r.finish(ctx, job, task, cfg)
 	}
 	return nil
 }
@@ -232,8 +231,8 @@ func (r *JobRunner) countBuckets(task *Task, start, end time.Time) (int, error) 
 }
 
 // jobSubjects 返回作业要合成的标的：作业指定了标的就取它与源数据集标的的交集，否则取全部。
-func (r *JobRunner) jobSubjects(ctx context.Context, task *Task, job store.ResampleJob) ([]string, error) {
-	all, err := SourceSubjects(ctx, r.Source, task)
+func (r *JobRunner) jobSubjects(ctx context.Context, task *Task, tagIDs []string, job store.ResampleJob) ([]string, error) {
+	all, err := resolveSubjectIDs(ctx, r.Source, task.Spec.SpaceID, tagIDs)
 	if err != nil || len(job.Subjects) == 0 {
 		return all, err
 	}

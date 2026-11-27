@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -57,7 +58,7 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 			if candidate.TimeInForce == string(exchange.FillPolicyGTC) {
 				return Decision{Rest: true}, nil
 			}
-			return Decision{Cancel: true, Reason: reason}, nil
+			return Decision{Cancel: true, RejectCode: orderdomain.RejectCodePriceLimit, Reason: reason}, nil
 		}
 	}
 	isMarket := candidate.OrderType == string(exchange.OrderTypeMarket)
@@ -114,13 +115,13 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	if isLimit && candidate.LimitPrice != nil {
 		limit, parseErr := shared.ParseDecimal(*candidate.LimitPrice)
 		if parseErr != nil {
-			return Decision{Cancel: true, Reason: "paper limit price invalid"}, nil
+			return Decision{Cancel: true, RejectCode: orderdomain.RejectCodePriceLimit, Reason: "paper limit price invalid"}, nil
 		}
 		if !LimitMarketable(exchange.Side(candidate.Side), limit, book) {
 			if candidate.TimeInForce == string(exchange.FillPolicyGTC) {
 				return Decision{Rest: true}, nil
 			}
-			return Decision{Cancel: true, Reason: "paper limit order is not marketable"}, nil
+			return Decision{Cancel: true, RejectCode: orderdomain.RejectCodePriceLimit, Reason: "paper limit order is not marketable"}, nil
 		}
 		if resting {
 			// 已挂在盘口的限价单被对手吃掉时按自己的限价成交：市场后来穿过限价，也不会得到更好的价格。
@@ -180,7 +181,7 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 			return Decision{}, snapshotErr
 		}
 		if !paperReservationSufficient(candidate, account, snapshot, price, fee) {
-			return Decision{Cancel: true, Reason: "paper reservation insufficient at match"}, nil
+			return Decision{Cancel: true, RejectCode: orderdomain.RejectCodeInsufficientFunds, Reason: "paper reservation insufficient at match"}, nil
 		}
 	}
 	if !rule.PositionFromBalance {

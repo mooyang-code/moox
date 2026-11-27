@@ -22,7 +22,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"ResumeLogicalAccount", "FlattenLogicalAccount",
 			"SubmitOrder", "CancelOrder", "GetOperatorAction",
 			"GetLogicalAccountTarget", "ListShadowTargets", "GetOrder", "ListOrders", "ListFills",
-			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
+			"ListPositions",
 			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve", "ListHoldings",
 			"ListAccountLedger", "FlattenTradingAccount",
 			"UnblockInstrument", "ListBlockedInstruments", "ListInstrumentHolders",

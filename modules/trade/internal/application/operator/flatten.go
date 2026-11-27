@@ -35,6 +35,8 @@ type FlattenCommand struct {
 	// PauseAs 是动作进入运行时暂停组合写入的暂停状态（保证金率风控减仓传 store.MarginPause(store.MarginReduced)）；零值按人工暂停记，原因取 Reason。
 	// 它不落进请求 JSON：工作线程恢复运行中的动作时不再写暂停，进入运行时写的来源和减仓状态保持不变。
 	PauseAs store.Pause
+	// Source 标识动作触发来源（USER / MARGIN / DELIST）；为空时按动作类型和 PauseAs 自动推断。
+	Source operatordomain.ActionSource
 	// DeadlineAt 是下架清仓的截止时间（毫秒，下架定时任务按下架时间传入）；大于 0 时到点不再下单，动作记 PARTIAL。
 	DeadlineAt int64
 
@@ -169,7 +171,7 @@ func decodeFlattenRequest(action store.OperatorActionRecord) (FlattenCommand, er
 		SpaceID: action.SpaceID, ActionID: action.ActionID,
 		LogicalAccountID: action.LogicalAccountID, TradingAccountID: request.TradingAccountID,
 		InstrumentID: request.InstrumentID, Exchange: request.Exchange, Reason: action.Reason,
-		DeadlineAt: request.DeadlineAt,
+		Source: operatordomain.ActionSource(action.Source), DeadlineAt: request.DeadlineAt,
 	}
 	if request.ReduceRatio != "" {
 		ratio, err := shared.ParseDecimal(request.ReduceRatio)
@@ -197,11 +199,26 @@ func (s *Service) FlattenLogicalAccount(
 	if err != nil {
 		return FlattenResult{}, err
 	}
+	actionSource := command.Source
+	if actionSource == "" {
+		switch {
+		case command.actionType() == operatordomain.ActionDelistFlatten:
+			actionSource = operatordomain.SourceDelist
+		case command.PauseAs.Source == store.PauseSourceMargin:
+			actionSource = operatordomain.SourceMargin
+		default:
+			actionSource = operatordomain.SourceUser
+		}
+	}
+	now := s.clock().UTC()
 	expectedAction := store.OperatorActionRecord{
 		SpaceID: command.SpaceID, ActionID: command.ActionID,
 		LogicalAccountID: command.LogicalAccountID,
-		ActionType:       string(command.actionType()), Reason: strings.TrimSpace(command.Reason),
-		RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
+		ActionType:       string(command.actionType()),
+		Source:           string(actionSource),
+		Reason:           strings.TrimSpace(command.Reason),
+		RequestJSON:      requestJSON, Status: string(operatordomain.StatusRunning),
+		CreatedAt: now, UpdatedAt: now,
 	}
 	existing, found, err := s.existingAction(ctx, expectedAction)
 	if err != nil {
@@ -291,6 +308,7 @@ func (s *Service) FlattenLogicalAccount(
 		if action.Status != string(operatordomain.StatusRunning) {
 			action.Status = string(operatordomain.StatusRunning)
 			action.LastError = ""
+			action.UpdatedAt = s.clock().UTC()
 			return tx.UpdateOperatorAction(action)
 		}
 		return nil
@@ -341,7 +359,7 @@ func (s *Service) FlattenLogicalAccount(
 		members = selected
 	}
 	// 这一轮执行的起点：运行中的动作被工作线程反复恢复时沿用原来的起点；从 FAILED、PARTIAL 重新进入运行（同一个动作号重试）、
-	// 或刚创建时记现在（精确到秒，操作记录的创建时间只到秒）。
+	// 或刚创建时记现在（按秒截断，与 t_trade_orders.c_ctime 的秒级粒度对齐）。
 	attemptStart := s.clock().Truncate(time.Second).UnixMilli()
 	if resuming {
 		if previous.AttemptStartedAt > 0 {

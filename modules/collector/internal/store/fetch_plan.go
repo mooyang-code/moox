@@ -33,20 +33,23 @@ type FetchPlanRecord struct {
 }
 
 type fetchPlanRow struct {
-	ID        int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID   string    `gorm:"column:c_space_id"`
-	Status    string    `gorm:"column:c_status"`
-	Plan      string    `gorm:"column:c_plan"`
-	Progress  string    `gorm:"column:c_progress"`
-	LastError string    `gorm:"column:c_last_error"`
-	CreatedAt time.Time `gorm:"column:c_ctime"`
-	UpdatedAt time.Time `gorm:"column:c_mtime"`
+	ID        int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID   string `gorm:"column:c_space_id"`
+	Status    string `gorm:"column:c_status"`
+	Plan      string `gorm:"column:c_plan"`
+	Progress  string `gorm:"column:c_progress"`
+	LastError string `gorm:"column:c_last_error"`
+	CreatedAt int64  `gorm:"column:c_ctime"`
+	UpdatedAt int64  `gorm:"column:c_mtime"`
 }
 
 func (fetchPlanRow) TableName() string { return "t_collector_fetch_plans" }
 
 func (row fetchPlanRow) record() *FetchPlanRecord {
-	return &FetchPlanRecord{ID: row.ID, SpaceID: row.SpaceID, Status: row.Status, Plan: row.Plan, Progress: row.Progress, LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return &FetchPlanRecord{
+		ID: row.ID, SpaceID: row.SpaceID, Status: row.Status, Plan: row.Plan, Progress: row.Progress, LastError: row.LastError,
+		CreatedAt: fromUnixMilli(row.CreatedAt), UpdatedAt: fromUnixMilli(row.UpdatedAt),
+	}
 }
 
 // FetchPlanRepository 保存采集计划。每个空间同一时间最多一份未生效的计划，由唯一索引保证，它通常几分钟内生效；
@@ -113,7 +116,8 @@ func (r *FetchPlanRepository) Create(ctx context.Context, spaceID, plan, progres
 	if strings.TrimSpace(progress) == "" {
 		progress = "{}"
 	}
-	row := fetchPlanRow{SpaceID: spaceID, Status: FetchPlanPending, Plan: plan, Progress: progress, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	now := nowUnixMilli()
+	row := fetchPlanRow{SpaceID: spaceID, Status: FetchPlanPending, Plan: plan, Progress: progress, CreatedAt: now, UpdatedAt: now}
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&row).Error; err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
@@ -144,7 +148,7 @@ func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, prog
 		progress = "{}"
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&fetchPlanRow{}).Where("c_id = ? AND c_status <> ?", id, FetchPlanApplied).Updates(map[string]any{"c_status": status, "c_progress": progress, "c_last_error": lastError, "c_mtime": time.Now().UTC()})
+		result := tx.Model(&fetchPlanRow{}).Where("c_id = ? AND c_status <> ?", id, FetchPlanApplied).Updates(map[string]any{"c_status": status, "c_progress": progress, "c_last_error": lastError, "c_mtime": nowUnixMilli()})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -172,7 +176,7 @@ func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan strin
 	if strings.TrimSpace(plan) == "" {
 		return fmt.Errorf("plan is required")
 	}
-	result := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Where("c_id = ? AND c_status <> ?", id, FetchPlanApplied).Updates(map[string]any{"c_plan": plan, "c_mtime": time.Now().UTC()})
+	result := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Where("c_id = ? AND c_status <> ?", id, FetchPlanApplied).Updates(map[string]any{"c_plan": plan, "c_mtime": nowUnixMilli()})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -232,7 +236,7 @@ func (r *FetchPlanRepository) ReregisterAppliedPlan(ctx context.Context, id int6
 		if open > 0 {
 			return ErrFetchPlanOpen
 		}
-		if err := tx.Model(&fetchPlanRow{}).Where("c_id = ?", id).Updates(map[string]any{"c_plan": plan, "c_mtime": time.Now().UTC()}).Error; err != nil {
+		if err := tx.Model(&fetchPlanRow{}).Where("c_id = ?", id).Updates(map[string]any{"c_plan": plan, "c_mtime": nowUnixMilli()}).Error; err != nil {
 			return err
 		}
 		return deleteSeriesTimeline(tx, row.SpaceID)

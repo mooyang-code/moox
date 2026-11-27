@@ -153,16 +153,48 @@ func (f catalogViewStateFake) GetViewState(_ context.Context, req *storagepb.Get
 	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: "idx", Columns: f.metadata.indexedColumns(req.GetDatasetId())}, nil
 }
 
+func cryptoColumnTypes() map[string]storagepb.FieldValueType {
+	return map[string]storagepb.FieldValueType{
+		"open":         storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"high":         storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"low":          storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"close":        storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"volume":       storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"trade_num":    storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
+	}
+}
+
+func stockColumnTypes() map[string]storagepb.FieldValueType {
+	return map[string]storagepb.FieldValueType{
+		"open":   storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"high":   storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"low":    storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"close":  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"amount": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}
+}
+
+func ohlcvColumnTypes() map[string]storagepb.FieldValueType {
+	return map[string]storagepb.FieldValueType{
+		"open":   storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"high":   storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"low":    storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"close":  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}
+}
+
 func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.Subject) {
 	metadata := newCatalogMetadataFake(failAt)
 	catalog := &Catalog{Metadata: metadata, View: catalogViewStateFake{metadata: metadata}}
 	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample"}
 	params := &domain.CollectParams{
-		Provider: "moox", MarketType: "spot",
 		SourceDatasetID: "source-bars", SourceFrequency: "1m", SourceSeriesTag: "venue:binance",
-		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m", Alignment: "epoch_utc",
+		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m",
 	}
-	source := storagesource.DatasetInfo{DataSourceID: "crypto"}
+	source := storagesource.DatasetInfo{DataSourceID: "crypto", Alignment: "epoch_utc", ColumnTypes: cryptoColumnTypes()}
 	subjects := []domain.Subject{{SubjectID: "BTC", Status: "active"}}
 	return metadata, catalog, rule, params, source, subjects
 }
@@ -183,8 +215,10 @@ func TestPrepareTargetCreatesDatasetWithColumnsInOneCall(t *testing.T) {
 
 // 合成任务不另起名字：目标列的显示名、分组与类型按字段名取自采集结果的基础字段。
 func TestTargetDatasetColumnsTakeNamesFromKlineOutputFields(t *testing.T) {
-	for _, tradeCount := range []bool{true, false} {
-		for _, column := range targetDatasetColumns(tradeCount, nil) {
+	for _, colTypes := range []map[string]storagepb.FieldValueType{cryptoColumnTypes(), stockColumnTypes(), ohlcvColumnTypes()} {
+		rules, err := ResolveTaskRules(colTypes, nil)
+		require.NoError(t, err)
+		for _, column := range targetDatasetColumns(rules) {
 			field, ok := taskresult.KlineOutputField(column.GetColumnName())
 			require.True(t, ok, column.GetColumnName())
 			assert.Equal(t, field.DisplayName, column.GetDisplayName())
@@ -192,7 +226,9 @@ func TestTargetDatasetColumnsTakeNamesFromKlineOutputFields(t *testing.T) {
 			assert.Equal(t, field.Kind, column.GetValueType())
 		}
 	}
-	quote := targetDatasetColumns(true, []string{"quote_volume"})
+	quoteRules, err := ResolveTaskRules(cryptoColumnTypes(), []string{"quote_volume"})
+	require.NoError(t, err)
+	quote := targetDatasetColumns(quoteRules)
 	require.Len(t, quote, 1)
 	assert.Equal(t, "计价币成交额", quote[0].GetDisplayName())
 	assert.Equal(t, "成交估值", quote[0].GetGroup())
@@ -229,10 +265,10 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	ids := taskresult.ResultIDs(rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID,
-		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Alignment: params.Alignment,
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Alignment: "epoch_utc",
 		Attributes: map[string]string{
 			"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID,
-			"market_type": "spot", "storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
+			"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 			"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 			"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
 			"target_freq": "5m",
@@ -330,63 +366,74 @@ func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 // 逐级合成：源是上一级合成结果、没有数据来源时，目标沿用它记下的原始 K 线来源，因子任务才能以它为源。
 func TestPrepareTargetInheritsSourceDataSourceForChainedResample(t *testing.T) {
 	metadata, catalog, rule, params, _, subjects := newPrepareTargetFixture("")
-	source := storagesource.DatasetInfo{Attributes: map[string]string{"dataset_role": "kline_resample_result", "source_data_source_id": "binance"}}
+	source := storagesource.DatasetInfo{
+		Alignment:   "epoch_utc",
+		ColumnTypes: cryptoColumnTypes(),
+		Attributes:  map[string]string{"dataset_role": "kline_resample_result", "source_data_source_id": "binance"},
+	}
 
 	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
 	ids := taskresult.ResultIDs(rule.TaskID)
 	require.Equal(t, "binance", metadata.datasets[ids.DatasetID].GetAttributes()["source_data_source_id"])
 }
 
-// 交易时段市场（如 A 股）的重采样目标数据集必须写入 calendar 属性，防止下游策略回退到 crypto_24x7 日历；
-// 连续交易市场（crypto）不写 calendar 属性；
+// PrepareTarget 直接从源数据集的 alignment + Attributes["calendar"] 派生并透传至目标数据集（与 space_id 无关）：
+// 交易时段源数据集（即使在自定义空间）必须写入对应 calendar 属性；
+// 连续交易源数据集（如 5 列外部导入 OHLCV）不写 calendar 属性且只建源数据集实际具备的 5 列；
 // 已有目标数据集仅缺失 calendar 时原地 UpdateDataset 回填成功，calendar 非空且不匹配时按血缘冲突拒绝。
-func TestPrepareTargetWritesCalendarAttributeForSessionMarkets(t *testing.T) {
-	// 公共逻辑 taskresult.SessionAttributes 对所有已登记交易时段市场均输出对应日历。
-	for _, tc := range []struct {
-		spaceID      string
-		wantCalendar string
-		wantAlign    string
-	}{
-		{spaceID: "stockcn", wantCalendar: "cn_stock", wantAlign: "session"},
-		{spaceID: "stockhk", wantCalendar: "hk_stock", wantAlign: "session"},
-		{spaceID: "stockus", wantCalendar: "us_stock", wantAlign: "session"},
-		{spaceID: "crypto", wantCalendar: "", wantAlign: ""},
-	} {
-		attrs, alignment, err := taskresult.SessionAttributes(tc.spaceID)
-		require.NoError(t, err, tc.spaceID)
-		require.Equal(t, tc.wantAlign, alignment, tc.spaceID)
-		require.Equal(t, tc.wantCalendar, attrs["calendar"], tc.spaceID)
-	}
-
-	// PrepareTarget 端到端校验（测试包登记了 stockcn 与 crypto 的标的规则）。
+func TestPrepareTargetInheritsAlignmentCalendarAndColumnsFromSourceDataset(t *testing.T) {
 	cases := []struct {
+		name         string
 		spaceID      string
+		sourceAlign  string
+		sourceCal    string
+		sourceCols   map[string]storagepb.FieldValueType
 		wantCalendar string
 		wantAlign    string
+		wantCols     []string
 	}{
-		{spaceID: "stockcn", wantCalendar: "cn_stock", wantAlign: "session"},
-		{spaceID: "crypto", wantCalendar: "", wantAlign: "epoch_utc"},
+		{
+			name: "session cn_stock", spaceID: "stockcn", sourceAlign: "session", sourceCal: "cn_stock",
+			sourceCols: stockColumnTypes(), wantCalendar: "cn_stock", wantAlign: "session",
+			wantCols: []string{"open", "high", "low", "close", "volume", "amount"},
+		},
+		{
+			name: "epoch crypto", spaceID: "crypto", sourceAlign: "epoch_utc", sourceCal: "",
+			sourceCols: cryptoColumnTypes(), wantCalendar: "", wantAlign: "epoch_utc",
+			wantCols: []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"},
+		},
+		{
+			name: "custom space 5-col OHLCV", spaceID: "sandbox", sourceAlign: "", sourceCal: "",
+			sourceCols: ohlcvColumnTypes(), wantCalendar: "", wantAlign: "epoch_utc",
+			wantCols: []string{"open", "high", "low", "close", "volume"},
+		},
+		{
+			name: "custom space with hk_stock calendar", spaceID: "sandbox_hk", sourceAlign: "session", sourceCal: "hk_stock",
+			sourceCols: ohlcvColumnTypes(), wantCalendar: "hk_stock", wantAlign: "session",
+			wantCols: []string{"open", "high", "low", "close", "volume"},
+		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.spaceID, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("")
 			rule.SpaceID = tc.spaceID
-			params.Alignment = tc.wantAlign
-			params.MarketType = "equity"
-			if tc.spaceID == "crypto" {
-				params.MarketType = "spot"
-			}
 			source.DataSourceID = tc.spaceID
+			source.Alignment = tc.sourceAlign
+			source.ColumnTypes = tc.sourceCols
+			if tc.sourceCal != "" {
+				source.Attributes = map[string]string{"calendar": tc.sourceCal}
+			}
 
 			require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
 			ids := taskresult.ResultIDs(rule.TaskID)
 			dataset := metadata.datasets[ids.DatasetID]
 			require.NotNil(t, dataset)
 			require.Equal(t, tc.wantAlign, dataset.GetAlignment())
+			require.Equal(t, tc.wantCols, metadata.createColumns)
 			require.Zero(t, metadata.updateDatasets, "新建数据集时无需 UpdateDataset")
 			if tc.wantCalendar == "" {
 				_, exists := dataset.GetAttributes()["calendar"]
-				require.False(t, exists, "连续交易市场不写 calendar 属性")
+				require.False(t, exists, "连续交易源数据集不写 calendar 属性")
 			} else {
 				require.Equal(t, tc.wantCalendar, dataset.GetAttributes()["calendar"])
 
@@ -397,7 +444,7 @@ func TestPrepareTargetWritesCalendarAttributeForSessionMarkets(t *testing.T) {
 				require.Equal(t, tc.wantCalendar, metadata.datasets[ids.DatasetID].GetAttributes()["calendar"])
 
 				// 2. 已有目标数据集 calendar 非空且不匹配（真实血缘冲突）：必须拒绝且不调用 UpdateDataset。
-				metadata.datasets[ids.DatasetID].Attributes["calendar"] = "hk_stock"
+				metadata.datasets[ids.DatasetID].Attributes["calendar"] = "us_stock"
 				err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 				require.ErrorContains(t, err, "immutable lineage attribute calendar")
 				require.Equal(t, 1, metadata.updateDatasets, "真实血缘冲突不得覆盖写入")

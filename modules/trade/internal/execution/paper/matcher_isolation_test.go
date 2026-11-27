@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -130,7 +131,7 @@ func TestMatcherStopsOnParentCancellationAndSharedStorageFailure(t *testing.T) {
 		calls := 0
 		m := &Matcher{Store: s, DecideContext: func(context.Context, store.OrderRecord) (Decision, error) {
 			calls++
-			return Decision{}, InfrastructureError{Err: cause}
+			return Decision{}, execution.InfrastructureError{Err: cause}
 		}}
 		require.ErrorIs(t, m.Scan(context.Background()), cause)
 		require.Equal(t, 1, calls)
@@ -142,7 +143,9 @@ func TestMatcherStaleCandidateDoesNotStopOtherAccount(t *testing.T) {
 	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}}
 	m.DecideContext = func(ctx context.Context, o store.OrderRecord) (Decision, error) {
 		if o.OrderID == "a" {
-			require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error { return tx.CancelPaperOrder(o, o.Version, "concurrent cancel") }))
+			require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
+				return tx.CancelPaperOrder(o, o.Version, orderdomain.RejectCodeNone, "concurrent cancel")
+			}))
 		}
 		return matchFill(o), nil
 	}
@@ -274,7 +277,7 @@ func TestPaperSnapshotClassifiesClosedDatabaseAsSharedFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.Close())
 	_, err = (&Adapter{Store: s, Account: account}).GetAccountSnapshot(context.Background())
-	var infrastructure InfrastructureError
+	var infrastructure execution.InfrastructureError
 	require.ErrorAs(t, err, &infrastructure)
 }
 
@@ -365,7 +368,7 @@ func TestPaperStorageDeadlineIsInfrastructureFailure(t *testing.T) {
 	defer cancel()
 	_, err = (&Adapter{Store: s, Account: account}).GetAccountSnapshot(ctx)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	var infrastructure InfrastructureError
+	var infrastructure execution.InfrastructureError
 	require.ErrorAs(t, err, &infrastructure, "a blocked shared SQLite connection is not an external quote timeout")
 }
 
@@ -411,7 +414,7 @@ func TestPaperAdapterStoreBoundariesPreserveInfrastructureErrors(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 				err := call(ctx)
 				cancel()
-				var infrastructure InfrastructureError
+				var infrastructure execution.InfrastructureError
 				require.ErrorAs(t, err, &infrastructure, name)
 				if mode == "deadline" {
 					require.ErrorIs(t, err, context.DeadlineExceeded, name)
@@ -451,15 +454,15 @@ func (a *instrumentLoadFailure) GetQuote(context.Context, exchange.SymbolKey) (e
 
 func TestPaperNativeSymbolPreservesInstrumentLoadFailure(t *testing.T) {
 	cause := errors.New("instrument store unavailable")
-	for _, failure := range []error{InfrastructureError{Err: cause}, &InfrastructureError{Err: cause}, fmt.Errorf("wrapped: %w", InfrastructureError{Err: cause})} {
+	for _, failure := range []error{execution.InfrastructureError{Err: cause}, &execution.InfrastructureError{Err: cause}, fmt.Errorf("wrapped: %w", execution.InfrastructureError{Err: cause})} {
 		market := &instrumentLoadFailure{err: failure}
 		a := &Adapter{MarketData: market}
 		_, err := a.GetReferencePrice(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDT"))
 		require.ErrorIs(t, err, cause)
-		require.True(t, IsInfrastructureError(err))
+		require.True(t, execution.IsInfrastructureError(err))
 		require.Zero(t, market.quoteCalls, "do not silently use the unmapped canonical symbol after load failure")
 	}
-	require.False(t, IsInfrastructureError(context.DeadlineExceeded), "external deadline is not storage failure without provenance")
+	require.False(t, execution.IsInfrastructureError(context.DeadlineExceeded), "external deadline is not storage failure without provenance")
 }
 
 func TestPaperPreloadedNativeSymbolDoesNotReloadInstruments(t *testing.T) {

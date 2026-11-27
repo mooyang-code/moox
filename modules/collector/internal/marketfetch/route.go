@@ -396,7 +396,7 @@ func LoadSourceRuntimes(route Route) (map[string]SourceRuntime, error) {
 }
 
 // LoadSourceRuntime 按数据源 ID 读某个市场数据源的运行参数：路由里的 K 线来源和只提供附加字段的来源都用它。
-// 没有配置文件时 found 为 false。
+// 没有配置文件、或文件仅承载端点/推送配置（无 provider 段，如 crypto/sources/binance.yaml）时 found 为 false。
 func LoadSourceRuntime(marketID, id string) (SourceRuntime, bool, error) {
 	marketID = normalizeMarketID(marketID)
 	id = strings.ToLower(strings.TrimSpace(id))
@@ -408,6 +408,9 @@ func LoadSourceRuntime(marketID, id string) (SourceRuntime, bool, error) {
 	}
 	if err != nil {
 		return SourceRuntime{}, false, err
+	}
+	if isEndpointOnlySourceYAML(raw) {
+		return SourceRuntime{}, false, nil
 	}
 	var file sourceFile
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
@@ -437,6 +440,29 @@ func LoadSourceRuntime(marketID, id string) (SourceRuntime, bool, error) {
 		KlineSpec:         file.Provider.Kline,
 		RateLimit:         rateLimit,
 	}, true, nil
+}
+
+// isEndpointOnlySourceYAML 识别只包含直连端点/推送配置（api/stream，不含 provider 运行参数段）的数据源文件，
+// 例如内嵌的 crypto/sources/binance.yaml；其它任何未知顶层键仍交给 KnownFields(true) 严格报错。
+func isEndpointOnlySourceYAML(raw []byte) bool {
+	var top map[string]yaml.Node
+	if err := yaml.Unmarshal(raw, &top); err != nil || len(top) == 0 {
+		return false
+	}
+	if _, hasProvider := top["provider"]; hasProvider {
+		return false
+	}
+	hasEndpoint := false
+	for key := range top {
+		switch key {
+		case "app":
+		case "api", "stream":
+			hasEndpoint = true
+		default:
+			return false
+		}
+	}
+	return hasEndpoint
 }
 
 func providerPort(providerID string) int {

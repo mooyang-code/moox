@@ -46,7 +46,9 @@ type ExchangeSession struct {
 	PaperMatcherReady     func() bool
 	PaperAccountState     func(string) paper.MatcherState
 	PaperAccountRecovered func(string, uint64)
-	OnReady               func(string)
+	// SubscribePaperState 订阅模拟撮合工人与账户健康状态变更，事件驱动唤醒 runPaper（零忙等轮询）。
+	SubscribePaperState func() (<-chan struct{}, func())
+	OnReady             func(string)
 
 	ready         atomic.Bool
 	opMu          sync.Mutex
@@ -470,8 +472,15 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	fundingDone.Go(func() { s.runPaperFunding(fundingCtx) })
 	defer fundingDone.Wait()
 	defer stopFunding()
-	poll := time.NewTicker(100 * time.Millisecond)
-	defer poll.Stop()
+	// 在检查初始状态之前完成订阅，避免订阅窗口内丢失状态变更唤醒。
+	var stateEvents <-chan struct{}
+	if s.SubscribePaperState != nil {
+		var unsubscribe func()
+		stateEvents, unsubscribe = s.SubscribePaperState()
+		if unsubscribe != nil {
+			defer unsubscribe()
+		}
+	}
 	refresh := time.NewTicker(interval)
 	defer refresh.Stop()
 	instrumentTicker := time.NewTicker(instrumentRefreshInterval)
@@ -490,7 +499,7 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 		case <-ctx.Done():
 			_ = s.disconnect(context.Background(), ctx.Err())
 			return ctx.Err()
-		case <-poll.C:
+		case <-stateEvents:
 		case <-instrumentTicker.C:
 			s.refreshInstruments(ctx)
 		case <-refresh.C:
@@ -503,6 +512,57 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 				return s.disconnect(ctx, err)
 			}
 			s.recoverPaperAccountAfterSync(generation, orders)
+		}
+	}
+}
+
+// CombineStateSubscriptions 把多个状态通知订阅（例如撮合工人与账户故障表）合并成单个带缓冲的事件通道。
+// 取消订阅时会安全终止转发协程，无泄漏、无竞态。
+func CombineStateSubscriptions(subs ...func() (<-chan struct{}, func())) func() (<-chan struct{}, func()) {
+	return func() (<-chan struct{}, func()) {
+		out := make(chan struct{}, 1)
+		stop := make(chan struct{})
+		var unsubs []func()
+		var wg sync.WaitGroup
+		for _, sub := range subs {
+			if sub == nil {
+				continue
+			}
+			ch, unsub := sub()
+			if unsub != nil {
+				unsubs = append(unsubs, unsub)
+			}
+			if ch == nil {
+				continue
+			}
+			wg.Add(1)
+			go func(src <-chan struct{}) {
+				defer wg.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					case _, ok := <-src:
+						if !ok {
+							return
+						}
+						select {
+						case out <- struct{}{}:
+						default:
+						}
+					}
+				}
+			}(ch)
+		}
+		var once sync.Once
+		return out, func() {
+			once.Do(func() {
+				close(stop)
+				for _, unsub := range unsubs {
+					unsub()
+				}
+				wg.Wait()
+			})
 		}
 	}
 }

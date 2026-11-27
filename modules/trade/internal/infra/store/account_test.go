@@ -150,10 +150,21 @@ func TestCreateTradingAccountIsExplicitAndRejectsDuplicate(t *testing.T) {
 		return tx.CreateTradingAccount(account)
 	}))
 	err := s.Transaction(ctx, func(tx *Tx) error {
-		account.Status = "DISABLED"
-		return tx.CreateTradingAccount(account)
+		duplicateID := account
+		duplicateID.Name = "different-name"
+		duplicateID.Status = "DISABLED"
+		return tx.CreateTradingAccount(duplicateID)
 	})
-	// 模拟账户的编号由名称算出，编号重复就是名称用过了：按“名称已被使用”报。
+	// 主键编号重复按写入冲突处理，不再借编号特判映射成名称冲突。
+	require.ErrorIs(t, err, ErrConflict)
+
+	err = s.Transaction(ctx, func(tx *Tx) error {
+		duplicateName := account
+		duplicateName.TradingAccountID = "account-2"
+		duplicateName.Status = "DISABLED"
+		return tx.CreateTradingAccount(duplicateName)
+	})
+	// 同一空间下名称重复由 UNIQUE (c_space_id, c_name) 统一映射为 ErrNameTaken。
 	require.ErrorIs(t, err, ErrNameTaken)
 
 	got, err := s.GetTradingAccount(ctx, account.SpaceID, account.TradingAccountID)

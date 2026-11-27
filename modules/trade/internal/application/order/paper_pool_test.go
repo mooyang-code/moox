@@ -49,10 +49,10 @@ func TestPaperMarginPoolAppliesToSpotBuyOfMixedAccount(t *testing.T) {
 
 	spotOnly := spotBuy
 	spotOnly.Account.Markets = []exchange.MarketType{exchange.MarketTypeSpot}
-	require.False(t, paperUsesMarginPool(spotOnly), "没开通合约的账户没有保证金占用")
+	require.False(t, orderPolicyOf(spotOnly, nil).NeedsMarginPoolSnapshot(spotOnly.Account, spotOnly.ReservedAsset, spotOnly.ReduceOnly), "没开通合约的账户没有保证金占用")
 	live := spotBuy
 	live.Account.ExecutionMode = exchange.ExecutionModeLive
-	require.False(t, paperUsesMarginPool(live))
+	require.False(t, orderPolicyOf(live, nil).NeedsMarginPoolSnapshot(live.Account, live.ReservedAsset, live.ReduceOnly))
 }
 
 // 合约浮盈为正：现货买单只扣已占保证金，浮盈不能花在现货上（现货不借币）；合约开仓仍按“浮盈 - 保证金”。

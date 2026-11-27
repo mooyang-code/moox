@@ -208,3 +208,33 @@ func TestAlignRangeSnapsStockCNToTradingBars(t *testing.T) {
 	require.Equal(t, at("2026-10-09 10:05"), start)
 	require.Equal(t, at("2026-10-09 11:00"), end)
 }
+
+func TestCancelTriggersFinishedRecalcJobPruning(t *testing.T) {
+	db := openRecalcStore(t)
+	seedRecalcTask(t, db, testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3))
+	ctx := context.Background()
+
+	// 先插入 3 条已完结历史作业与 1 条待取消作业。
+	for _, job := range []store.RecalcJob{
+		{JobID: "hist-1", RequestID: "hist-1", TaskID: "ftask_bars_1m", StartTime: 60, EndTime: 120, Status: store.RecalcStatusSucceeded},
+		{JobID: "hist-2", RequestID: "hist-2", TaskID: "ftask_bars_1m", StartTime: 120, EndTime: 180, Status: store.RecalcStatusFailed},
+		{JobID: "hist-3", RequestID: "hist-3", TaskID: "ftask_bars_1m", StartTime: 180, EndTime: 240, Status: store.RecalcStatusSucceeded},
+		{JobID: "to-cancel", RequestID: "to-cancel", TaskID: "ftask_bars_1m", StartTime: 240, EndTime: 300, Status: store.RecalcStatusAccepted},
+	} {
+		_, err := db.CreateRecalcJob(ctx, job)
+		require.NoError(t, err)
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	now := time.Now().UTC().Add(time.Minute)
+	svc := NewService(db, WithHistoryRetention(24*time.Hour, 2), withClock(func() time.Time { return now }))
+
+	cancelled, err := svc.Cancel(ctx, "to-cancel")
+	require.NoError(t, err)
+	require.Equal(t, store.RecalcStatusCancelled, cancelled.Status)
+
+	remaining, err := svc.List(ctx, "ftask_bars_1m", nil)
+	require.NoError(t, err)
+	require.Len(t, remaining, 2, "取消作业后触发每任务保留 2 条已完结历史的清理")
+	require.Equal(t, []string{"to-cancel", "hist-3"}, []string{remaining[0].JobID, remaining[1].JobID})
+}

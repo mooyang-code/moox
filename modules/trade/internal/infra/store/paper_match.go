@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
@@ -58,8 +59,11 @@ func (tx *Tx) ClearFirstMatchPending(current OrderRecord, expectedVersion uint64
 	return nil
 }
 
-func (tx *Tx) CancelPaperOrder(current OrderRecord, expectedVersion uint64, reason string) error {
-	r := tx.db.Exec(execCancelPaperOrder, reason, time.Now().UTC().UnixMilli(), current.SpaceID, current.OrderID, expectedVersion)
+func (tx *Tx) CancelPaperOrder(current OrderRecord, expectedVersion uint64, rejectCode orderdomain.RejectCode, reason string) error {
+	if !orderdomain.ValidRejectCode(rejectCode) {
+		return fmt.Errorf("%w: invalid reject code %q", ErrInvalidRecord, rejectCode)
+	}
+	r := tx.db.Exec(execCancelPaperOrder, string(rejectCode), reason, time.Now().UTC().UnixMilli(), current.SpaceID, current.OrderID, expectedVersion)
 	if r.Error != nil {
 		return writeError(r.Error)
 	}
@@ -115,7 +119,8 @@ const (
 		SET c_first_match_pending = 0, c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ? AND c_state = 'OPEN'`
 	execCancelPaperOrder = `UPDATE t_trade_orders
-		SET c_state = 'CANCELED', c_first_match_pending = 0, c_remaining_reserved_quantity = '0', c_reject_reason = ?,
+		SET c_state = 'CANCELED', c_first_match_pending = 0, c_remaining_reserved_quantity = '0',
+			c_reject_code = ?, c_reject_reason = ?,
 			c_finished_at = ?, c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_state = 'OPEN' AND c_version = ?`
 )

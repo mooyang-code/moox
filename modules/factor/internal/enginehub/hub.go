@@ -26,6 +26,7 @@ type Store interface {
 	PullRecalcJob(ctx context.Context, now time.Time, skipTasks map[string]bool) (store.RecalcJob, bool, error)
 	ReportRecalcProgress(ctx context.Context, jobID string, progress int64, status, errText string, defaultFilled map[string][]store.TimeRange, now time.Time) (store.RecalcJob, error)
 	GetRecalcJob(ctx context.Context, jobID string) (store.RecalcJob, error)
+	PruneRecalcJobs(ctx context.Context, now time.Time, retention time.Duration, keepPerTask int) (int64, error)
 }
 
 const DefaultEngineLeaseTTL = 45 * time.Second
@@ -35,10 +36,20 @@ type Option func(*Hub)
 // WithEngineLeaseTTL 设置心跳的新鲜期：超过这个时长没有心跳，引擎显示为离线，别的 engine_id 也可以登记。
 func WithEngineLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.engineTTL = ttl } }
 
+// WithRecalcHistoryRetention 设置已完结补算作业的触发清理策略（保留窗口与每任务上限）。
+func WithRecalcHistoryRetention(retention time.Duration, keepPerTask int) Option {
+	return func(h *Hub) {
+		h.recalcRetention = retention
+		h.recalcKeepPerTask = keepPerTask
+	}
+}
+
 type Hub struct {
-	store     Store
-	engineTTL time.Duration
-	now       func() time.Time
+	store             Store
+	engineTTL         time.Duration
+	recalcRetention   time.Duration
+	recalcKeepPerTask int
+	now               func() time.Time
 
 	mu    sync.Mutex
 	ready map[string]bool
@@ -66,7 +77,14 @@ type engineState struct {
 }
 
 func New(db Store, options ...Option) *Hub {
-	h := &Hub{store: db, engineTTL: DefaultEngineLeaseTTL, now: time.Now, ready: make(map[string]bool)}
+	h := &Hub{
+		store:             db,
+		engineTTL:         DefaultEngineLeaseTTL,
+		recalcRetention:   store.DefaultRecalcJobRetention,
+		recalcKeepPerTask: store.DefaultRecalcJobKeepPerTask,
+		now:               time.Now,
+		ready:             make(map[string]bool),
+	}
 	for _, option := range options {
 		if option != nil {
 			option(h)
@@ -104,7 +122,11 @@ func (h *Hub) Heartbeat(ctx context.Context, id domain.EngineIdentity, status do
 // in the latest reconciliation; the engine only computes ready sets.
 func (h *Hub) SetResultReady(taskID string, ready bool) {
 	h.mu.Lock()
-	h.ready[taskID] = ready
+	if ready {
+		h.ready[taskID] = true
+	} else {
+		delete(h.ready, taskID)
+	}
 	h.mu.Unlock()
 }
 

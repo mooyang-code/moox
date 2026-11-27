@@ -10,11 +10,11 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/barclock"
-	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -59,20 +59,25 @@ type Task struct {
 	Clock      barclock.Clock
 }
 
-// NewTask 解析合成任务：校验参数（含市场与周期规则），并按市场建立目标周期的时钟。
-func NewTask(task domain.CollectionTask) (*Task, error) {
+// NewTaskForSource 按源数据集元数据（alignment、calendar、活跃列）解析合成任务：
+// 校验周期规则与输出列交集，并构造目标周期的时钟与归约规则表。
+func NewTaskForSource(task domain.CollectionTask, sourceInfo storagesource.DatasetInfo) (*Task, error) {
 	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return nil, err
 	}
 	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
 	params.TargetDatasetID = ids.DatasetID
-	if err := ValidateTaskParams(task.SpaceID, params); err != nil {
+	if err := ValidateTaskParamsForSource(sourceInfo, params); err != nil {
 		return nil, err
 	}
 	source, _ := ParseFixedFrequency(params.SourceFrequency)
 	target, _ := ParseFixedFrequency(params.TargetFrequency)
-	market, err := barclock.MarketFor(task.SpaceID)
+	market, err := barclock.MarketForDataset(sourceInfo.Alignment, sourceInfo.Attributes["calendar"])
+	if err != nil {
+		return nil, err
+	}
+	rules, err := ResolveTaskRules(sourceInfo.ColumnTypes, params.OutputFields)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +91,7 @@ func NewTask(task domain.CollectionTask) (*Task, error) {
 			TaskID: task.TaskID, SpaceID: task.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: source,
 			SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: target,
 			OutputFields: append([]string(nil), params.OutputFields...),
+			Rules:        rules,
 		},
 	}, nil
 }
@@ -272,11 +278,7 @@ func (e *Engine) readSource(ctx context.Context, task *Task, expected []time.Tim
 	if limit <= 0 {
 		limit = defaultMaxReadKeys
 	}
-	tradeCount, err := hasTradeCount(task.Spec.SpaceID)
-	if err != nil {
-		return nil, nil, err
-	}
-	fields := sourceFields(tradeCount)
+	fields := sourceFields(task.Spec.Rules)
 	groups := make(map[string][]SourceBar, len(subjects))
 	decodeErrs := map[string]error{}
 	for start := 0; start < len(keys); start += limit {
@@ -286,7 +288,7 @@ func (e *Engine) readSource(ctx context.Context, task *Task, expected []time.Tim
 			return nil, nil, fmt.Errorf("read source rows: %w", err)
 		}
 		for _, row := range rows {
-			bar, decodeErr := decodeSourceBar(row)
+			bar, decodeErr := decodeSourceBar(row, task.Spec.Rules)
 			if decodeErr != nil {
 				if series := row.GetKey().GetTimeSeries(); series != nil {
 					decodeErrs[series.GetSubjectId()] = decodeErr
@@ -311,13 +313,9 @@ func (e *Engine) readSource(ctx context.Context, task *Task, expected []time.Tim
 // write 把一个桶的结果写入目标数据集：落在已登记快照内且周期还没截止的标的用周期提交（Storage 跟踪到齐并发出完成事件），
 // 其余（首次生效点之前的桶、截止之后的补写、快照之外的标的、周期提交失败）用普通写入，并记为补写通知。
 func (e *Engine) write(ctx context.Context, task *Task, bucket barclock.Bucket, results []Result, jobID string) (int, error) {
-	tradeCount, err := hasTradeCount(task.Spec.SpaceID)
-	if err != nil {
-		return 0, err
-	}
 	rows := make([]*storagepb.RowFieldUpsert, len(results))
 	for i, result := range results {
-		rows[i] = resultRowWithSpec(result, task.Spec, tradeCount)
+		rows[i] = resultRowWithSpec(result, task.Spec)
 	}
 	committed := 0
 	plain := rows
@@ -353,11 +351,7 @@ func (e *Engine) splitForCommit(ctx context.Context, task *Task, bucket barclock
 	if err != nil || !ok {
 		return nil, nil, rows, results
 	}
-	target, parseErr := frequencypkg.Parse(task.Spec.TargetFrequency.Storage)
-	if parseErr != nil {
-		return nil, nil, rows, results
-	}
-	deadline := target.BarEnd(bucket.Key).Add(time.Duration(TargetLatenessSeconds) * time.Second)
+	deadline := bucket.End.Add(time.Duration(TargetLatenessSeconds) * time.Second)
 	if !e.now().Add(commitSafetyMargin).Before(deadline) {
 		return nil, nil, rows, results
 	}

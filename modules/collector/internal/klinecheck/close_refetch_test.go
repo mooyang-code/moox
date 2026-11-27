@@ -82,7 +82,7 @@ func TestRefetchAfterCloseSubmitsOneForcedJobForTheDay(t *testing.T) {
 	require.Len(t, jobs, 1)
 	job := jobs[0]
 	require.Equal(t, store.BackfillKindForce, job.Kind)
-	require.Equal(t, store.BackfillSourceManual, job.Source)
+	require.Equal(t, store.BackfillSourceCloseRefetch, job.Source)
 	require.Equal(t, "ds_hk_5m", job.DatasetID)
 	require.Equal(t, "5m", job.Frequency)
 	require.True(t, job.From.Equal(time.Date(2026, 11, 11, 16, 0, 0, 0, time.UTC)), "范围从香港时间当天零点起：%s", job.From)

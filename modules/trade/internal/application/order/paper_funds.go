@@ -9,22 +9,22 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-// paperUsesMarginPool 报告订单预留的资金是否和合约保证金共用一个资金池：模拟盘、账户开通了合约市场、
-// 预留的是结算币。这时无论订单是现货还是合约，可用资金都要扣掉合约已占用的保证金和浮亏
-// （真实统一账户同样会因保证金不足拒单），不能让现货买单按全额现金下单。
-func paperUsesMarginPool(validation Validation) bool {
-	return validation.Account.ExecutionMode == exchange.ExecutionModePaper &&
-		validation.Account.HasLeverageMarket() &&
-		validation.ReservedAsset == validation.Account.SettlementAsset
+func orderPolicyOf(validation Validation, adapter execution.ExecutionAdapter) execution.OrderPolicy {
+	if validation.Policy != nil {
+		return validation.Policy
+	}
+	return execution.ResolveOrderPolicy(adapter, validation.Account)
 }
 
 // The caller holds the account lock. Market valuation happens outside the
 // SQLite transaction; cash and active reservations are read inside the write.
 func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validation) (shared.Decimal, error) {
-	if !paperUsesMarginPool(validation) {
+	policy := orderPolicyOf(validation, nil)
+	if !policy.NeedsMarginPoolSnapshot(validation.Account, validation.ReservedAsset, false) {
 		return shared.Zero(), nil
 	}
 	if s.Adapters == nil {
@@ -34,6 +34,7 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 	if err != nil {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "adapter", err)
 	}
+	policy = execution.ResolveOrderPolicy(adapter, validation.Account)
 	// 账户上有挂着的单（OPEN、部分成交）时不复用：撮合随时可能让它成交，持仓和保证金会变。
 	reusable, err := s.noRestingPaperOrders(ctx, validation)
 	if err != nil {
@@ -42,10 +43,10 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 	load := adapter.GetAccountSnapshot
 	if !reusable {
 		snapshot, loadErr := load(ctx)
-		return s.marginFromSnapshot(validation, snapshot, loadErr)
+		return s.marginFromSnapshot(policy, validation, snapshot, loadErr)
 	}
 	snapshot, err := reusedSnapshot(ctx, validation.Account.ID, load)
-	return s.marginFromSnapshot(validation, snapshot, err)
+	return s.marginFromSnapshot(policy, validation, snapshot, err)
 }
 
 // noRestingPaperOrders 报告账户上是否没有可能被撮合的挂单（OPEN、部分成交）。
@@ -66,7 +67,7 @@ func (s *Service) noRestingPaperOrders(ctx context.Context, validation Validatio
 	return true, nil
 }
 
-func (s *Service) marginFromSnapshot(validation Validation, snapshot exchange.AccountSnapshot, err error) (shared.Decimal, error) {
+func (s *Service) marginFromSnapshot(policy execution.OrderPolicy, validation Validation, snapshot exchange.AccountSnapshot, err error) (shared.Decimal, error) {
 	if err != nil {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
 	}
@@ -74,15 +75,10 @@ func (s *Service) marginFromSnapshot(validation Validation, snapshot exchange.Ac
 		snapshot.ExchangeUpdatedAt.IsZero() || snapshot.ExchangeUpdatedAt.After(s.now()) || s.now().Sub(snapshot.ExchangeUpdatedAt) > 10*time.Second {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig))
 	}
-	unrealized := snapshot.UnrealizedPnL
-	if !exchange.RuleFor(validation.Instrument.MarketType).UsesMargin && unrealized.Cmp(shared.Zero()) > 0 {
-		// 现货买入不借币：合约的浮盈不能拿来买现货，只扣浮亏和已占保证金；合约开仓才按“浮盈亏 - 保证金”。
-		unrealized = shared.Zero()
-	}
-	return unrealized.Sub(snapshot.UsedMargin), nil
+	return policy.MarginPoolAdjustment(validation.Instrument.MarketType, snapshot.UsedMargin, snapshot.UnrealizedPnL), nil
 }
 
-// fundsMarginAdjustment 是下单资金检查用的保证金调整：减仓单在 checkPaperFunds 里不占新保证金，
+// fundsMarginAdjustment 是下单资金检查用的保证金调整：减仓单在 checkLocalLedgerFunds 里不占新保证金，
 // 不必为它计算账户快照。
 func (s *Service) fundsMarginAdjustment(ctx context.Context, validation Validation) (shared.Decimal, error) {
 	if validation.ReduceOnly {
@@ -124,7 +120,7 @@ func reusedSnapshot(ctx context.Context, accountID string, load func(context.Con
 	return snapshot, nil
 }
 
-func checkPaperFunds(tx *store.Tx, validation Validation, marginAdjustment, required shared.Decimal, oldAsset, oldQuantity string, now time.Time) error {
+func checkLocalLedgerFunds(tx *store.Tx, validation Validation, marginAdjustment, required shared.Decimal, oldAsset, oldQuantity string, now time.Time) error {
 	if validation.ReduceOnly {
 		// 减仓单不占用新保证金：已占用的保证金会在平仓时释放，只需现金覆盖手续费预留。
 		// 若仍扣除已占用保证金，接近满保证金的仓位会因“可用资金不足”而无法平仓（需要先平仓才能释放保证金）。

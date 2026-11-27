@@ -8,11 +8,11 @@ import (
 	"time"
 
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
@@ -202,12 +202,18 @@ func TestFlattenStockHaltAndLimitDownAreRetryable(t *testing.T) {
 func TestFlattenStockRetriesAfterUnfilledIOC(t *testing.T) {
 	fixture := stockFlattenFixture(t, "100", "100")
 	limit := "9.7"
-	for index, reason := range []string{"", paper.OutOfSessionReason} {
+	for index, item := range []struct {
+		code   orderdomain.RejectCode
+		reason string
+	}{
+		{code: orderdomain.RejectCodeNone, reason: ""},
+		{code: orderdomain.RejectCodeOutOfSession, reason: execution.ReasonOutOfSession},
+	} {
 		fixture.order(t, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: fmt.Sprintf("old-%d", index), ClientOrderID: fmt.Sprintf("old-%d", index),
 			ExchangeOrderID: fmt.Sprintf("old-%d", index), Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG",
 			InstrumentID: "600519.XSHG", OrderType: "LIMIT", TimeInForce: "IOC", LimitPrice: &limit, Side: "SELL", Quantity: "100",
-			FilledQuantity: "0", ReferencePrice: "10", State: "CANCELED", RejectReason: reason,
+			FilledQuantity: "0", ReferencePrice: "10", State: "CANCELED", RejectCode: string(item.code), RejectReason: item.reason,
 			OwnerType: "OPERATOR", OwnerID: "flatten-stock", LogicalAccountID: "logical-1", Version: 1,
 		})
 	}

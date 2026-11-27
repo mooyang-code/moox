@@ -22,14 +22,61 @@ func (r *CreateTradingAccountReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.Name) == "" {
 		return fmt.Errorf("name is required")
 	}
-	if !validExchange(r.Exchange) ||
-		!validMarkets(r.Markets) ||
-		r.Live == nil ||
-		!validAccountEnvironment(r.Live.GetEnvironment()) ||
-		(r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET &&
-			r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) ||
-		strings.TrimSpace(r.Live.GetCredentialSecretId()) == "" {
-		return fmt.Errorf("exchange, markets and live environment/credential are required")
+	if !validExchange(r.Exchange) || !validMarkets(r.Markets) {
+		return fmt.Errorf("exchange and markets are required")
+	}
+	if (r.Live == nil) == (r.Paper == nil) {
+		return fmt.Errorf("exactly one of live or paper config is required")
+	}
+	if r.Live != nil {
+		if !validAccountEnvironment(r.Live.GetEnvironment()) ||
+			(r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET &&
+				r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) ||
+			strings.TrimSpace(r.Live.GetCredentialSecretId()) == "" {
+			return fmt.Errorf("live environment and credential_secret_id are required")
+		}
+		if strings.TrimSpace(r.LogicalAccountId) != "" ||
+			strings.TrimSpace(r.LogicalAccountName) != "" ||
+			r.ControlMode != ControlMode_CONTROL_MODE_UNSPECIFIED ||
+			r.Priority != 0 {
+			return fmt.Errorf("logical account creation options are only supported for paper accounts")
+		}
+		return nil
+	}
+	if strings.TrimSpace(r.SettlementAsset) == "" {
+		return fmt.Errorf("settlement_asset is required for paper account")
+	}
+	if !validCreationControlMode(r.ControlMode) {
+		return fmt.Errorf("control_mode is invalid")
+	}
+	if strings.TrimSpace(r.LogicalAccountId) != "" && strings.TrimSpace(r.LogicalAccountName) != "" {
+		return fmt.Errorf("logical_account_id 和 logical_account_name 只能给一个：加入已有组合，或新建组合")
+	}
+	if r.Priority < 0 {
+		return fmt.Errorf("priority must not be negative")
+	}
+	if err := validateOrderRetentionDays(r.Paper.OrderRetentionDays); err != nil {
+		return err
+	}
+	if !isCanonicalPositiveDecimal(r.Paper.InitialBalance) ||
+		!isOptionalCanonicalUnsignedDecimal(r.Paper.MakerFeeRate) ||
+		!isOptionalCanonicalUnsignedDecimal(r.Paper.TakerFeeRate) ||
+		!isOptionalCanonicalUnsignedDecimal(r.Paper.SlippageBps) {
+		return fmt.Errorf("paper configuration decimals are invalid")
+	}
+	if !isSlippageBPSLessThan10000(r.Paper.SlippageBps) {
+		return fmt.Errorf("slippage_bps must be less than 10000")
+	}
+	margin := strings.ToUpper(strings.TrimSpace(r.MarginMode))
+	hasSwap := slices.Contains(r.Markets, marketSwap)
+	if !hasSwap && margin != "" {
+		return fmt.Errorf("paper account without swap cannot configure margin_mode")
+	}
+	if hasSwap && margin != "" && margin != "CROSS" {
+		return fmt.Errorf("swap paper account requires CROSS margin_mode")
+	}
+	if hasSwap && !strings.EqualFold(strings.TrimSpace(r.SettlementAsset), "USDT") {
+		return fmt.Errorf("swap 模拟盘的结算资产必须是 USDT")
 	}
 	return nil
 }
@@ -133,50 +180,6 @@ func (r *ReinspectTradingAccountReq) Validate() error {
 		return fmt.Errorf("trading_account_id is required")
 	}
 	return nil
-}
-
-func (r *CreatePaperSimulationReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.AccountName) == "" ||
-		!validExchange(r.Exchange) || !validMarkets(r.Markets) || strings.TrimSpace(r.SettlementAsset) == "" {
-		return fmt.Errorf("account_name, exchange, markets and settlement_asset are required")
-	}
-	if !validCreationControlMode(r.ControlMode) {
-		return fmt.Errorf("control_mode is invalid")
-	}
-	if strings.TrimSpace(r.LogicalAccountId) != "" && strings.TrimSpace(r.LogicalAccountName) != "" {
-		return fmt.Errorf("logical_account_id 和 logical_account_name 只能给一个：加入已有组合，或新建组合")
-	}
-	if r.Priority < 0 {
-		return fmt.Errorf("priority must not be negative")
-	}
-	if err := validateOrderRetentionDays(r.OrderRetentionDays); err != nil {
-		return err
-	}
-	if !isCanonicalPositiveDecimal(r.InitialBalance) || !canonicalUnsignedDecimalPattern.MatchString(r.MakerFeeRate) ||
-		!canonicalUnsignedDecimalPattern.MatchString(r.TakerFeeRate) || !canonicalUnsignedDecimalPattern.MatchString(r.SlippageBps) {
-		return fmt.Errorf("paper configuration decimals are invalid")
-	}
-	margin := strings.ToUpper(strings.TrimSpace(r.MarginMode))
-	hasSwap := slices.Contains(r.Markets, marketSwap)
-	if !hasSwap && margin != "" {
-		return fmt.Errorf("paper simulation without swap cannot configure margin_mode")
-	}
-	if hasSwap && margin != "" && margin != "CROSS" {
-		return fmt.Errorf("swap paper simulation requires CROSS margin_mode")
-	}
-	if hasSwap && !strings.EqualFold(strings.TrimSpace(r.SettlementAsset), "USDT") {
-		return fmt.Errorf("swap 模拟盘的结算资产必须是 USDT")
-	}
-	return nil
-}
-
-func (r *ClosePaperSimulationReq) Validate() error {
-	return requireID(r != nil, value(func() string {
-		if r == nil {
-			return ""
-		}
-		return r.TradingAccountId
-	}), "trading_account_id")
 }
 
 func (r *ListTradableInstrumentsReq) Validate() error {
@@ -617,6 +620,23 @@ func isCanonicalPositiveDecimal(value string) bool {
 	}
 	number, ok := new(big.Rat).SetString(value)
 	return ok && number.Sign() > 0
+}
+
+func isOptionalCanonicalUnsignedDecimal(value string) bool {
+	if value == "" {
+		return true
+	}
+	return len(value) <= maxDecimalLength && canonicalUnsignedDecimalPattern.MatchString(value)
+}
+
+var maxSlippageBPSExclusive = big.NewRat(10000, 1)
+
+func isSlippageBPSLessThan10000(value string) bool {
+	if value == "" {
+		return true
+	}
+	number, ok := new(big.Rat).SetString(value)
+	return ok && number.Sign() >= 0 && number.Cmp(maxSlippageBPSExclusive) < 0
 }
 
 func requireID(present bool, id string, field string) error {

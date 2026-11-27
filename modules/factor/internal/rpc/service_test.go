@@ -299,6 +299,7 @@ type catalogFake struct {
 	members           []domain.TaskMember
 	infos             []domain.FactorInfo
 	createFactorCalls int
+	listSpaceID       string
 	listTaskID        string
 	listStatus        string
 	err               error
@@ -330,7 +331,19 @@ func (f *catalogFake) GetTask(context.Context, string) (domain.FactorTask, []dom
 	}
 	return f.set, f.members, nil
 }
-func (f *catalogFake) ListTasks(context.Context) ([]domain.FactorTask, error) { return f.sets, nil }
+func (f *catalogFake) ListTasks(_ context.Context, spaceID string) ([]domain.FactorTask, error) {
+	f.listSpaceID = spaceID
+	if spaceID == "" {
+		return f.sets, nil
+	}
+	var out []domain.FactorTask
+	for _, set := range f.sets {
+		if set.SpaceID == spaceID {
+			out = append(out, set)
+		}
+	}
+	return out, nil
+}
 func (f *catalogFake) CreateFactor(_ context.Context, in domain.FactorDef) (domain.FactorDef, error) {
 	f.createFactorCalls++
 	return in, f.err

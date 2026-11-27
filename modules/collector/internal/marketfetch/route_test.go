@@ -241,3 +241,11 @@ func TestSourceFileMustBelongToItsMarketDirectory(t *testing.T) {
 	_, _, err := LoadSourceRuntime("stockcn", "sina")
 	require.ErrorContains(t, err, `market 必须是 "stockcn"`)
 }
+
+// 内嵌的 crypto/sources/binance.yaml 只包含直连端点与推送配置（无 provider 路由运行参数段），
+// LoadSourceRuntime 将其视为无路由运行参数而非格式错误。
+func TestLoadSourceRuntimeSkipsEmbeddedBinanceEndpointConfig(t *testing.T) {
+	_, found, err := LoadSourceRuntime("crypto", "binance")
+	require.NoError(t, err)
+	require.False(t, found)
+}

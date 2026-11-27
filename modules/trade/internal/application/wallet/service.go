@@ -62,27 +62,16 @@ const (
 	pendingAlertAfter = 10 * time.Minute
 )
 
-// 不计入“连续失败”的 FAILED 记录标记：限频没有发出请求、宽限期后交易所记录里没有这笔划转，都不是划转本身出了问题。
+// 现货买入被缩小或阻断时展示给用户看的中文说明；业务分支判断统一看 Outcome.ReasonCodes（store.BlockedReason*），不解析本组文案。
 const (
-	softNotSent   = "[未发出]"
-	softNotArrive = "[未到账]"
-)
-
-// 合约钱包可划转的资金不够时，写进 blocked_targets 的原因都以 FundsShortagePrefix 开头：
-// 执行器据此判断“这个账户的买单在等资金”（不归集），关注项据此把它合并进 transfer_shortfall（不再重复发 target_blocked）。
-const (
-	FundsShortagePrefix = "合约钱包可划转的资金"
 	// ReasonShortfallNoBuy 是资金不足、钱包没有给出更具体原因时，这轮买不了的说明。
-	ReasonShortfallNoBuy = FundsShortagePrefix + "不足，这轮买不了"
+	ReasonShortfallNoBuy = "合约钱包可划转的资金不足，这轮买不了"
 	// ReasonShortfallScaled 是资金不足、买单按现有资金缩小的说明。
-	ReasonShortfallScaled = FundsShortagePrefix + "不足，现货买入按现有资金缩小"
-	reasonCapacityUsedUp  = FundsShortagePrefix + "已经划完，现货买入按现有资金缩小"
+	ReasonShortfallScaled = "合约钱包可划转的资金不足，现货买入按现有资金缩小"
+	reasonCapacityUsedUp  = "合约钱包可划转的资金已经划完，现货买入按现有资金缩小"
 	// reasonAlreadyCollected 不是资金不足：这个目标已经把现货钱包多出来的资金归集回合约钱包，不再追加划转。
 	reasonAlreadyCollected = "这个目标已经把现货钱包多出来的资金归集回合约钱包，不再追加划转，现货买入按现有资金缩小"
 )
-
-// IsFundsShortage 报告 blocked_targets 的原因是不是合约钱包可划转资金不足。
-func IsFundsShortage(reason string) bool { return strings.HasPrefix(reason, FundsShortagePrefix) }
 
 // AdapterSource 按执行账户取适配器。
 type AdapterSource interface {
@@ -103,8 +92,10 @@ type Outcome struct {
 	Waiting map[string]string
 	// BuyScale 是各账户现货买入要缩小到的比例（键：执行账户 ID，0 到 1）；没有条目表示不缩小。
 	BuyScale map[string]shared.Decimal
-	// Reasons 是比例缩小或为 0 的原因（键：执行账户 ID），执行器写进 blocked_targets。
+	// Reasons 是比例缩小或为 0 的展示原因（键：执行账户 ID），执行器写进 blocked_targets。
 	Reasons map[string]string
+	// ReasonCodes 是与 Reasons 对应的结构化原因码（store.BlockedReason*），供状态机与关注项判断。
+	ReasonCodes map[string]string
 	// RetryAfter 是建议的下次收敛间隔（失败后退避的剩余时间）；0 表示用默认间隔。
 	RetryAfter time.Duration
 }
@@ -271,6 +262,7 @@ type accountResult struct {
 	waiting    bool
 	scale      *shared.Decimal
 	reason     string
+	reasonCode string
 	retryAfter time.Duration
 }
 
@@ -285,7 +277,12 @@ type accountResult struct {
 //  5. 额度不足、划转连续失败、不支持划转：买单比例设 0 或按比例缩小，原因写明并告警；限频等软失败不算失败，
 //     这个账户按退避等待后自动重试；一个账户出问题不影响同组合其他账户（结果按账户区分）。
 func (s *Service) BeforeSpotBuy(ctx context.Context, spaceID string, targetRecord store.LogicalAccountTargetRecord, buys []Buy) (Outcome, error) {
-	outcome := Outcome{Waiting: map[string]string{}, BuyScale: map[string]shared.Decimal{}, Reasons: map[string]string{}}
+	outcome := Outcome{
+		Waiting:     map[string]string{},
+		BuyScale:    map[string]shared.Decimal{},
+		Reasons:     map[string]string{},
+		ReasonCodes: map[string]string{},
+	}
 	byAccount := map[string][]Buy{}
 	var order []string
 	for _, buy := range buys {
@@ -307,6 +304,13 @@ func (s *Service) BeforeSpotBuy(ctx context.Context, spaceID string, targetRecor
 		}
 		if result.reason != "" {
 			outcome.Reasons[accountID] = result.reason
+			code := result.reasonCode
+			if code == "" {
+				code = store.BlockedReasonTransferFailed
+			}
+			outcome.ReasonCodes[accountID] = code
+		} else if result.reasonCode != "" {
+			outcome.ReasonCodes[accountID] = result.reasonCode
 		}
 	}
 	return outcome, nil
@@ -323,7 +327,7 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 		reason := fmt.Sprintf("账户钱包划转不可用：%v", err)
 		s.alertOnceWithLabel(telemetry.AttentionTransferFailing, targetRecord.TargetID, account.TradingAccountID, account.Name+"："+reason,
 			account.Name+"：账户钱包划转不可用")
-		return accountResult{scale: &zero, reason: reason}
+		return accountResult{scale: &zero, reason: reason, reasonCode: store.BlockedReasonTransferFailed}
 	}
 	// 1. 这个账户所有未结的划转（不论目标）。
 	rows, pendingRows, listErr := s.settleAccountPending(ctx, spaceID, account, transferer)
@@ -367,7 +371,7 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 	}
 	for _, row := range collected {
 		if row.State != store.TransferStateFailed {
-			return accountResult{scale: scaleFor(spotAvailable, requirement), reason: reasonAlreadyCollected}
+			return accountResult{scale: scaleFor(spotAvailable, requirement), reason: reasonAlreadyCollected, reasonCode: store.BlockedReasonOrderRule}
 		}
 	}
 	history, err := s.Store.ListWalletTransfersForTarget(ctx, spaceID, targetRecord.LogicalAccountID, targetRecord.TargetID, account.TradingAccountID, store.TransferToSpot)
@@ -379,17 +383,17 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 		// 上一笔已经把合约钱包可划的额度划完（或这个目标划得太多次了）：不再追加，只按现有资金缩小。
 		reason := reasonCapacityUsedUp
 		if !capped {
-			reason = fmt.Sprintf(FundsShortagePrefix+"一直不够（这个目标已经划转 %d 次），现货买入按现有资金缩小", completed)
+			reason = fmt.Sprintf("合约钱包可划转的资金一直不够（这个目标已经划转 %d 次），现货买入按现有资金缩小", completed)
 		}
 		s.alertShortfallOnce(account, targetRecord.TargetID, requirement, spotAvailable)
-		return accountResult{scale: scaleFor(spotAvailable, requirement), reason: reason}
+		return accountResult{scale: scaleFor(spotAvailable, requirement), reason: reason, reasonCode: store.BlockedReasonTransferShortfall}
 	}
 	failures, lastError := trailingHardFailures(history)
 	if failures >= maxTransferFailures {
 		reason := fmt.Sprintf("合约钱包划转连续失败 %d 次（%s），这个目标不再重试，现货买入这轮不做", failures, lastError)
 		s.alertOnceWithLabel(telemetry.AttentionTransferFailing, targetRecord.TargetID, account.TradingAccountID, account.Name+"："+reason,
 			account.Name+"：合约钱包划转连续失败，这个目标不再重试")
-		return accountResult{scale: &zero, reason: reason}
+		return accountResult{scale: &zero, reason: reason, reasonCode: store.BlockedReasonTransferFailed}
 	}
 	capacity := walletTransferable(snapshot, exchange.WalletFutures, asset).Mul(dec(transferCapRatio)).RoundDown(8)
 	amount := need
@@ -398,7 +402,7 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 	}
 	if amount.Cmp(dec(minTransferAmount)) < 0 {
 		s.alertShortfallOnce(account, targetRecord.TargetID, requirement, spotAvailable)
-		return accountResult{scale: scaleFor(spotAvailable, requirement), reason: ReasonShortfallScaled}
+		return accountResult{scale: scaleFor(spotAvailable, requirement), reason: ReasonShortfallScaled, reasonCode: store.BlockedReasonTransferShortfall}
 	}
 	// 被额度封顶的划转在记录上打标记：它完成后这个目标不再追加划转。
 	isCapped := amount.Cmp(need) < 0
@@ -418,7 +422,7 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 		return accountResult{waiting: true, reason: reason, retryAfter: wait}
 	default:
 		// 确定没有划成：这一轮这个账户不买，下一轮再试，连续硬失败到上限后不再重试。
-		return accountResult{scale: &zero, reason: "合约钱包划转没有成功：" + start.failure}
+		return accountResult{scale: &zero, reason: "合约钱包划转没有成功：" + start.failure, reasonCode: store.BlockedReasonTransferFailed}
 	}
 }
 
@@ -455,7 +459,7 @@ func trailingHardFailures(history []store.WalletTransferRecord) (int, string) {
 		if row.State == store.TransferStateCompleted {
 			break
 		}
-		if row.State != store.TransferStateFailed || strings.HasPrefix(row.LastError, softNotSent) || strings.HasPrefix(row.LastError, softNotArrive) {
+		if !row.IsHardFailure() {
 			continue
 		}
 		count++
@@ -610,8 +614,8 @@ func (s *Service) reconcile(ctx context.Context, spaceID string, row store.Walle
 	}
 	if match == nil {
 		if row.ExchangeTransferID == "" && s.now().Sub(time.UnixMilli(row.RequestedAt)) >= confirmGrace {
-			// 过了对账宽限期，交易所的划转记录里仍然没有：确认没到账，这条记录作废，允许重试（不计入连续失败）。
-			return s.finish(ctx, spaceID, row, "", store.TransferStateFailed, softNotArrive+"交易所划转记录里没有找到这笔划转，确认没到账", 0)
+			// 过了对账宽限期，交易所的划转记录里仍然没有：确认没到账，这条记录作废，允许重试（软失败，不计入连续硬失败）。
+			return s.finish(ctx, spaceID, row, "", store.TransferStateFailed, store.TransferFailureNotArrived, "交易所划转记录里没有找到这笔划转，确认没到账", 0)
 		}
 		return row, nil
 	}
@@ -622,13 +626,13 @@ func (s *Service) reconcile(ctx context.Context, spaceID string, row store.Walle
 		if completedAt <= 0 {
 			completedAt = s.now().UnixMilli()
 		}
-		return s.finish(ctx, spaceID, row, match.ExchangeTransferID, store.TransferStateCompleted, "", completedAt)
+		return s.finish(ctx, spaceID, row, match.ExchangeTransferID, store.TransferStateCompleted, store.TransferFailureNone, "", completedAt)
 	case execution.TransferFailed:
-		return s.finish(ctx, spaceID, row, match.ExchangeTransferID, store.TransferStateFailed, "交易所划转记录显示失败", 0)
+		return s.finish(ctx, spaceID, row, match.ExchangeTransferID, store.TransferStateFailed, store.TransferFailureHard, "交易所划转记录显示失败", 0)
 	}
 	// 交易所记录还是 PENDING：记下流水号，继续等。PENDING 不等于没到账，不能重试。
 	if row.ExchangeTransferID == "" {
-		return s.finish(ctx, spaceID, row, match.ExchangeTransferID, store.TransferStatePending, "", 0)
+		return s.finish(ctx, spaceID, row, match.ExchangeTransferID, store.TransferStatePending, store.TransferFailureNone, "", 0)
 	}
 	return row, nil
 }
@@ -650,16 +654,16 @@ func matchesRow(record execution.TransferRecord, row store.WalletTransferRecord)
 
 // finish 把一条 PENDING 的记录推进到新状态。记录已经不是 PENDING（被对账的另一轮或人工结束抢先处理了）不是错误：
 // 原样返回，下一轮读到最新状态；不能把它当成查询失败去退避、告警。
-func (s *Service) finish(ctx context.Context, spaceID string, row store.WalletTransferRecord, exchangeID, state, lastError string, completedAt int64) (store.WalletTransferRecord, error) {
+func (s *Service) finish(ctx context.Context, spaceID string, row store.WalletTransferRecord, exchangeID, state, failureKind, lastError string, completedAt int64) (store.WalletTransferRecord, error) {
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateWalletTransfer(spaceID, row.TransferID, exchangeID, state, lastError, completedAt)
+		return tx.UpdateWalletTransfer(spaceID, row.TransferID, exchangeID, state, failureKind, lastError, completedAt)
 	}); err != nil {
 		if errors.Is(err, store.ErrNotPending) {
 			return row, nil
 		}
 		return row, err
 	}
-	row.ExchangeTransferID, row.State, row.LastError, row.CompletedAt = exchangeID, state, lastError, completedAt
+	row.ExchangeTransferID, row.State, row.FailureKind, row.LastError, row.CompletedAt = exchangeID, state, failureKind, lastError, completedAt
 	return row, nil
 }
 
@@ -675,7 +679,7 @@ type transferStart struct {
 
 // startTransfer 先写 PENDING 记录，再请求交易所：
 //   - 成功：记下流水号，状态仍是 PENDING，下一轮对账确认到账；
-//   - 确定没有受理：限频（不计入连续失败）记 FAILED 并带 [未发出] 标记；被拒绝、余额不足等是硬失败；
+//   - 确定没有受理：限频（不计入连续失败）记 FAILED 且 c_failure_kind = NOT_SENT；被拒绝、余额不足等是硬失败（HARD）；
 //   - 结果不明（超时、传输错误）：记录保持 PENDING 且没有流水号，下一轮靠交易所划转记录对账，确认没到账才重试。
 //
 // refKey 是本地引用号的前缀：目标划转用 TargetID，风控归集（TargetID 为空串）用这次风控事件的幂等键，
@@ -718,12 +722,12 @@ func (s *Service) startTransfer(
 		summary := truncate(exchange.FailureSummary(err), 200)
 		switch {
 		case exchange.NotAccepted(err):
-			if _, finishErr := s.finish(ctx, spaceID, row, "", store.TransferStateFailed, softNotSent+summary, 0); finishErr != nil {
+			if _, finishErr := s.finish(ctx, spaceID, row, "", store.TransferStateFailed, store.TransferFailureNotSent, summary, 0); finishErr != nil {
 				log.Warnf("交易划转：记录限频失败：%v", finishErr)
 			}
 			return transferStart{soft: true, failure: summary}
 		case definitelyRejected(err):
-			if _, finishErr := s.finish(ctx, spaceID, row, "", store.TransferStateFailed, summary, 0); finishErr != nil {
+			if _, finishErr := s.finish(ctx, spaceID, row, "", store.TransferStateFailed, store.TransferFailureHard, summary, 0); finishErr != nil {
 				log.Warnf("交易划转：记录划转失败出错：%v", finishErr)
 			}
 			return transferStart{failure: summary}
@@ -732,7 +736,7 @@ func (s *Service) startTransfer(
 		log.Warnf("交易划转：账户 %s 划转 %s %s 结果不明，等待对账：%s", account.Name, amount.String(), asset, summary)
 		return transferStart{started: true}
 	}
-	if _, err := s.finish(ctx, spaceID, row, receipt.ExchangeTransferID, store.TransferStatePending, "", 0); err != nil {
+	if _, err := s.finish(ctx, spaceID, row, receipt.ExchangeTransferID, store.TransferStatePending, store.TransferFailureNone, "", 0); err != nil {
 		// 已经划出去但没记上流水号：下一轮靠金额和时间窗口对账认领，不会重复划。
 		log.Warnf("交易划转：记录流水号失败，等待对账认领：%v", err)
 	}
@@ -832,7 +836,7 @@ func (s *Service) collectForAccount(ctx context.Context, spaceID string, targetR
 			return false, nil
 		case row.State == store.TransferStateCompleted:
 			return false, nil // 这次风控事件已经归集完成
-		case row.State == store.TransferStateFailed && !strings.HasPrefix(row.LastError, softNotSent) && !strings.HasPrefix(row.LastError, softNotArrive):
+		case row.IsHardFailure():
 			hardFailures++
 		}
 	}

@@ -8,6 +8,7 @@ import (
 
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -259,10 +260,14 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 						return err
 					}
 				}
+				now := f.service.now().UTC()
 				var ensureErr error
 				record, _, ensureErr = tx.EnsureOperatorAction(store.OperatorActionRecord{
-					SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalID, ActionType: "REDUCE", Reason: reason,
+					SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalID, ActionType: "REDUCE",
+					Source:      string(operatordomain.SourceMargin),
+					Reason:      reason,
 					RequestJSON: `{"logical_account_id":"logical-1","reduce_ratio":"0.1"}`, Status: "RUNNING",
+					CreatedAt: now, UpdatedAt: now,
 				})
 				return ensureErr
 			})
@@ -322,7 +327,10 @@ func TestRunTriggersReduceAndPausesOnce(t *testing.T) {
 	call := f.reduces[0]
 	require.Equal(t, "space-1", call.spaceID)
 	require.Equal(t, "logical-1", call.logicalID)
-	require.Contains(t, call.actionID, store.MarginActionIDPrefix+"logical-1-")
+	require.Contains(t, call.actionID, "margin-logical-1-")
+	stored, err := f.store.GetOperatorAction(context.Background(), "space-1", call.actionID)
+	require.NoError(t, err)
+	require.Equal(t, string(operatordomain.SourceMargin), stored.Source)
 	require.Equal(t, "0.1", call.ratio.String())
 	require.Equal(t, store.MarginPause(store.MarginReduced).Reason, call.reason, "暂停原因是固定文字，不带变化的数字")
 	require.True(t, f.logical().Pause().Auto(), "风控暂停同时算系统自动暂停")
@@ -400,13 +408,17 @@ func TestRunPausesFirstWhenTheReduceCannotStart(t *testing.T) {
 	require.Len(t, f.reduces, 1, "下架清仓结束后，下一轮把减仓补上")
 }
 
-// resume 模拟用户恢复组合：库里记下恢复时间（比减仓动作晚一秒以上）。
+// resume 模拟用户恢复组合：通过 store.Tx.ResumeLogicalAccount 原子写入毫秒恢复时间和已确认的风控动作号。
 func (f *fixture) resume() {
 	f.t.Helper()
+	f.resumeAt(f.service.now().Add(5 * time.Second))
+}
+
+func (f *fixture) resumeAt(at time.Time) {
+	f.t.Helper()
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1", at)
 	}))
-	require.NoError(f.t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_resumed_at = ?`, time.Now().Add(5*time.Second).UnixMilli()).Error)
 }
 
 // 暂停期间用户人工下单、撤单、清仓会改写暂停原因：比值仍低也不会再自动减一次；用户恢复之后重新监控。
@@ -725,4 +737,97 @@ func TestManualGroupReducesAgainOnceTheLastReduceFinished(t *testing.T) {
 	f.advance(time.Hour)
 	f.run()
 	require.Len(t, f.reduces, 3)
+}
+
+// 回归测试（D2）：同秒内（+200ms）甚至同毫秒内（+0ms）快速恢复后，保证金风控绝不能因为旧的 1 秒宽容窗口而永久失效。
+// 恢复时原子记录 c_acked_margin_action_id 且动作时间为毫秒级，重启后仍准确放行下一次减仓。
+func TestRapidResumeWithinSameSecondAndSameMillisecondStillTriggersMarginReduce(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		delay time.Duration
+	}{
+		{name: "同秒内200ms快速恢复", delay: 200 * time.Millisecond},
+		{name: "同毫秒0ms快速恢复", delay: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "", "400")
+			base := time.Date(2026, 6, 1, 10, 0, 0, 100*int(time.Millisecond), time.UTC)
+			current := base
+			f.service.Now = func() time.Time { return current }
+			require.NoError(t, f.store.DBForTest().Exec(
+				`UPDATE t_trading_accounts SET c_last_sync_at = ?`, current.UnixMilli(),
+			).Error)
+
+			// 第一次触发减仓。
+			f.run()
+			require.Len(t, f.reduces, 1)
+			firstActionID := f.reduces[0].actionID
+			require.NoError(t, f.store.DBForTest().Exec(
+				`UPDATE t_operator_actions SET c_status = 'COMPLETED' WHERE c_action_id = ?`, firstActionID,
+			).Error)
+
+			// 亚秒 / 同毫秒内快速恢复，且随后重启。
+			current = current.Add(tc.delay)
+			f.resumeAt(current)
+			require.Equal(t, firstActionID, f.logical().AckedMarginActionID)
+			f.restart()
+
+			// 稍微推进 1ms 确保新动作 ID 毫秒戳不同，保证金率仍低于阈值时必须再次触发减仓。
+			current = current.Add(time.Millisecond)
+			require.NoError(t, f.store.DBForTest().Exec(
+				`UPDATE t_trading_accounts SET c_last_sync_at = ?`, current.UnixMilli(),
+			).Error)
+			f.run()
+			require.Len(t, f.reduces, 2, "同秒/同毫秒恢复后风控必须重新生效，不能永久失效")
+			require.NotEqual(t, firstActionID, f.reduces[1].actionID)
+		})
+	}
+}
+
+// 回归测试：NTP 时钟回拨导致新触发的风控减仓动作时间早于上次 c_resumed_at 时，
+// marginActionAcknowledged 仅按 c_acked_margin_action_id 精确比对，绝不把新动作误判为“已确认”。
+func TestClockRollbackDoesNotFalselyAcknowledgeMarginAction(t *testing.T) {
+	f := newFixture(t, "", "400")
+	base := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	current := base
+	f.service.Now = func() time.Time { return current }
+	require.NoError(t, f.store.DBForTest().Exec(
+		`UPDATE t_trading_accounts SET c_last_sync_at = ?`, current.UnixMilli(),
+	).Error)
+
+	// 第一次风控减仓并恢复，记录 c_resumed_at = base + 5m 与 c_acked_margin_action_id = firstID。
+	f.run()
+	require.Len(t, f.reduces, 1)
+	firstID := f.reduces[0].actionID
+	require.NoError(t, f.store.DBForTest().Exec(
+		`UPDATE t_operator_actions SET c_status = 'COMPLETED' WHERE c_action_id = ?`, firstID,
+	).Error)
+	current = base.Add(5 * time.Minute)
+	f.resumeAt(current)
+
+	// 模拟 NTP 时钟回拨 2 分钟：新触发的第二笔风控减仓 c_created_at < c_resumed_at。
+	current = base.Add(3 * time.Minute)
+	require.NoError(t, f.store.DBForTest().Exec(
+		`UPDATE t_trading_accounts SET c_last_sync_at = ?`, current.UnixMilli(),
+	).Error)
+	f.run()
+	require.Len(t, f.reduces, 2)
+	secondID := f.reduces[1].actionID
+	require.NoError(t, f.store.DBForTest().Exec(
+		`UPDATE t_operator_actions SET c_status = 'COMPLETED' WHERE c_action_id = ?`, secondID,
+	).Error)
+
+	logical := f.logical()
+	last, err := f.store.LastMarginReduceAction(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.NotNil(t, last)
+	require.Equal(t, secondID, last.ActionID)
+	require.Greater(t, logical.ResumedAt, last.CreatedAt.UnixMilli(), "前提：时钟回拨使新动作时间早于上次恢复时间")
+	require.False(t, marginActionAcknowledged(logical, *last), "未匹配 c_acked_margin_action_id 的新动作绝不能因时钟回拨被误判为已确认")
+
+	// 重启后仍应为第二笔未确认减仓执行归集，且不会误判为已确认而再次发起减仓。
+	f.restart()
+	f.run()
+	require.Len(t, f.reduces, 2, "未恢复前不得因时钟回拨再次强平")
+	require.Equal(t, []string{"logical-1|" + secondID + "|account-1"}, f.collect)
 }

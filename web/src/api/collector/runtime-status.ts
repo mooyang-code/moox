@@ -220,8 +220,10 @@ export interface KlineRangeRequest {
   to: string;
 }
 
+export type BackfillJobSource = "manual" | "auto" | "seed" | "close_refetch" | "catchup";
+
 export interface BackfillJobFilter {
-  source?: "manual" | "auto";
+  source?: BackfillJobSource;
   attention?: boolean;
   dataset_id?: string;
 }

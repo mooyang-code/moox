@@ -29,8 +29,10 @@ type LogicalAccountRecord struct {
 	MarginReduceState MarginReduceState
 	// ResumedAt 是最近一次从暂停恢复自动执行的时间（毫秒），没恢复过为 0。
 	ResumedAt int64
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// AckedMarginActionID 是最近一次恢复自动执行时已人工确认的保证金风控减仓动作号。
+	AckedMarginActionID string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type LogicalAccountMemberRecord struct {
@@ -44,22 +46,23 @@ type LogicalAccountMemberRecord struct {
 }
 
 type logicalAccountRow struct {
-	ControlMode       string    `gorm:"column:c_control_mode"`
-	SpaceID           string    `gorm:"column:c_space_id"`
-	LogicalAccountID  string    `gorm:"column:c_logical_account_id"`
-	Name              string    `gorm:"column:c_name"`
-	ClosedThrough     int64     `gorm:"column:c_closed_through"`
-	ExecutionMode     string    `gorm:"column:c_execution_mode"`
-	SettlementAsset   string    `gorm:"column:c_settlement_asset"`
-	OrderSettingsJSON string    `gorm:"column:c_order_settings_json"`
-	FundSettingsJSON  string    `gorm:"column:c_fund_settings_json"`
-	AutomationState   string    `gorm:"column:c_automation_state"`
-	PauseReason       string    `gorm:"column:c_pause_reason"`
-	PauseSource       string    `gorm:"column:c_pause_source"`
-	MarginReduceState string    `gorm:"column:c_margin_reduce_state"`
-	ResumedAt         int64     `gorm:"column:c_resumed_at"`
-	CreatedAt         time.Time `gorm:"column:c_ctime"`
-	UpdatedAt         time.Time `gorm:"column:c_mtime"`
+	ControlMode         string    `gorm:"column:c_control_mode"`
+	SpaceID             string    `gorm:"column:c_space_id"`
+	LogicalAccountID    string    `gorm:"column:c_logical_account_id"`
+	Name                string    `gorm:"column:c_name"`
+	ClosedThrough       int64     `gorm:"column:c_closed_through"`
+	ExecutionMode       string    `gorm:"column:c_execution_mode"`
+	SettlementAsset     string    `gorm:"column:c_settlement_asset"`
+	OrderSettingsJSON   string    `gorm:"column:c_order_settings_json"`
+	FundSettingsJSON    string    `gorm:"column:c_fund_settings_json"`
+	AutomationState     string    `gorm:"column:c_automation_state"`
+	PauseReason         string    `gorm:"column:c_pause_reason"`
+	PauseSource         string    `gorm:"column:c_pause_source"`
+	MarginReduceState   string    `gorm:"column:c_margin_reduce_state"`
+	ResumedAt           int64     `gorm:"column:c_resumed_at"`
+	AckedMarginActionID string    `gorm:"column:c_acked_margin_action_id"`
+	CreatedAt           time.Time `gorm:"column:c_ctime"`
+	UpdatedAt           time.Time `gorm:"column:c_mtime"`
 }
 
 func (logicalAccountRow) TableName() string {
@@ -190,6 +193,24 @@ func (r LogicalAccountRecord) Pause() Pause {
 	return Pause{Source: r.PauseSource, MarginReduce: r.MarginReduceState, Reason: r.PauseReason}
 }
 
+// ResumeLogicalAccount 在事务内以调用方时钟恢复自动执行，并显式确认当前最近一条保证金风控减仓动作，
+// 保证同秒/同毫秒恢复后新的风控告警仍可再次触发，无需时间宽限。
+func (tx *Tx) ResumeLogicalAccount(spaceID, logicalAccountID string, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	ackedActionID := ""
+	lastMargin, err := tx.LastMarginReduceAction(spaceID, logicalAccountID)
+	if err != nil {
+		return err
+	}
+	if lastMargin != nil {
+		ackedActionID = lastMargin.ActionID
+	}
+	result := tx.db.Exec(execResumeLogicalAccount, now.UTC().UnixMilli(), ackedActionID, spaceID, logicalAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
+}
+
 // SetLogicalAccountAutomation 恢复自动执行（state 为 ACTIVE，原因为空）或人工暂停（state 为 PAUSED，来源记 USER）。
 // 系统自动暂停与保证金率风控暂停走 PauseLogicalAccount、PauseLogicalAccountIf。
 func (tx *Tx) SetLogicalAccountAutomation(
@@ -200,8 +221,7 @@ func (tx *Tx) SetLogicalAccountAutomation(
 ) error {
 	switch {
 	case state == string(logicalaccount.AutomationActive) && blank(reason):
-		result := tx.db.Exec(execResumeLogicalAccount, time.Now().UnixMilli(), spaceID, logicalAccountID)
-		return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
+		return tx.ResumeLogicalAccount(spaceID, logicalAccountID, time.Now().UTC())
 	case state == string(logicalaccount.AutomationPaused):
 		return tx.PauseLogicalAccount(spaceID, logicalAccountID, UserPause(reason))
 	}
@@ -422,7 +442,8 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 		SettlementAsset:   row.SettlementAsset,
 		OrderSettingsJSON: row.OrderSettingsJSON, FundSettingsJSON: row.FundSettingsJSON,
 		AutomationState: row.AutomationState, PauseReason: row.PauseReason,
-		PauseSource: PauseSource(row.PauseSource), MarginReduceState: MarginReduceState(row.MarginReduceState), ResumedAt: row.ResumedAt,
+		PauseSource: PauseSource(row.PauseSource), MarginReduceState: MarginReduceState(row.MarginReduceState),
+		ResumedAt: row.ResumedAt, AckedMarginActionID: row.AckedMarginActionID,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
@@ -444,9 +465,10 @@ const (
 			c_order_settings_json, c_fund_settings_json,
 			c_automation_state, c_pause_reason, c_pause_source, c_margin_reduce_state
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	// 恢复自动执行：从暂停恢复时记下恢复时间，清空暂停原因、来源与减仓状态；只有策略控制的组合能恢复自动执行。
+	// 恢复自动执行：从暂停恢复时记下恢复时间与已确认的最近一次风控减仓动作号，清空暂停原因、来源与减仓状态；只有策略控制的组合能恢复自动执行。
 	execResumeLogicalAccount = `UPDATE t_logical_accounts
 		SET c_resumed_at = CASE WHEN c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
+			c_acked_margin_action_id = CASE WHEN c_automation_state <> 'ACTIVE' THEN ? ELSE c_acked_margin_action_id END,
 			c_automation_state = 'ACTIVE', c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = '',
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_control_mode = 'STRATEGY'`

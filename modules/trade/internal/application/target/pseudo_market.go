@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/rs/xid"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -40,7 +39,7 @@ func pseudoMarketAttempts(children []store.TargetChildOrder) int {
 			continue
 		}
 		// 休市前一刻发出、到休市时还没撮合就被模拟撮合撤掉的单，不是一次真正的尝试。
-		if child.RejectReason == paper.OutOfSessionReason && filledErr == nil && filled.IsZero() {
+		if child.RejectCode == string(orderdomain.RejectCodeOutOfSession) && filledErr == nil && filled.IsZero() {
 			continue
 		}
 		attempts++

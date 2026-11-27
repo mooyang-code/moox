@@ -86,3 +86,48 @@ func TestPaperSessionSyncDoesNotClearUnverifiedOrderQuoteFault(t *testing.T) {
 	s.recoverPaperAccountAfterSync(1, []exchange.Order{{}})
 	require.True(t, recovered, "successful snapshot sync repairs a refresh-stage fault")
 }
+
+// 事件驱动唤醒（D6）：PaperMatcherWorker 与 CombineStateSubscriptions 变更时立刻触发 channel 信号，
+// 无需 100ms 轮询，且多订阅并发通知和取消在 -race 下无竞态、无泄露。
+func TestPaperStateEventSubscriptionWakesImmediatelyWithoutPolling(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	worker := NewPaperMatcherWorker(matcherScanFunc(func(context.Context) error {
+		if fail.Load() {
+			return errors.New("temporary db error")
+		}
+		return nil
+	}), time.Hour)
+	matcher := &paper.Matcher{}
+
+	combined := CombineStateSubscriptions(worker.SubscribeState, matcher.SubscribeState)
+	events, unsubscribe := combined()
+	defer unsubscribe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	// Worker 从未就绪变为失败状态，再恢复为就绪状态，均应立即收到事件唤醒。
+	worker.Wake()
+	select {
+	case <-events:
+	case <-time.After(time.Second):
+		t.Fatal("expected immediate event on worker failure")
+	}
+
+	fail.Store(false)
+	worker.Wake()
+	select {
+	case <-events:
+	case <-time.After(time.Second):
+		t.Fatal("expected immediate event on worker recovery")
+	}
+	require.True(t, worker.Ready())
+
+	// Matcher 账户状态恢复也通过同一合成订阅立即通知。
+	matcher.RecoverAccount("acc-1", 0)
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}

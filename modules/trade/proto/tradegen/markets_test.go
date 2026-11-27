@@ -30,11 +30,12 @@ func TestCreateTradingAccountRequiresValidDistinctMarkets(t *testing.T) {
 	}
 }
 
-func TestCreatePaperSimulationMarginRulesFollowSwapInMarkets(t *testing.T) {
-	paper := func(margin, settlement string, markets ...string) *CreatePaperSimulationReq {
-		return &CreatePaperSimulationReq{
-			AccountName: "paper", Exchange: "binance", Markets: markets, SettlementAsset: settlement,
-			MarginMode: margin, InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+func TestCreatePaperAccountMarginRulesFollowSwapInMarkets(t *testing.T) {
+	paper := func(margin, settlement string, markets ...string) *CreateTradingAccountReq {
+		return &CreateTradingAccountReq{
+			Name: "paper", Exchange: "binance", Markets: markets, SettlementAsset: settlement,
+			MarginMode: margin,
+			Paper:      &PaperConfig{InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
 		}
 	}
 	swap, spot := "swap", "spot"
@@ -44,7 +45,7 @@ func TestCreatePaperSimulationMarginRulesFollowSwapInMarkets(t *testing.T) {
 	if err := paper("CROSS", "USDT", swap).Validate(); err != nil {
 		t.Fatalf("合约全仓应合法：%v", err)
 	}
-	for name, req := range map[string]*CreatePaperSimulationReq{
+	for name, req := range map[string]*CreateTradingAccountReq{
 		"没有合约不能设保证金模式": paper("CROSS", "USDT", spot),
 		"合约必须全仓":       paper("ISOLATED", "USDT", swap),
 		"含合约必须 USDT":   paper("", "BTC", spot, swap),
@@ -56,11 +57,12 @@ func TestCreatePaperSimulationMarginRulesFollowSwapInMarkets(t *testing.T) {
 	}
 }
 
-func TestCreatePaperSimulationJoinExistingLogicalAccount(t *testing.T) {
-	req := func(id, name string, priority int32) *CreatePaperSimulationReq {
-		return &CreatePaperSimulationReq{
-			AccountName: "paper", Exchange: "binance", Markets: []string{"spot"},
-			SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+func TestCreatePaperAccountJoinExistingLogicalAccount(t *testing.T) {
+	req := func(id, name string, priority int32) *CreateTradingAccountReq {
+		return &CreateTradingAccountReq{
+			Name: "paper", Exchange: "binance", Markets: []string{"spot"},
+			SettlementAsset:  "USDT",
+			Paper:            &PaperConfig{InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
 			LogicalAccountId: id, LogicalAccountName: name, Priority: priority,
 		}
 	}
@@ -75,6 +77,36 @@ func TestCreatePaperSimulationJoinExistingLogicalAccount(t *testing.T) {
 	}
 	if err := req("la-1", "", -1).Validate(); err == nil {
 		t.Error("负的优先级应被拒绝")
+	}
+}
+
+func TestCreatePaperAccountSlippageAndOptionalFeesValidation(t *testing.T) {
+	makeReq := func(maker, taker, slippage string) *CreateTradingAccountReq {
+		return &CreateTradingAccountReq{
+			Name: "paper", Exchange: "binance", Markets: []string{"spot"},
+			SettlementAsset: "USDT",
+			Paper: &PaperConfig{
+				InitialBalance: "1000", MakerFeeRate: maker, TakerFeeRate: taker, SlippageBps: slippage,
+			},
+		}
+	}
+	for name, req := range map[string]*CreateTradingAccountReq{
+		"费率滑点缺省按0":    makeReq("", "", ""),
+		"边界滑点9999.99": makeReq("0.0002", "0.0005", "9999.99"),
+	} {
+		if err := req.Validate(); err != nil {
+			t.Errorf("%s 应通过：%v", name, err)
+		}
+	}
+	for name, req := range map[string]*CreateTradingAccountReq{
+		"滑点等于10000": makeReq("0", "0", "10000"),
+		"滑点大于10000": makeReq("0", "0", "10000.01"),
+		"负滑点":       makeReq("0", "0", "-1"),
+		"负费率":       makeReq("-0.001", "0", "0"),
+	} {
+		if err := req.Validate(); err == nil {
+			t.Errorf("%s 应被拒绝", name)
+		}
 	}
 }
 

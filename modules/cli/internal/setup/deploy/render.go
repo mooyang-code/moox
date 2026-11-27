@@ -299,7 +299,6 @@ func (r *renderer) environment(component servicecatalog.Component, values map[st
 	case "collector":
 		// Collector 建函数时开通采集日志主题，保留天数来自 moox.toml 的 [logging] retention_days（只在创建主题时生效）。
 		values["MOOX_CLS_RETENTION_DAYS"] = strconv.FormatInt(r.Config.Logging.RetentionDays, 10)
-		values["MOOX_STORAGE_MARKET_CONFIG"] = path.Join(layout.Config(id), "sources/market/binance.yaml")
 	case "collector-stream":
 		values["MOOX_SPACE_ID"] = defaultStreamSpace
 	case "storage-primary", "storage-view":
@@ -398,7 +397,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("scf_entry.key_file", layout.Secret("scf-collector.key"))
 		case "collector-stream":
 			set("data_dir", data)
-			set("market_config", path.Join(layout.Config(id), "sources/market/binance.yaml"))
 		case "factor-mgr":
 			set("database.path", path.Join(data, "factor.db"))
 		case "archive-mgr":

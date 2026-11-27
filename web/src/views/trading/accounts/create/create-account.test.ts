@@ -5,7 +5,6 @@ import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
 import { type LogicalAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({
-  createPaperSimulation: vi.fn(),
   createTradingAccount: vi.fn(),
   createLogicalAccount: vi.fn(),
   addLogicalAccountMember: vi.fn(),
@@ -56,8 +55,7 @@ async function openDialog(logicals: LogicalAccount[] = [existing]) {
 
 beforeEach(() => {
   mocks.createLogicalAccount.mockReset().mockResolvedValue({ logical_account: { logical_account_id: "la-made" } });
-  mocks.createPaperSimulation.mockReset().mockResolvedValue({ account: { trading_account_id: "ta-new" } });
-  mocks.createTradingAccount.mockReset();
+  mocks.createTradingAccount.mockReset().mockResolvedValue({ account: { trading_account_id: "ta-new" } });
   mocks.addLogicalAccountMember.mockReset().mockResolvedValue({});
   mocks.inspectExchangeCredential.mockReset();
 });
@@ -71,9 +69,15 @@ describe("新建账户提交", () => {
   it("模拟盘加入已有组合：一次请求完成，后端在同一个事务里加入，前端不再单独加成员", async () => {
     const vm = await openDialog();
     await vm.submit();
-    expect(mocks.createPaperSimulation).toHaveBeenCalledTimes(1);
-    expect(mocks.createPaperSimulation).toHaveBeenCalledWith(
-      expect.objectContaining({ logical_account_id: "la-existing", logical_account_name: "", markets: ["spot", "swap"] })
+    expect(mocks.createTradingAccount).toHaveBeenCalledTimes(1);
+    expect(mocks.createTradingAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "新账户",
+        logical_account_id: "la-existing",
+        logical_account_name: "",
+        markets: ["spot", "swap"],
+        paper: expect.objectContaining({ initial_balance: "100000" })
+      })
     );
     expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
     expect(wrapper.emitted("created")).toEqual([["paper"]]);
@@ -81,21 +85,21 @@ describe("新建账户提交", () => {
 
   it("模拟盘加入失败时后端不留账户：不锁定前几步，再点一次重新提交整个请求", async () => {
     const vm = await openDialog();
-    mocks.createPaperSimulation.mockRejectedValueOnce(new Error("组合账户正在自动执行，先暂停再加入新账户"));
+    mocks.createTradingAccount.mockRejectedValueOnce(new Error("组合账户正在自动执行，先暂停再加入新账户"));
     await vm.submit();
     await flushPromises();
     expect(document.body.textContent).toContain("先暂停再加入新账户");
     expect(document.body.textContent).not.toContain("已锁定");
     expect(wrapper.emitted("created")).toBeUndefined();
     await vm.submit();
-    expect(mocks.createPaperSimulation).toHaveBeenCalledTimes(2);
+    expect(mocks.createTradingAccount).toHaveBeenCalledTimes(2);
   });
 
   it("新建组合时一次请求就完成", async () => {
     const vm = await openDialog();
     Object.assign(vm.form, { join: "new", logicalName: "新组合" });
     await vm.submit();
-    expect(mocks.createPaperSimulation).toHaveBeenCalledWith(
+    expect(mocks.createTradingAccount).toHaveBeenCalledWith(
       expect.objectContaining({ logical_account_name: "新组合", logical_account_id: undefined })
     );
     expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
@@ -104,7 +108,7 @@ describe("新建账户提交", () => {
   it("提交到一半对话框被关闭重开：账户已建成仍通知列表刷新，不动新打开的对话框", async () => {
     const vm = await openDialog();
     let resolve!: (value: unknown) => void;
-    mocks.createPaperSimulation.mockImplementationOnce(() => new Promise(done => (resolve = done)));
+    mocks.createTradingAccount.mockImplementationOnce(() => new Promise(done => (resolve = done)));
     const submitting = vm.submit();
     // 取消后又重新打开：关闭会使进行中的提交失效
     vm.visible = false;
@@ -123,7 +127,7 @@ describe("新建账户提交", () => {
   ])("提交挂着时切换空间，请求%s返回后弹窗仍能关闭、按钮不再转圈", async (_name, fails) => {
     const vm = await openDialog();
     let settle!: (fail: boolean) => void;
-    mocks.createPaperSimulation.mockImplementationOnce(
+    mocks.createTradingAccount.mockImplementationOnce(
       () =>
         new Promise((done, reject) => {
           settle = failed => (failed ? reject(new Error("请求失败")) : done({ account: { trading_account_id: "ta-new" } }));
@@ -148,7 +152,7 @@ describe("新建账户提交", () => {
   it("提交中不能关闭：遮罩、关闭按钮、Esc 都禁用，取消按钮置灰且点了没反应；结束后恢复", async () => {
     const vm = await openDialog();
     let resolve!: (value: unknown) => void;
-    mocks.createPaperSimulation.mockImplementationOnce(() => new Promise(done => (resolve = done)));
+    mocks.createTradingAccount.mockImplementationOnce(() => new Promise(done => (resolve = done)));
     Object.assign(vm.form, { step: 3 });
     const submitting = vm.submit();
     await flushPromises();

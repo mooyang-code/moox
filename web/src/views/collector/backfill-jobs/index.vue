@@ -48,9 +48,7 @@
               <template #cell="{ record }">
                 <a-link class="job-id" :title="record.job_id" @click="openDetail(record)">{{ record.job_id }}</a-link>
                 <a-space :size="4">
-                  <a-tag size="small" :color="record.source === 'auto' ? 'arcoblue' : 'gray'">{{
-                    jobSourceText(record.source)
-                  }}</a-tag>
+                  <a-tag size="small" :color="jobSourceInfo(record.source).color">{{ jobSourceText(record.source) }}</a-tag>
                   <a-tag size="small">{{ jobKindText(record.kind) }}</a-tag>
                 </a-space>
               </template>
@@ -213,6 +211,7 @@ import {
   jobKindText,
   jobRetryable,
   jobSegments,
+  jobSourceInfo,
   jobSourceText,
   jobStatusInfo,
   normalizeSegment,
@@ -259,7 +258,7 @@ const rowClass = (record: KlineBackfillJob) =>
 function filterOf(): BackfillJobFilter {
   const filter: BackfillJobFilter = datasetId.value ? { dataset_id: datasetId.value } : {};
   if (segment.value === "attention") filter.attention = true;
-  if (segment.value === "manual" || segment.value === "auto") filter.source = segment.value;
+  else if (segment.value !== "all") filter.source = segment.value;
   return filter;
 }
 

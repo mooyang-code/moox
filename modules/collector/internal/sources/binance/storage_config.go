@@ -1,14 +1,17 @@
 package binance
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
+	marketfiles "github.com/mooyang-code/moox/modules/collector/config/markets"
 	"gopkg.in/yaml.v3"
 )
+
+const embeddedBinanceSourceConfig = "crypto/sources/binance.yaml"
 
 // APIConfig 是按顺序故障转移的币安官方端点；没有写时沿用客户端内置的默认域名。
 type APIConfig struct {
@@ -58,17 +61,21 @@ func ResolveAPIConfig() (APIConfig, error) {
 }
 
 func loadBinanceSourceConfig() (*binanceSourceConfig, error) {
-	path, err := resolveBinanceSourceConfigPath()
-	if err != nil {
-		return nil, err
+	if explicit := strings.TrimSpace(os.Getenv("MOOX_STORAGE_MARKET_CONFIG")); explicit != "" {
+		file, err := os.Open(explicit)
+		if err == nil {
+			defer file.Close()
+			return decodeBinanceSourceConfig(file)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("MOOX_STORAGE_MARKET_CONFIG: %w", err)
+		}
 	}
-
-	file, err := os.Open(path)
+	file, err := marketfiles.FS.Open(embeddedBinanceSourceConfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open embedded %s: %w", embeddedBinanceSourceConfig, err)
 	}
 	defer file.Close()
-
 	return decodeBinanceSourceConfig(file)
 }
 
@@ -80,55 +87,4 @@ func decodeBinanceSourceConfig(reader io.Reader) (*binanceSourceConfig, error) {
 		return nil, err
 	}
 	return &source, nil
-}
-
-// resolveBinanceSourceConfigPath finds the Binance source file: the SCF
-// package root first, then the repository layout used by local runs.
-func resolveBinanceSourceConfigPath() (string, error) {
-	// 常驻进程（collector-stream）显式给出数据源配置路径。
-	if explicit := strings.TrimSpace(os.Getenv("MOOX_STORAGE_MARKET_CONFIG")); explicit != "" {
-		if _, err := os.Stat(explicit); err != nil {
-			return "", fmt.Errorf("MOOX_STORAGE_MARKET_CONFIG: %w", err)
-		}
-		return explicit, nil
-	}
-	for _, candidate := range []string{"sources/market/binance.yaml", "configs/sources/market/binance.yaml"} {
-		for _, full := range relativeConfigCandidates(candidate) {
-			if _, err := os.Stat(full); err == nil {
-				return full, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("未找到 Binance 数据源配置")
-}
-
-func relativeConfigCandidates(candidate string) []string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
-	}
-	var out []string
-	for dir := cwd; ; dir = filepath.Dir(dir) {
-		for _, prefix := range []string{"", "collector", "collector/configs", "modules/collector", "modules/collector/configs"} {
-			out = append(out, filepath.Clean(filepath.Join(dir, prefix, candidate)))
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-	}
-	return dedupeStrings(out)
-}
-
-func dedupeStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
 }

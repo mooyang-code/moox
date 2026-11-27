@@ -3,7 +3,6 @@ package events
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -51,27 +50,12 @@ type ConsumerConfig struct {
 	DeliverDecodeErrors bool
 }
 
-// SpaceConsumerConfig binds every subject route for one event family and one
-// space. It deliberately does not consume the same event from another space.
-type SpaceConsumerConfig struct {
-	ConsumerConfig
-	SpaceID string
-}
-
 func NewConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig) (*Consumer, error) {
 	filter, err := consumerEventFilter(registry, cfg)
 	if err != nil {
 		return nil, err
 	}
 	return newConsumer(ctx, client, registry, cfg, filter)
-}
-
-func NewSpaceConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SpaceConsumerConfig) (*Consumer, error) {
-	filter, err := spaceConsumerFilter(registry, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return newConsumer(ctx, client, registry, cfg.ConsumerConfig, filter)
 }
 
 // consumerEventFilter 返回一种事件全部主题的过滤模式。
@@ -83,19 +67,6 @@ func consumerEventFilter(registry *Registry, cfg ConsumerConfig) (string, error)
 		return "", fmt.Errorf("event consumer Event is required")
 	}
 	return registry.FamilyPattern(cfg.Event)
-}
-
-func spaceConsumerFilter(registry *Registry, cfg SpaceConsumerConfig) (string, error) {
-	if strings.TrimSpace(cfg.SpaceID) == "" {
-		return "", fmt.Errorf("event space consumer space_id is required")
-	}
-	if err := registry.Validate(); err != nil {
-		return "", err
-	}
-	if cfg.Event.Name() == "" {
-		return "", fmt.Errorf("event consumer Event is required")
-	}
-	return registry.SpacePattern(cfg.Event, cfg.SpaceID)
 }
 
 func newConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig, filter string) (*Consumer, error) {

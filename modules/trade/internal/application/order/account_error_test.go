@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -187,7 +186,7 @@ func TestSubmitAccountErrorOnlyAfterPersistedOutcome(t *testing.T) {
 
 func TestAccountExecutionErrorPreservesInfrastructure(t *testing.T) {
 	cause := errors.New("sqlite failed")
-	for _, err := range []error{paper.InfrastructureError{Err: cause}, &paper.InfrastructureError{Err: cause}} {
+	for _, err := range []error{execution.InfrastructureError{Err: cause}, &execution.InfrastructureError{Err: cause}} {
 		got := accountExecutionError("account-1", "snapshot", err)
 		var accountErr *AccountExecutionError
 		require.False(t, errors.As(got, &accountErr))
@@ -204,7 +203,7 @@ func TestPaperMarginSnapshotErrorBoundary(t *testing.T) {
 		cause := errors.New("snapshot failed")
 		var snapshotErr error = cause
 		if infrastructure {
-			snapshotErr = paper.InfrastructureError{Err: cause}
+			snapshotErr = execution.InfrastructureError{Err: cause}
 		}
 		s.Adapters = errorBoundarySource{adapter: errorBoundarySnapshotAdapter{adapterStub: adapter, err: snapshotErr}}
 		_, err := s.paperMarginAdjustment(context.Background(), Validation{Account: account, ReservedAsset: account.SettlementAsset, Instrument: exchange.Instrument{MarketType: exchange.MarketTypeSwap}})

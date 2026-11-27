@@ -10,27 +10,18 @@ done
 ROOT="$(cd -P "$(dirname "${SOURCE}")/../.." && pwd)"
 if [[ "${1:-}" == "--help" ]]; then
   echo "Usage: SCF_SPACE_ID=<space> $0"
-  echo "Requires: go, zip. Credentials are never read or packaged."
+  echo "Requires: go, zip. Packages only the single linux/amd64 main binary; all market configs are embedded."
   exit 0
 fi
 SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto)}"
 SCF_ENTRYPOINT="${SCF_ENTRYPOINT:-market_data}"
 [[ "${SCF_ENTRYPOINT}" == "market_data" ]] || { echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1; }
-if [[ -n "${SCF_CONFIG_DIR:-}" ]]; then
-	CONFIG_DIR="${SCF_CONFIG_DIR}"
-else
-	CONFIG_DIR="${ROOT}/modules/collector/configs/scf/${SCF_SPACE_ID}"
-	if [[ ! -d "${CONFIG_DIR}" ]]; then
-    CONFIG_DIR="${ROOT}/modules/collector/configs/scf/market_data"
-  fi
-fi
 while (($#)); do
   case "$1" in
     *) echo "unsupported package parameter: $1" >&2; exit 1 ;;
   esac
 done
-# 配置与凭据检查、路径规范化用 Go 实现（modules/collector/cmd/scfpackcheck），不再依赖 Python。
-scf_check() { (cd "${ROOT}/modules/collector" && go run ./cmd/scfpackcheck "$@"); }
+
 VERSION="${VERSION:-v$(date +%Y%m%d%H%M%S)}"
 OUT_DIR="${OUT_DIR:-${ROOT}/release/scf}"
 OUT_PATH="${OUT_PATH:-${OUT_DIR}/collector-scf-${SCF_SPACE_ID}-${VERSION}.zip}"
@@ -40,21 +31,6 @@ fi
 BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moox-collector-scf.XXXXXX")"
 OUT_TEMP_DIR=""
 
-CONFIG_DIR="$(scf_check normpath "${CONFIG_DIR}")"
-[[ -d "${CONFIG_DIR}" ]] || {
-  echo "SCF config directory does not exist: ${CONFIG_DIR}" >&2
-  exit 1
-}
-[[ ! -L "${CONFIG_DIR}" ]] || { echo "SCF config directory symlinks are not permitted" >&2; exit 1; }
-[[ -d "${CONFIG_DIR}/sources" && ! -L "${CONFIG_DIR}/sources" ]] || {
-  echo "SCF sources must be a regular non-symlink directory" >&2
-  exit 1
-}
-if find "${CONFIG_DIR}/sources" -type l -print -quit | grep -q .; then
-  echo "SCF source symlinks are not permitted" >&2
-  exit 1
-fi
-
 cleanup() {
   rm -rf "${BUILD_DIR}"
   [[ -z "${OUT_TEMP_DIR}" ]] || rm -rf "${OUT_TEMP_DIR}"
@@ -63,6 +39,7 @@ trap cleanup EXIT
 
 mkdir -p "${OUT_DIR}" "${BUILD_DIR}/package"
 
+# 各市场的 market.yaml、route.yaml、数据源运行参数（含 binance.yaml）和交易日历都内嵌在二进制中，包里只有单一 main。
 echo "==> build moox-collector-scf for linux/amd64"
 (
   cd "${ROOT}/modules/collector"
@@ -71,13 +48,6 @@ echo "==> build moox-collector-scf for linux/amd64"
     -o "${BUILD_DIR}/package/main" "./cmd/scf/${SCF_ENTRYPOINT}"
 )
 
-# 市场数据文件（market.yaml、route.yaml、数据源运行参数）和交易日历都编在二进制里，包里只带 sources 下的数据源配置。
-echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
-cp -R "${CONFIG_DIR}/sources" "${BUILD_DIR}/package/sources"
-
-echo "==> check SCF package is credential-free"
-scf_check check "${BUILD_DIR}/package"
-
 echo "==> package ${OUT_PATH}"
 mkdir -p "$(dirname "${OUT_PATH}")"
 OUT_TEMP_DIR="$(mktemp -d "$(dirname "${OUT_PATH}")/.collector-scf-package.XXXXXX")"
@@ -85,7 +55,7 @@ TEMP_PACKAGE="${OUT_TEMP_DIR}/package.zip"
 (
   umask 077
   cd "${BUILD_DIR}/package"
-  zip -qr "${TEMP_PACKAGE}" .
+  zip -qr "${TEMP_PACKAGE}" main
 )
 chmod 0600 "${TEMP_PACKAGE}"
 zip -T "${TEMP_PACKAGE}" >/dev/null

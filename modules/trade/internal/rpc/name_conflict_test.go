@@ -8,7 +8,6 @@ import (
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -28,32 +27,38 @@ func requireNameTaken(t *testing.T, label string, info *tradepb.RetInfo) {
 // 关闭的模拟账户只是停用、名称一直占着：用同名再建模拟账户、实盘账户都回参数错误和“名称已被使用”，不带 SQLite 原文。
 func TestClosedPaperSimulationKeepsNameTaken(t *testing.T) {
 	tradeStore := openRPCStore(t)
-	paper := &papersimulation.Service{Store: tradeStore}
+	accountSvc := &accountapp.Service{
+		Store: accountapp.Repository{Store: tradeStore}, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
+	}
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	command := papersimulation.CreateCommand{
+	command := accountapp.CreatePaperCommand{
 		SpaceID: "space-1", AccountName: "模拟一号", LogicalAccountName: "模拟组合",
 		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot},
 		SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("1000"),
 		MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(),
 	}
-	created, err := paper.Create(ctx, command)
+	created, err := accountSvc.CreatePaperAccount(ctx, command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := paper.Close(ctx, "space-1", created.Account.TradingAccountID); err != nil {
+	if _, err := accountSvc.ClosePaperAccount(ctx, "space-1", created.Account.TradingAccountID); err != nil {
 		t.Fatal(err)
 	}
 
-	console := &ConsoleServer{Paper: paper}
+	accounts := &AccountServer{
+		Accounts: accountSvc,
+		Store:    tradeStore,
+		NewID:    func() string { return "live-1" },
+	}
 	for _, item := range []struct{ label, account, logical string }{
-		{"账户名和组合名都相同（模拟账户编号相同）", "模拟一号", "模拟组合"},
+		{"账户名和组合名都相同", "模拟一号", "模拟组合"},
 		{"只有账户名相同", "模拟一号", "另一个组合"},
 		{"只有组合名相同", "模拟二号", "模拟组合"},
 	} {
-		rsp, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
-			AccountName: item.account, LogicalAccountName: item.logical,
-			Exchange: "binance", Markets: []string{"spot"},
-			SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+		rsp, err := accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
+			Name: item.account, LogicalAccountName: item.logical,
+			Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
+			Paper: &tradepb.PaperConfig{InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -61,12 +66,6 @@ func TestClosedPaperSimulationKeepsNameTaken(t *testing.T) {
 		requireNameTaken(t, item.label, rsp.GetRetInfo())
 	}
 
-	accounts := &AccountServer{
-		Accounts: &accountapp.Service{
-			Store: accountapp.Repository{Store: tradeStore}, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
-		},
-		Store: tradeStore, NewID: func() string { return "live-1" },
-	}
 	rsp, err := accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
 		Name: "模拟一号", Exchange: "binance",
 		Markets:         []string{"spot"},

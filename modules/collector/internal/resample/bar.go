@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/barclock"
 )
 
@@ -23,51 +24,36 @@ type TaskSpec struct {
 	TargetDatasetID string
 	TargetFrequency FixedFrequency
 	OutputFields    []string
+	// Rules 是本次重采样实际读取、归约与写入的列规则（标准归约规则表 ∩ 源数据集活跃列 ∩ OutputFields）。
+	Rules []FieldRule
 }
 
-// SourceBar is one decoded source K-line. Pointer fields preserve whether a
-// required Storage field was absent.
+// SourceBar 是一根已解码的源 K 线；列值按列规则表动态存放，不含市场专属字段。
 type SourceBar struct {
-	SpaceID     string
-	DatasetID   string
-	SubjectID   string
-	Frequency   string
-	DataTime    time.Time
-	SeriesTag   string
-	Open        *float64
-	High        *float64
-	Low         *float64
-	Close       *float64
-	Volume      *float64
-	QuoteVolume *float64
-	TradeNum    *int64
-	// Amount 是 A 股的成交额；可能是采集时估算的值（腾讯按 收盘价 × 成交量），合成不区分估算与否。
-	Amount *float64
+	SpaceID   string
+	DatasetID string
+	SubjectID string
+	Frequency string
+	DataTime  time.Time
+	SeriesTag string
+	Values    map[string]FieldValue
 }
 
-// Result is one complete target K-line plus the deterministic source-window hash.
+// Result 是一根完整的目标 K 线与源窗口内容指纹。
 type Result struct {
-	SpaceID     string
-	DatasetID   string
-	SubjectID   string
-	Frequency   string
-	DataTime    time.Time
-	SeriesTag   string
-	Open        float64
-	High        float64
-	Low         float64
-	Close       float64
-	Volume      float64
-	QuoteVolume float64
-	TradeNum    int64
-	// Amount 是 A 股的成交额：桶内源 K 线的成交额之和，可能含估算值（不传递 amount_quality）；有任何一根没有成交额时为空（写入 NULL）。
-	Amount          *float64
+	SpaceID         string
+	DatasetID       string
+	SubjectID       string
+	Frequency       string
+	DataTime        time.Time
+	SeriesTag       string
+	Values          map[string]FieldValue
 	SourceWindowEnd time.Time
 	SourceHash      string
 }
 
-// Aggregate 把一个桶内全部应有的源 K 线聚合成一根目标 K 线。
-// expected 是桶内应有的源 K 线开盘时刻（升序，由 barclock 按市场的交易时段给出）；rows 必须与它一一对应，少一根都不输出半根。
+// Aggregate 把一个桶内全部应有的源 K 线按 spec.Rules 声明的归约算子聚合成一根目标 K 线。
+// expected 是桶内应有的源 K 线开盘时刻（升序，由 barclock 给出）；rows 必须与它一一对应，少一根都不输出半根。
 func Aggregate(spec TaskSpec, subjectID string, bucket barclock.Bucket, expected []time.Time, rows []SourceBar) (Result, error) {
 	if err := validateTaskSpec(spec); err != nil {
 		return Result{}, err
@@ -87,55 +73,90 @@ func Aggregate(spec TaskSpec, subjectID string, bucket barclock.Bucket, expected
 		return ordered[i].DataTime.Before(ordered[j].DataTime)
 	})
 
-	var result Result
-	crypto, err := hasTradeCount(spec.SpaceID)
-	if err != nil {
-		return Result{}, err
-	}
-	amount, amountKnown := 0.0, true
 	for index := range ordered {
-		row := &ordered[index]
-		if err := validateSourceBar(spec, subjectID, expected[index], row); err != nil {
+		if err := validateSourceBar(spec, subjectID, expected[index], &ordered[index]); err != nil {
 			return Result{}, fmt.Errorf("source row %d: %w", index, err)
 		}
-		if index == 0 {
-			result.Open = *row.Open
-			result.High = *row.High
-			result.Low = *row.Low
-		} else {
-			result.High = math.Max(result.High, *row.High)
-			result.Low = math.Min(result.Low, *row.Low)
-		}
-		result.Close = *row.Close
-		result.Volume += *row.Volume
-		if crypto {
-			result.QuoteVolume += *row.QuoteVolume
-			if *row.TradeNum > math.MaxInt64-result.TradeNum {
-				return Result{}, fmt.Errorf("source row %d: trade_num sum overflows int64", index)
-			}
-			result.TradeNum += *row.TradeNum
-		} else if row.Amount == nil {
-			amountKnown = false
-		} else {
-			amount += *row.Amount
-		}
-		if !finite(result.Volume) || !finite(result.QuoteVolume) || !finite(amount) {
-			return Result{}, fmt.Errorf("source row %d: volume sum is not finite", index)
-		}
-	}
-	if !crypto && amountKnown {
-		result.Amount = &amount
 	}
 
-	result.SpaceID = spec.SpaceID
-	result.DatasetID = spec.TargetDatasetID
-	result.SubjectID = subjectID
-	result.Frequency = spec.TargetFrequency.Storage
-	result.DataTime = bucket.Key.UTC()
-	result.SeriesTag = spec.SourceSeriesTag
-	result.SourceWindowEnd = bucket.End.UTC()
-	result.SourceHash = hashSourceBars(ordered)
-	return result, nil
+	values := make(map[string]FieldValue, len(spec.Rules))
+	for _, rule := range spec.Rules {
+		reduced, err := reduceRule(rule, ordered)
+		if err != nil {
+			return Result{}, err
+		}
+		values[rule.Name] = reduced
+	}
+
+	return Result{
+		SpaceID:         spec.SpaceID,
+		DatasetID:       spec.TargetDatasetID,
+		SubjectID:       subjectID,
+		Frequency:       spec.TargetFrequency.Storage,
+		DataTime:        bucket.Key.UTC(),
+		SeriesTag:       spec.SourceSeriesTag,
+		Values:          values,
+		SourceWindowEnd: bucket.End.UTC(),
+		SourceHash:      hashSourceBars(ordered, spec.Rules),
+	}, nil
+}
+
+func reduceRule(rule FieldRule, ordered []SourceBar) (FieldValue, error) {
+	switch rule.Op {
+	case ReduceFirst:
+		return ordered[0].Values[rule.Name], nil
+	case ReduceLast:
+		return ordered[len(ordered)-1].Values[rule.Name], nil
+	case ReduceMax:
+		best := ordered[0].Values[rule.Name].Float
+		for i := 1; i < len(ordered); i++ {
+			best = math.Max(best, ordered[i].Values[rule.Name].Float)
+		}
+		return FieldValue{Float: best}, nil
+	case ReduceMin:
+		best := ordered[0].Values[rule.Name].Float
+		for i := 1; i < len(ordered); i++ {
+			best = math.Min(best, ordered[i].Values[rule.Name].Float)
+		}
+		return FieldValue{Float: best}, nil
+	case ReduceSum:
+		sum := 0.0
+		for i := range ordered {
+			sum += ordered[i].Values[rule.Name].Float
+			if !finite(sum) {
+				return FieldValue{}, fmt.Errorf("source row %d: %s sum is not finite", i, rule.Name)
+			}
+		}
+		return FieldValue{Float: sum}, nil
+	case ReduceSumAllPresent:
+		sum := 0.0
+		for i := range ordered {
+			val, ok := ordered[i].Values[rule.Name]
+			if !ok || val.Null {
+				return FieldValue{Null: true}, nil
+			}
+			sum += val.Float
+			if !finite(sum) {
+				return FieldValue{}, fmt.Errorf("source row %d: %s sum is not finite", i, rule.Name)
+			}
+		}
+		return FieldValue{Float: sum}, nil
+	case ReduceSumInt:
+		var sum int64
+		for i := range ordered {
+			v := ordered[i].Values[rule.Name].Int
+			if v > 0 && sum > math.MaxInt64-v {
+				return FieldValue{}, fmt.Errorf("source row %d: %s sum overflows int64", i, rule.Name)
+			}
+			if v < 0 && sum < math.MinInt64-v {
+				return FieldValue{}, fmt.Errorf("source row %d: %s sum underflows int64", i, rule.Name)
+			}
+			sum += v
+		}
+		return FieldValue{Int: sum}, nil
+	default:
+		return FieldValue{}, fmt.Errorf("unsupported reduce op %q for field %s", rule.Op, rule.Name)
+	}
 }
 
 func validateTaskSpec(spec TaskSpec) error {
@@ -144,6 +165,9 @@ func validateTaskSpec(spec TaskSpec) error {
 	}
 	if spec.SourceDatasetID == spec.TargetDatasetID {
 		return fmt.Errorf("source and target Dataset IDs must differ")
+	}
+	if len(spec.Rules) == 0 {
+		return fmt.Errorf("resample task requires at least one field rule")
 	}
 	if err := ValidateResamplePair(spec.SourceFrequency, spec.TargetFrequency); err != nil {
 		return err
@@ -167,48 +191,27 @@ func validateSourceBar(spec TaskSpec, subjectID string, expectedTime time.Time, 
 	if !row.DataTime.UTC().Equal(expectedTime) {
 		return fmt.Errorf("expected data_time %s, got %s", expectedTime.Format(time.RFC3339Nano), row.DataTime.Format(time.RFC3339Nano))
 	}
-	values := []struct {
-		name  string
-		value *float64
-	}{
-		{name: "open", value: row.Open},
-		{name: "high", value: row.High},
-		{name: "low", value: row.Low},
-		{name: "close", value: row.Close},
-		{name: "volume", value: row.Volume},
-	}
-	crypto, err := hasTradeCount(spec.SpaceID)
-	if err != nil {
-		return err
-	}
-	if crypto {
-		values = append(values, struct {
-			name  string
-			value *float64
-		}{name: "quote_volume", value: row.QuoteVolume})
-	}
-	for _, field := range values {
-		if field.value == nil {
-			return fmt.Errorf("required field %s is missing", field.name)
+	for _, rule := range spec.Rules {
+		val, ok := row.Values[rule.Name]
+		if !ok || val.Null {
+			if rule.Nullable {
+				continue
+			}
+			return fmt.Errorf("required field %s is missing", rule.Name)
 		}
-		if !finite(*field.value) {
-			return fmt.Errorf("field %s must be finite", field.name)
+		switch rule.ValueType {
+		case storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE:
+			if !finite(val.Float) {
+				return fmt.Errorf("field %s must be finite", rule.Name)
+			}
+			if rule.NonNegative && val.Float < 0 {
+				return fmt.Errorf("field %s must not be negative", rule.Name)
+			}
+		case storagepb.FieldValueType_FIELD_VALUE_TYPE_INT:
+			if rule.NonNegative && val.Int < 0 {
+				return fmt.Errorf("field %s must not be negative", rule.Name)
+			}
 		}
-	}
-	if *row.Volume < 0 || (crypto && *row.QuoteVolume < 0) {
-		return fmt.Errorf("volume fields must not be negative")
-	}
-	if !crypto {
-		if row.Amount != nil && (!finite(*row.Amount) || *row.Amount < 0) {
-			return fmt.Errorf("amount must be finite and not negative")
-		}
-		return nil
-	}
-	if row.TradeNum == nil {
-		return fmt.Errorf("required field trade_num is missing")
-	}
-	if *row.TradeNum < 0 {
-		return fmt.Errorf("trade_num must not be negative")
 	}
 	return nil
 }
@@ -217,9 +220,9 @@ func finite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
-func hashSourceBars(rows []SourceBar) string {
+func hashSourceBars(rows []SourceBar, rules []FieldRule) string {
 	digest := sha256.New()
-	writeHashString(digest, "moox:kline-resample-source:v1")
+	writeHashString(digest, "moox:kline-resample-source:v2")
 	for index := range rows {
 		row := &rows[index]
 		writeHashString(digest, row.SpaceID)
@@ -228,19 +231,19 @@ func hashSourceBars(rows []SourceBar) string {
 		writeHashString(digest, row.Frequency)
 		writeHashInt64(digest, row.DataTime.UTC().UnixNano())
 		writeHashString(digest, row.SeriesTag)
-		writeHashFloat64(digest, "open", *row.Open)
-		writeHashFloat64(digest, "high", *row.High)
-		writeHashFloat64(digest, "low", *row.Low)
-		writeHashFloat64(digest, "close", *row.Close)
-		writeHashFloat64(digest, "volume", *row.Volume)
-		if row.TradeNum != nil && row.QuoteVolume != nil {
-			writeHashFloat64(digest, "quote_volume", *row.QuoteVolume)
-			writeHashString(digest, "trade_num")
-			writeHashInt64(digest, *row.TradeNum)
-		} else if row.Amount != nil {
-			writeHashFloat64(digest, "amount", *row.Amount)
-		} else {
-			writeHashString(digest, "amount_unknown")
+		for _, rule := range rules {
+			val, ok := row.Values[rule.Name]
+			if !ok || val.Null {
+				writeHashString(digest, rule.Name+":null")
+				continue
+			}
+			switch rule.ValueType {
+			case storagepb.FieldValueType_FIELD_VALUE_TYPE_INT:
+				writeHashString(digest, rule.Name)
+				writeHashInt64(digest, val.Int)
+			default:
+				writeHashFloat64(digest, rule.Name, val.Float)
+			}
 		}
 	}
 	return hex.EncodeToString(digest.Sum(nil))

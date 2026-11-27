@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type SubjectProvider interface {
@@ -18,13 +19,28 @@ type SubjectProvider interface {
 }
 
 type config struct {
-	subjects SubjectProvider
+	subjects    SubjectProvider
+	retention   time.Duration
+	keepPerTask int
+	now         func() time.Time
 }
 
 type Option func(*config)
 
 func WithSubjectProvider(provider SubjectProvider) Option {
 	return func(cfg *config) { cfg.subjects = provider }
+}
+
+// WithHistoryRetention 设置已完结历史补算作业的保留窗口与每任务最大保留条数；均不大于 0 时不做触发清理。
+func WithHistoryRetention(retention time.Duration, keepPerTask int) Option {
+	return func(cfg *config) {
+		cfg.retention = retention
+		cfg.keepPerTask = keepPerTask
+	}
+}
+
+func withClock(now func() time.Time) Option {
+	return func(cfg *config) { cfg.now = now }
 }
 
 // Service owns durable request acceptance and inspection in moox-factor-mgr;
@@ -35,11 +51,18 @@ type Service struct {
 }
 
 func NewService(db *store.Store, options ...Option) *Service {
-	cfg := config{}
+	cfg := config{
+		retention:   store.DefaultRecalcJobRetention,
+		keepPerTask: store.DefaultRecalcJobKeepPerTask,
+		now:         time.Now,
+	}
 	for _, option := range options {
 		if option != nil {
 			option(&cfg)
 		}
+	}
+	if cfg.now == nil {
+		cfg.now = time.Now
 	}
 	return &Service{db: db, cfg: cfg}
 }
@@ -134,7 +157,7 @@ func (s *Service) Cancel(ctx context.Context, jobID string) (store.RecalcJob, er
 	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
 	}
-	return s.db.UpdateRecalcJob(ctx, jobID, func(job *store.RecalcJob) error {
+	job, err := s.db.UpdateRecalcJob(ctx, jobID, func(job *store.RecalcJob) error {
 		switch job.Status {
 		case store.RecalcStatusSucceeded, store.RecalcStatusFailed, store.RecalcStatusCancelled:
 			return nil
@@ -143,6 +166,13 @@ func (s *Service) Cancel(ctx context.Context, jobID string) (store.RecalcJob, er
 			return nil
 		}
 	})
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	if _, pruneErr := s.db.PruneRecalcJobs(ctx, s.cfg.now().UTC(), s.cfg.retention, s.cfg.keepPerTask); pruneErr != nil {
+		log.WarnContextf(ctx, "factor_recalc_jobs_prune_failed job_id=%s error=%v", job.JobID, pruneErr)
+	}
+	return job, nil
 }
 
 func (s *Service) selection(ctx context.Context, taskID string, memberKeys, subjects []string) (domain.FactorTask, []domain.MemberDef, []string, error) {

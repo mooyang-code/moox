@@ -248,7 +248,7 @@ func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbac
 
 	payload, err := pipeline.Execute(ctx, Request{BatchID: "batch-30", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-30", Concurrency: 30, Items: items})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Len(t, pipeline.Storage.(*pipelineStorage).rows, 30)
 	require.Equal(t, int32(2), atomic.LoadInt32(&firstCalls))
 	require.Equal(t, int32(30), atomic.LoadInt32(&fallbackCalls))
@@ -271,7 +271,7 @@ func TestKlinePipelineRejectsRealtimeBarsInsideSettleWindow(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
 	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "settle", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "settle", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1}}})
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
+	require.Equal(t, "failed", payload.Status)
 	require.Empty(t, storage.rows)
 }
 
@@ -304,7 +304,7 @@ func TestKlinePipelineDoesNotFallbackAcrossBoundSources(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
+	require.Equal(t, "failed", payload.Status)
 	require.Empty(t, storage.rows)
 }
 
@@ -358,8 +358,8 @@ func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
 	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "history", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "history", Items: []domain.CollectionItem{{SubjectID: recent.SubjectID, Symbol: recent.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3}}})
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
-	require.Contains(t, payload.GetErrorSummary(), "coverage")
+	require.Equal(t, "failed", payload.Status)
+	require.Contains(t, payload.ErrorSummary, "coverage")
 }
 
 func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *testing.T) {
@@ -381,7 +381,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Equal(t, period, observed.StartTime)
 	require.Equal(t, period.Add(time.Minute), observed.EndTime)
 	require.Equal(t, 1, storage.commits)
@@ -396,7 +396,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus(), "a required target without any supported fields cannot succeed")
+	require.Equal(t, "failed", payload.Status, "a required target without any supported fields cannot succeed")
 	require.Zero(t, noRowsStorage.commits)
 	target.OutputFields = ""
 	secondTarget := target
@@ -410,10 +410,10 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target, secondTarget},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
+	require.Equal(t, "failed", payload.Status)
 	require.Equal(t, 1, mixedFieldsStorage.commits, "unsupported output must not prevent an independent valid target from committing")
-	require.Equal(t, "failed", payload.GetItems()[0].GetTargets()[0].GetStatus())
-	require.Equal(t, "succeeded", payload.GetItems()[0].GetTargets()[1].GetStatus())
+	require.Equal(t, "failed", payload.Items[0].Targets[0].Status)
+	require.Equal(t, "succeeded", payload.Items[0].Targets[1].Status)
 	target.OutputFields = ""
 	partialStorage := &recordingTimerPeriodCommitStorage{failDataset: target.DatasetID}
 	pipeline.Storage = partialStorage
@@ -423,8 +423,8 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target, secondTarget},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus(), "one accepted Dataset cannot mask a rejected required target")
-	require.Len(t, payload.GetItems()[0].GetTargets(), 2)
+	require.Equal(t, "failed", payload.Status, "one accepted Dataset cannot mask a rejected required target")
+	require.Len(t, payload.Items[0].Targets, 2)
 
 	registry = marketdata.NewRegistry()
 	recent := bar
@@ -441,8 +441,8 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
-	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.GetItems()[0].GetOutcome())
+	require.Equal(t, "failed", payload.Status)
+	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.Items[0].Outcome)
 	require.Zero(t, missingStorage.commits, "a later bar must not count as evidence for the frozen target")
 }
 
@@ -513,7 +513,7 @@ func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
 	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-1", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-1", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: "2026-08-28T06:59:00Z", BarLimit: 3, TargetDataTime: "2026-08-28T06:59:00Z", SeriesHash: "residual-period-hash", ExpectedCount: 1}}})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Equal(t, 1, storage.writes)
 	require.Len(t, storage.rows, 1)
 	row := storage.rows[0]
@@ -607,7 +607,7 @@ func TestKlinePipelineAcceptsCryptoHourFrequency(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", InstrumentType: marketdata.InstrumentSpot, DatasetID: "binance_spot_kline_1h", Now: func() time.Time { return now }}
 	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-hour", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Frequency: "1h", Provider: "binance", MarketType: "spot", RequestID: "request-hour", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "binance_spot_kline_1h", Frequency: "1h", StartTime: barStart.Format(time.RFC3339), BarLimit: 1}}})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Len(t, storage.rows, 1)
 	require.Equal(t, "1h", storage.rows[0].GetKey().GetTimeSeries().GetFreq())
 }
@@ -645,7 +645,7 @@ func TestKlinePipelineFiltersBarsBeforeConfiguredCoverageStart(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
 	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-2", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-2", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: after.BarStart.Format(time.RFC3339), EndTime: after.BarEnd.Format(time.RFC3339), BarLimit: 3}}})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Len(t, storage.rows, 1)
 	require.Equal(t, after.BarStart.Format(time.RFC3339Nano), storage.rows[0].GetKey().GetTimeSeries().GetDataTime())
 	fields := make(map[string]*storagepb.TypedValue)
@@ -674,7 +674,7 @@ func TestKlinePipelineUsesThirdProviderAfterThreeAttempts(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent", "eastmoney"}, Now: func() time.Time { return now }}
 	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-third", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-third", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Len(t, storage.rows, 1)
 	fields := make(map[string]*storagepb.TypedValue)
 	for _, field := range storage.rows[0].GetFields() {
@@ -803,7 +803,7 @@ func TestKlinePipelineAssignsSourcesPerSubjectAndFallsBack(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, AutoBindSource: true, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Now: func() time.Time { return now }}
 	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "assign", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", MarketType: "equity", RequestID: "assign", Concurrency: 20, Items: items})
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Len(t, storage.rows, 20)
 	require.Equal(t, int32(20), atomic.LoadInt32(&tencentCalls), "每个标的最终都由腾讯取到")
 	require.Equal(t, int32(assignedToSina*RuntimeKlineProviderAttemptBudget()), atomic.LoadInt32(&sinaCalls), "分到新浪的标的只试新浪一轮，分到腾讯的不试新浪")

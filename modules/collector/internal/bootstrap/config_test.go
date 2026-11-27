@@ -67,12 +67,6 @@ func TestCollectorRPCListenersUseNativeLoopbackOnly(t *testing.T) {
 	require.True(t, foundCollectMgr)
 }
 
-// 合成覆盖 barclock 登记的全部市场，不读环境变量；Admin 的 collectorEventBusSpaces 要与这份名单一致。
-func TestResampleSpaceIDsCoverAllRegisteredMarkets(t *testing.T) {
-	t.Setenv("MOOX_SPACE_IDS", "crypto")
-	assert.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, resampleSpaceIDs())
-}
-
 func TestLoadKlineResampleConfig(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, `kline_resample:
   enabled: true

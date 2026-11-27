@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
@@ -181,20 +180,6 @@ func (r *Registry) FamilyPattern(event Event) (string, error) {
 		return "", fmt.Errorf("event %s is not registered", eventKey(event))
 	}
 	return eventFamily(event), nil
-}
-
-// SpacePattern returns the subject family for exactly one space. It is useful
-// for consumers which own all routes of an event type within one tenant, while
-// keeping completions from other spaces out of their durable consumer.
-func (r *Registry) SpacePattern(event Event, spaceID string) (string, error) {
-	if _, ok := r.Lookup(event.Name(), event.Version()); !ok {
-		return "", fmt.Errorf("event %s is not registered", eventKey(event))
-	}
-	spaceToken, err := jetstream.EncodeSubjectToken(spaceID)
-	if err != nil {
-		return "", fmt.Errorf("encode space_id: %w", err)
-	}
-	return strings.ReplaceAll(strings.ReplaceAll(eventSubject(event), "<space>", spaceToken), "<subject>", ">"), nil
 }
 
 func eventSubject(event Event) string {

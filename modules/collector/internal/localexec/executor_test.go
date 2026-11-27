@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	marketserverless "github.com/mooyang-code/moox/modules/collector/internal/serverless/market_data"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -40,11 +39,11 @@ func recordingHandler(observed *[]marketfetch.Request, mu *sync.Mutex) func() *m
 	return func() *marketfetch.Handler {
 		return &marketfetch.Handler{
 			NewStorage: func() (marketfetch.Storage, error) { return nopStorage{}, nil },
-			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetch.BatchCompleted, error) {
 				mu.Lock()
 				*observed = append(*observed, request)
 				mu.Unlock()
-				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
+				return &marketfetch.BatchCompleted{BatchID: request.BatchID, Status: "succeeded"}, nil
 			},
 		}
 	}
@@ -92,7 +91,7 @@ func TestLocalExecutorLimitsConcurrency(t *testing.T) {
 	executor := New("crypto", 2, func() *marketfetch.Handler {
 		return &marketfetch.Handler{
 			NewStorage: func() (marketfetch.Storage, error) { return nopStorage{}, nil },
-			Execute: func(context.Context, marketfetch.Request, marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+			Execute: func(context.Context, marketfetch.Request, marketfetch.Storage) (*marketfetch.BatchCompleted, error) {
 				current := running.Add(1)
 				for {
 					old := peak.Load()
@@ -102,7 +101,7 @@ func TestLocalExecutorLimitsConcurrency(t *testing.T) {
 				}
 				<-release
 				running.Add(-1)
-				return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil
+				return &marketfetch.BatchCompleted{Status: "succeeded"}, nil
 			},
 		}
 	})

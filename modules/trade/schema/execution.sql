@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_remaining_reserved_quantity TEXT NOT NULL DEFAULT '0',
     c_paper_execution_price TEXT,
     c_first_match_pending INTEGER NOT NULL DEFAULT 0,
+    -- 结构化拒单/结束错误码；业务状态判断只看本列，不解析 c_reject_reason 展示文案
+    c_reject_code TEXT NOT NULL DEFAULT '',
     c_reject_reason TEXT NOT NULL DEFAULT '',
     c_exchange_updated_at INTEGER NOT NULL DEFAULT 0,
     c_version INTEGER NOT NULL DEFAULT 1,
@@ -43,16 +45,32 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_finished_at INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_order_id),
-    UNIQUE (c_space_id, c_trading_account_id, c_market_type, c_client_order_id),
-    FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
-    FOREIGN KEY (c_space_id, c_logical_account_id)
-        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
     CHECK (c_first_match_pending IN (0, 1)),
     CHECK (c_attempt >= 0),
     CHECK (c_owner_type IN ('TARGET', 'OPERATOR', 'EXTERNAL', 'SYSTEM')),
     CHECK (c_owner_id <> ''),
+    CHECK (
+        c_reject_code IN (
+            '',
+            'OUT_OF_SESSION',
+            'INSUFFICIENT_FUNDS',
+            'REDUCE_ONLY',
+            'QUANTITY_RULE',
+            'NOTIONAL_LIMIT',
+            'LEVERAGE_LIMIT',
+            'INSTRUMENT_DISABLED',
+            'INSTRUMENT_GONE',
+            'PRICE_LIMIT',
+            'INVALID_SPEC',
+            'CROSS_ZERO',
+            'ACCOUNT_OWNERSHIP',
+            'EXCHANGE_REJECTED',
+            'SESSION_CLOSE',
+            'PAPER_CLOSED',
+            'MANUAL_EXPIRE',
+            'UNKNOWN'
+        )
+    ),
     CHECK (
         (
             c_owner_type = 'TARGET'
@@ -76,7 +94,13 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
             AND c_logical_account_id IS NOT NULL
             AND c_instance_id IS NULL
         )
-    )
+    ),
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
+    PRIMARY KEY (c_space_id, c_order_id),
+    UNIQUE (c_space_id, c_trading_account_id, c_market_type, c_client_order_id)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_trade_orders_exchange_order
@@ -88,10 +112,8 @@ ON t_trade_orders (
     c_exchange_order_id
 )
 WHERE c_exchange_order_id <> '';
-
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_state
 ON t_trade_orders (c_space_id, c_trading_account_id, c_state, c_mtime);
-
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_symbol_finished
 ON t_trade_orders (
     c_space_id,
@@ -100,23 +122,18 @@ ON t_trade_orders (
     c_exchange_symbol,
     c_finished_at
 );
-
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_finished
 ON t_trade_orders (c_space_id, c_trading_account_id, c_finished_at);
-
 -- 下单资金检查按提交时间取账户里还没反映到交易所快照的预留。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_submitted
 ON t_trade_orders (c_space_id, c_trading_account_id, c_submitted_at);
-
 -- 管理台按组合列订单：按创建时间倒序分页，不用对组合的全部订单排序。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_created
 ON t_trade_orders (c_space_id, c_logical_account_id, c_ctime, c_order_id);
-
 -- 成交明细没补齐的订单（观察到的累计成交量和已入账的不一致）：每次同步都查，部分索引不随历史订单增长。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_fill_gap
 ON t_trade_orders (c_space_id, c_trading_account_id)
 WHERE c_observed_filled_quantity != '0' AND c_observed_filled_quantity <> c_filled_quantity;
-
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_owner_state
 ON t_trade_orders (
     c_space_id,
@@ -126,19 +143,26 @@ ON t_trade_orders (
     c_state,
     c_mtime
 );
-
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_state
 ON t_trade_orders (c_space_id, c_logical_account_id, c_state);
-
 -- 单币每小时上限：按组合和提交时间范围取策略已提交的子单，再按内部标的 ID 汇总名义金额（查询不带标的条件）。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_target_hourly
 ON t_trade_orders (c_space_id, c_logical_account_id, c_submitted_at)
 WHERE c_owner_type = 'TARGET';
-
 -- 模拟撮合只扫 OPEN 订单，部分索引不随历史订单增长。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_paper_open
 ON t_trade_orders (c_first_match_pending, c_space_id, c_order_id)
 WHERE c_state = 'OPEN';
+
+CREATE TRIGGER IF NOT EXISTS trg_t_trade_orders_mtime
+AFTER UPDATE ON t_trade_orders
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_trade_orders
+    SET c_mtime = CURRENT_TIMESTAMP
+    WHERE c_space_id = OLD.c_space_id AND c_order_id = OLD.c_order_id;
+END;
 
 CREATE TABLE IF NOT EXISTS t_order_fills (
     c_space_id TEXT NOT NULL,
@@ -163,7 +187,10 @@ CREATE TABLE IF NOT EXISTS t_order_fills (
     c_traded_at INTEGER NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_logical_account_id TEXT,
-    PRIMARY KEY (c_space_id, c_fill_id),
+    FOREIGN KEY (c_space_id, c_order_id)
+        REFERENCES t_trade_orders (c_space_id, c_order_id),
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
     UNIQUE (
         c_space_id,
         c_trading_account_id,
@@ -171,18 +198,13 @@ CREATE TABLE IF NOT EXISTS t_order_fills (
         c_exchange_symbol,
         c_exchange_trade_id
     ),
-    FOREIGN KEY (c_space_id, c_order_id)
-        REFERENCES t_trade_orders (c_space_id, c_order_id),
-    FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+    PRIMARY KEY (c_space_id, c_fill_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_order_fills_order_time
 ON t_order_fills (c_space_id, c_order_id, c_traded_at);
-
 CREATE INDEX IF NOT EXISTS idx_order_fills_paper_balance_history
 ON t_order_fills (c_space_id, c_trading_account_id, c_traded_at, c_fill_id);
-
 -- c_logical_account_id 是成交所属订单的组合账户（订单不属于任何组合时为空），写入成交时从订单带过来；
 -- 按组合查成交、汇总收益按这一列过滤，并按成交时间倒序分页。
 CREATE INDEX IF NOT EXISTS idx_order_fills_logical_time
@@ -204,6 +226,8 @@ CREATE TABLE IF NOT EXISTS t_order_fill_hourly_summaries (
     c_fill_count INTEGER NOT NULL DEFAULT 0,
     CHECK (c_bucket_time >= 0),
     CHECK (c_fill_count > 0),
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
     PRIMARY KEY (
         c_space_id,
         c_trading_account_id,
@@ -211,9 +235,7 @@ CREATE TABLE IF NOT EXISTS t_order_fill_hourly_summaries (
         c_logical_account_id,
         c_fee_asset,
         c_settlement_asset
-    ),
-    FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+    )
 );
 
 -- 按组合汇总收益（含已移出成员的历史成交）走这条。
@@ -238,9 +260,9 @@ CREATE TABLE IF NOT EXISTS t_account_instrument_summaries (
     c_last_traded_at INTEGER NOT NULL,
     c_last_fill_id TEXT NOT NULL,
     CHECK (c_managed IN (0, 1)),
-    PRIMARY KEY (c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol),
     FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
+    PRIMARY KEY (c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol)
 );
 
 CREATE TABLE IF NOT EXISTS t_trading_positions (
@@ -263,16 +285,30 @@ CREATE TABLE IF NOT EXISTS t_trading_positions (
     -- 权威（REST 完整）持仓快照已经覆盖到的时间：时间早于它的迟到成交已包含在快照数量里，不能再叠加
     c_snapshot_covered_until INTEGER NOT NULL DEFAULT 0,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
     PRIMARY KEY (
         c_space_id,
         c_trading_account_id,
         c_market_type,
         c_exchange_symbol,
         c_position_side
-    ),
-    FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+    )
 );
+
+CREATE TRIGGER IF NOT EXISTS trg_t_trading_positions_mtime
+AFTER UPDATE ON t_trading_positions
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_trading_positions
+    SET c_mtime = CURRENT_TIMESTAMP
+    WHERE c_space_id = OLD.c_space_id
+        AND c_trading_account_id = OLD.c_trading_account_id
+        AND c_market_type = OLD.c_market_type
+        AND c_exchange_symbol = OLD.c_exchange_symbol
+        AND c_position_side = OLD.c_position_side;
+END;
 
 -- 被权威（REST 完整）持仓快照确认为空仓而删除的持仓墓碑：保留“快照确认空仓”的覆盖时间，
 -- 时间早于它的迟到成交已经体现在空仓里，不能再从零叠加出虚假持仓。
@@ -283,13 +319,13 @@ CREATE TABLE IF NOT EXISTS t_trading_position_tombstones (
     c_exchange_symbol TEXT NOT NULL,
     c_position_side TEXT NOT NULL,
     c_covered_until INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
     PRIMARY KEY (
         c_space_id,
         c_trading_account_id,
         c_market_type,
         c_exchange_symbol,
         c_position_side
-    ),
-    FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+    )
 );

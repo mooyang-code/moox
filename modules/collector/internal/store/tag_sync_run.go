@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"gorm.io/gorm"
@@ -12,21 +11,21 @@ import (
 )
 
 type tagSyncRunRow struct {
-	SpaceID       string     `gorm:"column:c_space_id;primaryKey"`
-	TagID         string     `gorm:"column:c_tag_id;primaryKey"`
-	LastRunAt     time.Time  `gorm:"column:c_last_run_at"`
-	LastStatus    string     `gorm:"column:c_last_status"`
-	LastError     string     `gorm:"column:c_last_error"`
-	LastSuccessAt *time.Time `gorm:"column:c_last_success_at"`
-	MTime         time.Time  `gorm:"column:c_mtime"`
+	SpaceID       string `gorm:"column:c_space_id;primaryKey"`
+	TagID         string `gorm:"column:c_tag_id;primaryKey"`
+	LastRunAt     int64  `gorm:"column:c_last_run_at"`
+	LastStatus    string `gorm:"column:c_last_status"`
+	LastError     string `gorm:"column:c_last_error"`
+	LastSuccessAt *int64 `gorm:"column:c_last_success_at"`
+	MTime         int64  `gorm:"column:c_mtime"`
 }
 
 func (tagSyncRunRow) TableName() string { return "t_collector_tag_sync_runs" }
 
 func (row tagSyncRunRow) run() domain.TagSyncRun {
-	run := domain.TagSyncRun{SpaceID: row.SpaceID, TagID: row.TagID, LastRunAt: row.LastRunAt.UTC(), LastStatus: row.LastStatus, LastError: row.LastError}
+	run := domain.TagSyncRun{SpaceID: row.SpaceID, TagID: row.TagID, LastRunAt: fromUnixMilli(row.LastRunAt), LastStatus: row.LastStatus, LastError: row.LastError}
 	if row.LastSuccessAt != nil {
-		run.LastSuccessAt = row.LastSuccessAt.UTC()
+		run.LastSuccessAt = fromUnixMilli(*row.LastSuccessAt)
 	}
 	return run
 }
@@ -57,8 +56,8 @@ func (r *TagSyncRunRepository) Record(ctx context.Context, run domain.TagSyncRun
 	if run.LastStatus != domain.TagSyncSuccess && run.LastStatus != domain.TagSyncFailed {
 		return fmt.Errorf("tag sync run status %q is invalid", run.LastStatus)
 	}
-	runAt := run.LastRunAt.UTC()
-	row := tagSyncRunRow{SpaceID: run.SpaceID, TagID: run.TagID, LastRunAt: runAt, LastStatus: run.LastStatus, LastError: run.LastError, MTime: time.Now().UTC()}
+	runAt := toUnixMilli(run.LastRunAt)
+	row := tagSyncRunRow{SpaceID: run.SpaceID, TagID: run.TagID, LastRunAt: runAt, LastStatus: run.LastStatus, LastError: run.LastError, MTime: nowUnixMilli()}
 	updates := []string{"c_last_run_at", "c_last_status", "c_last_error", "c_mtime"}
 	if run.LastStatus == domain.TagSyncSuccess {
 		row.LastSuccessAt = &runAt

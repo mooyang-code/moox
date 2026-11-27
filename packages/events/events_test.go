@@ -240,6 +240,15 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	require.Equal(t, int64(1792576800), decoded.GetStart(), "start 是 Unix 秒")
 	require.Equal(t, start.Add(time.Hour).Unix(), decoded.GetEnd())
 
+	for _, origin := range []string{"auto", "manual", "force", "resample", "seed", "catchup", "close_refetch"} {
+		candidate := proto.Clone(payload).(*storagepb.CollectorKlineBackfilled)
+		candidate.Origin = origin
+		encoded, err := registry.Encode(CollectorKlineBackfilled, candidate, PublishOptions{EventID: "batch-" + origin, OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
+		require.NoError(t, err, "origin=%s 应通过校验", origin)
+		_, err = registry.ValidateMessage(encoded.Message)
+		require.NoError(t, err, "origin=%s 消息校验应通过", origin)
+	}
+
 	for name, mutate := range map[string]func(*storagepb.CollectorKlineBackfilled){
 		"dataset mismatch": func(p *storagepb.CollectorKlineBackfilled) { p.DatasetId = "other" },
 		"no subjects":      func(p *storagepb.CollectorKlineBackfilled) { p.SubjectIds = nil },

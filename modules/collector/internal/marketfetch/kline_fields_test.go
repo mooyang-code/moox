@@ -90,7 +90,7 @@ func TestKlinePipelineFillsFieldsFromTwoSources(t *testing.T) {
 		"all": `["close","adj_factor","sw_l1"]`, "plain": `["close"]`,
 	}))
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Len(t, storage.rows["all"], 3)
 	for index, row := range storage.rows["all"] {
 		require.Equal(t, 1.5+float64(index), findField(row, "adj_factor").GetDoubleValue())
@@ -119,10 +119,10 @@ func TestKlinePipelineFieldSourceErrorFailsOnlyTargetsThatSelectedIt(t *testing.
 		"with_adj": `["close","adj_factor"]`, "with_industry": `["close","sw_l1"]`, "plain": `["close"]`,
 	}))
 	require.NoError(t, err)
-	require.Len(t, payload.GetItems(), 1)
-	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.GetItems()[0].GetOutcome())
-	require.Equal(t, "adj_factor", payload.GetItems()[0].GetErrorType())
-	require.Equal(t, int32(1), payload.GetRetryCount(), "可以重试")
+	require.Len(t, payload.Items, 1)
+	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.Items[0].Outcome)
+	require.Equal(t, "adj_factor", payload.Items[0].ErrorType)
+	require.Equal(t, int32(1), payload.RetryCount, "可以重试")
 	require.Empty(t, storage.rows["with_adj"])
 	require.Len(t, storage.rows["with_industry"], 3)
 	require.NotNil(t, findField(storage.rows["with_industry"][0], "sw_l1"))
@@ -139,7 +139,7 @@ func TestKlinePipelineWritesRowWhenFieldHasNoValue(t *testing.T) {
 	storage := &datasetStorage{}
 	payload, err := fieldsPipeline(t, storage, adj, industry).Execute(context.Background(), fieldsRequest(map[string]string{"all": `["close","adj_factor","sw_l1"]`}))
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	rows := storage.rows["all"]
 	require.Len(t, rows, 3)
 	require.Equal(t, 2.0, findField(rows[0], "adj_factor").GetDoubleValue())
@@ -157,7 +157,7 @@ func TestKlinePipelineSkipsFieldSourcesWhenNotSelected(t *testing.T) {
 	storage := &datasetStorage{}
 	payload, err := fieldsPipeline(t, storage, adj, industry).Execute(context.Background(), fieldsRequest(map[string]string{"plain": `["close"]`, "default": ""}))
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Empty(t, adj.requested())
 	require.Empty(t, industry.requested())
 	require.Len(t, storage.rows["plain"], 3)
@@ -171,7 +171,7 @@ func TestKlinePipelineFetchesFieldsAfterKlinesWhenRangeUnknown(t *testing.T) {
 	req.Items[0].EndTime = ""
 	payload, err := fieldsPipeline(t, storage, adj).Execute(context.Background(), req)
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	requests := adj.requested()
 	require.Len(t, requests, 1)
 	require.Equal(t, fundingBarBase, requests[0].Start)

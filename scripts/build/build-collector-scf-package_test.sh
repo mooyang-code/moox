@@ -13,144 +13,31 @@ TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-collector-scf-package-test.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 FAKE_BIN="${TMP_ROOT}/bin"
 mkdir -p "${FAKE_BIN}"
-REAL_GO="$(command -v go)"
-# 打包脚本用 go build -o 构建 SCF 二进制（这里替换成占位文件），用 go run 跑配置检查（交给真正的 go）。
-cat >"${FAKE_BIN}/go" <<EOF
+# 打包脚本用 go build -o 构建 SCF 单二进制（这里替换成占位文件）。
+cat >"${FAKE_BIN}/go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "\${1:-}" == "run" ]]; then exec "${REAL_GO}" "\$@"; fi
-while ((\$#)); do
-  if [[ "\$1" == "-o" ]]; then printf '#!/usr/bin/env bash\n' >"\$2"; chmod +x "\$2"; exit 0; fi
+while (($#)); do
+  if [[ "$1" == "-o" ]]; then printf '#!/usr/bin/env bash\n' >"$2"; chmod +x "$2"; exit 0; fi
   shift
 done
 exit 1
 EOF
 chmod +x "${FAKE_BIN}/go"
-for secret_case in nats-jwt nkey-seed; do
-  secret_config="${TMP_ROOT}/config-${secret_case}"
-  cp -R "${ROOT}/modules/collector/configs/scf/market_data" "${secret_config}"
-  if [[ "${secret_case}" == "nats-jwt" ]]; then
-    printf 'credentials: |\n  -----BEGIN NATS USER JWT-----\n  test-user-jwt\n  ------END NATS USER JWT------\n' >"${secret_config}/sources/market/credentials.yaml"
-  else
-    printf 'nats:\n  user_nkey_seed: SUABCDEF1234567890\n' >"${secret_config}/sources/market/credentials.yaml"
-  fi
-  if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${secret_config}" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/${secret_case}.zip" \
-    bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
-    echo "expected packaging to reject ${secret_case}" >&2
-    exit 1
-  fi
-  [[ ! -e "${TMP_ROOT}/${secret_case}.zip" ]]
-done
-
-for credential_case in scalar list structured structured-cased null-key comment quoted-comment quoted-punct-comment empty-quote-tail null-tail tilde-tail null-plus-comment-credential empty-plus-comment-credential; do
-  credential_config="${TMP_ROOT}/config-${credential_case}"
-  cp -R "${ROOT}/modules/collector/configs/scf/market_data" "${credential_config}"
-  if [[ "${credential_case}" == "scalar" ]]; then
-    printf 'note: MOOX_CLS_SECRET_KEY=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "list" ]]; then
-    printf 'notes:\n  - MOOX_EVENTBUS_NATS_PASSWORD=secret\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "structured" ]]; then
-    printf 'env:\n  - name: MOOX_CLS_SECRET_KEY\n    value: topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "structured-cased" ]]; then
-    printf 'env:\n  - Name: MOOX_EVENTBUS_NATS_PASSWORD\n    Value: topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "null-key" ]]; then
-    printf 'MOOX_CLS_SECRET_KEY=topsecret:\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "quoted-comment" ]]; then
-    printf '# "MOOX_CLS_SECRET_KEY": "topsecret"\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "quoted-punct-comment" ]]; then
-    printf '# "MOOX_CLS_SECRET_KEY": ",topsecret"\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "empty-quote-tail" ]]; then
-    printf '# MOOX_CLS_SECRET_KEY: ""topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "null-tail" ]]; then
-    printf '# MOOX_CLS_SECRET_KEY: null topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "tilde-tail" ]]; then
-    printf '# MOOX_CLS_SECRET_KEY: ~ topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "null-plus-comment-credential" ]]; then
-    printf '# MOOX_CLS_SECRET_KEY: null # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  elif [[ "${credential_case}" == "empty-plus-comment-credential" ]]; then
-    printf '# MOOX_CLS_SECRET_KEY: "" # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  else
-    printf '# MOOX_CLS_SECRET_KEY=topsecret\n' >"${credential_config}/sources/market/credential.yaml"
-  fi
-  if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${credential_config}" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/${credential_case}-credential.zip" \
-    bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
-    echo "expected packaging to reject credential assignment in ${credential_case}" >&2
-    exit 1
-  fi
-  [[ ! -e "${TMP_ROOT}/${credential_case}-credential.zip" ]]
-done
-
-for placeholder in null tilde empty quoted-whitespace implicit-null-eof; do
-  placeholder_config="${TMP_ROOT}/config-placeholder-${placeholder}"
-  cp -R "${ROOT}/modules/collector/configs/scf/market_data" "${placeholder_config}"
-  case "${placeholder}" in
-    null) printf 'MOOX_CLS_SECRET_KEY: null\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-    tilde) printf 'MOOX_CLS_SECRET_KEY: ~\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-    empty) printf 'MOOX_CLS_SECRET_KEY: ""\n' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-    quoted-whitespace) printf "MOOX_CLS_SECRET_KEY: '  '\\n" >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-    implicit-null-eof) printf 'MOOX_CLS_SECRET_KEY:' >"${placeholder_config}/sources/market/placeholder.yaml" ;;
-  esac
-  placeholder_zip="${TMP_ROOT}/${placeholder}-placeholder.zip"
-  PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${placeholder_config}" SCF_SPACE_ID="market_data" OUT_PATH="${placeholder_zip}" \
-    bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
-  [[ -e "${placeholder_zip}" ]]
-done
-
-symlink_config="${TMP_ROOT}/config-symlink"
-cp -R "${ROOT}/modules/collector/configs/scf/market_data" "${symlink_config}"
-cp "${symlink_config}/sources/market/binance.yaml" "${TMP_ROOT}/outside-binance.yaml"
-rm "${symlink_config}/sources/market/binance.yaml"
-ln -s "${TMP_ROOT}/outside-binance.yaml" "${symlink_config}/sources/market/binance.yaml"
-if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${symlink_config}" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/symlink-config.zip" \
-  bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
-  echo "expected packaging to reject a symlinked source config" >&2
-  exit 1
-fi
-[[ ! -e "${TMP_ROOT}/symlink-config.zip" ]]
-
-config_dir_target="${TMP_ROOT}/config-dir-target"
-cp -R "${ROOT}/modules/collector/configs/scf/market_data" "${config_dir_target}"
-config_dir_symlink="${TMP_ROOT}/config-dir-symlink"
-ln -s "${config_dir_target}" "${config_dir_symlink}"
-if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${config_dir_symlink}/./" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/symlink-config-dir.zip" \
-  bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
-  echo "expected packaging to reject a symlinked SCF config directory" >&2
-  exit 1
-fi
-[[ ! -e "${TMP_ROOT}/symlink-config-dir.zip" ]]
-
-if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${TMP_ROOT}/missing-config" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/missing-config.zip" \
-  bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
-  echo "expected packaging to reject an explicitly missing SCF config directory" >&2
-  exit 1
-fi
-[[ ! -e "${TMP_ROOT}/missing-config.zip" ]]
-
-symlink_parent_base="${TMP_ROOT}/symlink-parent-base"
-symlink_target="${TMP_ROOT}/symlink-target"
-mkdir -p "${symlink_parent_base}" "${symlink_target}/child" "${symlink_target}/config"
-cp -R "${ROOT}/modules/collector/configs/scf/market_data/sources" "${symlink_target}/config/sources"
-ln -s "${symlink_target}/child" "${symlink_parent_base}/link"
-if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${symlink_parent_base}/link/../config" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/symlink-parent-escape.zip" \
-  bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
-  echo "expected packaging to use the normalized SCF config path" >&2
-  exit 1
-fi
-[[ ! -e "${TMP_ROOT}/symlink-parent-escape.zip" ]]
 
 package_path="${TMP_ROOT}/collector-scf.zip"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="market_data" SCF_ENTRYPOINT="market_data" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="crypto" SCF_ENTRYPOINT="market_data" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
     bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
 )
 listing_path="${TMP_ROOT}/listing.txt"
-unzip -l "${package_path}" >"${listing_path}"
-grep -q ' main$' "${listing_path}"
-! grep -q ' certs/' "${listing_path}"
-! grep -q 'trpc_go.yaml' "${listing_path}"
-unzip -p "${package_path}" sources/market/binance.yaml >"${TMP_ROOT}/binance.yaml"
-cmp "${TMP_ROOT}/binance.yaml" "${ROOT}/modules/collector/configs/scf/market_data/sources/market/binance.yaml"
+unzip -Z1 "${package_path}" >"${listing_path}"
+[[ "$(cat "${listing_path}")" == "main" ]] || {
+  echo "expected SCF package to contain only 'main', got:" >&2
+  cat "${listing_path}" >&2
+  exit 1
+}
 
 stock_package_path="${TMP_ROOT}/collector-stockcn-scf.zip"
 (
@@ -159,19 +46,20 @@ stock_package_path="${TMP_ROOT}/collector-stockcn-scf.zip"
     bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
 )
 stock_listing_path="${TMP_ROOT}/stock-listing.txt"
-unzip -l "${stock_package_path}" >"${stock_listing_path}"
-grep -q ' main$' "${stock_listing_path}"
-grep -q ' sources/market/binance.yaml$' "${stock_listing_path}"
-# 市场数据文件（路由、数据源运行参数）和交易日历都编在二进制里，代码包不带。
-if grep -Eq 'calendar.yaml|route.yaml|market.yaml|sources/market/(sina|tencent|eastmoney|tdx).yaml' "${stock_listing_path}"; then
-  echo "stockcn SCF package must not contain market files (they are embedded in the binary)" >&2
+unzip -Z1 "${stock_package_path}" >"${stock_listing_path}"
+[[ "$(cat "${stock_listing_path}")" == "main" ]] || {
+  echo "expected stockcn SCF package to contain only 'main', got:" >&2
+  cat "${stock_listing_path}" >&2
+  exit 1
+}
+! unzip -p "${stock_package_path}" | grep -Eq 'test-cls-secret|test-eventbus-password'
+
+if PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="crypto" SCF_ENTRYPOINT="invalid" OUT_PATH="${TMP_ROOT}/bad-entry.zip" \
+  bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
+  echo "expected unsupported entrypoint to fail" >&2
   exit 1
 fi
-! grep -q 'trpc_go.yaml' "${stock_listing_path}"
-unzip -p "${stock_package_path}" sources/market/binance.yaml >"${TMP_ROOT}/stock-binance.yaml"
-cmp "${TMP_ROOT}/stock-binance.yaml" "${ROOT}/modules/collector/configs/scf/stockcn/sources/market/binance.yaml"
-
-! unzip -p "${stock_package_path}" | grep -Eq 'test-cls-secret|test-eventbus-password'
+[[ ! -e "${TMP_ROOT}/bad-entry.zip" ]]
 
 atomic_package_path="${TMP_ROOT}/collector-scf-atomic.zip"
 cp "${package_path}" "${atomic_package_path}"
@@ -183,7 +71,7 @@ printf 'partial archive\n' >"$2"
 exit 17
 EOF
 chmod +x "${TMP_ROOT}/fail-bin/zip"
-if PATH="${FAKE_BIN}:${TMP_ROOT}/fail-bin:${PATH}" SCF_SPACE_ID="market_data" OUT_PATH="${atomic_package_path}" \
+if PATH="${FAKE_BIN}:${TMP_ROOT}/fail-bin:${PATH}" SCF_SPACE_ID="crypto" OUT_PATH="${atomic_package_path}" \
   bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
   echo "expected zip failure to abort packaging" >&2
   exit 1

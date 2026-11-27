@@ -136,7 +136,7 @@ func (e *Executor) LaneStatuses(ctx context.Context, target store.LogicalAccount
 func (e *Executor) laneStatus(ctx context.Context, inputs laneInputs, instrumentID string) (LaneStatus, error) {
 	status := LaneStatus{InstrumentID: instrumentID}
 	desired := inputs.desired[instrumentID]
-	action, complete, reason, err := e.laneAction(inputs.env, instrumentID, desired, inputs.members)
+	action, complete, reason, _, err := e.laneAction(inputs.env, instrumentID, desired, inputs.members)
 	switch {
 	case err != nil:
 		return status, err

@@ -273,7 +273,7 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 		return nil, fmt.Errorf("task result frequency is required")
 	}
 	marketID := firstTaskResultInventoryValue(params.MarketID, task.SpaceID)
-	calendarID, timezone, sessions, err := taskResultMarketCalendar(marketID)
+	calendarID, timezone, sessions, err := s.taskResultCalendar(ctx, task, params, marketID)
 	if err != nil {
 		return nil, err
 	}
@@ -308,11 +308,35 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 	entry.ResultStatus = inspection.Status
 	entry.OwnershipVerified = inspection.Dataset != nil
 	entry.ViewLastDataTime = strings.TrimSpace(inspection.LastDataTime)
+	if strings.EqualFold(task.DataType, "kline_resample") && inspection.Dataset != nil {
+		if dsMarket, dsErr := barclock.MarketForDataset(inspection.Dataset.GetAlignment(), inspection.Dataset.GetAttributes()["calendar"]); dsErr == nil {
+			entry.CalendarId, entry.Timezone, entry.Sessions = marketCalendarTuple(dsMarket)
+		}
+	}
 	// 优先采用 Storage 数据集上真实生效的 allowed_lateness_seconds（如重采样目标的 120s 或同步生效的自定义迟到时间）。
 	if effective := inspection.Dataset.GetAllowedLatenessSeconds(); effective > 0 {
 		entry.AllowedLatenessSeconds = int32(effective)
 	}
 	return entry, nil
+}
+
+func (s *Service) taskResultCalendar(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, marketID string) (calendarID, timezone string, sessions []string, err error) {
+	if strings.EqualFold(task.DataType, "kline_resample") && s != nil && s.datasetSrc != nil && strings.TrimSpace(params.SourceDatasetID) != "" {
+		if sourceInfo, sourceErr := s.datasetSrc.GetDataset(ctx, task.SpaceID, params.SourceDatasetID); sourceErr == nil {
+			if market, marketErr := barclock.MarketForDataset(sourceInfo.Alignment, sourceInfo.Attributes["calendar"]); marketErr == nil {
+				c, tz, sess := marketCalendarTuple(market)
+				return c, tz, sess, nil
+			}
+		}
+	}
+	return taskResultMarketCalendar(marketID)
+}
+
+func marketCalendarTuple(market barclock.Market) (calendarID, timezone string, sessions []string) {
+	if market.Alignment == barclock.AlignmentEpochUTC {
+		return "", "UTC", nil
+	}
+	return market.CalendarID, market.Timezone, append([]string(nil), market.Sessions...)
 }
 
 // allowedLatenessSeconds 返回任务结果数据集的兜底允许迟到时间（在 Storage 数据集尚未创建或未设置时使用）：

@@ -20,10 +20,10 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/marginmonitor"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	walletapp "github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
@@ -124,7 +124,7 @@ func initialize(
 		RetryMin: time.Second, RetryMax: 30 * time.Second,
 	}
 	accounts := &accountapp.Service{
-		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
+		Store: accountapp.Repository{Store: tradeStore}, RawStore: tradeStore, Secrets: secrets,
 		SessionState: manager, SymbolConfigs: manager, Exchanges: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 		Inspector: registry,
 	}
@@ -175,7 +175,7 @@ func initialize(
 		}
 		account, accountErr := tradeStore.GetTradingAccountByID(refreshCtx, tradingAccountID)
 		if accountErr != nil {
-			return executionpaper.InfrastructureError{Err: accountErr}
+			return execution.InfrastructureError{Err: accountErr}
 		}
 		// 模拟盘快照的权益同样按统一公式落库（与实盘同步、权益采样一致）；估值失败保留适配器的值。
 		refreshed := store.SnapshotFromExchange(snapshot)
@@ -199,7 +199,7 @@ func initialize(
 			)
 		})
 		if err != nil {
-			return executionpaper.InfrastructureError{Err: err}
+			return execution.InfrastructureError{Err: err}
 		}
 		return nil
 	}
@@ -265,7 +265,8 @@ func initialize(
 			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, pause store.Pause,
 		) (store.OperatorActionRecord, error) {
 			result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
-				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: pause.Reason, ReduceRatio: ratio, PauseAs: pause,
+				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID,
+				Reason: pause.Reason, ReduceRatio: ratio, PauseAs: pause, Source: operatordomain.SourceMargin,
 			})
 			return result.Action, reduceErr
 		},
@@ -287,6 +288,10 @@ func initialize(
 	orderHistoryWorker := &traderuntime.FundWorker{
 		Maintainer: &traderuntime.OrderHistoryPruner{Store: tradeStore}, Interval: time.Hour, Name: "历史订单清理",
 	}
+	// 分钟净值历史降采样：与 store.DefaultEquityRetentionTiers 一致，0~7 天保留分钟级，7~30 天降采样为 15 分钟级，30~365 天降采样为小时级，365 天以上降采样为日级。
+	equityHistoryWorker := &traderuntime.FundWorker{
+		Maintainer: &traderuntime.EquityHistoryDownsampler{Store: tradeStore}, Interval: 6 * time.Hour, Name: "分钟净值历史降采样",
+	}
 	// 下架处理：收事件、名单查询与定时推进共用这一个实例。清仓在进程内直接调用 FlattenLogicalAccount。
 	delistService := &delistapp.Service{
 		Store: tradeStore, OnChanged: targetWorker.Wake,
@@ -295,7 +300,7 @@ func initialize(
 			_, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
 				SpaceID: request.SpaceID, ActionID: request.ActionID, LogicalAccountID: request.LogicalAccountID,
 				Reason: request.Reason, InstrumentID: request.InstrumentID, Exchange: request.Exchange,
-				DeadlineAt: request.DeadlineAt,
+				Source: operatordomain.SourceDelist, DeadlineAt: request.DeadlineAt,
 			})
 			if errors.Is(flattenErr, operatorapp.ErrLogicalAccountBusy) {
 				return delistapp.ErrFlattenBusy
@@ -373,6 +378,7 @@ func initialize(
 			PaperMatcherReady:     paperMatcherWorker.Ready,
 			PaperAccountState:     paperMatcher.AccountState,
 			PaperAccountRecovered: paperMatcher.RecoverAccount,
+			SubscribePaperState:   traderuntime.CombineStateSubscriptions(paperMatcherWorker.SubscribeState, paperMatcher.SubscribeState),
 			OnReady: func(tradingAccountID string) {
 				equitySampler.Enqueue(tradingAccountID)
 				fundWorker.AccountReady(tradingAccountID)
@@ -446,6 +452,7 @@ func initialize(
 	runWorker(marginWorker.Run)
 	runWorker(targetHistoryWorker.Run)
 	runWorker(orderHistoryWorker.Run)
+	runWorker(equityHistoryWorker.Run)
 	runWorker(delistWorker.Run)
 	attentionWorker := &traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor, Delist: delistService}
 	if eventBus != nil {
@@ -538,7 +545,6 @@ func initialize(
 		},
 
 		rpc.ConsoleOptions{
-			Paper:              &papersimulation.Service{Store: tradeStore, Exchanges: registry},
 			Exchanges:          registry,
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 			MatcherReady:       paperMatcherWorker.Ready,

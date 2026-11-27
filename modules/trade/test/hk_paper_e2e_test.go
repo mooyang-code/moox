@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -101,19 +101,24 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	// 建账户：港股只开股票、按 HKD 结算；结算资产不对在建账户时就拒绝。
-	console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db, Exchanges: registry},
-		LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
-	request := &tradepb.CreatePaperSimulationReq{
-		AccountName: "港股模拟", LogicalAccountName: "港股模拟组合", Exchange: "hkex",
-		Markets: []string{"equity"}, SettlementAsset: "CNY",
-		InitialBalance: "1000000", MakerFeeRate: "0.0003", TakerFeeRate: "0.0003", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+	logicalSrv := &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}
+	console := &rpc.ConsoleServer{
+		Store:                db,
+		AccountServer:        &rpc.AccountServer{Store: db, Logical: logicalSrv, Accounts: &accountapp.Service{Store: accountapp.Repository{Store: db}, Exchanges: registry}},
+		LogicalAccountServer: logicalSrv,
 	}
-	rejected, err := console.CreatePaperSimulation(ctx, request)
+	request := &tradepb.CreateTradingAccountReq{
+		Name: "港股模拟", LogicalAccountName: "港股模拟组合", Exchange: "hkex",
+		Markets: []string{"equity"}, SettlementAsset: "CNY",
+		Paper:       &tradepb.PaperConfig{InitialBalance: "1000000", MakerFeeRate: "0.0003", TakerFeeRate: "0.0003", SlippageBps: "0"},
+		ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+	}
+	rejected, err := console.CreateTradingAccount(ctx, request)
 	require.NoError(t, err)
 	require.NotEqual(t, tradepb.ErrorCode_SUCCESS, rejected.GetRetInfo().GetCode())
 	require.Contains(t, rejected.GetRetInfo().GetMsg(), "结算资产只能是 HKD")
 	request.SettlementAsset = "HKD"
-	created, err := console.CreatePaperSimulation(ctx, request)
+	created, err := console.CreateTradingAccount(ctx, request)
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo())
 	require.Equal(t, "hkex", created.GetAccount().GetExchange())

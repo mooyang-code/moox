@@ -1,6 +1,6 @@
 package order
 
-import "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
+import "github.com/mooyang-code/moox/modules/trade/internal/execution"
 
 // OperationDiscardPendingLock 是丢弃待提交订单时等交易账户锁没等到的 AccountExecutionError.Operation。
 const OperationDiscardPendingLock = "discard_pending_lock"
@@ -21,7 +21,7 @@ func accountExecutionError(accountID, operation string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if paper.IsInfrastructureError(err) {
+	if execution.IsInfrastructureError(err) {
 		return err
 	}
 	return &AccountExecutionError{TradingAccountID: accountID, Operation: operation, Err: err}

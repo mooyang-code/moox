@@ -63,6 +63,8 @@ type TransferOutcome struct {
 	BuyScale map[string]shared.Decimal
 	// Reasons 是比例缩小或为 0 的原因（键：执行账户 ID），写进 blocked_targets；没有写原因的用默认说明。
 	Reasons map[string]string
+	// ReasonCodes 是与 Reasons 对应的结构化原因码（键：执行账户 ID），供状态机与关注项判断。
+	ReasonCodes map[string]string
 	// RetryAfter 是建议的下次收敛间隔（失败后退避的剩余时间）；0 表示用 transferPollInterval。
 	RetryAfter time.Duration
 }
@@ -108,7 +110,7 @@ func (e *Executor) walletTransferBeforeSpotBuy(
 // 缩小后的动作记下原始差额和缩小原因，写 blocked_targets 时用原始差额。
 // 约定：比例是“划转实现这一轮看到的可用额度”相对“这一轮计划买入量”的比例。每一轮收敛都会按当前持仓重算计划买入量、
 // 再缩一次，已经买到的部分下一轮已在持仓里，不会重复缩小同一笔。实现划转（T9）时要对齐这个口径，比例按本轮算，不要累计。
-func scaleBuys(buys []laneAction, scale map[string]shared.Decimal, reasons map[string]string) []laneAction {
+func scaleBuys(buys []laneAction, scale map[string]shared.Decimal, reasons map[string]string, reasonCodes map[string]string) []laneAction {
 	if len(scale) == 0 {
 		return buys
 	}
@@ -125,10 +127,17 @@ func scaleBuys(buys []laneAction, scale map[string]shared.Decimal, reasons map[s
 				continue
 			}
 			reason := reasons[accountID]
+			reasonCode := reasonCodes[accountID]
 			if reason == "" {
 				reason = wallet.ReasonShortfallScaled
+				if reasonCode == "" {
+					reasonCode = store.BlockedReasonTransferShortfall
+				}
+			} else if reasonCode == "" {
+				reasonCode = store.BlockedReasonTransferFailed
 			}
-			action.fullDelta, action.delta, action.scaled, action.scaleReason = action.delta, smaller, true, reason
+			action.fullDelta, action.delta, action.scaled = action.delta, smaller, true
+			action.scaleReason, action.scaleReasonCode = reason, reasonCode
 			scaled = append(scaled, action)
 		}
 	}

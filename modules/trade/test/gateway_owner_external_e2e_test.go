@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
@@ -30,7 +30,12 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)
 	defer db.Close()
-	console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db}, LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
+	logicalSrv := &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}
+	console := &rpc.ConsoleServer{
+		Store:                db,
+		AccountServer:        &rpc.AccountServer{Store: db, Logical: logicalSrv, Accounts: &accountapp.Service{Store: accountapp.Repository{Store: db}}},
+		LogicalAccountServer: logicalSrv,
+	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:11200")
 	require.NoError(t, err)
 	var submits, closes atomic.Int32
@@ -48,9 +53,13 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	go func() { done <- svc.Serve() }()
 	defer func() { _ = svc.Close(nil); <-done }()
 	proxy := tradepb.NewTradeConsoleServiceClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(3*time.Second))
-	var created *tradepb.CreatePaperSimulationRsp
+	var created *tradepb.CreateTradingAccountRsp
 	require.Eventually(t, func() bool {
-		created, err = proxy.CreatePaperSimulation(context.Background(), &tradepb.CreatePaperSimulationReq{AccountName: "gateway-paper", LogicalAccountName: "gateway-strategy", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}, client.WithMetaData("X-Space-Id", []byte("space-gateway-e2e")))
+		created, err = proxy.CreateTradingAccount(context.Background(), &tradepb.CreateTradingAccountReq{
+			Name: "gateway-paper", LogicalAccountName: "gateway-strategy", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
+			Paper:       &tradepb.PaperConfig{InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
+			ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+		}, client.WithMetaData("X-Space-Id", []byte("space-gateway-e2e")))
 		return err == nil
 	}, 5*time.Second, 20*time.Millisecond)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created)

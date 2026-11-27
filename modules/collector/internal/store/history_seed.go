@@ -42,17 +42,17 @@ type HistorySeed struct {
 func (s HistorySeed) Active() bool { return s.Status == SeedPreparing || s.Status == SeedRunning }
 
 type historySeedRow struct {
-	SpaceID       string     `gorm:"column:c_space_id;primaryKey"`
-	DatasetID     string     `gorm:"column:c_dataset_id;primaryKey"`
-	Frequency     string     `gorm:"column:c_frequency;primaryKey"`
-	Status        string     `gorm:"column:c_status"`
-	TargetFrom    time.Time  `gorm:"column:c_target_from"`
-	EffectiveFrom time.Time  `gorm:"column:c_effective_from"`
-	JobIDs        string     `gorm:"column:c_job_ids"`
-	Retried       bool       `gorm:"column:c_retried"`
-	Note          string     `gorm:"column:c_note"`
-	StartedAt     time.Time  `gorm:"column:c_started_at"`
-	FinishedAt    *time.Time `gorm:"column:c_finished_at"`
+	SpaceID       string `gorm:"column:c_space_id;primaryKey"`
+	DatasetID     string `gorm:"column:c_dataset_id;primaryKey"`
+	Frequency     string `gorm:"column:c_frequency;primaryKey"`
+	Status        string `gorm:"column:c_status"`
+	TargetFrom    int64  `gorm:"column:c_target_from"`
+	EffectiveFrom int64  `gorm:"column:c_effective_from"`
+	JobIDs        string `gorm:"column:c_job_ids"`
+	Retried       bool   `gorm:"column:c_retried"`
+	Note          string `gorm:"column:c_note"`
+	StartedAt     int64  `gorm:"column:c_started_at"`
+	FinishedAt    *int64 `gorm:"column:c_finished_at"`
 }
 
 func (historySeedRow) TableName() string { return "t_collector_history_seeds" }
@@ -60,8 +60,8 @@ func (historySeedRow) TableName() string { return "t_collector_history_seeds" }
 func (row historySeedRow) seed() HistorySeed {
 	seed := HistorySeed{
 		SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, Status: row.Status,
-		TargetFrom: row.TargetFrom.UTC(), EffectiveFrom: row.EffectiveFrom.UTC(), Retried: row.Retried, Note: row.Note,
-		StartedAt: row.StartedAt.UTC(), FinishedAt: row.FinishedAt,
+		TargetFrom: fromUnixMilli(row.TargetFrom), EffectiveFrom: fromUnixMilli(row.EffectiveFrom), Retried: row.Retried, Note: row.Note,
+		StartedAt: fromUnixMilli(row.StartedAt), FinishedAt: fromUnixMilliPtr(row.FinishedAt),
 	}
 	_ = json.Unmarshal([]byte(row.JobIDs), &seed.JobIDs)
 	return seed
@@ -78,12 +78,8 @@ func newHistorySeedRow(seed HistorySeed) (historySeedRow, error) {
 	}
 	row := historySeedRow{
 		SpaceID: seed.SpaceID, DatasetID: seed.DatasetID, Frequency: seed.Frequency, Status: seed.Status,
-		TargetFrom: seed.TargetFrom.UTC(), EffectiveFrom: seed.EffectiveFrom.UTC(), JobIDs: string(raw), Retried: seed.Retried,
-		Note: seed.Note, StartedAt: seed.StartedAt.UTC(),
-	}
-	if seed.FinishedAt != nil {
-		finished := seed.FinishedAt.UTC()
-		row.FinishedAt = &finished
+		TargetFrom: toUnixMilli(seed.TargetFrom), EffectiveFrom: toUnixMilli(seed.EffectiveFrom), JobIDs: string(raw), Retried: seed.Retried,
+		Note: seed.Note, StartedAt: toUnixMilli(seed.StartedAt), FinishedAt: toUnixMilliPtr(seed.FinishedAt),
 	}
 	return row, nil
 }
@@ -172,7 +168,7 @@ func (r *BackfillRepository) UpdateHistorySeed(ctx context.Context, seed History
 	if len(from) > 0 {
 		query = query.Where("c_status IN ?", from)
 	}
-	result := query.Updates(map[string]any{"c_status": row.Status, "c_job_ids": row.JobIDs, "c_retried": row.Retried, "c_note": row.Note, "c_finished_at": row.FinishedAt, "c_mtime": time.Now().UTC()})
+	result := query.Updates(map[string]any{"c_status": row.Status, "c_job_ids": row.JobIDs, "c_retried": row.Retried, "c_note": row.Note, "c_finished_at": row.FinishedAt, "c_mtime": nowUnixMilli()})
 	return result.RowsAffected > 0, result.Error
 }
 
@@ -222,7 +218,7 @@ func (r *BackfillRepository) RetryHistorySeed(ctx context.Context, spaceID, data
 				}
 			}
 		}
-		now := time.Now().UTC()
+		now := nowUnixMilli()
 		if len(toRetry) > 0 {
 			if err := tx.Model(&backfillJobRow{}).Where("c_job_id IN ? AND c_status = ?", toRetry, BackfillFailed).
 				Updates(map[string]any{"c_status": BackfillPending, "c_last_error": "", "c_mtime": now}).Error; err != nil {

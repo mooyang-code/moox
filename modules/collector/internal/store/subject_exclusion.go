@@ -27,21 +27,21 @@ func (e SubjectExclusion) Excludes(marketType string) bool {
 }
 
 type subjectExclusionRow struct {
-	SpaceID    string     `gorm:"column:c_space_id;primaryKey"`
-	SubjectID  string     `gorm:"column:c_subject_id;primaryKey"`
-	MarketType string     `gorm:"column:c_market_type;primaryKey"`
-	Reason     string     `gorm:"column:c_reason"`
-	Caller     string     `gorm:"column:c_caller"`
-	CreatedAt  time.Time  `gorm:"column:c_ctime"`
-	ExpiresAt  *time.Time `gorm:"column:c_expires_at"`
+	SpaceID    string `gorm:"column:c_space_id;primaryKey"`
+	SubjectID  string `gorm:"column:c_subject_id;primaryKey"`
+	MarketType string `gorm:"column:c_market_type;primaryKey"`
+	Reason     string `gorm:"column:c_reason"`
+	Caller     string `gorm:"column:c_caller"`
+	CreatedAt  int64  `gorm:"column:c_ctime"`
+	ExpiresAt  *int64 `gorm:"column:c_expires_at"`
 }
 
 func (subjectExclusionRow) TableName() string { return "t_collector_subject_exclusions" }
 
 func (row subjectExclusionRow) exclusion() SubjectExclusion {
-	item := SubjectExclusion{SpaceID: row.SpaceID, SubjectID: row.SubjectID, MarketType: row.MarketType, Reason: row.Reason, Caller: row.Caller, CreatedAt: row.CreatedAt.UTC()}
+	item := SubjectExclusion{SpaceID: row.SpaceID, SubjectID: row.SubjectID, MarketType: row.MarketType, Reason: row.Reason, Caller: row.Caller, CreatedAt: fromUnixMilli(row.CreatedAt)}
 	if row.ExpiresAt != nil {
-		item.ExpiresAt = row.ExpiresAt.UTC()
+		item.ExpiresAt = fromUnixMilli(*row.ExpiresAt)
 	}
 	return item
 }
@@ -73,12 +73,13 @@ func (r *SubjectExclusionRepository) Set(ctx context.Context, items []SubjectExc
 			if item.SpaceID == "" || item.SubjectID == "" {
 				return fmt.Errorf("排除需要空间与标的")
 			}
-			row := subjectExclusionRow{SpaceID: item.SpaceID, SubjectID: item.SubjectID, MarketType: item.MarketType, Reason: item.Reason, Caller: item.Caller, CreatedAt: item.CreatedAt.UTC()}
-			if row.CreatedAt.IsZero() {
-				row.CreatedAt = time.Now().UTC()
+			createdAt := toUnixMilli(item.CreatedAt)
+			if createdAt == 0 {
+				createdAt = nowUnixMilli()
 			}
+			row := subjectExclusionRow{SpaceID: item.SpaceID, SubjectID: item.SubjectID, MarketType: item.MarketType, Reason: item.Reason, Caller: item.Caller, CreatedAt: createdAt}
 			if !item.ExpiresAt.IsZero() {
-				expires := item.ExpiresAt.UTC()
+				expires := toUnixMilli(item.ExpiresAt)
 				row.ExpiresAt = &expires
 			}
 			conflict := clause.OnConflict{
@@ -122,7 +123,7 @@ func (r *SubjectExclusionRepository) Active(ctx context.Context, spaceID string,
 	}
 	var rows []subjectExclusionRow
 	if err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND (c_expires_at IS NULL OR c_expires_at > ?)", strings.ToLower(strings.TrimSpace(spaceID)), now.UTC()).
+		Where("c_space_id = ? AND (c_expires_at IS NULL OR c_expires_at > ?)", strings.ToLower(strings.TrimSpace(spaceID)), toUnixMilli(now)).
 		Order("c_subject_id").Order("c_market_type").Find(&rows).Error; err != nil {
 		return nil, err
 	}

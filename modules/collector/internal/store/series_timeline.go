@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"gorm.io/gorm"
@@ -27,17 +26,17 @@ type SeriesTimelineEntry struct {
 }
 
 type seriesTimelineRow struct {
-	ID            int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID       string    `gorm:"column:c_space_id"`
-	DatasetID     string    `gorm:"column:c_dataset_id"`
-	Frequency     string    `gorm:"column:c_frequency"`
-	EffectiveFrom int64     `gorm:"column:c_effective_from"`
-	SeriesHash    string    `gorm:"column:c_series_hash"`
-	Series        string    `gorm:"column:c_series"`
-	Symbols       string    `gorm:"column:c_external_symbols"`
-	LatenessS     int       `gorm:"column:c_lateness_s"`
-	OutputFields  string    `gorm:"column:c_output_fields"`
-	CreatedAt     time.Time `gorm:"column:c_ctime"`
+	ID            int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID       string `gorm:"column:c_space_id"`
+	DatasetID     string `gorm:"column:c_dataset_id"`
+	Frequency     string `gorm:"column:c_frequency"`
+	EffectiveFrom int64  `gorm:"column:c_effective_from"`
+	SeriesHash    string `gorm:"column:c_series_hash"`
+	Series        string `gorm:"column:c_series"`
+	Symbols       string `gorm:"column:c_external_symbols"`
+	LatenessS     int    `gorm:"column:c_lateness_s"`
+	OutputFields  string `gorm:"column:c_output_fields"`
+	CreatedAt     int64  `gorm:"column:c_ctime"`
 }
 
 func (seriesTimelineRow) TableName() string { return "t_collector_series_timeline" }
@@ -148,7 +147,7 @@ func appendSeriesTimeline(tx *gorm.DB, entries []SeriesTimelineEntry) error {
 	for _, entry := range entries {
 		row := seriesTimelineRow{
 			SpaceID: strings.TrimSpace(entry.SpaceID), DatasetID: strings.TrimSpace(entry.DatasetID), Frequency: strings.TrimSpace(entry.Frequency),
-			EffectiveFrom: entry.EffectiveFrom, SeriesHash: entry.SeriesHash, LatenessS: entry.LatenessS, CreatedAt: time.Now().UTC(),
+			EffectiveFrom: entry.EffectiveFrom, SeriesHash: entry.SeriesHash, LatenessS: entry.LatenessS, CreatedAt: nowUnixMilli(),
 		}
 		if row.SpaceID == "" || row.DatasetID == "" || row.Frequency == "" || row.EffectiveFrom <= 0 {
 			return fmt.Errorf("series timeline entry needs space_id, dataset_id, frequency and a positive effective_from")

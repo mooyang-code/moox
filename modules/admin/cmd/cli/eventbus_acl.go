@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/events"
 )
 
@@ -38,16 +37,6 @@ func eventBusRoleFiles() map[string]string {
 	return out
 }
 
-// eventBusSpaces 是按空间建的消费者要展开的空间：barclock 登记的全部市场（Collector 给每个登记的市场建消费者）。
-func eventBusSpaces() []string {
-	markets := barclock.Markets()
-	out := make([]string, 0, len(markets))
-	for _, market := range markets {
-		out = append(out, market.ID)
-	}
-	return out
-}
-
 // eventBusRoleACL 推出一个账号的发布、订阅权限。发布权限只到自己发布的事件主题族与自己消费者的 JetStream 接口；
 // 拉取消费只需要订阅自己的收件箱，不订阅事件主题。
 func eventBusRoleACL(role events.Role) (publish, subscribe []string) {
@@ -61,26 +50,18 @@ func eventBusRoleACL(role events.Role) (publish, subscribe []string) {
 		publish = append(publish, "$JS.API.STREAM.NAMES")
 	}
 	for _, consumer := range role.Consumers {
-		names := []string{consumer.NameFor("")}
-		if consumer.PerSpace() {
-			names = names[:0]
-			for _, space := range eventBusSpaces() {
-				names = append(names, consumer.NameFor(space))
-			}
-		}
+		name := consumer.Name()
 		stream := consumer.Stream()
-		for _, name := range names {
-			publish = append(publish,
-				fmt.Sprintf("$JS.API.CONSUMER.INFO.*.%s", name),
-				fmt.Sprintf("$JS.API.CONSUMER.CREATE.%s.%s", stream, name),
-				fmt.Sprintf("$JS.API.CONSUMER.CREATE.%s.%s.>", stream, name),
-				fmt.Sprintf("$JS.API.CONSUMER.DURABLE.CREATE.%s.%s", stream, name),
-				fmt.Sprintf("$JS.API.CONSUMER.MSG.NEXT.%s.%s", stream, name),
-				fmt.Sprintf("$JS.ACK.%s.%s.>", stream, name),
-			)
-			if consumer.Deletable() {
-				publish = append(publish, fmt.Sprintf("$JS.API.CONSUMER.DELETE.%s.%s", stream, name))
-			}
+		publish = append(publish,
+			fmt.Sprintf("$JS.API.CONSUMER.INFO.*.%s", name),
+			fmt.Sprintf("$JS.API.CONSUMER.CREATE.%s.%s", stream, name),
+			fmt.Sprintf("$JS.API.CONSUMER.CREATE.%s.%s.>", stream, name),
+			fmt.Sprintf("$JS.API.CONSUMER.DURABLE.CREATE.%s.%s", stream, name),
+			fmt.Sprintf("$JS.API.CONSUMER.MSG.NEXT.%s.%s", stream, name),
+			fmt.Sprintf("$JS.ACK.%s.%s.>", stream, name),
+		)
+		if consumer.Deletable() {
+			publish = append(publish, fmt.Sprintf("$JS.API.CONSUMER.DELETE.%s.%s", stream, name))
 		}
 	}
 	return publish, []string{"_INBOX.>"}

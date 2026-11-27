@@ -227,7 +227,8 @@ func TestTimeoutWithoutDeliveryRetriesOnlyAfterGracePeriod(t *testing.T) {
 	rows := e.transfers(store.TransferToSpot)
 	require.Len(t, rows, 2)
 	require.Equal(t, store.TransferStateFailed, rows[0].State)
-	require.True(t, strings.HasPrefix(rows[0].LastError, softNotArrive))
+	require.Equal(t, store.TransferFailureNotArrived, rows[0].FailureKind)
+	require.True(t, rows[0].IsSoftFailure())
 	require.NotEqual(t, rows[0].ClientRef, rows[1].ClientRef)
 	failures, _ := trailingHardFailures(rows)
 	require.Zero(t, failures)
@@ -525,9 +526,9 @@ func TestFinishOnAlreadySettledRecordIsNotAnError(t *testing.T) {
 	e := newEnv(t, "10", "1000")
 	require.True(t, waiting(e.before("0.01")))
 	row := e.transfers(store.TransferToSpot)[0]
-	_, err := e.service.finish(context.Background(), "space-1", row, "tran-9", store.TransferStateCompleted, "", e.now.UnixMilli())
+	_, err := e.service.finish(context.Background(), "space-1", row, "tran-9", store.TransferStateCompleted, store.TransferFailureNone, "", e.now.UnixMilli())
 	require.NoError(t, err)
-	stale, err := e.service.finish(context.Background(), "space-1", row, "", store.TransferStateFailed, "x", 0)
+	stale, err := e.service.finish(context.Background(), "space-1", row, "", store.TransferStateFailed, store.TransferFailureHard, "x", 0)
 	require.NoError(t, err, "已经完成的记录再推进：原样返回，不报错")
 	require.Equal(t, store.TransferStatePending, stale.State)
 	require.Equal(t, store.TransferStateCompleted, e.transfers(store.TransferToSpot)[0].State)
@@ -720,7 +721,8 @@ func TestResolveStuckPendingTransferManually(t *testing.T) {
 	require.Equal(t, ResolveResult{State: store.TransferStateFailed}, result)
 	stored := e.transfers(store.TransferToSpot)[0]
 	require.Equal(t, store.TransferStateFailed, stored.State)
-	require.True(t, strings.HasPrefix(stored.LastError, softNotArrive), "人工记没到账不计入连续失败")
+	require.Equal(t, store.TransferFailureNotArrived, stored.FailureKind, "人工记没到账不计入连续失败")
+	require.True(t, stored.IsSoftFailure())
 	require.Contains(t, stored.LastError, "交易所没有这笔")
 	failures, _ := trailingHardFailures(e.transfers(store.TransferToSpot))
 	require.Zero(t, failures)
@@ -767,7 +769,7 @@ func TestNoTransferToSpotAfterTheTargetAlreadyCollected(t *testing.T) {
 	require.Empty(t, e.exchange.Calls(), "不再往现货钱包划")
 	require.NotEmpty(t, outcome.BuyScale["account-1"])
 	require.Contains(t, outcome.Reasons["account-1"], "归集")
-	require.False(t, IsFundsShortage(outcome.Reasons["account-1"]), "不是资金不足")
+	require.NotEqual(t, store.BlockedReasonTransferShortfall, outcome.ReasonCodes["account-1"], "不是资金不足")
 
 	// 归集失败（没成功）的记录不算归集过。
 	failed := newEnv(t, "10", "1000")
@@ -775,7 +777,7 @@ func TestNoTransferToSpotAfterTheTargetAlreadyCollected(t *testing.T) {
 		return tx.InsertWalletTransfer(store.WalletTransferRecord{
 			SpaceID: "space-1", TransferID: "collect-1", TradingAccountID: "account-1", LogicalAccountID: "logical-1", TargetID: "target-1",
 			Direction: store.TransferToFutures, Asset: "USDT", Amount: "509", ClientRef: "target-1:TO_FUTURES:1",
-			State: store.TransferStateFailed, LastError: "被交易所拒绝", RequestedAt: failed.now.UnixMilli(),
+			State: store.TransferStateFailed, FailureKind: store.TransferFailureHard, LastError: "被交易所拒绝", RequestedAt: failed.now.UnixMilli(),
 		})
 	}))
 	require.True(t, waiting(failed.before("0.01")))

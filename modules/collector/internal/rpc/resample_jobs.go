@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,10 +30,11 @@ type resampleSource struct {
 	Provider     string
 	MarketType   string
 	SubjectCount int
+	Dataset      storagesource.DatasetInfo
 }
 
 // resampleSourceOf 由源采集任务（kline 或 kline_resample）推导合成的源参数：源数据集是源任务的结果数据集，
-// 源周期是它采集（或合成）的周期，序列标签与采集写入时用的相同。
+// 源周期是它采集（或合成）的周期，序列标签优先取源数据集属性与已登记序列快照，尚未登记快照时再退回采集路由推导。
 func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID string) (resampleSource, error) {
 	sourceTaskID = strings.TrimSpace(sourceTaskID)
 	if sourceTaskID == "" {
@@ -48,34 +50,42 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 	}
 	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
 	out := resampleSource{TaskID: task.TaskID, DatasetID: ids.DatasetID}
+	if s.datasetSrc != nil {
+		info, infoErr := s.datasetSrc.GetDataset(ctx, task.SpaceID, out.DatasetID)
+		if infoErr != nil {
+			return resampleSource{}, fmt.Errorf("source task %q result Dataset is not ready: %w", sourceTaskID, infoErr)
+		}
+		out.Dataset = info
+		out.Provider = strings.TrimSpace(info.DataSourceID)
+		if out.Provider == "" {
+			out.Provider = strings.TrimSpace(info.Attributes["source_data_source_id"])
+		}
+		out.MarketType = strings.ToLower(strings.TrimSpace(info.Attributes["market_type"]))
+		subjects, subjectsErr := s.datasetSrc.ResolveSubjects(ctx, task.SpaceID, info.SubjectTags)
+		if subjectsErr == nil {
+			out.SubjectCount = len(subjects)
+		}
+	}
 	switch strings.ToLower(task.DataType) {
 	case "kline_resample":
-		out.Frequency, out.SeriesTag, out.Provider, out.MarketType = params.TargetFrequency, params.SourceSeriesTag, params.Provider, params.MarketType
+		out.Frequency = params.TargetFrequency
+		out.SeriesTag = firstNonEmptyString(
+			params.SourceSeriesTag,
+			out.Dataset.Attributes["source_series_tag"],
+			out.Dataset.Attributes["series_tag"],
+		)
 	case "kline":
 		out.Frequency = params.Frequency
-		tagSource, ok := s.datasetSrc.(collectionTaskTagSource)
-		if !ok {
-			return resampleSource{}, errors.New("source tag lookup is unavailable")
+		seriesTag, provider, marketType, tagErr := s.resolveKlineSourceSeriesTag(ctx, *task, params, out.Dataset)
+		if tagErr != nil {
+			return resampleSource{}, tagErr
 		}
-		tagIDs := normalizeTagIDs(task.TagIDs)
-		if len(tagIDs) == 0 {
-			return resampleSource{}, fmt.Errorf("source task %q has no tags", sourceTaskID)
+		out.SeriesTag = seriesTag
+		if out.Provider == "" {
+			out.Provider = provider
 		}
-		// 采集任务的标签同属一个数据源与市场（建任务时校验），结果数据集只有一条源序列。
-		for _, tagID := range tagIDs {
-			tag, tagErr := tagSource.GetTag(ctx, task.SpaceID, tagID)
-			if tagErr != nil || tag == nil {
-				return resampleSource{}, fmt.Errorf("load source tag %s: %v", tagID, tagErr)
-			}
-			provider, marketType := tagattr.Source(tag), tagattr.MarketType(tag)
-			seriesTag, tagErr := fetchplan.TaskSeriesTag(task.SpaceID, params, provider, marketType, s.sourceIDResolver)
-			if tagErr != nil {
-				return resampleSource{}, fmt.Errorf("源任务 %q 的序列标签：%w", sourceTaskID, tagErr)
-			}
-			if out.SeriesTag != "" && out.SeriesTag != seriesTag {
-				return resampleSource{}, fmt.Errorf("源任务 %q 的标签写入不同的序列（%s、%s），合成只支持单一序列", sourceTaskID, out.SeriesTag, seriesTag)
-			}
-			out.Provider, out.MarketType, out.SeriesTag = provider, marketType, seriesTag
+		if out.MarketType == "" {
+			out.MarketType = marketType
 		}
 	default:
 		return resampleSource{}, fmt.Errorf("source task %q is %s, not a K-line task", sourceTaskID, task.DataType)
@@ -83,21 +93,117 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 	if strings.TrimSpace(out.Frequency) == "" {
 		return resampleSource{}, fmt.Errorf("source task %q has no frequency", sourceTaskID)
 	}
-	if s.datasetSrc != nil {
-		info, infoErr := s.datasetSrc.GetDataset(ctx, task.SpaceID, out.DatasetID)
-		if infoErr != nil {
-			return resampleSource{}, fmt.Errorf("source task %q result Dataset is not ready: %w", sourceTaskID, infoErr)
-		}
-		subjects, subjectsErr := s.datasetSrc.ResolveSubjects(ctx, task.SpaceID, info.SubjectTags)
-		if subjectsErr == nil {
-			out.SubjectCount = len(subjects)
-		}
+	if strings.TrimSpace(out.SeriesTag) == "" {
+		return resampleSource{}, fmt.Errorf("source task %q has no series tag", sourceTaskID)
 	}
 	return out, nil
 }
 
+// resolveKlineSourceSeriesTag 解析 K 线源任务的序列标签：
+// 1. 优先读源数据集属性（source_series_tag / series_tag）；
+// 2. 其次读已登记标的时间线快照（t_collector_series_timeline）最新生效段的唯一序列标签；
+// 3. 尚未登记快照（如刚创建源任务尚未首次对账）时，再退回按源任务标签推导。
+func (s *Service) resolveKlineSourceSeriesTag(
+	ctx context.Context,
+	task domain.CollectionTask,
+	params *domain.CollectParams,
+	info storagesource.DatasetInfo,
+) (seriesTag, provider, marketType string, err error) {
+	if attrTag := firstNonEmptyString(info.Attributes["source_series_tag"], info.Attributes["series_tag"]); attrTag != "" {
+		return attrTag, strings.TrimSpace(info.DataSourceID), strings.ToLower(strings.TrimSpace(info.Attributes["market_type"])), nil
+	}
+	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
+	if timelineTag, timelineErr := s.seriesTagFromTimeline(ctx, task.SpaceID, ids.DatasetID, params.Frequency); timelineErr != nil {
+		return "", "", "", fmt.Errorf("源任务 %q 的序列标签：%w", task.TaskID, timelineErr)
+	} else if timelineTag != "" {
+		return timelineTag, strings.TrimSpace(info.DataSourceID), strings.ToLower(strings.TrimSpace(info.Attributes["market_type"])), nil
+	}
+	tagSource, ok := s.datasetSrc.(collectionTaskTagSource)
+	if !ok {
+		return "", "", "", errors.New("source tag lookup is unavailable")
+	}
+	tagIDs := normalizeTagIDs(task.TagIDs)
+	if len(tagIDs) == 0 {
+		return "", "", "", fmt.Errorf("source task %q has no tags", task.TaskID)
+	}
+	for _, tagID := range tagIDs {
+		tag, tagErr := tagSource.GetTag(ctx, task.SpaceID, tagID)
+		if tagErr != nil || tag == nil {
+			return "", "", "", fmt.Errorf("load source tag %s: %v", tagID, tagErr)
+		}
+		p, m := tagattr.Source(tag), tagattr.MarketType(tag)
+		candidate, tagErr := fetchplan.TaskSeriesTag(task.SpaceID, params, p, m, s.sourceIDResolver)
+		if tagErr != nil {
+			return "", "", "", fmt.Errorf("源任务 %q 的序列标签：%w", task.TaskID, tagErr)
+		}
+		if seriesTag != "" && seriesTag != candidate {
+			return "", "", "", fmt.Errorf("源任务 %q 的标签写入不同的序列（%s、%s），合成只支持单一序列", task.TaskID, seriesTag, candidate)
+		}
+		seriesTag, provider, marketType = candidate, p, m
+	}
+	return seriesTag, provider, marketType, nil
+}
+
+// seriesTagFromTimeline 从已登记标的时间线取该（数据集, 频率）最新生效段的唯一序列标签；未登记或已清空时返回空串。
+func (s *Service) seriesTagFromTimeline(ctx context.Context, spaceID, datasetID, frequency string) (string, error) {
+	if s == nil || s.persistence == nil {
+		return "", nil
+	}
+	entries, err := s.persistence.SeriesTimeline().ListBySpace(ctx, spaceID)
+	if err != nil {
+		return "", nil
+	}
+	// 按写入先后重放同一生效点（后写覆盖先写），取生效点最晚的一段。
+	byEffective := map[int64]store.SeriesTimelineEntry{}
+	for _, entry := range entries {
+		if entry.DatasetID == datasetID && strings.EqualFold(entry.Frequency, frequency) {
+			byEffective[entry.EffectiveFrom] = entry
+		}
+	}
+	var latestEffective int64
+	var latest store.SeriesTimelineEntry
+	found := false
+	for effective, entry := range byEffective {
+		if !found || effective > latestEffective {
+			latestEffective, latest, found = effective, entry, true
+		}
+	}
+	if !found || len(latest.Series) == 0 {
+		return "", nil
+	}
+	seen := map[string]struct{}{}
+	tags := make([]string, 0, 2)
+	for _, item := range latest.Series {
+		tag := strings.TrimSpace(item.SeriesTag)
+		if tag == "" {
+			continue
+		}
+		if _, exists := seen[tag]; !exists {
+			seen[tag] = struct{}{}
+			tags = append(tags, tag)
+		}
+	}
+	if len(tags) == 0 {
+		return "", nil
+	}
+	if len(tags) > 1 {
+		sort.Strings(tags)
+		return "", fmt.Errorf("数据集包含多条序列标签（%s），合成只支持单一序列", strings.Join(tags, "、"))
+	}
+	return tags[0], nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // deriveResampleSource 创建合成任务时用 source_task_id 推导并写入 source_dataset_id、source_frequency、source_series_tag 等源参数，
-// 前端只提交源任务与目标频率，手填的序列标签不会再出错。没有 source_task_id（配置文件导入）时参数保持原样。
+// 同时剥离外部采集路由字段（provider、market_type、alignment）；没有 source_task_id（配置文件导入）时仅剥离冗余路由字段。
 func (s *Service) deriveResampleSource(ctx context.Context, task *domain.CollectionTask) error {
 	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
 		return nil
@@ -107,26 +213,22 @@ func (s *Service) deriveResampleSource(ctx context.Context, task *domain.Collect
 		return nil // 参数格式错误由后面的校验报告
 	}
 	sourceTaskID, _ := values["source_task_id"].(string)
-	if strings.TrimSpace(sourceTaskID) == "" {
-		return nil
+	if strings.TrimSpace(sourceTaskID) != "" {
+		if strings.TrimSpace(sourceTaskID) == strings.TrimSpace(task.TaskID) {
+			return errors.New("source_task_id must not be the task itself")
+		}
+		source, err := s.resampleSourceOf(ctx, task.SpaceID, sourceTaskID)
+		if err != nil {
+			return err
+		}
+		values["source_task_id"] = source.TaskID
+		values["source_dataset_id"] = source.DatasetID
+		values["source_frequency"] = source.Frequency
+		values["source_series_tag"] = source.SeriesTag
 	}
-	if strings.TrimSpace(sourceTaskID) == strings.TrimSpace(task.TaskID) {
-		return errors.New("source_task_id must not be the task itself")
-	}
-	source, err := s.resampleSourceOf(ctx, task.SpaceID, sourceTaskID)
-	if err != nil {
-		return err
-	}
-	values["source_task_id"] = source.TaskID
-	values["source_dataset_id"] = source.DatasetID
-	values["source_frequency"] = source.Frequency
-	values["source_series_tag"] = source.SeriesTag
-	if source.Provider != "" {
-		values["provider"] = source.Provider
-	}
-	if source.MarketType != "" {
-		values["market_type"] = source.MarketType
-	}
+	delete(values, "provider")
+	delete(values, "market_type")
+	delete(values, "alignment")
 	encoded, err := json.Marshal(values)
 	if err != nil {
 		return err
@@ -135,7 +237,7 @@ func (s *Service) deriveResampleSource(ctx context.Context, task *domain.Collect
 	return nil
 }
 
-// PreviewKlineResampleSource 由源采集任务推导合成的源参数，并按合成规则校验目标频率。
+// PreviewKlineResampleSource 由源采集任务推导合成的源参数、分桶时钟与实际可合成列，并按合成规则校验目标频率。
 func (s *Service) PreviewKlineResampleSource(ctx context.Context, req *pb.PreviewKlineResampleSourceReq) (*pb.PreviewKlineResampleSourceRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetSourceTaskId()) == "" {
 		return &pb.PreviewKlineResampleSourceRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id and source_task_id are required")}, nil
@@ -148,22 +250,29 @@ func (s *Service) PreviewKlineResampleSource(ctx context.Context, req *pb.Previe
 		RetInfo: retOK(), SourceDatasetId: source.DatasetID, SourceFrequency: source.Frequency, SourceSeriesTag: source.SeriesTag,
 		SubjectCount: uint32(source.SubjectCount), MarketId: req.GetSpaceId(), Provider: source.Provider, MarketType: source.MarketType,
 	}
-	market, err := barclock.MarketFor(req.GetSpaceId())
+	market, err := barclock.MarketForDataset(source.Dataset.Alignment, source.Dataset.Attributes["calendar"])
 	if err != nil {
 		rsp.ValidationError = err.Error()
 		return rsp, nil
 	}
 	rsp.Alignment = market.Alignment
+	rsp.CalendarId = market.CalendarID
 	rsp.AllowedFrequencies = s.allowedResampleFrequencies(market, source.Frequency)
+	rules, colErr := collectorresample.AvailableRulesForSource(source.Dataset.ColumnTypes)
+	if colErr != nil {
+		rsp.ValidationError = colErr.Error()
+		return rsp, nil
+	}
+	rsp.AllowedOutputFields = outputFieldOptionsForRules(rules)
 	if target := strings.TrimSpace(req.GetTargetFrequency()); target != "" {
 		preview := map[string]any{
-			"provider": source.Provider, "market_type": source.MarketType, "source_dataset_id": source.DatasetID, "source_frequency": source.Frequency,
+			"source_dataset_id": source.DatasetID, "source_frequency": source.Frequency,
 			"target_dataset_id": "dataset_preview", "target_frequency": target, "source_series_tag": source.SeriesTag,
 		}
 		raw, _ := json.Marshal(preview)
 		params, parseErr := domain.ParseCollectParams(string(raw), "", "", "kline_resample")
 		if parseErr == nil {
-			parseErr = collectorresample.ValidateTaskParams(req.GetSpaceId(), params)
+			parseErr = collectorresample.ValidateTaskParamsForSource(source.Dataset, params)
 		}
 		if parseErr != nil {
 			rsp.ValidationError = parseErr.Error()
@@ -172,7 +281,28 @@ func (s *Service) PreviewKlineResampleSource(ctx context.Context, req *pb.Previe
 	return rsp, nil
 }
 
-// allowedResampleFrequencies 返回市场允许、且能由源周期合成的目标周期：比源周期长、是它的整数倍，加上 1d。
+func outputFieldOptionsForRules(rules []collectorresample.FieldRule) []*pb.OutputFieldOption {
+	options := make([]*pb.OutputFieldOption, 0, len(rules))
+	for _, rule := range rules {
+		displayName := rule.Name
+		group := taskresult.GroupTrading
+		valueType := taskresult.ValueTypeName(rule.ValueType)
+		if spec, ok := taskresult.KlineOutputField(rule.Name); ok {
+			displayName = spec.DisplayName
+			group = spec.Group
+			valueType = taskresult.ValueTypeName(spec.Kind)
+		}
+		options = append(options, &pb.OutputFieldOption{
+			FieldId:     rule.Name,
+			DisplayName: displayName,
+			Group:       group,
+			ValueType:   valueType,
+		})
+	}
+	return options
+}
+
+// allowedResampleFrequencies 返回数据集时钟允许、且能由源周期合成的目标周期：比源周期长、是它的整数倍，加上 1d。
 func (s *Service) allowedResampleFrequencies(market barclock.Market, sourceFrequency string) []string {
 	source, err := collectorresample.ParseFixedFrequency(sourceFrequency)
 	if err != nil {
@@ -231,18 +361,23 @@ func (s *Service) SubmitKlineResampleJob(ctx context.Context, req *pb.SubmitKlin
 	if collection.PrepareState != domain.PrepareStateReady {
 		return fail(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task is not ready (prepare_state=%s)", collection.PrepareState))
 	}
-	task, err := collectorresample.NewTask(*collection)
+	params, err := domain.ParseCollectParams(collection.CollectParams, "", "", collection.DataType)
 	if err != nil {
 		return fail(pb.ErrorCode_INVALID_PARAM, err.Error())
 	}
+	var source storagesource.DatasetInfo
 	if s.datasetSrc != nil {
-		source, sourceErr := s.datasetSrc.GetDataset(ctx, req.GetSpaceId(), task.Spec.SourceDatasetID)
-		if sourceErr != nil {
-			return fail(pb.ErrorCode_NOT_FOUND, sourceErr.Error())
+		source, err = s.datasetSrc.GetDataset(ctx, req.GetSpaceId(), params.SourceDatasetID)
+		if err != nil {
+			return fail(pb.ErrorCode_NOT_FOUND, err.Error())
 		}
 		if err := checkSourceRetention(source, start, time.Now().UTC()); err != nil {
 			return fail(pb.ErrorCode_INVALID_PARAM, err.Error())
 		}
+	}
+	task, err := collectorresample.NewTaskForSource(*collection, source)
+	if err != nil {
+		return fail(pb.ErrorCode_INVALID_PARAM, err.Error())
 	}
 	job, created, err := collectorresample.SubmitJob(ctx, s.persistence.Resample(), task, collectorresample.SubmitJobRequest{
 		SpaceID: req.GetSpaceId(), TaskID: req.GetTaskId(), RequestID: strings.TrimSpace(req.GetRequestId()),

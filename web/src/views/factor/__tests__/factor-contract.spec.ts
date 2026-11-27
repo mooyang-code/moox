@@ -5,6 +5,7 @@ import type {
   FactorInfo,
   FactorMember,
   FactorTask,
+  ListFactorTasksReq,
   ListRecalcJobsReq,
   RecalcFactorsReq,
   RecalcJob,
@@ -113,6 +114,8 @@ describe("factor API contract", () => {
       runners: [],
       recent_runs: [run]
     };
+    const listReq: ListFactorTasksReq = { space_id: set.space_id, status: "enabled" };
+    expect(listReq.space_id).toBe("crypto");
     expect(set.result_dataset_id).toMatch(/^dataset_/);
     expect(engine.recent_runs[0].factors?.[0].status).toBe("degraded");
   });

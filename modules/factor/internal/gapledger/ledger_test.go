@@ -207,3 +207,33 @@ func TestLedgerHasPendingInPeriod(t *testing.T) {
 	require.False(t, ledger.HasPendingIn("fset", t0))
 	require.True(t, ledger.HasPendingIn("fset", t0.Add(time.Minute)))
 }
+
+// 任务删除后 CancelTask 与 CancelMissingTasks 立即取消该任务的全部待恢复项并落盘，且不影响其他现存任务。
+func TestLedgerCancelTaskAndCancelMissingTasksPersistAcrossReopen(t *testing.T) {
+	dir, c := t.TempDir(), &clock{now: t0}
+	ledger, _ := open(t, dir, c, 0)
+	entries := []pipeline.GapEntry{
+		{TaskID: "ftask_keep", Subject: "BTC", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt"},
+		{TaskID: "ftask_del_1", Subject: "BTC", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt"},
+		{TaskID: "ftask_del_1", Subject: "ETH", Period: t0.Add(time.Minute), Member: "b", DefinitionHash: "h-b", TriggerEventID: "evt"},
+		{TaskID: "ftask_del_2", Subject: "SOL", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt"},
+	}
+	require.NoError(t, ledger.RecordGaps(context.Background(), entries))
+	require.Equal(t, 4, ledger.PendingCount())
+
+	cancelled, err := ledger.CancelTask("ftask_del_1", "task_deleted")
+	require.NoError(t, err)
+	require.Equal(t, 2, cancelled)
+	require.Equal(t, 2, ledger.PendingCount())
+
+	cancelled, err = ledger.CancelMissingTasks(map[string]struct{}{"ftask_keep": {}}, "task_deleted")
+	require.NoError(t, err)
+	require.Equal(t, 1, cancelled)
+	require.Equal(t, 1, ledger.PendingCount())
+	require.Equal(t, "ftask_keep", ledger.Pending()[0].Set)
+
+	require.NoError(t, ledger.Close())
+	reopened, _ := open(t, dir, c, 0)
+	require.Equal(t, 1, reopened.PendingCount())
+	require.Equal(t, "ftask_keep", reopened.Pending()[0].Set)
+}

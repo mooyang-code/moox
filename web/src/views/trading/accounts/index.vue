@@ -101,16 +101,14 @@
           </a-table-column>
           <a-table-column title="近 24 小时" :width="130" align="right">
             <template #cell="{ record }">
-              <span v-if="changes[record.key] === undefined" class="tx-muted">…</span>
-              <span v-else class="tx-num tx-nowrap" :class="pnlClass(changes[record.key])">{{
-                fmtPercent(changes[record.key])
+              <span class="tx-num tx-nowrap" :class="pnlClass(record.equityChangePct24h)">{{
+                fmtPercent(record.equityChangePct24h)
               }}</span>
             </template>
           </a-table-column>
           <a-table-column title="持仓" :width="70" align="right">
             <template #cell="{ record }">
-              <span v-if="counts[record.key] === undefined" class="tx-muted">…</span>
-              <span v-else class="tx-num">{{ counts[record.key] ?? "—" }}</span>
+              <span class="tx-num">{{ record.positionCount }}</span>
             </template>
           </a-table-column>
           <a-table-column title="就绪" :width="140">
@@ -136,10 +134,10 @@ import InfoTip from "@/components/info-tip/index.vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
-import { listLogicalAccounts, listTradingAccounts, queryEquityCurve } from "@/api/trade";
+import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { accountMapOf, comboRows, equityChange, executionRows, type ComboRow } from "./account-list";
+import { accountMapOf, comboRows, executionRows, type ComboRow } from "./account-list";
 import CreateAccount from "./create/index.vue";
 import {
   environmentLabel,
@@ -150,7 +148,6 @@ import {
   type Environment
 } from "@/components/trade-confirm/environment";
 import { fmtMoney, fmtPercent, pnlClass } from "./shared/format";
-import { loadPositionSnapshot, positionCount } from "./shared/position-snapshot";
 import StatusMark from "./shared/status-mark.vue";
 import { loadStrategyLinks, type StrategyLink } from "./shared/strategy-link";
 import ExecutionTab from "./execution-tab.vue";
@@ -179,8 +176,6 @@ const strategies = ref<Map<string, StrategyLink>>(new Map());
 const strategiesFailed = ref(false);
 const loading = ref(false);
 const loadError = ref("");
-const changes = ref<Record<string, number | null>>({});
-const counts = ref<Record<string, number | null>>({});
 const createDialog = ref<InstanceType<typeof CreateAccount>>();
 
 const accountMap = computed(() => accountMapOf(accounts.value));
@@ -189,7 +184,6 @@ const execution = computed(() => executionRows(accounts.value, logicals.value, e
 
 // 空间切换后，旧空间迟到的响应不能覆盖新空间的列表：只有最新一次请求可以更新页面。
 const listRequests = createLatestRequestGuard();
-const extraRequests = createLatestRequestGuard();
 
 async function load() {
   const request = listRequests.begin();
@@ -204,10 +198,6 @@ async function load() {
     if (!request.isLatest()) return;
     logicals.value = logicalRsp.logical_accounts || [];
     accounts.value = accountRsp.accounts || [];
-    // 重新读列表后权益变化和持仓数也要重读
-    changes.value = {};
-    counts.value = {};
-    if (list.value === "combo") void loadExtras(rows.value);
     void loadStrategies(request);
   } catch (error) {
     if (request.isLatest()) loadError.value = error instanceof Error ? error.message : "读取交易账户失败，请稍后重试";
@@ -225,36 +215,6 @@ async function loadStrategies(request: { isLatest(): boolean }) {
 
 const strategyOf = (row: ComboRow) => strategies.value.get(row.key);
 const memberNames = (row: ComboRow) => row.members.map(item => item.name).join("、");
-
-/** 权益变化和持仓数逐个组合补：列表先渲染出来，数字陆续出现，同时最多三个请求。 */
-async function loadExtras(list: ComboRow[]) {
-  const request = extraRequests.begin();
-  const pending = list.filter(row => changes.value[row.key] === undefined || counts.value[row.key] === undefined);
-  const now = Date.now();
-  let cursor = 0;
-  async function worker() {
-    while (cursor < pending.length && request.isLatest()) {
-      const row = pending[cursor++];
-      const [change, count] = await Promise.all([
-        queryEquityCurve({ logical_account_id: row.key, start_time: String(now - 86_400_000), end_time: String(now) })
-          .then(rsp => equityChange(rsp.points || []))
-          .catch(() => null),
-        loadPositionSnapshot(row.logical, accountMap.value)
-          .then(positionCount)
-          .catch(() => null)
-      ]);
-      if (!request.isLatest()) return;
-      changes.value = { ...changes.value, [row.key]: change };
-      counts.value = { ...counts.value, [row.key]: count };
-    }
-  }
-  await Promise.all([worker(), worker(), worker()]);
-}
-
-// 权益变化和持仓数只在组合账户页签显示：切到这个页签时，补读还没读过的组合
-watch(list, () => {
-  if (list.value === "combo") void loadExtras(rows.value);
-});
 
 function changeList(key: string | number) {
   const next = key === "execution" ? key : undefined;
@@ -282,17 +242,13 @@ watch(
   (next, previous) => {
     if (!next || next === previous) return;
     listRequests.invalidate();
-    extraRequests.invalidate();
     logicals.value = [];
     accounts.value = [];
-    changes.value = {};
-    counts.value = {};
     void load();
   }
 );
 onBeforeUnmount(() => {
   listRequests.invalidate();
-  extraRequests.invalidate();
 });
 
 void load();

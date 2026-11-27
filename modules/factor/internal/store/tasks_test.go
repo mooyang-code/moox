@@ -232,3 +232,38 @@ func TestLifecycleStatusWritesUseExpectedStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusEnabled, member.Status)
 }
+
+func TestListTasksBySpace(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	cryptoA := testTask("ftask_crypto_a", domain.TaskStatusEnabled)
+	cryptoA.SpaceID, cryptoA.ResultDatasetID = "crypto", "dataset_factor_crypto_a"
+	cryptoB := testTask("ftask_crypto_b", domain.TaskStatusDisabled)
+	cryptoB.SpaceID, cryptoB.ResultDatasetID = "crypto", "dataset_factor_crypto_b"
+	stockA := testTask("ftask_stock_a", domain.TaskStatusEnabled)
+	stockA.SpaceID, stockA.ResultDatasetID = "stockcn", "dataset_factor_stock_a"
+
+	for _, task := range []domain.FactorTask{stockA, cryptoB, cryptoA} {
+		require.NoError(t, s.CreateTask(ctx, task))
+	}
+
+	all, err := s.ListTasksBySpace(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, all, 3)
+	require.Equal(t, []string{"ftask_crypto_a", "ftask_crypto_b", "ftask_stock_a"}, []string{all[0].TaskID, all[1].TaskID, all[2].TaskID})
+
+	cryptoOnly, err := s.ListTasksBySpace(ctx, "crypto")
+	require.NoError(t, err)
+	require.Len(t, cryptoOnly, 2)
+	require.Equal(t, []string{"ftask_crypto_a", "ftask_crypto_b"}, []string{cryptoOnly[0].TaskID, cryptoOnly[1].TaskID})
+
+	stockOnly, err := s.ListTasksBySpace(ctx, " stockcn ")
+	require.NoError(t, err)
+	require.Len(t, stockOnly, 1)
+	require.Equal(t, "ftask_stock_a", stockOnly[0].TaskID)
+
+	none, err := s.ListTasksBySpace(ctx, "unknown")
+	require.NoError(t, err)
+	require.Empty(t, none)
+}

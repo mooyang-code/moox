@@ -52,7 +52,7 @@ func TestResolveExecutionCapabilitiesPaperRequiresMatcher(t *testing.T) {
 		false,
 		true,
 	)
-	if !ready.CanPlaceOrder || !ready.CanClosePaperSimulation || !ready.Valid() {
+	if !ready.CanPlaceOrder || !ready.CanClosePaperAccount || !ready.Valid() {
 		t.Fatalf("ready paper capabilities = %+v", ready)
 	}
 }

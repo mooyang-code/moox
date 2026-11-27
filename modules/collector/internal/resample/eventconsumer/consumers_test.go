@@ -72,7 +72,7 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 	consumerClient, err := jetstream.Connect(context.Background(), jetstream.Config{URLs: []string{server.URL()}, Name: "test-consumers"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = consumerClient.Close() })
-	consumers, err := Start(context.Background(), consumerClient, ConsumersConfig{SpaceIDs: []string{"crypto"}, FetchMaxWait: 100 * time.Millisecond}, registry,
+	consumers, err := Start(context.Background(), consumerClient, ConsumersConfig{FetchMaxWait: 100 * time.Millisecond}, registry,
 		&PeriodHandler{Registry: registry, Trigger: triggers, NakDelay: 100 * time.Millisecond},
 		&BackfilledHandler{Registry: registry, Trigger: triggers, NakDelay: 100 * time.Millisecond})
 	require.NoError(t, err)
@@ -86,22 +86,29 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 		Source:             "ledger", SnapshotRef: "snapshot", CompletedAt: period.Add(6 * time.Minute).UnixMilli(),
 	}, events.PublishOptions{EventID: "evt-period", OccurredAt: period.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
+	// 通配消费者同时接收任意自定义空间的事件。
+	_, err = publisher.Publish(context.Background(), events.DatasetPeriodCompleted, &storagepb.DatasetPeriodCompleted{
+		DatasetId: "dataset_ext", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
+		UniverseSubjectIds: []string{"SYM"},
+		Source:             "ledger", SnapshotRef: "snapshot", CompletedAt: period.Add(6 * time.Minute).UnixMilli(),
+	}, events.PublishOptions{EventID: "evt-period-sandbox", OccurredAt: period.Add(5 * time.Minute), SpaceID: "sandbox", SubjectID: "dataset_ext"})
+	require.NoError(t, err)
 	confirmed := period.Add(time.Hour)
 	_, err = publisher.Publish(context.Background(), events.CollectorKlineBackfilled, &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: period.Unix(), End: period.Add(5 * time.Minute).Unix(),
 		Origin: "auto", ConfirmedAt: confirmed.UnixMilli(),
-	}, events.PublishOptions{EventID: "kbf-1", OccurredAt: confirmed, SpaceID: "crypto", SubjectID: "dataset_src"})
+	}, events.PublishOptions{EventID: "kbf-1", OccurredAt: confirmed, SpaceID: "sandbox", SubjectID: "dataset_src"})
 	require.NoError(t, err)
 
-	// 第一次处理周期事件失败后延迟重试，最终两个事件都送到触发器。
+	// 第一次处理周期事件失败后延迟重试，最终跨空间事件都送到触发器。
 	require.Eventually(t, func() bool {
 		periods, backfills := triggers.counts()
-		return periods == 1 && backfills == 1
+		return periods == 2 && backfills == 1
 	}, 5*time.Second, 50*time.Millisecond)
 	triggers.mu.Lock()
 	defer triggers.mu.Unlock()
-	require.Equal(t, []string{"crypto/dataset_src"}, triggers.periods)
-	require.Equal(t, []string{"crypto/kbf-1/dataset_src"}, triggers.backfills)
+	require.ElementsMatch(t, []string{"crypto/dataset_src", "sandbox/dataset_ext"}, triggers.periods)
+	require.Equal(t, []string{"sandbox/kbf-1/dataset_src"}, triggers.backfills)
 }
 
 // 任一消费者创建失败则整体失败（已建的被关闭），由 Hub 之后整体重试。
@@ -115,7 +122,7 @@ func TestStartFailsAsAWholeWhenAnyConsumerCannotBeCreated(t *testing.T) {
 	client, err := jetstream.Connect(context.Background(), jetstream.Config{URLs: []string{server.URL()}, Name: "test-consumers"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	consumers, err := Start(context.Background(), client, ConsumersConfig{SpaceIDs: []string{"crypto", "stockhk"}, FetchMaxWait: 100 * time.Millisecond}, registry,
+	consumers, err := Start(context.Background(), client, ConsumersConfig{FetchMaxWait: 100 * time.Millisecond}, registry,
 		&PeriodHandler{Registry: registry, Trigger: triggers}, &BackfilledHandler{Registry: registry, Trigger: triggers})
 	require.Error(t, err)
 	require.Nil(t, consumers)

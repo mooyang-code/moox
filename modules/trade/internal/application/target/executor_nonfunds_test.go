@@ -49,7 +49,7 @@ func TestNonFundsUnplaceableBuyNeverTransfers(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stored.BlockedTargets, 1)
 	require.Equal(t, "0.01", stored.BlockedTargets[0].Quantity)
-	require.False(t, wallet.IsFundsShortage(stored.BlockedTargets[0].Reason), "是非资金原因："+stored.BlockedTargets[0].Reason)
+	require.False(t, stored.BlockedTargets[0].IsTransferShortfall(), "是非资金原因："+stored.BlockedTargets[0].Reason)
 }
 
 // 本目标里这个账户已经拒过这笔买单（单成员）：已知下不了的单也不先划转。

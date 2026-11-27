@@ -157,3 +157,17 @@ func (f *filledPeriods) covers(taskID string, period time.Time) bool {
 	f.ranges[taskID] = kept
 	return found
 }
+
+// retain 仅保留 keep 中的任务补写记录，清理已删除任务的残留。
+func (f *filledPeriods) retain(keep map[string]struct{}) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for taskID := range f.ranges {
+		if _, ok := keep[taskID]; !ok {
+			delete(f.ranges, taskID)
+		}
+	}
+}

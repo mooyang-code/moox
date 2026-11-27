@@ -1,0 +1,31 @@
+# Binance source configuration embedded in collector runtime (SCF / Collector / collector-stream).
+app:
+  id: "binance"
+  name: "加密交易所"
+  description: "加密现货/永续合约 K 线与标的采集"
+  type: "market"
+
+api:
+  # 现货配 3 个出口各不相同的官方端点，按顺序故障转移：
+  #   api.binance.com        CloudFront 边缘节点
+  #   api-gcp.binance.com    Google Cloud 负载均衡
+  #   data-api.binance.vision AWS 东京直连（仅公开行情）
+  # 合约只有 fapi.binance.com 一个可用端点。
+  spot_base_urls:
+    - "https://api.binance.com"
+    - "https://api-gcp.binance.com"
+    - "https://data-api.binance.vision"
+  swap_base_urls:
+    - "https://fapi.binance.com"
+
+# WS 推送（collector-stream）：现货 kline、合约连续合约 K 线（只在 /market 路由）。
+stream:
+  spot_endpoints:
+    - "wss://stream.binance.com:9443/stream"
+    - "wss://stream.binance.com:443/stream"
+  swap_endpoints:
+    - "wss://fstream.binance.com/market/stream"
+  streams_per_conn: 1000
+  streams_per_message: 100
+  messages_per_second: 5
+  max_conn_age_hours: 24

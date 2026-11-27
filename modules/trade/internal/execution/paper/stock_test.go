@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -158,10 +160,22 @@ func TestMatcherSkipsOutsideSession(t *testing.T) {
 	fresh, err := s.GetOrder(context.Background(), "s", "fresh")
 	require.NoError(t, err)
 	require.Equal(t, "CANCELED", fresh.State)
+	require.Equal(t, string(orderdomain.RejectCodeOutOfSession), fresh.RejectCode)
 	require.Equal(t, OutOfSessionReason, fresh.RejectReason)
 	resting, err := s.GetOrder(context.Background(), "s", "resting")
 	require.NoError(t, err)
 	require.Equal(t, "OPEN", resting.State)
+
+	// ExecutionAdapter 边界直接拒收时段外新单。
+	adapter := &Adapter{
+		Account:   store.TradingAccountRecord{TradingAccountID: "a", Exchange: "ashare"},
+		Exchanges: ashareCatalog(t),
+		Now:       func() time.Time { return beijingTime("2026-11-06 12:00:00") },
+	}
+	_, placeErr := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "c-out", Market: exchange.MarketTypeEquity, ExchangeSymbol: "600519.XSHG",
+	})
+	require.ErrorIs(t, placeErr, execution.ErrOutOfSession)
 }
 
 type stockPublicData struct {
@@ -229,11 +243,17 @@ func (s *t1Store) PaperT1Bought(_ context.Context, _, _ string, since int64) (ma
 func TestApplyT1SubtractsTodayBuys(t *testing.T) {
 	source := &t1Store{bought: map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("200")}}
 	adapter := &Adapter{Store: source, Now: func() time.Time { return beijingTime("2026-11-06 10:00:00") }}
-	rows := paperBalances(map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("300"), "CNY": shared.MustDecimal("100")},
-		map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("50")})
-	require.NoError(t, adapter.applyT1(context.Background(), store.TradingAccountRecord{Exchange: "ashare", Markets: []string{"equity"}}, rows))
+	t1Locked, err := adapter.loadT1Locked(context.Background(), store.TradingAccountRecord{Exchange: "ashare", Markets: []string{"equity"}})
+	require.NoError(t, err)
+	computed := tradingaccount.ComputePaperEquity(tradingaccount.PaperEquityInput{
+		SettlementAsset:  "CNY",
+		HasBalanceMarket: true,
+		Totals:           map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("300"), "CNY": shared.MustDecimal("100")},
+		Locked:           map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("50")},
+		T1Locked:         t1Locked,
+	})
 	byAsset := map[string]exchange.AssetBalance{}
-	for _, row := range rows {
+	for _, row := range computed.Balances {
 		byAsset[row.Asset] = row
 	}
 	require.Equal(t, "50", byAsset["600519.XSHG"].Available.String())
@@ -244,13 +264,21 @@ func TestApplyT1SubtractsTodayBuys(t *testing.T) {
 	// 港股 T+0：当日买入可卖，不读当日买入、也不扣。
 	hkSource := &t1Store{bought: map[string]shared.Decimal{"00700.XHKG": shared.MustDecimal("200")}}
 	hkAdapter := &Adapter{Store: hkSource, Now: func() time.Time { return beijingTime("2026-11-06 10:00:00") }}
-	hkRows := paperBalances(map[string]shared.Decimal{"00700.XHKG": shared.MustDecimal("300")}, nil)
-	require.NoError(t, hkAdapter.applyT1(context.Background(), store.TradingAccountRecord{Exchange: "hkex", Markets: []string{"equity"}}, hkRows))
-	require.Equal(t, "300", hkRows[0].Available.String())
+	hkT1, err := hkAdapter.loadT1Locked(context.Background(), store.TradingAccountRecord{Exchange: "hkex", Markets: []string{"equity"}})
+	require.NoError(t, err)
+	hkComputed := tradingaccount.ComputePaperEquity(tradingaccount.PaperEquityInput{
+		SettlementAsset:  "HKD",
+		HasBalanceMarket: true,
+		Totals:           map[string]shared.Decimal{"00700.XHKG": shared.MustDecimal("300")},
+		T1Locked:         hkT1,
+	})
+	require.Equal(t, "300", hkComputed.Balances[0].Available.String())
 	require.Zero(t, hkSource.since, "T+0 的场所不查当日买入")
 
 	// 加密货币账户不查当日买入。
 	source.since = 0
-	require.NoError(t, adapter.applyT1(context.Background(), store.TradingAccountRecord{Markets: []string{"spot"}}, rows))
+	cryptoT1, err := adapter.loadT1Locked(context.Background(), store.TradingAccountRecord{Markets: []string{"spot"}})
+	require.NoError(t, err)
+	require.Nil(t, cryptoT1)
 	require.Zero(t, source.since)
 }

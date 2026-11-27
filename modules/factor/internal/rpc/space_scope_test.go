@@ -56,6 +56,65 @@ func TestFactorTaskOperationsAreScopedToTheCallerSpace(t *testing.T) {
 	require.Equal(t, denied, created.GetRetInfo().GetCode(), "不能在请求空间之外创建任务")
 }
 
+// ListFactorTasks 支持可选 space_id 过滤，并与请求头 X-Space-Id 协同校验防止跨空间扫描。
+func TestListFactorTasksSpaceFilterAndHeaderValidation(t *testing.T) {
+	catalog := &catalogFake{
+		set: domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto", Status: domain.TaskStatusEnabled},
+		sets: []domain.FactorTask{
+			{TaskID: "ftask_a", SpaceID: "crypto", Status: domain.TaskStatusEnabled},
+			{TaskID: "ftask_b", SpaceID: "stockcn", Status: domain.TaskStatusEnabled},
+			{TaskID: "ftask_c", SpaceID: "crypto", Status: domain.TaskStatusDisabled},
+		},
+	}
+	svc := NewService(catalog, &recalcFake{})
+
+	// 无空间头、无过滤参数：返回全量。
+	all, err := svc.ListFactorTasks(spaceCtx(""), &factorpb.ListFactorTasksReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, all.GetRetInfo().GetCode())
+	require.Equal(t, "", catalog.listSpaceID)
+	require.Len(t, all.GetFactorTasks(), 3)
+
+	// 无空间头、显式指定 space_id：只查该空间，避免跨空间扫描。
+	onlyCrypto, err := svc.ListFactorTasks(spaceCtx(""), &factorpb.ListFactorTasksReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, onlyCrypto.GetRetInfo().GetCode())
+	require.Equal(t, "crypto", catalog.listSpaceID)
+	require.Len(t, onlyCrypto.GetFactorTasks(), 2)
+	for _, info := range onlyCrypto.GetFactorTasks() {
+		require.Equal(t, "crypto", info.GetFactorTask().GetSpaceId())
+	}
+
+	// 无空间头、同时按 space_id 与 status 过滤。
+	enabledCrypto, err := svc.ListFactorTasks(spaceCtx(""), &factorpb.ListFactorTasksReq{SpaceId: "crypto", Status: domain.TaskStatusEnabled})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, enabledCrypto.GetRetInfo().GetCode())
+	require.Len(t, enabledCrypto.GetFactorTasks(), 1)
+	require.Equal(t, "ftask_a", enabledCrypto.GetFactorTasks()[0].GetFactorTask().GetTaskId())
+
+	// 带 X-Space-Id 头且未传 space_id：自动下推到 store 按请求头空间查询。
+	catalog.listSpaceID = ""
+	scoped, err := svc.ListFactorTasks(spaceCtx("stockcn"), &factorpb.ListFactorTasksReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, scoped.GetRetInfo().GetCode())
+	require.Equal(t, "stockcn", catalog.listSpaceID)
+	require.Len(t, scoped.GetFactorTasks(), 1)
+	require.Equal(t, "ftask_b", scoped.GetFactorTasks()[0].GetFactorTask().GetTaskId())
+
+	// 带 X-Space-Id 头且 space_id 一致：放行。
+	matching, err := svc.ListFactorTasks(spaceCtx("stockcn"), &factorpb.ListFactorTasksReq{SpaceId: "stockcn"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, matching.GetRetInfo().GetCode())
+	require.Len(t, matching.GetFactorTasks(), 1)
+
+	// 带 X-Space-Id 头且 space_id 指向其他空间：直接拒绝，不查库。
+	catalog.listSpaceID = "sentinel"
+	mismatch, err := svc.ListFactorTasks(spaceCtx("crypto"), &factorpb.ListFactorTasksReq{SpaceId: "stockcn"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, mismatch.GetRetInfo().GetCode())
+	require.Equal(t, "sentinel", catalog.listSpaceID, "跨空间过滤在查库前被拒绝")
+}
+
 // 因子定义是全局的，但引用关系（任务 ID、启停状态）属于各自空间：其他空间的调用方不能通过 GetFactor/ListFactors 看到。
 func TestFactorUsagesAreScopedToTheCallerSpace(t *testing.T) {
 	catalog := &catalogFake{

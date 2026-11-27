@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -54,7 +54,8 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 	f.fake.quoteErr = errors.New("closing must not require public quotes")
 	f.fake.mu.Unlock()
 
-	require.NoError(t, (&papersimulation.Service{Store: f.store}).Close(ctx, testSpace, testAccount))
+	_, err = (&accountapp.Service{Store: accountapp.Repository{Store: f.store}}).ClosePaperAccount(ctx, testSpace, testAccount)
+	require.NoError(t, err)
 	closed, err := f.store.GetOrder(ctx, testSpace, string(placed.ID))
 	require.NoError(t, err)
 	require.Equal(t, "CANCELED", closed.State)
@@ -122,9 +123,11 @@ func TestClosePaperSimulationPreservesFilledBalancesWithoutQuotesE2E(t *testing.
 			f.fake.mu.Lock()
 			f.fake.quoteErr = errors.New("public quotes unavailable")
 			f.fake.mu.Unlock()
-			service := &papersimulation.Service{Store: f.store}
-			require.NoError(t, service.Close(ctx, testSpace, testAccount))
-			require.NoError(t, service.Close(ctx, testSpace, testAccount))
+			service := &accountapp.Service{Store: accountapp.Repository{Store: f.store}}
+			_, err = service.ClosePaperAccount(ctx, testSpace, testAccount)
+			require.NoError(t, err)
+			_, err = service.ClosePaperAccount(ctx, testSpace, testAccount)
+			require.NoError(t, err)
 			after, err := f.store.GetTradingAccountByID(ctx, testAccount)
 			require.NoError(t, err)
 			require.Equal(t, before.Snapshot, after.Snapshot)
@@ -188,7 +191,8 @@ func testClosePositionMarkTimestamp(t *testing.T, unknown bool) {
 	require.NoError(t, err)
 	require.Equal(t, t2.UnixMilli(), before.Snapshot.ExchangeUpdatedAt)
 	f.fake.quoteErr = errors.New("quotes unavailable at close")
-	require.NoError(t, (&papersimulation.Service{Store: f.store}).Close(ctx, testSpace, testAccount))
+	_, err = (&accountapp.Service{Store: accountapp.Repository{Store: f.store}}).ClosePaperAccount(ctx, testSpace, testAccount)
+	require.NoError(t, err)
 	closed, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	require.Equal(t, "5000", closed.Snapshot.UsedMargin)
@@ -248,7 +252,8 @@ func testCloseAfterPositionRefreshFailure(t *testing.T, reduce bool) {
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
 	require.Equal(t, wantMargin, positions[0].UsedMargin)
-	require.NoError(t, (&papersimulation.Service{Store: f.store}).Close(ctx, testSpace, testAccount))
+	_, err = (&accountapp.Service{Store: accountapp.Repository{Store: f.store}}).ClosePaperAccount(ctx, testSpace, testAccount)
+	require.NoError(t, err)
 	closed, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	require.Equal(t, wantMargin, closed.Snapshot.UsedMargin)

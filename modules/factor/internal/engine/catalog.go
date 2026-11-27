@@ -30,15 +30,19 @@ type CatalogCache struct {
 	loaded         bool
 	hash           string
 	sets           []domain.EngineTask
+	existing       []string
+	hasExisting    bool
 	syncedAt       time.Time
 	syncErrorSince time.Time
 	syncError      string
 }
 
 type catalogState struct {
-	Hash     string              `json:"hash"`
-	SyncedAt time.Time           `json:"synced_at"`
-	Sets     []domain.EngineTask `json:"sets"`
+	Hash               string              `json:"hash"`
+	SyncedAt           time.Time           `json:"synced_at"`
+	Sets               []domain.EngineTask `json:"sets"`
+	ExistingTaskIDs    []string            `json:"existing_task_ids,omitempty"`
+	HasExistingTaskIDs bool                `json:"has_existing_task_ids,omitempty"`
 }
 
 func NewCatalogCache(stateFile string) (*CatalogCache, error) {
@@ -63,8 +67,11 @@ func (c *CatalogCache) Load() (bool, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return false, fmt.Errorf("decode engine catalog %s: %w", c.stateFile, err)
 	}
+	existing := append([]string(nil), state.ExistingTaskIDs...)
+	sort.Strings(existing)
 	c.mu.Lock()
 	c.loaded, c.hash, c.sets, c.syncedAt = true, state.Hash, compileTasks(sortTasks(state.Sets)), state.SyncedAt
+	c.existing, c.hasExisting = existing, state.HasExistingTaskIDs
 	c.mu.Unlock()
 	return true, nil
 }
@@ -81,13 +88,22 @@ func (c *CatalogCache) Apply(snapshot CatalogSnapshot) (bool, error) {
 		return false, nil
 	}
 	sets := sortTasks(snapshot.Sets)
-	if err := c.persist(catalogState{Hash: snapshot.Hash, SyncedAt: now, Sets: sets}); err != nil {
+	existing := append([]string(nil), snapshot.ExistingTaskIDs...)
+	sort.Strings(existing)
+	if err := c.persist(catalogState{
+		Hash:               snapshot.Hash,
+		SyncedAt:           now,
+		Sets:               sets,
+		ExistingTaskIDs:    existing,
+		HasExistingTaskIDs: snapshot.HasExistingTaskIDs,
+	}); err != nil {
 		return false, err
 	}
 	sets = compileTasks(sets)
 	c.mu.Lock()
 	changed := !sameTaskIDs(c.sets, sets)
 	c.loaded, c.hash, c.sets = true, snapshot.Hash, sets
+	c.existing, c.hasExisting = existing, snapshot.HasExistingTaskIDs
 	c.syncedAt, c.syncErrorSince, c.syncError = now, time.Time{}, ""
 	c.mu.Unlock()
 	return changed, nil
@@ -150,6 +166,17 @@ func (c *CatalogCache) TaskIDs() []string {
 		ids = append(ids, set.Set.TaskID)
 	}
 	return ids
+}
+
+// ExistingTaskIDs 返回管理端库中当前存在的全部因子任务 ID（含未启用任务）；
+// ok 为 false 表示当前快照尚未包含权威的全量任务清单。
+func (c *CatalogCache) ExistingTaskIDs() ([]string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.loaded || !c.hasExisting {
+		return nil, false
+	}
+	return append([]string(nil), c.existing...), true
 }
 
 // EnabledTasksByDataset implements trigger.TaskLocator from the snapshot: every

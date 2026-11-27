@@ -86,24 +86,6 @@ func (b *Backfiller) seedSubjectsPerJob() int {
 	return seedDefaultSubjectsPerJob
 }
 
-// seedJobIDs 返回空间里补齐中的作业 ID（Tick 据此把它们排在最后、按补齐的上限认领）。
-func (b *Backfiller) seedJobIDs(ctx context.Context, spaceID string) (map[string]bool, error) {
-	out := map[string]bool{}
-	if !b.Seed.Enabled {
-		return out, nil
-	}
-	seeds, err := b.Store.HistorySeeds(ctx, spaceID, true)
-	if err != nil {
-		return nil, err
-	}
-	for _, seed := range seeds {
-		for _, id := range seed.JobIDs {
-			out[id] = true
-		}
-	}
-	return out, nil
-}
-
 // seedRegions 返回市场补齐分块可用的云函数地域；没有时分块按任务的采集方式选执行端。
 func (b *Backfiller) seedRegions(provider FunctionProvider, spaceID, marketType string) []string {
 	if b.Seed.Regions != nil {
@@ -459,7 +441,7 @@ func (b *Backfiller) submitSeedBatch(ctx context.Context, spaceID string, seed s
 	if len(gaps) == 0 {
 		return "", nil
 	}
-	job := store.BackfillJob{SpaceID: spaceID, Source: store.BackfillSourceManual, Kind: store.BackfillKindGap, DatasetID: seed.DatasetID, Frequency: seed.Frequency, From: seed.TargetFrom, To: to}
+	job := store.BackfillJob{SpaceID: spaceID, Source: store.BackfillSourceSeed, Kind: store.BackfillKindGap, DatasetID: seed.DatasetID, Frequency: seed.Frequency, From: seed.TargetFrom, To: to}
 	id, _, err := b.createJobWith(ctx, job, gaps, MaxChunksPerJob, merge)
 	return id, err
 }

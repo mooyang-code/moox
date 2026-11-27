@@ -10,11 +10,11 @@ CREATE TABLE IF NOT EXISTS t_paper_funding_fees (
     c_quantity TEXT NOT NULL,
     c_amount TEXT NOT NULL,
     c_asset TEXT NOT NULL,
-    FOREIGN KEY (c_space_id, c_trading_account_id)
-        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
     CHECK (c_exchange_symbol <> ''),
     CHECK (c_settled_at > 0),
     CHECK (c_asset <> ''),
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
     PRIMARY KEY (c_space_id, c_trading_account_id, c_exchange_symbol, c_settled_at)
 );
 

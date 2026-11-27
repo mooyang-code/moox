@@ -2,13 +2,13 @@ package order
 
 import (
 	"context"
-	"errors"
 	"math/big"
 	"time"
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -27,8 +27,9 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 	if err != nil {
 		return shared.Zero(), err
 	}
-	if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
-		spec, err = s.paperReference(ctx, spec, validation)
+	policy := orderPolicyOf(validation, nil)
+	if policy.NeedsExecutableQuote() {
+		spec, err = s.adapterExecutableReference(ctx, spec, validation)
 		if err != nil {
 			return shared.Zero(), err
 		}
@@ -36,6 +37,7 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 		if err != nil {
 			return shared.Zero(), err
 		}
+		policy = orderPolicyOf(validation, nil)
 	}
 	adjustment, err := s.paperMarginAdjustment(ctx, validation)
 	if err != nil {
@@ -76,7 +78,19 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 	}
 	whole := new(big.Int).Quo(units.Num(), units.Denom())
 	quantity = shared.MustDecimal(whole.String()).Mul(step)
-	quantity = stockBuyCapacity(validation, spec, quantity, step, available)
+	if !validation.ReservedQuantity.IsZero() {
+		quantity = policy.ClampBuyCapacity(execution.CapacityClampRequest{
+			Account:        validation.Account,
+			Instrument:     validation.Instrument,
+			OrderType:      spec.Type,
+			Side:           spec.Side,
+			ReferencePrice: spec.ReferencePrice,
+			LimitPrice:     spec.LimitPrice,
+			Quantity:       quantity,
+			Step:           step,
+			Available:      available,
+		})
+	}
 	price := spec.ReferencePrice
 	if spec.Type == exchange.OrderTypeLimit {
 		price = *spec.LimitPrice
@@ -87,32 +101,6 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 	return quantity, nil
 }
 
-// stockBuyCapacity 给模拟盘里有自己费用函数的场所（A 股、港股）的买单把容量收到费用也付得起：佣金有最低值（港股还有
-// 印花税取整），花费和数量不成正比，按比例算出的数量可能差几块钱，这里按场所的费用函数逐个步长往下减到
-// 付得起（和预留、扣费用同一个函数）。
-func stockBuyCapacity(validation Validation, spec orderdomain.OrderSpec, quantity, step, available shared.Decimal) shared.Decimal {
-	account := validation.Account
-	rule := exchange.RuleAt(account.Exchange, validation.Instrument.MarketType)
-	if spec.Side != exchange.SideBuy || account.ExecutionMode != exchange.ExecutionModePaper || account.Paper == nil ||
-		rule.Fee == nil || validation.ReservedQuantity.IsZero() {
-		return quantity
-	}
-	unit := spec.ReferencePrice
-	if spec.Type == exchange.OrderTypeLimit && spec.LimitPrice != nil {
-		unit = *spec.LimitPrice
-	} else {
-		unit = paperSlippagePrice(unit, spec.Side, account.Paper.SlippageBPS)
-	}
-	for quantity.Cmp(shared.Zero()) > 0 &&
-		rule.BuyCost(quantity.Mul(unit), account.Paper.TakerFeeRate).Cmp(available) > 0 {
-		quantity = quantity.Sub(step)
-	}
-	if quantity.IsNegative() {
-		return shared.Zero()
-	}
-	return quantity
-}
-
 func minCapacity(a, b shared.Decimal) shared.Decimal {
 	if a.Cmp(b) <= 0 {
 		return a
@@ -121,7 +109,7 @@ func minCapacity(a, b shared.Decimal) shared.Decimal {
 }
 
 func availableReservationFunds(tx *store.Tx, validation Validation, adjustment shared.Decimal, now time.Time) (shared.Decimal, error) {
-	if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
+	if orderPolicyOf(validation, nil).UsesLocalFundsLedger() {
 		balances, err := tx.GetPaperBalanceSnapshot(validation.Account.SpaceID, validation.Account.ID)
 		if err != nil {
 			return shared.Zero(), err
@@ -157,7 +145,7 @@ func paperT1Locked(tx *store.Tx, validation Validation, now time.Time) (shared.D
 	return bought[validation.ReservedAsset], nil
 }
 
-func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec, validation Validation) (orderdomain.OrderSpec, error) {
+func (s *Service) adapterExecutableReference(ctx context.Context, spec orderdomain.OrderSpec, validation Validation) (orderdomain.OrderSpec, error) {
 	if s.Adapters == nil {
 		return spec, ErrServiceConfig
 	}
@@ -165,17 +153,17 @@ func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "adapter", err)
 	}
-	quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(validation.Instrument.MarketType, validation.Instrument.ExchangeSymbol))
+	policy := execution.ResolveOrderPolicy(adapter, validation.Account)
+	price, sourceTime, err := policy.ResolveExecutableQuote(
+		ctx,
+		exchange.NewSymbolKey(validation.Instrument.MarketType, validation.Instrument.ExchangeSymbol),
+		spec.Side,
+		s.now(),
+		10*time.Second,
+	)
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "quote", err)
 	}
-	if !paperQuoteFresh(quote, s.now(), 10*time.Second) {
-		return spec, accountExecutionError(spec.TradingAccountID, "quote", errors.New("trade order: paper quote is stale"))
-	}
-	price, err := paperExecutablePrice(spec.Side, quote)
-	if err != nil {
-		return spec, accountExecutionError(spec.TradingAccountID, "quote", err)
-	}
-	spec.ReferencePrice, spec.ReferencePriceAt = price, quote.SourceTime
+	spec.ReferencePrice, spec.ReferencePriceAt = price, sourceTime
 	return spec, nil
 }

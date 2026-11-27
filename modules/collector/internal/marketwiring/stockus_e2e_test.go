@@ -117,7 +117,7 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 		pipeline := stockUSPipeline(t, storage, usTime("2026-11-12 22:50:05"), request.FetchLimits, server)
 		payload, err := pipeline.Execute(context.Background(), request)
 		require.NoError(t, err)
-		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+		require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sizes)))
 	require.Equal(t, []int{50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 3}, sizes)

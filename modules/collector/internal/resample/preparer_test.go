@@ -47,7 +47,7 @@ func TestPreparerSkipsReadyTasksAndPreparesNonReadyTasks(t *testing.T) {
 	metadata := newCatalogMetadataFake("")
 	view := &countingViewState{inner: catalogViewStateFake{metadata: metadata}}
 	source := &countingSubjectSource{
-		info:     storagesource.DatasetInfo{DataSourceID: "binance", SubjectTags: []string{"binance_spot"}},
+		info:     storagesource.DatasetInfo{DataSourceID: "binance", Alignment: "epoch_utc", ColumnTypes: cryptoColumnTypes(), SubjectTags: []string{"binance_spot"}},
 		subjects: []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}},
 	}
 	preparer := &Preparer{

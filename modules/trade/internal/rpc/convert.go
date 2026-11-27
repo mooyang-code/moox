@@ -501,6 +501,7 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 		AveragePrice: value.AveragePrice, ReservedAsset: value.ReservedAsset,
 		ReservedQuantity:          value.ReservedQuantity,
 		RemainingReservedQuantity: value.RemainingReservedQuantity,
+		RejectCode:                value.RejectCode,
 		RejectReason:              value.RejectReason, Version: value.Version,
 		SubmittedAt: value.SubmittedAt, FinishedAt: value.FinishedAt,
 		CreatedAt: unixMilli(value.CreatedAt), UpdatedAt: unixMilli(value.UpdatedAt),
@@ -556,6 +557,7 @@ func logicalAccountTargetToPB(
 			InstrumentId: target.InstrumentID,
 			Quantity:     target.Quantity,
 			Reason:       target.Reason,
+			ReasonCode:   target.ReasonCode,
 			Deferred:     target.Deferred,
 		})
 	}

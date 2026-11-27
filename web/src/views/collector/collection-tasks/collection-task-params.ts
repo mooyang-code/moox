@@ -1,4 +1,10 @@
-import type { CollectorTask, CollectionTaskPayload, ExtraFieldOption, OutputFieldOption } from "@/api/collector";
+import type {
+  CollectorTask,
+  CollectionTaskPayload,
+  ExtraFieldOption,
+  OutputFieldOption,
+  ResampleSourcePreview
+} from "@/api/collector";
 import { normalizeFrequency } from "@/utils/frequency";
 import { marketLabel } from "@/views/data/shared/series-market";
 import { getTaskResultDatasetIds, getTaskResultState } from "@/views/collector/task-results/task-results-model";
@@ -42,6 +48,18 @@ export function availableExtraFieldIds(condition: ExtraFieldCondition): Set<stri
 /** 基础输出字段的 ID 集合：来自 GetDataTypeConfigWithFields 的 base_output_fields（结果数据集能建的列）。 */
 export function baseOutputFieldIds(options: ReadonlyArray<OutputFieldOption> | undefined): Set<string> {
   return new Set((options || []).map(option => option.field_id));
+}
+
+/**
+ * K 线重采样实际可选的输出字段目录：优先使用 PreviewKlineResampleSource 返回的源数据集可合成列
+ * （标准字段归约规则表 ∩ 源数据集活跃列），尚未选源任务或预览未就绪时退回数据类型基础字段目录。
+ */
+export function resampleOutputFieldOptions(
+  preview: Pick<ResampleSourcePreview, "allowed_output_fields"> | null | undefined,
+  fallbackBase: ReadonlyArray<OutputFieldOption> | undefined
+): OutputFieldOption[] {
+  if (preview?.allowed_output_fields?.length) return preview.allowed_output_fields.slice();
+  return (fallbackBase || []).slice();
 }
 
 /** 输出字段目录里的一项：显示名与分组只在 Collector 的字段规格里登记，由 GetDataTypeConfigWithFields 给出。 */
@@ -145,12 +163,10 @@ export function outputFieldSelectable(
   return originalFields.some(id => foldText(id) === foldText(fieldId));
 }
 
-export type CollectionTaskMarket = "spot" | "swap" | "equity";
-
 export interface CollectionTaskInput {
   dataType: CollectionTaskDataType;
-  provider: string;
-  market: CollectionTaskMarket;
+  provider?: string;
+  market?: string;
   frequency: string;
   subjectTags?: string[];
   // 合成的源采集任务：创建时只提交它与目标频率，源数据集、源周期、序列标签由后端推导。
@@ -180,8 +196,6 @@ export function ingestLabel(value: unknown): string {
 
 export interface KlineResampleParams extends Record<string, unknown> {
   source_task_id?: string;
-  provider?: string;
-  market_type?: CollectionTaskMarket;
   source_dataset_id?: string;
   source_frequency?: string;
   source_series_tag?: string;
@@ -231,14 +245,12 @@ export function collectionTaskNameError(value: unknown): string | undefined {
 }
 
 export function buildCollectionTaskParams(input: CollectionTaskInput): Record<string, unknown> {
-  const provider = input.provider.trim().toLowerCase();
-  const market = input.market;
   const frequency = input.frequency.trim();
   const outputFields = [...new Set((input.outputFields || []).map(value => value.trim()).filter(Boolean))];
   if (!frequency) throw new Error("请输入采集频率");
 
   if (input.dataType === "kline_resample") {
-    return buildKlineResampleParams({ ...input, provider, market, frequency, outputFields });
+    return buildKlineResampleParams({ ...input, frequency, outputFields });
   }
 
   const subjectTags = normalizeSubjectTags(input.subjectTags);
@@ -262,11 +274,8 @@ export function buildKlineResampleParams(input: CollectionTaskInput & { outputFi
 }
 
 export function parseKlineResampleParams(params: Record<string, unknown>): KlineResampleParams {
-  const provider = stringValue(params.provider);
   return {
     ...(stringValue(params.source_task_id) ? { source_task_id: stringValue(params.source_task_id) } : {}),
-    ...(provider ? { provider } : {}),
-    ...(provider || stringValue(params.market_type) ? { market_type: normalizeMarket(stringValue(params.market_type)) } : {}),
     source_dataset_id: stringValue(params.source_dataset_id),
     source_frequency: stringValue(params.source_frequency),
     source_series_tag: stringValue(params.source_series_tag),
@@ -325,8 +334,6 @@ export function parseCollectionTaskInput(
     const resample = parseKlineResampleParams(params);
     return {
       dataType,
-      provider: resample.provider || "",
-      market: resample.market_type || "spot",
       frequency: resample.target_frequency,
       sourceTaskId: resample.source_task_id,
       sourceId: resample.source_dataset_id,
@@ -337,8 +344,6 @@ export function parseCollectionTaskInput(
   }
   return {
     dataType,
-    provider: "",
-    market: "spot",
     frequency: stringValue(params.frequency),
     subjectTags: task.tag_ids.length ? task.tag_ids.slice() : stringArrayValue(params.subject_tags),
     outputFields: stringArrayValue(params.output_fields)
@@ -353,10 +358,6 @@ export function taskFrequency(task: Pick<CollectionTaskRecord, "data_type" | "co
 function normalizeDataType(value: string): CollectionTaskDataType {
   if (value === "kline_resample") return "kline_resample";
   return "kline";
-}
-
-export function normalizeMarket(value: string): CollectionTaskMarket {
-  return value === "swap" || value === "equity" ? value : "spot";
 }
 
 /** 一个标签的最小描述：创建任务时按它判断来源和市场。 */

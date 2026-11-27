@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -360,6 +359,11 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		if err != nil {
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 		}
+	} else if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		task.CollectParams, err = stripResampleTaskRouting(task.CollectParams)
+		if err != nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
 	}
 	params, err = domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
@@ -566,6 +570,11 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 		if err != nil {
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 		}
+	} else if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		task.CollectParams, err = stripResampleTaskRouting(task.CollectParams)
+		if err != nil {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
 	}
 	task.ResultDatasetID = existing.ResultDatasetID
 	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
@@ -581,7 +590,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 		if strings.TrimSpace(requestedParams.TargetDatasetID) == "" {
 			requestedParams.TargetDatasetID = task.ResultDatasetID
 		}
-		if err := collectorresample.ValidateTaskParams(task.SpaceID, requestedParams); err != nil {
+		if err := collectorresample.ValidateTaskParamsBasic(requestedParams); err != nil {
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 		}
 	}
@@ -624,7 +633,9 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, lookupErr.Error())}, nil
 	}
-	if outputFieldsChanged {
+	// 合成任务的目标数据集及列（含可选列的 Required=false 语义）由 resample Preparer/Catalog 异步维护，
+	// 这里只对直接采集任务同步结果数据集列，避免未就绪时阻断合法缩减输出字段或覆写可选列的 Required 标记。
+	if outputFieldsChanged && !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
 		if s.resultManager == nil {
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
@@ -869,14 +880,17 @@ func CollectionTaskDefinitionHash(task domain.CollectionTask) string {
 		// also canonicalizes output-field ordering, frequency spelling and defaults.
 		parsed.SubjectTags = nil
 		parsed.TargetDatasetID = ""
-		if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
-			// Direct collection routing belongs to Tag/Space, never to the task.
+		if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") || strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+			// Direct collection routing belongs to Tag/Space; resample derives clock/calendar from source Dataset.
 			parsed.Provider = ""
 			parsed.MarketType = ""
 			parsed.MarketID = ""
 			parsed.InstrumentType = ""
 			parsed.SourceID = ""
 			parsed.SeriesTag = ""
+			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+				parsed.Alignment = ""
+			}
 		}
 		if encoded, encodeErr := parsed.CanonicalJSON(); encodeErr == nil {
 			params = encoded
@@ -1123,7 +1137,7 @@ func validateCollectionTask(task domain.CollectionTask) error {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-		if err := collectorresample.ValidateTaskParams(task.SpaceID, params); err != nil {
+		if err := collectorresample.ValidateTaskParamsBasic(params); err != nil {
 			return fmt.Errorf("invalid collect_params: %w", err)
 		}
 	} else {
@@ -1143,6 +1157,22 @@ func stripCollectionTaskRouting(raw string) (string, error) {
 		return "", fmt.Errorf("invalid collect_params: %w", err)
 	}
 	for _, key := range []string{"provider", "market_type", "market_id", "instrument_type", "source_id", "series_tag"} {
+		delete(values, key)
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("encode collect_params: %w", err)
+	}
+	return string(encoded), nil
+}
+
+// stripResampleTaskRouting 从 kline_resample 持久化参数中剥离冗余外部采集路由与对齐覆盖字段。
+func stripResampleTaskRouting(raw string) (string, error) {
+	values := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return "", fmt.Errorf("invalid collect_params: %w", err)
+	}
+	for _, key := range []string{"provider", "market_type", "market_id", "instrument_type", "source_id", "series_tag", "alignment"} {
 		delete(values, key)
 	}
 	encoded, err := json.Marshal(values)
@@ -1257,6 +1287,13 @@ func canonicalizeCollectionTask(task domain.CollectionTask) (domain.CollectionTa
 	if err != nil {
 		return task, err
 	}
+	params.Provider = ""
+	params.MarketType = ""
+	params.MarketID = ""
+	params.InstrumentType = ""
+	params.SourceID = ""
+	params.SeriesTag = ""
+	params.Alignment = ""
 	canonical, err := params.CanonicalJSON()
 	if err != nil {
 		return task, err
@@ -1291,6 +1328,15 @@ func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error
 			return fmt.Errorf("normalize existing task collect_params: %w", err)
 		}
 		desiredRaw, err = stripCollectionTaskRouting(desiredRaw)
+		if err != nil {
+			return fmt.Errorf("normalize desired task collect_params: %w", err)
+		}
+	} else if strings.EqualFold(strings.TrimSpace(desired.DataType), "kline_resample") {
+		existingRaw, err = stripResampleTaskRouting(existingRaw)
+		if err != nil {
+			return fmt.Errorf("normalize existing task collect_params: %w", err)
+		}
+		desiredRaw, err = stripResampleTaskRouting(desiredRaw)
 		if err != nil {
 			return fmt.Errorf("normalize desired task collect_params: %w", err)
 		}
@@ -1367,10 +1413,6 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 	if info.DataKind != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return fmt.Errorf("source Dataset %s must be time_series", params.SourceDatasetID)
 	}
-	actualMarket := strings.ToLower(strings.TrimSpace(info.Attributes["market_type"]))
-	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(params.MarketType)) {
-		return fmt.Errorf("source Dataset %s market_type=%s does not match collect_params market_type=%s", params.SourceDatasetID, actualMarket, params.MarketType)
-	}
 	wantedFrequency, normalizeErr := frequencypkg.Normalize(params.SourceFrequency)
 	if normalizeErr != nil {
 		return fmt.Errorf("source Dataset %s frequency %q is invalid: %w", params.SourceDatasetID, params.SourceFrequency, normalizeErr)
@@ -1378,43 +1420,10 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 	if info.Freq != wantedFrequency {
 		return fmt.Errorf("source Dataset %s freq is %q, not %q", params.SourceDatasetID, info.Freq, params.SourceFrequency)
 	}
-	// Dataset metadata adapters that expose column discovery return a
-	// non-nil ColumnTypes map. Validate both presence and logical type so
-	// an empty or malformed schema cannot enter ready and spin forever.
-	if info.ColumnTypes != nil {
-		expected := map[string]storagepb.FieldValueType{
-			"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		}
-		// 与合成读源 K 线用同一个判断（resample 包按空间默认品种的行形状取列）。
-		hasTradeCount, err := markets.HasTradeCount(task.SpaceID, "")
-		if err != nil {
-			return err
-		}
-		if hasTradeCount {
-			expected["quote_volume"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
-			expected["trade_num"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
-		} else {
-			expected["amount"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
-		}
-		missing := make([]string, 0)
-		for column, expectedType := range expected {
-			actualType, ok := info.ColumnTypes[column]
-			if !ok {
-				missing = append(missing, column)
-				continue
-			}
-			if actualType != expectedType {
-				return fmt.Errorf("source Dataset %s column %s has value_type=%s, want %s", params.SourceDatasetID, column, actualType.String(), expectedType.String())
-			}
-		}
-		if len(missing) != 0 {
-			sort.Strings(missing)
-			return fmt.Errorf("source Dataset %s missing active K-line columns: %s", params.SourceDatasetID, strings.Join(missing, ","))
-		}
+	if strings.TrimSpace(params.TargetDatasetID) == "" {
+		params.TargetDatasetID = taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID).DatasetID
 	}
-	return nil
+	return collectorresample.ValidateTaskParamsForSource(info, params)
 }
 
 func (s *Service) validateDataset(

@@ -68,11 +68,11 @@ func (f *timelineFixture) flatten(ctx context.Context, request FlattenRequest) e
 	return err
 }
 
-// setAction 直接改动作的状态和最后修改时间（c_mtime 由 SQLite 写入，不受模拟时钟控制）。
+// setAction 直接改动作的状态和最后修改时间（毫秒时间戳）。
 func (f *timelineFixture) setAction(spaceID, actionID, status string, mtime time.Time) {
 	f.t.Helper()
-	require.NoError(f.t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = ?, c_mtime = ? WHERE c_space_id = ? AND c_action_id = ?`,
-		status, mtime.UTC().Format("2006-01-02 15:04:05"), spaceID, actionID).Error)
+	require.NoError(f.t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = ?, c_updated_at = ? WHERE c_space_id = ? AND c_action_id = ?`,
+		status, mtime.UTC().UnixMilli(), spaceID, actionID).Error)
 }
 
 func (f *timelineFixture) hold(logicals ...string) {

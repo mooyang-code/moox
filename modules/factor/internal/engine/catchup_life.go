@@ -76,6 +76,16 @@ func (t *catchupTracker) drop(taskID string) {
 	delete(t.jobs, taskID)
 }
 
+func (t *catchupTracker) retain(keep map[string]struct{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for taskID := range t.jobs {
+		if _, ok := keep[taskID]; !ok {
+			delete(t.jobs, taskID)
+		}
+	}
+}
+
 // catchupHook 是生命周期的 Catchup 钩子：引擎是活动引擎、满足追赶前置条件（本次恢复之后目录同步成功、参与追赶的任务引用的
 // 自定义算子模块全部就绪），并且参与追赶的任务都追平，才算追平。参与者见 catchupMembers：除本地窗口外还有不通过项的任务
 // 本来就不计算，不参与本次追赶、也不挡住引擎放行（检查通过之后由连续水位从断点补算）；只是窗口没载入的任务照常参与，

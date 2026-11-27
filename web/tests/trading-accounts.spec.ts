@@ -102,13 +102,15 @@ test("新建模拟账户四步，测试网和生产环境也可选，请求带�
   await dialog.getByRole("button", { name: "创建" }).click();
   await expect.poll(() => calls.paper.length).toBe(1);
   expect(calls.paper[0]).toMatchObject({
-    account_name: "演示账户",
+    name: "演示账户",
     logical_account_name: "演示组合",
     exchange: "binance",
     markets: ["spot", "swap"],
     margin_mode: "CROSS",
     settlement_asset: "USDT",
-    order_retention_days: 5
+    paper: {
+      order_retention_days: 5
+    }
   });
 });
 

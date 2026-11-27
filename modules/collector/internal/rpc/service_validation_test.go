@@ -51,6 +51,7 @@ type taskResultMetadataFake struct {
 	datasets          map[string]*storagepb.Dataset
 	getDatasets       int
 	deleteDatasets    int
+	upsertColumns     int
 	failDeleteDataset bool
 	failGetDataset    error
 	// indexedTo 是 storage-view 里各数据集已建索引的上界；没有的按 VIEW_NOT_FOUND 回答。
@@ -113,6 +114,9 @@ func (f *taskResultMetadataFake) DeleteDataset(_ context.Context, req *storagepb
 }
 
 func (f *taskResultMetadataFake) UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upsertColumns++
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
@@ -889,7 +893,7 @@ func TestValidateCollectionTaskDatasetsAcceptsExchangeSourceForMooxResample(t *t
 		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1h", Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	rule := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4h","alignment":"epoch_utc"}`,
+		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", CollectParams: `{"source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"dataset_target","target_frequency":"4h"}`,
 	}
 	require.NoError(t, service.validateCollectionTaskDatasets(context.Background(), rule))
 }
@@ -1081,4 +1085,132 @@ func TestCreateTaskIngestDefaultsToTheMarketValue(t *testing.T) {
 	_, metadata, rsp = create(t, "kline", "", map[string]any{"ingest": "stream", "executor": "scf"})
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "“推送加云函数补采”无法表达")
 	require.Empty(t, metadata.datasets)
+}
+
+// 合成任务在 waiting_view（目标数据集尚未建立）与 ready（已由 resample Catalog 建列）状态下缩减 output_fields，
+// UpdateTask 均不得调用 resultManager.EnsureOutputFields（避免未就绪被拦截或覆写 amount 等可选列的 Required=false）。
+func TestUpdateTaskResampleOutputFieldsReductionSkipsResultManagerEnsure(t *testing.T) {
+	ctx := context.Background()
+	sourceInfo := storagesource.DatasetInfo{
+		DataSourceID: "eastmoney",
+		DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+		Status:       "active",
+		Freq:         "1m",
+		Alignment:    "session",
+		SubjectTags:  []string{"cn_a_share"},
+		Attributes:   map[string]string{"calendar": "cn_stock", "market_type": "equity"},
+		Columns:      []string{"open", "high", "low", "close", "volume", "amount", "quote_volume"},
+		ColumnTypes: map[string]storagepb.FieldValueType{
+			"open":         storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"high":         storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"low":          storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"close":        storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"volume":       storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"amount":       storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			"quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		},
+	}
+
+	cases := []struct {
+		name         string
+		taskID       string
+		prepareState domain.CollectionTaskPrepareState
+		targetExists bool
+		initial      []string
+		reduced      []string
+	}{
+		{
+			name:         "waiting_view_before_target_created",
+			taskID:       "resample-waiting",
+			prepareState: domain.PrepareStateWaitingView,
+			targetExists: false,
+			initial:      []string{"open", "high", "low", "close", "volume", "amount"},
+			reduced:      []string{"open", "high", "low", "close", "volume"},
+		},
+		{
+			name:         "ready_preserves_optional_column_required_flag",
+			taskID:       "resample-ready",
+			prepareState: domain.PrepareStateReady,
+			targetExists: true,
+			initial:      []string{"open", "high", "low", "close", "volume", "amount", "quote_volume"},
+			reduced:      []string{"open", "high", "low", "close", "volume", "amount"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openCollectorTestStore(t)
+			taskID := tc.taskID
+			targetID := taskresult.ResultIDs(taskID).DatasetID
+			initialParams := domain.CollectParams{
+				SourceDatasetID: "source_kline",
+				SourceFrequency: "1m",
+				SourceSeriesTag: "market:equity",
+				TargetDatasetID: targetID,
+				TargetFrequency: "5m",
+				OutputFields:    tc.initial,
+			}
+			rawInitial, err := initialParams.CanonicalJSON()
+			require.NoError(t, err)
+			require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
+				SpaceID:         "stockcn",
+				TaskID:          taskID,
+				TaskName:        "重采样-" + tc.name,
+				DataType:        "kline_resample",
+				CollectParams:   rawInitial,
+				Enabled:         true,
+				PrepareState:    tc.prepareState,
+				ResultDatasetID: targetID,
+			}))
+
+			metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}}
+			if tc.targetExists {
+				metadata.datasets[targetID] = &storagepb.Dataset{
+					SpaceId: "stockcn", DatasetId: targetID, Status: "active",
+					Attributes: map[string]string{"owner_module": "collector", "collector_task_id": taskID},
+				}
+			}
+			service := &Service{
+				persistence:   db,
+				taskRepo:      db.Tasks(),
+				resultManager: taskresult.NewManagerWithAPI(metadata),
+				datasetSrc:    validationDatasetSource{"source_kline": sourceInfo},
+			}
+
+			reducedAny := make([]any, len(tc.reduced))
+			for i, f := range tc.reduced {
+				reducedAny[i] = f
+			}
+			reqParams, err := structpb.NewStruct(map[string]any{
+				"source_dataset_id": "source_kline",
+				"source_frequency":  "1m",
+				"source_series_tag": "market:equity",
+				"target_frequency":  "5m",
+				"output_fields":     reducedAny,
+			})
+			require.NoError(t, err)
+
+			rsp, callErr := service.UpdateTask(ctx, &pb.UpdateTaskReq{
+				SpaceId: "stockcn",
+				TaskId:  taskID,
+				Task: &pb.CollectionTask{
+					SpaceId:       "stockcn",
+					TaskId:        taskID,
+					TaskName:      "重采样-" + tc.name,
+					DataType:      "kline_resample",
+					CollectParams: reqParams,
+				},
+			})
+			require.NoError(t, callErr)
+			require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+			require.Zero(t, metadata.upsertColumns, "合成任务缩减输出字段不得调用 EnsureOutputFields / UpsertDatasetColumn")
+
+			updated, err := db.Tasks().GetByTaskID(ctx, "stockcn", taskID)
+			require.NoError(t, err)
+			require.Equal(t, tc.prepareState, updated.PrepareState)
+			parsed, err := domain.ParseCollectParams(updated.CollectParams, "", "", updated.DataType)
+			require.NoError(t, err)
+			require.ElementsMatch(t, tc.reduced, parsed.OutputFields)
+		})
+	}
 }

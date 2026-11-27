@@ -17,7 +17,6 @@ import (
 const (
 	ResampleJobQueued    = "queued"
 	ResampleJobRunning   = "running"
-	ResampleJobSyncing   = "syncing"
 	ResampleJobSucceeded = "succeeded"
 	ResampleJobFailed    = "failed"
 	ResampleJobCancelled = "cancelled"
@@ -104,38 +103,38 @@ type OutboxEvent struct {
 }
 
 type resampleSnapshotRow struct {
-	ID            int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID       string    `gorm:"column:c_space_id"`
-	TaskID        string    `gorm:"column:c_task_id"`
-	EffectiveFrom int64     `gorm:"column:c_effective_from"`
-	SeriesHash    string    `gorm:"column:c_series_hash"`
-	Subjects      string    `gorm:"column:c_subjects"`
-	CreatedAt     time.Time `gorm:"column:c_ctime"`
+	ID            int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID       string `gorm:"column:c_space_id"`
+	TaskID        string `gorm:"column:c_task_id"`
+	EffectiveFrom int64  `gorm:"column:c_effective_from"`
+	SeriesHash    string `gorm:"column:c_series_hash"`
+	Subjects      string `gorm:"column:c_subjects"`
+	CreatedAt     int64  `gorm:"column:c_ctime"`
 }
 
 func (resampleSnapshotRow) TableName() string { return "t_collector_resample_snapshots" }
 
 type resampleJobRow struct {
-	ID             int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
-	JobID          string    `gorm:"column:c_job_id"`
-	SpaceID        string    `gorm:"column:c_space_id"`
-	TaskID         string    `gorm:"column:c_task_id"`
-	RequestID      string    `gorm:"column:c_request_id"`
-	Origin         string    `gorm:"column:c_origin"`
-	Subjects       string    `gorm:"column:c_subjects"`
-	Start          time.Time `gorm:"column:c_start"`
-	End            time.Time `gorm:"column:c_end"`
-	NextBucket     time.Time `gorm:"column:c_next_bucket"`
-	NotBefore      time.Time `gorm:"column:c_not_before"`
-	Status         string    `gorm:"column:c_status"`
-	TotalBuckets   int       `gorm:"column:c_total_buckets"`
-	DoneBuckets    int       `gorm:"column:c_done_buckets"`
-	Written        int64     `gorm:"column:c_written"`
-	Skipped        int64     `gorm:"column:c_skipped"`
-	SkippedSamples string    `gorm:"column:c_skipped_samples"`
-	LastError      string    `gorm:"column:c_last_error"`
-	CreatedAt      time.Time `gorm:"column:c_ctime"`
-	UpdatedAt      time.Time `gorm:"column:c_mtime"`
+	ID             int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	JobID          string `gorm:"column:c_job_id"`
+	SpaceID        string `gorm:"column:c_space_id"`
+	TaskID         string `gorm:"column:c_task_id"`
+	RequestID      string `gorm:"column:c_request_id"`
+	Origin         string `gorm:"column:c_origin"`
+	Subjects       string `gorm:"column:c_subjects"`
+	Start          int64  `gorm:"column:c_start"`
+	End            int64  `gorm:"column:c_end"`
+	NextBucket     int64  `gorm:"column:c_next_bucket"`
+	NotBefore      int64  `gorm:"column:c_not_before"`
+	Status         string `gorm:"column:c_status"`
+	TotalBuckets   int    `gorm:"column:c_total_buckets"`
+	DoneBuckets    int    `gorm:"column:c_done_buckets"`
+	Written        int64  `gorm:"column:c_written"`
+	Skipped        int64  `gorm:"column:c_skipped"`
+	SkippedSamples string `gorm:"column:c_skipped_samples"`
+	LastError      string `gorm:"column:c_last_error"`
+	CreatedAt      int64  `gorm:"column:c_ctime"`
+	UpdatedAt      int64  `gorm:"column:c_mtime"`
 }
 
 func (resampleJobRow) TableName() string { return "t_collector_resample_jobs" }
@@ -143,9 +142,9 @@ func (resampleJobRow) TableName() string { return "t_collector_resample_jobs" }
 func (row resampleJobRow) job() ResampleJob {
 	job := ResampleJob{
 		JobID: row.JobID, SpaceID: row.SpaceID, TaskID: row.TaskID, RequestID: row.RequestID, Origin: row.Origin,
-		Start: row.Start.UTC(), End: row.End.UTC(), NextBucket: row.NextBucket.UTC(), NotBefore: row.NotBefore.UTC(),
+		Start: fromUnixMilli(row.Start), End: fromUnixMilli(row.End), NextBucket: fromUnixMilli(row.NextBucket), NotBefore: fromUnixMilli(row.NotBefore),
 		Status: row.Status, TotalBuckets: row.TotalBuckets, DoneBuckets: row.DoneBuckets, Written: row.Written, Skipped: row.Skipped,
-		LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		LastError: row.LastError, CreatedAt: fromUnixMilli(row.CreatedAt), UpdatedAt: fromUnixMilli(row.UpdatedAt),
 	}
 	_ = json.Unmarshal([]byte(row.Subjects), &job.Subjects)
 	_ = json.Unmarshal([]byte(row.SkippedSamples), &job.SkippedSamples)
@@ -153,24 +152,24 @@ func (row resampleJobRow) job() ResampleJob {
 }
 
 type backfillNoticeRow struct {
-	ID        int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID   string    `gorm:"column:c_space_id"`
-	DatasetID string    `gorm:"column:c_dataset_id"`
-	Frequency string    `gorm:"column:c_frequency"`
-	SubjectID string    `gorm:"column:c_subject_id"`
-	Start     time.Time `gorm:"column:c_start"`
-	End       time.Time `gorm:"column:c_end"`
-	Origin    string    `gorm:"column:c_origin"`
-	JobID     string    `gorm:"column:c_job_id"`
-	BatchID   string    `gorm:"column:c_batch_id"`
-	CreatedAt time.Time `gorm:"column:c_ctime"`
+	ID        int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID   string `gorm:"column:c_space_id"`
+	DatasetID string `gorm:"column:c_dataset_id"`
+	Frequency string `gorm:"column:c_frequency"`
+	SubjectID string `gorm:"column:c_subject_id"`
+	Start     int64  `gorm:"column:c_start"`
+	End       int64  `gorm:"column:c_end"`
+	Origin    string `gorm:"column:c_origin"`
+	JobID     string `gorm:"column:c_job_id"`
+	BatchID   string `gorm:"column:c_batch_id"`
+	CreatedAt int64  `gorm:"column:c_ctime"`
 }
 
 func (backfillNoticeRow) TableName() string { return "t_collector_backfill_notices" }
 
 func (row backfillNoticeRow) notice() BackfillNotice {
 	return BackfillNotice{ID: row.ID, SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID,
-		Start: row.Start.UTC(), End: row.End.UTC(), Origin: row.Origin, JobID: row.JobID, BatchID: row.BatchID}
+		Start: fromUnixMilli(row.Start), End: fromUnixMilli(row.End), Origin: row.Origin, JobID: row.JobID, BatchID: row.BatchID}
 }
 
 // 发件箱事件的发布状态（t_collector_event_outbox.c_published）。
@@ -184,14 +183,14 @@ const (
 )
 
 type eventOutboxRow struct {
-	ID           int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
-	EventID      string    `gorm:"column:c_event_id"`
-	SpaceID      string    `gorm:"column:c_space_id"`
-	EventName    string    `gorm:"column:c_event_name"`
-	SubjectToken string    `gorm:"column:c_subject_token"`
-	Payload      []byte    `gorm:"column:c_payload"`
-	Published    int       `gorm:"column:c_published"`
-	CreatedAt    time.Time `gorm:"column:c_ctime"`
+	ID           int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	EventID      string `gorm:"column:c_event_id"`
+	SpaceID      string `gorm:"column:c_space_id"`
+	EventName    string `gorm:"column:c_event_name"`
+	SubjectToken string `gorm:"column:c_subject_token"`
+	Payload      []byte `gorm:"column:c_payload"`
+	Published    int    `gorm:"column:c_published"`
+	CreatedAt    int64  `gorm:"column:c_ctime"`
 }
 
 func (eventOutboxRow) TableName() string { return "t_collector_event_outbox" }
@@ -217,8 +216,29 @@ func (r *ResampleStateRepository) AddSnapshot(ctx context.Context, snapshot Resa
 		return err
 	}
 	subjects, _ := json.Marshal(snapshot.Subjects)
-	row := resampleSnapshotRow{SpaceID: snapshot.SpaceID, TaskID: snapshot.TaskID, EffectiveFrom: snapshot.EffectiveFrom, SeriesHash: snapshot.SeriesHash, Subjects: string(subjects)}
+	row := resampleSnapshotRow{SpaceID: snapshot.SpaceID, TaskID: snapshot.TaskID, EffectiveFrom: snapshot.EffectiveFrom, SeriesHash: snapshot.SeriesHash, Subjects: string(subjects), CreatedAt: nowUnixMilli()}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
+}
+
+// CleanupSnapshots 清理早于 before 的已被替代的历史标的快照，每个任务至少保留 before 之前最新的一份基线快照，
+// 确保对 [before, +∞) 任意时刻的 SnapshotFor 查询结果不变。
+func (r *ResampleStateRepository) CleanupSnapshots(ctx context.Context, before time.Time) (int64, error) {
+	if err := r.ready(); err != nil {
+		return 0, err
+	}
+	cutoff := before.UTC().Unix()
+	result := r.db.WithContext(ctx).Exec(`
+		DELETE FROM t_collector_resample_snapshots
+		WHERE c_effective_from < ?
+		  AND c_effective_from < (
+		      SELECT MAX(s2.c_effective_from)
+		      FROM t_collector_resample_snapshots AS s2
+		      WHERE s2.c_space_id = t_collector_resample_snapshots.c_space_id
+		        AND s2.c_task_id = t_collector_resample_snapshots.c_task_id
+		        AND s2.c_effective_from < ?
+		  )
+	`, cutoff, cutoff)
+	return result.RowsAffected, result.Error
 }
 
 // SnapshotFor 返回对时刻 at（Unix 秒）生效的快照：生效点不晚于 at 的最新一份。
@@ -282,12 +302,12 @@ func (r *ResampleStateRepository) SubmitJob(ctx context.Context, job ResampleJob
 		if job.Origin == ResampleOriginSourceBackfill {
 			var rows []resampleJobRow
 			if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_origin = ? AND c_status = ? AND c_start <= ? AND c_end >= ?",
-				job.SpaceID, job.TaskID, ResampleOriginSourceBackfill, ResampleJobQueued, job.End.UTC(), job.Start.UTC()).Order("c_id").Find(&rows).Error; err != nil {
+				job.SpaceID, job.TaskID, ResampleOriginSourceBackfill, ResampleJobQueued, toUnixMilli(job.End), toUnixMilli(job.Start)).Order("c_id").Find(&rows).Error; err != nil {
 				return err
 			}
 			for _, row := range rows {
 				// 已经开始推进（游标不在起点）的作业不再合并，避免回头。
-				if !row.NextBucket.Equal(row.Start) {
+				if row.NextBucket != row.Start {
 					continue
 				}
 				merged := row.job()
@@ -297,8 +317,8 @@ func (r *ResampleStateRepository) SubmitJob(ctx context.Context, job ResampleJob
 				merged.Subjects = unionSubjects(merged.Subjects, job.Subjects)
 				subjects, _ := json.Marshal(merged.Subjects)
 				if err := tx.Model(&resampleJobRow{}).Where("c_id = ?", row.ID).Updates(map[string]any{
-					"c_start": merged.Start, "c_next_bucket": merged.NextBucket, "c_end": merged.End, "c_not_before": merged.NotBefore,
-					"c_subjects": string(subjects), "c_total_buckets": 0, "c_mtime": time.Now().UTC(),
+					"c_start": toUnixMilli(merged.Start), "c_next_bucket": toUnixMilli(merged.NextBucket), "c_end": toUnixMilli(merged.End), "c_not_before": toUnixMilli(merged.NotBefore),
+					"c_subjects": string(subjects), "c_total_buckets": 0, "c_mtime": nowUnixMilli(),
 				}).Error; err != nil {
 					return err
 				}
@@ -307,10 +327,11 @@ func (r *ResampleStateRepository) SubmitJob(ctx context.Context, job ResampleJob
 			}
 		}
 		subjects, _ := json.Marshal(sortedUnique(job.Subjects))
+		now := nowUnixMilli()
 		row := resampleJobRow{
 			JobID: job.JobID, SpaceID: job.SpaceID, TaskID: job.TaskID, RequestID: job.RequestID, Origin: job.Origin, Subjects: string(subjects),
-			Start: job.Start.UTC(), End: job.End.UTC(), NextBucket: job.Start.UTC(), NotBefore: job.NotBefore.UTC(), Status: ResampleJobQueued,
-			TotalBuckets: job.TotalBuckets, SkippedSamples: "[]",
+			Start: toUnixMilli(job.Start), End: toUnixMilli(job.End), NextBucket: toUnixMilli(job.Start), NotBefore: toUnixMilli(job.NotBefore), Status: ResampleJobQueued,
+			TotalBuckets: job.TotalBuckets, SkippedSamples: "[]", CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
@@ -410,9 +431,10 @@ func (r *ResampleStateRepository) RunnableJobs(ctx context.Context, now time.Tim
 		return nil, err
 	}
 	var rows []resampleJobRow
-	if err := r.db.WithContext(ctx).Where("c_status IN ?", []string{ResampleJobQueued, ResampleJobRunning, ResampleJobSyncing}).Order("c_id").Find(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_status IN ?", []string{ResampleJobQueued, ResampleJobRunning}).Order("c_id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	nowMs := toUnixMilli(now)
 	seen := map[string]bool{}
 	var out []ResampleJob
 	for _, row := range rows {
@@ -421,7 +443,7 @@ func (r *ResampleStateRepository) RunnableJobs(ctx context.Context, now time.Tim
 			continue
 		}
 		seen[key] = true // 任务里最早的未结束作业还没到开始时间时，后面的也不越过它
-		if row.NotBefore.After(now) {
+		if row.NotBefore > nowMs {
 			continue
 		}
 		out = append(out, row.job())
@@ -440,8 +462,8 @@ func (r *ResampleStateRepository) StartJob(ctx context.Context, jobID string, no
 		return ResampleJob{}, false, err
 	}
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&resampleJobRow{}).Where("c_job_id = ? AND c_status = ? AND c_not_before <= ?", jobID, ResampleJobQueued, now.UTC()).
-			Updates(map[string]any{"c_status": ResampleJobRunning, "c_mtime": time.Now().UTC()})
+		result := tx.Model(&resampleJobRow{}).Where("c_job_id = ? AND c_status = ? AND c_not_before <= ?", jobID, ResampleJobQueued, toUnixMilli(now)).
+			Updates(map[string]any{"c_status": ResampleJobRunning, "c_mtime": nowUnixMilli()})
 		if result.Error != nil || result.RowsAffected == 0 {
 			return result.Error
 		}
@@ -461,7 +483,7 @@ func (r *ResampleStateRepository) SetJobTotal(ctx context.Context, jobID string,
 		return err
 	}
 	return r.db.WithContext(ctx).Model(&resampleJobRow{}).Where("c_job_id = ?", jobID).
-		Updates(map[string]any{"c_total_buckets": totalBuckets, "c_mtime": time.Now().UTC()}).Error
+		Updates(map[string]any{"c_total_buckets": totalBuckets, "c_mtime": nowUnixMilli()}).Error
 }
 
 // JobProgress 是一轮推进的结果。
@@ -496,9 +518,9 @@ func (r *ResampleStateRepository) AdvanceJob(ctx context.Context, jobID string, 
 		}
 		encoded, _ := json.Marshal(samples)
 		return tx.Model(&resampleJobRow{}).Where("c_id = ?", row.ID).Updates(map[string]any{
-			"c_next_bucket": progress.NextBucket.UTC(), "c_done_buckets": row.DoneBuckets + progress.DoneBuckets,
+			"c_next_bucket": toUnixMilli(progress.NextBucket), "c_done_buckets": row.DoneBuckets + progress.DoneBuckets,
 			"c_written": row.Written + progress.Written, "c_skipped": row.Skipped + progress.Skipped,
-			"c_skipped_samples": string(encoded), "c_mtime": time.Now().UTC(),
+			"c_skipped_samples": string(encoded), "c_mtime": nowUnixMilli(),
 		}).Error
 	})
 }
@@ -510,7 +532,7 @@ func (r *ResampleStateRepository) SetJobStatus(ctx context.Context, jobID, statu
 	}
 	return r.db.WithContext(ctx).Model(&resampleJobRow{}).
 		Where("c_job_id = ? AND c_status NOT IN ?", jobID, []string{ResampleJobSucceeded, ResampleJobFailed, ResampleJobCancelled}).
-		Updates(map[string]any{"c_status": status, "c_last_error": lastError, "c_mtime": time.Now().UTC()}).Error
+		Updates(map[string]any{"c_status": status, "c_last_error": lastError, "c_mtime": nowUnixMilli()}).Error
 }
 
 // CancelJob 取消排队或运行中的作业（已写入的保留）。
@@ -533,7 +555,7 @@ func (r *ResampleStateRepository) CleanupFinishedJobs(ctx context.Context, befor
 	if err := r.ready(); err != nil {
 		return 0, err
 	}
-	result := r.db.WithContext(ctx).Where("c_status IN ? AND c_mtime < ?", []string{ResampleJobSucceeded, ResampleJobFailed, ResampleJobCancelled}, before.UTC()).Delete(&resampleJobRow{})
+	result := r.db.WithContext(ctx).Where("c_status IN ? AND c_mtime < ?", []string{ResampleJobSucceeded, ResampleJobFailed, ResampleJobCancelled}, toUnixMilli(before)).Delete(&resampleJobRow{})
 	return result.RowsAffected, result.Error
 }
 
@@ -549,10 +571,11 @@ func addNoticesTx(tx *gorm.DB, notices []BackfillNotice) error {
 	if len(notices) == 0 {
 		return nil
 	}
+	now := nowUnixMilli()
 	rows := make([]backfillNoticeRow, len(notices))
 	for i, notice := range notices {
 		rows[i] = backfillNoticeRow{SpaceID: notice.SpaceID, DatasetID: notice.DatasetID, Frequency: notice.Frequency, SubjectID: notice.SubjectID,
-			Start: notice.Start.UTC(), End: notice.End.UTC(), Origin: notice.Origin, JobID: notice.JobID}
+			Start: toUnixMilli(notice.Start), End: toUnixMilli(notice.End), Origin: notice.Origin, JobID: notice.JobID, CreatedAt: now}
 	}
 	return tx.CreateInBatches(&rows, 200).Error
 }
@@ -573,8 +596,7 @@ func (r *ResampleStateRepository) UnsealedNoticesBefore(ctx context.Context, bef
 	var rows []backfillNoticeRow
 	query := r.db.WithContext(ctx).Where("c_batch_id = ''")
 	if !before.IsZero() {
-		// c_ctime 按写入进程的本地时区存成文本，直接比字符串会差出一个时区偏移；这里的阈值只有一小时，用 datetime() 归一到 UTC 再比。
-		query = query.Where("datetime(c_ctime) < datetime(?)", before.UTC())
+		query = query.Where("c_ctime < ?", toUnixMilli(before))
 	}
 	if err := query.Order("c_id").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
@@ -602,7 +624,7 @@ func (r *ResampleStateRepository) SealBatch(ctx context.Context, noticeIDs []int
 		if result.RowsAffected == 0 {
 			return nil
 		}
-		row := eventOutboxRow{EventID: event.EventID, SpaceID: event.SpaceID, EventName: event.EventName, SubjectToken: event.SubjectToken, Payload: event.Payload}
+		row := eventOutboxRow{EventID: event.EventID, SpaceID: event.SpaceID, EventName: event.EventName, SubjectToken: event.SubjectToken, Payload: event.Payload, CreatedAt: nowUnixMilli()}
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
 	})
 }
@@ -621,7 +643,7 @@ func (r *ResampleStateRepository) PendingEvents(ctx context.Context, limit int) 
 	}
 	out := make([]OutboxEvent, len(rows))
 	for i, row := range rows {
-		out[i] = OutboxEvent{ID: row.ID, EventID: row.EventID, SpaceID: row.SpaceID, EventName: row.EventName, SubjectToken: row.SubjectToken, Payload: row.Payload, CreatedAt: row.CreatedAt}
+		out[i] = OutboxEvent{ID: row.ID, EventID: row.EventID, SpaceID: row.SpaceID, EventName: row.EventName, SubjectToken: row.SubjectToken, Payload: row.Payload, CreatedAt: fromUnixMilli(row.CreatedAt)}
 	}
 	return out, nil
 }
@@ -657,13 +679,13 @@ func (r *ResampleStateRepository) CleanupNotices(ctx context.Context, before tim
 	if err := r.ready(); err != nil {
 		return 0, err
 	}
+	cutoff := toUnixMilli(before)
 	var total int64
-	// c_ctime 按写入进程的本地时区存成文本，和 UnsealedNoticesBefore 一样用 datetime() 归一到 UTC 再比。
-	result := r.db.WithContext(ctx).Where("datetime(c_ctime) < datetime(?)", before.UTC()).Delete(&backfillNoticeRow{})
+	result := r.db.WithContext(ctx).Where("c_ctime < ?", cutoff).Delete(&backfillNoticeRow{})
 	if result.Error != nil {
 		return 0, result.Error
 	}
 	total += result.RowsAffected
-	result = r.db.WithContext(ctx).Where("c_published <> ? AND datetime(c_ctime) < datetime(?)", OutboxPending, before.UTC()).Delete(&eventOutboxRow{})
+	result = r.db.WithContext(ctx).Where("c_published <> ? AND c_ctime < ?", OutboxPending, cutoff).Delete(&eventOutboxRow{})
 	return total + result.RowsAffected, result.Error
 }

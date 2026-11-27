@@ -20,10 +20,8 @@ const (
 // API 端点
 const (
 	SpotKlineEndpoint        = "/api/v3/klines"        // 现货K线
-	SpotTradesEndpoint       = "/api/v3/aggTrades"     // 现货聚合成交（支持 fromId）
 	SpotExchangeInfoEndpoint = "/api/v3/exchangeInfo"  // 现货交易规则和交易对
 	SwapKlineEndpoint        = "/fapi/v1/klines"       // 永续合约K线
-	SwapTradesEndpoint       = "/fapi/v1/aggTrades"    // 永续合约聚合成交（支持 fromId）
 	SwapExchangeInfoEndpoint = "/fapi/v1/exchangeInfo" // 永续合约交易规则和交易对
 	SwapFundingRateEndpoint  = "/fapi/v1/fundingRate"  // 永续合约历史资金费率（公共接口，不带 symbol 时返回全部合约）
 )

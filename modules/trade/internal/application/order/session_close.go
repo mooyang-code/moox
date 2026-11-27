@@ -146,7 +146,7 @@ func (c *SessionCloser) closeOrder(ctx context.Context, current store.OrderRecor
 			return err
 		}
 		reducer := &consumer.Reducer{Store: c.Store, Now: c.Now}
-		if err := reducer.FinishOrderTx(tx, record, aggregate.State, ReasonSessionClose); err != nil {
+		if err := reducer.FinishOrderTx(tx, record, aggregate.State, orderdomain.RejectCodeSessionClose, ReasonSessionClose); err != nil {
 			return err
 		}
 		done = true

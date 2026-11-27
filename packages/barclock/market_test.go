@@ -1,6 +1,7 @@
 package barclock
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -64,5 +65,51 @@ func TestRegularCloseAndFullDayBuckets(t *testing.T) {
 	crypto, _ := MarketFor("crypto")
 	if _, err := crypto.RegularClose(); err == nil || crypto.FullDayBuckets(time.Minute) != 0 {
 		t.Fatal("24 小时连续市场没有收市时刻和每日桶数")
+	}
+}
+
+func TestMarketAndClockForDataset(t *testing.T) {
+	for _, tc := range []struct {
+		alignment, calendar string
+		wantAlign           string
+		wantCalendar        string
+		wantTimezone        string
+	}{
+		{"", "", AlignmentEpochUTC, "", "UTC"},
+		{"epoch_utc", "", AlignmentEpochUTC, "", "UTC"},
+		{"EPOCH_UTC", "crypto_24x7", AlignmentEpochUTC, "", "UTC"},
+		{"session", "cn_stock", AlignmentSession, "cn_stock", "Asia/Shanghai"},
+		{"session", "HK_STOCK", AlignmentSession, "hk_stock", "Asia/Hong_Kong"},
+		{"session", "us_stock", AlignmentSession, "us_stock", "America/New_York"},
+		{"", "cn_stock", AlignmentSession, "cn_stock", "Asia/Shanghai"},
+	} {
+		market, err := MarketForDataset(tc.alignment, tc.calendar)
+		if err != nil {
+			t.Fatalf("MarketForDataset(%q, %q) unexpected err: %v", tc.alignment, tc.calendar, err)
+		}
+		if market.Alignment != tc.wantAlign || market.CalendarID != tc.wantCalendar || market.Timezone != tc.wantTimezone {
+			t.Fatalf("MarketForDataset(%q, %q) = %+v", tc.alignment, tc.calendar, market)
+		}
+		clock, err := ClockForDataset(tc.alignment, tc.calendar, 5*time.Minute)
+		if err != nil || clock.Alignment() != tc.wantAlign {
+			t.Fatalf("ClockForDataset(%q, %q, 5m) = %v, %v", tc.alignment, tc.calendar, clock, err)
+		}
+		allowed, err := AllowedIntradayForDataset(tc.alignment, tc.calendar)
+		if err != nil || len(allowed) == 0 {
+			t.Fatalf("AllowedIntradayForDataset(%q, %q) = %v, %v", tc.alignment, tc.calendar, allowed, err)
+		}
+	}
+
+	if _, err := MarketForDataset("session", ""); !errors.Is(err, ErrNoCalendar) {
+		t.Fatalf("session without calendar should return ErrNoCalendar, got %v", err)
+	}
+	if _, err := MarketForDataset("session", "jp_stock"); !errors.Is(err, ErrNoCalendar) {
+		t.Fatalf("session with unknown calendar should return ErrNoCalendar, got %v", err)
+	}
+	if _, err := MarketForDataset("epoch_utc", "cn_stock"); err == nil {
+		t.Fatal("epoch_utc with session calendar should fail")
+	}
+	if _, err := MarketForDataset("custom", ""); err == nil {
+		t.Fatal("unknown alignment should fail")
 	}
 }

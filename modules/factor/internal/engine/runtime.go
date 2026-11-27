@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -213,7 +214,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.syncer = &catalogSyncer{
 		client: r.manager, cache: r.catalog, interval: cfg.CatalogSync.Interval, offset: cfg.CatalogSync.Offset,
 		onChange: r.reconcileConsumer, now: time.Now, kick: make(chan struct{}, 1),
-		prepare: r.prepareSnapshot, applied: r.retainModules,
+		prepare: r.prepareSnapshot, applied: r.onCatalogApplied,
 	}
 	beat := &heartbeater{
 		client: r.manager, lease: r.lease, status: r.engineStatus, interval: cfg.Engine.HeartbeatInterval,
@@ -295,6 +296,133 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 // active reports whether this engine may compute: it has a catalog and no
 // other engine holds the lease.
 func (r *Runtime) active() bool { return r.catalog.Loaded() && !r.lease.Conflict() }
+
+// onCatalogApplied 在每次目录同步成功（含 NotModified）后执行：先清理已删除任务的本地状态，再回收不再引用的自定义算子模块。
+func (r *Runtime) onCatalogApplied() {
+	r.reconcileDeletedTasks()
+	r.retainModules()
+}
+
+// reconcileDeletedTasks 按管理端权威的现存任务列表（含停用任务）清理已删除任务的本地落盘与内存状态：
+//   - localdata：释放已离开启用目录的任务登记，不误删仍被其他活跃任务共享的源数据集；
+//   - watermark（watermarks.json）与 continuity 缺席表：删除已删任务的连续水位并落盘；
+//   - gapledger：立即将已删任务的全部待恢复项记为 cancelled（task_deleted）并落盘；
+//   - param_cache.json、runTracker、filledPeriods、catchups、checks：清理已删任务的残留状态。
+//
+// 仅停用但未删除的任务仍在 existingTaskIDs 中，因此保留其 watermark 与参数缓存，仅释放 localdata 内存窗口。
+func (r *Runtime) reconcileDeletedTasks() {
+	if r.catalog == nil {
+		return
+	}
+	if r.preload != nil {
+		r.preload.releaseGone()
+	}
+	enabledIDs := r.catalog.TaskIDs()
+	activeSet := make(map[string]struct{}, len(enabledIDs))
+	for _, id := range enabledIDs {
+		activeSet[id] = struct{}{}
+	}
+	if r.data != nil {
+		if dropped := r.data.RetainTasks(activeSet); len(dropped) > 0 {
+			log.Infof("factor_localdata_sources_released sources=%v", dropped)
+		}
+	}
+	r.checks.keep(enabledIDs)
+
+	existingIDs, hasExisting := r.catalog.ExistingTaskIDs()
+	if !hasExisting {
+		return
+	}
+	keep := make(map[string]struct{}, len(existingIDs))
+	for _, id := range existingIDs {
+		keep[id] = struct{}{}
+	}
+
+	deleted := map[string]struct{}{}
+	if r.watermarks != nil {
+		for _, state := range r.watermarks.All() {
+			if _, ok := keep[state.TaskID]; !ok {
+				deleted[state.TaskID] = struct{}{}
+			}
+		}
+	}
+	if r.gap != nil {
+		for _, entry := range r.gap.Pending() {
+			if _, ok := keep[entry.Set]; !ok {
+				deleted[entry.Set] = struct{}{}
+			}
+		}
+	}
+	deletedIDs := make([]string, 0, len(deleted))
+	for id := range deleted {
+		deletedIDs = append(deletedIDs, id)
+	}
+	sort.Strings(deletedIDs)
+
+	for _, taskID := range deletedIDs {
+		r.cleanupDeletedTask(taskID)
+	}
+	if r.continuity != nil {
+		if _, err := r.continuity.RetainTasks(keep); err != nil {
+			log.Warnf("factor_deleted_task_watermark_prune_failed error=%v", err)
+		}
+	} else if r.watermarks != nil {
+		if _, err := r.watermarks.Retain(keep); err != nil {
+			log.Warnf("factor_deleted_task_watermark_prune_failed error=%v", err)
+		}
+	}
+	if r.params != nil {
+		if removed, err := r.params.RetainTasks(keep); err != nil {
+			log.Warnf("factor_deleted_task_param_cache_prune_failed error=%v", err)
+		} else if len(removed) > 0 {
+			log.Infof("factor_deleted_task_param_cache_cleaned tasks=%v", removed)
+		}
+	}
+	if r.runs != nil {
+		r.runs.retain(keep)
+	}
+	if r.filled != nil {
+		r.filled.retain(keep)
+	}
+	r.catchups.retain(keep)
+}
+
+func (r *Runtime) cleanupDeletedTask(taskID string) {
+	if r.locks != nil {
+		unlock := r.locks.Lock(taskID)
+		defer unlock()
+	}
+	// 加锁后复核一次目录，防止并发同步刚把同名任务重新加回。
+	if existing, ok := r.catalog.ExistingTaskIDs(); ok {
+		for _, id := range existing {
+			if id == taskID {
+				return
+			}
+		}
+	}
+	var wmDeleted bool
+	if r.continuity != nil {
+		var err error
+		if wmDeleted, err = r.continuity.DeleteTask(taskID); err != nil {
+			log.Warnf("factor_deleted_task_watermark_cleanup_failed task_id=%s error=%v", taskID, err)
+		}
+	} else if r.watermarks != nil {
+		var err error
+		if wmDeleted, err = r.watermarks.Delete(taskID); err != nil {
+			log.Warnf("factor_deleted_task_watermark_cleanup_failed task_id=%s error=%v", taskID, err)
+		}
+	}
+	var gapCancelled int
+	if r.gap != nil {
+		var err error
+		if gapCancelled, err = r.gap.CancelTask(taskID, "task_deleted"); err != nil {
+			log.Warnf("factor_deleted_task_gapledger_cleanup_failed task_id=%s error=%v", taskID, err)
+		}
+	}
+	if wmDeleted || gapCancelled > 0 {
+		log.Infof("factor_deleted_task_cleaned task_id=%s watermark_deleted=%t gap_cancelled=%d", taskID, wmDeleted, gapCancelled)
+	}
+}
 
 // reconcileConsumer starts the period consumer when the engine becomes active,
 // stops it on a lease conflict and refreshes its set filters otherwise. While

@@ -390,18 +390,12 @@ func (m *Manager) viewIndexedRange(ctx context.Context, spaceID, datasetID strin
 	return strings.TrimSpace(state.GetIndexedFrom()), strings.TrimSpace(state.GetIndexedTo()), nil
 }
 
-// resultLastDataTime 返回结果最近一条数据的业务时间：记录型取属性；时序型优先取已建索引的上界 indexedTo，再退回属性。
+// resultLastDataTime 返回结果最近一条数据的业务时间：优先取已建索引的上界 indexedTo，再退回属性。
 func resultLastDataTime(dataset *storagepb.Dataset, indexedTo string) string {
-	if dataset == nil {
+	if dataset == nil || indexedTo != "" {
 		return indexedTo
 	}
-	keys := []string{"last_data_time", "last_data_time_at", "indexed_to"}
-	if dataset.GetDataKind() == storagepb.DataKind_DATA_KIND_RECORD {
-		keys = []string{"last_data_time", "last_data_time_at", "fetched_at"}
-	} else if indexedTo != "" {
-		return indexedTo
-	}
-	for _, key := range keys {
+	for _, key := range []string{"last_data_time", "last_data_time_at", "indexed_to"} {
 		if value := strings.TrimSpace(dataset.GetAttributes()[key]); value != "" {
 			return value
 		}
@@ -433,10 +427,6 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return IDs{}, fmt.Errorf("space_id and task_id are required")
 	}
 	ids := resultIDs(taskID)
-	kind := storagepb.DataKind_DATA_KIND_TIME_SERIES
-	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
-		kind = storagepb.DataKind_DATA_KIND_RECORD
-	}
 	subjectTags := normalizeSubjectTags(cfg.SubjectTags)
 	dataSourceID, tagMarketType, err := m.resultDataSource(ctx, spaceID, subjectTags)
 	if err != nil {
@@ -449,12 +439,9 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	}
 	// derived 是由市场决定、已有结果数据集缺了要补上的属性：market_type，以及交易时段市场时序结果的 calendar
 	// （策略按 calendar 选交易日历，缺省按 crypto_24x7）；alignment 是数据集的正式字段（策略按它校验行键）。
-	derived := map[string]string{}
-	alignment := ""
-	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		if derived, alignment, err = SessionAttributes(spaceID); err != nil {
-			return IDs{}, err
-		}
+	derived, alignment, err := SessionAttributes(spaceID)
+	if err != nil {
+		return IDs{}, err
 	}
 	if marketType != "" {
 		derived["market_type"] = marketType
@@ -470,14 +457,14 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return IDs{}, metadataError("get result dataset", nil, nil)
 	}
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
-		columns, columnsErr := m.resultDatasetColumns(spaceID, kind, cfg.OutputFields)
+		columns, columnsErr := m.resultDatasetColumns(spaceID, cfg.OutputFields)
 		if columnsErr != nil {
 			return IDs{}, columnsErr
 		}
 		// 数据集连同列在一次调用里建好，建好即可写入。
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID,
-			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Freq: datasetFrequency(kind, cfg.Frequency), Alignment: alignment, Attributes: attrs, SubjectTags: subjectTags,
+			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: datasetFrequency(cfg.Frequency), Alignment: alignment, Attributes: attrs, SubjectTags: subjectTags,
 		}, Columns: columns})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))
@@ -527,7 +514,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			}
 		}
 		// 已有的结果数据集按同一份列定义补齐：上一轮建数据集时缓存没发布成功，这里也会让 Storage 重新发布。
-		if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, kind, cfg.OutputFields); err != nil {
+		if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, cfg.OutputFields); err != nil {
 			return IDs{}, err
 		}
 	}
@@ -629,11 +616,7 @@ func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datas
 	if !datasetExists {
 		return fmt.Errorf("task result Dataset is unavailable")
 	}
-	kind := storagepb.DataKind_DATA_KIND_TIME_SERIES
-	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
-		kind = storagepb.DataKind_DATA_KIND_RECORD
-	}
-	return m.ensureColumns(ctx, spaceID, ids.DatasetID, kind, outputFields)
+	return m.ensureColumns(ctx, spaceID, ids.DatasetID, outputFields)
 }
 
 // EnsureWithCleanup provisions a raw result and returns a compensating action
@@ -695,8 +678,8 @@ func (m *Manager) resultDatasetExists(ctx context.Context, spaceID, taskID strin
 }
 
 // ensureColumns 把结果数据集的列逐个补齐（已有的列按同一定义覆盖）。
-func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID string, kind storagepb.DataKind, outputFields []string) error {
-	columns, err := m.resultDatasetColumns(spaceID, kind, outputFields)
+func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID string, outputFields []string) error {
+	columns, err := m.resultDatasetColumns(spaceID, outputFields)
 	if err != nil {
 		return err
 	}
@@ -760,27 +743,11 @@ func KlineOutputField(name string) (OutputField, bool) {
 	return OutputField{}, false
 }
 
-// recordOutputFields 是记录型结果数据集（标的快照）的列。
-var recordOutputFields = []OutputField{
-	{"symbol", typeString, "交易对", GroupIdentity}, {"external_symbol", typeString, "外部交易对代码", GroupIdentity},
-	{"base_asset", typeString, "基础资产", GroupIdentity}, {"quote_asset", typeString, "计价资产", GroupIdentity},
-	{"status", typeString, "交易状态", GroupIdentity}, {"min_qty", typeDouble, "最小数量", GroupIdentity},
-	{"max_qty", typeDouble, "最大数量", GroupIdentity}, {"tick_size", typeDouble, "最小价格变动", GroupIdentity},
-	{"lot_size", typeDouble, "最小下单数量", GroupIdentity}, {"security_code", typeString, "证券代码", GroupIdentity},
-	{"provider_symbol", typeString, "来源代码", GroupIdentity}, {"exchange", typeString, "交易所", GroupIdentity},
-	{"instrument_name", typeString, "证券名称", GroupIdentity}, {"instrument_status", typeString, "证券状态", GroupIdentity},
-	{"snapshot_id", typeString, "标的快照ID", GroupIdentity}, {"source_provider", typeString, "源提供方", GroupIdentity},
-	{"fetched_at", typeTime, "抓取时间", GroupIdentity},
-}
-
-// resultDatasetColumns 返回结果数据集的列定义：按数据类型取默认字段；指定了输出字段时只取选中的那些，并校验字段都受支持。
-func (m *Manager) resultDatasetColumns(spaceID string, kind storagepb.DataKind, outputFields []string) ([]*storagepb.DatasetColumn, error) {
+// resultDatasetColumns 返回结果数据集的列定义：默认取全部基础 K 线字段；指定了输出字段时只取选中的那些，并校验字段都受支持。
+func (m *Manager) resultDatasetColumns(spaceID string, outputFields []string) ([]*storagepb.DatasetColumn, error) {
 	fields := append([]OutputField(nil), KlineOutputFields...)
-	if kind == storagepb.DataKind_DATA_KIND_RECORD {
-		fields = append([]OutputField(nil), recordOutputFields...)
-	}
 	extra := map[string]marketdata.FieldSpec{}
-	if len(outputFields) > 0 && kind != storagepb.DataKind_DATA_KIND_RECORD {
+	if len(outputFields) > 0 {
 		// 附加字段只在显式选中时建列；输出字段为空（默认字段）时不建。
 		for _, spec := range m.fields.Specs(spaceID) {
 			extra[spec.ID] = spec
@@ -869,14 +836,8 @@ func shortChineseResultName(slug string) string {
 		return "现货小时K线"
 	case "binance_swap_kline_1h":
 		return "合约小时K线"
-	case "binance_spot_symbols":
-		return "现货标的"
-	case "binance_swap_symbols":
-		return "合约标的"
 	case "stockcn_kline_1m":
 		return "A股分钟K线"
-	case "stockcn_instrument_1d":
-		return "A股标的"
 	default:
 		return ""
 	}
@@ -969,13 +930,9 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	return nil
 }
 
-// datasetFrequency returns the Dataset freq: a time-series result has the
-// task's one frequency in canonical form ("1H" becomes "1h"), a record result
-// has none. An unknown frequency is passed through for Storage to reject.
-func datasetFrequency(kind storagepb.DataKind, frequency string) string {
-	if kind != storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		return ""
-	}
+// datasetFrequency returns the Dataset freq in canonical form ("1H" becomes
+// "1h"). An unknown frequency is passed through for Storage to reject.
+func datasetFrequency(frequency string) string {
 	if canonical, err := frequencypkg.Normalize(frequency); err == nil {
 		return canonical
 	}

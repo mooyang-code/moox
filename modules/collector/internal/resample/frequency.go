@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/frequency"
 )
@@ -47,13 +48,9 @@ func ValidateResamplePair(source, target FixedFrequency) error {
 	return nil
 }
 
-// ValidateTaskParams 是合成任务参数的唯一校验入口（创建、更新、种子导入、启动清单都调用它），在提交时就拒绝不可能完成的合成：
-//   - 目标周期必须是源周期的整数倍；
-//   - 市场必须登记了分桶方式（crypto 按 epoch_utc；A 股按交易日历 session），没有交易日历的市场不能合成；
-//   - 交易时段市场的日内源周期、目标周期必须整除每个交易时段，除不尽的（如 A 股 45m）直接拒绝并列出可选周期。
-//
-// 结果 Dataset 身份在 space_id 与 task_id 确定后才分配，所以调用方要先分配好 target_dataset_id。
-func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
+// ValidateTaskParamsBasic 在尚未加载源数据集元数据时校验合成任务的静态结构契约：
+// 源/目标数据集 ID 不同且合法、序列标签非空、目标周期是源周期的整数倍、输出字段属于标准可归约列。
+func ValidateTaskParamsBasic(params *domain.CollectParams) error {
 	if params == nil {
 		return fmt.Errorf("resample collect params are required")
 	}
@@ -69,10 +66,6 @@ func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 	if strings.TrimSpace(params.SourceSeriesTag) == "" {
 		return fmt.Errorf("source_series_tag is required")
 	}
-	// 合成的字段表是固定的，资金费率不做求和合成：源数据集带这一列也可以重采样（结果里没有这一列），只拒绝显式要它。
-	if domain.HasOutputField(params.OutputFields, domain.FieldFundingRate) {
-		return fmt.Errorf("重采样不能合成输出字段 %s，请从输出字段里去掉它", domain.FieldFundingRate)
-	}
 	source, err := ParseFixedFrequency(params.SourceFrequency)
 	if err != nil {
 		return fmt.Errorf("source_frequency: %w", err)
@@ -84,15 +77,29 @@ func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 	if err := ValidateResamplePair(source, target); err != nil {
 		return err
 	}
-	market, err := barclock.MarketFor(spaceID)
+	if err := ValidateOutputFieldsBasic(params.OutputFields); err != nil {
+		return err
+	}
+	return ValidateTargetDatasetID(params.TargetDatasetID)
+}
+
+// ValidateTaskParamsForSource 是合成任务参数的完整校验入口，直接依据源数据集的 alignment、calendar 与活跃列校验：
+//   - 静态契约（ID、序列标签、源/目标周期整倍数）；
+//   - 源数据集分桶时钟（由 source.Alignment + source.Attributes["calendar"] 派生，与 space_id 解耦）；
+//   - 交易时段数据集的日内源/目标周期必须整除每个交易时段；
+//   - 输出字段必须包含在“标准字段归约规则表 ∩ 源数据集活跃列”中。
+func ValidateTaskParamsForSource(sourceInfo storagesource.DatasetInfo, params *domain.CollectParams) error {
+	if err := ValidateTaskParamsBasic(params); err != nil {
+		return err
+	}
+	source, _ := ParseFixedFrequency(params.SourceFrequency)
+	target, _ := ParseFixedFrequency(params.TargetFrequency)
+	market, err := barclock.MarketForDataset(sourceInfo.Alignment, sourceInfo.Attributes["calendar"])
 	if err != nil {
 		return err
 	}
-	if err := ValidateOutputFields(spaceID, params.OutputFields); err != nil {
+	if _, err := ResolveTaskRules(sourceInfo.ColumnTypes, params.OutputFields); err != nil {
 		return err
-	}
-	if alignment := strings.TrimSpace(params.Alignment); alignment != "" && alignment != market.Alignment {
-		return fmt.Errorf("alignment must be %s for market %s", market.Alignment, market.ID)
 	}
 	clock, err := market.Clock(target.Duration)
 	if err == nil {
@@ -100,11 +107,15 @@ func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 	}
 	if err != nil {
 		if errors.Is(err, barclock.ErrPeriodNotDivisible) {
-			return fmt.Errorf("%w；市场 %s 可选的日内周期：%s，1d 按交易日一天一根", err, market.ID, strings.Join(market.AllowedIntraday(), "、"))
+			label := market.CalendarID
+			if label == "" {
+				label = market.Alignment
+			}
+			return fmt.Errorf("%w；日历 %s 可选的日内周期：%s，1d 按交易日一天一根", err, label, strings.Join(market.AllowedIntraday(), "、"))
 		}
 		return err
 	}
-	return ValidateTargetDatasetID(params.TargetDatasetID)
+	return nil
 }
 
 func validateFixedFrequency(frequency FixedFrequency) error {

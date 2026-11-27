@@ -52,12 +52,48 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 	}
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 合成任务的目标快照与历史作业属于任务本身。标的时间线不在这里清：任务删掉后，下一份采集计划会给它的数据集
-		// 写一行“停止采集”，在那之前检查与补采仍会碰这个数据集。
+		// 合成任务的目标快照与历史作业属于任务本身。
 		if err := tx.Exec(`DELETE FROM t_collector_resample_snapshots WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error; err != nil {
 			return err
 		}
-		return tx.Exec(`DELETE FROM t_collector_resample_jobs WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error
+		if err := tx.Exec(`DELETE FROM t_collector_resample_jobs WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error; err != nil {
+			return err
+		}
+		// 若任务有独占结果数据集，一并清理该数据集在 Collector 内的历史补齐、水位、确认缺失、补写通知与定向补采作业。
+		// 标的时间线不在这里清：任务删掉后，下一份采集计划会给它的数据集写一行“停止采集”，在那之前检查与补采仍会碰这个数据集。
+		var datasetID string
+		if err := tx.Table("t_collector_tasks").
+			Select("c_result_dataset_id").
+			Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).
+			Limit(1).Scan(&datasetID).Error; err != nil {
+			return err
+		}
+		datasetID = strings.TrimSpace(datasetID)
+		if datasetID == "" {
+			return nil
+		}
+		var otherRefs int64
+		if err := tx.Table("t_collector_tasks").
+			Where("c_space_id = ? AND c_result_dataset_id = ? AND c_task_id <> ?", spaceID, datasetID, taskID).
+			Count(&otherRefs).Error; err != nil {
+			return err
+		}
+		if otherRefs > 0 {
+			return nil
+		}
+		for _, stmt := range []string{
+			`DELETE FROM t_collector_history_seeds WHERE c_space_id = ? AND c_dataset_id = ?`,
+			`DELETE FROM t_collector_backfill_watermarks WHERE c_space_id = ? AND c_dataset_id = ?`,
+			`DELETE FROM t_collector_source_absences WHERE c_space_id = ? AND c_dataset_id = ?`,
+			`DELETE FROM t_collector_backfill_notices WHERE c_space_id = ? AND c_dataset_id = ?`,
+			`DELETE FROM t_collector_kline_backfill_chunks WHERE c_job_id IN (SELECT c_job_id FROM t_collector_kline_backfill_jobs WHERE c_space_id = ? AND c_dataset_id = ?)`,
+			`DELETE FROM t_collector_kline_backfill_jobs WHERE c_space_id = ? AND c_dataset_id = ?`,
+		} {
+			if err := tx.Exec(stmt, spaceID, datasetID).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -259,9 +295,6 @@ func (s *Store) Close() error {
 
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
-		// Keep timestamps readable by SQLite date functions and consistent in
-		// equality/range queries; the driver's default includes a zone name.
-		"_time_format=sqlite",
 		"_pragma=journal_mode(WAL)",
 		// Collector persists assignment and readiness state that drives the
 		// market timers.  Synchronous=OFF can leave b-tree pages torn after a

@@ -102,7 +102,7 @@ func TestKlinePipelineBackfillFillsFundingRatePerBar(t *testing.T) {
 	pipeline := fundingPipeline(t, swapHourBars(3), NewFundingCache(source, nil), storage)
 	payload, err := pipeline.Execute(context.Background(), fundingBackfillRequest(domain.BatchKindBackfill))
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	values := fundingValues(storage.rows["with_funding"])
 	require.Len(t, values, 3)
 	require.Equal(t, 0.0, values[0])
@@ -122,10 +122,10 @@ func TestKlinePipelineFundingFailureFailsOnlyFundingTarget(t *testing.T) {
 	pipeline := fundingPipeline(t, swapHourBars(3), NewFundingCache(source, nil), storage)
 	payload, err := pipeline.Execute(context.Background(), fundingBackfillRequest(domain.BatchKindBackfill))
 	require.NoError(t, err)
-	require.Len(t, payload.GetItems(), 1)
-	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.GetItems()[0].GetOutcome())
-	require.Equal(t, "funding_rate", payload.GetItems()[0].GetErrorType())
-	require.Equal(t, int32(1), payload.GetRetryCount(), "可以重试")
+	require.Len(t, payload.Items, 1)
+	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.Items[0].Outcome)
+	require.Equal(t, "funding_rate", payload.Items[0].ErrorType)
+	require.Equal(t, int32(1), payload.RetryCount, "可以重试")
 	require.Empty(t, storage.rows["with_funding"])
 	require.Len(t, storage.rows["plain"], 3)
 }
@@ -141,7 +141,7 @@ func TestKlinePipelineRealtimeReadsFundingCache(t *testing.T) {
 	req.Items[0].BarLimit = 1
 	payload, err := pipeline.Execute(context.Background(), req)
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, "succeeded", payload.Status)
 	require.Equal(t, []float64{0.0004}, fundingValues(storage.rows["with_funding"]))
 	queries := source.queried()
 	require.Len(t, queries, 1)
@@ -170,7 +170,7 @@ func TestKlinePipelineRealtimeFundingWaitIsBoundedBeforeDeadline(t *testing.T) {
 	payload, err := pipeline.Execute(ctx, req)
 	require.NoError(t, err)
 	require.Less(t, time.Since(started), 900*time.Millisecond, "在批次截止前就停止等待")
-	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.GetItems()[0].GetOutcome())
+	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.Items[0].Outcome)
 	require.Empty(t, storage.rows["with_funding"])
 	require.Len(t, storage.rows["plain"], 1)
 }
@@ -184,7 +184,7 @@ func TestKlinePipelineFundingWithoutCapabilityIsInvalid(t *testing.T) {
 	req.Items[0].OutputFields = []string{"close", domain.FieldFundingRate}
 	payload, err := pipeline.Execute(context.Background(), req)
 	require.NoError(t, err)
-	require.Equal(t, string(domain.ItemOutcomeInvalid), payload.GetItems()[0].GetOutcome())
+	require.Equal(t, string(domain.ItemOutcomeInvalid), payload.Items[0].Outcome)
 	require.Empty(t, storage.rows)
 }
 

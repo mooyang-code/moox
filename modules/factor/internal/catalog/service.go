@@ -245,7 +245,11 @@ func (s *Service) DeleteTask(ctx context.Context, taskID string, purge bool) err
 			return fmt.Errorf("delete factor result dataset: %w", err)
 		}
 	}
-	return s.db.DeleteTask(ctx, taskID)
+	if err := s.db.DeleteTask(ctx, taskID); err != nil {
+		return err
+	}
+	s.markReady(taskID, false)
+	return nil
 }
 
 // DeleteBoundTask 删除关联到 instanceID 的任务，连同全部成员和结果数据集（策略服务删除实例时调用）。
@@ -307,7 +311,11 @@ func (s *Service) DeleteBoundTask(ctx context.Context, taskID, instanceID string
 	if err := s.metadata.DeleteDataset(ctx, task.SpaceID, task.ResultDatasetID); err != nil {
 		return fmt.Errorf("删除因子任务 %s 的结果数据集 %s：%w", taskID, task.ResultDatasetID, err)
 	}
-	return s.db.DeleteBoundTask(ctx, taskID, instanceID)
+	if err := s.db.DeleteBoundTask(ctx, taskID, instanceID); err != nil {
+		return err
+	}
+	s.markReady(taskID, false)
+	return nil
 }
 
 // disableBoundTask 在任务锁下核对关联的实例并停用任务；任务不存在时 found 为假。
@@ -430,8 +438,8 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (domain.FactorTask
 	return set, members, err
 }
 
-func (s *Service) ListTasks(ctx context.Context) ([]domain.FactorTask, error) {
-	return s.db.ListTasks(ctx)
+func (s *Service) ListTasks(ctx context.Context, spaceID string) ([]domain.FactorTask, error) {
+	return s.db.ListTasksBySpace(ctx, spaceID)
 }
 
 // CreateFactor registers a standalone definition. It only runs the static

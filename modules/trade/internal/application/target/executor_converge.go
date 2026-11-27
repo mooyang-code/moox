@@ -277,17 +277,21 @@ func (e *Executor) planActions(
 	orderSettings ordersettings.Settings,
 ) (actions []laneAction, blocked []store.BlockedTarget, early *Result, err error) {
 	for _, instrumentID := range laneIDs(desired, members) {
-		action, complete, reason, actionErr := e.laneAction(
+		action, complete, reason, reasonCode, actionErr := e.laneAction(
 			env, instrumentID, desired[instrumentID], members,
 		)
 		if actionErr != nil {
 			return nil, nil, nil, actionErr
 		}
 		if reason != "" {
+			if reasonCode == "" {
+				reasonCode = store.BlockedReasonInstrumentUnavailable
+			}
 			blocked = append(blocked, store.BlockedTarget{
 				InstrumentID: instrumentID,
 				Quantity:     desired[instrumentID].Quantity.String(),
 				Reason:       reason,
+				ReasonCode:   reasonCode,
 			})
 			continue
 		}
@@ -371,13 +375,24 @@ func (e *Executor) prepareSpotBuys(
 				// 每小时上限已用完：顺延到下一个整点，不为它划转；账户的资金到整点还要用，不归集。
 				run.capDeferred = true
 				run.deferredItems = append(run.deferredItems, store.BlockedTarget{
-					InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(), Reason: reasonHourlyCapDeferred, Deferred: true,
+					InstrumentID: action.instrument.InstrumentID,
+					Quantity:     action.delta.String(),
+					Reason:       reasonHourlyCapDeferred,
+					ReasonCode:   store.BlockedReasonHourlyCap,
+					Deferred:     true,
 				})
 				run.holdCollect(stage, action)
 				continue
 			case verdict.blockedReason != "":
+				reasonCode := verdict.blockedReasonCode
+				if reasonCode == "" {
+					reasonCode = store.BlockedReasonOrderRule
+				}
 				run.blocked = append(run.blocked, store.BlockedTarget{
-					InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(), Reason: verdict.blockedReason,
+					InstrumentID: action.instrument.InstrumentID,
+					Quantity:     action.delta.String(),
+					Reason:       verdict.blockedReason,
+					ReasonCode:   reasonCode,
 				})
 				continue
 			}
@@ -391,7 +406,7 @@ func (e *Executor) prepareSpotBuys(
 		return nil, err
 	}
 	// 合约钱包可划额度不够时，现货买入按比例缩小，剩下的留到下一份目标重算。
-	scaledActions := scaleBuys(stageActions, outcome.BuyScale, outcome.Reasons)
+	scaledActions := scaleBuys(stageActions, outcome.BuyScale, outcome.Reasons, outcome.ReasonCodes)
 	for _, action := range stageActions {
 		accountID := action.member.account.TradingAccountID
 		if reason, waiting := outcome.Waiting[accountID]; waiting {
@@ -400,7 +415,11 @@ func (e *Executor) prepareSpotBuys(
 			run.openBuyAccounts[accountID] = struct{}{}
 			if reason != "" {
 				run.deferredItems = append(run.deferredItems, store.BlockedTarget{
-					InstrumentID: action.instrument.InstrumentID, Quantity: action.blockedQuantity(), Reason: reason, Deferred: true,
+					InstrumentID: action.instrument.InstrumentID,
+					Quantity:     action.blockedQuantity(),
+					Reason:       reason,
+					ReasonCode:   store.BlockedReasonTransferWaiting,
+					Deferred:     true,
 				})
 			}
 			continue
@@ -412,15 +431,23 @@ func (e *Executor) prepareSpotBuys(
 		}
 		if !kept {
 			reason := outcome.Reasons[accountID]
+			reasonCode := outcome.ReasonCodes[accountID]
 			if reason == "" {
 				reason = wallet.ReasonShortfallNoBuy
+				if reasonCode == "" {
+					reasonCode = store.BlockedReasonTransferShortfall
+				}
+			} else if reasonCode == "" {
+				reasonCode = store.BlockedReasonTransferFailed
 			}
-			if wallet.IsFundsShortage(reason) {
+			if reasonCode == store.BlockedReasonTransferShortfall {
 				run.openBuyAccounts[accountID] = struct{}{}
 			}
 			run.blocked = append(run.blocked, store.BlockedTarget{
-				InstrumentID: action.instrument.InstrumentID, Quantity: action.blockedQuantity(),
-				Reason: reason,
+				InstrumentID: action.instrument.InstrumentID,
+				Quantity:     action.blockedQuantity(),
+				Reason:       reason,
+				ReasonCode:   reasonCode,
 			})
 		}
 	}
@@ -498,6 +525,7 @@ func (e *Executor) runStages(
 					InstrumentID: instrumentID,
 					Quantity:     action.blockedQuantity(),
 					Reason:       reasonPositionUnreflected,
+					ReasonCode:   store.BlockedReasonPositionUnreflected,
 				})
 				run.holdCollect(stage, action)
 				continue
@@ -522,7 +550,11 @@ func (e *Executor) runStages(
 				run.marketDeferred = true
 				run.holdCollect(stage, action)
 				run.deferredItems = append(run.deferredItems, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: placement.deferReason, Deferred: true,
+					InstrumentID: instrumentID,
+					Quantity:     action.blockedQuantity(),
+					Reason:       placement.deferReason,
+					ReasonCode:   store.BlockedReasonMarketDeferred,
+					Deferred:     true,
 				})
 				continue
 			}
@@ -532,16 +564,23 @@ func (e *Executor) runStages(
 				run.capDeferred = true
 				run.holdCollect(stage, action)
 				run.deferredItems = append(run.deferredItems, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: reasonHourlyCapDeferred, Deferred: true,
+					InstrumentID: instrumentID,
+					Quantity:     action.blockedQuantity(),
+					Reason:       reasonHourlyCapDeferred,
+					ReasonCode:   store.BlockedReasonHourlyCap,
+					Deferred:     true,
 				})
 				continue
 			}
 			if action.scaled && (placement.belowConfiguredMin || placement.tooSmall) {
 				// 缩小后的买单太小下不了：不是“已满足”，原因是合约钱包划转的资金不够，要让界面看得到。
 				run.blocked = append(run.blocked, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: action.scaleReason,
+					InstrumentID: instrumentID,
+					Quantity:     action.blockedQuantity(),
+					Reason:       action.scaleReason,
+					ReasonCode:   action.scaleReasonCode,
 				})
-				if wallet.IsFundsShortage(action.scaleReason) {
+				if action.scaleReasonCode == store.BlockedReasonTransferShortfall {
 					run.holdCollect(stage, action)
 				}
 				continue
@@ -553,10 +592,15 @@ func (e *Executor) runStages(
 				continue
 			}
 			if placement.reason != "" {
+				reasonCode := placement.reasonCode
+				if reasonCode == "" {
+					reasonCode = store.BlockedReasonOrderRule
+				}
 				run.blocked = append(run.blocked, store.BlockedTarget{
 					InstrumentID: instrumentID,
 					Quantity:     action.blockedQuantity(),
 					Reason:       placement.reason,
+					ReasonCode:   reasonCode,
 				})
 				continue
 			}

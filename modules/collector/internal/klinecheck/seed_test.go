@@ -57,6 +57,10 @@ func TestSeedStartsForNewDatasetAndCompletes(t *testing.T) {
 	require.Equal(t, store.SeedRunning, seed.Status)
 	require.True(t, seed.Active(), "补齐中下游不生效")
 	require.Len(t, seed.JobIDs, 1, "一批标的一个作业")
+	seedJob, _, err := b.Store.GetJob(ctx, seed.JobIDs[0])
+	require.NoError(t, err)
+	require.NotNil(t, seedJob)
+	require.Equal(t, store.BackfillSourceSeed, seedJob.Source, "历史补齐作业来源必须是 seed")
 
 	views, err := b.SeedViews(ctx, "crypto", true)
 	require.NoError(t, err)

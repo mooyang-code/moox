@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,7 +34,7 @@ func TestKlineCollectorFallsBackToNextSpotEndpoint(t *testing.T) {
 	client.HTTPClient = httpclient.NewHTTPClient(&http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}})
 	collector := &KlineCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client)}
 
-	rows, err := collector.fetchKlinesOnce(context.Background(), &sources.CollectParams{InstType: InstTypeSPOT, Symbol: "BTCUSDT"}, &exchange.KlineRequest{Symbol: "BTCUSDT", Interval: "1m", Limit: 1})
+	rows, err := collector.fetchKlinesOnce(context.Background(), &sources.CollectParams{InstType: InstTypeSPOT, Symbol: "BTCUSDT"}, &binanceapi.KlineRequest{Symbol: "BTCUSDT", Interval: "1m", Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assertEqualTime(t, time.UnixMilli(1700000000000), rows[0].OpenTime)
@@ -74,10 +73,10 @@ func TestEndpointAttemptContextKeepsAMinimumWindow(t *testing.T) {
 
 func TestTryEndpointsFailsOverInOrder(t *testing.T) {
 	var called []string
-	klines, err := tryEndpoints(context.Background(), []string{"a", "b", "c"}, func(_ context.Context, domain string) ([]*exchange.Kline, error) {
+	klines, err := tryEndpoints(context.Background(), []string{"a", "b", "c"}, func(_ context.Context, domain string) ([]*binanceapi.Kline, error) {
 		called = append(called, domain)
 		if domain == "c" {
-			return []*exchange.Kline{{}}, nil
+			return []*binanceapi.Kline{{}}, nil
 		}
 		return nil, errors.New(domain + " down")
 	})
@@ -87,7 +86,7 @@ func TestTryEndpointsFailsOverInOrder(t *testing.T) {
 	if strings.Join(called, ",") != "a,b,c" {
 		t.Fatalf("called %v, want a,b,c", called)
 	}
-	if _, err := tryEndpoints(context.Background(), []string{"a"}, func(context.Context, string) ([]*exchange.Kline, error) {
+	if _, err := tryEndpoints(context.Background(), []string{"a"}, func(context.Context, string) ([]*binanceapi.Kline, error) {
 		return nil, errors.New("only down")
 	}); err == nil || err.Error() != "only down" {
 		t.Fatalf("err=%v", err)

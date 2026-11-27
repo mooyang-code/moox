@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -26,19 +24,13 @@ const (
 	fieldAmount      = "amount"
 )
 
-// hasTradeCount 判断空间的 K 线是否带报价成交量和成交笔数（现货、永续）；股票等只有成交额 amount。
-// 按空间默认品种的行形状判断（markets.HasTradeCount）；空间未登记时报错，不猜。
-func hasTradeCount(spaceID string) (bool, error) {
-	return markets.HasTradeCount(spaceID, "")
-}
-
-// sourceFields 是读取源 K 线的字段。
-func sourceFields(tradeCount bool) []string {
-	fields := []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume}
-	if tradeCount {
-		return append(fields, fieldQuoteVolume, fieldTradeNum)
+// sourceFields 按列规则表返回需要从源数据集读取的列名。
+func sourceFields(rules []FieldRule) []string {
+	fields := make([]string, len(rules))
+	for i, rule := range rules {
+		fields[i] = rule.Name
 	}
-	return append(fields, fieldAmount)
+	return fields
 }
 
 // PrimaryStorage is the exact-read and write surface required by a local
@@ -68,91 +60,41 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// BucketStorage reads one source bucket and writes its target row only when the
-// source hash changed. It is safe to retry after a crash between write and CAS.
 func rowKey(spaceID, datasetID, subjectID, frequency string, at time.Time, seriesTag string) *storagepb.RowKey {
 	return &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 		SubjectId: subjectID, Freq: frequency, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
 	}}}
 }
 
-func resultRow(result Result, tradeCount bool) *storagepb.RowFieldUpsert {
-	fields := []*storagepb.FieldValue{
-		doubleField(fieldOpen, result.Open), doubleField(fieldHigh, result.High), doubleField(fieldLow, result.Low),
-		doubleField(fieldClose, result.Close), doubleField(fieldVolume, result.Volume),
-	}
-	switch {
-	case tradeCount:
-		fields = append(fields, doubleField(fieldQuoteVolume, result.QuoteVolume), intField(fieldTradeNum, result.TradeNum))
-	case result.Amount != nil:
-		fields = append(fields, doubleField(fieldAmount, *result.Amount))
-	default:
-		// 源 K 线没有真实成交额：显式写 NULL，覆盖该行之前可能写过的值。
-		fields = append(fields, &storagepb.FieldValue{FieldId: fieldAmount, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}})
+func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
+	fields := make([]*storagepb.FieldValue, 0, len(spec.Rules))
+	for _, rule := range spec.Rules {
+		val, ok := result.Values[rule.Name]
+		if !ok || val.Null {
+			fields = append(fields, nullField(rule.Name))
+			continue
+		}
+		switch rule.ValueType {
+		case storagepb.FieldValueType_FIELD_VALUE_TYPE_INT:
+			fields = append(fields, intField(rule.Name, val.Int))
+		default:
+			fields = append(fields, doubleField(rule.Name, val.Float))
+		}
 	}
 	return &storagepb.RowFieldUpsert{
 		Key:    rowKey(result.SpaceID, result.DatasetID, result.SubjectID, result.Frequency, result.DataTime, result.SeriesTag),
 		Fields: fields,
 		Attributes: map[string]*storagepb.TypedValue{
-			"resample_task_id":  stringValue(""),
-			"source_dataset_id": stringValue(""),
-			"source_freq":       stringValue(""),
+			"resample_task_id":  stringValue(spec.TaskID),
+			"source_dataset_id": stringValue(spec.SourceDatasetID),
+			"source_freq":       stringValue(spec.SourceFrequency.Storage),
 			"source_window_end": stringValue(result.SourceWindowEnd.UTC().Format(time.RFC3339Nano)),
 			"source_hash":       stringValue(result.SourceHash),
 		},
 	}
 }
 
-func resultRowWithSpec(result Result, spec TaskSpec, tradeCount bool) *storagepb.RowFieldUpsert {
-	row := resultRow(result, tradeCount)
-	if len(spec.OutputFields) > 0 {
-		selected := make(map[string]struct{}, len(spec.OutputFields))
-		for _, name := range spec.OutputFields {
-			selected[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
-		}
-		fields := row.Fields[:0]
-		for _, field := range row.Fields {
-			if _, ok := selected[strings.ToLower(strings.TrimSpace(field.GetFieldId()))]; ok {
-				fields = append(fields, field)
-			}
-		}
-		row.Fields = fields
-	}
-	row.Attributes["resample_task_id"] = stringValue(spec.TaskID)
-	row.Attributes["source_dataset_id"] = stringValue(spec.SourceDatasetID)
-	row.Attributes["source_freq"] = stringValue(spec.SourceFrequency.Storage)
-	return row
-}
-
-// attrOutputFields 记录目标行写入时的输出字段集合，参与幂等判断。
-const attrOutputFields = "resample_output_fields"
-
-// outputFieldsSignature 返回规范化（小写、去空白、排序、去重）后的输出字段集合；未限定输出字段时为 "*"。
-func outputFieldsSignature(fields []string) string {
-	if len(fields) == 0 {
-		return "*"
-	}
-	seen := make(map[string]struct{}, len(fields))
-	names := make([]string, 0, len(fields))
-	for _, name := range fields {
-		name = strings.ToLower(strings.TrimSpace(name))
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	if len(names) == 0 {
-		return "*"
-	}
-	sort.Strings(names)
-	return strings.Join(names, ",")
-}
-
-func decodeSourceBar(row *storagepb.RowFieldValues) (SourceBar, error) {
+func decodeSourceBar(row *storagepb.RowFieldValues, rules []FieldRule) (SourceBar, error) {
 	if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
 		return SourceBar{}, fmt.Errorf("source row key is invalid")
 	}
@@ -161,76 +103,78 @@ func decodeSourceBar(row *storagepb.RowFieldValues) (SourceBar, error) {
 	if err != nil {
 		return SourceBar{}, fmt.Errorf("source row data_time: %w", err)
 	}
-	open, err := requiredDouble(row, fieldOpen)
-	if err != nil {
-		return SourceBar{}, err
-	}
-	high, err := requiredDouble(row, fieldHigh)
-	if err != nil {
-		return SourceBar{}, err
-	}
-	low, err := requiredDouble(row, fieldLow)
-	if err != nil {
-		return SourceBar{}, err
-	}
-	closeValue, err := requiredDouble(row, fieldClose)
-	if err != nil {
-		return SourceBar{}, err
-	}
-	volume, err := requiredDouble(row, fieldVolume)
-	if err != nil {
-		return SourceBar{}, err
-	}
-	bar := SourceBar{SpaceID: row.GetKey().GetSpaceId(), DatasetID: row.GetKey().GetDatasetId(), SubjectID: k.GetSubjectId(), Frequency: k.GetFreq(), DataTime: at.UTC(), SeriesTag: k.GetSeriesTag(), Open: &open, High: &high, Low: &low, Close: &closeValue, Volume: &volume}
-	tradeCount, err := hasTradeCount(bar.SpaceID)
-	if err != nil {
-		return SourceBar{}, err
-	}
-	if tradeCount {
-		quote, err := requiredDouble(row, fieldQuoteVolume)
-		if err != nil {
-			return SourceBar{}, err
-		}
-		trade, err := requiredInt(row, fieldTradeNum)
-		if err != nil {
-			return SourceBar{}, err
-		}
-		bar.QuoteVolume, bar.TradeNum = &quote, &trade
-		return bar, nil
-	}
-	// A 股的成交额可以是 NULL（采集只拿到估算值时）：缺失表示未知，不算解码失败。
-	if value, ok := fieldValue(row, fieldAmount); ok && value != nil {
-		if _, isDouble := value.GetValue().(*storagepb.TypedValue_DoubleValue); isDouble {
-			amount := value.GetDoubleValue()
-			bar.Amount = &amount
+	values := make(map[string]FieldValue, len(rules))
+	for _, rule := range rules {
+		switch rule.ValueType {
+		case storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE:
+			val, decodeErr := decodeDoubleField(row, rule)
+			if decodeErr != nil {
+				return SourceBar{}, decodeErr
+			}
+			values[rule.Name] = val
+		case storagepb.FieldValueType_FIELD_VALUE_TYPE_INT:
+			val, decodeErr := decodeIntField(row, rule)
+			if decodeErr != nil {
+				return SourceBar{}, decodeErr
+			}
+			values[rule.Name] = val
+		default:
+			return SourceBar{}, fmt.Errorf("unsupported column type %s for field %q", rule.ValueType.String(), rule.Name)
 		}
 	}
-	return bar, nil
+	return SourceBar{
+		SpaceID:   row.GetKey().GetSpaceId(),
+		DatasetID: row.GetKey().GetDatasetId(),
+		SubjectID: k.GetSubjectId(),
+		Frequency: k.GetFreq(),
+		DataTime:  at.UTC(),
+		SeriesTag: k.GetSeriesTag(),
+		Values:    values,
+	}, nil
 }
 
-func requiredDouble(row *storagepb.RowFieldValues, name string) (float64, error) {
-	value, ok := fieldValue(row, name)
+func decodeDoubleField(row *storagepb.RowFieldValues, rule FieldRule) (FieldValue, error) {
+	value, ok := fieldValue(row, rule.Name)
 	if !ok || value == nil {
-		return 0, fmt.Errorf("source row missing field %q", name)
+		if rule.Nullable {
+			return FieldValue{Null: true}, nil
+		}
+		return FieldValue{}, fmt.Errorf("source row missing field %q", rule.Name)
+	}
+	if _, isNull := value.GetValue().(*storagepb.TypedValue_NullValue); isNull {
+		if rule.Nullable {
+			return FieldValue{Null: true}, nil
+		}
+		return FieldValue{}, fmt.Errorf("source row missing field %q", rule.Name)
 	}
 	if _, isDouble := value.GetValue().(*storagepb.TypedValue_DoubleValue); !isDouble {
-		return 0, fmt.Errorf("source field %q is not double", name)
+		return FieldValue{}, fmt.Errorf("source field %q is not double", rule.Name)
 	}
-	if math.IsNaN(value.GetDoubleValue()) || math.IsInf(value.GetDoubleValue(), 0) {
-		return 0, fmt.Errorf("source field %q is not finite", name)
+	v := value.GetDoubleValue()
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return FieldValue{}, fmt.Errorf("source field %q is not finite", rule.Name)
 	}
-	return value.GetDoubleValue(), nil
+	return FieldValue{Float: v}, nil
 }
 
-func requiredInt(row *storagepb.RowFieldValues, name string) (int64, error) {
-	value, ok := fieldValue(row, name)
+func decodeIntField(row *storagepb.RowFieldValues, rule FieldRule) (FieldValue, error) {
+	value, ok := fieldValue(row, rule.Name)
 	if !ok || value == nil {
-		return 0, fmt.Errorf("source row missing field %q", name)
+		if rule.Nullable {
+			return FieldValue{Null: true}, nil
+		}
+		return FieldValue{}, fmt.Errorf("source row missing field %q", rule.Name)
+	}
+	if _, isNull := value.GetValue().(*storagepb.TypedValue_NullValue); isNull {
+		if rule.Nullable {
+			return FieldValue{Null: true}, nil
+		}
+		return FieldValue{}, fmt.Errorf("source row missing field %q", rule.Name)
 	}
 	if _, isInt := value.GetValue().(*storagepb.TypedValue_IntValue); !isInt {
-		return 0, fmt.Errorf("source field %q is not int", name)
+		return FieldValue{}, fmt.Errorf("source field %q is not int", rule.Name)
 	}
-	return value.GetIntValue(), nil
+	return FieldValue{Int: value.GetIntValue()}, nil
 }
 
 func fieldValue(row *storagepb.RowFieldValues, name string) (*storagepb.TypedValue, bool) {
@@ -246,19 +190,18 @@ func fieldValue(row *storagepb.RowFieldValues, name string) (*storagepb.TypedVal
 	return nil, false
 }
 
-func typedString(value *storagepb.TypedValue) string {
-	if value == nil {
-		return ""
-	}
-	return value.GetStringValue()
-}
-
 func stringValue(value string) *storagepb.TypedValue {
 	return &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}}
 }
+
 func doubleField(name string, value float64) *storagepb.FieldValue {
 	return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}}}
 }
+
 func intField(name string, value int64) *storagepb.FieldValue {
 	return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: value}}}
+}
+
+func nullField(name string) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}}
 }

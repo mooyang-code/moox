@@ -258,7 +258,7 @@ message ResampleJob {
   string next_bucket = 8;
   // 最早开始时刻（Unix 毫秒），之前不开始；0 表示不限。
   int64 not_before = 9;
-  // queued / running / syncing / succeeded / failed / cancelled
+  // queued / running / succeeded / failed / cancelled
   string status = 10;
   uint32 total_buckets = 11;
   uint32 done_buckets = 12;
@@ -346,6 +346,10 @@ message PreviewKlineResampleSourceRsp {
   repeated string allowed_frequencies = 10;
   // 目标频率不满足合成规则时的原因；为空表示通过或未给出目标频率。
   string validation_error = 11;
+  // 交易时段数据集的日历 ID（如 cn_stock / hk_stock / us_stock）；epoch_utc 为空。
+  string calendar_id = 12;
+  // 该源数据集实际可合成的输出字段（标准字段归约规则表 ∩ 源数据集活跃列）。
+  repeated OutputFieldOption allowed_output_fields = 13;
 }
 
 message SyncSubjectsReq {
@@ -482,7 +486,7 @@ message KlineBackfillChunk {
 message KlineBackfillJob {
   string job_id = 1;
   string space_id = 2;
-  // source 取值 manual、auto；kind 取值 gap（按缺口）、force（整段重拉）。
+  // source 取值 manual、auto、seed、close_refetch、catchup；kind 取值 gap（按缺口）、force（整段重拉）。
   string source = 3;
   string kind = 4;
   // dataset_id、frequency、subject_id 为空表示全部。

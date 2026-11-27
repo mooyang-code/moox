@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
@@ -17,27 +16,30 @@ type OperatorActionRecord struct {
 	ActionID         string
 	LogicalAccountID string
 	ActionType       string
-	Reason           string
-	RequestJSON      string
-	Status           string
-	ResultJSON       *string
-	LastError        string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// Source 标识操作来源：USER 人工、MARGIN 保证金率风控、DELIST 下架清仓。
+	Source      string
+	Reason      string
+	RequestJSON string
+	Status      string
+	ResultJSON  *string
+	LastError   string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type operatorActionRow struct {
-	SpaceID          string    `gorm:"column:c_space_id"`
-	ActionID         string    `gorm:"column:c_action_id"`
-	LogicalAccountID string    `gorm:"column:c_logical_account_id"`
-	ActionType       string    `gorm:"column:c_action_type"`
-	Reason           string    `gorm:"column:c_reason"`
-	RequestJSON      string    `gorm:"column:c_request_json"`
-	Status           string    `gorm:"column:c_status"`
-	ResultJSON       *string   `gorm:"column:c_result_json"`
-	LastError        string    `gorm:"column:c_last_error"`
-	CreatedAt        time.Time `gorm:"column:c_ctime"`
-	UpdatedAt        time.Time `gorm:"column:c_mtime"`
+	SpaceID          string  `gorm:"column:c_space_id"`
+	ActionID         string  `gorm:"column:c_action_id"`
+	LogicalAccountID string  `gorm:"column:c_logical_account_id"`
+	ActionType       string  `gorm:"column:c_action_type"`
+	Source           string  `gorm:"column:c_source"`
+	Reason           string  `gorm:"column:c_reason"`
+	RequestJSON      string  `gorm:"column:c_request_json"`
+	Status           string  `gorm:"column:c_status"`
+	ResultJSON       *string `gorm:"column:c_result_json"`
+	LastError        string  `gorm:"column:c_last_error"`
+	CreatedAt        int64   `gorm:"column:c_created_at"`
+	UpdatedAt        int64   `gorm:"column:c_updated_at"`
 }
 
 func (operatorActionRow) TableName() string {
@@ -87,14 +89,20 @@ func (tx *Tx) EnsureOperatorAction(
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return OperatorActionRecord{}, false, err
 	}
-	var createdAt any
-	if !record.CreatedAt.IsZero() {
-		createdAt = record.CreatedAt.UTC()
+	createdAt := record.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	createdAtMS := createdAt.UTC().UnixMilli()
+	updatedAtMS := createdAtMS
+	if !record.UpdatedAt.IsZero() {
+		updatedAtMS = record.UpdatedAt.UTC().UnixMilli()
 	}
 	result := tx.db.Exec(execInsertOperatorAction,
 		record.SpaceID, record.ActionID, record.LogicalAccountID,
-		record.ActionType, record.Reason, record.RequestJSON,
-		record.Status, record.ResultJSON, record.LastError, createdAt,
+		record.ActionType, record.Source, record.Reason, record.RequestJSON,
+		record.Status, record.ResultJSON, record.LastError,
+		createdAtMS, updatedAtMS,
 	)
 	if result.Error != nil {
 		return OperatorActionRecord{}, false, writeError(result.Error)
@@ -123,6 +131,13 @@ func normalizeOperatorAction(
 	record.RequestJSON = requestJSON
 	if record.Status == "" {
 		record.Status = string(operatordomain.StatusRunning)
+	}
+	if record.Source == "" {
+		if record.ActionType == string(operatordomain.ActionDelistFlatten) {
+			record.Source = string(operatordomain.SourceDelist)
+		} else {
+			record.Source = string(operatordomain.SourceUser)
+		}
 	}
 	if err := operatorActionDomain(record).Validate(); err != nil {
 		return OperatorActionRecord{}, fmt.Errorf("%w: %v", ErrInvalidRecord, err)
@@ -175,7 +190,7 @@ func (s *Store) ListRunningOperatorActions(
 	if err := s.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_logical_account_id = ? AND c_status = ?",
 			spaceID, logicalAccountID, operatordomain.StatusRunning).
-		Order("c_ctime, c_action_id").
+		Order("c_created_at, c_action_id").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -192,7 +207,7 @@ func (tx *Tx) RunningOperatorActionsOfType(spaceID, logicalAccountID, actionType
 	if err := tx.db.
 		Where("c_space_id = ? AND c_logical_account_id = ? AND c_action_type = ? AND c_status = ?",
 			spaceID, logicalAccountID, actionType, operatordomain.StatusRunning).
-		Order("c_ctime, c_action_id").
+		Order("c_created_at, c_action_id").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -209,7 +224,7 @@ func (s *Store) ListAllRunningOperatorActions(
 	var rows []operatorActionRow
 	if err := s.db.WithContext(ctx).
 		Where("c_status = ?", operatordomain.StatusRunning).
-		Order("c_space_id, c_ctime, c_action_id").
+		Order("c_space_id, c_created_at, c_action_id").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -234,8 +249,12 @@ func (tx *Tx) UpdateOperatorAction(
 		}
 		resultJSON = value
 	}
+	updatedAt := record.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
 	result := tx.db.Exec(execUpdateOperatorActionResult,
-		record.Status, resultJSON, record.LastError,
+		record.Status, resultJSON, record.LastError, updatedAt.UTC().UnixMilli(),
 		record.SpaceID, record.ActionID,
 	)
 	return requireUpdated(result.Error, result.RowsAffected, "operator action")
@@ -246,6 +265,7 @@ func operatorActionDomain(record OperatorActionRecord) operatordomain.Action {
 		SpaceID: record.SpaceID, ID: record.ActionID,
 		LogicalAccountID: record.LogicalAccountID,
 		Type:             operatordomain.ActionType(record.ActionType),
+		Source:           operatordomain.ActionSource(record.Source),
 		Reason:           record.Reason, RequestJSON: record.RequestJSON,
 		Status:     operatordomain.Status(record.Status),
 		ResultJSON: record.ResultJSON, LastError: record.LastError,
@@ -256,10 +276,11 @@ func operatorActionRecord(row operatorActionRow) OperatorActionRecord {
 	return OperatorActionRecord{
 		SpaceID: row.SpaceID, ActionID: row.ActionID,
 		LogicalAccountID: row.LogicalAccountID,
-		ActionType:       row.ActionType, Reason: row.Reason,
+		ActionType:       row.ActionType, Source: row.Source, Reason: row.Reason,
 		RequestJSON: row.RequestJSON, Status: row.Status,
 		ResultJSON: row.ResultJSON, LastError: row.LastError,
-		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		CreatedAt: time.UnixMilli(row.CreatedAt).UTC(),
+		UpdatedAt: time.UnixMilli(row.UpdatedAt).UTC(),
 	}
 }
 
@@ -268,6 +289,7 @@ func sameOperatorRequest(left OperatorActionRecord, right OperatorActionRecord) 
 		left.ActionID == right.ActionID &&
 		left.LogicalAccountID == right.LogicalAccountID &&
 		left.ActionType == right.ActionType &&
+		left.Source == right.Source &&
 		left.Reason == right.Reason &&
 		left.RequestJSON == right.RequestJSON
 }
@@ -291,6 +313,7 @@ func canonicalJSON(raw string, label string) (string, error) {
 type OperatorActionQuery struct {
 	LogicalAccountID string
 	ActionType       string
+	Source           string
 	StartTime        int64
 	EndTime          int64
 	Offset           int
@@ -309,18 +332,21 @@ func listOperatorActions(db *gorm.DB, spaceID string, query OperatorActionQuery)
 	if query.ActionType != "" {
 		db = db.Where("c_action_type = ?", query.ActionType)
 	}
+	if query.Source != "" {
+		db = db.Where("c_source = ?", query.Source)
+	}
 	if query.StartTime > 0 {
-		db = db.Where("c_ctime >= datetime(? / 1000, 'unixepoch')", query.StartTime)
+		db = db.Where("c_created_at >= ?", query.StartTime)
 	}
 	if query.EndTime > 0 {
-		db = db.Where("c_ctime <= datetime(? / 1000, 'unixepoch')", query.EndTime)
+		db = db.Where("c_created_at <= ?", query.EndTime)
 	}
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []operatorActionRow
-	if err := db.Order("c_ctime DESC, c_action_id DESC").Offset(query.Offset).Limit(query.Limit).Find(&rows).Error; err != nil {
+	if err := db.Order("c_created_at DESC, c_action_id DESC").Offset(query.Offset).Limit(query.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	records := make([]OperatorActionRecord, 0, len(rows))
@@ -330,34 +356,46 @@ func listOperatorActions(db *gorm.DB, spaceID string, query OperatorActionQuery)
 	return records, total, nil
 }
 
-// MarginActionIDPrefix 是保证金率风控发起的减仓动作号的前缀，用来在操作记录里认出它们。
-const MarginActionIDPrefix = "margin-"
-
-// LastMarginReduceAction 返回组合最近一次保证金率风控发起的减仓动作，没有则为 nil。保证金率风控用，走主连接。
+// LastMarginReduceAction 返回组合最近一次保证金率风控发起的减仓动作，没有则为 nil。
+// 按显式列 c_source = 'MARGIN' 与毫秒时间戳直接查询，不再依赖动作号前缀扫描。
 func (s *Store) LastMarginReduceAction(ctx context.Context, spaceID, logicalAccountID string) (*OperatorActionRecord, error) {
-	actions, _, err := listOperatorActions(s.db.WithContext(ctx), spaceID, OperatorActionQuery{
-		LogicalAccountID: logicalAccountID, ActionType: string(operatordomain.ActionReduce), Limit: 20,
-	})
-	if err != nil {
+	return lastMarginReduceAction(s.db.WithContext(ctx), spaceID, logicalAccountID)
+}
+
+// LastMarginReduceAction 返回事务内组合最近一次保证金率风控发起的减仓动作，没有则为 nil。
+func (tx *Tx) LastMarginReduceAction(spaceID, logicalAccountID string) (*OperatorActionRecord, error) {
+	return lastMarginReduceAction(tx.db, spaceID, logicalAccountID)
+}
+
+func lastMarginReduceAction(db *gorm.DB, spaceID, logicalAccountID string) (*OperatorActionRecord, error) {
+	var rows []operatorActionRow
+	if err := db.Raw(queryLastMarginReduceAction, spaceID, logicalAccountID, string(operatordomain.ActionReduce), string(operatordomain.SourceMargin)).
+		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	for i := range actions {
-		if strings.HasPrefix(actions[i].ActionID, MarginActionIDPrefix) {
-			return &actions[i], nil
-		}
+	if len(rows) == 0 {
+		return nil, nil
 	}
-	return nil, nil
+	record := operatorActionRecord(rows[0])
+	return &record, nil
 }
 
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。
 const (
 	execInsertOperatorAction = `INSERT INTO t_operator_actions (
-			c_space_id, c_action_id, c_logical_account_id, c_action_type,
-			c_reason, c_request_json, c_status, c_result_json, c_last_error, c_ctime
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
+			c_space_id, c_action_id, c_logical_account_id, c_action_type, c_source,
+			c_reason, c_request_json, c_status, c_result_json, c_last_error,
+			c_created_at, c_updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_action_id) DO NOTHING`
 	execUpdateOperatorActionResult = `UPDATE t_operator_actions
-		SET c_status = ?, c_result_json = ?, c_last_error = ?,
-			c_mtime = CURRENT_TIMESTAMP
+		SET c_status = ?, c_result_json = ?, c_last_error = ?, c_updated_at = ?
 		WHERE c_space_id = ? AND c_action_id = ?`
+	queryLastMarginReduceAction = `SELECT c_space_id, c_action_id, c_logical_account_id, c_action_type, c_source,
+			c_reason, c_request_json, c_status, c_result_json, c_last_error,
+			c_created_at, c_updated_at
+		FROM t_operator_actions
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_action_type = ? AND c_source = ?
+		ORDER BY c_created_at DESC, c_action_id DESC
+		LIMIT 1`
 )

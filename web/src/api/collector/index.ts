@@ -130,7 +130,7 @@ export interface DeleteTaskRequest {
   delete_result_data: boolean;
 }
 
-// 历史合成作业：范围 [start, end) 按目标桶推进，状态 queued / running / syncing / succeeded / failed / cancelled。
+// 历史合成作业：范围 [start, end) 按目标桶推进，状态 queued / running / succeeded / failed / cancelled。
 export interface ResampleJob {
   job_id: string;
   task_id: string;
@@ -163,17 +163,19 @@ export interface SubmitResampleJobRequest {
   subjects?: string[];
 }
 
-// 由源采集任务推导出的合成源参数，以及目标频率的校验结果。
+// 由源采集任务推导出的合成源参数，以及目标频率与实际可合成列的校验结果。
 export interface ResampleSourcePreview {
   source_dataset_id: string;
   source_frequency: string;
   source_series_tag: string;
   subject_count: number;
   market_id: string;
-  provider: string;
-  market_type: string;
+  provider?: string;
+  market_type?: string;
   alignment: "epoch_utc" | "session" | string;
+  calendar_id?: string;
   allowed_frequencies?: string[];
+  allowed_output_fields?: OutputFieldOption[];
   validation_error?: string;
 }
 

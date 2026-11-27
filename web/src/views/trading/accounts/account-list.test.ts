@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { EquityPoint, LogicalAccount, TradingAccount } from "@/api/trade/types";
-import { accountMapOf, comboRows, equityChange, executionRows } from "./account-list";
+import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { accountMapOf, comboRows, executionRows } from "./account-list";
 
 const account = (id: string, extra: Partial<TradingAccount> = {}) =>
   ({
@@ -67,11 +67,21 @@ describe("账户列表模型", () => {
     expect(executionRows(accounts, [], "prod").map(row => row.key)).toEqual(["live-off"]);
   });
 
-  it("近 24 小时变化用窗口内首尾两点，点数不足或起点为 0 时为空", () => {
-    const points = (values: number[]) =>
-      values.map((equity, index) => ({ bucket_time: String(index), equity: String(equity) }) as EquityPoint);
-    expect(equityChange(points([100, 90, 110]))).toBeCloseTo(0.1);
-    expect(equityChange(points([100]))).toBeNull();
-    expect(equityChange(points([0, 5]))).toBeNull();
+  it("从列表响应直接解析持仓标的数与近 24 小时权益变化比例，缺失或非法时回退为空和 0", () => {
+    const accounts = accountMapOf([account("a")]);
+    const rows = comboRows(
+      [
+        logical("p1", ["a"], { position_count: 3, equity_change_24h: "10", equity_change_pct_24h: "0.1" }),
+        logical("p2", ["a"], { equity_change_pct_24h: "" }),
+        logical("p3", ["a"], { position_count: 1, equity_change_pct_24h: "not-a-number" })
+      ],
+      accounts,
+      "paper"
+    );
+    expect(rows.map(row => [row.key, row.positionCount, row.equityChangePct24h])).toEqual([
+      ["p1", 3, 0.1],
+      ["p2", 0, null],
+      ["p3", 1, null]
+    ]);
   });
 });

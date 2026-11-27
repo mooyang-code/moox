@@ -18,16 +18,31 @@ export function jobKindText(kind?: string) {
   return jobKinds[kind || ""] || kind || "-";
 }
 
-export function jobSourceText(source?: string) {
-  return source === "auto" ? "自动" : "手动";
+const jobSources: Record<string, { text: string; color: string }> = {
+  manual: { text: "手动", color: "gray" },
+  auto: { text: "自动", color: "arcoblue" },
+  seed: { text: "历史补齐", color: "purple" },
+  close_refetch: { text: "收市重取", color: "orange" },
+  catchup: { text: "恢复追赶", color: "cyan" }
+};
+
+export function jobSourceInfo(source?: string) {
+  return jobSources[source || ""] || { text: source || "手动", color: "gray" };
 }
 
-/** 补采作业的筛选分段：需关注（未结束或有失败）、全部、手动、自动。 */
+export function jobSourceText(source?: string) {
+  return jobSourceInfo(source).text;
+}
+
+/** 补采作业的筛选分段：需关注（未结束或有失败）、全部，以及五种正交作业来源。 */
 export const JOB_SEGMENTS = [
   { key: "attention", label: "需关注" },
   { key: "all", label: "全部" },
   { key: "manual", label: "手动" },
-  { key: "auto", label: "自动" }
+  { key: "auto", label: "自动" },
+  { key: "seed", label: "历史补齐" },
+  { key: "close_refetch", label: "收市重取" },
+  { key: "catchup", label: "恢复追赶" }
 ] as const;
 
 export type JobSegment = (typeof JOB_SEGMENTS)[number]["key"];

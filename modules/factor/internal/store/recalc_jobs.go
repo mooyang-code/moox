@@ -19,6 +19,11 @@ const (
 	RecalcStatusSucceeded = "succeeded"
 	RecalcStatusFailed    = "failed"
 	RecalcStatusCancelled = "cancelled"
+
+	// DefaultRecalcJobRetention 是已完结历史补算作业的默认保留窗口。
+	DefaultRecalcJobRetention = 30 * 24 * time.Hour
+	// DefaultRecalcJobKeepPerTask 是每个因子任务默认最多保留的已完结历史补算作业数量。
+	DefaultRecalcJobKeepPerTask = 200
 )
 
 // RecalcJob is the durable state needed to accept, resume, inspect, or cancel
@@ -386,6 +391,66 @@ func (s *Store) ListRecalcJobs(ctx context.Context, filter RecalcJobFilter) ([]R
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
+}
+
+// PruneRecalcJobs 清理已完结（succeeded/failed/cancelled）的历史补算作业，防止 t_factor_recalc_jobs 无限膨胀：
+//   - retention > 0 时，删除 c_mtime 早于 now - retention 的已完结作业；
+//   - keepPerTask > 0 时，每个任务仅保留最新 keepPerTask 条已完结作业（按 c_ctime DESC, c_job_id DESC）。
+//
+// 排队中或执行中的作业（accepted/running）永不清理。返回本次删除的记录条数。
+func (s *Store) PruneRecalcJobs(ctx context.Context, now time.Time, retention time.Duration, keepPerTask int) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("factor database is not open")
+	}
+	if retention <= 0 && keepPerTask <= 0 {
+		return 0, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	var deleted int64
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if retention > 0 {
+			cutoff := now.Add(-retention).Format(time.RFC3339Nano)
+			res := tx.Exec(`
+				DELETE FROM t_factor_recalc_jobs
+				WHERE c_status IN (?, ?, ?)
+				  AND julianday(c_mtime) < julianday(?)
+			`, RecalcStatusSucceeded, RecalcStatusFailed, RecalcStatusCancelled, cutoff)
+			if res.Error != nil {
+				return res.Error
+			}
+			deleted += res.RowsAffected
+		}
+		if keepPerTask > 0 {
+			res := tx.Exec(`
+				DELETE FROM t_factor_recalc_jobs
+				WHERE c_job_id IN (
+					SELECT c_job_id FROM (
+						SELECT c_job_id,
+						       ROW_NUMBER() OVER (
+						           PARTITION BY c_task_id
+						           ORDER BY julianday(c_ctime) DESC, c_job_id DESC
+						       ) AS rn
+						FROM t_factor_recalc_jobs
+						WHERE c_status IN (?, ?, ?)
+					)
+					WHERE rn > ?
+				)
+			`, RecalcStatusSucceeded, RecalcStatusFailed, RecalcStatusCancelled, keepPerTask)
+			if res.Error != nil {
+				return res.Error
+			}
+			deleted += res.RowsAffected
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 func (s *Store) getRecalcJobRow(ctx context.Context, key, value string) (recalcJobRow, error) {

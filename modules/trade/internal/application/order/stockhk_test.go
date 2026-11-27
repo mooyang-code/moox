@@ -106,10 +106,17 @@ func TestHKBuyCapacityCoversMinimumFees(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	validation := Validation{Account: hkAccount("0"), Instrument: hkInstrumentForOrder(), ReservedQuantity: shared.MustDecimal("1")}
 	spec := hkSpec(exchange.SideBuy, "800", "10", now)
+	clamp := func(qty, step, avail string) shared.Decimal {
+		return orderPolicyOf(validation, nil).ClampBuyCapacity(execution.CapacityClampRequest{
+			Account: validation.Account, Instrument: validation.Instrument,
+			OrderType: spec.Type, Side: spec.Side, ReferencePrice: spec.ReferencePrice, LimitPrice: spec.LimitPrice,
+			Quantity: shared.MustDecimal(qty), Step: shared.MustDecimal(step), Available: shared.MustDecimal(avail),
+		})
+	}
 	// 800 股 × 10 = 8000：佣金 2.4→3 + 印花税 8 + 0.452 + 0.216 + 0.012 + 交收费 0.336 = 12.016，共 8012.016。
-	got := stockBuyCapacity(validation, spec, shared.MustDecimal("800"), shared.MustDecimal("400"), shared.MustDecimal("8012.015"))
+	got := clamp("800", "400", "8012.015")
 	require.Equal(t, "400", got.String())
-	got = stockBuyCapacity(validation, spec, shared.MustDecimal("800"), shared.MustDecimal("400"), shared.MustDecimal("8012.016"))
+	got = clamp("800", "400", "8012.016")
 	require.Equal(t, "800", got.String())
 }
 
@@ -160,6 +167,6 @@ func TestHKPaperFundsDoNotLockTodayBuys(t *testing.T) {
 		ReservedAsset: "00005.XHKG", ReservedQuantity: shared.MustDecimal("400"),
 	}
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
-		return checkPaperFunds(tx, validation, shared.Zero(), validation.ReservedQuantity, "", "", time.Now())
+		return checkLocalLedgerFunds(tx, validation, shared.Zero(), validation.ReservedQuantity, "", "", time.Now())
 	}))
 }

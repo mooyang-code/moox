@@ -10,11 +10,11 @@ import (
 // HTTP console and non-HTTP callers. Keeping the decision here prevents the UI
 // from re-implementing the production gate or Paper matcher readiness rules.
 type ExecutionCapabilities struct {
-	CanPlaceOrder           bool
-	UnavailableReason       string
-	OrderTypes              []exchange.OrderType
-	FillPolicies            []exchange.FillPolicy
-	CanClosePaperSimulation bool
+	CanPlaceOrder        bool
+	UnavailableReason    string
+	OrderTypes           []exchange.OrderType
+	FillPolicies         []exchange.FillPolicy
+	CanClosePaperAccount bool
 }
 
 func ResolveExecutionCapabilities(
@@ -26,7 +26,7 @@ func ResolveExecutionCapabilities(
 	capabilities := ExecutionCapabilities{
 		OrderTypes:   descriptor.OrderTypes,
 		FillPolicies: descriptor.FillPolicies,
-		CanClosePaperSimulation: account.ExecutionMode == exchange.ExecutionModePaper &&
+		CanClosePaperAccount: account.ExecutionMode == exchange.ExecutionModePaper &&
 			account.Status == exchange.AccountStatusEnabled,
 	}
 	if account.Status != exchange.AccountStatusEnabled {

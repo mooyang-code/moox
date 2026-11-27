@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -170,6 +172,41 @@ func (s *paramSelector) Done(_ context.Context, taskID string, period time.Time)
 	}
 	delete(s.cache.InFlight, taskID)
 	return s.persistLocked()
+}
+
+// RetainTasks 仅保留 keep 中的任务参数缓存与进行中记录，清理已删除任务的残留条目并原子落盘。
+func (s *paramSelector) RetainTasks(keep map[string]struct{}) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removedSet := map[string]struct{}{}
+	for taskID := range s.cache.InFlight {
+		if _, ok := keep[taskID]; !ok {
+			delete(s.cache.InFlight, taskID)
+			removedSet[taskID] = struct{}{}
+		}
+	}
+	for key := range s.cache.Latest {
+		taskID, _, ok := strings.Cut(key, "/")
+		if !ok {
+			continue
+		}
+		if _, exists := keep[taskID]; !exists {
+			delete(s.cache.Latest, key)
+			removedSet[taskID] = struct{}{}
+		}
+	}
+	if len(removedSet) == 0 {
+		return nil, nil
+	}
+	removed := make([]string, 0, len(removedSet))
+	for taskID := range removedSet {
+		removed = append(removed, taskID)
+	}
+	sort.Strings(removed)
+	if err := s.persistLocked(); err != nil {
+		return removed, err
+	}
+	return removed, nil
 }
 
 // fetch 在 timeout 内读取提交值，失败按间隔重试；读不到时返回最后一次错误。

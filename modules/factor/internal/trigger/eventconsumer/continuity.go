@@ -74,6 +74,26 @@ func NewContinuity(cfg ContinuityConfig) (*Continuity, error) {
 // States 返回全部任务的推进状态（心跳上报与指标用）。
 func (c *Continuity) States() []watermark.State { return c.cfg.Store.All() }
 
+// DeleteTask 清理已删除任务的水位记录（含持久化文件）与内存中的确认缺失表。
+func (c *Continuity) DeleteTask(taskID string) (bool, error) {
+	c.mu.Lock()
+	delete(c.absent, taskID)
+	c.mu.Unlock()
+	return c.cfg.Store.Delete(taskID)
+}
+
+// RetainTasks 仅保留 keep 中的任务，删除其余任务的落盘水位记录与内存确认缺失表。
+func (c *Continuity) RetainTasks(keep map[string]struct{}) ([]string, error) {
+	c.mu.Lock()
+	for taskID := range c.absent {
+		if _, ok := keep[taskID]; !ok {
+			delete(c.absent, taskID)
+		}
+	}
+	c.mu.Unlock()
+	return c.cfg.Store.Retain(keep)
+}
+
 // NoteAbsent 记下补采确认行情源没有的标的（K 线补写事件带来），30 分钟后过期。
 func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Duration, subjects []string) {
 	if len(subjects) == 0 || step <= 0 {

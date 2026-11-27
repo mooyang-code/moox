@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -38,14 +38,44 @@ type PublicMarketData interface {
 	execution.ReferencePriceSource
 }
 
-// 编译期确认模拟盘适配器实现了会话按类型断言使用的可选能力。
+// 编译期确认模拟盘适配器实现了会话按类型断言使用的可选能力与订单策略边界。
 var (
 	_ execution.ExecutionAdapter = (*Adapter)(nil)
 	_ execution.SymbolConfigurer = (*Adapter)(nil)
 	_ execution.LedgerSource     = (*Adapter)(nil)
 	_ execution.QuotePrefetcher  = (*Adapter)(nil)
 	_ execution.ExchangeIdentity = (*Adapter)(nil)
+	_ execution.OrderPolicy      = (*Adapter)(nil)
 )
+
+func (a *Adapter) orderPolicy() execution.PaperOrderPolicy {
+	return execution.PaperOrderPolicy{Adapter: a}
+}
+
+func (a *Adapter) NeedsExecutableQuote() bool { return a.orderPolicy().NeedsExecutableQuote() }
+func (a *Adapter) ResolveExecutableQuote(ctx context.Context, key exchange.SymbolKey, side exchange.Side, now time.Time, maxAge time.Duration) (shared.Decimal, time.Time, error) {
+	return a.orderPolicy().ResolveExecutableQuote(ctx, key, side, now, maxAge)
+}
+func (a *Adapter) UsesLocalFundsLedger() bool  { return a.orderPolicy().UsesLocalFundsLedger() }
+func (a *Adapter) ConfirmsCancelLocally() bool { return a.orderPolicy().ConfirmsCancelLocally() }
+func (a *Adapter) NeedsMarginPoolSnapshot(account tradingaccount.Account, reservedAsset string, reduceOnly bool) bool {
+	return a.orderPolicy().NeedsMarginPoolSnapshot(account, reservedAsset, reduceOnly)
+}
+func (a *Adapter) MarginPoolAdjustment(market exchange.MarketType, usedMargin, unrealizedPnL shared.Decimal) shared.Decimal {
+	return a.orderPolicy().MarginPoolAdjustment(market, usedMargin, unrealizedPnL)
+}
+func (a *Adapter) ComputeReservation(req execution.ReservationRequest) (execution.ReservationResult, error) {
+	return a.orderPolicy().ComputeReservation(req)
+}
+func (a *Adapter) RepriceMarketOrder(req execution.RepriceRequest) (shared.Decimal, shared.Decimal, error) {
+	return a.orderPolicy().RepriceMarketOrder(req)
+}
+func (a *Adapter) ClampBuyCapacity(req execution.CapacityClampRequest) shared.Decimal {
+	return a.orderPolicy().ClampBuyCapacity(req)
+}
+func (a *Adapter) DefaultLeverage() (shared.Decimal, bool) {
+	return a.orderPolicy().DefaultLeverage()
+}
 
 // Exchange 返回模拟账户所在的场所，报价新鲜度按这个场所的交易时段判断。
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.Exchange(a.Account.Exchange) }
@@ -118,8 +148,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		return exchange.AccountSnapshot{}, storageError(err)
 	}
 	balances, locked := projection.Totals, projection.Reserved
-	settlement := balances[account.SettlementAsset]
-	equity := settlement
+	assetPrices := make(map[string]shared.Decimal)
 	usedMargin := shared.Zero()
 	unrealizedPnL := shared.Zero()
 	if account.HasBalanceMarket() {
@@ -155,7 +184,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 			if priceErr != nil {
 				return exchange.AccountSnapshot{}, priceErr
 			}
-			equity = equity.Add(balance.Mul(price))
+			assetPrices[asset] = price
 		}
 	}
 	if account.HasPositionMarket() {
@@ -183,70 +212,56 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 			if quoteErr != nil {
 				return exchange.AccountSnapshot{}, quoteErr
 			}
-			unrealizedPnL = unrealizedPnL.Add(mark.Sub(entry).Mul(quantity))
-			usedMargin = usedMargin.Add(quantity.Abs().Mul(mark).Div(leverage))
+			posMargin, posPnL := tradingaccount.PaperPositionValuation(quantity, entry, mark, leverage)
+			usedMargin = usedMargin.Add(posMargin)
+			unrealizedPnL = unrealizedPnL.Add(posPnL)
 		}
-		equity = equity.Add(unrealizedPnL)
 	}
-	// 单一资金池：现货买入和合约保证金都花结算币；现货持有的币不能当保证金。
-	available := settlement.Sub(locked[account.SettlementAsset])
-	if account.HasPositionMarket() {
-		available = settlement.Add(unrealizedPnL).Sub(usedMargin).Sub(locked[account.SettlementAsset])
-	}
-	paperRows := paperBalances(balances, locked)
-	if err := a.applyT1(ctx, account, paperRows); err != nil {
+	t1Locked, err := a.loadT1Locked(ctx, account)
+	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
-	if account.HasPositionMarket() && account.HasBalanceMarket() {
-		// 单一资金池里结算币这一行是现货买单看的：扣掉合约占用的保证金和浮亏，但浮盈不能花在现货上（现货不借币），
-		// 所以是 现金 + min(浮盈亏, 0) - 保证金 - 冻结。账户级的 AvailableFunds 给合约用，保持含浮盈的口径。
-		spotAvailable := settlement.Sub(usedMargin).Sub(locked[account.SettlementAsset])
-		if unrealizedPnL.IsNegative() {
-			spotAvailable = spotAvailable.Add(unrealizedPnL)
-		}
-		for i := range paperRows {
-			if paperRows[i].Asset == account.SettlementAsset {
-				paperRows[i].Available = spotAvailable
-			}
-		}
-	}
+	computed := tradingaccount.ComputePaperEquity(tradingaccount.PaperEquityInput{
+		SettlementAsset:   account.SettlementAsset,
+		HasBalanceMarket:  account.HasBalanceMarket(),
+		HasPositionMarket: account.HasPositionMarket(),
+		Totals:            balances,
+		Locked:            locked,
+		T1Locked:          t1Locked,
+		AssetPrices:       assetPrices,
+		UsedMargin:        usedMargin,
+		UnrealizedPnL:     unrealizedPnL,
+	})
 	return exchange.AccountSnapshot{
-		Balances: paperRows, Equity: equity, AvailableFunds: available, UsedMargin: usedMargin,
-		UnrealizedPnL: unrealizedPnL, ExchangeUpdatedAt: a.now(), Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true, UsedMargin: true, UnrealizedPnL: true},
+		Balances:          computed.Balances,
+		Equity:            computed.Equity,
+		AvailableFunds:    computed.AvailableFunds,
+		UsedMargin:        computed.UsedMargin,
+		UnrealizedPnL:     computed.UnrealizedPnL,
+		ExchangeUpdatedAt: a.now(),
+		Present:           exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true, UsedMargin: true, UnrealizedPnL: true},
 	}, nil
+}
+
+// loadT1Locked 读当日买入（北京时间当天）不可卖数量：T+1 的场所（A 股）才查，港股与加密货币返回 nil。
+func (a *Adapter) loadT1Locked(ctx context.Context, account store.TradingAccountRecord) (map[string]shared.Decimal, error) {
+	if !slices.ContainsFunc(account.Markets, func(market string) bool { return exchange.RuleAt(account.Exchange, market).T1 }) {
+		return nil, nil
+	}
+	source, ok := a.Store.(t1Source)
+	if !ok {
+		return nil, nil
+	}
+	bought, err := source.PaperT1Bought(ctx, account.SpaceID, account.TradingAccountID, exchange.T1Since(a.now()).UnixMilli())
+	if err != nil {
+		return nil, storageError(err)
+	}
+	return bought, nil
 }
 
 // t1Source 是能读当日买入数量的事实存储（*store.Store 实现）；测试替身没有实现时不扣 T+1。
 type t1Source interface {
 	PaperT1Bought(ctx context.Context, spaceID, accountID string, since int64) (map[string]shared.Decimal, error)
-}
-
-// applyT1 从可用数量里扣掉当日买入（北京时间当天）的股票：T+1（A 股），当天买的次日才能卖。执行器的可卖数量取自这里。
-// 港股等 T+0 的场所不扣。
-func (a *Adapter) applyT1(ctx context.Context, account store.TradingAccountRecord, rows []exchange.AssetBalance) error {
-	if !slices.ContainsFunc(account.Markets, func(market string) bool { return exchange.RuleAt(account.Exchange, market).T1 }) {
-		return nil
-	}
-	source, ok := a.Store.(t1Source)
-	if !ok {
-		return nil
-	}
-	bought, err := source.PaperT1Bought(ctx, account.SpaceID, account.TradingAccountID, exchange.T1Since(a.now()).UnixMilli())
-	if err != nil {
-		return storageError(err)
-	}
-	for i := range rows {
-		quantity, found := bought[rows[i].Asset]
-		if !found {
-			continue
-		}
-		available := rows[i].Available.Sub(quantity)
-		if available.IsNegative() {
-			available = shared.Zero()
-		}
-		rows[i].Available = available
-	}
-	return nil
 }
 
 // balancePrice 给现货持有的一个币取估值价，取不到新鲜报价时和实盘权益采样用同一套降级规则（execution.DegradedPrice）：
@@ -343,34 +358,6 @@ func (a *Adapter) valuationQuote(ctx context.Context, key exchange.SymbolKey) (s
 	return quote.Price, nil
 }
 
-func paperBalances(total, locked map[string]shared.Decimal) []exchange.AssetBalance {
-	assets := make([]string, 0, len(total)+len(locked))
-	seen := make(map[string]struct{}, len(total)+len(locked))
-	for asset := range total {
-		if asset != "" {
-			seen[asset] = struct{}{}
-			assets = append(assets, asset)
-		}
-	}
-	for asset := range locked {
-		if asset != "" {
-			if _, found := seen[asset]; !found {
-				assets = append(assets, asset)
-			}
-		}
-	}
-	sort.Strings(assets)
-	result := make([]exchange.AssetBalance, 0, len(assets))
-	for _, asset := range assets {
-		totalAmount := total[asset]
-		lockedAmount := locked[asset]
-		result = append(result, exchange.AssetBalance{
-			Wallet: exchange.WalletUnified,
-			Asset:  asset, Available: totalAmount.Sub(lockedAmount), Locked: lockedAmount, Total: totalAmount,
-		})
-	}
-	return result
-}
 func (a *Adapter) AccountSnapshot() exchange.AccountSnapshot {
 	return exchange.AccountSnapshot{ExchangeUpdatedAt: a.now()}
 }
@@ -470,9 +457,10 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 				return nil, quoteErr
 			}
 			position.MarkPrice = quote.Price
-			position.UnrealizedPnL = position.MarkPrice.Sub(position.EntryPrice).Mul(position.SignedQuantity)
+			usedMargin, unrealizedPnL := tradingaccount.PaperPositionValuation(position.SignedQuantity, position.EntryPrice, position.MarkPrice, position.Leverage)
+			position.UnrealizedPnL = unrealizedPnL
 			if position.Leverage.Cmp(shared.Zero()) > 0 {
-				position.UsedMargin = position.SignedQuantity.Abs().Mul(position.MarkPrice).Div(position.Leverage)
+				position.UsedMargin = usedMargin
 			}
 		}
 		result = append(result, position)
@@ -549,10 +537,17 @@ func (a *Adapter) GetOrderByExchangeID(ctx context.Context, key exchange.SymbolK
 }
 
 func (a *Adapter) PlaceOrder(_ context.Context, req exchange.OrderRequest) (exchange.Order, error) {
+	now := a.now()
+	// 交易时段拒单收口在 ExecutionAdapter 边界：有交易时段的场所休市时直接拒绝受理新单。
+	if a.Exchanges != nil && !execution.InSession(a.Exchanges, a.Account.Exchange, now) {
+		return exchange.Order{}, &exchange.Error{
+			Kind: exchange.ErrorRejected,
+			Err:  execution.ErrOutOfSession,
+		}
+	}
 	if a.Wake != nil {
 		a.Wake()
 	}
-	now := a.now()
 	symbol := req.ExchangeSymbol
 	return exchange.Order{ExchangeOrderID: paperOrderID(a.Account.TradingAccountID, req.ClientOrderID), ClientOrderID: req.ClientOrderID, Market: req.Market, ExchangeSymbol: symbol, Status: exchange.OrderStatusOpen, CreatedAt: now, UpdatedAt: now}, nil
 }

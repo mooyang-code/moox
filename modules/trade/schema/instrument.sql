@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS t_trade_instruments (
     c_status TEXT NOT NULL,
     c_exchange_updated_at INTEGER NOT NULL DEFAULT 0,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_exchange, c_environment, c_market_type, c_exchange_symbol),
     CHECK (c_linear IN (0, 1)),
     CHECK (
         c_market_type <> 'swap'
@@ -29,12 +28,25 @@ CREATE TABLE IF NOT EXISTS t_trade_instruments (
             AND c_contract_value_asset = c_base_asset
             AND c_min_exchange_quantity <> '0'
         )
-    )
+    ),
+    PRIMARY KEY (c_exchange, c_environment, c_market_type, c_exchange_symbol)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_exchange_instruments_id
 ON t_trade_instruments (c_exchange, c_environment, c_market_type, c_instrument_id)
 WHERE c_instrument_id <> '';
-
 CREATE INDEX IF NOT EXISTS idx_trade_instruments_status
 ON t_trade_instruments (c_exchange, c_environment, c_market_type, c_status);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_trade_instruments_mtime
+AFTER UPDATE ON t_trade_instruments
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_trade_instruments
+    SET c_mtime = CURRENT_TIMESTAMP
+    WHERE c_exchange = OLD.c_exchange
+        AND c_environment = OLD.c_environment
+        AND c_market_type = OLD.c_market_type
+        AND c_exchange_symbol = OLD.c_exchange_symbol;
+END;

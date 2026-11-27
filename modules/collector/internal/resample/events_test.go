@@ -172,3 +172,45 @@ func TestNoticePublisherKeepsOnlyTheLatestAbsencesBeyondTheLimit(t *testing.T) {
 	require.Equal(t, start.Add(30*time.Minute).Unix(), absent[0].GetStart())
 	require.Equal(t, start.Add(20*time.Minute).Unix(), absent[1].GetStart())
 }
+
+// seed / catchup / close_refetch 三种细化补采来源均可正常封存为合法事件并进入发件箱。
+func TestNoticePublisherSealsOrthogonalBackfillOrigins(t *testing.T) {
+	mgr := openState(t)
+	ctx := context.Background()
+	start := utc("2026-10-21T10:00:00Z")
+	origins := []string{store.BackfillSourceSeed, store.BackfillSourceCatchup, store.BackfillSourceCloseRefetch}
+	notices := make([]store.BackfillNotice, 0, len(origins))
+	for _, origin := range origins {
+		notices = append(notices, store.BackfillNotice{
+			SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC",
+			Start: start, End: start.Add(time.Hour), Origin: origin, JobID: "job-" + origin,
+		})
+	}
+	require.NoError(t, mgr.Resample().AddNotices(ctx, notices))
+	require.NoError(t, mgr.Backfill().AddAbsences(ctx, []store.SourceAbsence{
+		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "ETH", From: start, To: start.Add(5 * time.Minute), Bars: 1},
+	}))
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	publisher := &NoticePublisher{State: mgr.Resample(), Registry: registry, Absences: mgr.Backfill(), Enabled: true, Now: func() time.Time { return start.Add(3 * time.Hour) }}
+
+	require.NoError(t, publisher.Flush(ctx))
+	left, err := mgr.Resample().UnsealedNotices(ctx, 10)
+	require.NoError(t, err)
+	require.Empty(t, left)
+
+	pending, err := mgr.Resample().PendingEvents(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, len(origins))
+	gotOrigins := map[string]bool{}
+	for _, event := range pending {
+		message, err := registry.UnmarshalMessage(event.Payload)
+		require.NoError(t, err)
+		payload := decodePayload(t, registry, message)
+		gotOrigins[payload.GetOrigin()] = true
+		require.Len(t, payload.GetAbsent(), 1, "补采来源 %s 应携带范围内确认缺失", payload.GetOrigin())
+	}
+	for _, origin := range origins {
+		require.True(t, gotOrigins[origin], "缺少来源 %s 的封存事件", origin)
+	}
+}

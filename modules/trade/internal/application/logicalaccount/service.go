@@ -576,9 +576,7 @@ func (s *Service) Resume(
 			fmt.Errorf("%w：还有人工操作在执行", ErrNotReady)
 	}
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation(
-			spaceID, logicalAccountID, "ACTIVE", "",
-		)
+		return tx.ResumeLogicalAccount(spaceID, logicalAccountID, s.now())
 	}); err != nil {
 		return store.LogicalAccountRecord{}, "", err
 	}

@@ -24,16 +24,16 @@ type DelistNotice struct {
 }
 
 type delistNoticeRow struct {
-	ID          int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
-	Exchange    string    `gorm:"column:c_exchange"`
-	Market      string    `gorm:"column:c_market"`
-	Symbol      string    `gorm:"column:c_symbol"`
-	Scope       string    `gorm:"column:c_scope"`
-	DelistAt    time.Time `gorm:"column:c_delist_at"`
-	Source      string    `gorm:"column:c_source"`
-	EventID     string    `gorm:"column:c_event_id"`
-	FirstSeenAt time.Time `gorm:"column:c_first_seen_at"`
-	LastSeenAt  time.Time `gorm:"column:c_last_seen_at"`
+	ID          int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	Exchange    string `gorm:"column:c_exchange"`
+	Market      string `gorm:"column:c_market"`
+	Symbol      string `gorm:"column:c_symbol"`
+	Scope       string `gorm:"column:c_scope"`
+	DelistAt    int64  `gorm:"column:c_delist_at"`
+	Source      string `gorm:"column:c_source"`
+	EventID     string `gorm:"column:c_event_id"`
+	FirstSeenAt int64  `gorm:"column:c_first_seen_at"`
+	LastSeenAt  int64  `gorm:"column:c_last_seen_at"`
 }
 
 func (delistNoticeRow) TableName() string { return "t_collector_delist_notices" }
@@ -64,9 +64,11 @@ func (r *DelistNoticeRepository) Register(ctx context.Context, notice DelistNoti
 			}
 			found = false
 		}
-		if found && latest.DelistAt.Equal(notice.DelistAt.UTC()) {
+		delistAt := toUnixMilli(notice.DelistAt)
+		seenAt := toUnixMilli(notice.SeenAt)
+		if found && latest.DelistAt == delistAt {
 			eventID = latest.EventID
-			return tx.Model(&delistNoticeRow{}).Where("c_id = ?", latest.ID).Update("c_last_seen_at", notice.SeenAt.UTC()).Error
+			return tx.Model(&delistNoticeRow{}).Where("c_id = ?", latest.ID).Update("c_last_seen_at", seenAt).Error
 		}
 		var revision int64
 		if err := tx.Model(&delistNoticeRow{}).Where(key, args...).Count(&revision).Error; err != nil {
@@ -80,14 +82,14 @@ func (r *DelistNoticeRepository) Register(ctx context.Context, notice DelistNoti
 			return fmt.Errorf("delist notice requires an outbox event id")
 		}
 		row := delistNoticeRow{
-			Exchange: notice.Exchange, Market: notice.Market, Symbol: notice.Symbol, Scope: notice.Scope, DelistAt: notice.DelistAt.UTC(),
-			Source: notice.Source, EventID: event.EventID, FirstSeenAt: notice.SeenAt.UTC(), LastSeenAt: notice.SeenAt.UTC(),
+			Exchange: notice.Exchange, Market: notice.Market, Symbol: notice.Symbol, Scope: notice.Scope, DelistAt: delistAt,
+			Source: notice.Source, EventID: event.EventID, FirstSeenAt: seenAt, LastSeenAt: seenAt,
 		}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
 		created, eventID = true, event.EventID
-		outbox := eventOutboxRow{EventID: event.EventID, SpaceID: event.SpaceID, EventName: event.EventName, SubjectToken: event.SubjectToken, Payload: event.Payload}
+		outbox := eventOutboxRow{EventID: event.EventID, SpaceID: event.SpaceID, EventName: event.EventName, SubjectToken: event.SubjectToken, Payload: event.Payload, CreatedAt: nowUnixMilli()}
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&outbox).Error
 	})
 	return created, eventID, err
@@ -105,6 +107,7 @@ func (r *DelistNoticeRepository) DelistedSymbols(ctx context.Context, exchange, 
 		Order("c_id DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	nowMs := toUnixMilli(now)
 	seen := map[string]bool{}
 	delisted := map[string]bool{}
 	for _, row := range rows {
@@ -113,7 +116,7 @@ func (r *DelistNoticeRepository) DelistedSymbols(ctx context.Context, exchange, 
 			continue
 		}
 		seen[symbol] = true
-		if !row.DelistAt.After(now.UTC()) {
+		if row.DelistAt <= nowMs {
 			delisted[symbol] = true
 		}
 	}

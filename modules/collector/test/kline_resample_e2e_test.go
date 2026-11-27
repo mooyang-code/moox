@@ -16,10 +16,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type e2eSource struct{ subjects []string }
+type e2eSource struct {
+	subjects []string
+	info     storagesource.DatasetInfo
+}
 
 func (s e2eSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "5m", SubjectTags: []string{"tag"}}, nil
+	info := s.info
+	if info.DataSourceID == "" {
+		info.DataSourceID = "binance"
+	}
+	info.DataKind = storagepb.DataKind_DATA_KIND_TIME_SERIES
+	info.Status = "active"
+	info.SubjectTags = []string{"tag"}
+	return info, nil
+}
+
+func e2eCryptoColumns() map[string]storagepb.FieldValueType {
+	return map[string]storagepb.FieldValueType{
+		"open":         storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"high":         storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"low":          storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"close":        storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"volume":       storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"trade_num":    storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
+	}
+}
+
+func e2eStockColumns() map[string]storagepb.FieldValueType {
+	return map[string]storagepb.FieldValueType{
+		"open":   storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"high":   storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"low":    storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"close":  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"amount": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}
 }
 
 func (s e2eSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
@@ -115,8 +148,9 @@ func TestKlineResample45mHistoryJobE2E(t *testing.T) {
 	missing := time.Date(2026, 10, 20, 10, 20, 0, 0, time.UTC)
 	delete(primary.rows, e2eKeyText(e2eRow("crypto", "dataset_src", "ETH", "5m", missing, 0).Key))
 
-	runner := &resample.JobRunner{State: db.Resample(), Tasks: db.Tasks(), Source: e2eSource{subjects: subjects}, Engine: engine, Config: resample.JobRunnerConfig{BucketsPerRound: 40}}
-	rt, err := resample.NewTask(task)
+	sourceInfo := storagesource.DatasetInfo{Freq: "5m", Alignment: "epoch_utc", ColumnTypes: e2eCryptoColumns()}
+	runner := &resample.JobRunner{State: db.Resample(), Tasks: db.Tasks(), Source: e2eSource{subjects: subjects, info: sourceInfo}, Engine: engine, Config: resample.JobRunnerConfig{BucketsPerRound: 40}}
+	rt, err := resample.NewTaskForSource(task, sourceInfo)
 	require.NoError(t, err)
 	n := 0
 	job, _, err := resample.SubmitJob(ctx, db.Resample(), rt, resample.SubmitJobRequest{SpaceID: "crypto", TaskID: task.TaskID, RequestID: "r1", Start: from, End: to},
@@ -181,8 +215,11 @@ func TestKlineResampleAStockHourlyE2E(t *testing.T) {
 			primary.rows[e2eKeyText(e2eRow("stockcn", "dataset_src", "600000", "1m", at, 10).Key)] = e2eRow("stockcn", "dataset_src", "600000", "1m", at, 10)
 		}
 	}
-	runner := &resample.JobRunner{State: db.Resample(), Tasks: db.Tasks(), Source: e2eSource{subjects: subjects}, Engine: engine}
-	rt, err := resample.NewTask(task)
+	sourceInfo := storagesource.DatasetInfo{
+		Freq: "1m", Alignment: "session", Attributes: map[string]string{"calendar": "cn_stock"}, ColumnTypes: e2eStockColumns(),
+	}
+	runner := &resample.JobRunner{State: db.Resample(), Tasks: db.Tasks(), Source: e2eSource{subjects: subjects, info: sourceInfo}, Engine: engine}
+	rt, err := resample.NewTaskForSource(task, sourceInfo)
 	require.NoError(t, err)
 	_, _, err = resample.SubmitJob(ctx, db.Resample(), rt, resample.SubmitJobRequest{SpaceID: "stockcn", TaskID: task.TaskID, RequestID: "r1", Start: day, End: day.Add(24 * time.Hour)},
 		func() string { return "job-a" }, time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC))
@@ -193,9 +230,9 @@ func TestKlineResampleAStockHourlyE2E(t *testing.T) {
 	}
 	require.Len(t, primary.rows, 240+4, "240 根 1m 源 K 线 + 每个交易日 4 根 1h，午休与盘后没有桶")
 
-	params := `{"provider":"binance","market_type":"spot","source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_e2e","target_frequency":"45m"}`
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_e2e","target_frequency":"45m"}`
 	bad := task
 	bad.CollectParams = params
-	_, err = resample.NewTask(bad)
+	_, err = resample.NewTaskForSource(bad, sourceInfo)
 	require.ErrorContains(t, err, "不能整除")
 }

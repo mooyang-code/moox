@@ -6,10 +6,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
-	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
+	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,14 +17,14 @@ func TestMarketDataAdapterFetchesClosedKlineThroughTypedProvider(t *testing.T) {
 	start := time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC)
 	end := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
 	collector := NewKlineCollector()
-	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *binanceapi.KlineRequest) ([]*binanceapi.Kline, error) {
 		assert.Equal(t, InstTypeSPOT, params.InstType)
 		assert.Equal(t, "BTCUSDT", params.Symbol)
 		assert.Equal(t, start, req.StartTime)
 		assert.Equal(t, end, req.EndTime)
-		return []*exchange.Kline{
-			testExchangeKline(start, start.Add(time.Minute-time.Millisecond), "100", "110", "90", "105", "12", "1234.56"),
-			testExchangeKline(start.Add(time.Minute), start.Add(2*time.Minute-time.Millisecond), "105", "112", "101", "108", "8", "850"),
+		return []*binanceapi.Kline{
+			testBinanceKline(start, start.Add(time.Minute-time.Millisecond), 100, 110, 90, 105, 12, 1234.56),
+			testBinanceKline(start.Add(time.Minute), start.Add(2*time.Minute-time.Millisecond), 105, 112, 101, 108, 8, 850),
 		}, nil
 	}
 
@@ -66,11 +64,11 @@ func TestMarketDataAdapterUsesRuntimeKlineRequestTimeout(t *testing.T) {
 func TestMarketDataAdapterNormalizesBinanceIntervalWithoutChangingStoredFrequency(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	collector := NewKlineCollector()
-	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *binanceapi.KlineRequest) ([]*binanceapi.Kline, error) {
 		assert.Equal(t, "1h", params.Interval)
 		assert.Equal(t, "1h", req.Interval)
 		start := now.Add(-2 * time.Hour)
-		return []*exchange.Kline{testExchangeKline(start, start.Add(time.Hour-time.Millisecond), "100", "110", "90", "105", "12", "1234.56")}, nil
+		return []*binanceapi.Kline{testBinanceKline(start, start.Add(time.Hour-time.Millisecond), 100, 110, 90, 105, 12, 1234.56)}, nil
 	}
 
 	adapter := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSpot, KlineCollector: collector, Now: func() time.Time { return now }})
@@ -87,11 +85,11 @@ func TestMarketDataAdapterNormalizesBinanceIntervalWithoutChangingStoredFrequenc
 func TestMarketDataAdapterSupportsSwapHourlyRequestThroughRouter(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	collector := NewKlineCollector()
-	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	collector.fetchKlinePage = func(_ context.Context, params *sources.CollectParams, req *binanceapi.KlineRequest) ([]*binanceapi.Kline, error) {
 		assert.Equal(t, "SWAP", params.InstType)
 		assert.Equal(t, "1h", req.Interval)
 		start := now.Add(-2 * time.Hour)
-		return []*exchange.Kline{testExchangeKline(start, start.Add(time.Hour-time.Millisecond), "100", "110", "90", "105", "12", "1234.56")}, nil
+		return []*binanceapi.Kline{testBinanceKline(start, start.Add(time.Hour-time.Millisecond), 100, 110, 90, 105, 12, 1234.56)}, nil
 	}
 	adapter := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSwap, KlineCollector: collector, Now: func() time.Time { return now }})
 	registry := marketdata.NewRegistry()
@@ -110,15 +108,13 @@ func TestMarketDataAdapterSupportsSwapHourlyRequestThroughRouter(t *testing.T) {
 func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 	snapshotAt := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	collector := NewSymbolCollector()
-	collector.fetchSymbolPage = func(_ context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
+	collector.fetchSymbolPage = func(_ context.Context, params *sources.CollectParams) ([]*binanceapi.SymbolInfo, error) {
 		assert.Equal(t, InstTypeSPOT, params.InstType)
-		return []*exchange.SymbolInfo{
+		return []*binanceapi.SymbolInfo{
 			{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active", TradingStatus: "TRADING"},
 			{Symbol: "币安人生USDT", BaseAsset: "币安人生", QuoteAsset: "USDT", Status: "active", TradingStatus: "TRADING"},
-			// 非交易状态的交易对也带出来（交易状态检测与标签同步各自处理），状态在 TradingStatus 里。
 			{Symbol: "ETH-USDT", BaseAsset: "ETH", QuoteAsset: "USDT", Status: "inactive", TradingStatus: "BREAK"},
 			{Symbol: "XRP-BUSD", BaseAsset: "XRP", QuoteAsset: "BUSD", Status: "active", TradingStatus: "TRADING"},
-			// 同一标的出现两次（一条是已下架的旧交易对）：保留 TRADING 的那条。
 			{Symbol: "SOL-USDT", BaseAsset: "SOL", QuoteAsset: "USDT", Status: "inactive", TradingStatus: "BREAK"},
 			{Symbol: "SOL-USDT", BaseAsset: "SOL", QuoteAsset: "USDT", Status: "active", TradingStatus: "TRADING"},
 		}, nil
@@ -158,8 +154,8 @@ func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 func TestMarketDataAdapterRejectsSnapshotWhenSymbolsSkipped(t *testing.T) {
 	snapshotAt := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	collector := NewSymbolCollector()
-	collector.fetchSymbolPage = func(_ context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
-		return []*exchange.SymbolInfo{
+	collector.fetchSymbolPage = func(_ context.Context, params *sources.CollectParams) ([]*binanceapi.SymbolInfo, error) {
+		return []*binanceapi.SymbolInfo{
 			{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"},
 			{Symbol: "BAD USDT", BaseAsset: "BAD COIN", QuoteAsset: "USDT", Status: "active"},
 		}, nil
@@ -185,14 +181,14 @@ func TestMarketDataAdapterRejectsSnapshotWhenSymbolsSkipped(t *testing.T) {
 func TestKlineCollectorUsesOnePhysicalRequestPerFetcherCall(t *testing.T) {
 	collector := NewKlineCollector()
 	calls := 0
-	collector.fetchKlinePage = func(context.Context, *sources.CollectParams, *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	collector.fetchKlinePage = func(context.Context, *sources.CollectParams, *binanceapi.KlineRequest) ([]*binanceapi.Kline, error) {
 		calls++
-		return []*exchange.Kline{testExchangeKline(time.Unix(0, 0), time.Unix(59, 0), "1", "2", "1", "2", "3", "4")}, nil
+		return []*binanceapi.Kline{testBinanceKline(time.Unix(0, 0), time.Unix(59, 0), 1, 2, 1, 2, 3, 4)}, nil
 	}
 
 	klines, err := collector.fetchKlinesOnce(context.Background(), &sources.CollectParams{
 		InstType: InstTypeSPOT, Symbol: "BTCUSDT", Interval: "1m",
-	}, &exchange.KlineRequest{Symbol: "BTCUSDT", Interval: "1m", Limit: 1})
+	}, &binanceapi.KlineRequest{Symbol: "BTCUSDT", Interval: "1m", Limit: 1})
 
 	require.NoError(t, err)
 	assert.Len(t, klines, 1)
@@ -201,7 +197,7 @@ func TestKlineCollectorUsesOnePhysicalRequestPerFetcherCall(t *testing.T) {
 
 func TestFilterClosedKlinesExcludesOpenBar(t *testing.T) {
 	now := time.Date(2026, 8, 29, 1, 31, 30, 0, time.UTC)
-	closed, skipped := filterClosedKlines([]*market.Kline{
+	closed, skipped := filterClosedKlines([]*binanceapi.Kline{
 		{OpenTime: now.Add(-2 * time.Minute), CloseTime: now.Add(-time.Minute)},
 		{OpenTime: now.Add(-time.Minute), CloseTime: now.Add(time.Minute)},
 	}, now)
@@ -210,15 +206,15 @@ func TestFilterClosedKlinesExcludesOpenBar(t *testing.T) {
 	assert.Equal(t, 1, skipped)
 }
 
-func testExchangeKline(openTime, closeTime time.Time, open, high, low, close, volume, quoteVolume string) *exchange.Kline {
-	return &exchange.Kline{
+func testBinanceKline(openTime, closeTime time.Time, open, high, low, closePrice, volume, quoteVolume float64) *binanceapi.Kline {
+	return &binanceapi.Kline{
 		OpenTime:    openTime,
 		CloseTime:   closeTime,
-		Open:        common.NewDecimal(open),
-		High:        common.NewDecimal(high),
-		Low:         common.NewDecimal(low),
-		Close:       common.NewDecimal(close),
-		Volume:      common.NewDecimal(volume),
-		QuoteVolume: common.NewDecimal(quoteVolume),
+		Open:        open,
+		High:        high,
+		Low:         low,
+		Close:       closePrice,
+		Volume:      volume,
+		QuoteVolume: quoteVolume,
 	}
 }

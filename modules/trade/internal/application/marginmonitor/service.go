@@ -66,8 +66,12 @@ type Collect func(ctx context.Context, spaceID, logicalAccountID, idempotencyKey
 // 默认的快照最长允许年龄：账户同步间隔是 30 秒，超过这个时间没更新说明数据不可信，不据此减仓。
 const defaultMaxSnapshotAge = 3 * time.Minute
 
-// createdAtSlackMillis：操作记录的创建时间只精确到秒（向下取整），组合“恢复过”要比它晚一秒以上才算。
-const createdAtSlackMillis = 1000
+// marginActionAcknowledged 报告组合是否已显式确认了这次保证金风控减仓动作：
+// 恢复事务会原子写入当前最新风控动作号 c_acked_margin_action_id；
+// 仅按动作号精确匹配，不比较墙钟时间，杜绝同秒恢复失效或 NTP 时钟回拨导致的误确认。
+func marginActionAcknowledged(logical store.LogicalAccountRecord, action store.OperatorActionRecord) bool {
+	return logical.AckedMarginActionID != "" && logical.AckedMarginActionID == action.ActionID
+}
 
 // collectGiveUpAfter：风控减仓动作结束这么久、库里还没有它的任何归集记录，就不再归集。
 // “没有可归集资金”不落记录，进程内的“已处理”重启就丢；不设期限，重启后会对很久以前的减仓再归集一次，
@@ -328,7 +332,7 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	}
 	if last != nil {
 		if logical.ControlMode != "MANUAL" {
-			if logical.MarginReduceState != store.MarginReducePending && logical.ResumedAt <= last.CreatedAt.UnixMilli()+createdAtSlackMillis {
+			if logical.MarginReduceState != store.MarginReducePending && !marginActionAcknowledged(logical, *last) {
 				return nil
 			}
 		} else if reducedNothing(*last) && s.now().Sub(last.UpdatedAt) < emptyReduceRetry {
@@ -413,7 +417,7 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 		}
 		detail += reading.Describe()
 	}
-	actionID := store.MarginActionIDPrefix + logical.LogicalAccountID + "-" + s.now().UTC().Format("20060102T150405")
+	actionID := fmt.Sprintf("margin-%s-%s", logical.LogicalAccountID, s.now().UTC().Format("20060102T150405.000"))
 	_, err := s.Reduce(ctx, logical.SpaceID, actionID, logical.LogicalAccountID, settings.MarginReduceRatio, store.MarginPause(store.MarginReduced))
 	if errors.Is(err, operatorapp.ErrLogicalAccountBusy) {
 		// 减仓排不进去（有下架清仓在跑，或拿不到组合锁）：先把组合暂停停住，下一轮再试减仓。
@@ -450,8 +454,8 @@ func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalA
 	if err != nil || action == nil || action.Status == string(operatordomain.StatusRunning) {
 		return err
 	}
-	// 动作之后组合恢复过（用户确认安全后恢复，时间记在库里）：旧动作的归集不再做，下一次风控触发有新的动作号。
-	if logical.ResumedAt > action.CreatedAt.UnixMilli()+createdAtSlackMillis {
+	// 动作之后组合恢复过（用户确认安全后恢复，时间与已确认动作号记在库里）：旧动作的归集不再做，下一次风控触发有新的动作号。
+	if marginActionAcknowledged(logical, *action) {
 		return nil
 	}
 	s.mu.Lock()

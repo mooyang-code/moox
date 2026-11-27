@@ -31,8 +31,6 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     c_last_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_trading_account_id),
-    UNIQUE (c_space_id, c_name),
     CHECK (json_valid(c_leverage_settings_json)),
     CHECK (json_type(c_leverage_settings_json) = 'object'),
     CHECK (json_valid(c_fill_cursors_json)),
@@ -50,25 +48,35 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     CHECK (c_live_environment <> 'TESTNET' OR c_exchange <> 'binance' OR c_markets <> 'spot,swap'),
     CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
     CHECK (
-        (c_execution_mode = 'PAPER'
+        (
+            c_execution_mode = 'PAPER'
             AND c_live_environment = ''
-            AND c_credential_secret_id = '')
+            AND c_credential_secret_id = ''
+        )
         OR
         (
             c_execution_mode = 'LIVE'
             AND c_live_environment IN ('TESTNET', 'PRODUCTION')
             AND c_credential_secret_id <> ''
         )
-    )
+    ),
+    UNIQUE (c_space_id, c_name),
+    PRIMARY KEY (c_space_id, c_trading_account_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_trading_accounts_status
-ON t_trading_accounts (c_space_id, c_status);
-
+CREATE INDEX IF NOT EXISTS idx_trading_accounts_status ON t_trading_accounts (c_space_id, c_status);
 -- 一把密钥（交易所、环境、密钥 ID）全局只能有一个启用的实盘执行账户
 CREATE UNIQUE INDEX IF NOT EXISTS uk_trading_accounts_credential
 ON t_trading_accounts (c_exchange, c_live_environment, c_credential_secret_id)
 WHERE c_execution_mode = 'LIVE' AND c_status = 'ENABLED';
+CREATE UNIQUE INDEX IF NOT EXISTS uk_trading_accounts_id ON t_trading_accounts (c_trading_account_id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_trading_accounts_id
-ON t_trading_accounts (c_trading_account_id);
+CREATE TRIGGER IF NOT EXISTS trg_t_trading_accounts_mtime
+AFTER UPDATE ON t_trading_accounts
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_trading_accounts
+    SET c_mtime = CURRENT_TIMESTAMP
+    WHERE c_space_id = OLD.c_space_id AND c_trading_account_id = OLD.c_trading_account_id;
+END;

@@ -112,7 +112,7 @@ func TestDryRunPassesTargetLevelErrorsThrough(t *testing.T) {
 	settings, err := loadOrderSettings(logical)
 	require.NoError(t, err)
 	env := executor.newLaneEnv(ctx, "space-1", "logical-1", settings, members, desired)
-	action, complete, _, err := nextLaneAction("BTC-USDT-SPOT", desired["BTC-USDT-SPOT"], members)
+	action, complete, _, _, err := nextLaneAction("BTC-USDT-SPOT", desired["BTC-USDT-SPOT"], members)
 	require.NoError(t, err)
 	require.False(t, complete)
 

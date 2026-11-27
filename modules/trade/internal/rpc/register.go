@@ -2,7 +2,6 @@ package rpc
 
 import (
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
-	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	executionport "github.com/mooyang-code/moox/modules/trade/internal/execution"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -22,11 +21,13 @@ func RegisterAll(
 	if consoleService == nil {
 		panic("TradeConsoleService is not configured")
 	}
+	if accounts != nil && accounts.Logical == nil {
+		accounts.Logical = logicalAccounts
+	}
 	console := &ConsoleServer{
 		AccountServer: accounts, LogicalAccountServer: logicalAccounts,
 		ExecutionServer: execution, Store: accounts.Store,
 	}
-	console.Paper = options.Paper
 	console.LiveTradingEnabled = options.LiveTradingEnabled
 	console.MatcherReady = options.MatcherReady
 	console.Holdings = options.Holdings
@@ -39,7 +40,6 @@ func RegisterAll(
 }
 
 type ConsoleOptions struct {
-	Paper              *papersimulation.Service
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService

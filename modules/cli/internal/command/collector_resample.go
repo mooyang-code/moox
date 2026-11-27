@@ -81,7 +81,7 @@ func init() {
 	bind(collectorResampleJobsCmd, &resampleJobsFlags)
 	collectorResampleJobsCmd.Flags().StringVar(&resampleJobsFlags.TaskID, "task-id", "", "只看该合成任务的作业")
 	collectorResampleJobsCmd.Flags().StringVar(&resampleJobsFlags.JobID, "job-id", "", "作业 ID")
-	collectorResampleJobsCmd.Flags().StringVar(&resampleJobsFlags.Status, "status", "", "只看该状态：queued、running、syncing、succeeded、failed、cancelled")
+	collectorResampleJobsCmd.Flags().StringVar(&resampleJobsFlags.Status, "status", "", "只看该状态：queued、running、succeeded、failed、cancelled")
 	collectorResampleJobsCmd.Flags().Uint32Var(&resampleJobsFlags.Limit, "limit", 50, "最多列出多少个")
 	bind(collectorResampleCancelCmd, &resampleCancelFlags)
 	collectorResampleCancelCmd.Flags().StringVar(&resampleCancelFlags.JobID, "job-id", "", "作业 ID")

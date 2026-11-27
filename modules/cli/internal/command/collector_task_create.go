@@ -51,10 +51,7 @@ var collectorTaskCreateCmd = &cobra.Command{
 		if collectorTaskCreateFlagsValue.AllFields && cmd.Flags().Changed("output-field") {
 			return errors.New("--all-output-fields 不能与 --output-field 同时用")
 		}
-		if hint := collectorTaskCreateFieldsHint(collectorTaskCreateFlagsValue, cmd.Flags().Changed("output-field")); hint != "" {
-			fmt.Fprintln(cmd.ErrOrStderr(), hint)
-		}
-		return runCollectorTaskCreate(cmd.Context(), cmd.OutOrStdout(), collectorTaskCreateFlagsValue, true)
+		return runCollectorTaskCreate(cmd.Context(), cmd.OutOrStdout(), collectorTaskCreateFlagsValue, cmd.Flags().Changed("output-field"))
 	},
 }
 
@@ -71,15 +68,6 @@ func validateResampleCreateFlags(cmd *cobra.Command) error {
 	return nil
 }
 
-// collectorTaskCreateFieldsHint 在既没显式给 --output-field、也没带 --all-output-fields 时返回一句提示：
-// 这时用的是默认字段清单，不一定是这个品种行的字段。
-func collectorTaskCreateFieldsHint(flags collectorTaskCreateFlags, fieldsGiven bool) string {
-	if flags.AllFields || fieldsGiven {
-		return ""
-	}
-	return "提示：没有指定输出字段，用的是默认字段清单（" + strings.Join(flags.Fields, ",") + "）；要输出该品种行的全部字段请加 --all-output-fields。"
-}
-
 func init() {
 	collectorCmd.AddCommand(collectorTaskCmd)
 	collectorTaskCmd.AddCommand(collectorTaskCreateCmd)
@@ -91,15 +79,15 @@ func init() {
 	flags.StringSliceVar(&collectorTaskCreateFlagsValue.TagIDs, "tag-id", nil, "标的标签，可重复")
 	flags.StringVar(&collectorTaskCreateFlagsValue.Frequency, "frequency", "1m", "K 线频率；合成任务是目标周期，必须显式给出")
 	flags.StringVar(&collectorTaskCreateFlagsValue.SourceTaskID, "source-task-id", "", "建 K 线合成任务：源采集任务 ID（源数据集、源周期由服务端推导；先用 collector resample preview 看目标周期是否可行）")
-	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", []string{"close", "high", "low", "open", "quote_volume", "trade_num", "volume"}, "输出字段；默认值是现货、永续行的字段，股票任务用 --all-output-fields；合成任务不给就输出合成的全部固定字段")
-	flags.BoolVar(&collectorTaskCreateFlagsValue.AllFields, "all-output-fields", false, "不指定输出字段：输出该品种行的全部字段，与内置任务不写 output_fields 相同（股票任务用它）；不能与 --output-field 同时用")
+	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", nil, "输出字段（可重复）；不给时由服务端按市场或源数据集输出全部默认可采集/可合成列")
+	flags.BoolVar(&collectorTaskCreateFlagsValue.AllFields, "all-output-fields", false, "显式输出该品种行的全部默认字段（不传 --output-field 时默认亦如此）；不能与 --output-field 同时用")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Symbols, "symbols-per-function", 0, "定时模式下每个函数负责的标的数（0 为默认 50）")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Lateness, "allowed-lateness-seconds", 0, "结果数据集的允许迟到时间（0 为空间默认）")
 	flags.BoolVar(&collectorTaskCreateFlagsValue.Disabled, "disabled", false, "创建后保持停用")
 	flags.StringVar(&collectorTaskCreateFlagsValue.Ingest, "ingest", "", "采集方式：stream（collector-stream 接收推送）、scf（云函数定时拉取）或 local（collector-stream 本地定时拉取）；留空用市场默认值")
 }
 
-// fieldsGiven 只对合成任务有意义：没显式给 --output-field 时不发 output_fields，输出合成的全部固定字段（资金费率、股票附加字段不合成）。
+// fieldsGiven 表示调用方是否显式指定了 --output-field；未指定时不发 output_fields，由服务端按市场或源数据集列规则全量输出。
 func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorTaskCreateFlags, fieldsGiven bool) error {
 	resample := strings.TrimSpace(flags.SourceTaskID) != ""
 	if strings.TrimSpace(flags.SpaceID) == "" || strings.TrimSpace(flags.Name) == "" {
@@ -135,10 +123,10 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	return printJSON(out, map[string]any{"status": "created", "task_id": rsp.GetTaskId()})
 }
 
-// collectorTaskCreateParams 拼出建任务的采集参数。AllFields 为真时不带 output_fields（空表示该品种行的全部字段）。
+// collectorTaskCreateParams 拼出建任务的采集参数。未显式指定 Fields 或 AllFields 为真时不带 output_fields。
 func collectorTaskCreateParams(flags collectorTaskCreateFlags) map[string]any {
 	params := map[string]any{"subject_tags": stringsToAny(flags.TagIDs), "frequency": flags.Frequency}
-	if !flags.AllFields {
+	if !flags.AllFields && len(flags.Fields) > 0 {
 		params["output_fields"] = stringsToAny(flags.Fields)
 	}
 	if flags.Symbols > 0 {

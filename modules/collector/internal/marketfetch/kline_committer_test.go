@@ -67,7 +67,7 @@ func TestKlineCommitterWritesTheSameRowsAsTheSCFPipeline(t *testing.T) {
 	pipeline.DatasetID = requests[0].Request.DatasetID
 	payload, err := pipeline.Execute(context.Background(), requests[0].Request)
 	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus(), "%v", payload.GetItems())
+	require.Equal(t, "succeeded", payload.Status, "%v", payload.Items)
 
 	stream := &capturingPeriodStorage{}
 	committer := NewKlineCommitter(stream, plan.Market)

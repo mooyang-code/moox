@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -44,8 +44,17 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	db, err := store.Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db}, LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
-	created, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "external-paper", LogicalAccountName: "external-strategy", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY})
+	logicalSrv := &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}
+	console := &rpc.ConsoleServer{
+		Store:                db,
+		AccountServer:        &rpc.AccountServer{Store: db, Logical: logicalSrv, Accounts: &accountapp.Service{Store: accountapp.Repository{Store: db}}},
+		LogicalAccountServer: logicalSrv,
+	}
+	created, err := console.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
+		Name: "external-paper", LogicalAccountName: "external-strategy", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
+		Paper:       &tradepb.PaperConfig{InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
+		ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo())
 	logicalID, testAccount := created.GetLogicalAccount().GetLogicalAccountId(), created.GetAccount().GetTradingAccountId()

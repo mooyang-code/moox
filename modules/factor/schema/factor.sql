@@ -20,6 +20,14 @@ CREATE TABLE IF NOT EXISTS t_factor_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_tasks_source ON t_factor_tasks (c_space_id, c_source_dataset_id, c_freq, c_status);
 
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_tasks_mtime
+AFTER UPDATE OF c_name, c_source_dataset_id, c_freq, c_result_dataset_id, c_bound_instance_id, c_status ON t_factor_tasks
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE c_task_id = OLD.c_task_id;
+END;
+
 -- 因子分类（例如动量类、波动类）：只是元数据，用于因子库查找与按类展示
 CREATE TABLE IF NOT EXISTS t_factor_categories (
     c_category_id TEXT NOT NULL PRIMARY KEY,
@@ -29,7 +37,16 @@ CREATE TABLE IF NOT EXISTS t_factor_categories (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT OR IGNORE INTO t_factor_categories (c_category_id, c_name, c_sort_order) VALUES ('uncategorized', '未分类', 1000);
+INSERT OR IGNORE INTO t_factor_categories (c_category_id, c_name, c_sort_order)
+VALUES ('uncategorized', '未分类', 1000);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_categories_mtime
+AFTER UPDATE ON t_factor_categories
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_categories SET c_mtime = CURRENT_TIMESTAMP WHERE c_category_id = OLD.c_category_id;
+END;
 
 -- 因子定义：只描述算法，与因子任务无关，无运行状态。c_spec 是表达式定义文本（YAML），
 -- 因子类型、输入列、输出列与回看由编译 c_spec 派生，不落库
@@ -48,6 +65,14 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_defs_category ON t_factor_defs (c_category_id);
 
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_defs_mtime
+AFTER UPDATE ON t_factor_defs
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE c_factor_id = OLD.c_factor_id;
+END;
+
 -- 因子任务成员：定义在某个因子任务中的运行实例，身份是任务内唯一的成员键（因子 ID 加参数段），启停状态属于成员。
 -- 固定成员的参数在加成员时写定、之后不变；可变成员的默认参数写在 c_params，策略逐期提交的值记在 t_factor_member_params。
 CREATE TABLE IF NOT EXISTS t_factor_task_members (
@@ -60,11 +85,11 @@ CREATE TABLE IF NOT EXISTS t_factor_task_members (
     c_params TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_task_id, c_member_key),
     CHECK (c_kind IN ('fixed', 'var')),
     CHECK (c_status IN ('enabled', 'disabled')),
     FOREIGN KEY (c_task_id) REFERENCES t_factor_tasks (c_task_id),
-    FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT
+    FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT,
+    PRIMARY KEY (c_task_id, c_member_key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_task_members_task ON t_factor_task_members (c_task_id, c_status);
@@ -73,6 +98,14 @@ CREATE INDEX IF NOT EXISTS idx_t_factor_task_members_factor ON t_factor_task_mem
 CREATE UNIQUE INDEX IF NOT EXISTS ux_t_factor_task_members_var
 ON t_factor_task_members (c_task_id, c_factor_id)
 WHERE c_kind = 'var';
+
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_task_members_mtime
+AFTER UPDATE ON t_factor_task_members
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_task_members SET c_mtime = CURRENT_TIMESTAMP WHERE c_task_id = OLD.c_task_id AND c_member_key = OLD.c_member_key;
+END;
 
 -- 可变成员最近一次被接受的提交：运行状态，不属于配置（目录同步、目录指纹都不看它），只有一格，不保留提交历史。
 -- c_params 是各标的最近一次提交的参数（默认值加按标的覆盖的规范 JSON，按标的合并），c_period 是目标期（Unix 秒）
@@ -83,18 +116,19 @@ CREATE TABLE IF NOT EXISTS t_factor_member_params (
     c_period INTEGER NOT NULL DEFAULT 0,
     c_request_id TEXT NOT NULL DEFAULT '',
     c_submitted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_task_id, c_member_key),
-    FOREIGN KEY (c_task_id, c_member_key) REFERENCES t_factor_task_members (c_task_id, c_member_key) ON DELETE CASCADE
+    FOREIGN KEY (c_task_id, c_member_key) REFERENCES t_factor_task_members (c_task_id, c_member_key) ON DELETE CASCADE,
+    PRIMARY KEY (c_task_id, c_member_key)
 );
 
+-- 补算作业：记录异步补算请求的进度与终态，随所属因子任务级联删除，已完结历史由管理端定期清理
 CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_job_id TEXT NOT NULL PRIMARY KEY,
     c_request_id TEXT NOT NULL,
     c_task_id TEXT NOT NULL,
     c_members_json TEXT NOT NULL DEFAULT '[]',
     c_subjects_json TEXT NOT NULL DEFAULT '[]',
-    c_members_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_members_omitted IN (0, 1)),
-    c_subjects_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_subjects_omitted IN (0, 1)),
+    c_members_omitted INTEGER NOT NULL DEFAULT 0,
+    c_subjects_omitted INTEGER NOT NULL DEFAULT 0,
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'accepted',
@@ -105,13 +139,24 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_default_filled_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_members_omitted IN (0, 1)),
+    CHECK (c_subjects_omitted IN (0, 1)),
     CHECK (c_status IN ('accepted', 'running', 'succeeded', 'failed', 'cancelled')),
     CHECK (c_end_time > c_start_time),
+    FOREIGN KEY (c_task_id) REFERENCES t_factor_tasks (c_task_id) ON DELETE CASCADE,
     UNIQUE (c_request_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_status
-ON t_factor_recalc_jobs (c_status, c_mtime);
+CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_status ON t_factor_recalc_jobs (c_status, c_mtime);
+CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_task_ctime ON t_factor_recalc_jobs (c_task_id, c_ctime);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_recalc_jobs_mtime
+AFTER UPDATE ON t_factor_recalc_jobs
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_recalc_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_job_id = OLD.c_job_id;
+END;
 
 -- 自定义算子（wasm UDF）：名称指向当前启用的版本，空串表示还没有启用
 CREATE TABLE IF NOT EXISTS t_factor_udfs (
@@ -120,6 +165,14 @@ CREATE TABLE IF NOT EXISTS t_factor_udfs (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_udfs_mtime
+AFTER UPDATE ON t_factor_udfs
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_udfs SET c_mtime = CURRENT_TIMESTAMP WHERE c_name = OLD.c_name;
+END;
 
 -- 自定义算子的版本：不可变，主键是 wasm 字节的 sha256；c_manifest 含说明与示例（可随重复上传更新），
 -- c_source_ref 是私有仓库与提交号，c_report 是服务端一致性测试报告
@@ -157,52 +210,3 @@ CREATE TABLE IF NOT EXISTS t_factor_history_seeds (
     c_freq TEXT NOT NULL,
     PRIMARY KEY (c_space_id, c_dataset_id, c_freq)
 );
-
-CREATE TRIGGER IF NOT EXISTS trg_t_factor_tasks_mtime
-AFTER UPDATE OF c_name, c_source_dataset_id, c_freq, c_result_dataset_id, c_bound_instance_id, c_status ON t_factor_tasks
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_factor_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE c_task_id = OLD.c_task_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_t_factor_defs_mtime
-AFTER UPDATE ON t_factor_defs
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE c_factor_id = OLD.c_factor_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_t_factor_task_members_mtime
-AFTER UPDATE ON t_factor_task_members
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_factor_task_members SET c_mtime = CURRENT_TIMESTAMP
-    WHERE c_task_id = OLD.c_task_id AND c_member_key = OLD.c_member_key;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_t_factor_recalc_jobs_mtime
-AFTER UPDATE ON t_factor_recalc_jobs
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_factor_recalc_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_job_id = OLD.c_job_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_t_factor_categories_mtime
-AFTER UPDATE ON t_factor_categories
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_factor_categories SET c_mtime = CURRENT_TIMESTAMP WHERE c_category_id = OLD.c_category_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_t_factor_udfs_mtime
-AFTER UPDATE ON t_factor_udfs
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_factor_udfs SET c_mtime = CURRENT_TIMESTAMP WHERE c_name = OLD.c_name;
-END;

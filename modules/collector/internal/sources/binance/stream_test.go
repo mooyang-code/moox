@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
-	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
+	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/stream"
 	"github.com/stretchr/testify/require"
 )
@@ -53,11 +52,12 @@ func TestStreamNamesAndLimits(t *testing.T) {
 func TestStreamDecodeMatchesRESTNormalization(t *testing.T) {
 	received := time.Date(2025, 10, 21, 8, 0, 0, 231e6, time.UTC)
 	for _, test := range []struct {
-		market, file, symbol, sourceID, open, high, low, close, volume, quote string
-		trades                                                                int64
+		market, file, symbol, sourceID     string
+		open, high, low, close, vol, quote float64
+		trades                             int64
 	}{
-		{"spot", "spot_kline_final.json", "BTCUSDT", "spot_http", "108012.34000000", "108077.00000000", "107990.10000000", "108050.01000000", "12.34567000", "1333777.12345670", 1207},
-		{"swap", "swap_continuous_final.json", "BTCUSDT", "swap_http", "107980.1", "108040.0", "107950.0", "108020.5", "321.456", "34712345.6789", 1455},
+		{"spot", "spot_kline_final.json", "BTCUSDT", "spot_http", 108012.34, 108077.0, 107990.1, 108050.01, 12.34567, 1333777.1234567, 1207},
+		{"swap", "swap_continuous_final.json", "BTCUSDT", "swap_http", 107980.1, 108040.0, 107950.0, 108020.5, 321.456, 34712345.6789, 1455},
 	} {
 		events, err := testStreamSource(t, test.market).Decode(fixture(t, test.file), received)
 		require.NoError(t, err)
@@ -66,9 +66,9 @@ func TestStreamDecodeMatchesRESTNormalization(t *testing.T) {
 		require.Equal(t, stream.EventKlineFinal, event.Kind)
 		require.Equal(t, test.symbol, event.Symbol)
 
-		restKline := &market.Kline{OpenTime: time.UnixMilli(1761033540000), CloseTime: time.UnixMilli(1761033599999),
-			Open: common.NewDecimal(test.open), High: common.NewDecimal(test.high), Low: common.NewDecimal(test.low), Close: common.NewDecimal(test.close),
-			Volume: common.NewDecimal(test.volume), QuoteVolume: common.NewDecimal(test.quote), TradeCount: test.trades}
+		restKline := &binanceapi.Kline{OpenTime: time.UnixMilli(1761033540000), CloseTime: time.UnixMilli(1761033599999),
+			Open: test.open, High: test.high, Low: test.low, Close: test.close,
+			Volume: test.vol, QuoteVolume: test.quote, TradeCount: test.trades}
 		instrument := marketdata.InstrumentSpot
 		if test.market == "swap" {
 			instrument = marketdata.InstrumentSwap

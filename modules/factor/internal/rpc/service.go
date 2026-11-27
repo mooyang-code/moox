@@ -28,7 +28,7 @@ type CatalogAPI interface {
 	SetTaskStatus(ctx context.Context, taskID, status string) (domain.FactorTask, error)
 	DeleteTask(ctx context.Context, taskID string, purge bool) error
 	GetTask(ctx context.Context, taskID string) (domain.FactorTask, []domain.TaskMember, error)
-	ListTasks(ctx context.Context) ([]domain.FactorTask, error)
+	ListTasks(ctx context.Context, spaceID string) ([]domain.FactorTask, error)
 	CreateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error)
 	ImportCatalog(ctx context.Context, files []factorlib.File) ([]domain.FactorDef, error)
 	PurgeResultDataset(ctx context.Context, spaceID, datasetID string) error
@@ -280,18 +280,29 @@ func (s *Service) GetFactorTask(ctx context.Context, req *factorpb.GetFactorTask
 }
 
 func (s *Service) ListFactorTasks(ctx context.Context, req *factorpb.ListFactorTasksReq) (*factorpb.ListFactorTasksRsp, error) {
-	sets, err := s.catalog.ListTasks(ctx)
-	if err != nil {
-		return &factorpb.ListFactorTasksRsp{RetInfo: inner(err)}, nil
-	}
-	space, scoped, scopeErr := callerSpace(ctx)
+	headerSpace, scoped, scopeErr := callerSpace(ctx)
 	if scopeErr != nil {
 		return &factorpb.ListFactorTasksRsp{RetInfo: invalid(scopeErr)}, nil
 	}
+	reqSpace := ""
+	if req != nil {
+		reqSpace = strings.TrimSpace(req.GetSpaceId())
+	}
+	if scoped && reqSpace != "" && reqSpace != headerSpace {
+		return &factorpb.ListFactorTasksRsp{RetInfo: invalid(fmt.Errorf("space_id %q does not match the request space %q", reqSpace, headerSpace))}, nil
+	}
+	filterSpace := reqSpace
+	if scoped {
+		filterSpace = headerSpace
+	}
+	sets, err := s.catalog.ListTasks(ctx, filterSpace)
+	if err != nil {
+		return &factorpb.ListFactorTasksRsp{RetInfo: inner(err)}, nil
+	}
 	filtered := make([]domain.FactorTask, 0, len(sets))
 	for _, set := range sets {
-		if scoped && set.SpaceID != space {
-			continue // 只返回调用方所属空间的计算任务，分页在过滤之后
+		if filterSpace != "" && set.SpaceID != filterSpace {
+			continue // 只返回目标空间的计算任务，分页在过滤之后
 		}
 		if req == nil || req.GetStatus() == "" || set.Status == req.GetStatus() {
 			filtered = append(filtered, set)

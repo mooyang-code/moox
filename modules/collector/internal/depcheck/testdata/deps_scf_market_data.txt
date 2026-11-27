@@ -13,7 +13,6 @@ github.com/mooyang-code/moox/packages/gatewayclient
 github.com/mooyang-code/moox/packages/security/domainpolicy
 github.com/mooyang-code/moox/modules/collector/internal/httpclient
 github.com/mooyang-code/moox/modules/collector/internal/marketdata
-github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb
 github.com/mooyang-code/moox/modules/collector/config/markets
 github.com/mooyang-code/moox/packages/marketcalendar
 github.com/mooyang-code/moox/packages/barclock
@@ -41,10 +40,7 @@ github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn
 github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn
 github.com/mooyang-code/moox/modules/collector/internal/markets/stockhk
 github.com/mooyang-code/moox/modules/collector/internal/markets/stockus
-github.com/mooyang-code/moox/modules/collector/internal/model/common
-github.com/mooyang-code/moox/modules/collector/internal/model/market
 github.com/mooyang-code/moox/modules/collector/internal/sources
-github.com/mooyang-code/moox/modules/collector/internal/sources/exchange
 github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client
 github.com/mooyang-code/moox/modules/collector/proto/collectorgen
 github.com/mooyang-code/moox/modules/collector/internal/stream

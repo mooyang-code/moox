@@ -10,6 +10,7 @@ import (
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/spacecontext"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorname"
 )
@@ -102,14 +103,18 @@ const (
 	factorTaskMaxPages = 100
 )
 
-// ListFactorTaskIDs 分页列出 Factor 里现有的全部因子任务 ID。
+// ListFactorTaskIDs 分页列出 Factor 里现有的因子任务 ID；ctx 带空间身份时按空间过滤，避免跨空间扫描。
 func (c *RPCClient) ListFactorTaskIDs(ctx context.Context) (map[string]bool, error) {
 	if c == nil || c.Factor == nil {
 		return nil, errors.New("Factor 客户端未配置")
 	}
+	spaceID, _ := spacecontext.FromContext(ctx)
 	ids := map[string]bool{}
 	for page := uint32(1); page <= factorTaskMaxPages; page++ {
-		rsp, err := c.Factor.ListFactorTasks(ctx, &factorpb.ListFactorTasksReq{Page: &commonpb.Page{Page: page, Size: factorTaskPageSize}})
+		rsp, err := c.Factor.ListFactorTasks(ctx, &factorpb.ListFactorTasksReq{
+			SpaceId: spaceID,
+			Page:    &commonpb.Page{Page: page, Size: factorTaskPageSize},
+		})
 		if err != nil {
 			return nil, transport("列出因子任务", err)
 		}

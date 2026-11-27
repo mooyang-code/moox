@@ -1,4 +1,4 @@
-import type { CreatePaperSimulationReq, CreateTradingAccountReq, Exchange, MarketType } from "@/api/trade/types";
+import type { CreateTradingAccountReq, Exchange, LiveConfig, MarketType, PaperConfig } from "@/api/trade/types";
 import { isTradeSessionNotReady } from "@/api/trade";
 import type { Environment } from "@/components/trade-confirm/environment";
 import { DEFAULT_ORDER_RETENTION_DAYS, orderRetentionError } from "../shared/order-retention";
@@ -221,10 +221,10 @@ export function validateStep(form: CreateForm, step: number): string {
   return "";
 }
 
-export function buildPaperRequest(form: CreateForm): CreatePaperSimulationReq {
+export function buildPaperRequest(form: CreateForm): CreateTradingAccountReq & { paper: PaperConfig } {
   const swap = form.markets.includes("swap");
   return {
-    account_name: form.name.trim(),
+    name: form.name.trim(),
     // 新建组合：后端同时建组合；加入已有组合：后端在同一个事务里把新账户加进去，两者只给一个
     logical_account_name: form.join === "new" ? form.logicalName.trim() || form.name.trim() : "",
     logical_account_id: form.join === "exist" ? form.existingLogicalId : undefined,
@@ -233,16 +233,18 @@ export function buildPaperRequest(form: CreateForm): CreatePaperSimulationReq {
     markets: [...form.markets],
     settlement_asset: form.settlementAsset.trim().toUpperCase(),
     margin_mode: swap ? "CROSS" : "",
-    initial_balance: form.initialBalance.trim(),
-    // 股票场所只有一个佣金比例：挂单、吃单相同
-    maker_fee_rate: stockExchangeOf(form) ? form.takerFeeRate.trim() : form.makerFeeRate.trim(),
-    taker_fee_rate: form.takerFeeRate.trim(),
-    slippage_bps: form.slippageBps.trim(),
-    order_retention_days: Number(form.orderRetentionDays.trim())
+    paper: {
+      initial_balance: form.initialBalance.trim(),
+      // 股票场所只有一个佣金比例：挂单、吃单相同
+      maker_fee_rate: stockExchangeOf(form) ? form.takerFeeRate.trim() : form.makerFeeRate.trim(),
+      taker_fee_rate: form.takerFeeRate.trim(),
+      slippage_bps: form.slippageBps.trim(),
+      order_retention_days: Number(form.orderRetentionDays.trim())
+    }
   };
 }
 
-export function buildLiveRequest(form: CreateForm): CreateTradingAccountReq {
+export function buildLiveRequest(form: CreateForm): CreateTradingAccountReq & { live: LiveConfig } {
   return {
     name: form.name.trim(),
     exchange: form.exchange,

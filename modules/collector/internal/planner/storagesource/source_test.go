@@ -41,6 +41,7 @@ func TestDatasetSourceGetDatasetReturnsTagsAndValidationContract(t *testing.T) {
 	require.Equal(t, "binance", info.DataSourceID)
 	require.Equal(t, []string{"binance_spot"}, info.SubjectTags)
 	require.Equal(t, "spot", info.Attributes["market_type"])
+	require.Nil(t, info.ColumnTypes, "未实现 ListDatasetColumns 时保持 nil 以触发下游默认列兜底")
 }
 
 func TestDatasetSourceResolveSubjectsUsesStorageUnion(t *testing.T) {

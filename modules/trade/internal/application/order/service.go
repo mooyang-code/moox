@@ -143,11 +143,9 @@ func (s *Service) Place(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	// Paper reservations and the persisted MARKET execution price must use the
-	// side-executable quote, not a Last-only reference. Revalidate once with the
-	// fresh bid/ask so the reservation and matcher consume the same price.
-	if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
-		spec, err = s.paperReference(ctx, spec, validation)
+	// 按适配器的 OrderPolicy 决定是否需现查方向可执行价并重算预留，上层服务不感知模拟盘细节。
+	if orderPolicyOf(validation, nil).NeedsExecutableQuote() {
+		spec, err = s.adapterExecutableReference(ctx, spec, validation)
 		if err != nil {
 			return orderdomain.Order{}, err
 		}
@@ -198,8 +196,8 @@ func (s *Service) Place(
 			}
 		}
 		if !validation.ReservedQuantity.IsZero() {
-			if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
-				if err := checkPaperFunds(tx, validation, marginAdjustment, validation.ReservedQuantity, "", "", s.now()); err != nil {
+			if orderPolicyOf(validation, nil).UsesLocalFundsLedger() {
+				if err := checkLocalLedgerFunds(tx, validation, marginAdjustment, validation.ReservedQuantity, "", "", s.now()); err != nil {
 					return err
 				}
 				return tx.CreateOrder(record)
@@ -606,7 +604,8 @@ func (s *Service) cancel(
 		if accountErr != nil {
 			return orderdomain.Order{}, accountErr
 		}
-		if account.ExecutionMode == string(exchange.ExecutionModePaper) &&
+		policy := execution.ResolveOrderPolicy(adapter, tradingaccount.Account{ExecutionMode: exchange.ExecutionMode(account.ExecutionMode)})
+		if policy.ConfirmsCancelLocally() &&
 			response.Status == exchange.OrderStatusCanceled {
 			if confirmer, ok := s.Syncer.(CancelConfirmer); ok {
 				if confirmErr := confirmer.ConfirmCancel(ctx, record.SpaceID, record.OrderID); confirmErr != nil {
@@ -887,6 +886,7 @@ func (s *Service) ExpireUnknown(
 	applyAggregate(&record, current)
 	record.RemainingReservedQuantity = "0"
 	record.FinishedAt = s.now().UnixMilli()
+	record.RejectCode = string(orderdomain.RejectCodeManualExpire)
 	record.RejectReason = "提交结果一直未知，人工强制结束：" + strings.TrimSpace(reason)
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateOrder(record, expected)
@@ -1036,10 +1036,10 @@ func (s *Service) freshReference(
 	if err != nil {
 		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
 	}
-	if !paperQuoteFresh(quote, s.now(), maxAge) {
+	if !execution.QuoteWithinAge(quote, s.now(), maxAge) {
 		return spec, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
 	}
-	price, err := paperExecutablePrice(spec.Side, quote)
+	price, err := execution.ExecutableQuotePrice(spec.Side, quote)
 	if err != nil {
 		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
 	}
@@ -1149,10 +1149,10 @@ func (s *Service) prepareSubmit(
 		if quoteErr != nil {
 			return nil, aggregate, accountExecutionError(record.TradingAccountID, "quote", quoteErr)
 		}
-		if !paperQuoteFresh(quote, s.now(), validator.MaxReferenceAge) {
+		if !execution.QuoteWithinAge(quote, s.now(), validator.MaxReferenceAge) {
 			return nil, aggregate, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
 		}
-		price, priceErr := paperExecutablePrice(aggregate.Spec.Side, quote)
+		price, priceErr := execution.ExecutableQuotePrice(aggregate.Spec.Side, quote)
 		if priceErr != nil {
 			return nil, aggregate, accountExecutionError(record.TradingAccountID, "quote", priceErr)
 		}
@@ -1204,38 +1204,39 @@ func (s *Service) prepareSubmit(
 		aggregate.Spec.ReducePositionOnly
 	record.ReduceOnly = aggregate.Spec.ReducePositionOnly
 	oldReservedAsset, oldRemaining := record.ReservedAsset, record.RemainingReservedQuantity
-	if refreshedReference && validation.Account.ExecutionMode == exchange.ExecutionModePaper && aggregate.Spec.Type == exchange.OrderTypeMarket {
-		price := aggregate.Spec.ReferencePrice
+	policy := execution.ResolveOrderPolicy(adapter, validation.Account)
+	if refreshedReference && policy.UsesLocalFundsLedger() && aggregate.Spec.Type == exchange.OrderTypeMarket {
+		var previousExec *shared.Decimal
 		if record.PaperExecutionPrice != nil {
-			previous, parseErr := shared.ParseDecimal(*record.PaperExecutionPrice)
+			parsed, parseErr := shared.ParseDecimal(*record.PaperExecutionPrice)
 			if parseErr != nil {
 				return nil, aggregate, parseErr
 			}
-			reference, parseErr := shared.ParseDecimal(record.ReferencePrice)
-			if parseErr != nil || reference.Cmp(shared.Zero()) <= 0 {
-				return nil, aggregate, store.ErrInvalidRecord
-			}
-			// Preserve the slippage fixed at Place, even if account settings changed.
-			price = previous.Mul(price).Div(reference)
-		} else if validation.Account.Paper != nil {
-			price = paperExecutionPrice(price, aggregate.Spec.Side, validation.Account.Paper.SlippageBPS)
+			previousExec = &parsed
+		}
+		oldRef, parseErr := shared.ParseDecimal(record.ReferencePrice)
+		if parseErr != nil || oldRef.Cmp(shared.Zero()) <= 0 {
+			return nil, aggregate, store.ErrInvalidRecord
+		}
+		price, reservedQty, repriceErr := policy.RepriceMarketOrder(execution.RepriceRequest{
+			Account:                validation.Account,
+			Instrument:             validation.Instrument,
+			Side:                   aggregate.Spec.Side,
+			Quantity:               aggregate.Spec.Quantity,
+			NewReferencePrice:      aggregate.Spec.ReferencePrice,
+			OldReferencePrice:      oldRef,
+			PreviousExecutionPrice: previousExec,
+			ReduceOnly:             aggregate.Spec.ReducePositionOnly,
+			Leverage:               validation.Leverage,
+			DefaultFeeBuffer:       validator.FeeBufferRate,
+		})
+		if repriceErr != nil {
+			return nil, aggregate, repriceErr
 		}
 		raw := price.String()
 		record.PaperExecutionPrice = &raw
-		// Repricing preserves the original execution slippage. Reserve against
-		// that same price, not a newly edited account slippage setting.
-		feeRate := validator.FeeBufferRate
-		if validation.Account.Paper != nil {
-			feeRate = maxDecimal(validation.Account.Paper.MakerFeeRate, validation.Account.Paper.TakerFeeRate)
-		}
-		notional := aggregate.Spec.Quantity.Mul(price)
-		if exchange.RuleFor(validation.Instrument.MarketType).UsesMargin {
-			validation.ReservedQuantity = notional.Mul(feeRate)
-			if !aggregate.Spec.ReducePositionOnly {
-				validation.ReservedQuantity = validation.ReservedQuantity.Add(notional.Div(validation.Leverage))
-			}
-		} else if aggregate.Spec.Side == exchange.SideBuy {
-			validation.ReservedQuantity = buyReservation(validation.Account, validation.Instrument.MarketType, notional, feeRate)
+		if !reservedQty.IsZero() || exchange.RuleFor(validation.Instrument.MarketType).UsesMargin || aggregate.Spec.Side == exchange.SideBuy {
+			validation.ReservedQuantity = reservedQty
 		}
 	}
 	if releaseReservationForReduction || refreshedReference || retryRepriced {
@@ -1246,13 +1247,13 @@ func (s *Service) prepareSubmit(
 	applyAggregate(&record, aggregate)
 	record.SubmittedAt = s.now().UnixMilli()
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
+		if policy.UsesLocalFundsLedger() {
 			required, err := shared.ParseDecimal(record.RemainingReservedQuantity)
 			if err != nil {
 				return err
 			}
 			if !required.IsZero() {
-				if err := checkPaperFunds(tx, validation, marginAdjustment, required, oldReservedAsset, oldRemaining, s.now()); err != nil {
+				if err := checkLocalLedgerFunds(tx, validation, marginAdjustment, required, oldReservedAsset, oldRemaining, s.now()); err != nil {
 					return err
 				}
 			}
@@ -1376,6 +1377,7 @@ func (s *Service) deliverSubmit(
 		err = current.MarkSubmitUnknown()
 	default:
 		err = current.Reject()
+		latest.RejectCode = string(rejectCodeForError(callErr))
 		latest.RejectReason = exchange.RejectMessage(callErr)
 	}
 	if err != nil {
@@ -1480,6 +1482,7 @@ func (s *Service) rejectPending(
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, current)
+	record.RejectCode = string(rejectCodeForError(cause))
 	record.RejectReason = exchange.RejectMessage(cause)
 	record.RemainingReservedQuantity = "0"
 	record.FinishedAt = s.now().UnixMilli()
@@ -1519,6 +1522,37 @@ func permanentValidationError(err error) bool {
 	return false
 }
 
+func rejectCodeForError(err error) orderdomain.RejectCode {
+	switch {
+	case err == nil:
+		return orderdomain.RejectCodeNone
+	case errors.Is(err, execution.ErrOutOfSession):
+		return orderdomain.RejectCodeOutOfSession
+	case errors.Is(err, ErrInsufficientFunds):
+		return orderdomain.RejectCodeInsufficientFunds
+	case errors.Is(err, ErrReduceOnly):
+		return orderdomain.RejectCodeReduceOnly
+	case errors.Is(err, ErrQuantityRule):
+		return orderdomain.RejectCodeQuantityRule
+	case errors.Is(err, ErrNotionalLimit):
+		return orderdomain.RejectCodeNotionalLimit
+	case errors.Is(err, ErrLeverageLimit):
+		return orderdomain.RejectCodeLeverageLimit
+	case errors.Is(err, ErrInstrumentDisabled), errors.Is(err, ErrInstrumentHalted):
+		return orderdomain.RejectCodeInstrumentDisabled
+	case errors.Is(err, ErrPriceLimit):
+		return orderdomain.RejectCodePriceLimit
+	case errors.Is(err, orderdomain.ErrInvalidSpec):
+		return orderdomain.RejectCodeInvalidSpec
+	case errors.Is(err, ErrCrossZero):
+		return orderdomain.RejectCodeCrossZero
+	case errors.Is(err, ErrAccountOwnership):
+		return orderdomain.RejectCodeAccountOwnership
+	default:
+		return orderdomain.RejectCodeExchangeRejected
+	}
+}
+
 func orderRecord(validation Validation, value orderdomain.Order) store.OrderRecord {
 	instrumentID := validation.Instrument.InstrumentID
 	exchangeSymbol := validation.Instrument.ExchangeSymbol
@@ -1529,6 +1563,11 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 	if value.Spec.LimitPrice != nil {
 		raw := value.Spec.LimitPrice.String()
 		limitPrice = &raw
+	}
+	var paperExecutionPrice *string
+	if validation.ExecutionPrice != nil {
+		raw := validation.ExecutionPrice.String()
+		paperExecutionPrice = &raw
 	}
 	record := store.OrderRecord{
 		SpaceID: validation.Account.SpaceID, OrderID: string(value.ID),
@@ -1552,53 +1591,11 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 		ReservedAsset:             validation.ReservedAsset,
 		ReservedQuantity:          validation.ReservedQuantity.String(),
 		RemainingReservedQuantity: validation.ReservedQuantity.String(),
+		PaperExecutionPrice:       paperExecutionPrice,
+		FirstMatchPending:         validation.FirstMatchPending,
 		Version:                   value.Version,
 	}
-	if validation.Account.ExecutionMode == exchange.ExecutionModePaper {
-		if value.Spec.Type == exchange.OrderTypeMarket {
-			price := value.Spec.ReferencePrice
-			if validation.Account.Paper != nil {
-				price = paperExecutionPrice(price, value.Spec.Side, validation.Account.Paper.SlippageBPS)
-			}
-			raw := price.String()
-			record.PaperExecutionPrice = &raw
-		}
-		record.FirstMatchPending = value.Spec.Type == exchange.OrderTypeMarket ||
-			value.Spec.Type == exchange.OrderTypeLimit
-	}
 	return record
-}
-
-func paperExecutionPrice(reference shared.Decimal, side exchange.Side, slippage shared.Decimal) shared.Decimal {
-	if slippage.Cmp(shared.Zero()) <= 0 {
-		return reference
-	}
-	factor := shared.MustDecimal("1").Add(slippage.Div(shared.MustDecimal("10000")))
-	if side == exchange.SideSell {
-		factor = shared.MustDecimal("1").Sub(slippage.Div(shared.MustDecimal("10000")))
-	}
-	return reference.Mul(factor)
-}
-
-func paperExecutablePrice(side exchange.Side, quote execution.MarketQuote) (shared.Decimal, error) {
-	if side != exchange.SideBuy && side != exchange.SideSell {
-		return shared.Decimal{}, errors.New("trade order: paper order side is required")
-	}
-	price := quote.Ask
-	if side == exchange.SideSell {
-		price = quote.Bid
-	}
-	if price.IsZero() {
-		price = quote.Last
-	}
-	if price.Cmp(shared.Zero()) <= 0 {
-		return shared.Decimal{}, errors.New("trade order: paper executable quote is empty")
-	}
-	return price, nil
-}
-
-func paperQuoteFresh(quote execution.MarketQuote, now time.Time, maxAge time.Duration) bool {
-	return !quote.SourceTime.IsZero() && !quote.SourceTime.After(now) && now.Sub(quote.SourceTime) <= maxAge
 }
 
 func domainOrder(record store.OrderRecord) (orderdomain.Order, error) {

@@ -20,11 +20,11 @@ type StreamWorker struct {
 }
 
 type streamWorkerRow struct {
-	SpaceID     string    `gorm:"column:c_space_id;primaryKey"`
-	InstanceID  string    `gorm:"column:c_instance_id"`
-	Applied     string    `gorm:"column:c_applied"`
-	Status      string    `gorm:"column:c_status"`
-	HeartbeatAt time.Time `gorm:"column:c_heartbeat_at"`
+	SpaceID     string `gorm:"column:c_space_id;primaryKey"`
+	InstanceID  string `gorm:"column:c_instance_id"`
+	Applied     string `gorm:"column:c_applied"`
+	Status      string `gorm:"column:c_status"`
+	HeartbeatAt int64  `gorm:"column:c_heartbeat_at"`
 }
 
 func (streamWorkerRow) TableName() string { return "t_collector_stream_workers" }
@@ -41,7 +41,7 @@ func (r *StreamWorkerRepository) Heartbeat(ctx context.Context, worker StreamWor
 	if r == nil || r.db == nil {
 		return fmt.Errorf("stream worker repository is not initialized")
 	}
-	row := streamWorkerRow{SpaceID: strings.ToLower(worker.SpaceID), InstanceID: worker.InstanceID, Applied: worker.Applied, Status: worker.Status, HeartbeatAt: worker.HeartbeatAt.UTC()}
+	row := streamWorkerRow{SpaceID: strings.ToLower(worker.SpaceID), InstanceID: worker.InstanceID, Applied: worker.Applied, Status: worker.Status, HeartbeatAt: toUnixMilli(worker.HeartbeatAt)}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_space_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_instance_id", "c_applied", "c_status", "c_heartbeat_at"})}).Create(&row).Error
 }
 
@@ -58,5 +58,5 @@ func (r *StreamWorkerRepository) Get(ctx context.Context, spaceID string) (*Stre
 	if result.RowsAffected == 0 {
 		return nil, nil
 	}
-	return &StreamWorker{SpaceID: row.SpaceID, InstanceID: row.InstanceID, Applied: row.Applied, Status: row.Status, HeartbeatAt: row.HeartbeatAt}, nil
+	return &StreamWorker{SpaceID: row.SpaceID, InstanceID: row.InstanceID, Applied: row.Applied, Status: row.Status, HeartbeatAt: fromUnixMilli(row.HeartbeatAt)}, nil
 }

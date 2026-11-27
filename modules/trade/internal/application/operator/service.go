@@ -416,6 +416,10 @@ func (s *Service) createManualAction(
 		return store.OperatorActionRecord{}, ErrServiceConfig
 	}
 	expected.CreatedAt = s.clock().UTC()
+	expected.UpdatedAt = expected.CreatedAt
+	if expected.Source == "" {
+		expected.Source = string(operatordomain.SourceUser)
+	}
 	deadline := command.DeadlineAt
 	if deadline == 0 {
 		deadline = s.manualDeadlineFrom(expected.CreatedAt)
@@ -945,6 +949,7 @@ func (s *Service) updateAction(
 	ctx context.Context,
 	action store.OperatorActionRecord,
 ) error {
+	action.UpdatedAt = s.clock().UTC()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {

@@ -5,13 +5,24 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/stretchr/testify/require"
 )
+
+func seedRecalcParentTask(t *testing.T, s *Store, taskID string) {
+	t.Helper()
+	task := testTask(taskID, domain.TaskStatusEnabled)
+	task.Name = taskID
+	task.ResultDatasetID = "dataset_factor_" + taskID
+	require.NoError(t, s.CreateTask(context.Background(), task))
+}
 
 func TestRecalcJobRequestIDIsIdempotent(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
+	seedRecalcParentTask(t, s, "task_prices")
 	first, err := s.CreateRecalcJob(ctx, RecalcJob{
 		JobID: "job-first", RequestID: "request-1", TaskID: "task_prices",
 		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
@@ -33,6 +44,7 @@ func TestConcurrentRecalcJobRequestIDIsIdempotent(t *testing.T) {
 	secondStore, err := Open(&Options{Path: path, MaxOpenConns: 2})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, firstStore.Close()); require.NoError(t, secondStore.Close()) })
+	seedRecalcParentTask(t, firstStore, "set")
 
 	jobs := []RecalcJob{
 		{JobID: "job-a", RequestID: "request-race", TaskID: "set", Members: []string{"a"}, Subjects: []string{"BTC"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
@@ -53,6 +65,7 @@ func TestConcurrentDifferentRecalcPayloadConflicts(t *testing.T) {
 	secondStore, err := Open(&Options{Path: path, MaxOpenConns: 2})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, firstStore.Close()); require.NoError(t, secondStore.Close()) })
+	seedRecalcParentTask(t, firstStore, "set")
 	jobs := []RecalcJob{
 		{JobID: "job-a", RequestID: "request-conflict", TaskID: "set", Members: []string{"a"}, StartTime: 1, EndTime: 2},
 		{JobID: "job-b", RequestID: "request-conflict", TaskID: "set", Members: []string{"b"}, StartTime: 1, EndTime: 2},
@@ -93,6 +106,7 @@ func concurrentCreate(t *testing.T, firstStore, secondStore *Store, jobs []Recal
 func TestUpdateRecalcProgressAndCancel(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
+	seedRecalcParentTask(t, s, "task_prices")
 	job, err := s.CreateRecalcJob(ctx, RecalcJob{
 		JobID: "job-1", RequestID: "request-1", TaskID: "task_prices",
 		StartTime: 100, EndTime: 500, Status: RecalcStatusAccepted,
@@ -135,6 +149,8 @@ func TestUpdateRecalcProgressAndCancel(t *testing.T) {
 func TestListRecalcJobsFiltersTaskAndStatuses(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
+	seedRecalcParentTask(t, s, "set")
+	seedRecalcParentTask(t, s, "other")
 	for _, job := range []RecalcJob{
 		{JobID: "job-a", RequestID: "req-a", TaskID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusAccepted},
 		{JobID: "job-b", RequestID: "req-b", TaskID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
@@ -161,6 +177,7 @@ func TestRecalcJobPersistsAcrossStoreReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "factor.db")
 	s, err := Open(&Options{Path: path})
 	require.NoError(t, err)
+	seedRecalcParentTask(t, s, "task_prices")
 	job, err := s.CreateRecalcJob(context.Background(), RecalcJob{
 		JobID: "job-1", RequestID: "request-1", TaskID: "task_prices",
 		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
@@ -174,4 +191,90 @@ func TestRecalcJobPersistsAcrossStoreReopen(t *testing.T) {
 	got, err := s.GetRecalcJob(context.Background(), job.JobID)
 	require.NoError(t, err)
 	require.Equal(t, job, got)
+}
+
+func TestRecalcJobSchemaForeignKeyCascadeAndIndex(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	// 外键约束拒绝引用不存在的 c_task_id。
+	_, err := s.CreateRecalcJob(ctx, RecalcJob{
+		JobID: "job-orphan", RequestID: "req-orphan", TaskID: "task_missing",
+		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
+	})
+	require.Error(t, err)
+
+	// 删除因子任务时级联清理其补算作业记录。
+	task := testTask("task_cascade", domain.TaskStatusDisabled)
+	task.Name, task.ResultDatasetID = "task_cascade", "dataset_factor_cascade"
+	require.NoError(t, s.CreateTask(ctx, task))
+	_, err = s.CreateRecalcJob(ctx, RecalcJob{
+		JobID: "job-cascade", RequestID: "req-cascade", TaskID: "task_cascade",
+		StartTime: 100, EndTime: 200, Status: RecalcStatusSucceeded,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.DeleteTask(ctx, "task_cascade"))
+	jobs, err := s.ListRecalcJobs(ctx, RecalcJobFilter{TaskID: "task_cascade"})
+	require.NoError(t, err)
+	require.Empty(t, jobs)
+
+	// 验证 (c_task_id, c_ctime) 复合索引存在。
+	var indexCols []string
+	require.NoError(t, s.db.Raw(`SELECT name FROM pragma_index_info('idx_t_factor_recalc_jobs_task_ctime') ORDER BY seqno`).Scan(&indexCols).Error)
+	require.Equal(t, []string{"c_task_id", "c_ctime"}, indexCols)
+}
+
+func TestPruneRecalcJobsRespectsRetentionPerTaskCapAndActiveJobs(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	seedRecalcParentTask(t, s, "task_a")
+	seedRecalcParentTask(t, s, "task_b")
+
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	insertJob := func(jobID, taskID, status string, ctime, mtime string) {
+		t.Helper()
+		_, err := s.CreateRecalcJob(ctx, RecalcJob{
+			JobID: jobID, RequestID: "req-" + jobID, TaskID: taskID,
+			StartTime: 100, EndTime: 200, Status: status,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.db.Exec(
+			`UPDATE t_factor_recalc_jobs SET c_ctime = ?, c_mtime = ? WHERE c_job_id = ?`,
+			ctime, mtime, jobID,
+		).Error)
+	}
+
+	// task_a: 2 条过期已完结（覆盖 RFC3339Nano 与 SQLite DATETIME 两种格式）、3 条窗口内已完结、2 条活跃作业（即使过期也不能删）。
+	insertJob("a_expired_rfc", "task_a", RecalcStatusSucceeded, now.Add(-40*time.Hour).Format(time.RFC3339Nano), now.Add(-35*time.Hour).Format(time.RFC3339Nano))
+	insertJob("a_expired_sql", "task_a", RecalcStatusFailed, now.Add(-38*time.Hour).Format("2006-01-02 15:04:05"), now.Add(-30*time.Hour).Format("2006-01-02 15:04:05"))
+	insertJob("a_recent_1", "task_a", RecalcStatusCancelled, now.Add(-10*time.Hour).Format(time.RFC3339Nano), now.Add(-10*time.Hour).Format(time.RFC3339Nano))
+	insertJob("a_recent_2", "task_a", RecalcStatusSucceeded, now.Add(-5*time.Hour).Format(time.RFC3339Nano), now.Add(-5*time.Hour).Format(time.RFC3339Nano))
+	insertJob("a_recent_3", "task_a", RecalcStatusFailed, now.Add(-1*time.Hour).Format(time.RFC3339Nano), now.Add(-1*time.Hour).Format(time.RFC3339Nano))
+	insertJob("a_accepted_old", "task_a", RecalcStatusAccepted, now.Add(-50*time.Hour).Format(time.RFC3339Nano), now.Add(-50*time.Hour).Format(time.RFC3339Nano))
+	insertJob("a_running_old", "task_a", RecalcStatusRunning, now.Add(-45*time.Hour).Format(time.RFC3339Nano), now.Add(-45*time.Hour).Format(time.RFC3339Nano))
+
+	// task_b: 2 条窗口内已完结，应按任务独立保留。
+	insertJob("b_recent_1", "task_b", RecalcStatusSucceeded, now.Add(-6*time.Hour).Format(time.RFC3339Nano), now.Add(-6*time.Hour).Format(time.RFC3339Nano))
+	insertJob("b_recent_2", "task_b", RecalcStatusCancelled, now.Add(-2*time.Hour).Format(time.RFC3339Nano), now.Add(-2*time.Hour).Format(time.RFC3339Nano))
+
+	deleted, err := s.PruneRecalcJobs(ctx, now, 24*time.Hour, 2)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), deleted, "应删除 task_a 的 2 条过期已完结和 1 条超出每任务上限的旧已完结作业")
+
+	taskAJobs, err := s.ListRecalcJobs(ctx, RecalcJobFilter{TaskID: "task_a"})
+	require.NoError(t, err)
+	var taskAIDs []string
+	for _, job := range taskAJobs {
+		taskAIDs = append(taskAIDs, job.JobID)
+	}
+	require.ElementsMatch(t, []string{"a_recent_3", "a_recent_2", "a_accepted_old", "a_running_old"}, taskAIDs)
+
+	taskBJobs, err := s.ListRecalcJobs(ctx, RecalcJobFilter{TaskID: "task_b"})
+	require.NoError(t, err)
+	require.Len(t, taskBJobs, 2)
+
+	// 再次执行幂等（不再删除任何记录）。
+	deleted, err = s.PruneRecalcJobs(ctx, now, 24*time.Hour, 2)
+	require.NoError(t, err)
+	require.Zero(t, deleted)
 }

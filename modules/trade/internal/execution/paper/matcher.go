@@ -11,29 +11,18 @@ import (
 	"unicode"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
 )
 
-// InfrastructureError marks shared storage failures originating in a callback.
-type InfrastructureError struct{ Err error }
-
-func (e InfrastructureError) Error() string        { return e.Err.Error() }
-func (e InfrastructureError) Unwrap() error        { return e.Err }
-func (e InfrastructureError) infrastructureFault() {}
-
-func IsInfrastructureError(err error) bool {
-	var infrastructure interface{ infrastructureFault() }
-	return errors.As(err, &infrastructure)
-}
-
 func storageError(err error) error {
 	if err == nil || errors.Is(err, store.ErrInvalidRecord) || errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	return InfrastructureError{Err: err}
+	return execution.InfrastructureError{Err: err}
 }
 
 type CandidateError struct {
@@ -46,16 +35,17 @@ func (e *CandidateError) Unwrap() error { return e.Err }
 
 var errStaleCandidate = errors.New("paper matcher: stale candidate")
 
-// OutOfSessionReason 是休市后撤掉没撮合过的订单时写的原因；目标执行器据此不把它算作一次伪市价尝试。
-const OutOfSessionReason = "不在交易时段"
+// OutOfSessionReason 是休市后撤掉没撮合过的订单时写的展示原因；状态机判断统一看 orderdomain.RejectCodeOutOfSession。
+const OutOfSessionReason = execution.ReasonOutOfSession
 
 var errBusyCandidate = errors.New("paper matcher: account is busy")
 
 type Decision struct {
-	Rest   bool
-	Cancel bool
-	Reason string
-	Fill   exchange.Fill
+	Rest       bool
+	Cancel     bool
+	RejectCode orderdomain.RejectCode
+	Reason     string
+	Fill       exchange.Fill
 }
 type MatchReducer interface {
 	ApplyFillToOrderTx(context.Context, *store.Tx, store.OrderRecord, exchange.Fill, consumer.Source) error
@@ -81,7 +71,44 @@ type Matcher struct {
 	pendingRefresh map[string]map[filledTarget]struct{}
 	// failedRefresh 是刷新快照失败的账户涉及的目标，账户恢复（会话核对后已刷新快照）时再唤醒。
 	failedRefresh map[string]map[filledTarget]struct{}
+	// stateSubs 订阅撮合器与各模拟账户健康状态变化，用于会话事件唤醒（取代固定轮询）。
+	stateSubsMu sync.Mutex
+	stateSubs   map[chan struct{}]struct{}
 }
+
+// SubscribeState 订阅模拟撮合器就绪状态与账户故障/恢复变化；返回的通道在每次状态变更时收到非阻塞信号。
+func (m *Matcher) SubscribeState() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	if m == nil {
+		return ch, func() {}
+	}
+	m.stateSubsMu.Lock()
+	if m.stateSubs == nil {
+		m.stateSubs = make(map[chan struct{}]struct{})
+	}
+	m.stateSubs[ch] = struct{}{}
+	m.stateSubsMu.Unlock()
+	return ch, func() {
+		m.stateSubsMu.Lock()
+		delete(m.stateSubs, ch)
+		m.stateSubsMu.Unlock()
+	}
+}
+
+func (m *Matcher) notifyState() {
+	if m == nil {
+		return
+	}
+	m.stateSubsMu.Lock()
+	for ch := range m.stateSubs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	m.stateSubsMu.Unlock()
+}
+
 type MatcherState struct {
 	Ready      bool
 	LastError  string
@@ -126,6 +153,7 @@ func (m *Matcher) RecoverAccount(accountID string, generation uint64) {
 	}
 	m.accounts[accountID] = state
 	m.accountsMu.Unlock()
+	m.notifyState()
 
 	m.pendingMu.Lock()
 	targets := m.failedRefresh[accountID]
@@ -140,7 +168,6 @@ func (m *Matcher) RecoverAccount(accountID string, generation uint64) {
 
 func (m *Matcher) failAccount(accountID string, err error, orderID ...string) {
 	m.accountsMu.Lock()
-	defer m.accountsMu.Unlock()
 	if m.accounts == nil {
 		m.accounts = make(map[string]MatcherState)
 	}
@@ -162,6 +189,8 @@ func (m *Matcher) failAccount(accountID string, err error, orderID ...string) {
 	}
 	state.Generation++
 	m.accounts[accountID] = state
+	m.accountsMu.Unlock()
+	m.notifyState()
 }
 
 func boundedMatcherError(err error) string {
@@ -180,7 +209,9 @@ func boundedMatcherError(err error) string {
 
 func (m *Matcher) SetReady(v bool) {
 	if m != nil {
-		m.ready.Store(v)
+		if m.ready.Swap(v) != v {
+			m.notifyState()
+		}
 	}
 }
 func (m *Matcher) Ready() bool { return m != nil && m.ready.Load() }
@@ -260,7 +291,7 @@ func (m *Matcher) Scan(ctx context.Context) error {
 						cancel()
 						continue
 					}
-					decision = Decision{Cancel: true, Reason: OutOfSessionReason}
+					decision = Decision{Cancel: true, RejectCode: orderdomain.RejectCodeOutOfSession, Reason: OutOfSessionReason}
 				} else if m.DecideContext != nil {
 					decision, err = m.DecideContext(candidateCtx, candidate)
 				}
@@ -285,7 +316,7 @@ func (m *Matcher) Scan(ctx context.Context) error {
 				}
 				if err != nil {
 					var candidateError *CandidateError
-					if IsInfrastructureError(err) || !errors.As(err, &candidateError) {
+					if execution.IsInfrastructureError(err) || !errors.As(err, &candidateError) {
 						return err
 					}
 					m.failAccount(candidate.TradingAccountID, err, candidate.OrderID)
@@ -430,7 +461,7 @@ func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, d
 			return tx.ClearFirstMatchPending(current, candidate.Version)
 		}
 		if decision.Cancel {
-			return tx.CancelPaperOrder(current, candidate.Version, decision.Reason)
+			return tx.CancelPaperOrder(current, candidate.Version, decision.RejectCode, decision.Reason)
 		}
 		if current.ReduceOnly {
 			ok, err := tx.CanFillReduceOnly(current)
@@ -438,11 +469,11 @@ func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, d
 				return err
 			}
 			if !ok {
-				return tx.CancelPaperOrder(current, candidate.Version, "paper reduce-only capacity changed")
+				return tx.CancelPaperOrder(current, candidate.Version, orderdomain.RejectCodeReduceOnly, "paper reduce-only capacity changed")
 			}
 		}
 		if m.Reducer == nil {
-			return tx.CancelPaperOrder(current, candidate.Version, "paper matcher reducer is not configured")
+			return tx.CancelPaperOrder(current, candidate.Version, orderdomain.RejectCodeUnknown, "paper matcher reducer is not configured")
 		}
 		err = m.Reducer.ApplyFillToOrderTx(ctx, tx, current, decision.Fill, consumer.Source{
 			SpaceID: current.SpaceID, TradingAccountID: current.TradingAccountID,

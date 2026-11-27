@@ -291,7 +291,6 @@ components:
       - from: modules/collector/config/app.yaml
       - from: modules/collector/config/trpc_go.yaml
       - from: config/setup/collection-tasks.yaml
-      - {from: modules/collector/configs/sources/market/binance.yaml, to: sources/market/binance.yaml}
     after: [host-gateway, admin, eventbus, storage-primary]
     credentials: ["eventbus:collector-eventbus", cls]
     health:
@@ -437,7 +436,6 @@ components:
     config_files:
       - from: modules/collector/config/stream/app.yaml
       - from: modules/collector/config/stream/trpc_go.yaml
-      - {from: modules/collector/configs/sources/market/binance.yaml, to: sources/market/binance.yaml}
     after: [host-gateway, collector, storage-primary]
     credentials: [cls]
     health:
@@ -987,8 +985,6 @@ components:
             read_only: true
           - name: ListPositions
             read_only: true
-          - name: CreatePaperSimulation
-          - name: ClosePaperSimulation
           - name: GetExecutionCapabilities
             read_only: true
           - name: ListTradableInstruments

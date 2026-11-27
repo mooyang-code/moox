@@ -145,3 +145,30 @@ func TestSnapshotMarksSourceSeedingAndHashesIt(t *testing.T) {
 	require.False(t, sets[0].SourceSeeding)
 	require.Equal(t, base, released)
 }
+
+// SnapshotWithExisting 返回全量现存任务 ID（含停用任务），且删除已停用的任务会改变目录指纹，确保引擎感知删除并清理本地状态。
+func TestSnapshotWithExistingTracksDisabledAndDeletedTasks(t *testing.T) {
+	hub, db, _ := newTestHub(t)
+	ctx := context.Background()
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	seedTask(t, db, "task_b", map[string]string{"bias": domain.MemberStatusDisabled})
+	require.NoError(t, db.SetTaskStatus(ctx, "task_b", domain.TaskStatusEnabled, domain.TaskStatusDisabled))
+
+	hashWithDisabled, notModified, sets, existing, err := hub.SnapshotWithExisting(ctx, "")
+	require.NoError(t, err)
+	require.False(t, notModified)
+	require.Len(t, sets, 1)
+	require.Equal(t, "task_a", sets[0].Set.TaskID)
+	require.Equal(t, []string{"task_a", "task_b"}, existing)
+
+	// 删除已停用的 task_b 后：启用任务集合未变，但 existing_task_ids 与 catalog_hash 都必须变化。
+	require.NoError(t, db.RemoveMember(ctx, "task_b", "bias"))
+	require.NoError(t, db.DeleteTask(ctx, "task_b"))
+
+	hashAfterDelete, notModified, sets, existing, err := hub.SnapshotWithExisting(ctx, hashWithDisabled)
+	require.NoError(t, err)
+	require.False(t, notModified, "删除已停用任务必须使旧 catalog_hash 失效")
+	require.NotEqual(t, hashWithDisabled, hashAfterDelete)
+	require.Len(t, sets, 1)
+	require.Equal(t, []string{"task_a"}, existing)
+}

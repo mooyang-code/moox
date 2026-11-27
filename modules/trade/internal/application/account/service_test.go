@@ -250,7 +250,7 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 	service := Service{Store: store, Secrets: &fakeSecrets{secret: validSecret()}, Inspector: okInspector}
 	name := "renamed"
 
-	got, err := service.Update(context.Background(), UpdateCommand{
+	got, _, err := service.Update(context.Background(), UpdateCommand{
 		TradingAccountID: before.ID,
 		Name:             &name,
 	})
@@ -284,7 +284,7 @@ func TestUpdateEnablingProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *
 		},
 	}
 
-	_, err := service.Update(context.Background(), UpdateCommand{
+	_, _, err := service.Update(context.Background(), UpdateCommand{
 		TradingAccountID: value.ID,
 		Status:           &status,
 	})
@@ -305,7 +305,7 @@ func TestUpdateDisablingProductionAccountIsAllowedWhileLiveTradingIsDisabled(t *
 	status := exchange.AccountStatusDisabled
 	service := Service{Store: store}
 
-	got, err := service.Update(context.Background(), UpdateCommand{
+	got, _, err := service.Update(context.Background(), UpdateCommand{
 		TradingAccountID: value.ID,
 		Status:           &status,
 	})
@@ -686,7 +686,7 @@ func TestUpdateRejectsDisablingAccountStillInLogicalAccount(t *testing.T) {
 	status := exchange.AccountStatusDisabled
 	service := Service{Store: store}
 
-	_, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, Status: &status})
+	_, _, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, Status: &status})
 	if !errors.Is(err, ErrAccountInLogicalAccount) {
 		t.Fatalf("Update() error = %v, want ErrAccountInLogicalAccount", err)
 	}
@@ -694,7 +694,7 @@ func TestUpdateRejectsDisablingAccountStillInLogicalAccount(t *testing.T) {
 		t.Fatalf("Update() writes = %d, want 0", store.updateCalls)
 	}
 	delete(store.memberships, value.ID)
-	if _, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, Status: &status}); err != nil {
+	if _, _, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, Status: &status}); err != nil {
 		t.Fatalf("Update() after removal error = %v", err)
 	}
 }
