@@ -79,7 +79,8 @@ func TestRunChecksIdentityThenHosts(t *testing.T) {
 		{Name: "host:overseas", Status: "valid"},
 	}, result.Checks)
 	assert.Equal(t, 1, identity.calls)
-	assert.Equal(t, []string{"control", "overseas"}, sshChecker.calls)
+	// checkHosts 并发检查各主机，仅保证 result.Checks 输出顺序与拓扑一致，SSH 调用到达顺序不固定。
+	assert.ElementsMatch(t, []string{"control", "overseas"}, sshChecker.calls)
 }
 
 func TestRunStopsBeforeSSHWhenIdentityFails(t *testing.T) {
