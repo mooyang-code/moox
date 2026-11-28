@@ -183,13 +183,13 @@ func (c Catalog) ValidateTopology(t Topology) error {
 		if component.Scope == ScopeControl && p.HostID != t.ControlHostID {
 			return fmt.Errorf("control component %q cannot be placed on %q", component.ID, p.HostID)
 		}
-		if (component.Protected || component.Scope == ScopeHost) && p.Status != Enabled {
+		if (component.IsProtected() || component.Scope == ScopeHost) && p.Status != Enabled {
 			return fmt.Errorf("protected or host component %q cannot be disabled", component.ID)
 		}
 		if p.Status != Enabled {
 			continue
 		}
-		if component.Scope != ScopeHost && component.Replicas == Single {
+		if component.Scope != ScopeHost {
 			if previous := singles[component.ID]; previous != "" {
 				return fmt.Errorf("single component %q is enabled on both %q and %q", component.ID, previous, p.HostID)
 			}
@@ -206,7 +206,7 @@ func (c Catalog) ValidateTopology(t Topology) error {
 		}
 	}
 	for _, component := range c.Components {
-		if component.Protected && component.Scope == ScopeControl {
+		if component.IsProtected() && component.Scope == ScopeControl {
 			if _, ok := deployments[t.ControlHostID+"/"+component.ID]; !ok {
 				return fmt.Errorf("protected component %q is missing on control", component.ID)
 			}
@@ -298,10 +298,7 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 			if service.Port == 0 {
 				continue
 			}
-			limit := service.MaxBodyBytes
-			if limit == 0 {
-				limit = DefaultMaxBodyBytes
-			}
+			limit := service.BodyLimit()
 			for _, method := range service.Methods {
 				if callers := c.routeCallers(method); len(callers) > 0 {
 					compiled.Routes = append(compiled.Routes, Route{ComponentID: component.ID, ServicePath: service.Path, Method: method.Name, Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMS: service.TimeoutFor(method.Name), MaxBodyBytes: limit, ReadOnly: method.ReadOnly, Callers: callers})
@@ -409,6 +406,11 @@ func (r RelayTarget) Allowed(caller string, port int) bool {
 		}
 	}
 	return false
+}
+
+// MethodCallers 返回方法的全部有效调用方（operators 展开后与 callers 合并并排序）。
+func (c Catalog) MethodCallers(method Method) []string {
+	return c.routeCallers(method)
 }
 
 // routeCallers 是网关上这条路由的调用方：人操作身份按 operators，其余照 callers（含外部身份）。

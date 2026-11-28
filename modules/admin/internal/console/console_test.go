@@ -14,51 +14,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHTTPRequestHandler_ParseRequestParams_ValidPath_ShouldReturnServiceAndMethod(t *testing.T) {
-	h := NewHTTPRequestHandler()
+func TestParseRequestParams_ValidPath_ShouldReturnServiceAndMethod(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/login", nil)
 	req = mux.SetURLVars(req, map[string]string{"service": "auth", "method": "login"})
 
-	serviceID, method, err := h.parseRequestParams(req)
+	serviceID, method, err := parseRequestParams(req)
 	require.NoError(t, err)
 	assert.Equal(t, "auth", serviceID)
 	assert.Equal(t, "login", method)
 }
 
-func TestHTTPRequestHandler_ParseRequestParams_MissingService_ShouldError(t *testing.T) {
-	h := NewHTTPRequestHandler()
+func TestParseRequestParams_MissingService_ShouldError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/admin//login", nil)
 	req = mux.SetURLVars(req, map[string]string{"method": "login"})
 
-	_, _, err := h.parseRequestParams(req)
+	_, _, err := parseRequestParams(req)
 	require.Error(t, err)
 }
 
-func TestHTTPRequestHandler_ReadRequestBodyWithRaw_QueryDoesNotBecomeRPCBody(t *testing.T) {
-	h := NewHTTPRequestHandler()
+func TestReadRequestBody_QueryDoesNotBecomeRPCBody(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/auth/login?foo=bar&baz=1", nil)
 
-	raw, body, err := h.readRequestBodyWithRaw(req)
+	body, err := readRequestBody(req)
 	require.NoError(t, err)
-	assert.Empty(t, raw)
-
 	assert.Empty(t, body)
 }
 
-func TestHTTPRequestHandler_ReadRequestBodyWithRaw_ReturnsExactBodyAndIgnoresQuery(t *testing.T) {
-	h := NewHTTPRequestHandler()
+func TestReadRequestBody_ReturnsExactBodyAndIgnoresQuery(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/login?foo=query", strings.NewReader(`{"foo":"body"}`))
 
-	raw, body, err := h.readRequestBodyWithRaw(req)
+	body, err := readRequestBody(req)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"foo":"body"}`, string(raw))
-
-	assert.Equal(t, raw, body)
+	assert.JSONEq(t, `{"foo":"body"}`, string(body))
 }
 
 // 透传给下游的请求头只有 trace、压缩与空间；用户、令牌、来源 IP 一律不从请求头取。
-func TestHTTPRequestHandler_ExtractGatewayHeaders_ShouldCollectHeaders(t *testing.T) {
-	h := NewHTTPRequestHandler()
+func TestExtractGatewayHeaders_ShouldCollectHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.Header.Set("X-Access-Token", "token-1")
 	req.Header.Set("X-Trace-Id", "trace-1")
@@ -67,15 +58,14 @@ func TestHTTPRequestHandler_ExtractGatewayHeaders_ShouldCollectHeaders(t *testin
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("X-Space-Id", "space-1")
 
-	headers := h.extractGatewayHeaders(req)
+	headers := extractGatewayHeaders(req)
 	assert.Equal(t, map[string]string{"trace_id": "trace-1", "accept_encoding": "gzip", "space_id": "space-1"}, headers)
 }
 
 func TestHandleGatewayRequest_InvalidParams_ShouldReturnBadRequest(t *testing.T) {
-	h := NewHTTPRequestHandler()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/", nil)
 	req = mux.SetURLVars(req, map[string]string{"service": "auth", "method": ""})
-	_, _, err := h.parseRequestParams(req)
+	_, _, err := parseRequestParams(req)
 	require.Error(t, err)
 }
 

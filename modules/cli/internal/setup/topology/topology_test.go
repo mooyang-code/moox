@@ -339,10 +339,10 @@ control = ["collector"]
 	}
 	declared, err := cfg.Declared()
 	require.NoError(t, err)
-	for _, host := range declared.Hosts {
-		require.Equal(t, host.HostID == "factor", host.Disabled, host.HostID)
-		if host.HostID == "control" {
-			require.Equal(t, []string{"collector"}, host.DisabledComponents)
+	for _, host := range declared.GetHosts() {
+		require.Equal(t, host.GetHostId() != "factor", host.GetEnabled(), host.GetHostId())
+		if host.GetHostId() == "control" {
+			require.Equal(t, []string{"collector"}, host.GetDisabledComponentIds())
 		}
 	}
 }

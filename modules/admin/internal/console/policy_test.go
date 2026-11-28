@@ -8,147 +8,112 @@ import (
 )
 
 func TestMethodSpacePolicyThreeTierMatrix(t *testing.T) {
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+
 	cases := []struct {
 		service string
 		method  string
-		want    spacePolicy
+		want    string
 	}{
 		// 全局服务
-		{"auth", "Login", spacePolicyGlobal},
-		{"ssh", "SftpList", spacePolicyGlobal},
-		{"secret", "ListSecrets", spacePolicyGlobal},
-		{"sysdeploy", "ListHosts", spacePolicyGlobal},
-		{"monitor", "GetHealthOverview", spacePolicyGlobal},
-		{"eventbus", "GetOverview", spacePolicyGlobal},
+		{"auth", "Login", servicecatalog.SpacePolicyGlobal},
+		{"ssh", "SftpList", servicecatalog.SpacePolicyGlobal},
+		{"secret", "ListSecrets", servicecatalog.SpacePolicyGlobal},
+		{"sysdeploy", "ListHosts", servicecatalog.SpacePolicyGlobal},
+		{"monitor", "GetHealthOverview", servicecatalog.SpacePolicyGlobal},
 
 		// Storage 全局方法 vs 空间内方法
-		{"storage", "ListSpaces", spacePolicyGlobal},
-		{"storage", "CreateSpace", spacePolicyGlobal},
-		{"storage", "UpdateSpace", spacePolicyGlobal},
-		{"storage", "DeleteSpace", spacePolicyGlobal},
-		{"storage", "ListDatasets", spacePolicyRequired},
-		{"storage", "QueryTimeSeriesRows", spacePolicyRequired},
+		{"storage", "ListSpaces", servicecatalog.SpacePolicyGlobal},
+		{"storage", "CreateSpace", servicecatalog.SpacePolicyGlobal},
+		{"storage", "UpdateSpace", servicecatalog.SpacePolicyGlobal},
+		{"storage", "DeleteSpace", servicecatalog.SpacePolicyGlobal},
+		{"storage", "ListDatasets", servicecatalog.SpacePolicyRequired},
+		{"storage", "QueryTimeSeriesRows", servicecatalog.SpacePolicyRequired},
 
 		// Collector 全局方法 vs 空间内方法
-		{"collector", "ListCloudAccounts", spacePolicyGlobal},
-		{"collector", "CreateCloudAccount", spacePolicyGlobal},
-		{"collector", "UpdateCloudAccount", spacePolicyGlobal},
-		{"collector", "DeleteCloudAccount", spacePolicyGlobal},
-		{"collector", "ListCloudRegions", spacePolicyGlobal},
-		{"collector", "GetDataTypeConfigs", spacePolicyGlobal},
-		{"collector", "GetDataTypeConfigWithFields", spacePolicyGlobal},
-		{"collector", "ListSubjectListers", spacePolicyGlobal},
-		{"collector", "RegisterDelistNotice", spacePolicyGlobal},
-		{"collector", "GetLifecycle", spacePolicyGlobal},
-		{"collector", "ControlLifecycle", spacePolicyGlobal},
-		{"collector", "GetTaskList", spacePolicyRequired},
-		{"collector", "ListFunctionPackages", spacePolicyRequired},
-		{"collector", "ListCloudFunctions", spacePolicyRequired},
+		{"collector", "ListCloudAccounts", servicecatalog.SpacePolicyGlobal},
+		{"collector", "CreateCloudAccount", servicecatalog.SpacePolicyGlobal},
+		{"collector", "UpdateCloudAccount", servicecatalog.SpacePolicyGlobal},
+		{"collector", "DeleteCloudAccount", servicecatalog.SpacePolicyGlobal},
+		{"collector", "ListCloudRegions", servicecatalog.SpacePolicyGlobal},
+		{"collector", "GetDataTypeConfigs", servicecatalog.SpacePolicyGlobal},
+		{"collector", "GetDataTypeConfigWithFields", servicecatalog.SpacePolicyGlobal},
+		{"collector", "ListSubjectListers", servicecatalog.SpacePolicyGlobal},
+		{"collector", "RegisterDelistNotice", servicecatalog.SpacePolicyGlobal},
+		{"collector", "GetLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"collector", "ControlLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"collector", "GetTaskList", servicecatalog.SpacePolicyRequired},
+		{"collector", "ListFunctionPackages", servicecatalog.SpacePolicyRequired},
+		{"collector", "ListCloudFunctions", servicecatalog.SpacePolicyRequired},
 
 		// Trade 全局方法 vs 空间内方法
-		{"trade", "InspectExchangeCredential", spacePolicyGlobal},
-		{"trade", "ListBlockedInstruments", spacePolicyGlobal},
-		{"trade", "UnblockInstrument", spacePolicyGlobal},
-		{"trade", "ListInstrumentHolders", spacePolicyGlobal},
-		{"trade", "ListDelists", spacePolicyGlobal},
-		{"trade", "GetLifecycle", spacePolicyGlobal},
-		{"trade", "ControlLifecycle", spacePolicyGlobal},
-		{"trade", "ListLogicalAccounts", spacePolicyRequired},
-		{"trade", "ListTradingAccounts", spacePolicyRequired},
-		{"trade", "ListOrders", spacePolicyRequired},
+		{"trade", "InspectExchangeCredential", servicecatalog.SpacePolicyGlobal},
+		{"trade", "ListBlockedInstruments", servicecatalog.SpacePolicyGlobal},
+		{"trade", "UnblockInstrument", servicecatalog.SpacePolicyGlobal},
+		{"trade", "ListInstrumentHolders", servicecatalog.SpacePolicyGlobal},
+		{"trade", "ListDelists", servicecatalog.SpacePolicyGlobal},
+		{"trade", "GetLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"trade", "ControlLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"trade", "ListLogicalAccounts", servicecatalog.SpacePolicyRequired},
+		{"trade", "ListTradingAccounts", servicecatalog.SpacePolicyRequired},
+		{"trade", "ListOrders", servicecatalog.SpacePolicyRequired},
 
 		// Strategy 全局 / space_optional / space_required
-		{"strategy", "CreateStrategy", spacePolicyGlobal},
-		{"strategy", "UpdateStrategy", spacePolicyGlobal},
-		{"strategy", "ListStrategies", spacePolicyGlobal},
-		{"strategy", "DeleteStrategy", spacePolicyGlobal},
-		{"strategy", "GetLifecycle", spacePolicyGlobal},
-		{"strategy", "ControlLifecycle", spacePolicyGlobal},
-		{"strategy", "GetStrategy", spacePolicyOptional},
-		{"strategy", "ValidateStrategy", spacePolicyOptional},
-		{"strategy", "ListStrategyInstances", spacePolicyRequired},
-		{"strategy", "CreateStrategyInstance", spacePolicyRequired},
-		{"strategy", "ListStrategyResults", spacePolicyRequired},
-		{"strategy", "ListReplays", spacePolicyRequired},
-		{"strategy", "ListReplayBars", spacePolicyRequired},
+		{"strategy", "CreateStrategy", servicecatalog.SpacePolicyGlobal},
+		{"strategy", "UpdateStrategy", servicecatalog.SpacePolicyGlobal},
+		{"strategy", "ListStrategies", servicecatalog.SpacePolicyGlobal},
+		{"strategy", "DeleteStrategy", servicecatalog.SpacePolicyGlobal},
+		{"strategy", "GetLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"strategy", "ControlLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"strategy", "GetStrategy", servicecatalog.SpacePolicyOptional},
+		{"strategy", "ValidateStrategy", servicecatalog.SpacePolicyOptional},
+		{"strategy", "ListStrategyInstances", servicecatalog.SpacePolicyRequired},
+		{"strategy", "CreateStrategyInstance", servicecatalog.SpacePolicyRequired},
+		{"strategy", "ListStrategyResults", servicecatalog.SpacePolicyRequired},
+		{"strategy", "ListReplays", servicecatalog.SpacePolicyRequired},
+		{"strategy", "ListReplayBars", servicecatalog.SpacePolicyRequired},
 
 		// ActivityLog space_optional
-		{"activity", "ListActivityLogs", spacePolicyOptional},
+		{"activity", "ListActivityLogs", servicecatalog.SpacePolicyOptional},
 
 		// FactorMgr 全局 / space_optional / space_required
-		{"factor-mgr", "CreateFactor", spacePolicyGlobal},
-		{"factor-mgr", "UpdateFactor", spacePolicyGlobal},
-		{"factor-mgr", "DeleteFactor", spacePolicyGlobal},
-		{"factor-mgr", "ValidateFactorSpec", spacePolicyGlobal},
-		{"factor-mgr", "ListFactorFunctions", spacePolicyGlobal},
-		{"factor-mgr", "ListFactorCategories", spacePolicyGlobal},
-		{"factor-mgr", "UpsertFactorCategory", spacePolicyGlobal},
-		{"factor-mgr", "DeleteFactorCategory", spacePolicyGlobal},
-		{"factor-mgr", "SetFactorCategory", spacePolicyGlobal},
-		{"factor-mgr", "GetStatus", spacePolicyGlobal},
-		{"factor-mgr", "PublishUdf", spacePolicyGlobal},
-		{"factor-mgr", "ListUdfs", spacePolicyGlobal},
-		{"factor-mgr", "GetUdf", spacePolicyGlobal},
-		{"factor-mgr", "ActivateUdf", spacePolicyGlobal},
-		{"factor-mgr", "GetLifecycle", spacePolicyGlobal},
-		{"factor-mgr", "ControlLifecycle", spacePolicyGlobal},
-		{"factor-mgr", "ListFactorTasks", spacePolicyOptional},
-		{"factor-mgr", "ListFactors", spacePolicyOptional},
-		{"factor-mgr", "GetFactor", spacePolicyOptional},
-		{"factor-mgr", "CreateFactorTask", spacePolicyRequired},
-		{"factor-mgr", "DeleteFactorTask", spacePolicyRequired},
-		{"factor-mgr", "AddTaskMember", spacePolicyRequired},
-		{"factor-mgr", "RecalcFactors", spacePolicyRequired},
-		{"factor-mgr", "PreviewFactor", spacePolicyRequired},
+		{"factor-mgr", "CreateFactor", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "UpdateFactor", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "DeleteFactor", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "ImportFactorCatalog", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "ValidateFactorSpec", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "ListFactorFunctions", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "ListFactorCategories", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "UpsertFactorCategory", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "DeleteFactorCategory", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "SetFactorCategory", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "GetStatus", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "PublishUdf", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "ListUdfs", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "GetUdf", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "ActivateUdf", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "GetLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "ControlLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"factor-mgr", "ListFactorTasks", servicecatalog.SpacePolicyOptional},
+		{"factor-mgr", "ListFactors", servicecatalog.SpacePolicyOptional},
+		{"factor-mgr", "GetFactor", servicecatalog.SpacePolicyOptional},
+		{"factor-mgr", "CreateFactorTask", servicecatalog.SpacePolicyRequired},
+		{"factor-mgr", "DeleteFactorTask", servicecatalog.SpacePolicyRequired},
+		{"factor-mgr", "AddTaskMember", servicecatalog.SpacePolicyRequired},
+		{"factor-mgr", "RecalcFactors", servicecatalog.SpacePolicyRequired},
+		{"factor-mgr", "PreviewFactor", servicecatalog.SpacePolicyRequired},
 
 		// Archive 全局 / space_required
-		{"archive", "GetLifecycle", spacePolicyGlobal},
-		{"archive", "ControlLifecycle", spacePolicyGlobal},
-		{"archive", "GetArchiveOverview", spacePolicyRequired},
-		{"archive", "ListArchiveTasks", spacePolicyRequired},
+		{"archive", "GetLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"archive", "ControlLifecycle", servicecatalog.SpacePolicyGlobal},
+		{"archive", "GetArchiveOverview", servicecatalog.SpacePolicyRequired},
+		{"archive", "ListArchiveTasks", servicecatalog.SpacePolicyRequired},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.service+"/"+tc.method, func(t *testing.T) {
-			require.Equal(t, tc.want, methodSpacePolicy(tc.service, tc.method))
+			require.Equal(t, tc.want, methodSpacePolicy(catalog, tc.service, tc.method))
 		})
-	}
-}
-
-// 策略表里的每个方法都必须存在于内嵌服务目录中，且不能同时被标成 global 和 space_optional。
-func TestSpacePolicyTablesMatchCatalog(t *testing.T) {
-	catalog, err := servicecatalog.LoadEmbedded()
-	require.NoError(t, err)
-
-	catalogMethods := map[string]map[string]bool{}
-	for _, component := range catalog.Components {
-		for _, service := range component.Services {
-			if service.ConsoleName == "" {
-				continue
-			}
-			if catalogMethods[service.ConsoleName] == nil {
-				catalogMethods[service.ConsoleName] = map[string]bool{}
-			}
-			for _, method := range service.Methods {
-				catalogMethods[service.ConsoleName][method.Name] = true
-			}
-		}
-	}
-
-	for serviceID := range globalServices {
-		require.Contains(t, catalogMethods, serviceID, "globalServices[%s] 不在 catalog.yaml 中", serviceID)
-	}
-	for serviceID, methods := range globalMethods {
-		require.NotContains(t, globalServices, serviceID, "%s 已在 globalServices，不应重复列在 globalMethods", serviceID)
-		for method := range methods {
-			require.True(t, catalogMethods[serviceID][method], "globalMethods[%s][%s] 不在 catalog.yaml 中", serviceID, method)
-			require.False(t, optionalSpaceMethods[serviceID][method], "%s/%s 不能同时出现在 globalMethods 与 optionalSpaceMethods", serviceID, method)
-		}
-	}
-	for serviceID, methods := range optionalSpaceMethods {
-		require.NotContains(t, globalServices, serviceID, "%s 已在 globalServices，不应重复列在 optionalSpaceMethods", serviceID)
-		for method := range methods {
-			require.True(t, catalogMethods[serviceID][method], "optionalSpaceMethods[%s][%s] 不在 catalog.yaml 中", serviceID, method)
-		}
 	}
 }

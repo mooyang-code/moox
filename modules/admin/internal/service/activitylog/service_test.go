@@ -55,7 +55,7 @@ func TestAppendIsIdempotentByDedupKey(t *testing.T) {
 	}
 	listed, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{})
 	require.NoError(t, err)
-	require.EqualValues(t, 5, listed.GetPage().GetTotal())
+	require.EqualValues(t, 5, listed.GetPageResult().GetTotal())
 }
 
 func TestAppendValidatesEntries(t *testing.T) {
@@ -91,13 +91,13 @@ func TestListFiltersAndPaginatesNewestFirst(t *testing.T) {
 
 	page1, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{SpaceId: "crypto", Page: &pb.Page{Page: 1, Size: 2}})
 	require.NoError(t, err)
-	require.EqualValues(t, 5, page1.GetPage().GetTotal())
-	require.True(t, page1.GetPage().GetHasMore())
+	require.EqualValues(t, 5, page1.GetPageResult().GetTotal())
+	require.True(t, page1.GetPageResult().GetHasMore())
 	require.Equal(t, []string{"事件 4", "事件 3"}, []string{page1.GetItems()[0].GetTitle(), page1.GetItems()[1].GetTitle()})
 	page3, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{SpaceId: "crypto", Page: &pb.Page{Page: 3, Size: 2}})
 	require.NoError(t, err)
 	require.Len(t, page3.GetItems(), 1)
-	require.False(t, page3.GetPage().GetHasMore())
+	require.False(t, page3.GetPageResult().GetHasMore())
 
 	byCategory, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{SpaceId: "crypto", Category: "collector.fetch_plan_applied"})
 	require.NoError(t, err)

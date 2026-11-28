@@ -126,7 +126,7 @@ async function load() {
     });
     if (!request.isLatest()) return;
     items.value = data.items || [];
-    total.value = Number(data.page?.total) || items.value.length;
+    total.value = Number(data.page_result?.total) || items.value.length;
     loadError.value = "";
   } catch (error) {
     if (!request.isLatest()) return;

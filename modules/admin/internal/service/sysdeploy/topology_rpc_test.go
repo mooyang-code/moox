@@ -69,8 +69,35 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.Equal(t, "control", catalog.GetControlHostId())
 	sum := sha256.Sum256([]byte(catalog.GetCatalogYaml()))
 	require.Equal(t, hex.EncodeToString(sum[:]), catalog.GetSha256())
-	_, err = servicecatalog.Decode(bytes.NewBufferString(catalog.GetCatalogYaml()))
+	decodedCatalog, err := servicecatalog.Decode(bytes.NewBufferString(catalog.GetCatalogYaml()))
 	require.NoError(t, err)
+	structured := catalog.GetCatalog()
+	require.NotNil(t, structured)
+	require.EqualValues(t, decodedCatalog.Version, structured.GetVersion())
+	require.Len(t, structured.GetIdentities(), len(decodedCatalog.Identities))
+	require.Len(t, structured.GetComponents(), len(decodedCatalog.Components))
+	var secretMgr *pb.CatalogService
+	for _, component := range structured.GetComponents() {
+		if component.GetId() == "admin" {
+			require.EqualValues(t, 11010, component.GetHealthPort())
+			for _, svc := range component.GetServices() {
+				if svc.GetPath() == "trpc.moox.ops.SecretMgr" {
+					secretMgr = svc
+				}
+			}
+		}
+	}
+	require.NotNil(t, secretMgr)
+	require.EqualValues(t, servicecatalog.DefaultTimeoutMS, secretMgr.GetTimeoutMs())
+	require.EqualValues(t, servicecatalog.DefaultMaxBodyBytes, secretMgr.GetMaxBodyBytes())
+	var exchangeMethod *pb.CatalogMethod
+	for _, m := range secretMgr.GetMethods() {
+		if m.GetName() == "GetExchangeCredential" {
+			exchangeMethod = m
+		}
+	}
+	require.NotNil(t, exchangeMethod)
+	require.Equal(t, []string{"trade"}, exchangeMethod.GetCallers())
 	declare := func(storage *pb.SyncTopologyHost) *pb.SyncTopologyReq {
 		hosts := []*pb.SyncTopologyHost{{HostId: "control", Enabled: true, Address: "control.example.test", ComponentIds: []string{"admin"}}}
 		if storage != nil {

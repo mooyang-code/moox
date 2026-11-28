@@ -1,6 +1,7 @@
 # 组件、公开 RPC 与调用权限、Doctor 的共同事实源；不包含地址或凭据。
 # 每个方法只写一遍：callers 是能调它的机器身份（组件 ID、identities 里的外部身份；host-gateway 指每台主机的网关），
 # 省略表示没有机器能调；operators 收窄人操作的 console 与 moox-cli，省略表示两者都能调，写 [] 表示都不能调。
+# space_policy 声明带 console_name 的控制台空间策略（global / space_optional / space_required），省略即 space_required。
 version: 2
 identities:
   - id: scf-collector
@@ -10,8 +11,6 @@ components:
     name: 主机网关
     binary: moox-host-gateway
     scope: host
-    replicas: single
-    protected: true
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     tools: [moox-host-gateway-cli]
     config_files:
@@ -30,8 +29,6 @@ components:
     name: 主机采集器
     binary: moox-host-agent
     scope: host
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/hostagent/config/app.yaml
@@ -43,7 +40,6 @@ components:
       - path: trpc.moox.hostagent.HostAgentMgr
         port: 11426
         timeout_ms: 30000
-        max_body_bytes: 4194304
         methods:
           - name: GetStatus
             read_only: true
@@ -57,8 +53,6 @@ components:
     name: 管理后台
     binary: moox-admin
     scope: control
-    replicas: single
-    protected: true
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     tools: [moox-admin-cli]
     config_files:
@@ -75,8 +69,7 @@ components:
       - path: trpc.moox.infra.Auth
         port: 0
         console_name: auth
-        timeout_ms: 5000
-        max_body_bytes: 4194304
+        space_policy: global
         methods:
           - name: Login
             operators: [console]
@@ -88,8 +81,7 @@ components:
       - path: trpc.moox.ops.Ssh
         port: 0
         console_name: ssh
-        timeout_ms: 5000
-        max_body_bytes: 4194304
+        space_policy: global
         methods:
           - name: CreateSession
             operators: [console]
@@ -106,18 +98,15 @@ components:
       - path: trpc.moox.ops.SecretMgr
         port: 11108
         console_name: secret
-        timeout_ms: 5000
-        max_body_bytes: 4194304
+        space_policy: global
         methods:
           - name: ListSecrets
             read_only: true
           - name: GetSecret
             read_only: true
-          # 组件里只有 trade 能调，并且只拿得到交易所密钥：网关把验过签的调用方名字写给 SecretMgr，
-          # 服务端对组件调用方只返回类别为 exchange 的秘钥（控制台与 moox-cli 不受这条限制）。
+          # 只留给 moox-cli 在进程内读取明文（如 setup、cls 命令）；业务组件各自走专用方法。
           - name: GetSecretValue
             read_only: true
-            callers: [trade]
             operators: [moox-cli]
           - name: CreateSecret
           - name: UpdateSecret
@@ -137,14 +126,19 @@ components:
             read_only: true
             callers: [collector]
             operators: []
+          # Trade 读交易所密钥的专用方法：SecretMgr 在服务端校验类别 exchange、状态 active，
+          # 不满足就拒绝，Trade 因此拿不到云账号等其他类别的密钥。
+          - name: GetExchangeCredential
+            read_only: true
+            callers: [trade]
+            operators: []
           # 按固定 secret_id 只建不改地写入初始密钥（仅供 moox-cli setup init 写入默认云账号密钥）。
           - name: EnsureInitialSecret
             operators: [moox-cli]
       - path: trpc.moox.ops.SysDeploy
         port: 11109
         console_name: sysdeploy
-        timeout_ms: 5000
-        max_body_bytes: 4194304
+        space_policy: global
         methods:
           - name: GetCatalog
             read_only: true
@@ -163,18 +157,15 @@ components:
       - path: trpc.moox.admin.ActivityLog
         port: 11113
         console_name: activity
-        timeout_ms: 5000
-        max_body_bytes: 4194304
         methods:
           - name: AppendActivityLogs
             callers: [collector]
             operators: []
           - name: ListActivityLogs
+            space_policy: space_optional
             read_only: true
       - path: trpc.moox.admin.GatewayControl
         port: 11112
-        timeout_ms: 5000
-        max_body_bytes: 4194304
         methods:
           - name: PullSnapshot
             callers: [host-gateway]
@@ -186,8 +177,6 @@ components:
     name: 消息总线
     binary: moox-eventbus
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/eventbus/config/app.yaml
@@ -200,19 +189,21 @@ components:
     services:
       - path: trpc.moox.eventbus.EventBusMgr
         port: 11420
-        console_name: eventbus
-        timeout_ms: 5000
-        max_body_bytes: 4194304
         methods:
           - name: GetOverview
+            operators: [moox-cli]
             read_only: true
           - name: ListEvents
+            operators: [moox-cli]
             read_only: true
           - name: ListStreams
+            operators: [moox-cli]
             read_only: true
           - name: ListConsumers
+            operators: [moox-cli]
             read_only: true
           - name: GetConsumer
+            operators: [moox-cli]
             read_only: true
     doctor:
       transport: reporter
@@ -221,8 +212,6 @@ components:
     name: 监控服务
     binary: moox-monitor
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/monitor/config/app.yaml
@@ -236,8 +225,7 @@ components:
       - path: trpc.moox.monitor.MonitorMgr
         port: 11410
         console_name: monitor
-        timeout_ms: 5000
-        max_body_bytes: 4194304
+        space_policy: global
         methods:
           - name: GetHealthOverview
             read_only: true
@@ -279,8 +267,6 @@ components:
     name: 行情采集服务
     binary: moox-collector
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     tools: [moox-collector-cli]
     config_files:
@@ -295,8 +281,6 @@ components:
       - path: trpc.moox.collector.CollectMgr
         port: 11402
         console_name: collector
-        timeout_ms: 5000
-        max_body_bytes: 4194304
         methods:
           - name: GetTaskList
             read_only: true
@@ -310,8 +294,10 @@ components:
           - name: DisableTask
           - name: DeleteTask
           - name: GetDataTypeConfigs
+            space_policy: global
             read_only: true
           - name: GetDataTypeConfigWithFields
+            space_policy: global
             read_only: true
           - name: SubmitKlineResampleJob
           - name: GetKlineResampleJob
@@ -330,6 +316,7 @@ components:
             read_only: true
             callers: [monitor]
           - name: ListSubjectListers
+            space_policy: global
             read_only: true
           - name: CheckKline
             read_only: true
@@ -368,15 +355,21 @@ components:
             read_only: true
           # 手工登记标的下架（补漏报和演练）：交易的下架名单页（经控制台）和 moox-cli。
           - name: RegisterDelistNotice
+            space_policy: global
           # 云账号与代码包（管理台运行状态页“函数”区的两个对话框、moox-cli）；列出云函数的期望与读回。
           - name: ListCloudAccounts
+            space_policy: global
             read_only: true
           - name: CreateCloudAccount
+            space_policy: global
           - name: UpdateCloudAccount
+            space_policy: global
           # 删云账号前要确认它在配置的各地域里没有建过的函数（取凭证、列命名空间、逐个命名空间列函数）；小于管理台的 30 秒请求超时。
           - name: DeleteCloudAccount
+            space_policy: global
             timeout_ms: 25000
           - name: ListCloudRegions
+            space_policy: global
             read_only: true
           - name: InitPackageUpload
           - name: CompletePackageUpload
@@ -398,16 +391,17 @@ components:
           # 读追赶进度（system resume 每次轮询都带 refresh_catchup）要对每个空间把整个暂停区间跑一遍 K 线核对，
           # 与 CheckKline、SubmitKlineBackfill 同一量级，给 330 秒；暂停要等 SCF 定时器停用确认与在途补采分块结束（最长 5 分钟）。
           - name: GetLifecycle
+            space_policy: global
             read_only: true
             timeout_ms: 330000
           - name: ControlLifecycle
+            space_policy: global
             operators: [moox-cli]
             timeout_ms: 330000
       # collector-stream 的心跳、拉计划与周期统计上报；不设租约，计划里的份就是唯一的授权。
       - path: trpc.moox.collector.StreamCollector
         port: 11422
         timeout_ms: 10000
-        max_body_bytes: 4194304
         methods:
           - name: StreamHeartbeat
             callers: [collector-stream]
@@ -426,8 +420,6 @@ components:
     name: 行情推送采集
     binary: moox-collector-stream
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/collector/config/stream/app.yaml
@@ -441,7 +433,6 @@ components:
       - path: trpc.moox.collector.MarketFetchExecutor
         port: 11450
         timeout_ms: 95000
-        max_body_bytes: 4194304
         methods:
           - name: Invoke
             callers: [collector]
@@ -453,8 +444,6 @@ components:
     name: 因子管理服务
     binary: moox-factor-mgr
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/factor/config/app.yaml
@@ -468,7 +457,6 @@ components:
         port: 11403
         console_name: factor-mgr
         timeout_ms: 120000
-        max_body_bytes: 4194304
         methods:
           - name: CreateFactorTask
           - name: SetFactorTaskStatus
@@ -478,23 +466,30 @@ components:
             read_only: true
             callers: [strategy]
           - name: ListFactorTasks
+            space_policy: space_optional
             read_only: true
             callers: [strategy]
           - name: CreateFactor
+            space_policy: global
           # 整批导入因子库与清孤立结果数据集只给命令行（管理台没有对应页面）。
           - name: ImportFactorCatalog
+            space_policy: global
             operators: [moox-cli]
           - name: PurgeResultDataset
             operators: [moox-cli]
           - name: UpdateFactor
+            space_policy: global
           - name: DeleteFactor
+            space_policy: global
           - name: GetFactor
+            space_policy: space_optional
             read_only: true
             callers: [strategy]
           - name: AddTaskMember
           - name: RemoveTaskMember
           - name: SetTaskMemberStatus
           - name: ListFactors
+            space_policy: space_optional
             read_only: true
           - name: RecalcFactors
           - name: ListRecalcJobs
@@ -503,18 +498,25 @@ components:
             read_only: true
           - name: CancelRecalcJob
           - name: GetStatus
+            space_policy: global
             read_only: true
           - name: ValidateFactorSpec
+            space_policy: global
             read_only: true
           - name: PreviewFactor
             read_only: true
           - name: ListFactorFunctions
+            space_policy: global
             read_only: true
           - name: ListFactorCategories
+            space_policy: global
             read_only: true
           - name: UpsertFactorCategory
+            space_policy: global
           - name: DeleteFactorCategory
+            space_policy: global
           - name: SetFactorCategory
+            space_policy: global
           - name: BindFactorTask
             callers: [strategy]
             operators: []
@@ -527,20 +529,25 @@ components:
           - name: GetFactorParams
             read_only: true
           - name: PublishUdf
+            space_policy: global
           - name: ListUdfs
+            space_policy: global
             read_only: true
           - name: GetUdf
+            space_policy: global
             read_only: true
           - name: ActivateUdf
+            space_policy: global
           # 模块生命周期：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module factor-mgr）。
           - name: GetLifecycle
+            space_policy: global
             read_only: true
           - name: ControlLifecycle
+            space_policy: global
             operators: [moox-cli]
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000
-        max_body_bytes: 4194304
         methods:
           - name: SyncEngineCatalog
             callers: [factor-engine]
@@ -567,8 +574,6 @@ components:
     name: 数据归档管理服务
     binary: moox-archive-mgr
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/archive/config/app.yaml
@@ -582,7 +587,6 @@ components:
         port: 11406
         console_name: archive
         timeout_ms: 30000
-        max_body_bytes: 4194304
         methods:
           - name: GetArchiveOverview
             read_only: true
@@ -611,13 +615,14 @@ components:
             operators: [moox-cli]
           # 模块生命周期：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module archive-mgr）。
           - name: GetLifecycle
+            space_policy: global
             read_only: true
           - name: ControlLifecycle
+            space_policy: global
             operators: [moox-cli]
       - path: trpc.moox.archive.ArchiveWorker
         port: 11408
         timeout_ms: 60000
-        max_body_bytes: 4194304
         methods:
           - name: ArchiveWorkerHeartbeat
             callers: [archive-worker]
@@ -638,8 +643,6 @@ components:
     name: 策略服务
     binary: moox-strategy
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     tools: [moox-strategy-cli]
     config_files:
@@ -653,17 +656,21 @@ components:
       - path: trpc.moox.strategy.StrategyMgr
         port: 11430
         console_name: strategy
-        timeout_ms: 5000
-        max_body_bytes: 4194304
         methods:
           - name: CreateStrategy
+            space_policy: global
           - name: UpdateStrategy
+            space_policy: global
           - name: GetStrategy
+            space_policy: space_optional
             read_only: true
           - name: ListStrategies
+            space_policy: global
             read_only: true
           - name: DeleteStrategy
+            space_policy: global
           - name: ValidateStrategy
+            space_policy: space_optional
             read_only: true
           - name: CreateStrategyInstance
           - name: UpdateStrategyInstance
@@ -695,9 +702,11 @@ components:
           - name: SetStrategyDisplaySettings
           # 模块生命周期：管理台与命令行都能读；暂停、恢复、放行只给命令行。暂停要等在途求值结束、目标发布完（最长 30 秒）。
           - name: GetLifecycle
+            space_policy: global
             read_only: true
             timeout_ms: 60000
           - name: ControlLifecycle
+            space_policy: global
             operators: [moox-cli]
             timeout_ms: 60000
     doctor:
@@ -707,8 +716,6 @@ components:
     name: 存储主服务
     binary: moox-storage-primary
     scope: any
-    replicas: single
-    protected: false
     args: ["-conf={config}/trpc_go.yaml"]
     tools: [moox-storage-cli]
     config_files:
@@ -722,17 +729,20 @@ components:
       - path: trpc.moox.storage.Metadata
         port: 20100
         console_name: storage
-        timeout_ms: 5000
         max_body_bytes: 33554432
         # 写方法的机器调用方按各模块实际的调用点放行：Collector 建改删数据集与列；factor-mgr 建删结果数据集与列（每个数据集的查询索引由 storage-view 随数据集自动建删）。
         methods:
           - name: CreateSpace
+            space_policy: global
           - name: UpdateSpace
+            space_policy: global
           - name: DeleteSpace
+            space_policy: global
           - name: GetSpace
             read_only: true
             callers: [archive-mgr, collector, factor-mgr, monitor, strategy]
           - name: ListSpaces
+            space_policy: global
             read_only: true
             callers: [collector, factor-mgr, monitor, strategy]
           - name: UpsertDataSource
@@ -797,7 +807,6 @@ components:
       - path: trpc.moox.storage.PrimaryStore
         port: 20102
         console_name: storage
-        timeout_ms: 5000
         # max_body_bytes 是网关侧逐方法的请求/响应上限（32 MiB）；Storage 与 HostGateway 的 tRPC 帧上限
         # 已统一提升至 64 MiB（nativewire.DefaultMaxFrameSize）以覆盖 32 MiB 业务体与协议帧开销。
         # 读取接口仍按合理分片返回（例如变更日志单页约 4 MiB），避免单次响应占用过多内存。
@@ -843,8 +852,6 @@ components:
     name: 存储视图服务
     binary: moox-storage-view
     scope: any
-    replicas: single
-    protected: false
     args: ["-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/storage/config/storage_view/trpc_go.yaml
@@ -884,8 +891,6 @@ components:
     name: 出口代理
     binary: moox-egress-proxy
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/egressproxy/config/app.yaml
@@ -910,8 +915,6 @@ components:
     name: 交易服务
     binary: moox-trade
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/trade/config/app.yaml
@@ -924,8 +927,6 @@ components:
       - path: trpc.moox.trade.TradeConsoleService
         port: 11200
         console_name: trade
-        timeout_ms: 5000
-        max_body_bytes: 4194304
         methods:
           - name: CreateTradingAccount
           - name: UpdateTradingAccount
@@ -936,6 +937,7 @@ components:
           - name: SetLeverage
           - name: SyncTradingAccount
           - name: InspectExchangeCredential
+            space_policy: global
             read_only: true
             timeout_ms: 15000
           - name: ReinspectTradingAccount
@@ -990,12 +992,16 @@ components:
             timeout_ms: 12000
           # 下架名单与下架记录（全局，不分空间）：解除名单只给管理台（会一并取消进行中的下架处理）。
           - name: UnblockInstrument
+            space_policy: global
             operators: [console]
           - name: ListBlockedInstruments
+            space_policy: global
             read_only: true
           - name: ListInstrumentHolders
+            space_policy: global
             read_only: true
           - name: ListDelists
+            space_policy: global
             read_only: true
           - name: SummarizeAccountPnl
             read_only: true
@@ -1004,9 +1010,11 @@ components:
             read_only: true
           # 模块生命周期：管理台与命令行都能读；暂停、恢复、放行只给命令行。暂停要等在途订单提交结束（最长 30 秒）。
           - name: GetLifecycle
+            space_policy: global
             read_only: true
             timeout_ms: 60000
           - name: ControlLifecycle
+            space_policy: global
             operators: [moox-cli]
             timeout_ms: 60000
     doctor:
@@ -1019,8 +1027,6 @@ components:
     name: 因子引擎
     binary: moox-factor-engine
     scope: any
-    replicas: single
-    protected: false
     args: ["serve", "-config={config}/engine.yaml", "-conf={config}/trpc_go.yaml"]
     config_files:
       - from: modules/factor/config/engine.yaml
@@ -1076,8 +1082,6 @@ components:
     name: 数据归档执行器
     binary: moox-archive-worker
     scope: any
-    replicas: single
-    protected: false
     args: ["-config={config}/app.yaml"]
     config_files:
       - from: modules/archive/config/worker/app.yaml

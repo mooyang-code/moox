@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
 )
@@ -51,8 +52,8 @@ func TestHostBundleIssuesOneKeyPerHostAndReusesItOnRedeploy(t *testing.T) {
 	opts := newBootstrapFixture(t)
 	bootstrap := runBootstrapFixture(t, opts)
 	declared := bootstrapFixtureTopology()
-	declared.Hosts[1].Disabled = true
-	declared.Hosts[2].DisabledComponents = []string{"egress-proxy"}
+	declared.Hosts[1].Enabled = false
+	declared.Hosts[2].DisabledComponentIds = []string{"egress-proxy"}
 	writeBootstrapTopology(t, opts, declared)
 	bootstrap = runBootstrapFixture(t, opts)
 	db, err := openAdminCLIDB(opts.dbPath)
@@ -165,7 +166,7 @@ func TestHostBundleProvisionsNewlyRegisteredHostAndRejectsUnknownOnes(t *testing
 	runBootstrapFixture(t, opts)
 	require.Error(t, runHostBundleCommand(hostBundleArguments(opts, hostBundleRun{hostID: "factor"}), nil, nil), "没登记的主机不签发")
 	declared := bootstrapFixtureTopology()
-	declared.Hosts = append(declared.Hosts, hostbundle.Host{HostID: "factor", Address: "192.168.0.103", Reachability: "outbound", Components: []string{"factor-engine"}})
+	declared.Hosts = append(declared.Hosts, &pb.SyncTopologyHost{HostId: "factor", Enabled: true, Address: "192.168.0.103", Reachability: "outbound", ComponentIds: []string{"factor-engine"}})
 	writeBootstrapTopology(t, opts, declared)
 	runBootstrapFixture(t, opts)
 	result := runHostBundleFixture(t, opts, hostBundleRun{hostID: "factor"})

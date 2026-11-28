@@ -23,6 +23,7 @@ func (c Catalog) Validate() error {
 	}
 	ids, binaries, paths := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	consoleRoutes := map[string]string{}
+	consoleServicePolicies := map[string]string{}
 	components, external := map[string]bool{}, map[string]bool{}
 	for _, component := range c.Components {
 		components[component.ID], external[component.ID] = true, component.ExternalProgram
@@ -39,8 +40,8 @@ func (c Catalog) Validate() error {
 			return fmt.Errorf("duplicate component %q", component.ID)
 		}
 		ids[component.ID], binaries[component.Binary] = true, true
-		if !slices.Contains([]string{ScopeHost, ScopeControl, ScopeAny}, component.Scope) || component.Replicas != Single {
-			return fmt.Errorf("component %q has invalid scope or replicas", component.ID)
+		if !slices.Contains([]string{ScopeHost, ScopeControl, ScopeAny}, component.Scope) {
+			return fmt.Errorf("component %q has invalid scope", component.ID)
 		}
 		// 外部程序可以声明服务（只监听本机，经所在主机的网关路由），但不能声明其他端口。
 		if component.ExternalProgram && len(component.Ports) != 0 {
@@ -89,6 +90,12 @@ func (c Catalog) Validate() error {
 			if service.TimeoutMS < 0 || service.TimeoutMS > 960000 || service.MaxBodyBytes < 0 || service.MaxBodyBytes > 64<<20 {
 				return fmt.Errorf("service %q has invalid limits", service.Path)
 			}
+			if !validSpacePolicy(service.SpacePolicy) {
+				return fmt.Errorf("service %q has invalid space_policy %q", service.Path, service.SpacePolicy)
+			}
+			if service.SpacePolicy != "" && service.ConsoleName == "" {
+				return fmt.Errorf("service %q declares space_policy without console_name", service.Path)
+			}
 			if len(service.Methods) == 0 {
 				return fmt.Errorf("service %q has no declared methods", service.Path)
 			}
@@ -104,11 +111,24 @@ func (c Catalog) Validate() error {
 				if method.TimeoutMS < 0 || method.TimeoutMS > 960000 {
 					return fmt.Errorf("service %q has invalid method timeout for %q", service.Path, method.Name)
 				}
+				if !validSpacePolicy(method.SpacePolicy) {
+					return fmt.Errorf("service %q method %q has invalid space_policy %q", service.Path, method.Name, method.SpacePolicy)
+				}
+				if method.SpacePolicy != "" && service.ConsoleName == "" {
+					return fmt.Errorf("service %q method %q declares space_policy without console_name", service.Path, method.Name)
+				}
+				if method.SpacePolicy != "" && service.SpacePolicy != "" {
+					return fmt.Errorf("service %q method %q cannot override service-level space_policy", service.Path, method.Name)
+				}
 			}
 			if service.ConsoleName != "" {
 				if !identifier.MatchString(service.ConsoleName) {
 					return fmt.Errorf("invalid console_name %q", service.ConsoleName)
 				}
+				if prev, exists := consoleServicePolicies[service.ConsoleName]; exists && prev != service.SpacePolicy {
+					return fmt.Errorf("console_name %q has inconsistent service-level space_policy", service.ConsoleName)
+				}
+				consoleServicePolicies[service.ConsoleName] = service.SpacePolicy
 			}
 		}
 	}
@@ -245,6 +265,10 @@ func isConsoleOnlyService(service Service) bool {
 		}
 	}
 	return true
+}
+
+func validSpacePolicy(policy string) bool {
+	return policy == "" || policy == SpacePolicyGlobal || policy == SpacePolicyOptional || policy == SpacePolicyRequired
 }
 
 func validateDoctor(component Component) error {

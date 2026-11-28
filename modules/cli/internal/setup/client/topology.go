@@ -18,19 +18,8 @@ func (c *Client) SyncTopology(ctx context.Context, cfg *topology.Config) error {
 	if err != nil {
 		return err
 	}
-	request := &pb.SyncTopologyReq{}
-	for _, host := range declared.Hosts {
-		entry := &pb.SyncTopologyHost{
-			HostId: host.HostID, Enabled: !host.Disabled, Label: host.Label, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region,
-			Reachability: host.Reachability, ExternalEntry: host.ExternalEntry, ComponentIds: host.Components, DisabledComponentIds: host.DisabledComponents,
-		}
-		if host.SSH != nil {
-			entry.SshPort, entry.SshUser, entry.SshAuthType, entry.SshSecret = int32(host.SSH.Port), host.SSH.User, host.SSH.AuthType, host.SSH.Secret
-		}
-		request.Hosts = append(request.Hosts, entry)
-	}
 	response := &pb.SyncTopologyRsp{}
-	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "SyncTopology", request, response); err != nil {
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "SyncTopology", declared, response); err != nil {
 		return err
 	}
 	return checkRetInfo(response.GetRetInfo())

@@ -3,43 +3,6 @@ package hostbundle
 
 import "time"
 
-// Topology is normalized deployment input. It may carry host SSH credentials
-// (Host.SSH), so the file is handled as a private file and never published.
-type Topology struct {
-	Version       int    `json:"version"`
-	ControlHostID string `json:"control_host_id"`
-	Hosts         []Host `json:"hosts"`
-}
-
-// SSH 是控制台终端登录这台主机用的信息；Port 为 0（或整体缺省）表示控制台不能 SSH。
-// AuthType 为 password 或 private_key，Secret 是对应的密码或私钥内容，Passphrase 是私钥口令。
-type SSH struct {
-	Port       int    `json:"port"`
-	User       string `json:"user"`
-	AuthType   string `json:"auth_type"`
-	Secret     string `json:"secret"`
-	Passphrase string `json:"passphrase,omitempty"`
-}
-
-type Host struct {
-	HostID         string   `json:"host_id"`
-	Label          string   `json:"label"`
-	Address        string   `json:"address"`
-	PrivateAddress string   `json:"private_address"`
-	Region         string   `json:"region"`
-	Description    string   `json:"description"`
-	Components     []string `json:"components"`
-	// Reachability 为空表示可直达，outbound 表示只能出站。
-	Reachability string `json:"reachability,omitempty"`
-	// ExternalEntry 表示这台主机的网关开外部入口（11004）。
-	ExternalEntry bool `json:"external_entry,omitempty"`
-	// Disabled 表示 moox.toml 里这台主机写了 enabled = false。
-	Disabled bool `json:"disabled,omitempty"`
-	// DisabledComponents 是 Components 里写在 [deployments_disabled] 的组件。
-	DisabledComponents []string `json:"disabled_components,omitempty"`
-	SSH                *SSH     `json:"ssh,omitempty"`
-}
-
 type CertificateInfo struct {
 	SHA256   string    `json:"sha256"`
 	Serial   string    `json:"serial"`

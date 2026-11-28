@@ -28,8 +28,14 @@ type signingKeys struct {
 	hostKey, scfCollectorKey       []byte
 }
 
+// bundleHost 是签发主机身份包与证书所需的主机摘要信息。
+type bundleHost struct {
+	hostID, address, privateAddress, reachability string
+	components                                    []string
+}
+
 type hostBundleMaterial struct {
-	host, control hostbundle.Host
+	host, control bundleHost
 	keys          signingKeys
 	// operatorPublic 是登记着的 moox-cli 公钥，只有 bootstrap 填。
 	operatorPublic string
@@ -47,9 +53,9 @@ func newSigningKey() (public string, file []byte, err error) {
 // ensureSigningKeys 决定这台主机的签名密钥：目标机上现有私钥的公钥和登记的一致就原样沿用（例行升级、续证书都不换密钥）；
 // 不一致、目标机上没有私钥，或显式要求（rotate）时新生成一把并登记公钥，旧私钥随即作废，没有新旧并存。
 // 部署了 collector 的主机另管 scf-collector 的私钥，规则相同（rotate 只换主机密钥）。
-func ensureSigningKeys(ctx context.Context, store *keys.Store, host hostbundle.Host, current currentKeys, rotate bool) (signingKeys, error) {
+func ensureSigningKeys(ctx context.Context, store *keys.Store, host bundleHost, current currentKeys, rotate bool) (signingKeys, error) {
 	var result signingKeys
-	registered, err := store.HostPublicKey(ctx, host.HostID)
+	registered, err := store.HostPublicKey(ctx, host.hostID)
 	if err != nil {
 		return result, err
 	}
@@ -58,13 +64,13 @@ func ensureSigningKeys(ctx context.Context, store *keys.Store, host hostbundle.H
 		if err != nil {
 			return result, err
 		}
-		if err := store.SetHostPublicKey(ctx, host.HostID, public); err != nil {
+		if err := store.SetHostPublicKey(ctx, host.hostID, public); err != nil {
 			return result, err
 		}
 		registered, result.hostKey = public, file
 	}
 	result.hostPublic = registered
-	if !slices.Contains(host.Components, "collector") {
+	if !slices.Contains(host.components, "collector") {
 		return result, nil
 	}
 	registered, err = store.Identity(ctx, "scf-collector")
@@ -109,7 +115,7 @@ func publishHostBundle(parentDir string, material hostBundleMaterial, ca *pki.St
 	}
 	defer stage.Close()
 	result := hostbundle.Metadata{
-		Version: 2, HostID: material.host.HostID, ControlHostID: material.control.HostID,
+		Version: 2, HostID: material.host.hostID, ControlHostID: material.control.hostID,
 		BundleDir:     filepath.Join(parentDir, finalName),
 		SignPublicKey: material.keys.hostPublic, SignKeyIssued: material.keys.hostKey != nil,
 		SCFCollectorPublicKey: material.keys.scfCollectorPublic, SCFCollectorKeyIssued: material.keys.scfCollectorKey != nil,
@@ -123,7 +129,7 @@ func publishHostBundle(parentDir string, material hostBundleMaterial, ca *pki.St
 			return hostbundle.Metadata{}, err
 		}
 	}
-	issued, err := ca.Issue(pki.HostIdentity{HostID: material.host.HostID, Address: material.host.Address, PrivateAddress: material.host.PrivateAddress, Outbound: material.host.Reachability != ""}, filepath.Join(parentDir, stageName, "tls"))
+	issued, err := ca.Issue(pki.HostIdentity{HostID: material.host.hostID, Address: material.host.address, PrivateAddress: material.host.privateAddress, Outbound: material.host.reachability != ""}, filepath.Join(parentDir, stageName, "tls"))
 	if err != nil {
 		return hostbundle.Metadata{}, err
 	}

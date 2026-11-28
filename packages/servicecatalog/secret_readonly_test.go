@@ -14,7 +14,7 @@ func TestCollectorOnlyReadsReadonlyExchangeKeyIdentifier(t *testing.T) {
 	if !c.Allowed("collector", secretMgr, "GetReadonlyExchangeKey") {
 		t.Fatal("collector must read the readonly exchange key identifier")
 	}
-	for _, method := range []string{"GetSecretValue", "GetSecret", "ListSecrets", "CreateSecret", "UpdateSecret", "DeleteSecret", "ToggleSecretStatus", "ExportSecrets", "ImportSecrets"} {
+	for _, method := range []string{"GetSecretValue", "GetExchangeCredential", "GetSecret", "ListSecrets", "CreateSecret", "UpdateSecret", "DeleteSecret", "ToggleSecretStatus", "ExportSecrets", "ImportSecrets"} {
 		if c.Allowed("collector", secretMgr, method) {
 			t.Fatalf("collector must not call SecretMgr.%s", method)
 		}
@@ -63,6 +63,34 @@ func TestCollectorOnlyReadsCloudCredentialThroughDedicatedMethod(t *testing.T) {
 	for _, caller := range []string{"console", "moox-cli", "trade", "host-gateway", "scf-collector", "collector-stream", "monitor"} {
 		if c.Allowed(caller, secretMgr, "GetCloudCredential") {
 			t.Fatalf("unexpected GetCloudCredential grant: %s", caller)
+		}
+	}
+}
+
+// Trade 读交易所密钥只放行专用方法 GetExchangeCredential（服务端校验类别 exchange、状态 active），
+// 不再允许调用通用明文接口 GetSecretValue。
+func TestTradeOnlyReadsExchangeCredentialThroughDedicatedMethod(t *testing.T) {
+	c := mustCatalog(t)
+	if !c.Allowed("trade", secretMgr, "GetExchangeCredential") {
+		t.Fatal("trade must read exchange credentials through GetExchangeCredential")
+	}
+	if c.Allowed("trade", secretMgr, "GetSecretValue") {
+		t.Fatal("trade must not call SecretMgr.GetSecretValue")
+	}
+	service, ok := c.Service(secretMgr)
+	if !ok {
+		t.Fatal("SecretMgr is not declared")
+	}
+	method, _ := service.Method("GetExchangeCredential")
+	if !method.ReadOnly {
+		t.Fatal("GetExchangeCredential is read only")
+	}
+	if callers := method.Callers; !slices.Equal(callers, []string{"trade"}) || len(method.OperatorList()) != 0 {
+		t.Fatalf("GetExchangeCredential callers = %v, want only trade", callers)
+	}
+	for _, caller := range []string{"console", "moox-cli", "collector", "host-gateway", "scf-collector", "collector-stream", "monitor"} {
+		if c.Allowed(caller, secretMgr, "GetExchangeCredential") {
+			t.Fatalf("unexpected GetExchangeCredential grant: %s", caller)
 		}
 	}
 }

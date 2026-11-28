@@ -45,7 +45,7 @@ func newTestRouter(t *testing.T, store *auth.SessionStore, local *LocalDispatche
 		store, err = auth.NewSessionStore(time.Hour)
 		require.NoError(t, err)
 	}
-	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, store)
+	router, err := NewHTTPRouter(local, gateway, store)
 	require.NoError(t, err)
 	return router
 }
@@ -96,6 +96,7 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	for _, suffix := range []string{
 		"secret/GetSecretValue", "SecretMgr/getsecretvalue", "trpc.moox.ops.SecretMgr/GetSecretValue",
 		"secret/GetCloudCredential", "SecretMgr/getcloudcredential", "trpc.moox.ops.SecretMgr/GetCloudCredential",
+		"secret/GetExchangeCredential", "SecretMgr/getexchangecredential", "trpc.moox.ops.SecretMgr/GetExchangeCredential",
 		"sysdeploy/SyncTopology",
 		"trade/CloseTargetSession", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",

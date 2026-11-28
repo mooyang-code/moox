@@ -295,7 +295,6 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/secret/ListSecrets",
       "/api/admin/sysdeploy/GetCatalog",
       "/api/admin/monitor/GetHealthOverview",
-      "/api/admin/eventbus/GetStatus",
       "/api/admin/storage/ListSpaces",
       "/api/admin/storage/CreateSpace",
       "/api/admin/storage/UpdateSpace",

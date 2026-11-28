@@ -117,26 +117,26 @@ func Start(ctx context.Context, client *jetstream.Client, cfg ConsumersConfig, r
 		pending = 16
 	}
 	for _, spec := range []struct {
-		name    string
-		event   events.Event
-		handler jetstream.DeliveryHandler
+		consumer events.DurableConsumer
+		handler  jetstream.DeliveryHandler
 	}{
-		{events.CollectorResamplePeriodConsumer.Name(), events.DatasetPeriodCompleted, period},
-		{events.CollectorResampleBackfilledConsumer.Name(), events.CollectorKlineBackfilled, backfilled},
+		{events.CollectorResamplePeriodConsumer, period},
+		{events.CollectorResampleBackfilledConsumer, backfilled},
 	} {
+		consumerName := spec.consumer.Name()
 		consumer, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
-			Name: spec.name, Event: spec.event, AckWait: ackWait, MaxDeliver: 10, MaxAckPending: pending,
+			Consumer: spec.consumer, AckWait: ackWait, MaxDeliver: 10, MaxAckPending: pending,
 			FetchMaxWait: fetchWait, DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true,
 		})
 		if err != nil {
 			_ = c.Close()
-			return nil, fmt.Errorf("start consumer %s: %w", spec.name, err)
+			return nil, fmt.Errorf("start consumer %s: %w", consumerName, err)
 		}
 		c.consumers = append(c.consumers, consumer)
 		runner := jetstream.NewRunner(consumer, spec.handler, jetstream.RunnerConfig{
 			BatchSize: pending, InProgressInterval: ackWait / 4,
 			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-				log.ErrorContextf(runCtx, "[Collector] resample consumer %s error: %v", spec.name, err)
+				log.ErrorContextf(runCtx, "[Collector] resample consumer %s error: %v", consumerName, err)
 			}),
 		})
 		c.wg.Add(1)
@@ -151,7 +151,7 @@ func Start(ctx context.Context, client *jetstream.Client, cfg ConsumersConfig, r
 				case <-time.After(time.Second):
 				}
 			}
-		}(spec.name)
+		}(consumerName)
 	}
 	return c, nil
 }

@@ -20,11 +20,12 @@ const (
 	ScopeHost                 = "host"
 	ScopeControl              = "control"
 	ScopeAny                  = "any"
-	Single                    = "single"
 	Enabled                   = "enabled"
 	Disabled                  = "disabled"
+	SpacePolicyGlobal         = "global"
+	SpacePolicyOptional       = "space_optional"
+	SpacePolicyRequired       = "space_required"
 	GatewayControlPath        = "trpc.moox.admin.GatewayControl"
-	SecretMgrPath             = "trpc.moox.ops.SecretMgr"
 	DefaultTimeoutMS    int64 = 5000
 	DefaultMaxBodyBytes int64 = 4 << 20
 )
@@ -43,12 +44,10 @@ type Identity struct {
 }
 
 type Component struct {
-	ID        string `yaml:"id" json:"id"`
-	Name      string `yaml:"name" json:"name"`
-	Binary    string `yaml:"binary" json:"binary"`
-	Scope     string `yaml:"scope" json:"scope"`
-	Replicas  string `yaml:"replicas" json:"replicas"`
-	Protected bool   `yaml:"protected" json:"protected"`
+	ID     string `yaml:"id" json:"id"`
+	Name   string `yaml:"name" json:"name"`
+	Binary string `yaml:"binary" json:"binary"`
+	Scope  string `yaml:"scope" json:"scope"`
 	// Ports reserves listeners which are not forwarded RPC services, such as
 	// the browser entrypoint, NATS and Storage's private runtime endpoints.
 	Ports    []int     `yaml:"ports,omitempty" json:"ports,omitempty"`
@@ -101,6 +100,11 @@ func (f ConfigFile) Target() string {
 	return path.Base(f.From)
 }
 
+// IsProtected 报告组件是否受保护（不可停用或移除）：只有控制机的 admin 与每台主机的 host-gateway。
+func (c Component) IsProtected() bool {
+	return c.ID == adminComponent || c.ID == hostGatewayCaller
+}
+
 // StopTimeout 是组件的停止等待秒数。
 func (c Component) StopTimeout() int {
 	if c.StopTimeoutSec > 0 {
@@ -143,6 +147,7 @@ type Service struct {
 	Path         string   `yaml:"path" json:"path"`
 	Port         int      `yaml:"port" json:"port"`
 	ConsoleName  string   `yaml:"console_name,omitempty" json:"console_name,omitempty"`
+	SpacePolicy  string   `yaml:"space_policy,omitempty" json:"space_policy,omitempty"`
 	TimeoutMS    int64    `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
 	MaxBodyBytes int64    `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty"`
 	Methods      []Method `yaml:"methods" json:"methods"`
@@ -150,8 +155,9 @@ type Service struct {
 
 // Method 是服务上的一个方法与它的全部属性；方法名在目录里只写这一次。
 type Method struct {
-	Name     string `yaml:"name" json:"name"`
-	ReadOnly bool   `yaml:"read_only,omitempty" json:"read_only,omitempty"`
+	Name        string `yaml:"name" json:"name"`
+	ReadOnly    bool   `yaml:"read_only,omitempty" json:"read_only,omitempty"`
+	SpacePolicy string `yaml:"space_policy,omitempty" json:"space_policy,omitempty"`
 	// Idempotent 标记重复提交同一请求不会产生额外副作用的写方法：请求可能已发出的网络失败后，
 	// 网关客户端可以像只读方法一样换连接重试一次。必须由服务端语义保证幂等，不能与 ReadOnly 同时声明。
 	Idempotent bool `yaml:"idempotent,omitempty" json:"idempotent,omitempty"`
@@ -354,6 +360,32 @@ func (c Catalog) ConsoleService(name, method string) (Service, bool) {
 	return Service{}, false
 }
 
+// ConsoleSpacePolicy 返回控制台请求 (consoleName, method) 的空间策略：
+// 优先取方法级声明，其次取服务级声明，省略默认为 space_required。
+func (c Catalog) ConsoleSpacePolicy(consoleName, method string) string {
+	if consoleName == "" {
+		return SpacePolicyRequired
+	}
+	servicePolicy := ""
+	for _, component := range c.Components {
+		for _, service := range component.Services {
+			if service.ConsoleName != consoleName {
+				continue
+			}
+			if service.SpacePolicy != "" {
+				servicePolicy = service.SpacePolicy
+			}
+			if m, ok := service.Method(method); ok && m.SpacePolicy != "" {
+				return m.SpacePolicy
+			}
+		}
+	}
+	if servicePolicy != "" {
+		return servicePolicy
+	}
+	return SpacePolicyRequired
+}
+
 // TimeoutFor 返回方法的路由超时（毫秒）：方法级覆盖优先，其次服务级，最后默认值。
 func (s Service) TimeoutFor(method string) int64 {
 	if m, ok := s.Method(method); ok && m.TimeoutMS > 0 {
@@ -363,4 +395,12 @@ func (s Service) TimeoutFor(method string) int64 {
 		return s.TimeoutMS
 	}
 	return DefaultTimeoutMS
+}
+
+// BodyLimit 返回服务的单次请求/响应包体上限（字节），省略时使用默认值。
+func (s Service) BodyLimit() int64 {
+	if s.MaxBodyBytes > 0 {
+		return s.MaxBodyBytes
+	}
+	return DefaultMaxBodyBytes
 }

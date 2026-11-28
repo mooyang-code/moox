@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/nats-io/nats.go"
@@ -213,9 +214,9 @@ func newEventBusE2EControl(t *testing.T, storageAddress string) eventBusE2EContr
 	require.NoError(t, os.Mkdir(dir, 0o700))
 	opts := bootstrapOptions{topologyFile: filepath.Join(dir, "topology.json"), dbPath: filepath.Join(dir, "data", "admin.db"), masterFile: filepath.Join(dir, "secrets", "admin-encryption.key"),
 		pkiDir: filepath.Join(dir, "secrets", "pki"), outputDir: filepath.Join(dir, "bundles"), operatorPublicKey: identityPublicKey("operator")}
-	writeBootstrapTopology(t, opts, hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
-		{HostID: "control", Address: "203.0.113.10", Components: []string{"admin", "collector"}},
-		{HostID: "storage", Address: storageAddress, Components: []string{"eventbus", "storage-primary", "storage-view"}},
+	writeBootstrapTopology(t, opts, &pb.SyncTopologyReq{Hosts: []*pb.SyncTopologyHost{
+		{HostId: "control", Enabled: true, Address: "203.0.113.10", ComponentIds: []string{"admin", "collector"}},
+		{HostId: "storage", Enabled: true, Address: storageAddress, ComponentIds: []string{"eventbus", "storage-primary", "storage-view"}},
 	}})
 	runBootstrapFixture(t, opts)
 	control := eventBusE2EControl{opts: opts}

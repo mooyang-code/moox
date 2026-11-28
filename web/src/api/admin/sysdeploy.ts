@@ -1,8 +1,6 @@
-import { isAlias, parseDocument, visit } from "yaml";
 import { call } from "@/api/http";
 import type {
   CatalogResponse,
-  ComponentCatalog,
   ComponentDeployment,
   DeploymentHost,
   DeploymentStatus,
@@ -59,34 +57,4 @@ export function listAllDeployments() {
     },
     row => `${row.host_id}\0${row.component_id}`
   );
-}
-export function decodeCatalog(response: CatalogResponse): ComponentCatalog {
-  if (!response.control_host_id || !/^[a-f0-9]{64}$/.test(response.sha256)) throw new Error("组件目录缺少有效的控制主机或摘要");
-  if (response.catalog_yaml.length > 2 * 1024 * 1024) throw new Error("组件目录超过大小限制");
-  const doc = parseDocument(response.catalog_yaml, { uniqueKeys: true });
-  if (doc.errors.length) throw new Error("组件目录 YAML 无效");
-  visit(doc, (_key, node) => {
-    if (isAlias(node)) throw new Error("组件目录不允许 YAML 别名");
-  });
-  const value = doc.toJS({ maxAliasCount: 0 }) as ComponentCatalog;
-  if (!value || value.version !== 2 || !Array.isArray(value.components) || !Array.isArray(value.identities))
-    throw new Error("组件目录结构无效");
-  const ids = new Set<string>();
-  for (const component of value.components) {
-    if (
-      !component ||
-      typeof component.id !== "string" ||
-      !component.id ||
-      ids.has(component.id) ||
-      typeof component.name !== "string" ||
-      typeof component.binary !== "string" ||
-      typeof component.protected !== "boolean" ||
-      !component.health ||
-      !["host", "control", "any"].includes(component.scope) ||
-      !["single", "multi"].includes(component.replicas)
-    )
-      throw new Error("组件目录含无效或重复组件");
-    ids.add(component.id);
-  }
-  return value;
 }

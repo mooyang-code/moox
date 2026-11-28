@@ -11,6 +11,7 @@ type Service interface {
 	pb.SysDeployService
 	SetSessionCloser(closer SessionCloser)
 	TopologyDAO() *TopologyDAO
+	GatewayStatuses() *GatewayStatusStore
 }
 
 // SessionCloser 关闭某台主机上所有在线的终端与文件会话。
@@ -19,6 +20,7 @@ type SessionCloser interface{ CloseHostSessions(hostID string) }
 type ServiceImpl struct {
 	pb.UnimplementedSysDeploy
 	topology    *TopologyDAO
+	statuses    *GatewayStatusStore
 	adminNodeID string
 	sessions    SessionCloser
 }
@@ -32,11 +34,14 @@ func NewService(dbManager *database.Manager, adminNodeID, encryptionKey string) 
 	if strings.TrimSpace(encryptionKey) != "" {
 		topology.WithEncryptionKey(encryptionKey)
 	}
-	return &ServiceImpl{topology: topology, adminNodeID: nodeID}, nil
+	return &ServiceImpl{topology: topology, statuses: NewGatewayStatusStore(), adminNodeID: nodeID}, nil
 }
 
 // TopologyDAO 返回复用的长生命周期 TopologyDAO。
 func (s *ServiceImpl) TopologyDAO() *TopologyDAO { return s.topology }
+
+// GatewayStatuses 返回与 GatewayControl 共用的进程内网关运行态存储。
+func (s *ServiceImpl) GatewayStatuses() *GatewayStatusStore { return s.statuses }
 
 // SetSessionCloser 接入 SSH 服务：主机的连接信息变化或主机被删除后，关闭它在线的会话。
 func (s *ServiceImpl) SetSessionCloser(closer SessionCloser) { s.sessions = closer }

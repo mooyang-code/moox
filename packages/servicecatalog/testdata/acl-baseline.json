@@ -3,9 +3,9 @@
   "summary": {
     "components": 16,
     "services": 23,
-    "methods": 293,
-    "read_only_methods": 136,
-    "retryable_methods": 139,
+    "methods": 294,
+    "read_only_methods": 137,
+    "retryable_methods": 140,
     "callers": 19,
     "principals": 1
   },
@@ -538,7 +538,6 @@
     {
       "path": "trpc.moox.eventbus.EventBusMgr",
       "component": "eventbus",
-      "console_name": "eventbus",
       "methods": [
         {
           "name": "GetConsumer",
@@ -1074,6 +1073,12 @@
         },
         {
           "name": "GetCloudCredential",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "GetExchangeCredential",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
@@ -2042,11 +2047,6 @@
       "trpc.moox.collector.CollectMgr/SubmitKlineResampleJob",
       "trpc.moox.collector.CollectMgr/UpdateCloudAccount",
       "trpc.moox.collector.CollectMgr/UpdateTask",
-      "trpc.moox.eventbus.EventBusMgr/GetConsumer",
-      "trpc.moox.eventbus.EventBusMgr/GetOverview",
-      "trpc.moox.eventbus.EventBusMgr/ListConsumers",
-      "trpc.moox.eventbus.EventBusMgr/ListEvents",
-      "trpc.moox.eventbus.EventBusMgr/ListStreams",
       "trpc.moox.factor.FactorMgr/ActivateUdf",
       "trpc.moox.factor.FactorMgr/AddTaskMember",
       "trpc.moox.factor.FactorMgr/CancelRecalcJob",
@@ -2589,7 +2589,7 @@
       "trpc.moox.trade.TradeConsoleService/GetLogicalAccount"
     ],
     "trade": [
-      "trpc.moox.ops.SecretMgr/GetSecretValue"
+      "trpc.moox.ops.SecretMgr/GetExchangeCredential"
     ]
   },
   "principals": {

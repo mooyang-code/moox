@@ -208,12 +208,9 @@ func TestProxyStripsGatewayHeadersAndTellsGatewayControlTheVerifiedHost(t *testi
 	// 非主机身份没有签名主机：头在，值为空，GatewayControl 据此拒绝。
 	forwarded = upstreamMetadata(servicecatalog.GatewayControlPath, gatewayauth.Claims{Caller: "moox-cli"}, inbound)
 	require.Equal(t, "", string(forwarded[gatewayauth.HeaderVerifiedHost]))
-	// SecretMgr 收到验过签的调用方名字；外面带进来的同名头不往后传，别的服务收不到这个头。
-	inbound[gatewayauth.HeaderVerifiedCaller] = []byte("console")
-	forwarded = upstreamMetadata(servicecatalog.SecretMgrPath, gatewayauth.Claims{Caller: "trade", Host: "overseas"}, inbound)
-	require.Equal(t, codec.MetaData{gatewayauth.HeaderVerifiedCaller: []byte("trade"), "trace": []byte("kept")}, forwarded)
-	// moox-cli 用身份密钥签名、没有签名主机：不写头，SecretMgr 不按组件限制它。
-	forwarded = upstreamMetadata(servicecatalog.SecretMgrPath, gatewayauth.Claims{Caller: "moox-cli"}, inbound)
+	// 其他服务（含 SecretMgr）一律不额外注入网关内部头，外面带进来的 x-moox- 头全部剥除。
+	inbound["X-Moox-Verified-Caller"] = []byte("console")
+	forwarded = upstreamMetadata("trpc.moox.ops.SecretMgr", gatewayauth.Claims{Caller: "trade", Host: "overseas"}, inbound)
 	require.Equal(t, codec.MetaData{"trace": []byte("kept")}, forwarded)
 	forwarded = upstreamMetadata("trpc.moox.storage.PrimaryStore", gatewayauth.Claims{Caller: "trade", Host: "overseas"}, inbound)
 	require.Equal(t, codec.MetaData{"trace": []byte("kept")}, forwarded)

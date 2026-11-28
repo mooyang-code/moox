@@ -8,7 +8,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"reflect"
 	"strings"
 	"time"
@@ -18,10 +17,8 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gorm.io/gorm"
 
-	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -132,7 +129,7 @@ func (s *Service) GetSecret(ctx context.Context, req *pb.GetSecretReq) (*pb.GetS
 	return &pb.GetSecretRsp{RetInfo: retOK(), Secret: secretModelToPB(secretRecord)}, nil
 }
 
-// GetSecretValue returns the plaintext value. Gateway route method allowlists protect machine access.
+// GetSecretValue 仅留给 moox-cli 按秘钥 ID 读取明文（如 setup、cls 命令）；业务组件各自使用专用方法。
 func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq) (*pb.GetSecretValueRsp, error) {
 	if req.GetSecretId() == "" {
 		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
@@ -148,22 +145,29 @@ func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq)
 	if secretRecord.Status != "" && secretRecord.Status != "active" {
 		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥未启用")}, nil
 	}
-	if componentCaller(ctx) != "" && secretRecord.Category != "exchange" {
-		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "组件只能读取类别为 exchange 的秘钥")}, nil
-	}
 	return &pb.GetSecretValueRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(secretRecord)}, nil
 }
 
-// componentCaller 返回经主机网关以组件身份调用时网关验过签的调用方名字（目前只有 trade 在 GetSecretValue 的名单上）；
-// 控制台、moox-cli（没有签名主机，网关不写头）与控制机上的同机直连没有这个头，返回空。头由本机网关在验签后写入，外面带进来的同名头在网关入口被剥掉。
-// 组件调用方只给交易所密钥：别的主机上的进程拿着主机密钥以 trade 的身份签名，也取不走云账号等其他类别的密钥。
-func componentCaller(ctx context.Context) string {
-	for key, value := range codec.Message(ctx).ServerMetaData() {
-		if http.CanonicalHeaderKey(key) == gatewayauth.HeaderVerifiedCaller {
-			return string(value)
-		}
+// GetExchangeCredential 按秘钥 ID 返回交易所密钥明文，只放行类别 exchange、状态 active 的秘钥。
+// 它是给 Trade 的专用方法：靠服务目录“按方法授权”只放行 Trade，再由这里在服务端校验类别与状态，
+// Trade 拿不到云账号等其他类别的密钥。
+func (s *Service) GetExchangeCredential(ctx context.Context, req *pb.GetExchangeCredentialReq) (*pb.GetExchangeCredentialRsp, error) {
+	if strings.TrimSpace(req.GetSecretId()) == "" {
+		return &pb.GetExchangeCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
 	}
-	return ""
+	record, err := s.store.FindByID(ctx, req.GetSecretId())
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &pb.GetExchangeCredentialRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在")}, nil
+		}
+		log.ErrorContextf(ctx, "[Secret] GetExchangeCredential failed: %v", err)
+		return &pb.GetExchangeCredentialRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥失败")}, nil
+	}
+	// 状态必须明确是 active：空状态不当作启用。
+	if record.Category != "exchange" || record.Status != "active" {
+		return &pb.GetExchangeCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "只能读取类别为 exchange 且已启用的秘钥")}, nil
+	}
+	return &pb.GetExchangeCredentialRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(record)}, nil
 }
 
 // GetReadonlyExchangeKey 按属性查找启用的交易所正式环境只读 Key，只返回其公开标识 key_id，

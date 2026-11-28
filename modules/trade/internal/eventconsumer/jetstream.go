@@ -28,8 +28,8 @@ func RunTarget(ctx context.Context, opts TargetOptions) error {
 	}
 	for ctx.Err() == nil {
 		consumer, openErr := events.NewConsumer(ctx, opts.Client, registry, events.ConsumerConfig{
-			Name: opts.ConsumerName, Event: events.LogicalAccountTargetWeightRequested,
-			AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 64,
+			Consumer: events.TradeTargetConsumer.WithName(opts.ConsumerName),
+			AckWait:  time.Minute, MaxDeliver: -1, MaxAckPending: 64,
 			FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
 			DeliverDecodeErrors: true,
 		})

@@ -92,7 +92,7 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 				encoded, err := proto.Marshal(rsp)
 				return &codec.Body{Data: encoded}, err
 			}
-			if message.ServerRPCName() != "/trpc.moox.ops.SecretMgr/GetSecretValue" || message.SerializationType() != codec.SerializationTypeJSON {
+			if message.ServerRPCName() != "/trpc.moox.ops.SecretMgr/GetExchangeCredential" || message.SerializationType() != codec.SerializationTypeJSON {
 				return nil, errors.New("unexpected Trade secret call")
 			}
 			// 同机直连的请求不带任何签名头。

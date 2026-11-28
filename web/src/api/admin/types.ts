@@ -46,21 +46,20 @@ export interface ComponentDeployment {
   created_at?: string;
   updated_at?: string;
 }
-/** 服务目录里的一个方法：callers 是能调它的机器身份，operators 收窄 console 与 moox-cli（省略表示两者都能调，[] 表示都不能调）。 */
+/** 服务目录里的一个方法：callers 是后端展开后的全部调用方（含人操作身份与机器身份）。 */
 export interface CatalogMethod {
   name: string;
   read_only?: boolean;
   idempotent?: boolean;
-  timeout_ms?: number;
+  timeout_ms?: number | string;
   callers?: string[];
-  operators?: string[];
 }
 export interface CatalogService {
   path: string;
   port: number;
-  methods: CatalogMethod[];
-  timeout_ms?: number;
-  max_body_bytes?: number;
+  methods?: CatalogMethod[];
+  timeout_ms?: number | string;
+  max_body_bytes?: number | string;
   console_name?: string;
 }
 export interface CatalogComponent {
@@ -68,26 +67,24 @@ export interface CatalogComponent {
   name: string;
   binary: string;
   scope: "host" | "control" | "any";
-  replicas: "single" | "multi";
-  protected: boolean;
   /** 外部程序（因子引擎、归档 worker）：由 systemd 用户服务托管，不经主机网关路由 */
   external_program?: boolean;
   ports?: number[];
   /** 健康端口只听本机（/healthz、/readyz、/metrics），组件健康看上报 */
-  health: { port: number };
+  health_port?: number;
   services?: CatalogService[];
-  doctor?: Record<string, unknown>;
 }
 export interface ComponentCatalog {
   version: number;
   /** 不对应部署的调用身份；external 为真的从入口主机网关的外部入口（11004）进入。 */
-  identities: { id: string; external: boolean }[];
-  components: CatalogComponent[];
+  identities?: { id: string; external?: boolean }[];
+  components?: CatalogComponent[];
 }
 export interface CatalogResponse {
-  catalog_yaml: string;
+  catalog_yaml?: string;
   sha256: string;
   control_host_id: string;
+  catalog?: ComponentCatalog;
 }
 /** 网关最近一次拉取快照时 Admin 记下的状态（拉取约每 5 秒一次，兼作心跳）。 */
 export interface HostGatewayRuntimeStatus {

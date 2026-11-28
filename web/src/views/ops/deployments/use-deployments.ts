@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { usePolling } from "@/hooks/usePolling";
 import { useRoute, useRouter } from "vue-router";
-import { decodeCatalog, getCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "@/api/admin/sysdeploy";
+import { getCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "@/api/admin/sysdeploy";
 import type { ComponentCatalog, ComponentDeployment, DeploymentHost, HostRoutesResponse } from "@/api/admin/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -175,10 +175,10 @@ export function useDeployments() {
           .then(result => ({ overview: result.overview, error: "" }))
           .catch(reason => ({ overview: undefined, error: reason instanceof Error ? reason.message : String(reason) }))
       ]);
-      const definition = decodeCatalog(rawCatalog);
+      if (!rawCatalog.control_host_id || !rawCatalog.catalog) throw new Error("组件目录响应缺少结构化目录或控制主机");
       const snapshots = await loadHostRoutes(hostRows, hostId => getHostRoutes(hostId));
       if (!request.isLatest()) return;
-      catalog.value = definition;
+      catalog.value = rawCatalog.catalog;
       catalogHash.value = rawCatalog.sha256;
       controlHostId.value = rawCatalog.control_host_id;
       hosts.value = hostRows;
