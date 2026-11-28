@@ -121,28 +121,6 @@ func (c *DatasetCache) GetDataset(ctx context.Context, spaceID string, datasetID
 	return proto.Clone(item).(*pb.Dataset), nil
 }
 
-// GetDatasetColumn 返回单个数据集列的独立副本。
-func (c *DatasetCache) GetDatasetColumn(ctx context.Context, spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, error) {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-	}
-	views, err := c.currentViews()
-	if err != nil {
-		return nil, err
-	}
-	item := views.items[datasetKey{spaceID, datasetID}]
-	if item == nil {
-		return nil, notFound("dataset_column", spaceID, datasetID+"/"+columnName)
-	}
-	column := item.columnsByName[columnName]
-	if column == nil {
-		return nil, notFound("dataset_column", spaceID, datasetID+"/"+columnName)
-	}
-	return proto.Clone(column).(*pb.DatasetColumn), nil
-}
-
 // ListDatasets 按条件过滤并分页返回数据集独立副本。
 func (c *DatasetCache) ListDatasets(ctx context.Context, query metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	if ctx != nil {

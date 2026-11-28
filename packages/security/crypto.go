@@ -4,7 +4,6 @@ package security
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -99,13 +98,6 @@ func decryptWithKey(data, key []byte) (string, error) {
 func SHA256Hex(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
-}
-
-// HMACSHA256Hex returns the lowercase hexadecimal HMAC-SHA256 of data.
-func HMACSHA256Hex(secret string, data []byte) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write(data)
-	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // RandomHex returns size cryptographically random bytes as lowercase hex.

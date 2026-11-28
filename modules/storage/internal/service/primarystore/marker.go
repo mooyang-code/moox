@@ -3,8 +3,6 @@ package primarystore
 import (
 	"context"
 	"errors"
-	"sort"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
@@ -78,19 +76,4 @@ func markerError(err error) *pb.RetInfo {
 		return retinfo.Error(pb.ErrorCode_INVALID_PARAM, validation)
 	}
 	return retinfo.Error(pb.ErrorCode_INNER_ERR, err)
-}
-
-func uniqueSorted(values []string) []string {
-	set := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			set[value] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(set))
-	for value := range set {
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
 }

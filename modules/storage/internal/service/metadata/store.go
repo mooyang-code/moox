@@ -75,7 +75,6 @@ type Writer interface {
 type Store interface {
 	Close() error
 	InitSchema(ctx context.Context) error
-	TableNames(ctx context.Context) ([]string, error)
 	Reader
 	TagStore
 	Writer

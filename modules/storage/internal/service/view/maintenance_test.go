@@ -37,11 +37,13 @@ func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata := metadataFor(recordSpec("space", "records", "title"))
-	stop, err := svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
+	opts, err := svc.normalizeMaintenanceOptions(MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
-	stop()
+	if err := svc.maintainOnce(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
 	indexID := viewindex.IndexID("space", "records")
 	if len(svc.views) != 1 {
 		t.Fatalf("views=%v", svc.views)

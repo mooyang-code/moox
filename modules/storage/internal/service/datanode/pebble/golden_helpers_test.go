@@ -49,7 +49,7 @@ func newGoldenStore(t *testing.T, clock *goldenClock) *Store {
 // goldenFinalize 跑一次截止判定（与后台每秒一次的判定相同），返回错误。
 func goldenFinalize(t *testing.T, store *Store, now time.Time) error {
 	t.Helper()
-	_, err := store.FinalizeWaitingDatasetPeriods(context.Background(), now)
+	_, err := store.finalizeDuePeriods(context.Background(), now, false)
 	return err
 }
 

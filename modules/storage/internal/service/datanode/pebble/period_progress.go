@@ -428,12 +428,6 @@ func (s *Store) clearPeriodFinalizeError() {
 	s.periodFinalizeErrorMu.Unlock()
 }
 
-// FinalizeWaitingDatasetPeriods 扫全部账本记录，判定到期的周期（序列已齐或已过截止），返回判定出终态的期数。
-// 某一期判定失败不影响其他期，错误合并返回。
-func (s *Store) FinalizeWaitingDatasetPeriods(ctx context.Context, now time.Time) (int, error) {
-	return s.finalizeDuePeriods(ctx, now, false)
-}
-
 func (s *Store) finalizeDuePeriods(ctx context.Context, now time.Time, windowed bool) (int, error) {
 	if now.IsZero() {
 		now = s.periodNow().UTC()

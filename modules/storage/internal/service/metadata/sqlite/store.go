@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -184,31 +183,4 @@ func (s *Store) nowUTC() time.Time {
 		return s.now().UTC()
 	}
 	return time.Now().UTC()
-}
-
-func (s *Store) TableNames(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT name
-		FROM sqlite_master
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-		ORDER BY name
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		names = append(names, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	sort.Strings(names)
-	return names, nil
 }

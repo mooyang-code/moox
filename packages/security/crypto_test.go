@@ -135,12 +135,6 @@ func TestSHA256Hex(t *testing.T) {
 	}
 }
 
-func TestHMACSHA256Hex(t *testing.T) {
-	if got := HMACSHA256Hex("key", []byte("The quick brown fox jumps over the lazy dog")); got != "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8" {
-		t.Fatalf("HMACSHA256Hex() = %q", got)
-	}
-}
-
 func TestRandomHexShapeAndUniqueness(t *testing.T) {
 	first, err := RandomHex(32)
 	if err != nil {

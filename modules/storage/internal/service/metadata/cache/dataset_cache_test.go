@@ -104,13 +104,6 @@ func TestDatasetCache_GetListAndFilters(t *testing.T) {
 	_, err = cache.GetDataset(ctx, "crypto", "missing")
 	require.ErrorIs(t, err, sql.ErrNoRows)
 
-	col, err := cache.GetDatasetColumn(ctx, "crypto", "dataset_kline_5m", "close")
-	require.NoError(t, err)
-	assert.Equal(t, "收盘", col.GetDisplayName())
-
-	_, err = cache.GetDatasetColumn(ctx, "crypto", "dataset_kline_5m", "missing")
-	require.ErrorIs(t, err, sql.ErrNoRows)
-
 	// 过滤查询
 	tsActive, page, err := cache.ListDatasets(ctx, metadata.DatasetQuery{
 		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,

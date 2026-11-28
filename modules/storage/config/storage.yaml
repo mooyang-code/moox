@@ -2,9 +2,6 @@ storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.
   policy_file: config/storage-policy.json
-  roles:
-    - primary
-    - view
   metadata:
     path: ./var/storage/metadata/storage_metadata.db
   devices:

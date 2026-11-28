@@ -9,13 +9,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-func TestStorageConfigRolesAreExplicit(t *testing.T) {
-	cfg := StorageConfig{Roles: []string{"primary", "view"}}
-	if !cfg.HasRole("primary") || !cfg.HasRole("view") || cfg.HasRole("view_index") {
-		t.Fatal("role matching must be explicit")
-	}
-}
-
 func TestStorageViewBackfillDefaults(t *testing.T) {
 	cfg := StorageConfig{}
 	cfg.ApplyDefaults()
@@ -105,22 +98,12 @@ func TestStorageConfigApplyHomeRootRebasesAbsolutePathsUnderOldRoot(t *testing.T
 	}
 }
 
-func TestStorageDeploymentConfigFilesLoadRoles(t *testing.T) {
-	tests := []struct {
-		file     string
-		wantRole string
-	}{
-		{file: "storage.primary.yaml", wantRole: "primary"},
-		{file: "storage_view/trpc_go.yaml", wantRole: "view"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.file, func(t *testing.T) {
+func TestStorageDeploymentConfigFilesLoadEventBusCredential(t *testing.T) {
+	for _, file := range []string{"storage.primary.yaml", "storage_view/trpc_go.yaml"} {
+		t.Run(file, func(t *testing.T) {
 			var cfg RuntimeConfig
-			if err := NewConfigLoader("../../config").LoadConfigWithDefaults(tt.file, &cfg, cfg.ApplyDefaults); err != nil {
-				t.Fatalf("LoadConfigWithDefaults(%s): %v", tt.file, err)
-			}
-			if !cfg.Storage.HasRole(tt.wantRole) {
-				t.Fatalf("roles = %v, want %s", cfg.Storage.Roles, tt.wantRole)
+			if err := NewConfigLoader("../../config").LoadConfigWithDefaults(file, &cfg, cfg.ApplyDefaults); err != nil {
+				t.Fatalf("LoadConfigWithDefaults(%s): %v", file, err)
 			}
 			if cfg.Storage.EventBus.CredentialFile != "~/.config/moox/eventbus/storage-eventbus.yaml" {
 				t.Fatalf("EventBus.CredentialFile = %q", cfg.Storage.EventBus.CredentialFile)

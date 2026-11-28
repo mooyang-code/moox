@@ -64,18 +64,6 @@ const metadataPageSize = 500
 const coverageRefreshInterval = 5 * time.Minute
 const coverageStatTimeout = 5 * time.Second
 
-func (s *Service) StartViewMaintainer(ctx context.Context, opts MaintenanceOptions) (func(), error) {
-	var err error
-	opts, err = s.normalizeMaintenanceOptions(opts)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.maintainOnce(ctx, opts); err != nil {
-		return nil, err
-	}
-	return s.startViewMaintenanceLoop(ctx, opts), nil
-}
-
 // StartViewMaintainerAsync 启动周期维护，不让进程启动等待首次建索引的大批量回填。
 func (s *Service) StartViewMaintainerAsync(ctx context.Context, opts MaintenanceOptions) (func(), error) {
 	var err error
@@ -148,27 +136,6 @@ func (s *Service) reportFilesOverLimit() {
 	s.mu.RUnlock()
 	sort.Strings(over)
 	s.metrics.SetViewFilesOverLimit(over)
-}
-
-func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts MaintenanceOptions) func() {
-	loopCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(opts.Interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-loopCtx.Done():
-				return
-			case <-ticker.C:
-				if err := s.maintainOnce(loopCtx, opts); err != nil && loopCtx.Err() == nil {
-					log.Warnf("storage view maintenance failed: %v", err)
-				}
-			}
-		}
-	}()
-	return func() { cancel(); <-done }
 }
 
 // listViewSpecs 列出元数据里全部数据集（含停用的）的 View 声明，按维护先后排好。先列数据集再列列：
