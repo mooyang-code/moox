@@ -226,7 +226,7 @@ func (r *countingRenewer) RefreshCertificate(context.Context) error {
 	return nil
 }
 
-// 网页证书的每日检查挂在证书巡检的定时器上：注册时先跑一次，之后每天跑。
+// 网页证书的定时检查挂在证书巡检的定时器上：注册时先跑一次，之后每分钟跑。
 func TestCertificateWatchTimerAlsoRenewsWebCertificate(t *testing.T) {
 	watch, _ := certificateWatchFixture(t, 365*24*time.Hour, 180*24*time.Hour)
 	s := &server.Server{}

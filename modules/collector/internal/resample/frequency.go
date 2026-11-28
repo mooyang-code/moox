@@ -59,7 +59,7 @@ func ValidateTaskParamsBasic(params *domain.CollectParams, targetDatasetID strin
 		return fmt.Errorf("source_dataset_id is required")
 	}
 	if targetDatasetID == "" {
-		return fmt.Errorf("target_dataset_id is required")
+		return fmt.Errorf("result_dataset_id is required")
 	}
 	if strings.TrimSpace(params.SourceDatasetID) == targetDatasetID {
 		return fmt.Errorf("source and target Dataset IDs must differ")

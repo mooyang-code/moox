@@ -56,9 +56,9 @@ func TestBuildTaskResultInventoryBorrowsGateway(t *testing.T) {
 	_, err = buildTaskResultInventory(cfg, nil)
 	require.ErrorContains(t, err, "gateway client")
 	invalid := *cfg
-	invalid.KlineFreshness.InventoryPageSize = 101
+	invalid.KlineFreshness.InventoryMaxEntries = 1001
 	_, err = buildTaskResultInventory(&invalid, gateway)
-	require.ErrorContains(t, err, "page size")
+	require.ErrorContains(t, err, "max entries")
 }
 
 func TestMaxInt(t *testing.T) {

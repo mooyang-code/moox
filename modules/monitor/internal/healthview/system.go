@@ -34,18 +34,30 @@ func projectLifecycle(l *lifecycleSource) *commonpb.LifecycleSnapshot {
 	return &commonpb.LifecycleSnapshot{Stage: l.Stage, Reason: l.Reason, Pause: projectPause(l.Pause), Catchup: projectCatchup(l.Catchup)}
 }
 
-// lifecycleModules 是提供生命周期接口的模块（组件 ID）。
+// systemHealthModules 是计入首页系统健康汇总的模块（组件 ID）：停止上报或未就绪时首页标红并列出。
+// 其中 factor-mgr 与 archive-mgr 不提供模块级生命周期阶段，但仍计入系统健康汇总。
+var systemHealthModules = map[string]bool{
+	"collector":     true,
+	"factor-mgr":    true,
+	"factor-engine": true,
+	"archive-mgr":   true,
+	"strategy":      true,
+	"trade":         true,
+	"monitor":       true,
+}
+
+// lifecycleModules 是提供模块级生命周期阶段的模块（组件 ID），参与运行阶段汇总。
 var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true, "monitor": true}
 
 // systemPausable 是系统级暂停（moox-cli system pause）覆盖的模块（组件 ID）。
 var systemPausable = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true}
 
 // projectSystem 汇总系统状态（设计 3.8），数据全部来自各模块的上报：
-//   - 健康面：有生命周期接口的模块停止上报（或从未上报）、上报了未就绪时标红，并列出模块与原因；
-//   - 运行阶段：各模块只有运行、暂停、恢复追赶三种状态。有模块恢复追赶 → resuming（含「已追平待放行」）；
+//   - 健康面：systemHealthModules 里的模块停止上报（或从未上报）、上报了未就绪时标红，并列出模块与原因；
+//   - 运行阶段：仅 lifecycleModules 里的模块参与汇总，各模块只有运行、暂停、恢复追赶三种状态。有模块恢复追赶 → resuming（含「已追平待放行」）；
 //     系统暂停覆盖的模块全部暂停 → paused，部分暂停 → partially_paused；否则 running。
 //
-// 没有任何模块上报生命周期状态时返回 nil。
+// 没有任何生命周期模块上报状态且系统健康汇总无异常时返回 nil。
 func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	type module struct {
 		id, name string
@@ -67,19 +79,20 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 		}
 		name := firstNonEmpty(c.GetName(), c.GetComponentId())
 		issue := false
-		if lifecycleModules[c.GetComponentId()] {
+		if systemHealthModules[c.GetComponentId()] {
 			switch {
 			case c.GetReporter().GetStatus() != "healthy":
-				// 它的生命周期状态读不出来，但不能因此从系统汇总里消失（否则其余模块还在跑时首页仍是绿色）。
+				// 停止上报的模块不能从系统汇总里消失（否则其余模块还在跑时首页仍是绿色）。
 				silent, issue = append(silent, name+"：停止上报"), true
 			case c.GetReadiness() == "not_ready":
 				notReady, issue = append(notReady, name+"：未就绪（"+firstNonEmpty(c.GetNotReadyReason(), "组件报告未就绪")+"）"), true
 			}
 		}
-		if c.GetLifecycle() != nil {
+		hasLifecycle := lifecycleModules[c.GetComponentId()] && c.GetLifecycle() != nil
+		if hasLifecycle {
 			modules = append(modules, module{id: c.GetComponentId(), name: name, l: c.GetLifecycle()})
 		}
-		if c.GetLifecycle() != nil || issue {
+		if hasLifecycle || issue {
 			counted++
 		}
 	}

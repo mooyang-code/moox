@@ -339,8 +339,8 @@ type DatasetMeta struct {
 	Purpose   string `json:"purpose"`
 	DirName   string `json:"dir_name"`
 	// Dataset 是 Storage 里的数据集信息（名称、简介、数据来源、标的范围等），由 mgr 提供。
-	Dataset json.RawMessage `json:"dataset,omitempty"`
-	Freq    string          `json:"freq"`
+	Dataset   json.RawMessage `json:"dataset,omitempty"`
+	Frequency string          `json:"frequency"`
 	// Partition 说明文件如何切分。
 	Partition PartitionMeta `json:"partition"`
 	Files     FilesMeta     `json:"files"`
@@ -364,9 +364,9 @@ type FilesMeta struct {
 
 // DatasetMetaInput 是生成元数据文件需要的信息。
 type DatasetMetaInput struct {
-	SpaceID, DatasetID, Freq string
-	Purpose, DirName         string
-	PartitionUnit, Timezone  string
+	SpaceID, DatasetID, Frequency string
+	Purpose, DirName              string
+	PartitionUnit, Timezone       string
 	// DatasetJSON 是 mgr 下发的数据集信息 JSON，可为空。
 	DatasetJSON string
 	Columns     []staging.Column
@@ -405,7 +405,7 @@ func (f Files) BuildDatasetMeta(in DatasetMetaInput, now time.Time) DatasetMeta 
 		pattern = "<yyyy>/<yyyymm>" + ext(f.format())
 	}
 	return DatasetMeta{
-		SpaceID: in.SpaceID, DatasetID: in.DatasetID, Purpose: in.Purpose, DirName: in.DirName, Dataset: dataset, Freq: in.Freq,
+		SpaceID: in.SpaceID, DatasetID: in.DatasetID, Purpose: in.Purpose, DirName: in.DirName, Dataset: dataset, Frequency: in.Frequency,
 		Partition: PartitionMeta{Unit: in.PartitionUnit, Timezone: in.Timezone},
 		Files:     FilesMeta{Format: f.format(), PathPattern: pattern, Header: header},
 		Columns:   columns, UpdatedAt: now.UTC().Format(time.RFC3339),

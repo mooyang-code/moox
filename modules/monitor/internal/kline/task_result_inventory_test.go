@@ -60,7 +60,7 @@ func TestCollectorTaskResultInventorySourceReadsOneBoundedSnapshot(t *testing.T)
 			},
 		),
 	}}
-	source, err := NewCollectorTaskResultInventorySource(client, []string{" crypto "}, 100, 2)
+	source, err := NewCollectorTaskResultInventorySource(client, []string{" crypto "}, 2)
 	require.NoError(t, err)
 	snapshot, err := source.FetchTaskResultInventory(context.Background())
 	require.NoError(t, err)
@@ -100,7 +100,7 @@ func TestCollectorTaskResultInventorySourceReadsConfiguredSpacesIndependently(t 
 			},
 		),
 	}}
-	source, err := NewCollectorTaskResultInventorySource(client, []string{"crypto", "stockcn"}, 100, 3)
+	source, err := NewCollectorTaskResultInventorySource(client, []string{"crypto", "stockcn"}, 3)
 	require.NoError(t, err)
 	snapshot, err := source.FetchTaskResultInventory(context.Background())
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestCollectorTaskResultInventorySourceRejectsOversizedAndCrossSpaceSnapshot
 	oversizedClient := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
 		inventoryResponse(observed, entry, &collectorpb.TaskResultInventoryEntry{SpaceId: "crypto", TaskId: "task-b", DatasetId: "dataset-b", Frequency: "1m", ObservedAt: observed}),
 	}}
-	oversizedSource, err := NewCollectorTaskResultInventorySource(oversizedClient, []string{"crypto"}, 100, 1)
+	oversizedSource, err := NewCollectorTaskResultInventorySource(oversizedClient, []string{"crypto"}, 1)
 	require.NoError(t, err)
 	_, err = oversizedSource.FetchTaskResultInventory(context.Background())
 	require.ErrorContains(t, err, "exceeds limit")
@@ -129,13 +129,13 @@ func TestCollectorTaskResultInventorySourceRejectsOversizedAndCrossSpaceSnapshot
 			SpaceId: "stockcn", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m", ObservedAt: observed,
 		}),
 	}}
-	wrongSpaceSource, err := NewCollectorTaskResultInventorySource(wrongSpaceClient, []string{"crypto"}, 100, 2)
+	wrongSpaceSource, err := NewCollectorTaskResultInventorySource(wrongSpaceClient, []string{"crypto"}, 2)
 	require.NoError(t, err)
 	_, err = wrongSpaceSource.FetchTaskResultInventory(context.Background())
 	require.ErrorContains(t, err, "returned task from Space")
 
 	for _, spaces := range [][]string{nil, {""}, {"crypto", " crypto "}} {
-		_, err := NewCollectorTaskResultInventorySource(&fakeCollectorTaskResultInventoryClient{}, spaces, 100, 2)
+		_, err := NewCollectorTaskResultInventorySource(&fakeCollectorTaskResultInventoryClient{}, spaces, 2)
 		require.Error(t, err)
 	}
 }
@@ -392,6 +392,88 @@ func TestKlineFreshnessEvaluatorPreservesUnownedErrorAndPendingTaskStates(t *tes
 	require.True(t, ok)
 	require.True(t, pendingReport.Skipped)
 	require.Equal(t, "task_result_not_ready", pendingReport.Reason)
+}
+
+// 已启用但一直停在准备状态（pending / unverified）的任务：30 分钟宽限期内跳过（保持原状态），超过 30 分钟由 K 线检查报失败；
+// 任务停用或就绪后计时清零，再次进入准备状态时重新计宽限期。
+func TestKlineFreshnessEvaluatorFailsWhenTaskStaysPreparingPastGrace(t *testing.T) {
+	t0 := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
+		ID: "snap-0", ObservedAt: t0,
+		Entries: []TaskResultInventoryEntry{
+			{SpaceID: "crypto", TaskID: "task-p", DatasetID: "dataset-pending", Frequency: "1m", Enabled: true, ResultStatus: "pending", ObservedAt: t0},
+		},
+	}}
+	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
+	require.NoError(t, err)
+	evaluator := NewKlineFreshnessEvaluatorWithInventory(newViewSummaryQuery(t, nil), cache, latenessPolicy(2*time.Minute), 20)
+
+	findReport := func(now time.Time) KlineFreshnessReport {
+		t.Helper()
+		reports, err := evaluator.Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		for _, r := range reports {
+			if r.CheckID == "kline_freshness:crypto:dataset-pending:1m" {
+				return r
+			}
+		}
+		t.Fatal("missing kline report")
+		return KlineFreshnessReport{}
+	}
+
+	// 首次见到 pending 与 29 分钟后仍在宽限期内，跳过。
+	r := findReport(t0)
+	require.True(t, r.Skipped)
+	require.Equal(t, "task_result_not_ready", r.Reason)
+
+	t29 := t0.Add(29 * time.Minute)
+	provider.snapshot = TaskResultInventorySnapshot{
+		ID: "snap-29", ObservedAt: t29,
+		Entries: []TaskResultInventoryEntry{
+			{SpaceID: "crypto", TaskID: "task-p", DatasetID: "dataset-pending", Frequency: "1m", Enabled: true, ResultStatus: "pending", ObservedAt: t29},
+		},
+	}
+	r = findReport(t29)
+	require.True(t, r.Skipped)
+	require.Equal(t, "task_result_not_ready", r.Reason)
+
+	// 满 30 分钟仍未准备好，报失败。
+	t30 := t0.Add(30 * time.Minute)
+	provider.snapshot = TaskResultInventorySnapshot{
+		ID: "snap-30", ObservedAt: t30,
+		Entries: []TaskResultInventoryEntry{
+			{SpaceID: "crypto", TaskID: "task-p", DatasetID: "dataset-pending", Frequency: "1m", Enabled: true, ResultStatus: "pending", ObservedAt: t30},
+		},
+	}
+	r = findReport(t30)
+	require.False(t, r.Skipped)
+	require.False(t, r.Success)
+	require.Equal(t, KlineReasonTaskResultPrepareStalled, r.Reason)
+	require.Equal(t, 30*time.Minute, r.StaleAge)
+	require.Contains(t, r.Diagnostic, "result_status=pending")
+
+	// 任务停用后清掉准备计时；再次启用进入 pending 时重新获得 30 分钟宽限。
+	t32 := t0.Add(32 * time.Minute)
+	provider.snapshot = TaskResultInventorySnapshot{
+		ID: "snap-disabled", ObservedAt: t32,
+		Entries: []TaskResultInventoryEntry{
+			{SpaceID: "crypto", TaskID: "task-p", DatasetID: "dataset-pending", Frequency: "1m", Enabled: false, ResultStatus: "pending", ObservedAt: t32},
+		},
+	}
+	r = findReport(t32)
+	require.True(t, r.Skipped)
+	require.Equal(t, "disabled", r.Reason)
+
+	t34 := t0.Add(34 * time.Minute)
+	provider.snapshot = TaskResultInventorySnapshot{
+		ID: "snap-reenabled", ObservedAt: t34,
+		Entries: []TaskResultInventoryEntry{
+			{SpaceID: "crypto", TaskID: "task-p", DatasetID: "dataset-pending", Frequency: "1m", Enabled: true, ResultStatus: "pending", ObservedAt: t34},
+		},
+	}
+	r = findReport(t34)
+	require.True(t, r.Skipped)
+	require.Equal(t, "task_result_not_ready", r.Reason)
 }
 
 // latenessPolicy 是所有周期都允许迟到 lateness 的健康策略。

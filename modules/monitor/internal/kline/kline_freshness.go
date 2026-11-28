@@ -23,12 +23,16 @@ import (
 )
 
 const (
-	KlineDefaultSeriesTag      = "default"
-	TaskResultInventoryCheckID = "kline_freshness:task_result_inventory"
-	klineFutureTolerance       = 10 * time.Minute
+	KlineDefaultSeriesTag               = "default"
+	TaskResultInventoryCheckID          = "kline_freshness:task_result_inventory"
+	KlineReasonTaskResultPrepareStalled = "task_result_prepare_stalled"
+	klineFutureTolerance                = 10 * time.Minute
 	// newSubjectCollectionAllowance 是新上线对象从进入采集清单到采集计划生效、首根数据写入的额外余量：
 	// 采集计划按周期刷新，生产上现货分钟线的新对象要 3～5 分钟才有第一根。
 	newSubjectCollectionAllowance = 10 * time.Minute
+	// taskResultPrepareGrace 是已启用任务在准备状态（pending / unverified）下允许等待的最长时间；
+	// 超过后由 K 线新鲜度检查报失败，避免 View 建索引卡住等情况长期无告警。
+	taskResultPrepareGrace = 30 * time.Minute
 )
 
 type KlineFreshnessRule struct {
@@ -88,6 +92,9 @@ type KlineFreshnessEvaluator struct {
 	pruneMu    sync.Mutex
 	prunedOnce bool
 	lastPruned [][2]string
+
+	pendingMu    sync.Mutex
+	pendingSince map[string]time.Time
 }
 
 // StaticDatasets 返回静态规则声明的采集数据集集合（键为 [空间, 数据集 ID]），供未配清单缓存的测试按规则区分采集与非采集数据集。
@@ -205,6 +212,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		}
 		reports = append(reports, inventoryReport)
 	}
+	activePending := make(map[string]struct{})
 	for _, rule := range rules {
 		if !rule.Enabled {
 			reports = append(reports, KlineFreshnessReport{
@@ -214,8 +222,19 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		}
 		report := KlineFreshnessReport{Rule: rule, CheckID: KlineFreshnessCheckID(rule)}
 		if rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
-			report.Skipped = true
-			report.Reason = "task_result_not_ready"
+			activePending[report.CheckID] = struct{}{}
+			age := e.observePending(report.CheckID, now)
+			if age < taskResultPrepareGrace {
+				report.Skipped = true
+				report.Reason = "task_result_not_ready"
+				reports = append(reports, report)
+				continue
+			}
+			report.Success = false
+			report.Reason = KlineReasonTaskResultPrepareStalled
+			report.StaleAge = age
+			report.Diagnostic = fmt.Sprintf("result_status=%s pending_age_seconds=%.0f grace_seconds=%.0f",
+				rule.ResultStatus, age.Seconds(), taskResultPrepareGrace.Seconds())
 			reports = append(reports, report)
 			continue
 		}
@@ -298,8 +317,35 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		e.evaluateViewSummary(&report, rule, clock, freq, expected, summary, activeSubjects, suffix, newSubjects, now)
 		reports = append(reports, report)
 	}
+	e.syncPendingState(activePending)
 	sort.Slice(reports, func(i, j int) bool { return reports[i].CheckID < reports[j].CheckID })
 	return reports, nil
+}
+
+// observePending 记录已启用任务首次处于准备状态（pending / unverified）的时刻，并返回已持续等待时长。
+func (e *KlineFreshnessEvaluator) observePending(checkID string, now time.Time) time.Duration {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	if e.pendingSince == nil {
+		e.pendingSince = make(map[string]time.Time)
+	}
+	since, exists := e.pendingSince[checkID]
+	if !exists || now.Before(since) {
+		e.pendingSince[checkID] = now
+		return 0
+	}
+	return now.Sub(since)
+}
+
+// syncPendingState 清理本轮不再处于准备状态的任务计时，确保任务就绪、停用或删除后重新计时。
+func (e *KlineFreshnessEvaluator) syncPendingState(active map[string]struct{}) {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	for checkID := range e.pendingSince {
+		if _, keep := active[checkID]; !keep {
+			delete(e.pendingSince, checkID)
+		}
+	}
 }
 
 // completedPeriodViewLag 判断结果视图是否落后于采集已完成的最新一期；落后时返回该期之后视图还缺的第一根已过收线多久。

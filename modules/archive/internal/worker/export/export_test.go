@@ -181,7 +181,7 @@ func TestDatasetJSONCarriesTheDatasetAndColumnDescriptionsAndIsRewrittenOnlyOnRe
 	now := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	cols := []staging.Column{{Name: "open", Type: staging.TypeDouble}}
 	input := DatasetMetaInput{
-		SpaceID: "crypto", DatasetID: "ds_1m", Purpose: "collect", DirName: "binance-spot-kline-1m", Freq: "1m", PartitionUnit: "day", Timezone: "UTC",
+		SpaceID: "crypto", DatasetID: "ds_1m", Purpose: "collect", DirName: "binance-spot-kline-1m", Frequency: "1m", PartitionUnit: "day", Timezone: "UTC",
 		DatasetJSON: `{"name":"现货分钟K线","description":"币安现货 1 分钟 K 线"}`, Columns: cols,
 		Infos: []ColumnMeta{{Name: "open", DisplayName: "开盘价", Group: "行情价格"}},
 	}
@@ -190,7 +190,7 @@ func TestDatasetJSONCarriesTheDatasetAndColumnDescriptionsAndIsRewrittenOnlyOnRe
 	}
 	path := filepath.Join(files.Root, "crypto", "collect", "binance-spot-kline-1m", "dataset.json")
 	first, _ := os.ReadFile(path)
-	for _, want := range []string{`"purpose": "collect"`, `"dir_name": "binance-spot-kline-1m"`, `"name": "现货分钟K线"`, `"description": "币安现货 1 分钟 K 线"`, `"display_name": "开盘价"`, `"display_name": "数据时间"`, `"path_pattern": "<yyyy>/<yyyymmdd>.csv.gz"`, `"format": "csv.gz"`, `"timezone": "UTC"`} {
+	for _, want := range []string{`"purpose": "collect"`, `"dir_name": "binance-spot-kline-1m"`, `"frequency": "1m"`, `"name": "现货分钟K线"`, `"description": "币安现货 1 分钟 K 线"`, `"display_name": "开盘价"`, `"display_name": "数据时间"`, `"path_pattern": "<yyyy>/<yyyymmdd>.csv.gz"`, `"format": "csv.gz"`, `"timezone": "UTC"`} {
 		if !strings.Contains(string(first), want) {
 			t.Fatalf("元数据缺少 %s:\n%s", want, first)
 		}

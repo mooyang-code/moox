@@ -26,19 +26,19 @@ func TestRealtimeTimeSeriesPolicyValidation(t *testing.T) {
 		{"分钟迟到容忍非正", func(p *RealtimeTimeSeriesPolicy) { p.Defaults.MinuteLateness = 0 }},
 		{"小时迟到容忍非正", func(p *RealtimeTimeSeriesPolicy) { p.Defaults.HourLateness = 0 }},
 		{"覆盖项缺少标识", func(p *RealtimeTimeSeriesPolicy) {
-			p.Overrides = []RealtimeTimeSeriesOverride{{SpaceID: "crypto", Freq: "1m"}}
+			p.Overrides = []RealtimeTimeSeriesOverride{{SpaceID: "crypto", Frequency: "1m"}}
 		}},
 		{"覆盖项周期无效", func(p *RealtimeTimeSeriesPolicy) {
-			p.Overrides = []RealtimeTimeSeriesOverride{{SpaceID: "crypto", DatasetID: "ds", Freq: "bad"}}
+			p.Overrides = []RealtimeTimeSeriesOverride{{SpaceID: "crypto", DatasetID: "ds", Frequency: "bad"}}
 		}},
 		{"覆盖项重复", func(p *RealtimeTimeSeriesPolicy) {
 			p.Overrides = []RealtimeTimeSeriesOverride{
-				{SpaceID: "crypto", DatasetID: "ds", Freq: "1h", Lateness: time.Minute},
-				{SpaceID: "crypto", DatasetID: "ds", Freq: "1H", Lateness: 2 * time.Minute},
+				{SpaceID: "crypto", DatasetID: "ds", Frequency: "1h", Lateness: time.Minute},
+				{SpaceID: "crypto", DatasetID: "ds", Frequency: "1H", Lateness: 2 * time.Minute},
 			}
 		}},
 		{"覆盖项迟到容忍为负", func(p *RealtimeTimeSeriesPolicy) {
-			p.Overrides = []RealtimeTimeSeriesOverride{{SpaceID: "crypto", DatasetID: "ds", Freq: "1m", Lateness: -time.Second}}
+			p.Overrides = []RealtimeTimeSeriesOverride{{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", Lateness: -time.Second}}
 		}},
 	}
 	for _, tc := range cases {
@@ -64,7 +64,7 @@ func TestRealtimeTimeSeriesPolicyLatenessByFrequency(t *testing.T) {
 			t.Fatalf("lateness(%s) = %s, want %s", freq, got, want)
 		}
 	}
-	policy.Overrides = []RealtimeTimeSeriesOverride{{SpaceID: "crypto", DatasetID: "dataset_x", Freq: "1H", Lateness: 5 * time.Minute}}
+	policy.Overrides = []RealtimeTimeSeriesOverride{{SpaceID: "crypto", DatasetID: "dataset_x", Frequency: "1H", Lateness: 5 * time.Minute}}
 	if got := policy.Lateness("crypto", "dataset_x", "1h"); got != 5*time.Minute {
 		t.Fatalf("override lateness = %s", got)
 	}

@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -244,19 +243,6 @@ type cachedSchema struct {
 }
 
 var expectedSchemaCache sync.Map // string(schemaSQL) -> cachedSchema
-
-// InspectExpectedSchema 把 schemaSQL 载入私有内存库，读出 sqlite_master 中规范化后的全部表与索引。
-func InspectExpectedSchema(schemaSQL string) (map[string]SchemaObject, error) {
-	parsed, err := parseExpectedSchema(schemaSQL)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]SchemaObject, len(parsed.objects))
-	for k, v := range parsed.objects {
-		out[k] = v
-	}
-	return out, nil
-}
 
 // SchemaHash 对 schemaSQL 载入内存库后规范化的表与索引语句计算确定性 SHA-256 哈希。
 // 与启动校验采用完全相同的口径：纯格式调整不改变哈希，任何语义变更都会改变哈希。
@@ -577,9 +563,4 @@ func RecordFormatAt(formatPath, component, schemaSQL string, extraParts map[stri
 		return err
 	}
 	return dataformat.VerifyOrWriteFile(formatPath, rec, hasExistingData)
-}
-
-// LifecycleVersion 返回生命周期格式版本常量的字符串形式。
-func LifecycleVersion() string {
-	return strconv.Itoa(dataformat.LifecycleStateVersion)
 }

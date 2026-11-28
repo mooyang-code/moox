@@ -84,21 +84,48 @@ func TestProjectSystemRunning(t *testing.T) {
 	require.Equal(t, int32(3), running.ModuleCount)
 }
 
-// 有生命周期接口的模块停止上报：不能从系统汇总里消失，健康面标红并列出；它最后一次上报的生命周期不再参与汇总。
+// 计入首页健康汇总的模块（含无生命周期阶段的 factor-mgr 与 archive-mgr）停止上报或未就绪时：
+// 首页标红并列出；不计入系统健康汇总的基础设施组件（如 storage-primary）不在此列；
+// factor-mgr 与 archive-mgr 不参与运行阶段汇总。
 func TestProjectSystemReportsSilentLifecycleModule(t *testing.T) {
 	system := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "strategy", silent: true}, moduleReport{id: "storage-primary", silent: true}, moduleReport{id: "archive-mgr", silent: true})
 	require.Equal(t, "attention", system.Health)
 	require.Equal(t, "red", system.Color)
 	require.Equal(t, "running", system.Phase)
-	require.Equal(t, []string{"策略服务：停止上报"}, system.Issues, "没有生命周期接口的组件不在此列")
-	require.Equal(t, int32(1), system.SilentModules)
-	require.Equal(t, int32(2), system.ModuleCount)
+	require.Equal(t, []string{"数据归档管理服务：停止上报", "策略服务：停止上报"}, system.Issues, "archive-mgr 停报应计入首页健康汇总，storage-primary 不计入")
+	require.Equal(t, int32(2), system.SilentModules)
+	require.Equal(t, int32(3), system.ModuleCount)
 
 	only := reportedSystem(t, moduleReport{id: "strategy", silent: true}, moduleReport{id: "factor-mgr", silent: true})
 	require.Equal(t, "attention", only.Health)
-	require.Equal(t, "unknown", only.Phase, "一个模块都读不到时运行阶段未知")
-	require.Equal(t, []string{"策略服务：停止上报"}, only.Issues, "factor-mgr 已无模块级生命周期，停止上报不计入系统汇总")
-	require.Equal(t, int32(1), only.SilentModules)
+	require.Equal(t, "red", only.Color)
+	require.Equal(t, "unknown", only.Phase, "一个生命周期模块都读不到时运行阶段未知")
+	require.Equal(t, []string{"因子管理服务：停止上报", "策略服务：停止上报"}, only.Issues, "factor-mgr 停止上报应计入系统健康汇总")
+	require.Equal(t, int32(2), only.SilentModules)
+
+	// factor-mgr 与 archive-mgr 上报未就绪时同样让首页标红并列出原因，不影响其他模块的运行阶段。
+	notReady := reportedSystem(t,
+		moduleReport{id: "collector", lifecycle: stage("running")},
+		moduleReport{id: "factor-mgr", notReady: "SQLite 只读"},
+		moduleReport{id: "archive-mgr", notReady: "未连接归档执行器"},
+	)
+	require.Equal(t, "attention", notReady.Health)
+	require.Equal(t, "red", notReady.Color)
+	require.Equal(t, "running", notReady.Phase)
+	require.Equal(t, int32(2), notReady.NotReadyModules)
+	require.Equal(t, []string{"因子管理服务：未就绪（SQLite 只读）", "数据归档管理服务：未就绪（未连接归档执行器）"}, notReady.Issues)
+
+	// factor-mgr 与 archive-mgr 正常上报且就绪时，首页保持绿色且不干扰运行阶段。
+	healthy := reportedSystem(t,
+		moduleReport{id: "collector", lifecycle: stage("running")},
+		moduleReport{id: "factor-mgr"},
+		moduleReport{id: "archive-mgr"},
+	)
+	require.Equal(t, "healthy", healthy.Health)
+	require.Equal(t, "green", healthy.Color)
+	require.Equal(t, "running", healthy.Phase)
+	require.Empty(t, healthy.Issues)
+	require.Equal(t, int32(1), healthy.ModuleCount)
 }
 
 // 有模块未就绪：Strategy 自检不过但进程仍在上报，首页标红并写明原因；它的运行阶段照常参与汇总。

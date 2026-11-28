@@ -77,7 +77,7 @@ func TestDatasetLatenessDoesNotScaleWithExpectedInterval(t *testing.T) {
 func TestDatasetTolerancesMatchFrequencyAliasesInOverrides(t *testing.T) {
 	policy := testRealtimePolicy()
 	policy.Overrides = []report.RealtimeTimeSeriesOverride{{
-		SpaceID: "crypto", DatasetID: "market_kline", Freq: "1h", Lateness: 90 * time.Minute,
+		SpaceID: "crypto", DatasetID: "market_kline", Frequency: "1h", Lateness: 90 * time.Minute,
 	}}
 
 	_, _, watermarkLag := datasetTolerances(

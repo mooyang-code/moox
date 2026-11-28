@@ -89,7 +89,6 @@ type KlineFreshnessConfig struct {
 	SpaceIDs                 []string      `yaml:"space_ids"`
 	EvaluationInterval       time.Duration `yaml:"evaluation_interval"`
 	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval"`
-	InventoryPageSize        int           `yaml:"inventory_page_size"`
 	InventoryMaxEntries      int           `yaml:"inventory_max_entries"`
 	MaxSubjectsPerAlert      int           `yaml:"max_subjects_per_alert"`
 }
@@ -157,7 +156,7 @@ func Default() *Config {
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
 		KlineFreshness: KlineFreshnessConfig{
 			SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
-			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
+			InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
 		Metrics: MetricsConfig{Enabled: true, DatasetHealth: report.DefaultRealtimeTimeSeriesPolicy(), NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000},
 	}
@@ -220,9 +219,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.KlineFreshness.InventoryRefreshInterval == 0 {
 		c.KlineFreshness.InventoryRefreshInterval = klineDefaults.InventoryRefreshInterval
-	}
-	if c.KlineFreshness.InventoryPageSize == 0 {
-		c.KlineFreshness.InventoryPageSize = klineDefaults.InventoryPageSize
 	}
 	if c.KlineFreshness.InventoryMaxEntries == 0 {
 		c.KlineFreshness.InventoryMaxEntries = klineDefaults.InventoryMaxEntries
@@ -349,9 +345,6 @@ func (c *Config) validateKlineFreshness() error {
 	}
 	if kline.InventoryRefreshInterval < 30*time.Second || kline.InventoryRefreshInterval > 10*time.Minute {
 		return fmt.Errorf("kline_freshness.inventory_refresh_interval must be between 30s and 10m")
-	}
-	if kline.InventoryPageSize < 1 || kline.InventoryPageSize > 100 {
-		return fmt.Errorf("kline_freshness.inventory_page_size must be between 1 and 100")
 	}
 	if kline.InventoryMaxEntries < 1 || kline.InventoryMaxEntries > 1000 {
 		return fmt.Errorf("kline_freshness.inventory_max_entries must be between 1 and 1000")

@@ -26,7 +26,7 @@ type RealtimeTimeSeriesDefaults struct {
 type RealtimeTimeSeriesOverride struct {
 	SpaceID   string `yaml:"space_id" json:"space_id"`
 	DatasetID string `yaml:"dataset_id" json:"dataset_id"`
-	Freq      string `yaml:"freq" json:"freq"`
+	Frequency string `yaml:"frequency" json:"frequency"`
 	// Lateness 覆盖该数据集最新一根 K 线收线后允许迟到的时间。
 	Lateness time.Duration `yaml:"lateness,omitempty" json:"lateness,omitempty"`
 }
@@ -51,7 +51,7 @@ func (p RealtimeTimeSeriesPolicy) Lateness(spaceID, datasetID, freq string) time
 		return 0
 	}
 	for _, override := range p.Overrides {
-		overrideFreq, err := frequency.Parse(override.Freq)
+		overrideFreq, err := frequency.Parse(override.Frequency)
 		if err == nil && override.SpaceID == spaceID && override.DatasetID == datasetID && overrideFreq == parsed && override.Lateness > 0 {
 			return override.Lateness
 		}
@@ -79,12 +79,12 @@ func (p RealtimeTimeSeriesPolicy) Validate() error {
 	for index, override := range p.Overrides {
 		if strings.TrimSpace(override.SpaceID) == "" ||
 			strings.TrimSpace(override.DatasetID) == "" ||
-			strings.TrimSpace(override.Freq) == "" {
-			return fmt.Errorf("数据集健康策略第 %d 条覆盖项缺少 space_id、dataset_id 或 freq", index)
+			strings.TrimSpace(override.Frequency) == "" {
+			return fmt.Errorf("数据集健康策略第 %d 条覆盖项缺少 space_id、dataset_id 或 frequency", index)
 		}
-		freq, err := frequency.Parse(override.Freq)
+		freq, err := frequency.Parse(override.Frequency)
 		if err != nil {
-			return fmt.Errorf("数据集健康策略第 %d 条覆盖项周期无效 %q", index, override.Freq)
+			return fmt.Errorf("数据集健康策略第 %d 条覆盖项周期无效 %q", index, override.Frequency)
 		}
 		key := strings.Join([]string{override.SpaceID, override.DatasetID, string(freq)}, "\x00")
 		if seen[key] {
@@ -92,7 +92,7 @@ func (p RealtimeTimeSeriesPolicy) Validate() error {
 				"数据集健康策略存在重复覆盖项：%s/%s/%s",
 				override.SpaceID,
 				override.DatasetID,
-				override.Freq,
+				override.Frequency,
 			)
 		}
 		seen[key] = true

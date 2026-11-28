@@ -221,7 +221,7 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if _, exists := freshness["collector_gateway_url"]; exists {
 		t.Fatal("obsolete Collector HTTP route remains")
 	}
-	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
+	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute ||
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 {
 		t.Fatalf("dynamic kline freshness inventory = %+v", cfg.KlineFreshness)
 	}
@@ -252,6 +252,16 @@ func TestMonitorConfigDatasetHealthPolicyDefaultsAndRejection(t *testing.T) {
 	}
 	if _, err := Load(writeConfig(t, "metrics:\n  dataset_health:\n    defaults:\n      minute_lateness: 0s\n")); err == nil {
 		t.Fatal("非法数据集健康阈值不应被接受")
+	}
+	loaded, err := Load(writeConfig(t, "metrics:\n  dataset_health:\n    overrides:\n      - space_id: crypto\n        dataset_id: ds_1m\n        frequency: 1m\n        lateness: 30s\n"))
+	if err != nil {
+		t.Fatalf("合法 frequency 覆盖项应被接受：%v", err)
+	}
+	if len(loaded.Metrics.DatasetHealth.Overrides) != 1 || loaded.Metrics.DatasetHealth.Overrides[0].Frequency != "1m" {
+		t.Fatalf("overrides = %+v", loaded.Metrics.DatasetHealth.Overrides)
+	}
+	if _, err := Load(writeConfig(t, "metrics:\n  dataset_health:\n    overrides:\n      - space_id: crypto\n        dataset_id: ds_1m\n        freq: 1m\n        lateness: 30s\n")); err == nil {
+		t.Fatal("旧字段 freq 不应被接受")
 	}
 }
 
@@ -314,7 +324,7 @@ func TestMonitorConfigValidatesStockCNMarketCanaryFrequency(t *testing.T) {
 func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
 	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 ||
-		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
+		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute ||
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 ||
 		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, registeredMarketIDs()) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
@@ -332,7 +342,6 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		{"empty Space ID", func(c *Config) { c.KlineFreshness.SpaceIDs = []string{""} }},
 		{"duplicate Space ID", func(c *Config) { c.KlineFreshness.SpaceIDs = []string{"crypto", " crypto "} }},
 		{"refresh interval unbounded", func(c *Config) { c.KlineFreshness.InventoryRefreshInterval = 11 * time.Minute }},
-		{"page size out of range", func(c *Config) { c.KlineFreshness.InventoryPageSize = 101 }},
 		{"inventory cap out of range", func(c *Config) { c.KlineFreshness.InventoryMaxEntries = 1001 }},
 		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
 	}
@@ -351,6 +360,7 @@ func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
 	for _, raw := range []string{
 		"kline_freshness:\n  typo_interval: 30s\n",
 		"kline_freshness:\n  enabled: true\n",
+		"kline_freshness:\n  inventory_page_size: 100\n",
 	} {
 		if _, err := Load(writeConfig(t, raw)); err == nil {
 			t.Fatalf("Load(%q) accepted unknown or removed kline freshness field", raw)

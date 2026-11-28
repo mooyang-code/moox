@@ -97,6 +97,8 @@ func klineReasonText(report kline.KlineFreshnessReport, now time.Time) string {
 		return "无法读取采集对象清单，暂时无法判断哪些对象落后"
 	case "task_result_error":
 		return "采集任务的结果状态异常，请检查采集任务"
+	case kline.KlineReasonTaskResultPrepareStalled:
+		return fmt.Sprintf("任务已启用但数据准备一直未完成（已持续 %s），请检查采集任务准备状态与结果视图", alerttext.Duration(report.StaleAge))
 	case "calendar_not_covered":
 		return "日历未覆盖：交易日历没有覆盖到当前日期，无法判断应收的最新一根K线，请更新交易日历"
 	case "calendar_unknown":

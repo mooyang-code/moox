@@ -281,7 +281,7 @@ func (s *runState) prepareTable(ctx context.Context) error {
 		return err
 	}
 	if err := r.Files.WriteDatasetJSON(r.Files.BuildDatasetMeta(export.DatasetMetaInput{
-		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Purpose: a.GetPurpose(), DirName: a.GetDirName(), Freq: a.GetFrequency(), PartitionUnit: a.GetPartitionUnit(),
+		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Purpose: a.GetPurpose(), DirName: a.GetDirName(), Frequency: a.GetFrequency(), PartitionUnit: a.GetPartitionUnit(),
 		Timezone: a.GetSpaceTz(), DatasetJSON: a.GetDatasetMetaJson(), Columns: columns, Infos: r.columnMetas(a.GetSpaceId(), a.GetDatasetId()),
 	}, r.now())); err != nil {
 		return fmt.Errorf("写 dataset.json 失败: %w", err)

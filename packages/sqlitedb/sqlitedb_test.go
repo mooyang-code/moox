@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/mooyang-code/moox/packages/dataformat"
@@ -107,7 +108,7 @@ func TestEnsureSchemaWritesFormatAcceptsReformattedAndRejectsChanged(t *testing.
 	h1, err := SchemaHash(testSchemaV1)
 	require.NoError(t, err)
 	require.Equal(t, h1, rec.Parts[dataformat.PartSQLiteSchema])
-	require.Equal(t, LifecycleVersion(), rec.Parts[dataformat.PartLifecycle])
+	require.Equal(t, strconv.Itoa(dataformat.LifecycleStateVersion), rec.Parts[dataformat.PartLifecycle])
 
 	// 用纯格式调整后的 schema 重开：校验通过。
 	db2, err := OpenSQL(Options{Path: dbPath})

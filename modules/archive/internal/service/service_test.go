@@ -1306,7 +1306,7 @@ func TestTaskCarriesDatasetMetadataToTheWorkerAndRefreshesIt(t *testing.T) {
 	follow, _ := h.worker.ListFollowTasks(ctx, &archivepb.ListFollowTasksReq{})
 	requireOK(t, follow.GetRetInfo())
 	meta := follow.GetTasks()[0].GetDatasetMetaJson()
-	for _, want := range []string{`"name":"现货分钟K线"`, `"description":"币安现货 1 分钟 K 线"`, `"data_source_id":"binance_spot"`, `"subject_tags":["crypto_spot"]`, `"online_retention":"168h"`} {
+	for _, want := range []string{`"name":"现货分钟K线"`, `"description":"币安现货 1 分钟 K 线"`, `"frequency":"1m"`, `"data_source_id":"binance_spot"`, `"subject_tags":["crypto_spot"]`, `"online_retention":"168h"`} {
 		if !strings.Contains(meta, want) {
 			t.Fatalf("dataset_meta_json 缺少 %s: %s", want, meta)
 		}

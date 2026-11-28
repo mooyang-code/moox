@@ -226,6 +226,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	// 根目录的对照表列出这个任务目录。
 	if raw, err := os.ReadFile(files.Abs("datasets.csv")); err != nil ||
+		!strings.HasPrefix(string(raw), "space_id,purpose,dir_name,dataset_id,name,frequency\n") ||
 		!strings.Contains(string(raw), "crypto,collect,binance-spot-kline-1m,ds_1m,现货分钟K线,1m\n") {
 		t.Fatalf("datasets.csv = %q, %v", raw, err)
 	}

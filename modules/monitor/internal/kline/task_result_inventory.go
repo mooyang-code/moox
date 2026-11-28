@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	maxCollectorTaskResultInventoryPage   = 100
 	maxCollectorTaskResultInventory       = 1000
 	maxCollectorTaskResultInventorySpaces = 16
 )
@@ -69,7 +68,7 @@ type CollectorTaskResultInventorySource struct {
 	maxItems int
 }
 
-func NewCollectorTaskResultInventorySource(client collectorTaskResultInventoryClient, spaceIDs []string, pageSize, maxItems int) (*CollectorTaskResultInventorySource, error) {
+func NewCollectorTaskResultInventorySource(client collectorTaskResultInventoryClient, spaceIDs []string, maxItems int) (*CollectorTaskResultInventorySource, error) {
 	if client == nil {
 		return nil, errors.New("collector task-result inventory client is required")
 	}
@@ -88,9 +87,6 @@ func NewCollectorTaskResultInventorySource(client collectorTaskResultInventoryCl
 		}
 		seenSpaces[spaceID] = struct{}{}
 		normalizedSpaces = append(normalizedSpaces, spaceID)
-	}
-	if pageSize <= 0 || pageSize > maxCollectorTaskResultInventoryPage {
-		return nil, fmt.Errorf("collector inventory page size must be between 1 and %d", maxCollectorTaskResultInventoryPage)
 	}
 	if maxItems <= 0 || maxItems > maxCollectorTaskResultInventory {
 		return nil, fmt.Errorf("collector inventory max entries must be between 1 and %d", maxCollectorTaskResultInventory)

@@ -197,7 +197,7 @@ func buildTaskResultInventory(cfg *config.Config, gateway gatewayclient.Invoker)
 	if err != nil {
 		return nil, err
 	}
-	source, err := kline.NewCollectorTaskResultInventorySource(client, cfg.KlineFreshness.SpaceIDs, cfg.KlineFreshness.InventoryPageSize, cfg.KlineFreshness.InventoryMaxEntries)
+	source, err := kline.NewCollectorTaskResultInventorySource(client, cfg.KlineFreshness.SpaceIDs, cfg.KlineFreshness.InventoryMaxEntries)
 	if err != nil {
 		return nil, fmt.Errorf("monitor collector inventory source: %w", err)
 	}

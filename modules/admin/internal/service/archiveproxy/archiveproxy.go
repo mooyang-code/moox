@@ -100,7 +100,7 @@ func (e *statusError) Error() string { return e.message }
 
 // dialer 按拓扑里唯一启用的 archive-worker 部署决定怎样连 worker 的数据端口：
 // 部署与所在主机都启用才算；所在主机是 control 就直连本机，是只出站主机就经中转，其他主机不支持。
-// 拓扑校验保证 replicas: single 的组件同时只有一条启用的部署，多于一条按登记异常处理。
+// 拓扑校验保证 archive-worker 同时只有一条启用的部署，多于一条按登记异常处理。
 func (p *Proxy) dialer(ctx context.Context) (func(ctx context.Context) (net.Conn, error), error) {
 	hosts, deployments, err := p.opts.Topology.Read(ctx)
 	if err != nil {

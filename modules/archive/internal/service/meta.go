@@ -7,7 +7,7 @@ type datasetMeta struct {
 	Name            string            `json:"name"`
 	Description     string            `json:"description"`
 	DataKind        string            `json:"data_kind"`
-	Freq            string            `json:"freq"`
+	Frequency       string            `json:"frequency"`
 	Status          string            `json:"status"`
 	DataSourceID    string            `json:"data_source_id,omitempty"`
 	Retention       string            `json:"online_retention"`
@@ -22,7 +22,7 @@ type datasetMeta struct {
 // metaJSON 把数据集信息序列化成 JSON（键顺序固定，内容不变时输出不变）。
 func metaJSON(ds Dataset) string {
 	raw, err := json.Marshal(datasetMeta{
-		Name: ds.Name, Description: ds.Description, DataKind: ds.DataKind, Freq: ds.Freq, Status: ds.Status, DataSourceID: ds.DataSourceID,
+		Name: ds.Name, Description: ds.Description, DataKind: ds.DataKind, Frequency: ds.Freq, Status: ds.Status, DataSourceID: ds.DataSourceID,
 		Retention: ds.Retention, RetentionSource: ds.RetentionSource, SubjectTags: ds.SubjectTags,
 		Attributes: ds.Attributes, CreatedAt: ds.CreatedAt, UpdatedAt: ds.UpdatedAt, Revision: ds.Revision,
 	})

@@ -309,6 +309,17 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 	require.NotNil(t, row, "准备中的任务本轮无法判断，检查保持原状态，不能删除")
 	require.Equal(t, 2, row.FailureCount)
 	require.Equal(t, domain.CheckStatusDown, row.Status, "pending preparation must not synthesize a Kline resolution")
+
+	// 准备中持续超过宽限时长（30 分钟）后由 K 线检查报失败，提示任务已启用但数据准备一直未完成。
+	entry.ObservedAt = now.Add(30 * time.Minute)
+	provider.snapshot = kline.TaskResultInventorySnapshot{ID: "inventory-pending-stalled", ObservedAt: entry.ObservedAt, Entries: []kline.TaskResultInventoryEntry{entry}}
+	now = entry.ObservedAt
+	require.NoError(t, run(t.Context()))
+	row = checkRow(t, repositories, "crypto", klineID)
+	require.NotNil(t, row)
+	require.Equal(t, domain.CheckStatusDown, row.Status)
+	require.Equal(t, 3, row.FailureCount)
+	require.Contains(t, row.Reason, "任务已启用但数据准备一直未完成")
 }
 
 // dataset: 检查只管非采集生产者（因子、策略等），不再为 collector 生成 dataset:collector: 检查。

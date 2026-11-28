@@ -48,7 +48,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		log.ErrorContextf(ctx, "注册TRPC服务失败: %v", err)
 		return nil, err
 	}
-	// 4. 浏览器入口（9527）：启动时检查或签发网页证书，之后随证书巡检每天检查一次。
+	// 4. 浏览器入口（9527）：启动时检查或签发网页证书，之后随证书巡检每分钟检查一次。
 	web, err := webserver.New(cfg.Web, services.consoleHandler, webui.FS())
 	if err != nil {
 		return nil, err
