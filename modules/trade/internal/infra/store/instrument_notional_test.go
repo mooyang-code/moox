@@ -25,3 +25,21 @@ func TestInstrumentRecordMinNotionalAt(t *testing.T) {
 	_, err := InstrumentRecord{MinExchangeQuantity: "abc"}.MinNotionalAt(price)
 	require.Error(t, err, "规则解析不了要报错")
 }
+
+func TestInstrumentRecordBaseQuantityRulesRejectsEmptyMinQuantity(t *testing.T) {
+	_, _, err := InstrumentRecord{MarketType: "spot", ExchangeQuantityStep: "0.001", MinExchangeQuantity: ""}.BaseQuantityRules()
+	require.ErrorContains(t, err, "最小下单数量")
+
+	_, _, err = InstrumentRecord{MarketType: "spot", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "   "}.BaseQuantityRules()
+	require.ErrorContains(t, err, "最小下单数量")
+
+	_, _, err = InstrumentRecord{MarketType: "spot", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "-1"}.BaseQuantityRules()
+	require.ErrorContains(t, err, "最小下单数量")
+
+	step, minimum, err := InstrumentRecord{
+		MarketType: "swap", ExchangeQuantityStep: "1", MinExchangeQuantity: "2", ContractValue: "0.01",
+	}.BaseQuantityRules()
+	require.NoError(t, err)
+	require.Equal(t, "0.01", step.String())
+	require.Equal(t, "0.02", minimum.String())
+}

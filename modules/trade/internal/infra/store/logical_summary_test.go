@@ -313,12 +313,31 @@ func TestBatchLogicalAccountSummariesTotalEquity(t *testing.T) {
 				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
 				SettlementAsset: "USDT", Status: "ENABLED",
 			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-partial-synced", Name: "acc-partial-synced",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+				Snapshot: TradingAccountSnapshot{Equity: "300"},
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-partial-unsynced", Name: "acc-partial-unsynced",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-disabled-empty", Name: "acc-disabled-empty",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+			},
 		} {
 			if err := tx.CreateTradingAccount(acc); err != nil {
 				return err
 			}
 		}
-		for _, id := range []string{"log-sum", "log-zero", "log-unsynced"} {
+		for _, id := range []string{"log-sum", "log-zero", "log-unsynced", "log-partial"} {
 			if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 				SpaceID: "s1", LogicalAccountID: id, Name: id,
 				Environment: string(exchange.AccountEnvironmentPaper), SettlementAsset: "USDT", PauseReason: "init",
@@ -330,8 +349,11 @@ func TestBatchLogicalAccountSummariesTotalEquity(t *testing.T) {
 			{SpaceID: "s1", LogicalAccountID: "log-sum", TradingAccountID: "acc-a", Enabled: true, Priority: 1},
 			{SpaceID: "s1", LogicalAccountID: "log-sum", TradingAccountID: "acc-b", Enabled: true, Priority: 2},
 			{SpaceID: "s1", LogicalAccountID: "log-sum", TradingAccountID: "acc-disabled", Enabled: false, Priority: 3},
+			{SpaceID: "s1", LogicalAccountID: "log-sum", TradingAccountID: "acc-disabled-empty", Enabled: false, Priority: 4},
 			{SpaceID: "s1", LogicalAccountID: "log-zero", TradingAccountID: "acc-zero", Enabled: true, Priority: 1},
 			{SpaceID: "s1", LogicalAccountID: "log-unsynced", TradingAccountID: "acc-empty", Enabled: true, Priority: 1},
+			{SpaceID: "s1", LogicalAccountID: "log-partial", TradingAccountID: "acc-partial-synced", Enabled: true, Priority: 1},
+			{SpaceID: "s1", LogicalAccountID: "log-partial", TradingAccountID: "acc-partial-unsynced", Enabled: true, Priority: 2},
 		} {
 			if err := tx.PutLogicalAccountMember(member); err != nil {
 				return err
@@ -340,11 +362,12 @@ func TestBatchLogicalAccountSummariesTotalEquity(t *testing.T) {
 		return nil
 	}))
 
-	summaries, err := st.BatchLogicalAccountSummaries(ctx, "s1", []string{"log-sum", "log-zero", "log-unsynced"}, time.Now())
+	summaries, err := st.BatchLogicalAccountSummaries(ctx, "s1", []string{"log-sum", "log-zero", "log-unsynced", "log-partial"}, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, summaries["log-sum"].TotalEquity)
 	require.Equal(t, "200", *summaries["log-sum"].TotalEquity)
 	require.NotNil(t, summaries["log-zero"].TotalEquity)
 	require.Equal(t, "0", *summaries["log-zero"].TotalEquity)
 	require.Nil(t, summaries["log-unsynced"].TotalEquity)
+	require.Nil(t, summaries["log-partial"].TotalEquity, "任一启用成员未同步时返回 nil，避免返回误导性的部分和")
 }

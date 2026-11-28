@@ -14,11 +14,9 @@ func (r InstrumentRecord) BaseQuantityRules() (step, minimum shared.Decimal, err
 	if err != nil || step.Cmp(shared.Zero()) <= 0 {
 		return shared.Decimal{}, shared.Decimal{}, errors.New("标的数量步长不合法")
 	}
-	if strings.TrimSpace(r.MinExchangeQuantity) != "" {
-		minimum, err = shared.ParseDecimal(r.MinExchangeQuantity)
-		if err != nil || minimum.IsNegative() {
-			return shared.Decimal{}, shared.Decimal{}, errors.New("标的最小下单数量不合法")
-		}
+	minimum, err = shared.ParseDecimal(r.MinExchangeQuantity)
+	if err != nil || minimum.IsNegative() {
+		return shared.Decimal{}, shared.Decimal{}, errors.New("标的最小下单数量不合法")
 	}
 	if exchange.RuleFor(r.MarketType).ContractValue {
 		contractValue, parseErr := shared.ParseDecimal(r.ContractValue)

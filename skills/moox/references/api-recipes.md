@@ -53,6 +53,13 @@
 ./bin/moox-cli strategy instance create --strategy-id <ID> --factor-task spot=<任务>   # 混合市场再加 --factor-task swap=<任务>
 ./bin/moox-cli strategy instance enable --instance-id <ID>        # 先预览，确认后加 --yes
 
+# 模拟盘串联：建模拟账户 → 建组合 → 加成员（默认只预览，加 --yes 执行）
+./bin/moox-cli trade paper create --account-name paper-swap --exchange binance --markets '["swap"]' --margin-mode CROSS --initial-balance 10000 --yes
+./bin/moox-cli trade logical create --name paper-main --environment ACCOUNT_ENVIRONMENT_PAPER --yes
+# 若新账户会话尚未完成首次同步，add-member 会被拒绝；先执行 trade account sync 或稍后重试：
+./bin/moox-cli trade account sync --account-id <账户ID>
+./bin/moox-cli trade logical add-member --logical-account-id <组合ID> --account-id <账户ID> --enabled --priority 1 --yes
+
 # 破坏性：先预览，给用户确认后再加 --yes
 ./bin/moox-cli factor task delete --task-id <任务>
 ./bin/moox-cli factor task delete --task-id <任务> --yes

@@ -12,7 +12,7 @@ import (
 // LogicalAccountSummary 是组合账户列表与详情直接携带的聚合摘要：持仓标的数、成员权益合计与近 24 小时净值变化。
 type LogicalAccountSummary struct {
 	PositionCount int32
-	// TotalEquity 是启用成员的权益合计；没有任何启用成员给出有效权益时为 nil，以区分“成员还没同步”与“权益为零”。
+	// TotalEquity 是启用成员的权益合计；没有启用成员，或存在任一启用成员尚未同步有效权益时为 nil，以区分“还没同步”与“权益为零”。
 	TotalEquity        *string
 	EquityChange24h    *string
 	EquityChangePct24h *string
@@ -85,9 +85,11 @@ func (s *Store) batchLogicalMemberStats(
 	}
 
 	memberToLogical := make(map[string]string, len(members))
+	expectedMembers := make(map[string]int, len(logicalIDs))
 	accountIDs := make([]string, 0, len(members))
 	for _, m := range members {
 		memberToLogical[m.TradingAccountID] = m.LogicalAccountID
+		expectedMembers[m.LogicalAccountID]++
 		accountIDs = append(accountIDs, m.TradingAccountID)
 	}
 
@@ -100,7 +102,7 @@ func (s *Store) batchLogicalMemberStats(
 	swapAccountIDs := make([]string, 0, len(accountRows))
 	balanceAccounts := make([]TradingAccountRecord, 0, len(accountRows))
 	equitySums := make(map[string]shared.Decimal, len(logicalIDs))
-	hasEquity := make(map[string]bool, len(logicalIDs))
+	syncedMembers := make(map[string]int, len(logicalIDs))
 	for _, row := range accountRows {
 		account, err := decodeAccountRow(row)
 		if err != nil {
@@ -109,12 +111,12 @@ func (s *Store) batchLogicalMemberStats(
 		if logicalID, ok := memberToLogical[account.TradingAccountID]; ok {
 			if raw := strings.TrimSpace(account.Snapshot.Equity); raw != "" {
 				if val, parseErr := shared.ParseDecimal(raw); parseErr == nil {
-					if hasEquity[logicalID] {
+					if syncedMembers[logicalID] > 0 {
 						equitySums[logicalID] = equitySums[logicalID].Add(val)
 					} else {
 						equitySums[logicalID] = val
-						hasEquity[logicalID] = true
 					}
+					syncedMembers[logicalID]++
 				}
 			}
 		}
@@ -261,10 +263,12 @@ func (s *Store) batchLogicalMemberStats(
 	for logicalID, coins := range coinsByLogical {
 		counts[logicalID] = int32(len(coins))
 	}
-	equities := make(map[string]*string, len(hasEquity))
-	for logicalID := range hasEquity {
-		str := equitySums[logicalID].String()
-		equities[logicalID] = &str
+	equities := make(map[string]*string, len(expectedMembers))
+	for logicalID, total := range expectedMembers {
+		if total > 0 && syncedMembers[logicalID] == total {
+			str := equitySums[logicalID].String()
+			equities[logicalID] = &str
+		}
 	}
 	return counts, equities, nil
 }

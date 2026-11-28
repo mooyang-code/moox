@@ -41,7 +41,7 @@ func (s stubAdapterSource) Adapter(tradingAccountID string) (execution.Execution
 	return adapter, nil
 }
 
-func TestQueryListUnifiesSwapAndSpotPositionsAndFiltersDisabledMembers(t *testing.T) {
+func TestQueryListUnifiesSwapAndSpotPositionsAndIncludesDisabledMembers(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)
@@ -65,8 +65,9 @@ func TestQueryListUnifiesSwapAndSpotPositionsAndFiltersDisabledMembers(t *testin
 			},
 			{
 				SpaceID: "space-1", TradingAccountID: "acc-disabled", Name: "acc-disabled",
-				Exchange: "binance", Markets: []string{"spot"},
-				ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
+				Exchange: "binance", Markets: []string{"spot", "swap"},
+				ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT",
+				MarginMode: "CROSS", Status: "ENABLED", LeverageSettings: store.LeverageSettings{"*": "3"},
 				Snapshot: store.TradingAccountSnapshot{
 					Balances: []store.AssetBalance{
 						{Wallet: "UNIFIED", Asset: "SOL", Available: "5", Total: "5"},
@@ -113,7 +114,7 @@ func TestQueryListUnifiesSwapAndSpotPositionsAndFiltersDisabledMembers(t *testin
 				return err
 			}
 		}
-		// 写入非零永续与零永续，零永续不应出现在结果中。
+		// 写入非零永续（含停用成员的未平仓永续）与零永续，零永续不应出现在结果中。
 		for _, pos := range []store.PositionRecord{
 			{
 				SpaceID: "space-1", TradingAccountID: "acc-1", MarketType: "swap",
@@ -125,6 +126,12 @@ func TestQueryListUnifiesSwapAndSpotPositionsAndFiltersDisabledMembers(t *testin
 				SpaceID: "space-1", TradingAccountID: "acc-1", MarketType: "swap",
 				InstrumentID: "DOGE-USDT-SWAP", ExchangeSymbol: "DOGEUSDT", PositionSide: "NET",
 				SignedQuantity: "0", EntryPrice: "0", MarkPrice: "0", Leverage: "3", ExchangeUpdatedAt: now.UnixMilli(),
+			},
+			{
+				SpaceID: "space-1", TradingAccountID: "acc-disabled", MarketType: "swap",
+				InstrumentID: "XRP-USDT-SWAP", ExchangeSymbol: "XRPUSDT", PositionSide: "NET",
+				SignedQuantity: "100", EntryPrice: "0.5", MarkPrice: "0.6", Leverage: "3",
+				MarginMode: "CROSS", UsedMargin: "20", UnrealizedPnL: "10", ExchangeUpdatedAt: now.UnixMilli(),
 			},
 		} {
 			if err := tx.UpsertPosition(pos); err != nil {
@@ -162,10 +169,11 @@ func TestQueryListUnifiesSwapAndSpotPositionsAndFiltersDisabledMembers(t *testin
 		}},
 	}
 
-	// 按组合账户查：返回启用成员的永续（BTC-USDT-SWAP）、结算资产余额（USDT）与现货（ETH-USDT-SPOT），不含停用成员（SOL）与零仓位（DOGE）。
+	// 按组合账户查：返回启用成员的永续（BTC-USDT-SWAP）、结算资产余额（USDT）与现货（ETH-USDT-SPOT），
+	// 同时包含停用成员仍持有的永续（XRP-USDT-SWAP）与现货（SOL-USDT-SPOT），不含零仓位（DOGE）。
 	rows, err := query.List(ctx, ListRequest{SpaceID: "space-1", LogicalAccountID: "logical-1"})
 	require.NoError(t, err)
-	require.Len(t, rows, 3)
+	require.Len(t, rows, 5)
 
 	byKey := map[string]Position{}
 	for _, row := range rows {
@@ -199,6 +207,16 @@ func TestQueryListUnifiesSwapAndSpotPositionsAndFiltersDisabledMembers(t *testin
 	require.Equal(t, "2", eth.Sellable)
 	require.NotNil(t, eth.UnrealizedPnL)
 	require.Equal(t, "1000", *eth.UnrealizedPnL)
+
+	xrp := byKey["XRP-USDT-SWAP"]
+	require.Equal(t, "acc-disabled", xrp.TradingAccountID)
+	require.Equal(t, "swap", xrp.MarketType)
+	require.Equal(t, "100", xrp.SignedQuantity)
+
+	sol := byKey["SOL-USDT-SPOT"]
+	require.Equal(t, "acc-disabled", sol.TradingAccountID)
+	require.Equal(t, "spot", sol.MarketType)
+	require.Equal(t, "5", sol.SignedQuantity)
 
 	// 按 instrument_id 过滤。
 	filtered, err := query.List(ctx, ListRequest{SpaceID: "space-1", LogicalAccountID: "logical-1", InstrumentID: "ETH-USDT-SPOT"})

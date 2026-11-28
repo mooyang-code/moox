@@ -106,10 +106,9 @@ func resolveAccounts(ctx context.Context, st *store.Store, req ListRequest) ([]s
 	if _, err := st.GetLogicalAccount(ctx, req.SpaceID, req.LogicalAccountID); err != nil {
 		return nil, err
 	}
-	// 显式指定了成员执行账户时，允许查该成员（含停用成员），但必须是组合的成员；
-	// 只按组合查询时，仅列启用成员的实际持仓（与组合列表持仓计数、组合权益口径一致）。
-	includeDisabled := req.TradingAccountID != ""
-	members, err := st.ListLogicalAccountMembers(ctx, req.SpaceID, req.LogicalAccountID, includeDisabled)
+	// 按组合查询时包含停用成员，确保停用成员仍持有的永续仓位与现货余额可见；
+	// 显式指定了成员执行账户时同样校验其属于该组合。
+	members, err := st.ListLogicalAccountMembers(ctx, req.SpaceID, req.LogicalAccountID, true)
 	if err != nil {
 		return nil, err
 	}
