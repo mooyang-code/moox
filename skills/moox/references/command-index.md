@@ -139,7 +139,7 @@
 | `factor functions` | 列出表达式里可用的函数 |
 | `factor import` | 按目录批量导入因子定义（目录下全部 *.yaml；任一因子已存在或编译失败时整批拒绝） |
 | `factor list` | 列出因子定义 |
-| `factor member add` | 给计算任务加因子成员（固定参数用 --param 名=数值） |
+| `factor member add` | 给计算任务加因子成员（固定参数用 --param 名=数值；传 --status enabled 可一步加入并启用） |
 | `factor member disable` | 停用因子成员（默认只预览，--yes 才执行） |
 | `factor member enable` | 启用因子成员 |
 | `factor member remove` | 移除计算任务的因子成员（默认只预览，--yes 才执行） |
@@ -148,7 +148,7 @@
 | `factor recalc cancel` | 取消补算作业 |
 | `factor recalc list` | 列出补算作业 |
 | `factor recalc show` | 查看一个补算作业 |
-| `factor recalc submit` | 提交历史补算（时间左闭右开；不给 --request-id 时自动生成） |
+| `factor recalc submit` | 提交历史补算（时间左闭右开；不给 --job-id 时自动生成） |
 | `factor show` | 查看一个因子定义 |
 | `factor status` | 因子运行状态（各任务的预热、排队、暂停与计算前检查；单个任务的检查看 factor task status） |
 | `factor task apply` | 按因子任务文件新建因子定义、任务与成员（只建不改；线上已有且内容不同时逐项列出差异，一项都不写） |
