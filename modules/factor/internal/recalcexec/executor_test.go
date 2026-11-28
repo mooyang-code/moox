@@ -351,7 +351,7 @@ func (s *recalcPipelineStore) ReportComputed(context.Context, storageio.PeriodMa
 	return nil
 }
 
-func (*recalcPipelineStore) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (*recalcPipelineStore) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 

@@ -124,7 +124,7 @@ func (s *sharedStorage) WriteRows(_ context.Context, _, datasetID string, rows [
 }
 
 func (*sharedStorage) ReportComputed(context.Context, storageio.PeriodMarker) error { return nil }
-func (*sharedStorage) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (*sharedStorage) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 

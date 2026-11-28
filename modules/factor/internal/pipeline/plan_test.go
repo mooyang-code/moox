@@ -21,7 +21,7 @@ func TestBuildLivePlanUsesEventUniverse(t *testing.T) {
 			domain.FactorDef{FactorID: "long", LookbackPeriods: 20},
 		),
 		PeriodTime: target, UniverseSubjects: []string{"SOL", "ETH", "BTC", "BTC"},
-		UpstreamFailed: []string{"ETH", "SOL", "DOGE"}, CarryColumns: []string{"volume", "close"}, TriggerEventID: "evt-1",
+		UpstreamFailed: []string{"ETH", "SOL", "DOGE"}, CarryColumns: []string{"volume", "close"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC", "ETH", "SOL"}, plan.Expected)

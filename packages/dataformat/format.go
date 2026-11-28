@@ -28,7 +28,7 @@ const (
 	// StorageViewIndexVersion 是 storage-view 索引（DuckDB / Bleve）的格式版本。
 	StorageViewIndexVersion = 1
 	// FactorEngineStateVersion 是 factor-engine 本地状态（seriesstore、watermark、gapledger、param_cache.json）的格式版本。
-	FactorEngineStateVersion = 1
+	FactorEngineStateVersion = 2
 	// LifecycleStateVersion 是 packages/lifecycle 持久化文件 lifecycle.json 的结构版本。
 	LifecycleStateVersion = 1
 )

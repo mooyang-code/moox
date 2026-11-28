@@ -17,7 +17,7 @@ import (
 
 type periodStoreFake struct{}
 
-func (periodStoreFake) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (periodStoreFake) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 

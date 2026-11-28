@@ -26,7 +26,7 @@ type periodUniverse struct {
 	err      error
 }
 
-func (p *periodUniverse) ComputedUniverse(_ context.Context, _, _, _ string, periodTime int64) (storageio.Universe, bool, error) {
+func (p *periodUniverse) ComputedUniverse(_ context.Context, _, _ string, periodTime int64) (storageio.Universe, bool, error) {
 	p.reads++
 	if p.err != nil {
 		return storageio.Universe{}, false, p.err
@@ -296,11 +296,11 @@ type flakyUniverse struct {
 	failAt int64
 }
 
-func (f *flakyUniverse) ComputedUniverse(ctx context.Context, space, dataset, trigger string, periodTime int64) (storageio.Universe, bool, error) {
+func (f *flakyUniverse) ComputedUniverse(ctx context.Context, space, dataset string, periodTime int64) (storageio.Universe, bool, error) {
 	if periodTime == f.failAt {
 		return storageio.Universe{}, false, errors.New("storage unavailable")
 	}
-	return f.periodUniverse.ComputedUniverse(ctx, space, dataset, trigger, periodTime)
+	return f.periodUniverse.ComputedUniverse(ctx, space, dataset, periodTime)
 }
 
 // 读 marker 失败只让这一期留待下一轮，其余各期照常运行并确认。
@@ -381,25 +381,25 @@ func TestGapFillerCrossSectionHoldsWhileMarkerMayStillBeWritten(t *testing.T) {
 	require.Zero(t, f.ledger.PendingCount(), "超过 Settle 仍读不到：按原逻辑 gave_up")
 }
 
-// “未找到”也缓存：同一轮里同一（数据集、触发事件、周期）读不到 marker 只读一次；读失败不缓存，下一次还会再读；新一轮清空缓存。
+// “未找到”也缓存：同一轮里同一（数据集、周期）读不到 marker 只读一次；读失败不缓存，下一次还会再读；新一轮清空缓存。
 func TestGapFillerCachesMarkerNotFoundWithinSweep(t *testing.T) {
 	universe := &periodUniverse{byPeriod: map[int64]storageio.Universe{}}
 	filler := &gapFiller{universe: universe}
 	set := domain.FactorTask{SpaceID: "crypto", ResultDatasetID: "dataset_result"}
 	for i := 0; i < 3; i++ {
-		_, found, err := filler.computedUniverse(context.Background(), set, "evt-0", minuteAt(0).Unix())
+		_, found, err := filler.computedUniverse(context.Background(), set, minuteAt(0).Unix())
 		require.NoError(t, err)
 		require.False(t, found)
 	}
 	require.Equal(t, 1, universe.reads, "未找到同一轮只读一次")
-	_, _, err := filler.computedUniverse(context.Background(), set, "evt-1", minuteAt(0).Unix())
+	_, _, err := filler.computedUniverse(context.Background(), set, minuteAt(1).Unix())
 	require.NoError(t, err)
-	require.Equal(t, 2, universe.reads, "触发事件不同是另一个键")
+	require.Equal(t, 2, universe.reads, "不同周期是另一个键")
 
 	failing := &periodUniverse{byPeriod: map[int64]storageio.Universe{}, err: errors.New("boom")}
 	filler = &gapFiller{universe: failing}
 	for i := 0; i < 2; i++ {
-		_, _, err := filler.computedUniverse(context.Background(), set, "evt-0", minuteAt(0).Unix())
+		_, _, err := filler.computedUniverse(context.Background(), set, minuteAt(0).Unix())
 		require.Error(t, err)
 	}
 	require.Equal(t, 2, failing.reads, "读失败不缓存")

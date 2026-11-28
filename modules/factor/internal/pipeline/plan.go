@@ -20,7 +20,6 @@ type LiveInput struct {
 	UniverseSubjects []string
 	UpstreamFailed   []string
 	CarryColumns     []string
-	TriggerEventID   string
 	Budget           time.Duration
 }
 
@@ -64,7 +63,7 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 		TargetStart: window[0], TargetEnd: target.Add(duration),
 		Expected: expected, Available: subjectDifference(expected, upstreamFailed), UpstreamFailed: upstreamFailed,
 		CarryColumns: uniqueSorted(input.CarryColumns), WriteCarry: true,
-		TriggerEventID: strings.TrimSpace(input.TriggerEventID), Budget: input.Budget,
+		Budget: input.Budget,
 	}, nil
 }
 

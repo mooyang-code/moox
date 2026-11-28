@@ -42,7 +42,7 @@ func (*fakeSource) ReportComputed(context.Context, storageio.PeriodMarker) error
 	return fmt.Errorf("试算不能上报")
 }
 
-func (*fakeSource) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (*fakeSource) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 

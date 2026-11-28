@@ -95,6 +95,7 @@ func periodDelivery(t *testing.T, eventID string, period time.Time, universe, fa
 type continuityHarness struct {
 	t       *testing.T
 	handler *Handler
+	periods *handlerPeriodStore
 	runner  *handlerRunner
 	rows    *periodRows
 	store   *watermark.Store
@@ -105,8 +106,8 @@ type continuityHarness struct {
 
 func newContinuityHarness(t *testing.T) *continuityHarness {
 	set := enabledTestTask()
-	h := &continuityHarness{t: t, runner: new(handlerRunner), rows: &periodRows{}, now: continuityBase.Add(time.Hour), taskID: set.TaskID}
-	h.handler = NewHandler(&handlerTaskLocator{set: set, factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true}, &handlerPeriodStore{}, h.runner, new(testTaskLocks), HandlerConfig{})
+	h := &continuityHarness{t: t, periods: &handlerPeriodStore{}, runner: new(handlerRunner), rows: &periodRows{}, now: continuityBase.Add(time.Hour), taskID: set.TaskID}
+	h.handler = NewHandler(&handlerTaskLocator{set: set, factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true}, h.periods, h.runner, new(testTaskLocks), HandlerConfig{})
 	t.Cleanup(h.handler.Close)
 	store, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
 	require.NoError(t, err)
@@ -146,8 +147,6 @@ func TestContinuityCatchesUpIntermediatePeriodsInOrder(t *testing.T) {
 	h.rows.set(minuteAt(2), universe...)
 	require.Equal(t, jetstream.ACK, h.event(3, universe, nil).Decision)
 	require.Equal(t, []time.Time{minuteAt(0), minuteAt(1), minuteAt(2), minuteAt(3)}, h.computed())
-	require.Equal(t, CatchupEventID(h.taskID, minuteAt(1)), h.runner.plans[1].TriggerEventID, "没有事件的周期用合成的触发事件")
-	require.Equal(t, "event-3", h.runner.plans[3].TriggerEventID)
 	require.Equal(t, minuteAt(3), h.state().CommittedThrough)
 	// 重复投递的旧事件不再计算。
 	require.Equal(t, jetstream.ACK, h.event(2, universe, nil).Decision)
@@ -308,18 +307,18 @@ func TestContinuityExcludesConfirmedAbsencesFromComputation(t *testing.T) {
 	require.True(t, h.state().BlockedSince.IsZero())
 }
 
-// 计算完成、水位落盘前进程退出：重启后这一期沿用原触发事件 ID，已完成检查能认出它。
-func TestContinuityReusesTheInFlightTriggerAfterACrash(t *testing.T) {
+// 计算完成、水位落盘前进程退出：完成标记使用 (结果数据集, 周期) 确定性幂等键，重启后追赶的已完成检查能直接认出并跳过重算。
+func TestContinuitySkipsComputedPeriodAfterCrash(t *testing.T) {
 	h := newContinuityHarness(t)
 	universe := subjectsN(20)
 	h.event(0, universe, nil)
 	state := h.state()
-	state.Target, state.InFlightPeriod, state.InFlightTrigger = minuteAt(1), minuteAt(1), "event-1"
+	state.Target = minuteAt(1)
 	require.NoError(t, h.store.Put(state))
 	h.rows.set(minuteAt(1), universe...)
+	h.periods.exists = true
 	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
-	require.Equal(t, "event-1", h.runner.plans[1].TriggerEventID)
-	require.Empty(t, h.state().InFlightTrigger)
+	require.Len(t, h.runner.plans, 1, "已写出完成标记的周期重启后直接跳过，不重复计算")
 	require.Equal(t, minuteAt(1), h.state().CommittedThrough)
 }
 

@@ -64,7 +64,6 @@ type PeriodMarker struct {
 	UniverseSubjects []string
 	FailedSubjects   []string
 	Factors          []FactorState
-	TriggerEventID   string
 	ComputedAt       time.Time
 }
 
@@ -85,7 +84,7 @@ type Store interface {
 	ReadWindow(ctx context.Context, req ReadRequest) (map[string]*Frame, error)
 	WriteRows(ctx context.Context, spaceID, datasetID string, rows []ResultRow) error
 	ReportComputed(ctx context.Context, marker PeriodMarker) error
-	ComputedExists(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (bool, error)
+	ComputedExists(ctx context.Context, spaceID, datasetID string, periodTime int64) (bool, error)
 }
 
 type ReadRequest struct {

@@ -90,7 +90,7 @@ type handlerPeriodStore struct {
 	calls     int
 }
 
-func (s *handlerPeriodStore) ComputedExists(_ context.Context, _, resultDatasetID, _ string, _ int64) (bool, error) {
+func (s *handlerPeriodStore) ComputedExists(_ context.Context, _, resultDatasetID string, _ int64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -219,7 +219,6 @@ func TestHandlerAcksDegradedOutcome(t *testing.T) {
 	require.Len(t, runner.plans, 1)
 	plan := runner.plans[0]
 	require.Equal(t, pipeline.ModeLive, plan.Mode)
-	require.Equal(t, "event-4", plan.TriggerEventID)
 	require.Equal(t, []string{"BTC", "ETH"}, plan.Expected)
 	require.Equal(t, []string{"BTC"}, plan.Available)
 	require.Equal(t, []string{"ETH"}, plan.UpstreamFailed)

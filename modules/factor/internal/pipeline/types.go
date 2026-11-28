@@ -40,7 +40,6 @@ type Plan struct {
 	FrozenUniverse bool
 	CarryColumns   []string
 	WriteCarry     bool
-	TriggerEventID string
 	Budget         time.Duration
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞、失败都不写任何字段（尤其不写失效 NULL），也不写 carry 列。
 	// 用于空洞补齐后的恢复。

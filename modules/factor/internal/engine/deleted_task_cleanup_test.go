@@ -165,7 +165,7 @@ func TestDeletedTaskSyncCleansWatermarkGapLedgerAndUnreferencedLocalData(t *test
 		cont.NoteAbsent(id, base, base.Add(2*time.Minute), time.Minute, []string{"BTC"})
 		require.NoError(t, ledger.RecordGaps(ctx, []pipeline.GapEntry{{
 			TaskID: id, Subject: "BTC", Period: base.Add(5 * time.Minute),
-			Member: "bias__var", DefinitionHash: "h1", TriggerEventID: "evt-1",
+			Member: "bias__var", DefinitionHash: "h1",
 		}}))
 		paramMgr.states[id] = []factorwire.MemberParamState{{
 			MemberKey:           "bias__var",

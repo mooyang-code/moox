@@ -22,7 +22,6 @@ func gap(subject string, minute int, factors ...string) []pipeline.GapEntry {
 	for _, factor := range factors {
 		out = append(out, pipeline.GapEntry{
 			TaskID: "fset", Subject: subject, Period: t0.Add(time.Duration(minute) * time.Minute), Member: factor, DefinitionHash: "h-" + factor,
-			TriggerEventID: "evt",
 		})
 	}
 	return out
@@ -53,7 +52,6 @@ func TestLedgerReplayRebuildsPendingTask(t *testing.T) {
 	got := reopened.Pending()
 	require.Len(t, got, 2)
 	require.Equal(t, "b", got[0].Member, "BTC 的因子 a 已 repaired，回放后不再待恢复")
-	require.Equal(t, "evt", got[0].Trigger)
 }
 
 // 同键再次 skip：skipID 取最后一条，发现时间取最早；用旧 skipID 确认不会移除新的待办。
@@ -172,8 +170,8 @@ func TestLedgerKeepsWarmingReasonAndCountsOnlyGapSkips(t *testing.T) {
 	dir, c := t.TempDir(), &clock{now: t0}
 	ledger, _ := open(t, dir, c, 0)
 	warming := []pipeline.GapEntry{
-		{TaskID: "fset", Subject: "ETH", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
-		{TaskID: "fset", Subject: "ETH", Period: t0, Member: "b", DefinitionHash: "h-b", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
+		{TaskID: "fset", Subject: "ETH", Period: t0, Member: "a", DefinitionHash: "h-a", Reason: pipeline.SkipReasonWarming},
+		{TaskID: "fset", Subject: "ETH", Period: t0, Member: "b", DefinitionHash: "h-b", Reason: pipeline.SkipReasonWarming},
 	}
 	require.NoError(t, ledger.RecordGaps(context.Background(), append(gap("BTC", 0, "a"), warming...)))
 	require.Equal(t, 3, ledger.PendingCount())
@@ -213,10 +211,10 @@ func TestLedgerCancelTaskAndCancelMissingTasksPersistAcrossReopen(t *testing.T) 
 	dir, c := t.TempDir(), &clock{now: t0}
 	ledger, _ := open(t, dir, c, 0)
 	entries := []pipeline.GapEntry{
-		{TaskID: "ftask_keep", Subject: "BTC", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt"},
-		{TaskID: "ftask_del_1", Subject: "BTC", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt"},
-		{TaskID: "ftask_del_1", Subject: "ETH", Period: t0.Add(time.Minute), Member: "b", DefinitionHash: "h-b", TriggerEventID: "evt"},
-		{TaskID: "ftask_del_2", Subject: "SOL", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt"},
+		{TaskID: "ftask_keep", Subject: "BTC", Period: t0, Member: "a", DefinitionHash: "h-a"},
+		{TaskID: "ftask_del_1", Subject: "BTC", Period: t0, Member: "a", DefinitionHash: "h-a"},
+		{TaskID: "ftask_del_1", Subject: "ETH", Period: t0.Add(time.Minute), Member: "b", DefinitionHash: "h-b"},
+		{TaskID: "ftask_del_2", Subject: "SOL", Period: t0, Member: "a", DefinitionHash: "h-a"},
 	}
 	require.NoError(t, ledger.RecordGaps(context.Background(), entries))
 	require.Equal(t, 4, ledger.PendingCount())

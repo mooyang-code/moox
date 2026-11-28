@@ -192,7 +192,7 @@ func (f *fakeStorage) ReportComputed(_ context.Context, m storageio.PeriodMarker
 	f.markers = append(f.markers, m)
 	return nil
 }
-func (f *fakeStorage) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (f *fakeStorage) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 
@@ -224,7 +224,7 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 func (fx *fixture) live(t *testing.T, target time.Time, subjects []string) pipeline.Outcome {
 	t.Helper()
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, UniverseSubjects: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, UniverseSubjects: subjects, CarryColumns: []string{"close", "volume"},
 	})
 	require.NoError(t, err)
 	outcome, err := fx.runner.Run(context.Background(), plan)

@@ -118,7 +118,6 @@ func TestRunRecordsUnavailableAndWarmingSubjects(t *testing.T) {
 	require.Equal(t, 1, outcome.Warming)
 	reasons := map[string]string{}
 	for _, entry := range sink.entries {
-		require.Equal(t, "evt-1", entry.TriggerEventID)
 		require.Equal(t, target, entry.Period)
 		reasons[entry.Subject] = entry.Reason
 	}

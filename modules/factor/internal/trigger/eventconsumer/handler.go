@@ -167,11 +167,11 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	}
 
 	event := periodEvent{
-		periodTime: time.Unix(payload.GetPeriodTime(), 0).UTC(), eventID: message.GetEventId(),
-		universe: payload.GetUniverseSubjectIds(), failed: payload.GetFailedSubjects(),
+		periodTime: time.Unix(payload.GetPeriodTime(), 0).UTC(),
+		universe:   payload.GetUniverseSubjectIds(), failed: payload.GetFailedSubjects(),
 	}
 	// 同一个源数据集可以有多个任务：事件同时分给每个启用的任务，各自在自己的串行通道里计算（同一任务内部的期次仍按顺序），
-	// 全部返回后再汇总错误。任一任务遇到基础设施错误时整条事件重投；已经算完的任务靠“同一触发事件的 marker 已存在”跳过。
+	// 全部返回后再汇总错误。任一任务遇到基础设施错误时整条事件重投；已经算完的任务靠“该周期的完成标记已存在”跳过。
 	sets, lookupErr := h.sets.EnabledTasksByDataset(ctx, message.GetSpaceId(), payload.GetDatasetId(), payload.GetFrequency())
 	if lookupErr != nil {
 		err = fmt.Errorf("%w: lookup enabled factor tasks: %v", storageio.ErrInfra, lookupErr)
@@ -231,7 +231,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 				if h.continuity != nil {
 					return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, current, currentMembers, event)
 				}
-				return h.computePeriod(runnerCtx, current, currentMembers, event.periodTime, event.scope(), event.eventID)
+				return h.computePeriod(runnerCtx, current, currentMembers, event.periodTime, event.scope())
 			})
 			if setErr != nil {
 				taskErrs[index] = fmt.Errorf("factor task %s: %w", set.TaskID, setErr)
@@ -260,7 +260,6 @@ func transient(err error) bool {
 // periodEvent 是一条周期完成事件里引擎需要的部分。
 type periodEvent struct {
 	periodTime time.Time
-	eventID    string
 	// universe、failed 是事件里的全集与失败标的（universe_subject_ids、failed_subjects）。
 	universe []string
 	failed   []string
@@ -275,10 +274,10 @@ func (e periodEvent) scope() periodScope {
 	return periodScope{universe: e.universe, failed: e.failed}
 }
 
-// computePeriod 计算一期：已经算过（同一触发事件的 marker 已存在）就跳过；开算之前先取得这一期的参数
+// computePeriod 计算一期：已经算过（该周期的完成标记已存在）就跳过；开算之前先取得这一期的参数
 // （取参是幂等的：重投、重启后重算拿到同一份，直到这一期的完成标记写出）。
-func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time, scope periodScope, triggerEventID string) (pipeline.Outcome, error) {
-	exists, existsErr := h.store.ComputedExists(ctx, set.SpaceID, set.ResultDatasetID, triggerEventID, period.Unix())
+func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time, scope periodScope) (pipeline.Outcome, error) {
+	exists, existsErr := h.store.ComputedExists(ctx, set.SpaceID, set.ResultDatasetID, period.Unix())
 	if existsErr != nil {
 		return pipeline.Outcome{}, fmt.Errorf("%w: check computed factor period: %v", storageio.ErrInfra, existsErr)
 	}
@@ -300,7 +299,7 @@ func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, memb
 		}
 		params = selected
 	}
-	plan, err := h.livePlan(ctx, set, members, params, period, scope, triggerEventID)
+	plan, err := h.livePlan(ctx, set, members, params, period, scope)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -336,7 +335,7 @@ func realPeriod(set domain.FactorTask, period time.Time) (time.Time, error) {
 	return axis.FromAxis(period)
 }
 
-func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamSnapshot, period time.Time, scope periodScope, triggerEventID string) (pipeline.Plan, error) {
+func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamSnapshot, period time.Time, scope periodScope) (pipeline.Plan, error) {
 	// 计划在轴上建立：轴是连续的，周期数学用 Continuous。
 	clock := periodclock.Continuous{}
 	columnsCtx, cancel := context.WithTimeout(ctx, h.cfg.ReadColumnTimeout)
@@ -352,7 +351,7 @@ func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members [
 	return pipeline.BuildLivePlan(clock, pipeline.LiveInput{
 		Set: set, Members: members, Params: params, PeriodTime: period,
 		UniverseSubjects: scope.universe, UpstreamFailed: scope.failed,
-		CarryColumns: carryColumns, TriggerEventID: triggerEventID, Budget: budget,
+		CarryColumns: carryColumns, Budget: budget,
 	})
 }
 
