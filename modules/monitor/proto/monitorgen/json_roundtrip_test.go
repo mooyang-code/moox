@@ -57,15 +57,6 @@ func TestMonitorTRPCJSONRoundTrip(t *testing.T) {
 		Day: "2023-11-14", StartAt: at, EndAt: at + 1,
 		Series: []*ArrivalHistorySeries{{Stage: "storage", Points: []*ArrivalHistoryPoint{{CloseAt: at + 2}}}},
 	}, new(QueryPipelineArrivalHistoryRsp), map[string]int64{"start_at": at, "end_at": at + 1, "series.0.points.0.close_at": at + 2}, map[string]string{"day": "2023-11-14"})
-	assertTRPCJSONRoundTrip(t, &GetDoctorContextRsp{
-		GeneratedAt:        at,
-		HealthObservations: []*DoctorObservation{{Kind: "health", ObservedAt: at + 1}},
-		Watermarks:         []*DoctorWatermark{{Module: "m", ObservedAt: at + 2}},
-		HostResources:      []*HostAgentInfo{{HostId: "h", LastSeenAt: at + 3}},
-	}, new(GetDoctorContextRsp), map[string]int64{
-		"generated_at": at, "health_observations.0.observed_at": at + 1, "watermarks.0.observed_at": at + 2,
-		"host_resources.0.last_seen_at": at + 3,
-	}, nil)
 	assertTRPCJSONRoundTrip(t, &GetAlertMuteRsp{State: &AlertMuteState{Muted: true, Since: at, ExpiresAt: at + 1}}, new(GetAlertMuteRsp), map[string]int64{"state.since": at, "state.expires_at": at + 1}, nil)
 	assertTRPCJSONRoundTrip(t, &QueryLogRecordsReq{StartAt: at, EndAt: at + 1}, new(QueryLogRecordsReq), map[string]int64{"start_at": at, "end_at": at + 1}, nil)
 	assertTRPCJSONRoundTrip(t, &QueryLogRecordsRsp{Records: []*LogRecord{{Id: 1, LoggedAt: at}}, Buckets: []*LogBucket{{StartAt: at + 1}}},

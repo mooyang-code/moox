@@ -219,15 +219,12 @@ func TestHostRemoteReadFileReadsLocalDirectlyWithoutSwallowingNotExist(t *testin
 	_, err := remote.ReadFile(t.Context(), "control", filepath.Join(root, "version.json"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 
-	policyPath := filepath.Join(root, "dataset-health-policy.yaml")
-	require.NoError(t, os.WriteFile(policyPath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    minute_lateness: 30s\n    hour_lateness: 1m\n  overrides: []\n"), 0o600))
 	report, err := doctorcli.RunBootstrap(t.Context(), doctorcli.BootstrapOptions{
-		NodeID:                  "control",
-		LocalNodeID:             "control",
-		DeployRoot:              root,
-		DatasetHealthPolicyPath: policyPath,
-		CheckIDs:                []string{"bootstrap.release_contract"},
-		ReadFile:                remote.ReadFile,
+		NodeID:      "control",
+		LocalNodeID: "control",
+		DeployRoot:  root,
+		CheckIDs:    []string{"bootstrap.release_contract"},
+		ReadFile:    remote.ReadFile,
 	})
 	require.NoError(t, err)
 	check := report.CheckByID("bootstrap.release_contract")

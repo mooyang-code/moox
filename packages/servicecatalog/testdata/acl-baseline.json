@@ -3,9 +3,9 @@
   "summary": {
     "components": 16,
     "services": 23,
-    "methods": 296,
-    "read_only_methods": 137,
-    "retryable_methods": 139,
+    "methods": 295,
+    "read_only_methods": 136,
+    "retryable_methods": 138,
     "callers": 20,
     "principals": 2
   },
@@ -977,12 +977,6 @@
         },
         {
           "name": "GetAlertMute",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "GetDoctorContext",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
@@ -2102,7 +2096,6 @@
       "trpc.moox.monitor.MonitorMgr/AddNotificationChannel",
       "trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel",
       "trpc.moox.monitor.MonitorMgr/GetAlertMute",
-      "trpc.moox.monitor.MonitorMgr/GetDoctorContext",
       "trpc.moox.monitor.MonitorMgr/GetHealthOverview",
       "trpc.moox.monitor.MonitorMgr/ListHostAgents",
       "trpc.moox.monitor.MonitorMgr/ListNotificationChannels",
@@ -2437,7 +2430,6 @@
       "trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel",
       "trpc.moox.monitor.MonitorMgr/ExportNotificationChannels",
       "trpc.moox.monitor.MonitorMgr/GetAlertMute",
-      "trpc.moox.monitor.MonitorMgr/GetDoctorContext",
       "trpc.moox.monitor.MonitorMgr/GetHealthOverview",
       "trpc.moox.monitor.MonitorMgr/ImportNotificationChannels",
       "trpc.moox.monitor.MonitorMgr/ListHostAgents",

@@ -12,16 +12,21 @@ import (
 
 	"github.com/spf13/cobra"
 
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	setupdataformat "github.com/mooyang-code/moox/modules/cli/internal/setup/dataformat"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	core "github.com/mooyang-code/moox/packages/doctor"
 )
 
-// setupVerifyTimeout 是 setup install 里验收的时限；setupReadyTimeout 是最后统一等全部组件就绪的时限。
+// setupVerifyTimeout 是 setup install 里验收的时限；setupReadyTimeout 是统一等全部组件就绪的时限；
+// setupDoctorTimeout 与 setupDoctorPoll 是安装后自检等待 Monitor 首轮上报就位的时限与间隔。
 const (
 	setupVerifyTimeout = 10 * time.Minute
 	setupReadyTimeout  = 5 * time.Minute
+	setupDoctorTimeout = 2 * time.Minute
+	setupDoctorPoll    = 5 * time.Second
 )
 
 // setupInstallOptions 是一次 setup install 的参数。
@@ -41,6 +46,7 @@ const (
 	installRestoreBackup = "restore-backup"
 	installInit          = "init"
 	installStart         = "start"
+	installDoctor        = "doctor"
 	installVerify        = "verify"
 )
 
@@ -96,7 +102,7 @@ func hostHasAny(manifest *topology.Config, host string, components []string) boo
 
 // setupInstallSteps 排出完整安装顺序：这台电脑的 moox-cli 签名私钥（已有就复用，重跑不换）；防火墙；控制机先装 Admin 与主机级组件（别的主机要向它要身份）；
 // 再装带 EventBus、Storage 的主机；导入业务空间与元数据（Collector 启动要它）；控制机其余组件；其余主机（外部程序所在的排最后）；
-// 统一等一次全部就绪；自动按覆盖导入待恢复的密钥与告警渠道备份（无待导入备份则跳过并提示）；完整初始化（默认云密钥、云账号、日志服务、采集计划、告警渠道检查）；启动空间；验收。
+// 统一等一次全部就绪；自动按覆盖导入待恢复的密钥与告警渠道备份（无待导入备份则跳过并提示）；完整初始化（默认云密钥、云账号、日志服务、采集计划、告警渠道检查）；启动空间；逐主机自检；按空间验收。
 func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstallStep {
 	spaceLabel := strings.TrimSpace(spaceID)
 	if spaceLabel == "" {
@@ -139,6 +145,7 @@ func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstall
 		setupInstallStep{Kind: installRestoreBackup, Command: "自动导入待恢复的密钥与告警渠道备份（moox.backup，按覆盖导入）"},
 		setupInstallStep{Kind: installInit, Command: "moox-cli setup init --storage-host " + storage},
 		setupInstallStep{Kind: installStart, Command: "moox-cli setup start --space-id " + spaceLabel},
+		setupInstallStep{Kind: installDoctor, Command: "moox-cli doctor bootstrap"},
 		setupInstallStep{Kind: installVerify, Command: "moox-cli setup verify --space-id " + spaceLabel},
 	)
 }
@@ -700,10 +707,97 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 			fmt.Fprintln(cmd.ErrOrStderr(), note)
 		}
 		return err
+	case installDoctor:
+		return deps.runDoctor(ctx, options.file, snapshot)
 	case installVerify:
 		return deps.verifySpace(ctx, options.file, snapshot, options.spaceID)
 	}
 	return fmt.Errorf("unknown install step %s", step.Kind)
+}
+
+// defaultSetupDoctor 对 moox.toml 中全部启用的主机执行安装后自检（第一部分本机事实探测 + 第二部分读取 Monitor 健康概览）。
+// 新装完成初期，Monitor 可能尚未完成下一轮拓扑同步或部分组件尚未发出首份上报，此时对 Monitor 侧检查做短暂轮询等待；
+// 本机事实探测失败会立即报错，不白等。
+func defaultSetupDoctor(ctx context.Context, file string, snapshot *setupSnapshot) error {
+	gateway, err := openCommandGateway(ctx, file, snapshot.Manifest)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
+	env := resolveDoctorEnv()
+	remote := newHostRemote(snapshot.Manifest, env.nodeID)
+	defer remote.Close()
+	client := doctorcli.New(gateway)
+	deployRoot := firstNonEmpty(env.deployRoot, snapshot.Manifest.Paths.DeployRoot, topology.DefaultDeployRoot)
+	var failures []string
+	for _, host := range snapshot.Manifest.Hosts() {
+		if !host.Enabled {
+			continue
+		}
+		err := runSetupDoctorHost(ctx, host.Name, setupDoctorTimeout, setupDoctorPoll, func(runCtx context.Context) (core.Report, error) {
+			return doctorcli.RunBootstrap(runCtx, doctorcli.BootstrapOptions{
+				NodeID:        host.Name,
+				LocalNodeID:   env.nodeID,
+				DeployRoot:    deployRoot,
+				Client:        client,
+				MonitorClient: client,
+				Probe:         remote.HealthProbe(),
+				Systemd:       remote.Systemd(),
+				ReadFile:      remote.ReadFile,
+				ProbeWritable: remote.ProbeWritable(host.Name),
+			})
+		})
+		if err != nil {
+			failures = append(failures, err.Error())
+		}
+	}
+	if len(failures) != 0 {
+		return fmt.Errorf("doctor_failed: 安装后自检未通过：%s", strings.Join(failures, "；"))
+	}
+	return nil
+}
+
+// runSetupDoctorHost 运行单台主机的安装后自检：若全部通过直接返回 nil；若仅有 Monitor 侧检查未通过（等待首轮上报/拓扑同步），
+// 在 timeout 内按 poll 间隔重试；本机事实探测失败直接返回错误。
+func runSetupDoctorHost(ctx context.Context, hostID string, timeout, poll time.Duration, run func(context.Context) (core.Report, error)) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		report, err := run(ctx)
+		if err != nil {
+			return fmt.Errorf("主机 %s 自检执行失败：%w（单独复查：moox-cli doctor bootstrap --node %s）", hostID, err, hostID)
+		}
+		if report.Conclusion == core.ConclusionHealthy {
+			return nil
+		}
+		localProblems, monitorProblems := classifyDoctorProblems(report)
+		if len(localProblems) > 0 || !time.Now().Before(deadline) {
+			problems := append(localProblems, monitorProblems...)
+			return fmt.Errorf("主机 %s 自检结论 %s：%s（单独复查：moox-cli doctor bootstrap --node %s）", hostID, report.Conclusion, strings.Join(problems, "；"), hostID)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+func classifyDoctorProblems(report core.Report) (localProblems, monitorProblems []string) {
+	for _, check := range report.Checks {
+		if check.Status == core.StatusPass || check.Status == core.StatusSkipped || check.Status == core.StatusBlocked {
+			continue
+		}
+		detail := fmt.Sprintf("%s[%s]: %s", check.ID, check.Status, check.Summary)
+		if check.Error != "" {
+			detail += "（" + check.Error + "）"
+		}
+		if strings.HasPrefix(check.ID, "monitor.") {
+			monitorProblems = append(monitorProblems, detail)
+		} else {
+			localProblems = append(localProblems, detail)
+		}
+	}
+	return localProblems, monitorProblems
 }
 
 // waitSetupAllReady 统一等一次全部主机上的全部组件就绪：按 moox.toml 的声明，停用的组件不等，停用的主机整台不等

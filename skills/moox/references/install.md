@@ -242,7 +242,7 @@ cd moox-${VER}
 8. 统一等一次全部组件就绪；
 9. **自动导入待恢复备份**（在全部组件就绪之后、完整初始化之前）：若本机有带“卸载后待导入”标记的 `moox.backup`，按覆盖导入密钥（`SecretMgr.ImportSecrets`，保留原密钥 ID）与告警渠道（`MonitorMgr.ImportNotificationChannels`，按地址幂等覆盖），成功后清掉待导入标记；没有备份则提示去管理台录入；
 10. `setup init`：写入默认云账号密钥（只建不改）、只读检查告警渠道（为空时提醒）、登记云账号、日志服务、采集计划，并输出管理台及密钥/监控入口地址；
-11. `setup start` 启动空间、`setup verify` 验收；验收通过后在控制机部署根下单独写出完成标记 `install-complete.json`。
+11. `setup start` 启动空间，先跑安装后自检（`doctor bootstrap`，逐台核对本机/SSH 事实与 Monitor 总览），再跑逐空间验收（`setup verify`）；自检与验收通过后在控制机部署根下单独写出完成标记 `install-complete.json`。
 
 - 每台主机的部署做的事：把登记同步到 Admin，预检本机组件的数据格式，目标机按产物包清单下载组件包（下载不了时由这台电脑下载再推送），向控制机要身份材料，
   渲染配置、环境文件和单元文件，装好后按启动顺序重启有变化的组件，写 `version.json`，再等这次装的组件就绪。
@@ -387,7 +387,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `browser_ca_trust_failed` | 从管理台服务器取不回 MooX CA 根证书 | 检查 SSH 和控制机是否已装好（根证书在 `<部署根>/secrets/moox-ca.crt`），用 `setup logs --host <控制机> --component admin` 查 |
 | `component_operation_failed` | `setup restart`、`stop`、`start-component` 失败 | 看错误原因；用 `setup logs --journal` 查 |
 | `collection_not_started` | 还没运行 `setup start`（任务默认停用）；或到超时还没有采集计划、collector-stream 不在线 | 看 `collector status` 给出的原因，不要删任务、不要手工改数据 |
-| `monitor_unhealthy` | 到超时 Monitor 还有 critical 问题，报错里列出了主机和组件 | 看 `doctor alerts`，再用 `doctor diagnose --node <主机>` 经 SSH 看那台主机上组件的本机 `/readyz`（健康端口只听本机，防火墙不放行它）。组件都正常但告警不解除时，检查告警通知渠道：恢复通知发不出去时告警会保持触发 |
+| `monitor_unhealthy` | 到超时 Monitor 还有 critical 问题，报错里列出了主机和组件 | 看 `doctor alerts`，再用 `doctor bootstrap --node <主机>` 经 SSH 看那台主机上组件的本机 `/readyz` 与 Monitor 上报状态（健康端口只听本机，防火墙不放行它）。组件都正常但告警不解除时，检查告警通知渠道：恢复通知发不出去时告警会保持触发 |
 | `monitor_unreadable` | 到超时还读不到 Monitor | 用 `setup logs --host <控制机> --component monitor` 查 Monitor |
 | `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector status` 和 `setup logs --host <海外机> --component collector-stream` |
 | `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败（源数据集补历史中的任务不算，它们按通过记、说明里写“补历史中，下游待生效”） | 看 `factor status` 和 `setup logs --host <因子机> --component factor-engine` |

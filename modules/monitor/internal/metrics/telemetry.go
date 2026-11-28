@@ -65,16 +65,10 @@ func recordIngestReason(moduleMetrics *report.ModuleMetrics, result, reason stri
 	if moduleMetrics != nil {
 		_ = moduleMetrics.ObserveRun("ingest", result, "monitor-metrics", now)
 	}
-	if moduleMetrics != nil && !observed.IsZero() {
-		_ = moduleMetrics.AdvanceInputWatermark("ingest", "monitor-metrics", observed)
-	}
 	if result == "success" {
 		ingestLastSuccess.Set(float64(now.Unix()))
 		if !observed.IsZero() && !observed.After(now) {
 			ingestLatency.Observe(now.Sub(observed).Seconds())
-		}
-		if moduleMetrics != nil && !observed.IsZero() {
-			_ = moduleMetrics.AdvanceWatermark("ingest", "monitor-metrics", observed)
 		}
 	}
 }

@@ -50,7 +50,7 @@ func TestEngineDependencyTruthTable(t *testing.T) {
 				return CheckResult{ID: spec.ID, Status: StatusPass, Summary: "downstream"}
 			})
 
-			report, err := (Engine{Mode: ModeDiagnose}).Run(context.Background(), []CheckSpec{{ID: "upstream"}, spec}, runner)
+			report, err := (Engine{Mode: ModeBootstrap}).Run(context.Background(), []CheckSpec{{ID: "upstream"}, spec}, runner)
 			if err != nil {
 				t.Fatalf("run: %v", err)
 			}
@@ -88,7 +88,7 @@ func TestEngineConclusionAndRoots(t *testing.T) {
 			for id := range tt.statuses {
 				specs = append(specs, CheckSpec{ID: id})
 			}
-			report, err := (Engine{Mode: ModeDiagnose}).Run(context.Background(), specs, RunnerFunc(func(_ context.Context, spec CheckSpec, _ []DependencyContext) CheckResult {
+			report, err := (Engine{Mode: ModeBootstrap}).Run(context.Background(), specs, RunnerFunc(func(_ context.Context, spec CheckSpec, _ []DependencyContext) CheckResult {
 				return CheckResult{ID: spec.ID, Status: tt.statuses[spec.ID]}
 			}))
 			if err != nil {
@@ -110,7 +110,7 @@ func TestEngineOptionalUnknownDoesNotMaskDownstreamFailure(t *testing.T) {
 		{ID: "optional-fact"},
 		{ID: "downstream", OptionalDependencies: []string{"optional-fact"}},
 	}
-	report, err := (Engine{Mode: ModeDiagnose}).Run(context.Background(), specs, RunnerFunc(func(_ context.Context, spec CheckSpec, _ []DependencyContext) CheckResult {
+	report, err := (Engine{Mode: ModeBootstrap}).Run(context.Background(), specs, RunnerFunc(func(_ context.Context, spec CheckSpec, _ []DependencyContext) CheckResult {
 		if spec.ID == "optional-fact" {
 			return CheckResult{ID: spec.ID, Status: StatusUnknown, Summary: "fact unavailable"}
 		}
@@ -131,11 +131,11 @@ func TestEngineRejectsCyclesAndUnknownDependencies(t *testing.T) {
 	runner := RunnerFunc(func(_ context.Context, spec CheckSpec, _ []DependencyContext) CheckResult {
 		return CheckResult{ID: spec.ID, Status: StatusPass}
 	})
-	_, err := (Engine{Mode: ModeDiagnose}).Run(context.Background(), []CheckSpec{{ID: "a", RequiredDependencies: []string{"b"}}}, runner)
+	_, err := (Engine{Mode: ModeBootstrap}).Run(context.Background(), []CheckSpec{{ID: "a", RequiredDependencies: []string{"b"}}}, runner)
 	if err == nil {
 		t.Fatal("unknown dependency accepted")
 	}
-	_, err = (Engine{Mode: ModeDiagnose}).Run(context.Background(), []CheckSpec{{ID: "a", RequiredDependencies: []string{"b"}}, {ID: "b", RequiredDependencies: []string{"a"}}}, runner)
+	_, err = (Engine{Mode: ModeBootstrap}).Run(context.Background(), []CheckSpec{{ID: "a", RequiredDependencies: []string{"b"}}, {ID: "b", RequiredDependencies: []string{"a"}}}, runner)
 	if err == nil {
 		t.Fatal("dependency cycle accepted")
 	}
@@ -148,7 +148,7 @@ func TestEnginePropagatesTimeoutAndCancellation(t *testing.T) {
 		<-ctx.Done()
 		return CheckResult{ID: spec.ID, Status: StatusUnknown, Error: ctx.Err().Error()}
 	})
-	report, err := (Engine{Mode: ModeDiagnose, TotalTimeout: 20 * time.Millisecond}).Run(context.Background(), []CheckSpec{{ID: "slow", Timeout: time.Second}}, runner)
+	report, err := (Engine{Mode: ModeBootstrap, TotalTimeout: 20 * time.Millisecond}).Run(context.Background(), []CheckSpec{{ID: "slow", Timeout: time.Second}}, runner)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

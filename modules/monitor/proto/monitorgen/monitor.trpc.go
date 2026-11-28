@@ -39,8 +39,6 @@ type MonitorMgrService interface {
 
 	QueryLogRecords(ctx context.Context, req *QueryLogRecordsReq) (*QueryLogRecordsRsp, error)
 
-	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error)
-
 	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error)
 
 	MuteAlerts(ctx context.Context, req *MuteAlertsReq) (*MuteAlertsRsp, error)
@@ -230,24 +228,6 @@ func MonitorMgrService_QueryLogRecords_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
-func MonitorMgrService_GetDoctorContext_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetDoctorContextReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorMgrService).GetDoctorContext(ctx, reqbody.(*GetDoctorContextReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func MonitorMgrService_GetHostPolicy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetHostPolicyReq{}
 	filters, err := f(req)
@@ -366,10 +346,6 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_QueryLogRecords_Handler,
 		},
 		{
-			Name: "/trpc.moox.monitor.MonitorMgr/GetDoctorContext",
-			Func: MonitorMgrService_GetDoctorContext_Handler,
-		},
-		{
 			Name: "/trpc.moox.monitor.MonitorMgr/GetHostPolicy",
 			Func: MonitorMgrService_GetHostPolicy_Handler,
 		},
@@ -429,9 +405,6 @@ func (s *UnimplementedMonitorMgr) QueryPipelineArrivalHistory(ctx context.Contex
 func (s *UnimplementedMonitorMgr) QueryLogRecords(ctx context.Context, req *QueryLogRecordsReq) (*QueryLogRecordsRsp, error) {
 	return nil, errors.New("rpc QueryLogRecords of service MonitorMgr is not implemented")
 }
-func (s *UnimplementedMonitorMgr) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error) {
-	return nil, errors.New("rpc GetDoctorContext of service MonitorMgr is not implemented")
-}
 func (s *UnimplementedMonitorMgr) GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error) {
 	return nil, errors.New("rpc GetHostPolicy of service MonitorMgr is not implemented")
 }
@@ -472,8 +445,6 @@ type MonitorMgrClientProxy interface {
 	QueryPipelineArrivalHistory(ctx context.Context, req *QueryPipelineArrivalHistoryReq, opts ...client.Option) (rsp *QueryPipelineArrivalHistoryRsp, err error)
 
 	QueryLogRecords(ctx context.Context, req *QueryLogRecordsReq, opts ...client.Option) (rsp *QueryLogRecordsRsp, err error)
-
-	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (rsp *GetDoctorContextRsp, err error)
 
 	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq, opts ...client.Option) (rsp *GetHostPolicyRsp, err error)
 
@@ -687,26 +658,6 @@ func (c *MonitorMgrClientProxyImpl) QueryLogRecords(ctx context.Context, req *Qu
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &QueryLogRecordsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MonitorMgrClientProxyImpl) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (*GetDoctorContextRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetDoctorContext")
-	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("monitor")
-	msg.WithCalleeService("MonitorMgr")
-	msg.WithCalleeMethod("GetDoctorContext")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetDoctorContextRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

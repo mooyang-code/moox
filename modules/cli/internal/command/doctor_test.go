@@ -7,14 +7,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDoctorRegistersOnlyV1Modes(t *testing.T) {
+func TestDoctorRegistersOnlyBootstrapAndAlerts(t *testing.T) {
 	cmd := newDoctorCommand(doctorCommandDeps{})
 	names := []string{}
 	for _, child := range cmd.Commands() {
 		names = append(names, child.Name())
 	}
-	require.Equal(t, []string{"alerts", "bootstrap", "diagnose"}, names)
-	for _, forbidden := range []string{"full", "get", "list", "cancel", "rerun"} {
+	require.Equal(t, []string{"alerts", "bootstrap"}, names)
+	for _, forbidden := range []string{"diagnose", "full", "get", "list", "cancel", "rerun"} {
 		found, _, err := cmd.Find([]string{forbidden})
 		require.Error(t, err)
 		require.NotEqual(t, forbidden, found.Name())
@@ -30,16 +30,10 @@ func TestValidateDoctorFlagsAndExitCodes(t *testing.T) {
 	require.Equal(t, 3, doctorExitCode(core.ConclusionInconclusive))
 }
 
-func TestResolveDoctorEnvUsesEnvironmentOverridesAndDefaults(t *testing.T) {
+func TestResolveDoctorEnvUsesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("MOOX_NODE_ID", "factor")
 	t.Setenv("MOOX_DEPLOY_ROOT", "/srv/moox")
-	t.Setenv("MOOX_DATASET_HEALTH_POLICY", "/tmp/policy.yaml")
 	env := resolveDoctorEnv()
 	require.Equal(t, "factor", env.nodeID)
 	require.Equal(t, "/srv/moox", env.deployRoot)
-	require.Equal(t, "/tmp/policy.yaml", env.datasetHealthPolicyPath)
-
-	t.Setenv("MOOX_DATASET_HEALTH_POLICY", "")
-	env = resolveDoctorEnv()
-	require.Equal(t, defaultDatasetHealthPolicyPath, env.datasetHealthPolicyPath)
 }

@@ -29,7 +29,7 @@ make test-deployment-packages
 
 云账号、代码包与云函数的命令（`collector account`、`collector package`、`collector function`）调 Collector 的 CollectMgr，走同一条 SSH 隧道进主机网关。相关命令的 `--file` 默认 `./moox.toml`，用于选择可信 SSH 主机；COS 文件上传仍使用返回的预签名 HTTPS 地址。读回、删除与出口探测采用服务目录中的方法超时，命令退出统一关闭连接。
 
-Admin 的密钥、Setup 与部署诊断复用命令持有的隧道客户端。`doctor bootstrap/diagnose --file <moox.toml>` 从同一操作员身份访问 SysDeploy；Monitor 与 Storage 管理入口同样复用这一客户端，命令结束时统一释放。
+Admin 的密钥、Setup 与部署诊断复用命令持有的隧道客户端。`doctor bootstrap --file <moox.toml>` 从同一操作员身份访问 SysDeploy 与 Monitor；Storage 管理入口同样复用这一客户端，命令结束时统一释放。
 
 Doctor 的 Monitor 与 SysDeploy 查询共用命令持有的隧道客户端，配置仅依赖 `--file` 指定的 `moox.toml`（不设独立本地 CLI 配置文件）。
 

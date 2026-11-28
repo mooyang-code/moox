@@ -395,69 +395,6 @@ message QueryPipelineArrivalHistoryRsp {
   repeated ArrivalTask tasks = 9;
 }
 
-message DoctorExpectedComponent {
-  string component_id = 1;
-  string service_name = 2;
-  string node_id = 3;
-  bool expected = 4;
-  string deployment_status = 5;
-  string transport = 6;
-  string functional_observability = 7;
-}
-message DoctorObservation {
-  string kind = 1;
-  string component_id = 2;
-  string service_name = 3;
-  string instance_id = 4;
-  string node_id = 5;
-  string boot_id = 6;
-  string status = 7;
-  int64 observed_at = 8;
-  string summary = 9;
-  string details_json = 10;
-  bool stale = 11;
-  bool conflict = 12;
-  double value = 13;
-  int64 age_seconds = 14;
-  int32 interval_seconds = 15;
-}
-message DoctorWatermark {
-  string module = 1;
-  string stage = 2;
-  string health_check_id = 3;
-  int64 observed_at = 4;
-  double value = 5;
-  string status = 6;
-}
-message DoctorDiskForecast {
-  // node_id 是主机 ID。
-  string node_id = 1;
-  string mountpoint = 3;
-  string status = 4;
-  double growth_bytes_per_day = 5;
-  double remaining_days = 6;
-  uint32 valid_intervals = 7;
-  string summary = 8;
-}
-message GetDoctorContextReq {
-  string node_id = 1;
-  repeated string component_ids = 2;
-  repeated string health_check_ids = 3;
-}
-message GetDoctorContextRsp {
-  common.RetInfo ret_info = 1;
-  int64 generated_at = 2;
-  string manifest_checksum = 3;
-  repeated DoctorExpectedComponent expected_components = 4;
-  repeated DoctorObservation health_observations = 5;
-  repeated DoctorObservation reporter_observations = 6;
-  repeated DoctorObservation module_observations = 7;
-  repeated DoctorWatermark watermarks = 8;
-  repeated HostAgentInfo host_resources = 9;
-  repeated DoctorDiskForecast disk_forecasts = 10;
-  repeated DoctorObservation missing_observations = 12;
-}
-
 // AlertMuteState 是告警屏蔽的当前状态。屏蔽只停推送：入库、告警评估与记录照常，到期自动恢复。
 message AlertMuteState {
   bool muted = 1;
@@ -556,7 +493,6 @@ service MonitorMgr {
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
   rpc QueryLogRecords(QueryLogRecordsReq) returns (QueryLogRecordsRsp);
-  rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
   rpc GetHostPolicy(GetHostPolicyReq) returns (GetHostPolicyRsp);
   rpc MuteAlerts(MuteAlertsReq) returns (MuteAlertsRsp);
   rpc UnmuteAlerts(UnmuteAlertsReq) returns (UnmuteAlertsRsp);

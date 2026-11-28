@@ -102,7 +102,7 @@ func (b Builder) buildServices(ctx context.Context, now time.Time, hosts []HostS
 }
 
 // Services 只给出各登记部署按最近一次上报得到的状态（含模块级生命周期），不构建整份概览；host-agent 按这台主机最近一次主机快照判断。
-// 组件检查、Doctor 上下文都用它的结论。
+// 组件检查与行情探针都用它的结论。
 func (b Builder) Services(ctx context.Context, now time.Time) ([]ServiceStatus, error) {
 	hosts, err := b.buildHosts(ctx, now)
 	if err != nil {

@@ -20,12 +20,11 @@ type Mode string
 
 const (
 	ModeBootstrap Mode = "bootstrap"
-	ModeDiagnose  Mode = "diagnose"
 )
 
 func (m Mode) Validate() error {
 	switch m {
-	case ModeBootstrap, ModeDiagnose:
+	case ModeBootstrap:
 		return nil
 	default:
 		return fmt.Errorf("invalid doctor mode %q", m)

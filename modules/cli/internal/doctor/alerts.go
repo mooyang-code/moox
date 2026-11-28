@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
@@ -255,4 +256,12 @@ func renderAlertsText(report AlertsReport, markdown bool) []byte {
 		fmt.Fprintf(&out, "\n注：%s\n", note)
 	}
 	return out.Bytes()
+}
+
+// msText 把 Monitor 接口里的毫秒时刻转成报告里显示的 RFC3339 UTC 文本；0 是空串。
+func msText(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).UTC().Format(time.RFC3339)
 }

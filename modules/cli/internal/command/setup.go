@@ -70,6 +70,8 @@ type setupDeps struct {
 	operate   func(context.Context, topology.Host, string, string) (string, error)
 	readLogs  func(context.Context, topology.Host, string, []string, string, int, bool) ([]deploy.LogSection, error)
 	openStart func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error)
+	// runDoctor 是 setup install 的倒数第二步（按空间验收之前），对全部启用主机跑安装后自检，测试里替换。
+	runDoctor func(context.Context, string, *setupSnapshot) error
 	// verifySpace 是 setup install 的最后一步，测试里替换。
 	verifySpace func(context.Context, string, *setupSnapshot, string) error
 	// markInstallComplete 在安装验收全部通过后，在控制机部署根下单独写完成标记文件。
@@ -527,6 +529,7 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.operate, defaults.operate)
 	fillSetupDep(&deps.readLogs, defaults.readLogs)
 	fillSetupDep(&deps.openStart, defaults.openStart)
+	fillSetupDep(&deps.runDoctor, defaults.runDoctor)
 	fillSetupDep(&deps.verifySpace, defaults.verifySpace)
 	fillSetupDep(&deps.markInstallComplete, defaults.markInstallComplete)
 	fillSetupDep(&deps.previewBackup, defaults.previewBackup)
@@ -571,7 +574,8 @@ func loadSetupSnapshot(path string) (*setupSnapshot, error) {
 
 func defaultSetupDeps() setupDeps {
 	return setupDeps{
-		load: loadSetupSnapshot,
+		load:      loadSetupSnapshot,
+		runDoctor: defaultSetupDoctor,
 		verifySpace: func(ctx context.Context, file string, snapshot *setupSnapshot, spaceID string) error {
 			_, err := runSetupVerifySpace(ctx, file, snapshot, spaceID, setupVerifyTimeout)
 			return err

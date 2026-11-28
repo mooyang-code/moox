@@ -5,17 +5,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
-	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -23,22 +22,23 @@ type DeploymentClient interface {
 	ListDeployments(context.Context, string) ([]Deployment, error)
 }
 
-type DoctorContextClient interface {
-	GetDoctorContext(context.Context, *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error)
+// HealthOverviewClient 读取 Monitor 的健康概览，自检第二部分直接复用 Monitor 的检查结果，不在 CLI 侧重算健康。
+type HealthOverviewClient interface {
+	GetHealthOverview(ctx context.Context, spaceID string) (*monitorpb.HealthOverview, error)
 }
 
 type BootstrapOptions struct {
-	NodeID, LocalNodeID, DatasetHealthPolicyPath string
-	CheckIDs                                     []string
-	Client                                       DeploymentClient
-	MonitorClient                                DoctorContextClient
+	NodeID, LocalNodeID string
+	CheckIDs            []string
+	Client              DeploymentClient
+	MonitorClient       HealthOverviewClient
 	// Probe 请求组件只听本机的健康端口：查的是本机时直接请求 127.0.0.1，带远端 --node 时经 SSH 转发到目标机的 127.0.0.1。
-	// SSH 连不上时 bootstrap 把这一项记为失败并建议重启服务（diagnose 同样情况记为无法判断）。
+	// SSH 连不上目标机时记为无法判断（StatusUnknown）；端口连不上或返回非 2xx 时记为失败。
 	Probe         HealthProbe
 	Now           func() time.Time
 	ProbeWritable func(context.Context, string, string) error
 	// Systemd 读组件 systemd 用户服务（moox-<组件>.service）的状态：开机自启、运行中与 linger 三项都满足才通过；
-	// 为空时自启动检查记为无法判断。全部组件都由 systemd 用户服务托管。
+	// 为空时自启动与托管状态检查记为无法判断。全部组件都由 systemd 用户服务托管。
 	Systemd SystemdChecker
 	// DeployRoot 是部署根（默认 /data/moox）：部署记录是 <部署根>/version.json，组件的数据目录是 <部署根>/data/<组件>。
 	DeployRoot string
@@ -47,16 +47,13 @@ type BootstrapOptions struct {
 }
 
 type bootstrapRunner struct {
-	options                BootstrapOptions
-	manifest               core.Manifest
-	deployments            map[string]Deployment
-	loadErr                error
-	datasetHealthPolicy    report.DatasetHealthPolicy
-	datasetHealthPolicyErr error
-	healthChecks           []report.ModuleHealthCheck
-	manifestErr            error
-	delivery               *monitorpb.GetDoctorContextRsp
-	deliveryErr            error
+	options     BootstrapOptions
+	manifest    core.Manifest
+	deployments map[string]Deployment
+	loadErr     error
+	manifestErr error
+	overview    *monitorpb.HealthOverview
+	overviewErr error
 }
 
 func isRemoteNode(options BootstrapOptions) bool {
@@ -70,15 +67,18 @@ func joinNodePath(remote bool, elem ...string) string {
 	return filepath.Join(elem...)
 }
 
+// RunBootstrap 对单台主机执行安装后自检，包含两部分内容：
+//  1. 本机/远端事实探测：版本摘要、主机清单、服务身份、网络、路径权限、自启与 systemd 状态、本机就绪端口；
+//  2. Monitor 检查结果（GetHealthOverview）：各组件是否已在上报、是否就绪、有没有严重告警。
 func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, error) {
 	if options.NodeID == "" {
 		options.NodeID = options.LocalNodeID
 	}
 	if options.NodeID == "" {
-		return core.Report{}, fmt.Errorf("bootstrap requires a target node ID")
+		return core.Report{}, fmt.Errorf("自检必须指定目标主机 ID（--node）")
 	}
 	if isRemoteNode(options) && (options.ReadFile == nil || options.Probe == nil || options.ProbeWritable == nil) {
-		return core.Report{}, fmt.Errorf("bootstrap for remote node %q requires remote SSH capabilities (load moox.toml)", options.NodeID)
+		return core.Report{}, fmt.Errorf("自检远端主机 %q 需要远端 SSH 能力（请先提供可读的 moox.toml）", options.NodeID)
 	}
 	manifest, err := core.LoadEmbeddedManifest()
 	if err != nil {
@@ -91,7 +91,7 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 		runner.manifestErr = verifyDeployedCatalog(ctx, options, manifest.Checksum)
 	}
 	if options.Client == nil {
-		runner.loadErr = fmt.Errorf("SysDeploy client is unavailable")
+		runner.loadErr = fmt.Errorf("SysDeploy 客户端不可用")
 	} else {
 		rows, loadErr := options.Client.ListDeployments(ctx, options.NodeID)
 		runner.loadErr = loadErr
@@ -99,15 +99,20 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 			runner.deployments[row.ComponentID] = row
 		}
 	}
-	runner.healthChecks = report.BuiltInModuleHealthChecks()
-	runner.datasetHealthPolicy, runner.datasetHealthPolicyErr = report.LoadDatasetHealthPolicy(options.DatasetHealthPolicyPath)
 	specs := bootstrapSpecs(manifest, options.NodeID)
 	specs, err = selectSpecs(specs, options.CheckIDs)
 	if err != nil {
 		return core.Report{}, err
 	}
-	if options.MonitorClient != nil && hasCheck(specs, "monitor.metrics_delivery") {
-		runner.delivery, runner.deliveryErr = options.MonitorClient.GetDoctorContext(ctx, &monitorpb.GetDoctorContextReq{NodeId: options.NodeID, HealthCheckIds: healthCheckIDs(runner.healthChecks)})
+	if needsMonitorOverview(specs) {
+		if options.MonitorClient == nil {
+			runner.overviewErr = fmt.Errorf("Monitor 客户端不可用")
+		} else {
+			runner.overview, runner.overviewErr = options.MonitorClient.GetHealthOverview(ctx, "")
+			if runner.overviewErr == nil && runner.overview == nil {
+				runner.overviewErr = fmt.Errorf("Monitor 返回了空的健康概览")
+			}
+		}
 	}
 	report, err := (core.Engine{Mode: core.ModeBootstrap, Now: options.Now}).Run(ctx, specs, core.RunnerFunc(runner.run))
 	if err != nil {
@@ -118,9 +123,9 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	return report, nil
 }
 
-func hasCheck(specs []core.CheckSpec, id string) bool {
+func needsMonitorOverview(specs []core.CheckSpec) bool {
 	for _, spec := range specs {
-		if spec.ID == id {
+		if spec.ID == "monitor.overview" || strings.HasPrefix(spec.ID, "monitor.component:") || strings.HasPrefix(spec.ID, "monitor.alerts:") {
 			return true
 		}
 	}
@@ -145,34 +150,36 @@ func bootstrapSpecs(manifest core.Manifest, nodeID string) []core.CheckSpec {
 		)
 		healthChecks[component.ComponentID] = "service.health:" + scope
 	}
-	metricsDeps := []string{}
-	for _, id := range []string{"eventbus", "monitor"} {
-		if healthChecks[id] != "" {
-			metricsDeps = append(metricsDeps, healthChecks[id])
-		}
+	overviewSpec := core.CheckSpec{ID: "monitor.overview"}
+	if healthChecks["monitor"] != "" {
+		overviewSpec.OptionalDependencies = []string{healthChecks["monitor"]}
 	}
-	specs = append(specs, core.CheckSpec{ID: "monitor.metrics_delivery", RequiredDependencies: metricsDeps})
+	specs = append(specs, overviewSpec)
 	for _, component := range manifest.Components {
-		specs = append(specs, core.CheckSpec{ID: "monitor.reporter_coverage:" + component.ComponentID, RequiredDependencies: []string{"monitor.metrics_delivery"}, OptionalDependencies: []string{healthChecks[component.ComponentID]}})
+		scope := component.ComponentID + "@" + nodeID
+		specs = append(specs, core.CheckSpec{
+			ID:                   "monitor.component:" + scope,
+			RequiredDependencies: []string{"bootstrap.inventory", "monitor.overview"},
+			OptionalDependencies: []string{healthChecks[component.ComponentID]},
+		})
 	}
+	specs = append(specs, core.CheckSpec{
+		ID:                   "monitor.alerts:" + nodeID,
+		RequiredDependencies: []string{"monitor.overview"},
+	})
 	return specs
 }
 
 func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.DependencyContext) core.CheckResult {
-	result := core.CheckResult{ID: spec.ID}
 	switch spec.ID {
 	case "bootstrap.release_contract":
-		contractErr := r.manifestErr
-		if contractErr == nil {
-			contractErr = r.datasetHealthPolicyErr
+		if r.manifestErr != nil {
+			return checkResult(spec.ID, core.StatusFail, "部署记录版本摘要校验未通过", r.manifestErr, "sync_host_deployments")
 		}
-		if contractErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "sync_host_deployments")
-		}
-		return checkResult(spec.ID, core.StatusPass, "deployed catalog checksum matches and Dataset health policy is available", nil)
+		return checkResult(spec.ID, core.StatusPass, "部署记录的服务目录摘要与当前 CLI 一致", nil)
 	case "bootstrap.inventory":
 		if r.loadErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "sync_host_deployments")
+			return checkResult(spec.ID, core.StatusFail, "无法读取 SysDeploy 主机部署清单", r.loadErr, "sync_host_deployments")
 		}
 		missing := []string{}
 		required := []string{"host-gateway", "host-agent"}
@@ -185,78 +192,82 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			}
 		}
 		if len(missing) > 0 {
-			return checkResult(spec.ID, core.StatusFail, "required deployment inventory is missing: "+strings.Join(missing, ", "), nil, "sync_host_deployments")
+			return checkResult(spec.ID, core.StatusFail, "主机部署清单缺少必需组件："+strings.Join(missing, ", "), nil, "sync_host_deployments")
 		}
-		return checkResult(spec.ID, core.StatusPass, "host deployments match the component catalog", nil)
-	}
-	if spec.ID == "monitor.metrics_delivery" {
-		if r.deliveryErr != nil || r.delivery == nil {
-			err := r.deliveryErr
+		return checkResult(spec.ID, core.StatusPass, "主机部署清单与组件目录一致", nil)
+	case "monitor.overview":
+		if r.overviewErr != nil || r.overview == nil {
+			err := r.overviewErr
 			if err == nil {
-				err = fmt.Errorf("Monitor delivery context was not requested")
+				err = fmt.Errorf("未请求 Monitor 健康概览")
 			}
-			return checkResult(spec.ID, core.StatusUnknown, "Reporter delivery cannot be confirmed without a bounded Monitor context", err, "run_bootstrap")
+			return checkResult(spec.ID, core.StatusUnknown, "无法读取 Monitor 健康概览", err, "run_bootstrap")
 		}
-		for _, observation := range append(append([]*monitorpb.DoctorObservation{}, r.delivery.GetReporterObservations()...), r.delivery.GetMissingObservations()...) {
-			if observation.GetComponentId() == "monitor" && (observation.GetConflict() || observation.GetStatus() == "FAIL" || observation.GetStale()) {
-				return checkResult(spec.ID, core.StatusFail, "Monitor Reporter delivery fact is stale or conflicting", nil, "verify_eventbus_credentials")
-			}
-		}
-		for _, observation := range r.delivery.GetReporterObservations() {
-			if observation.GetComponentId() == "monitor" && observation.GetStatus() == "FRESH" && !observation.GetStale() {
-				return checkResult(spec.ID, core.StatusPass, "Monitor Reporter delivery fact is current", nil)
-			}
-		}
-		return checkResult(spec.ID, core.StatusUnknown, "Monitor Reporter delivery fact is missing", nil, "verify_eventbus_credentials")
+		return checkResult(spec.ID, core.StatusPass, "已读取 Monitor 健康概览", nil)
+	}
+	if spec.ID == "monitor.alerts:"+r.options.NodeID {
+		return r.checkMonitorAlerts(spec.ID)
 	}
 	component, kind, ok := r.componentForCheck(spec.ID)
 	if !ok {
-		return checkResult(spec.ID, core.StatusFail, "unknown bootstrap check", nil)
+		return checkResult(spec.ID, core.StatusFail, "未知的自检项", nil)
 	}
 	deployment, placed := r.deployments[component.ComponentID]
 	if !placed || deployment.Status != "enabled" {
-		return checkResult(spec.ID, core.StatusSkipped, "component is disabled or not expected on this node", nil)
+		return checkResult(spec.ID, core.StatusSkipped, "该组件未部署在本机或已停用", nil)
 	}
 	switch kind {
 	case "service_identity":
-		if component.FunctionalObservability == core.FunctionalObservabilityDeferred || component.Transport != core.TransportReporter {
-			return checkResult(spec.ID, core.StatusSkipped, "identity extension is not part of the active V1 contract", nil)
+		if component.Transport != core.TransportReporter {
+			return checkResult(spec.ID, core.StatusSkipped, "该组件不走 Reporter 身份契约", nil)
 		}
 		probe, err := r.probe(ctx, component, "/readyz")
 		if err != nil {
-			return checkResult(spec.ID, core.StatusFail, "service identity probe failed", err, "verify_service_identity")
+			if errors.Is(err, ErrNodeUnreachable) {
+				return checkResult(spec.ID, core.StatusUnknown, "无法经 SSH 连到节点以核对服务身份", err, "verify_service_identity")
+			}
+			return checkResult(spec.ID, core.StatusFail, "服务身份探测失败", err, "verify_service_identity")
 		}
 		var identity struct {
-			Service                 string `json:"service"`
-			InstanceID              string `json:"instance_id"`
-			NodeID                  string `json:"node_id"`
-			BootID                  string `json:"boot_id"`
-			DatasetHealthPolicyHash string `json:"dataset_health_policy_hash"`
+			Service    string `json:"service"`
+			InstanceID string `json:"instance_id"`
+			NodeID     string `json:"node_id"`
+			BootID     string `json:"boot_id"`
 		}
 		if err := json.Unmarshal(probe.Body, &identity); err != nil {
-			return checkResult(spec.ID, core.StatusFail, "service identity response is invalid", err, "verify_service_identity")
+			return checkResult(spec.ID, core.StatusFail, "服务身份响应不是合法的 JSON", err, "verify_service_identity")
 		}
 		want := component.ServiceName + "@" + r.options.NodeID
-		identityMismatch := identity.Service != component.ServiceName ||
+		if identity.Service != component.ServiceName ||
 			identity.InstanceID != want ||
 			identity.NodeID != r.options.NodeID ||
-			identity.BootID == ""
-		policyMismatch := component.ServiceName == "monitor" &&
-			r.datasetHealthPolicy.Checksum != "" &&
-			identity.DatasetHealthPolicyHash != r.datasetHealthPolicy.Checksum
-		if identityMismatch || policyMismatch {
-			return checkResult(spec.ID, core.StatusFail, "service identity conflicts with canonical service@node identity", nil, "verify_service_identity")
+			identity.BootID == "" {
+			return checkResult(spec.ID, core.StatusFail, "服务身份与规范的 service@node 不一致", nil, "verify_service_identity")
 		}
-		result = checkResult(spec.ID, core.StatusPass, "service identity matches the canonical contract", nil)
-		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "local identity response", Digest: probe.Digest}}
+		result := checkResult(spec.ID, core.StatusPass, "服务身份与规范契约一致", nil)
+		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "本机服务身份响应", Digest: probe.Digest}}
 		return result
-	case "network", "health":
+	case "network":
+		probe, err := r.probe(ctx, component, "/healthz")
+		if err != nil {
+			if errors.Is(err, ErrNodeUnreachable) {
+				return checkResult(spec.ID, core.StatusUnknown, "无法经 SSH 连到节点以探测健康端口", err, "restart_service_manually")
+			}
+			return checkResult(spec.ID, core.StatusFail, "本机健康端口 /healthz 不可达", err, "restart_service_manually")
+		}
+		result := checkResult(spec.ID, core.StatusPass, "本机健康端口 /healthz 可达", nil)
+		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "本机 /healthz 响应", Digest: probe.Digest}}
+		return result
+	case "health":
 		probe, err := r.probe(ctx, component, "/readyz")
 		if err != nil {
-			return checkResult(spec.ID, core.StatusFail, "service health endpoint is unavailable", err, "restart_service_manually")
+			if errors.Is(err, ErrNodeUnreachable) {
+				return checkResult(spec.ID, core.StatusUnknown, "无法经 SSH 连到节点以探测就绪端口", err, "restart_service_manually")
+			}
+			return checkResult(spec.ID, core.StatusFail, "本机就绪端口 /readyz 未就绪或不可达", err, "restart_service_manually")
 		}
-		result = checkResult(spec.ID, core.StatusPass, "service health endpoint responded", nil)
-		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "local health response", Digest: probe.Digest}}
+		result := checkResult(spec.ID, core.StatusPass, "本机就绪端口 /readyz 已就绪", nil)
+		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "本机 /readyz 响应", Digest: probe.Digest}}
 		return result
 	case "path_permissions":
 		// 每个组件的可写目录固定是 <部署根>/data/<组件>（systemd 单元的 WorkingDirectory），不用声明。
@@ -268,80 +279,143 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			probeWritable = ProbeWritablePath
 		}
 		if err := probeWritable(ctx, r.options.DeployRoot, joinNodePath(isRemoteNode(r.options), "data", component.ComponentID)); err != nil {
-			return checkResult(spec.ID, core.StatusFail, "data directory probe failed", err, "repair_path_permissions")
+			return checkResult(spec.ID, core.StatusFail, "数据目录可写探测失败", err, "repair_path_permissions")
 		}
-		return checkResult(spec.ID, core.StatusPass, "data directory accepts bounded temporary probes", nil)
+		return checkResult(spec.ID, core.StatusPass, "数据目录可写探测通过", nil)
 	case "service_autostart":
 		unit := servicecatalog.UnitName(component.ComponentID)
 		if r.options.Systemd == nil {
-			return checkResult(spec.ID, core.StatusUnknown, "systemd state checker is unavailable for this run", nil, "restart_service_manually")
+			return checkResult(spec.ID, core.StatusUnknown, "未提供 systemd 状态检查器，无法核对自启与托管状态", nil, "restart_service_manually")
 		}
 		state, err := r.options.Systemd(ctx, r.options.NodeID, unit)
 		return supervisorResult(spec.ID, unit, state, err)
-	case "reporter_coverage":
-		if component.FunctionalObservability == core.FunctionalObservabilityDeferred || component.FunctionalObservability == core.FunctionalObservabilityNotApplicable {
-			if component.FunctionalObservability == core.FunctionalObservabilityNotApplicable {
-				return checkResult(spec.ID, core.StatusSkipped, "functional_observability_not_applicable", nil)
-			}
-			return checkResult(spec.ID, core.StatusSkipped, "storage_observability_deferred", nil)
-		}
-		if component.Transport != core.TransportReporter {
-			return checkResult(spec.ID, core.StatusSkipped, "component does not use Reporter transport", nil)
-		}
-		probe, err := r.probe(ctx, component, "/metrics")
-		if err != nil {
-			return checkResult(spec.ID, core.StatusFail, "Reporter metrics endpoint is unavailable", err, "verify_eventbus_credentials")
-		}
-		if len(probe.Body) == 0 {
-			return checkResult(spec.ID, core.StatusFail, "Reporter metrics endpoint is empty", nil, "verify_eventbus_credentials")
-		}
-		if reporterHasRecentFailure(probe.Body, probe.ObservedAt) {
-			return checkResult(spec.ID, core.StatusFail, "Reporter has recorded delivery failures", nil, "verify_eventbus_credentials")
-		}
-		return checkResult(spec.ID, core.StatusPass, "Reporter endpoint is readable", nil)
+	case "monitor_component":
+		return r.checkMonitorComponent(spec.ID, component.ComponentID)
 	}
-	return result
+	return checkResult(spec.ID, core.StatusFail, "未知的自检项", nil)
 }
 
-func reporterHasRecentFailure(body []byte, now time.Time) bool {
-	var total, lastError float64
-	for _, line := range strings.Split(string(body), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			continue
-		}
-		value, err := strconv.ParseFloat(fields[1], 64)
-		if err != nil {
-			continue
-		}
-		name := strings.SplitN(fields[0], "{", 2)[0]
-		switch {
-		case strings.HasPrefix(name, "moox_") &&
-			(strings.HasSuffix(name, "_report_errors_total") || strings.HasSuffix(name, "_metrics_errors_total")):
-			if value > total {
-				total = value
-			}
-		case strings.HasPrefix(name, "moox_") &&
-			(strings.HasSuffix(name, "_report_last_error_timestamp_seconds") || strings.HasSuffix(name, "_metrics_last_error_timestamp_seconds")):
-			if value > lastError {
-				lastError = value
-			}
+// checkMonitorComponent 直接读取 Monitor 健康概览里的组件检查结论：是否已在上报、是否就绪。
+func (r *bootstrapRunner) checkMonitorComponent(checkID, componentID string) core.CheckResult {
+	var entry *monitorpb.HealthComponent
+	for _, candidate := range r.overview.GetComponents() {
+		if candidate.GetHostId() == r.options.NodeID && candidate.GetComponentId() == componentID {
+			entry = candidate
+			break
 		}
 	}
-	if total <= 0 {
-		return false
+	if entry == nil {
+		if !r.overview.GetTopologyKnown() {
+			return checkResult(checkID, core.StatusUnknown, "Monitor 尚未同步部署拓扑", nil, "sync_host_deployments")
+		}
+		return checkResult(checkID, core.StatusUnknown, "Monitor 健康概览中暂无该组件记录", nil, "sync_host_deployments")
 	}
-	if lastError == 0 {
+	status := entry.GetStatus()
+	if status == "disabled" {
+		return checkResult(checkID, core.StatusSkipped, "Monitor 记为已停用", nil)
+	}
+	if entry.GetReadiness() == "not_ready" {
+		reason := strings.TrimSpace(entry.GetNotReadyReason())
+		if reason == "" {
+			reason = strings.TrimSpace(entry.GetReason())
+		}
+		if reason == "" {
+			reason = "组件报告未就绪"
+		}
+		return checkResult(checkID, core.StatusFail, "Monitor 报告未就绪："+reason, nil, "restart_service_manually")
+	}
+	if status == "down" {
+		reason := strings.TrimSpace(entry.GetReason())
+		if reason == "" {
+			reason = "组件不可用或停止上报"
+		}
+		return checkResult(checkID, core.StatusFail, "Monitor 报告组件异常："+reason, nil, "verify_eventbus_credentials", "restart_service_manually")
+	}
+	if status == "degraded" {
+		reason := strings.TrimSpace(entry.GetReason())
+		if reason == "" {
+			reason = "组件降级"
+		}
+		return checkResult(checkID, core.StatusWarn, "Monitor 报告组件降级："+reason, nil, "verify_eventbus_credentials")
+	}
+	if status == "unknown" {
+		reason := strings.TrimSpace(entry.GetReason())
+		if reason == "" {
+			reason = "尚未收到监控上报"
+		}
+		return checkResult(checkID, core.StatusUnknown, "Monitor 尚未确认组件状态："+reason, nil, "verify_eventbus_credentials")
+	}
+	if reporter := entry.GetReporter(); reporter != nil {
+		switch reporter.GetStatus() {
+		case "", "healthy", "unchecked":
+		case "unknown":
+			return checkResult(checkID, core.StatusFail, "Monitor 尚未收到该组件上报："+strings.TrimSpace(reporter.GetReason()), nil, "verify_eventbus_credentials")
+		default:
+			return checkResult(checkID, core.StatusWarn, "Monitor 报告上报异常："+strings.TrimSpace(reporter.GetReason()), nil, "verify_eventbus_credentials")
+		}
+	}
+	if status == "unchecked" {
+		return checkResult(checkID, core.StatusPass, "Monitor 记为未配置指标上报", nil)
+	}
+	return checkResult(checkID, core.StatusPass, "Monitor 确认组件已上报且就绪", nil)
+}
+
+// checkMonitorAlerts 直接读取 Monitor 概览中的严重告警（critical），过滤出属于本节点或全局系统的严重告警；
+// 归档覆盖待办（archive_coverage）在全新安装时必然存在，由 doctor alerts 提示，不阻塞自检。
+func (r *bootstrapRunner) checkMonitorAlerts(checkID string) core.CheckResult {
+	var critical []string
+	for _, alert := range r.overview.GetAlerts() {
+		if alert.GetSeverity() != AlertSeverityCritical {
+			continue
+		}
+		if !r.alertAppliesToNode(alert.GetObject()) {
+			continue
+		}
+		line := strings.TrimSpace(alert.GetTitle())
+		if reason := strings.TrimSpace(alert.GetReason()); reason != "" {
+			line += "（" + reason + "）"
+		}
+		if line == "" {
+			line = alert.GetId()
+		}
+		critical = append(critical, line)
+	}
+	if len(critical) == 0 {
+		return checkResult(checkID, core.StatusPass, "Monitor 没有严重告警", nil)
+	}
+	shown := critical
+	suffix := ""
+	if len(shown) > 3 {
+		shown = shown[:3]
+		suffix = fmt.Sprintf(" 等共 %d 条", len(critical))
+	}
+	return checkResult(checkID, core.StatusFail,
+		fmt.Sprintf("Monitor 存在严重告警：%s%s；运行 moox-cli doctor alerts 查看详情", strings.Join(shown, "；"), suffix),
+		nil, "inspect_health_check_input")
+}
+
+func (r *bootstrapRunner) alertAppliesToNode(object *monitorpb.HealthObject) bool {
+	if object == nil {
 		return true
 	}
-	return now.Sub(time.Unix(int64(lastError), 0).UTC()) <= 2*time.Minute
+	if object.GetKind() == "archive_coverage" {
+		return false
+	}
+	if hostID := strings.TrimSpace(object.GetHostId()); hostID != "" {
+		return hostID == r.options.NodeID
+	}
+	if componentID := strings.TrimSpace(object.GetComponentId()); componentID != "" {
+		if r.loadErr != nil {
+			return true
+		}
+		deployment, exists := r.deployments[componentID]
+		return exists && deployment.Status == "enabled"
+	}
+	return true
 }
 
 func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, bool) {
 	for _, component := range r.manifest.Components {
-		if id == "monitor.reporter_coverage:"+component.ComponentID {
-			return component, "reporter_coverage", true
-		}
 		suffix := ":" + component.ComponentID + "@" + r.options.NodeID
 		for _, kind := range []string{"service_identity", "network", "path_permissions", "service_autostart"} {
 			if id == "bootstrap."+kind+suffix {
@@ -351,6 +425,9 @@ func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, 
 		if id == "service.health"+suffix {
 			return component, "health", true
 		}
+		if id == "monitor.component"+suffix {
+			return component, "monitor_component", true
+		}
 	}
 	return core.Component{}, "", false
 }
@@ -358,7 +435,7 @@ func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, 
 // probe 请求 --node 所指节点上组件的健康端口（远端节点经 SSH 转发）。
 func (r *bootstrapRunner) probe(ctx context.Context, component core.Component, path string) (ProbeResult, error) {
 	if r.options.Probe == nil {
-		return ProbeResult{}, fmt.Errorf("health probe is unavailable")
+		return ProbeResult{}, fmt.Errorf("健康端口探测器不可用")
 	}
 	return r.options.Probe(ctx, r.options.NodeID, component.HealthPort, path)
 }
@@ -392,7 +469,7 @@ func selectSpecs(specs []core.CheckSpec, selected []string) ([]core.CheckSpec, e
 	add = func(id string) error {
 		spec, ok := byID[id]
 		if !ok {
-			return fmt.Errorf("unknown check id %q", id)
+			return fmt.Errorf("未知的自检项 %q", id)
 		}
 		if wanted[id] {
 			return nil
@@ -420,7 +497,7 @@ func selectSpecs(specs []core.CheckSpec, selected []string) ([]core.CheckSpec, e
 }
 
 // verifyDeployedCatalog 核对节点上 <部署根>/version.json 记的服务目录摘要与这个 moox-cli 内嵌的一致：
-// 不一致说明节点上的组件和这个 CLI 不是同一版本，按 CLI 的目录诊断会得出错误的结论。
+// 不一致说明节点上的组件和这个 CLI 不是同一版本，按 CLI 的目录自检会得出错误的结论。
 func verifyDeployedCatalog(ctx context.Context, options BootstrapOptions, checksum string) error {
 	versionPath := joinNodePath(isRemoteNode(options), options.DeployRoot, "version.json")
 	read := options.ReadFile

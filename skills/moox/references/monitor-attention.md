@@ -12,7 +12,7 @@
 | 监控告警 | Monitor 当前未恢复的告警（`alerts`） | `moox-cli doctor alerts` |
 | 数据 | 告警之外仍不健康的数据集（落后、停止上报） | `moox-cli doctor alerts` |
 | 策略 | 策略实例降级、目标过期等 | 控制台策略页，或 moox-cli 的策略命令 |
-| 因子 | 因子任务计算降级、落后 | 控制台因子页，或 `moox-cli doctor diagnose` |
+| 因子 | 因子任务计算降级、落后 | 控制台因子页，或 `moox-cli factor task status` |
 
 `doctor alerts` 基于 Monitor 概览，除当前告警与数据集外，还列出不健康的业务检查、组件和主机（`business_check`、`component`、`host`）。首页直接读取的策略实例与因子任务细节仍需另外查看，报告末尾的“注”会提醒。
 
@@ -28,8 +28,8 @@
    退出码：0 没有问题，1 只有警告（降级），2 有严重问题，3 无法判断。每一项带 `source`（alert、dataset、business_check、component、host）、
    `severity`（critical、warning、info）、原因、原始信息和一条常见原因提示。`info` 只提示（例如因子“积累中”），不算故障。
    只看某个空间用 `--space-id crypto`；余额对账、交易、采集等关注项与空间无关，归在 `mooxsys` 下。
-   同一类 doctor 还有 `doctor bootstrap`（新部署各模块的安装与配置是否正常）和 `doctor diagnose`（按 Monitor 的事实诊断各模块），
-   清单里查不出原因时再用它们。
+   同一类 doctor 还有 `doctor bootstrap`（安装后自检：核对本机/SSH 事实与 Monitor 总览中的上报、就绪与严重告警），
+   清单里查不出原因时再用它。
 
 2. **判断每一项是真问题、残留还是瞬时**，对照下面的“常见原因与处理”。先看起始时间：几分钟内的多半是重启或发布造成的瞬时现象。
 

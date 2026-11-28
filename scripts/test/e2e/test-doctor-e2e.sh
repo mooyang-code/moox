@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 storage_worktree_before="$(git -C "${ROOT}" status --short -- modules/storage)"
 
-(cd "${ROOT}/modules/monitor" && go test -count=1 ./internal/doctor ./internal/rpc ./test)
+(cd "${ROOT}/modules/monitor" && go test -count=1 ./internal/rpc ./test)
 (cd "${ROOT}/modules/cli" && go test -count=1 ./internal/doctor ./internal/command ./test -run 'DoctorBootstrap|StorageMetadataClient|TestDoctor|TestValidateDoctorFlags')
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
 (cd "${ROOT}/packages/report" && go test -count=1 ./...)

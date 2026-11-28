@@ -169,8 +169,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ## 6. 验收
 
-1. 四台主机的组件都在运行：`$CLI setup status --file ./moox.toml` 里每台 `installed: true`、各组件 `state: active`；再逐台 `$CLI doctor diagnose --file ./moox.toml --node <主机>`（`control`、`storage`、`overseas`、`factor`）看各组件的健康检查与上报
-   （刚装完时结论是 `INCONCLUSIVE`、退出码 3，唯一没过的是 `host.disk_forecast`“磁盘预测历史不足”，属于正常，其余检查都应是 PASS 或 SKIPPED）；`doctor bootstrap` 只能查运行它的那台机器，在操作电脑上验收目标机不用它。没开 linger 的主机在 `setup install` 预检的 `manual_steps` 里就会列出。
+1. 四台主机的组件都在运行：`$CLI setup status --file ./moox.toml` 里每台 `installed: true`、各组件 `state: active`；再逐台 `$CLI doctor bootstrap --file ./moox.toml --node <主机>`（`control`、`storage`、`overseas`、`factor`）做安装后自检，核对本机探查（服务目录摘要、身份、`/healthz`、目录权限、systemd 自启、`/readyz`）和 Monitor 的上报、就绪与严重告警结论（均应通过）。没开 linger 的主机在 `setup install` 预检的 `manual_steps` 里就会列出。
 2. `moox-cli doctor alerts --file ./moox.toml`：新对象会先有“尚未上报 / 尚无成功运行”，等一个周期；1h 数据集要等第一个整点之后。长时间不消的告警按提示排查。
 3. 一条链路至少跑通一期：`moox-cli collector status --space-id crypto`（各数据集 `level: ok`）→ 因子引擎的输出（`$CLI setup logs --host factor --component factor-engine --journal --grep factor_period_done`）里 `factor_period_done ... status=complete rows=<标的数>`
    （`status=degraded rows=0` 说明有问题，常见是 `factor_memory_budget_exceeded`，看内存配置）。
@@ -183,7 +182,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 第 8、9 步要在腾讯云控制台动手，第 21 步会真实下单、只在测试网或模拟盘账户上做，第 29、30 步会停组件、触发告警，这几步都先问用户。
 
 1. **配置**：`$CLI setup validate --file ./moox.toml` 通过。
-2. **进程与库**：`$CLI setup status --file ./moox.toml`、`$CLI doctor diagnose --file ./moox.toml --node control` 的组件清单与 `[deployments]` 一致。
+2. **进程与库**：`$CLI setup status --file ./moox.toml`、`$CLI doctor bootstrap --file ./moox.toml --node control` 的组件清单与 `[deployments]` 一致。
    主机装了 `sqlite3` 时只读看表：Collector 库（`/data/moox/data/collector/moox_collector.db`）有 `t_collector_series_timeline`、`t_collector_cloud_accounts`、`t_collector_function_packages`。命令形如 `$CLI host exec --host control -- sqlite3 -readonly <库文件> .tables`。
 3. **云账号与代码包**：`$CLI collector account list` 有一条云账号；`$CLI collector package list --space-id stockcn` 有可用（`available`）的代码包，每个配置了云函数的空间各查一次。
 4. **自动接管与计划外函数**（验收前先不清腾讯云上已有的函数）：

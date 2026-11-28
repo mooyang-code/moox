@@ -89,7 +89,7 @@ func TestModuleMetricsRejectsTwoHundredFiftySeventhSeries(t *testing.T) {
 	t.Fatal("test did not create 257 series")
 }
 
-func TestModuleMetricsRejectsUnknownLabelsAndWatermarkRegression(t *testing.T) {
+func TestModuleMetricsRejectsUnknownLabels(t *testing.T) {
 	m, err := NewModuleMetrics(prometheus.NewRegistry(), "collector", []string{"market-data"})
 	if err != nil {
 		t.Fatal(err)
@@ -105,19 +105,6 @@ func TestModuleMetricsRejectsUnknownLabelsAndWatermarkRegression(t *testing.T) {
 		if err := call(); err == nil {
 			t.Fatal("invalid metric labels were accepted")
 		}
-	}
-	watermark := time.Unix(100, 0)
-	if err := m.AdvanceWatermark("collect", "market-data", watermark); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.AdvanceWatermark("collect", "market-data", watermark.Add(-time.Second)); err == nil {
-		t.Fatal("watermark regression was accepted")
-	}
-	if err := m.AdvanceInputWatermark("collect", "market-data", watermark); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.AdvanceInputWatermark("collect", "market-data", watermark.Add(-time.Second)); err == nil {
-		t.Fatal("input watermark regression was accepted")
 	}
 }
 

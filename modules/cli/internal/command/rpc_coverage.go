@@ -59,7 +59,6 @@ var handWrittenCoverage = map[string]string{
 
 	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels": "setup init",
 	"trpc.moox.monitor.MonitorMgr/GetAlertMute":             "monitor mute-status",
-	"trpc.moox.monitor.MonitorMgr/GetDoctorContext":         "doctor diagnose",
 
 	"trpc.moox.ops.SecretMgr/ExportSecrets": "setup backup",
 	"trpc.moox.ops.SecretMgr/ImportSecrets": "setup backup",

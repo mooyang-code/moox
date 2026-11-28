@@ -27,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	pkgdataformat "github.com/mooyang-code/moox/packages/dataformat"
+	core "github.com/mooyang-code/moox/packages/doctor"
 )
 
 // fourHostSnapshot 是示例拓扑：控制机、存储机（带 EventBus）、海外机、只能出站的因子机。
@@ -189,6 +190,7 @@ func newInstallHarness(t *testing.T) *installHarness {
 		ensureArchiveTasks: func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error) {
 			return &setupArchiveTasksSummary{Enabled: true}, nil
 		},
+		runDoctor:   func(context.Context, string, *setupSnapshot) error { return record("doctor") },
 		verifySpace: func(context.Context, string, *setupSnapshot, string) error { return record("verify") },
 		markInstallComplete: func(_ context.Context, _ *setupSnapshot, _ string) error {
 			if err := record("mark-complete"); err != nil {
@@ -484,6 +486,7 @@ func TestSetupInstallFreshRunsStepsInDependencyOrderAndMarksComplete(t *testing.
 		"restore-backup",
 		"init",
 		"start",
+		"doctor",
 		"verify",
 		"mark-complete",
 	}, sequence)
@@ -583,6 +586,7 @@ func TestSetupInstallInstalledKeepUpdatesWithoutSpaceIDOrInit(t *testing.T) {
 	require.NotContains(t, h.calls, "restore-backup")
 	require.NotContains(t, h.calls, "init")
 	require.NotContains(t, h.calls, "start")
+	require.NotContains(t, h.calls, "doctor")
 	require.NotContains(t, h.calls, "verify")
 	require.NotContains(t, h.calls, "mark-complete")
 
@@ -1033,4 +1037,55 @@ func TestSetupWipeIncludesDisabledHostButKeepUpdateSkipsIt(t *testing.T) {
 	_, err = h.run("wipe", "--yes", "--expect", plan["digest"].(string))
 	require.NoError(t, err)
 	require.Contains(t, h.calls, "wipe:factor")
+}
+
+// 2E-6：安装末尾先自检再验收；自检失败时不得进入 setup verify，也不得写完成标记；
+// 仅 Monitor 侧上报延迟时自检在时限内轮询等待，本机探测失败则立即返回。
+func TestSetupInstallDoctorStepOrderAndPolling(t *testing.T) {
+	h := newInstallHarness(t)
+	h.fail = "doctor"
+	_, err := h.run("install", "--space-id", "crypto", "--yes")
+	require.ErrorContains(t, err, "install_step_failed")
+	require.ErrorContains(t, err, "moox-cli doctor bootstrap")
+	require.Contains(t, h.calls, "doctor")
+	require.NotContains(t, h.calls, "verify", "自检失败后不得继续跑按空间验收")
+	require.NotContains(t, h.calls, "mark-complete", "自检失败后不得写完成标记")
+
+	// 仅 monitor.* 未通过时，等待 Monitor 首轮上报就位后通过。
+	attempts := 0
+	err = runSetupDoctorHost(t.Context(), "control", 200*time.Millisecond, 10*time.Millisecond, func(context.Context) (core.Report, error) {
+		attempts++
+		if attempts < 2 {
+			return core.Report{
+				Conclusion: core.ConclusionUnhealthy,
+				Checks: []core.CheckResult{
+					{ID: "service.health:monitor@control", Status: core.StatusPass},
+					{ID: "monitor.component:monitor@control", Status: core.StatusFail, Summary: "尚未收到监控上报"},
+				},
+			}, nil
+		}
+		return core.Report{
+			Conclusion: core.ConclusionHealthy,
+			Checks: []core.CheckResult{
+				{ID: "service.health:monitor@control", Status: core.StatusPass},
+				{ID: "monitor.component:monitor@control", Status: core.StatusPass},
+			},
+		}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts)
+
+	// 本机事实探测失败立即返回，不空等轮询。
+	localAttempts := 0
+	err = runSetupDoctorHost(t.Context(), "control", time.Second, 10*time.Millisecond, func(context.Context) (core.Report, error) {
+		localAttempts++
+		return core.Report{
+			Conclusion: core.ConclusionUnhealthy,
+			Checks: []core.CheckResult{
+				{ID: "service.health:monitor@control", Status: core.StatusFail, Summary: "本机 /readyz 未就绪"},
+			},
+		}, nil
+	})
+	require.ErrorContains(t, err, "service.health:monitor@control")
+	require.Equal(t, 1, localAttempts)
 }

@@ -68,9 +68,9 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	require.Equal(t, "tencent-default", applied.SecretID)
 	require.NoError(t, setup.SyncTopology(t.Context(), cfg))
 	doctor := doctorcli.New(gateway)
-	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
+	overview, err := doctor.GetHealthOverview(t.Context(), "")
 	require.NoError(t, err)
-	require.Equal(t, "fixture-doctor-checksum", doctorContext.GetManifestChecksum())
+	require.True(t, overview.GetTopologyKnown())
 	rows, err := doctor.ListDeployments(t.Context(), "control")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -97,11 +97,8 @@ func (w *adminRPCWire) ListDeployments(_ context.Context, req *adminpb.ListDeplo
 	return &adminpb.ListDeploymentsRsp{RetInfo: &adminpb.RetInfo{}, Deployments: []*adminpb.ComponentDeployment{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}, nil
 }
 
-func (*adminRPCWire) GetDoctorContext(_ context.Context, req *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
-	if req.GetNodeId() != "control" {
-		return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM}}, nil
-	}
-	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UnixMilli()}, nil
+func (*adminRPCWire) GetHealthOverview(_ context.Context, _ *monitorpb.GetHealthOverviewReq) (*monitorpb.GetHealthOverviewRsp, error) {
+	return &monitorpb.GetHealthOverviewRsp{RetInfo: &commonpb.RetInfo{}, Overview: &monitorpb.HealthOverview{GeneratedAt: time.Now().UnixMilli(), TopologyKnown: true}}, nil
 }
 
 func (w *adminRPCWire) SyncTopology(_ context.Context, req *adminpb.SyncTopologyReq) (*adminpb.SyncTopologyRsp, error) {

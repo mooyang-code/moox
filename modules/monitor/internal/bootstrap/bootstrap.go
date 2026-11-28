@@ -11,8 +11,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
-	monitordeployment "github.com/mooyang-code/moox/modules/monitor/internal/deployment"
-	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -124,12 +122,6 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		_ = runtime.Close()
 		return nil, policyErr
 	}
-	doctorContext := &monitordoctor.Builder{
-		Deployments: monitordeployment.NewClientSource(runtime.Gateway),
-		Services:    monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology},
-		Metrics:     metricsQuery, Hosts: hostStore,
-		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
-	}
 	klineInventory, err := buildTaskResultInventory(cfg, runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
@@ -139,7 +131,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		// 最后一份有效的任务清单持久化：采集服务不可用或重启后仍可检查新鲜度。
 		klineInventory.SetStore(store.NewInventoryRepository(runtime.Store))
 	}
-	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory, doctorContext.DatasetHealthPolicy.RealtimeTimeSeries)
+	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory, datasetHealthPolicy.RealtimeTimeSeries)
 	if klineFreshness != nil {
 		// 新上线对象的首次出现时间持久化：Monitor 重启后宽限期不重新计时，部署前的存量对象不给宽限。
 		klineFreshness.SetSubjectFirstSeenStore(store.NewSubjectFirstSeenRepository(runtime.Store))
@@ -153,7 +145,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		Seeding: seedingMemory,
 		Metrics: metricsQuery, Hosts: hostStore,
 		Topology:  runtime.Repositories.Topology,
-		Policy:    doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
+		Policy:    datasetHealthPolicy.RealtimeTimeSeries,
 		Inventory: inventorySource(klineInventory),
 		Datasets:  archivableDatasets(storageMetadata),
 	}
@@ -177,8 +169,8 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata), Seeding: seedingMemory}, Checks: runtime.Repositories.Checks, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
-	registerMonitorService(s, cfg, runtime, hostStore, doctorContext, health)
+	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology, Policy: datasetHealthPolicy.RealtimeTimeSeries, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata), Seeding: seedingMemory}, Checks: runtime.Repositories.Checks, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
+	registerMonitorService(s, cfg, runtime, hostStore, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()

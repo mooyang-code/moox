@@ -102,15 +102,14 @@
 | `data view state` | 查看数据集查询索引（View）的状态：活动索引、代次、已建列、覆盖范围与跟随变更日志的进度 |
 | `data view wait-applied` | 等数据集的查询索引跟上此刻的变更日志头部（之前的写入都已可查） |
 
-## doctor：部署与运行诊断：告警、新部署检查、按监控事实诊断模块
+## doctor：安装后自检与告警查看
 
 | 命令 | 说明 |
 | --- | --- |
 | `doctor alerts` | 读取 Monitor 的告警与不健康项，供 Agent 处理 |
-| `doctor bootstrap` | 检查新部署各模块的安装与配置 |
-| `doctor diagnose` | 按 Monitor 的事实诊断模块 |
+| `doctor bootstrap` | 安装后自检：本机/SSH 检查配置、服务身份、权限、systemd、`/healthz` 与 `/readyz`，并直读 Monitor 健康总览 |
 
-各组件的健康端口（`/healthz`、`/readyz`、`/metrics`）只听 127.0.0.1、不验签：`doctor bootstrap` 支持检查本机或经 SSH 探测 `moox.toml` 登记的远端主机（无远端 SSH 能力时报错提示）；`doctor diagnose` 在组件给 Monitor 的上报缺失或过期时，经 SSH 在目标机上请求它的本机 `/readyz`（SSH 连不上记为无法判断），`systemd` 用户服务的状态同样经 SSH 读取。因子机只能出站，SSH 只有在家里的局域网才连得上，所以因子机的 doctor 与 `/readyz` 检查只能在局域网里做；不在局域网时看 Monitor 的上报状态（`doctor alerts`）和 `moox-cli host agent status --host factor`。
+各组件的健康端口（`/healthz`、`/readyz`、`/metrics`）只听 127.0.0.1、不验签：`doctor bootstrap` 检查本机或经 SSH 探测 `moox.toml` 登记的远端主机（读取 systemd 用户服务状态及 `/healthz`、`/readyz`，SSH 连不上记为无法判断），同时直接读取 Monitor `GetHealthOverview` 的上报、就绪与严重告警结论。因子机只能出站，SSH 只有在家里的局域网才连得上，所以因子机的 `doctor bootstrap` 只能在局域网里做；不在局域网时看 Monitor 的上报状态（`doctor alerts`）和 `moox-cli host agent status --host factor`。
 
 ## eventbus：EventBus：流、消费者与事件概览（调用 EventBusMgr，只读）
 

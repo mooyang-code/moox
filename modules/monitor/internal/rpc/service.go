@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -18,10 +17,9 @@ import (
 type Options struct {
 	InstanceID string
 	// StartedAt 是 Monitor 进程的启动时间，随 GetHostPolicy 下发：各主机采集器按它的变化发现 Monitor 反复重启。
-	StartedAt     time.Time
-	HostStore     *hostmetrics.Store
-	DoctorContext *doctor.Builder
-	HealthView    *healthview.Builder
+	StartedAt  time.Time
+	HostStore  *hostmetrics.Store
+	HealthView *healthview.Builder
 	// Lifecycle 返回 Monitor 的生命周期控制器（健康检查注册时才创建，之前为 nil）：告警屏蔽复用它的暂停。
 	Lifecycle func() *lifecycle.Controller
 	// EvaluationStale 返回检查评估停滞的原因（最近 3 分钟没有一次完整成功的评估），正常时为空；为 nil 时不判断。
@@ -32,12 +30,12 @@ type Options struct {
 }
 
 type Service struct {
+	monitorpb.UnimplementedMonitorMgr
 	alerts        *store.AlertRepository
 	notifications *store.NotificationRepository
 	logs          *store.LogRecordRepository
 	startedAt     time.Time
 	hostStore     *hostmetrics.Store
-	doctorContext *doctor.Builder
 	healthView    *healthview.Builder
 	lifecycle     func() *lifecycle.Controller
 	evalStale     func() string
@@ -54,7 +52,6 @@ func New(repos *store.Repositories, opts Options) *Service {
 		logs:          repos.Logs,
 		startedAt:     opts.StartedAt,
 		hostStore:     opts.HostStore,
-		doctorContext: opts.DoctorContext,
 		healthView:    opts.HealthView,
 		lifecycle:     opts.Lifecycle,
 		evalStale:     opts.EvaluationStale,

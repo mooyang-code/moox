@@ -9,8 +9,14 @@ import (
 func TestContractEnums(t *testing.T) {
 	t.Parallel()
 
-	if got := []Mode{ModeBootstrap, ModeDiagnose}; len(got) != 2 {
+	if got := []Mode{ModeBootstrap}; len(got) != 1 {
 		t.Fatalf("modes = %v", got)
+	}
+	if err := ModeBootstrap.Validate(); err != nil {
+		t.Fatalf("mode %q: %v", ModeBootstrap, err)
+	}
+	if err := Mode("diagnose").Validate(); err == nil {
+		t.Fatal("retired diagnose mode was accepted")
 	}
 	statuses := []CheckStatus{StatusPass, StatusWarn, StatusFail, StatusUnknown, StatusBlocked, StatusSkipped}
 	for _, status := range statuses {
