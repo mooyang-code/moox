@@ -76,11 +76,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 		return nil, fmt.Errorf("open factor database: %w", err)
 	}
 	runtime.store = db
-	life, err := newMgrLifecycle(cfg.Database.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open factor-mgr lifecycle: %w", err)
-	}
-	go life.Run(appCtx, lifecycleRefreshEvery)
 
 	runtime.gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(appCtx, "factor-mgr gateway directory refresh: %v", err) })
 	if err != nil {
@@ -134,13 +129,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.stopRecalcPrune = stopRecalcPrune
 
-	factorService := factorrpc.NewService(catalogService, recalcService, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)), factorrpc.WithLifecycle(life),
+	factorService := factorrpc.NewService(catalogService, recalcService, factorrpc.WithEngineAPI(hub),
 		factorrpc.WithPreviewer(preview.New(storageio.NewAxis(storage), previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService))
 
 	runtime.health.SnapshotFunc = runtime.healthSnapshot(db)
-	if err := registerMetricsReporter(s, hub, healthz.Readiness(runtime.health.Snapshot), life); err != nil {
+	if err := registerMetricsReporter(s, hub, healthz.Readiness(runtime.health.Snapshot)); err != nil {
 		return nil, err
 	}
 	if err := factorhealth.Register(s.Service(factorHealthService), runtime.health); err != nil {

@@ -16,7 +16,6 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorexpr"
-	"github.com/mooyang-code/moox/packages/lifecycle"
 	"gorm.io/gorm"
 )
 
@@ -77,24 +76,6 @@ func WithEngineAPI(engine EngineAPI) ServiceOption {
 	return func(s *Service) { s.engine = engine }
 }
 
-// WithMutationGate 设置修改类接口的生命周期门禁：返回错误（暂停、恢复追赶中）时，创建、修改、删除、启停因子与因子任务、
-// 提交与取消重算都被拒绝；读接口与引擎的同步、心跳、领取任务不受影响。不设置表示一直放行。
-func WithMutationGate(gate func() error) ServiceOption {
-	return func(s *Service) { s.mutationGate = gate }
-}
-
-func (s *Service) mutationAllowed() error {
-	if s.mutationGate == nil {
-		return nil
-	}
-	return s.mutationGate()
-}
-
-// WithLifecycle 设置模块的生命周期控制器（GetLifecycle、ControlLifecycle 转给它）；不设置时两个方法回答“还没有就绪”。
-func WithLifecycle(life *lifecycle.Controller) ServiceOption {
-	return func(s *Service) { s.life = life }
-}
-
 // WithPreviewer 启用 PreviewFactor；不设置时该接口返回错误。
 func WithPreviewer(previewer Previewer) ServiceOption {
 	return func(s *Service) { s.previewer = previewer }
@@ -107,9 +88,6 @@ type Service struct {
 	engine  EngineAPI
 	// previewer 执行 PreviewFactor 的试算。
 	previewer Previewer
-	// mutationGate 是修改类接口的生命周期门禁（见 WithMutationGate）。
-	mutationGate func() error
-	life         *lifecycle.Controller
 }
 
 func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Service {
@@ -123,9 +101,6 @@ func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Se
 }
 
 func (s *Service) CreateFactorTask(ctx context.Context, req *factorpb.CreateFactorTaskReq) (*factorpb.CreateFactorTaskRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.CreateFactorTaskRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || req.GetFactorTask() == nil {
 		return &factorpb.CreateFactorTaskRsp{RetInfo: invalid(fmt.Errorf("factor_task is required"))}, nil
 	}
@@ -147,9 +122,6 @@ func (s *Service) CreateFactorTask(ctx context.Context, req *factorpb.CreateFact
 }
 
 func (s *Service) SetFactorTaskStatus(ctx context.Context, req *factorpb.SetFactorTaskStatusReq) (*factorpb.SetFactorTaskStatusRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.SetFactorTaskStatusRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" {
 		return &factorpb.SetFactorTaskStatusRsp{RetInfo: invalid(fmt.Errorf("task_id is required"))}, nil
 	}
@@ -168,9 +140,6 @@ func (s *Service) SetFactorTaskStatus(ctx context.Context, req *factorpb.SetFact
 }
 
 func (s *Service) BindFactorTask(ctx context.Context, req *factorpb.BindFactorTaskReq) (*factorpb.BindFactorTaskRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.BindFactorTaskRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetInstanceId()) == "" {
 		return &factorpb.BindFactorTaskRsp{RetInfo: invalid(fmt.Errorf("task_id and instance_id are required"))}, nil
 	}
@@ -185,9 +154,6 @@ func (s *Service) BindFactorTask(ctx context.Context, req *factorpb.BindFactorTa
 }
 
 func (s *Service) DeleteFactorTask(ctx context.Context, req *factorpb.DeleteFactorTaskReq) (*factorpb.DeleteFactorTaskRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.DeleteFactorTaskRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" {
 		return &factorpb.DeleteFactorTaskRsp{RetInfo: invalid(fmt.Errorf("task_id is required"))}, nil
 	}
@@ -202,9 +168,6 @@ func (s *Service) DeleteFactorTask(ctx context.Context, req *factorpb.DeleteFact
 
 // DeleteBoundTask 删除关联到策略实例的任务，连同成员和结果数据集；任务不存在返回成功（重试幂等）。
 func (s *Service) DeleteBoundTask(ctx context.Context, req *factorpb.DeleteBoundTaskReq) (*factorpb.DeleteBoundTaskRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.DeleteBoundTaskRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetBoundInstanceId()) == "" {
 		return &factorpb.DeleteBoundTaskRsp{RetInfo: invalid(fmt.Errorf("task_id 和 bound_instance_id 不能为空"))}, nil
 	}
@@ -295,9 +258,6 @@ func (s *Service) ListFactorTasks(ctx context.Context, req *factorpb.ListFactorT
 }
 
 func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorReq) (*factorpb.CreateFactorRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.CreateFactorRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || req.GetFactor() == nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor is required"))}, nil
 	}
@@ -317,9 +277,6 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 
 // ImportFactorCatalog 整批导入一个因子库目录（解析与校验在 FactorMgr 侧，见 catalog.ImportCatalog）。
 func (s *Service) ImportFactorCatalog(ctx context.Context, req *factorpb.ImportFactorCatalogReq) (*factorpb.ImportFactorCatalogRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.ImportFactorCatalogRsp{RetInfo: unavailable(err)}, nil
-	}
 	if len(req.GetFiles()) == 0 {
 		return &factorpb.ImportFactorCatalogRsp{RetInfo: invalid(fmt.Errorf("files 不能为空"))}, nil
 	}
@@ -340,9 +297,6 @@ func (s *Service) ImportFactorCatalog(ctx context.Context, req *factorpb.ImportF
 
 // PurgeResultDataset 删除一个孤立的因子结果数据集；带空间头的调用只能删本空间的。
 func (s *Service) PurgeResultDataset(ctx context.Context, req *factorpb.PurgeResultDatasetReq) (*factorpb.PurgeResultDatasetRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.PurgeResultDatasetRsp{RetInfo: unavailable(err)}, nil
-	}
 	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &factorpb.PurgeResultDatasetRsp{RetInfo: invalid(fmt.Errorf("space_id 和 dataset_id 不能为空"))}, nil
 	}
@@ -358,9 +312,6 @@ func (s *Service) PurgeResultDataset(ctx context.Context, req *factorpb.PurgeRes
 }
 
 func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorReq) (*factorpb.UpdateFactorRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.UpdateFactorRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || req.GetFactor() == nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor is required"))}, nil
 	}
@@ -379,9 +330,6 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 }
 
 func (s *Service) AddTaskMember(ctx context.Context, req *factorpb.AddTaskMemberReq) (*factorpb.AddTaskMemberRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.AddTaskMemberRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.AddTaskMemberRsp{RetInfo: invalid(fmt.Errorf("task_id and factor_id are required"))}, nil
 	}
@@ -396,9 +344,6 @@ func (s *Service) AddTaskMember(ctx context.Context, req *factorpb.AddTaskMember
 }
 
 func (s *Service) RemoveTaskMember(ctx context.Context, req *factorpb.RemoveTaskMemberReq) (*factorpb.RemoveTaskMemberRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.RemoveTaskMemberRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetMemberKey()) == "" {
 		return &factorpb.RemoveTaskMemberRsp{RetInfo: invalid(fmt.Errorf("task_id and member_key are required"))}, nil
 	}
@@ -412,9 +357,6 @@ func (s *Service) RemoveTaskMember(ctx context.Context, req *factorpb.RemoveTask
 }
 
 func (s *Service) SetTaskMemberStatus(ctx context.Context, req *factorpb.SetTaskMemberStatusReq) (*factorpb.SetTaskMemberStatusRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.SetTaskMemberStatusRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetMemberKey()) == "" {
 		return &factorpb.SetTaskMemberStatusRsp{RetInfo: invalid(fmt.Errorf("task_id and member_key are required"))}, nil
 	}
@@ -433,9 +375,6 @@ func (s *Service) SetTaskMemberStatus(ctx context.Context, req *factorpb.SetTask
 }
 
 func (s *Service) DeleteFactor(ctx context.Context, req *factorpb.DeleteFactorReq) (*factorpb.DeleteFactorRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.DeleteFactorRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
 	}
@@ -495,9 +434,6 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 }
 
 func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactorsReq) (*factorpb.RecalcFactorsRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.RecalcFactorsRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetJobId()) == "" {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("task_id and job_id are required"))}, nil
 	}
@@ -566,9 +502,6 @@ func (s *Service) GetRecalcJob(ctx context.Context, req *factorpb.GetRecalcJobRe
 }
 
 func (s *Service) CancelRecalcJob(ctx context.Context, req *factorpb.CancelRecalcJobReq) (*factorpb.CancelRecalcJobRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.CancelRecalcJobRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req == nil || strings.TrimSpace(req.GetJobId()) == "" {
 		return &factorpb.CancelRecalcJobRsp{RetInfo: invalid(fmt.Errorf("job_id is required"))}, nil
 	}
@@ -661,11 +594,6 @@ func success() *commonpb.RetInfo {
 
 func invalid(err error) *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: err.Error()}
-}
-
-// unavailable 表示服务暂时不接受这个操作（暂停、恢复追赶中）。
-func unavailable(err error) *commonpb.RetInfo {
-	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: err.Error()}
 }
 
 func notFound(err error) *commonpb.RetInfo {

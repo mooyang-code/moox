@@ -339,8 +339,6 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/factor-mgr/GetUdf",
       "/api/admin/factor-mgr/ActivateUdf",
       "/api/admin/factor-mgr/GetStatus",
-      "/api/admin/factor-mgr/GetLifecycle",
-      "/api/admin/factor-mgr/ControlLifecycle",
       "/api/admin/archive/GetLifecycle",
       "/api/admin/archive/ControlLifecycle"
     ]) {

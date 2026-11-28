@@ -3,9 +3,9 @@
   "summary": {
     "components": 16,
     "services": 23,
-    "methods": 295,
-    "read_only_methods": 136,
-    "retryable_methods": 139,
+    "methods": 293,
+    "read_only_methods": 135,
+    "retryable_methods": 138,
     "callers": 19,
     "principals": 1
   },
@@ -710,12 +710,6 @@
           "timeout_ms": 120000
         },
         {
-          "name": "ControlLifecycle",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 120000
-        },
-        {
           "name": "CreateFactor",
           "read_only": false,
           "retryable": false,
@@ -765,12 +759,6 @@
         },
         {
           "name": "GetFactorTask",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 120000
-        },
-        {
-          "name": "GetLifecycle",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 120000
@@ -2071,7 +2059,6 @@
       "trpc.moox.factor.FactorMgr/GetFactor",
       "trpc.moox.factor.FactorMgr/GetFactorParams",
       "trpc.moox.factor.FactorMgr/GetFactorTask",
-      "trpc.moox.factor.FactorMgr/GetLifecycle",
       "trpc.moox.factor.FactorMgr/GetRecalcJob",
       "trpc.moox.factor.FactorMgr/GetStatus",
       "trpc.moox.factor.FactorMgr/GetUdf",
@@ -2394,7 +2381,6 @@
       "trpc.moox.factor.FactorMgr/ActivateUdf",
       "trpc.moox.factor.FactorMgr/AddTaskMember",
       "trpc.moox.factor.FactorMgr/CancelRecalcJob",
-      "trpc.moox.factor.FactorMgr/ControlLifecycle",
       "trpc.moox.factor.FactorMgr/CreateFactor",
       "trpc.moox.factor.FactorMgr/CreateFactorTask",
       "trpc.moox.factor.FactorMgr/DeleteFactor",
@@ -2403,7 +2389,6 @@
       "trpc.moox.factor.FactorMgr/GetFactor",
       "trpc.moox.factor.FactorMgr/GetFactorParams",
       "trpc.moox.factor.FactorMgr/GetFactorTask",
-      "trpc.moox.factor.FactorMgr/GetLifecycle",
       "trpc.moox.factor.FactorMgr/GetRecalcJob",
       "trpc.moox.factor.FactorMgr/GetStatus",
       "trpc.moox.factor.FactorMgr/GetUdf",

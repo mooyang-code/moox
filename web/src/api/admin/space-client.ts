@@ -97,9 +97,7 @@ const GLOBAL_METHODS: Record<string, ReadonlySet<string>> = {
     "PublishUdf",
     "ListUdfs",
     "GetUdf",
-    "ActivateUdf",
-    "GetLifecycle",
-    "ControlLifecycle"
+    "ActivateUdf"
   ]),
   archive: new Set(["GetLifecycle", "ControlLifecycle"])
 };

@@ -597,14 +597,14 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	}
 }
 
-// 模块生命周期（设计 3.7）：六个模块的服务都有 GetLifecycle、ControlLifecycle，读给管理台与 moox-cli、写只给 moox-cli，没有机器调用方；
+// 模块生命周期（设计 3.7）：各模块的服务都有 GetLifecycle、ControlLifecycle，读给管理台与 moox-cli、写只给 moox-cli，没有机器调用方；
 // ControlLifecycle 要等在途操作结束（采集最长 5 分钟，策略、Trade、因子引擎最长 30 秒），所以路由超时与模块的 tRPC 服务端超时
 // 都不能短于收敛时限，否则暂停会被网关或服务端先截断（H4）。
 func TestLifecycleMethodsAndTimeoutsCoverQuiesce(t *testing.T) {
 	c := mustCatalog(t)
 	quiesce := map[string]int64{
 		"trpc.moox.collector.CollectMgr": 300000, "trpc.moox.strategy.StrategyMgr": 30000, "trpc.moox.trade.TradeConsoleService": 30000,
-		"trpc.moox.factor.EngineControl": 30000, "trpc.moox.factor.FactorMgr": 0, "trpc.moox.archive.ArchiveMgr": 0,
+		"trpc.moox.factor.EngineControl": 30000, "trpc.moox.archive.ArchiveMgr": 0,
 	}
 	serverTimeouts := map[string]int64{}
 	files, err := filepath.Glob("../../modules/*/config/trpc_go*.yaml")

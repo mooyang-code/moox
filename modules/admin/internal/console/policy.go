@@ -83,8 +83,6 @@ var globalMethods = map[string]map[string]bool{
 		"ListUdfs":             true,
 		"GetUdf":               true,
 		"ActivateUdf":          true,
-		"GetLifecycle":         true,
-		"ControlLifecycle":     true,
 	},
 	"archive": {
 		"GetLifecycle":     true,

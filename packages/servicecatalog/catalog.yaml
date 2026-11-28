@@ -532,11 +532,6 @@ components:
           - name: GetUdf
             read_only: true
           - name: ActivateUdf
-          # 模块生命周期：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module factor-mgr）。
-          - name: GetLifecycle
-            read_only: true
-          - name: ControlLifecycle
-            operators: [moox-cli]
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000

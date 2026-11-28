@@ -32,9 +32,6 @@ func (s *Service) ListFactorCategories(ctx context.Context, _ *factorpb.ListFact
 }
 
 func (s *Service) UpsertFactorCategory(ctx context.Context, req *factorpb.UpsertFactorCategoryReq) (*factorpb.UpsertFactorCategoryRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.UpsertFactorCategoryRsp{RetInfo: unavailable(err)}, nil
-	}
 	if req.GetCategory() == nil {
 		return &factorpb.UpsertFactorCategoryRsp{RetInfo: invalid(errors.New("category is required"))}, nil
 	}
@@ -51,9 +48,6 @@ func (s *Service) UpsertFactorCategory(ctx context.Context, req *factorpb.Upsert
 }
 
 func (s *Service) DeleteFactorCategory(ctx context.Context, req *factorpb.DeleteFactorCategoryReq) (*factorpb.DeleteFactorCategoryRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.DeleteFactorCategoryRsp{RetInfo: unavailable(err)}, nil
-	}
 	if strings.TrimSpace(req.GetCategoryId()) == "" {
 		return &factorpb.DeleteFactorCategoryRsp{RetInfo: invalid(errors.New("category_id is required"))}, nil
 	}
@@ -64,9 +58,6 @@ func (s *Service) DeleteFactorCategory(ctx context.Context, req *factorpb.Delete
 }
 
 func (s *Service) SetFactorCategory(ctx context.Context, req *factorpb.SetFactorCategoryReq) (*factorpb.SetFactorCategoryRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.SetFactorCategoryRsp{RetInfo: unavailable(err)}, nil
-	}
 	if strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.SetFactorCategoryRsp{RetInfo: invalid(errors.New("factor_id is required"))}, nil
 	}
@@ -79,9 +70,6 @@ func (s *Service) SetFactorCategory(ctx context.Context, req *factorpb.SetFactor
 
 // SubmitFactorParams 只接受内部服务（参数写入方）的调用：带空间元数据的控制台调用直接拒绝，参数只能由关联的策略实例提交。
 func (s *Service) SubmitFactorParams(ctx context.Context, req *factorpb.SubmitFactorParamsReq) (*factorpb.SubmitFactorParamsRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.SubmitFactorParamsRsp{RetInfo: unavailable(err)}, nil
-	}
 	if _, scoped, err := callerSpace(ctx); err != nil || scoped {
 		if err == nil {
 			err = errors.New("参数只能由参数写入方（策略实例）提交")

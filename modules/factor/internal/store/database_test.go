@@ -88,7 +88,7 @@ func TestBuildSQLiteDSNUsesForeignKeysAndDurablePragmas(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "factor-mgr", rec.Component)
 	require.NotEmpty(t, rec.Parts[dataformat.PartSQLiteSchema])
-	require.NotEmpty(t, rec.Parts[dataformat.PartLifecycle])
+	require.NotContains(t, rec.Parts, dataformat.PartLifecycle)
 }
 
 func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
