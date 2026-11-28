@@ -50,6 +50,8 @@ type setupDeps struct {
 	openInitFactor  func(context.Context, *setupSnapshot) (setupInitFactor, error)
 	// ensureNotification 在 Monitor 还没有任何告警渠道时写入初始渠道（只建不改）；测试里替换。
 	ensureNotification func(context.Context, *setupSnapshot) (*setupNotificationSummary, error)
+	// ensureArchiveTasks 为已激活且保留期有限的时序数据集幂等创建归档任务（spaceID 为空表示全部空间）。
+	ensureArchiveTasks func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error)
 	// initStorage 的参数依次是存储机、源码或产物包目录、种子。
 	initStorage       func(context.Context, *setupSnapshot, string, string, setupInitBundle) (setupInitSummary, error)
 	initMetadata      func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error)
@@ -507,6 +509,7 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.openInitStorage, defaults.openInitStorage)
 	fillSetupDep(&deps.openInitFactor, defaults.openInitFactor)
 	fillSetupDep(&deps.ensureNotification, defaults.ensureNotification)
+	fillSetupDep(&deps.ensureArchiveTasks, defaults.ensureArchiveTasks)
 	fillSetupDep(&deps.exportSkillConfig, defaults.exportSkillConfig)
 	fillSetupDep(&deps.ensureOperatorKey, defaults.ensureOperatorKey)
 	fillSetupDep(&deps.registerIdentity, defaults.registerIdentity)
@@ -585,6 +588,7 @@ func defaultSetupDeps() setupDeps {
 			return defaultOpenSetupFactor(ctx, snapshot.Manifest)
 		},
 		ensureNotification:  defaultSetupEnsureNotification,
+		ensureArchiveTasks:  defaultSetupEnsureArchiveTasks,
 		exportSkillConfig:   defaultSetupExportSkillConfig,
 		ensureOperatorKey:   defaultSetupEnsureOperatorKey,
 		registerIdentity:    defaultSetupRegisterIdentity,

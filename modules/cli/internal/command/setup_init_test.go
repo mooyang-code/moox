@@ -120,6 +120,11 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		openInitStorage: func(context.Context, *setupSnapshot, string) (setupInitStorage, error) {
 			return storage, nil
 		},
+		ensureArchiveTasks: func(_ context.Context, _ *setupSnapshot, spaceID string) (*setupArchiveTasksSummary, error) {
+			require.Empty(t, spaceID, "setup init 应覆盖全部业务空间")
+			stages = append(stages, "archive-tasks")
+			return &setupArchiveTasksSummary{Enabled: true, Planned: 5, Created: 5}, nil
+		},
 	}
 	var output bytes.Buffer
 	cmd := newSetupCommand(deps)
@@ -137,6 +142,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"login",
 		"storage-apply",
 		"verify",
+		"archive-tasks",
 	}, stages)
 	var summary map[string]any
 	require.NoError(t, json.Unmarshal(output.Bytes(), &summary))
@@ -155,7 +161,8 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"admin_state":"completed",
 		"login_api":"valid",
 		"metadata":{"planned":3,"applied":3,"unchanged":0},
-		"verification":{"planned":3,"unchanged":3}
+		"verification":{"planned":3,"unchanged":3},
+		"archive_tasks":{"enabled":true,"planned":5,"created":5,"unchanged":0}
 	}`, string(summaryJSON))
 }
 
@@ -226,6 +233,9 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 		openInitStorage: func(context.Context, *setupSnapshot, string) (setupInitStorage, error) {
 			return storage, nil
 		},
+		ensureArchiveTasks: func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error) {
+			return nil, nil
+		},
 	})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
@@ -269,6 +279,9 @@ func TestSetupInitKeepsExistingChannelsAndSecrets(t *testing.T) {
 		},
 		openInitStorage: func(context.Context, *setupSnapshot, string) (setupInitStorage, error) {
 			return &fakeSetupInitStorage{}, nil
+		},
+		ensureArchiveTasks: func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error) {
+			return nil, nil
 		},
 	})
 	var output bytes.Buffer

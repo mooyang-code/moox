@@ -86,10 +86,10 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
 | 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
-| 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验（这些要等 Collector、Monitor 起来） |
-| 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
+| 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验、自动为有限保留期的内置时序数据集建归档任务（这些要等 Collector、Monitor、ArchiveMgr 起来） |
+| 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入，同时为该空间新建的因子结果数据集自动建归档任务 |
 
-- `setup verify` 不把“有限保留期的数据集还没有归档任务”算作没装好（全新安装一定没有归档任务，这一项在 `doctor alerts` 里照常显示）：装完后按需要用 `moox-cli archive tasks create` 或管理台“数据归档 › 归档任务”建任务。
+- `setup init` 与 `setup start` 在部署了 `archive-mgr` 时会自动为所有已激活且有限保留期的时序数据集（内置原始 K 线数据集与默认因子结果数据集）幂等创建归档任务，全新安装完成后即覆盖归档、不会触发“未归档的数据集”告警；自己后续手工新建的采集任务或因子任务仍可在管理台“数据归档 › 归档任务”页或用 `moox-cli archive tasks create` 建归档任务。
 - 全新安装时数据集首次接入要补历史（crypto 两个 1m 数据集要几小时），补齐期间因子任务不计算：`setup verify` 把这些任务算通过，因子检查的说明写“补历史中，下游待生效”，不用为了验收先 `collector history-seed skip`。
 - 任何一步失败先看原因和日志（`setup logs --host <主机> --component <组件> --journal`），修好后重跑同一条 `setup install`：每一步都可以重做，没有变化的组件不重启。
 - 改了代码要重新构建二进制再重跑；`setup deploy` 按二进制摘要判断哪些组件有变化。
@@ -152,8 +152,8 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 港股按交易时段推进：完整交易日 66 期（09:30～11:55、13:00～15:55），半日市（圣诞前夕、新年前夕、农历新年前夕）只有上午 30 期。港股实例可以挂港股模拟账户（交易模块新建账户时选“港股”，按港元结算）：
 整手（每手股数逐只不同，取自腾讯实时快照）、当日买入可卖、没有涨跌停、港股费用；只有模拟盘，没有实盘通道。规则与已知差别见 `docs/模块/交易.md` 的“港股模拟盘”一节。
 
-新建的因子任务（`setup start` 导入的和 `factor task apply` 建的都一样）的结果数据集没有归档任务，装了数据归档时 `doctor alerts` 会报“未归档的数据集”：命令结束时会逐个打出
-`moox-cli archive tasks create --space-id <空间> --dataset-id <结果数据集>`，要归档就执行它（归档任务由用户决定建不建，不代建）。
+`setup start` 导入默认因子任务后会自动为该空间有限保留期的结果数据集补建归档任务；自己手工通过 `factor task apply` 新建的因子任务结果数据集默认不代建归档任务，命令结束时会逐个打出
+`moox-cli archive tasks create --space-id <空间> --dataset-id <结果数据集>`，要归档就执行它。
 
 ### 交易日历的年度更新
 

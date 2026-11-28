@@ -60,6 +60,7 @@ type setupInitSummary struct {
 	LoginSkipped  string                    `json:"login_skipped,omitempty"`
 	Metadata      setupInitMetadataCounts   `json:"metadata"`
 	Verification  setupInitMetadataCounts   `json:"verification"`
+	ArchiveTasks  *setupArchiveTasksSummary `json:"archive_tasks,omitempty"`
 	BrowserTrust  *setupBrowserTrustSummary `json:"browser_trust,omitempty"`
 }
 
@@ -82,7 +83,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 管理员在部署控制机时已建好，这里只核对；腾讯云密钥、交易所密钥在管理台已有时以管理台为准，已在管理台删除的交易所密钥不重建；
 业务空间已在 Storage 时以管理台为准，不比对；
 告警渠道只在 Monitor 还没有任何渠道时写入一次（在管理台把渠道全删掉之后重跑，会把秘密文件里的渠道写回）。
-还会登记云账户、开通日志服务；因子任务由 setup start 导入。已经做过的步骤不会重复写入。
+还会登记云账户、开通日志服务，并在部署了数据归档时为有限保留期的内置时序数据集自动创建归档任务；因子任务由 setup start 导入（同时为新建的因子结果数据集补建归档任务）。已经做过的步骤不会重复写入。
 云函数代码包从 --source-dir（默认当前目录）下的 modules/collector 构建，元数据种子默认读它下面的 config/setup：
 要装哪个分支或工作副本的代码，就把 --source-dir 指到那里，并和 setup deploy、setup start 用同一个目录。
 交易所密钥在 Trade 部署好之后用 moox-cli trade inspect-credential 检测。`,
@@ -238,6 +239,10 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
+	archiveTasks, err := deps.ensureArchiveTasks(ctx, snapshot, "")
+	if err != nil {
+		return setupInitSummary{}, fmt.Errorf("archive_tasks: %w", err)
+	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.SpaceIDs), BusinessSpaceIDs: bundle.SpaceIDs,
 		Admin: admin, Notification: notification, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped,
@@ -247,6 +252,7 @@ func runSetupInit(
 		Verification: setupInitMetadataCounts{
 			Planned: verification.Planned, Unchanged: verification.Unchanged,
 		},
+		ArchiveTasks: archiveTasks,
 		BrowserTrust: describeSetupBrowserTrust(snapshot),
 	}, nil
 }
