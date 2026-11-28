@@ -47,6 +47,4 @@ moox-cli setup init \
 - `setup start` 重跑会把这种“线上停用、文件启用、参数一致”的成员当作上次没启用完，接着启用，安装能继续；
 - 用户手动执行的 `factor task apply` 仍把它报成“状态不同”、一项都不写（不会把在管理台里手工停用的成员重新启用），确认后用 `moox-cli factor member enable` 启用再重跑。
 
-告警渠道的初始值也只建不改：Monitor 一个渠道都没有时才写入秘密文件里的 `[notification]`。Monitor 删除渠道是硬删除，
-所以在管理台把渠道全部删掉之后再重跑写渠道的那一步（`setup install` 或 `setup init`），会把秘密文件里的旧渠道写回去；
-不想要它就先把秘密文件里的 `webhook_url` 清空。
+告警渠道与交易所密钥不在 `moox.secrets.toml` 里配置，安装完成后在管理台录入（「资源与运维 › 监控告警」的“消息通知设置”、「系统设置 › 密钥管理」），清空重装时通过本机 `moox.backup` 自动备份与恢复。

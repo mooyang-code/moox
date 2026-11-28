@@ -68,7 +68,7 @@ echo "下载源: $SRC"
 - **有没有装过**：不用先问，填完配置后第 3 节自动检测每台机器上的每个组件，再决定新安装、覆盖更新还是卸载。
   只有用户说机器已经装好、但这台电脑上没有原来的两份配置（换了电脑）时，先按“保留数据与换电脑”取回配置，不要重新 `config init`。
 - **启动哪个空间**：加密货币用 `crypto`（需要海外机），A 股用 `stockcn`（需要配 `[scf_plan]`）。采集任务默认停用，安装时只启动选定的空间。
-- **告警渠道**：企业微信、飞书、钉钉群机器人的 Webhook 地址，或一个接收告警的公网 HTTPS 地址（可选，没有可以部署后再在管理台添加）。飞书机器人开了“签名校验”、钉钉机器人启用了“加签”时还要它的密钥。
+- **告警渠道**：企业微信、飞书、钉钉群机器人的 Webhook 地址，或一个接收告警的公网 HTTPS 地址（不在配置文件里填，安装完成后直接到管理台「资源与运维 › 监控告警」的“消息通知设置”添加；飞书机器人开了“签名校验”、钉钉机器人启用了“加签”时还要它的密钥）。
 
 ## 1. 下载发布产物
 
@@ -126,22 +126,18 @@ cd moox-${VER}
 2. 各台服务器的 IP、SSH 端口和用户名（地域、规格按 IP 自动识别）；
 3. **免密登录**：页面在本机生成 MooX 专用密钥 `~/.ssh/moox_ed25519`，逐台确认主机指纹，用户输入一次 SSH 密码装上公钥（密码不保存），
    密码或用户名填错时，页面直接让用户重新填写用户名和密码；也可以按页面给出的 `ssh-copy-id` 命令自己在终端执行；因子机在免密开通后自动做环境检测；
-4. 管理员账号与告警渠道（机器人 Webhook 可以先不填，部署完成后在管理台“资源与运维 › 监控告警”的“消息通知设置”添加；添加之前出了问题不会通知到群里，要提醒用户补上）；
-5. 交易所密钥（可选，只有配了海外服务器才有这一步）：币安或 OKX 的 API 密钥写成 `[[exchange_keys]]`，只读密钥勾“只读”；页面不在本机检测（密钥通常绑定了海外服务器的 IP），装完后在海外机上检测；
-6. 确认后写出两份文件：明文的 `moox.toml`（主机、部署和部署参数，没有秘密）与加密的 `moox.secrets.toml`（管理员、云密钥、交易所密钥、告警渠道；解密密钥在系统钥匙串）。
+4. 管理员账号（管理台登录用）；
+5. 确认后写出两份文件：明文的 `moox.toml`（主机、部署和部署参数，没有秘密）与加密的 `moox.secrets.toml`（仅含管理员、腾讯云密钥与 CLS 写入密钥；解密密钥在系统钥匙串）。
 
 规则：
 
 - 命令结束后立即告诉用户：配置已保存，页面可以关，之后不用重填。
 - Agent **不打开、不填写、不读取**这个页面和 `moox.secrets.toml`；页面地址没能自动打开时，把命令打印的地址原样转给用户。`moox.toml` 是明文拓扑，可以直接看和改。
 - 之后要看或改配置用 `./bin/moox-cli config edit`（同样由用户在浏览器里操作）。
-- 填了交易所密钥的：`setup install` 把它们写进密钥管理（只建不改，管理台里已有或已删除的不动），安装结束后逐把检测：`moox-cli trade inspect-credential --exchange binance --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-<名称>`（`readonly = true` 的不检测）。输出里有阻断项就告诉用户原因，由用户在交易所或管理台处理；`检测没有完成` 是交易所接口暂时不可用，稍后重试。
-- 币安只读 Key（可选）：Collector 的下架检测用它读币安现货下架计划，固定读名称为 `readonly` 的币安生产环境只读密钥（`exchange = "binance"`、`environment = "production"`、`name = "readonly"`、`readonly = true`，ID `exchange-binance-production-readonly`）。
-  不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺这把 Key 时现货下架只能手工登记：`moox-cli collector delist register`（默认只预览，`--yes` 才执行），或管理台“交易管理 › 下架名单”页的“手工登记下架”。
-  登记后到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（名单与清仓都只对模拟盘生效，实盘照常买卖；演练核对结束后名单行自动删掉）。
-  要补就让用户 `config edit` 加上，再 `setup init` 写入，下一轮检测自动恢复。
-  注意 `setup init`（以及 `setup install` 里写告警渠道的那一步）对告警渠道的规则是“Monitor 一个渠道都没有就写入秘密文件里的 `[notification]`”：
-  用户在管理台把渠道全部删掉之后再跑，会把秘密文件里的旧渠道写回去。不想要它就先让用户在 `config edit` 里把 Webhook 地址清空。
+- 交易所密钥与告警通知渠道都不在配置文件里填写，安装完成后把 `setup install` / `setup init` 输出的 `console` 入口地址交给用户在管理台页面录入：
+  - **交易所密钥**（`https://<管理台地址>:9527/#/settings/secrets`）：在「系统设置 › 密钥管理」新增，类别选“交易所”，填交易所（`binance` / `okx`）、环境（生产 / 测试网）、是否只读与 OKX 口令。录入后可在页面点「测试连接」或运行 `moox-cli trade inspect-credential --exchange <交易所> --environment <环境> --credential-secret-id <密钥 ID>` 检测（只读密钥不检测）；输出里有阻断项就告诉用户原因，`检测没有完成` 是交易所接口暂时不可用，稍后重试。
+  - **币安只读 Key**（可选）：Collector 的下架检测用它读币安现货下架计划，按属性自动匹配任一把启用的币安生产环境只读密钥（类别“交易所”、厂商 `binance`、环境“生产”、勾选“只读”，不依赖固定 ID）。不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺 Key 期间现货下架只能手工登记（`moox-cli collector delist register`，默认只预览、`--yes` 才执行，或管理台“交易管理 › 下架名单”页的“手工登记下架”；登记后到下架前 24 小时自动卖出实盘持仓，`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`）。之后在管理台「系统设置 › 密钥管理」补建或启用，下一轮轮询即自动恢复。
+  - **告警通知渠道**（`https://<管理台地址>:9527/#/ops/monitor`）：在「资源与运维 › 监控告警」的“消息通知设置”添加。`setup install` / `setup init` 会只读检查 Monitor 渠道数，若尚未配置（`notification.warning`）会在结果里提醒；交付时务必把这条提醒和监控页地址给用户，未配置前出了故障不会通知到群里。
 - 不配海外机（没有出口代理）时 Collector 连不上币安、OKX，安装渲染会把 Collector 的 `delist.auto_detect` 设为 false，不自动检测下架，手工登记照常可用；配了海外机时为 true。
 - 免密登录开通后，Agent 就能通过 `moox-cli` 登录这些服务器完成后续所有步骤。
 - MooX 密钥不是 OpenSSH 的默认身份文件。手工验证要写 `ssh -i ~/.ssh/moox_ed25519 <用户>@<IP>`，普通 `ssh` 询问密码不代表公钥没装上。
@@ -240,12 +236,12 @@ cd moox-${VER}
 2. 放行防火墙端口；
 3. 控制机先装 Admin、主机网关和 HostAgent（其余主机要向 Admin 要身份材料）；
 4. 带 EventBus、Storage 的主机（默认是存储机）；
-5. `setup init --stage storage`：业务空间、初始秘密、元数据（控制机上的 Collector 启动时要核对元数据）；
+5. `setup init --stage storage`：业务空间、默认云账号密钥、元数据（控制机上的 Collector 启动时要核对元数据）；
 6. 控制机其余组件；
 7. 其余主机，因子机排最后；
 8. 统一等一次全部组件就绪；
 9. **自动导入待恢复备份**（在全部组件就绪之后、完整初始化之前）：若本机有带“卸载后待导入”标记的 `moox.backup`，按覆盖导入密钥（`SecretMgr.ImportSecrets`，保留原密钥 ID）与告警渠道（`MonitorMgr.ImportNotificationChannels`，按地址幂等覆盖），成功后清掉待导入标记；没有备份则提示去管理台录入；
-10. `setup init`：云账号、日志服务、采集计划、告警渠道核对（遇到已存在的密钥与渠道只建不改）；
+10. `setup init`：写入默认云账号密钥（只建不改）、只读检查告警渠道（为空时提醒）、登记云账号、日志服务、采集计划，并输出管理台及密钥/监控入口地址；
 11. `setup start` 启动空间、`setup verify` 验收；验收通过后在控制机部署根下单独写出完成标记 `install-complete.json`。
 
 - 每台主机的部署做的事：把登记同步到 Admin，预检本机组件的数据格式，目标机按产物包清单下载组件包（下载不了时由这台电脑下载再推送），向控制机要身份材料，
@@ -295,8 +291,8 @@ cd moox-${VER}
 
 启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的入口主机（`external_entry = true`）与 VPC。
 
-`setup install` 已经包含初始化；单独运行时：`setup init --stage storage` 只写业务空间、初始秘密（管理员、腾讯云密钥、交易所密钥，只建不改）并导入元数据（数据集建好即为 active，不需要另外激活）；
-不带 `--stage` 的 `setup init` 在全部组件装好后运行，依次完成防火墙核对、业务空间与初始秘密、告警渠道、云账户、日志服务、采集计划、元数据核对，已经做过的不会重复写入。
+`setup install` 已经包含初始化；单独运行时：`setup init --stage storage` 写入默认云账号密钥（`tencent-default`，只建不改）并把业务空间与元数据导入 Storage（数据集建好即为 active，不需要另外激活）；
+不带 `--stage` 的 `setup init` 在全部组件装好后运行，依次完成防火墙核对、默认云账号密钥写入、告警渠道只读检查（为空时提醒）、云账户登记、日志服务、采集计划、登录与元数据核对，并输出管理台入口地址（`console.url`、`console.secrets_url`、`console.monitor_url`），已经做过的不会重复写入。
 因子任务和默认策略在 `setup start` 里按空间导入。
 
 管理台用内部证书。信任要这台电脑的管理员授权，Agent 做不了，也不阻塞安装：安装结束时把下面的命令交给用户在自己的终端运行，不要替用户清理钥匙串里的这张证书。
@@ -316,8 +312,11 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
    新数据集第一次接入时 Collector 自动补历史（`collector status` 的“历史补齐”显示进度与预计剩余时间）：补齐期间因子任务显示“历史补齐中”、不计算，策略不下单，监控显示“待生效”，都不是故障，补齐结束自动放行；
    `setup verify` 把补历史中的因子任务算通过，因子检查的 `detail` 写“因子任务 … 补历史中，下游待生效”，交付时如实告诉用户这些任务要等补齐结束才开始计算；
    不想等用 `moox-cli collector history-seed skip --space-id <空间>`。美股、港股几十分钟，A 股、crypto 要几小时。要加快 crypto：在 `moox.toml` 给 crypto 配几个海外 public 地域（见 `moox.toml.example`）。
-3. 告诉用户管理台地址 `https://<管理台地址>:9527`、管理员用户名（密码在用户自己填的配置里），以及默认已经在跑的内容：
-   用户选的空间。crypto 是币安现货与合约 1m K 线采集；有因子机时还有因子任务和默认示例策略（合约 1m 双均线，观察实例，不投递）。以 `setup verify` 的结果为准，没验收通过不要说已经在跑。
+3. 把 `setup install` / `setup init` 输出的管理台入口地址交给用户：
+   - 管理台首页：`https://<管理台地址>:9527`（告知管理员用户名，密码在用户自己填的配置里）；
+   - 交易所密钥录入：`https://<管理台地址>:9527/#/settings/secrets`（在「系统设置 › 密钥管理」新增交易与币安只读密钥；装完实盘/测试网密钥后可用「测试连接」或 `moox-cli trade inspect-credential` 检测）；
+   - 告警通知渠道录入：`https://<管理台地址>:9527/#/ops/monitor`（在「资源与运维 › 监控告警」的“消息通知设置”添加；如果输出里带了未配置告警渠道的提醒，明确告知用户在补上之前故障不会推到群里）；
+   - 同时说明默认已经在跑的内容：用户选的空间（crypto 是币安现货与合约 1m K 线采集；有因子机时还有因子任务和默认示例策略，合约 1m 双均线，观察实例，不投递）。以 `setup verify` 的结果为准，没验收通过不要说已经在跑。
 4. 列出还没做、需要用户决定的事：长历史导入（[`initial-import.md`](initial-import.md)）、自定义因子（[`factor-dsl.md`](factor-dsl.md)）、自定义策略。
 
 ## 保留数据与换电脑

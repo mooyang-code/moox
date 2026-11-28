@@ -9,7 +9,7 @@
 
 ## 0. 前提与约定
 
-- 两份配置：明文的 `moox.toml`（主机、部署、部署参数）和同目录加密的 `moox.secrets.toml`（管理员、云密钥、交易所密钥、告警渠道）。可以放在任意目录，命令用 `--file <moox.toml 路径>` 指过去。
+- 两份配置：明文的 `moox.toml`（主机、部署、部署参数）和同目录加密的 `moox.secrets.toml`（仅含管理员、腾讯云密钥、CLS 写入密钥）。交易所密钥与告警通知渠道不在秘密文件里，安装完成后在管理台录入，清空重装时通过本机 `moox.backup` 自动备份与恢复。可以放在任意目录，命令用 `--file <moox.toml 路径>` 指过去。
   Agent 不直接读秘密文件、不打印密钥，要看用 `moox-cli config get`（默认打码）。改之前先备份两份文件。
 - 代码在独立 worktree 时，用 worktree 里构建的 CLI，并用 `--source-dir <worktree>` 指向源码：配置模板、systemd 单元模板、元数据种子（`config/setup`）、云函数代码包（`modules/collector`）、默认因子任务和默认策略都从这里取，不看运行命令时的当前目录。
   `setup install` 把同一个目录传给它里面的每一步；单独跑 `setup deploy`、`setup init`、`setup start` 时各自带上同一个 `--source-dir`，否则按当前目录取（在主仓库根运行就会把主仓库那个分支的云函数代码传上去）。种子不在 `<源码目录>/config/setup` 时才写 `--config-dir`。
@@ -82,12 +82,12 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 1 | 防火墙 | 放行各主机对外的端口 |
 | 2 | `setup deploy --host control --component admin,host-gateway,host-agent` | 先在控制机上执行 `moox-admin-cli bootstrap`（建库、CA、主密钥、登记这台电脑的 `moox-cli` 公钥、签发控制机的签名密钥，只建不改；全部主机与部署连同启停状态按 `moox.toml` 整份覆盖），再执行 `eventbus-credentials ensure` 与 `user ensure`（EventBus 凭据、管理员只建不改），然后装这三个组件；控制机的根证书同时记到这台电脑 |
 | 3 | `setup deploy --host storage` | Storage、EventBus，存储机的网关同时开外部入口（11004）；Storage 主库启动前自动初始化元数据库 |
-| 4 | `setup init --stage storage` | 业务空间、初始秘密、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
+| 4 | `setup init --stage storage` | 业务空间、默认云账号密钥（`tencent-default`）、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
 | 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
 | 8 | 自动导入待恢复备份 | 若本机存在带“卸载后待导入”标记的 `moox.backup`，在完整初始化前按覆盖导入密钥（`SecretMgr.ImportSecrets`）与告警渠道（`MonitorMgr.ImportNotificationChannels`），成功后清掉标记；无备份则跳过并提示 |
-| 9 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验、自动为有限保留期的内置时序数据集建归档任务（这些要等 Collector、Monitor、ArchiveMgr 起来） |
+| 9 | `setup init` | 默认云账号密钥（只建不改）、告警渠道只读检查（为空时提醒）、云账户、日志服务、云函数代码包、登录校验、自动为有限保留期的内置时序数据集建归档任务、输出管理台入口地址（这些要等 Collector、Monitor、ArchiveMgr 起来） |
 | 10 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入，同时为该空间新建的因子结果数据集自动建归档任务；验收通过后在控制机部署根写出完成标记 `install-complete.json` |
 
 - `setup init` 与 `setup start` 在部署了 `archive-mgr` 时会自动为所有已激活且有限保留期的时序数据集（内置原始 K 线数据集与默认因子结果数据集）幂等创建归档任务，全新安装完成后即覆盖归档、不会触发“未归档的数据集”告警；自己后续手工新建的采集任务或因子任务仍可在管理台“数据归档 › 归档任务”页或用 `moox-cli archive tasks create` 建归档任务。
@@ -95,9 +95,9 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 - 任何一步失败先看原因和日志（`setup logs --host <主机> --component <组件> --journal`），修好后重跑同一条 `setup install`：每一步都可以重做，没有变化的组件不重启。
 - 改了代码要重新构建二进制再重跑；`setup deploy` 按二进制摘要判断哪些组件有变化。
 - 另一个空间装完后再启动：`$CLI setup start --source-dir $WT --space-id stockcn`（`setup start` 没有预览，不带 `--yes`）、`$CLI setup verify --space-id stockcn`。
-- 交易所密钥：`setup init` 只写入、不检测。Trade 装好后逐把检测 `readonly = true` 以外的密钥：
-  `$CLI trade inspect-credential --exchange binance --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-main`
-  （固定 ID 是 `exchange-<交易所>-<环境>-<名称>`，OKX 用 `okx`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`），看 `blockers` 有无阻断项；`检测没有完成` 只是交易所接口暂时不可用，稍后重试。
+- 交易所密钥与告警渠道：若没有从 `moox.backup` 恢复，安装完成后由用户在管理台「系统设置 › 密钥管理」（`/#/settings/secrets`）与「资源与运维 › 监控告警」（`/#/ops/monitor`）录入。Trade 装好后对非只读交易所密钥可在管理台点「测试连接」或执行：
+  `$CLI trade inspect-credential --exchange binance --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id <密钥 ID>`
+  （OKX 用 `okx`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`，密钥 ID 可经 `$CLI secret list` 查到），看 `blockers` 有无阻断项；`检测没有完成` 只是交易所接口暂时不可用，稍后重试。
 - 因子引擎的窗口与内存：模板默认回看 50000 根、计算内存 4GiB、进程预算不限。要调就在因子机上运行 `/data/moox/bin/moox-factor-engine tune --config /data/moox/config/factor-engine/engine.yaml` 看建议值，
   写进 `moox.toml` 的 `[overrides."factor-engine"."engine.yaml"]`，再 `$CLI setup deploy $SRC --host factor --component factor-engine`。不要直接改目标机上的配置文件，下次部署会被覆盖。
 
