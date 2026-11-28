@@ -114,7 +114,7 @@ func TestDeleteReplaysBeyondKeepsLatestPerSpace(t *testing.T) {
 		if strings.HasSuffix(claimed.ReplayID, "-0") {
 			continue
 		}
-		if err := repo.FinishReplay(ctx, claimed.ReplayID, ReplayDone, []byte(`{}`), "", testNow); err != nil {
+		if err := repo.FinishReplay(ctx, claimed.ReplayID, ReplaySucceeded, []byte(`{}`), "", testNow); err != nil {
 			t.Fatal(err)
 		}
 	}

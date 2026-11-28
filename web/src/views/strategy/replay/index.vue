@@ -54,7 +54,7 @@
               <a-space>
                 <a-button size="small" :loading="rerunning" @click="rerunWithConfig">按此配置重新发起</a-button>
                 <a-button
-                  v-if="(selected.status === 'pending' || selected.status === 'running') && selected.replay_id === selectedId"
+                  v-if="(selected.status === 'queued' || selected.status === 'running') && selected.replay_id === selectedId"
                   class="cancel-replay"
                   status="warning"
                   :loading="cancelling"
@@ -721,7 +721,7 @@ function selectedNeedsRefresh(): boolean {
   const current = selected.value;
   if (!current || current.replay_id !== selectedId.value) return false;
   return (
-    current.status === "pending" ||
+    current.status === "queued" ||
     current.status === "running" ||
     awaitingShown.value ||
     tableRefreshPending === current.replay_id
@@ -745,7 +745,7 @@ async function refreshSelected() {
     series.value = all;
     await renderChart(false);
   }
-  maybeAwaitMetrics(replay, current.status === "pending" || current.status === "running");
+  maybeAwaitMetrics(replay, current.status === "queued" || current.status === "running");
   const lastPage = Math.max(1, Math.ceil(all.length / tablePageSize));
   // 表格没有落后、停在较早的页、状态也没变化时不用刷新。
   if (tableRefreshPending !== replayId && tablePage.value < lastPage - 1 && replay.status === current.status) return;
@@ -947,7 +947,7 @@ async function pollTick() {
   clock.value = Date.now();
   if (awaitingMetrics.value && clock.value > awaitingMetrics.value.until) awaitingMetrics.value = null;
   // 所选回放不在当前列表页时也要刷新：轮询条件看列表与所选回放两处。
-  if (!replays.value.some(item => item.status === "pending" || item.status === "running") && !selectedNeedsRefresh()) return;
+  if (!replays.value.some(item => item.status === "queued" || item.status === "running") && !selectedNeedsRefresh()) return;
   {
     const gen = generation;
     const seq = ++listSeq;

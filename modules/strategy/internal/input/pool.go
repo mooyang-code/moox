@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 策略池的绑定解析（设计 3.5）：池要绑定的因子任务是成员所需市场的并集；每个成员各自解析出自己的绑定（只看它用到的市场与列），
@@ -51,7 +54,7 @@ func (p PoolResolved) MembersJSON() (string, error) {
 }
 
 // ResolvePool 解析策略池的绑定。members 必须覆盖池的全部成员；taskIDs 是池绑定的因子任务，它们的市场必须恰好是成员所需市场的并集。
-func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []string, pool dsl.Strategy, members []PoolMemberDef) (PoolResolved, error) {
+func ResolvePool(ctx context.Context, client upstream.Client, spaceID string, taskIDs []string, pool dsl.Strategy, members []PoolMemberDef) (PoolResolved, error) {
 	if client == nil {
 		return PoolResolved{}, errors.New("Storage 客户端未配置")
 	}
@@ -102,13 +105,13 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 		}
 	}
 	// drift 的漂移起点与锚点要落在这个日历与周期的 bar 起点上（保存时分不出加密与 A 股，到这里才能检查）。
-	if _, err := PoolClock(calendarOf(first), strings.ToLower(first.view.Frequency), *pool.Pool); err != nil {
+	if _, err := period.PoolClock(calendarOf(first), strings.ToLower(first.view.Frequency), *pool.Pool); err != nil {
 		return PoolResolved{}, err
 	}
 	// 数据集的保留期要能装下预热：预热期数加成员里最长的回看（上一根与年龄判定）。
-	need := dsl.PoolWarmBars(pool, memberStrategies(members), WarmClock(calendarOf(first), strings.ToLower(first.view.Frequency))) + poolLookback(members)
+	need := dsl.PoolWarmBars(pool, memberStrategies(members), period.WarmClock(calendarOf(first), strings.ToLower(first.view.Frequency))) + poolLookback(members)
 	for _, item := range views {
-		if bars, ok := retentionBars(item.dataset.Retention, calendarOf(first), strings.ToLower(first.view.Frequency)); ok && need > bars {
+		if bars, ok := period.RetentionBars(item.dataset.Retention, calendarOf(first), strings.ToLower(first.view.Frequency)); ok && need > bars {
 			return PoolResolved{}, fmt.Errorf("View %s 的数据集保留 %d 根，策略池预热需要 %d 根（预热 %d 期 + 成员最长回看 %d 根），请调大保留期或缩短轮动、择时的窗口",
 				item.view.DatasetID, bars, need, need-poolLookback(members), poolLookback(members))
 		}
@@ -134,7 +137,7 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 			return PoolResolved{}, fmt.Errorf("永续的 View %s 没有资金费列 %s（strategy_pool.fees.funding_column）", views[swapView].view.DatasetID, column)
 		}
 	}
-	resolved := Resolved{Market: union, Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{},
+	resolved := Resolved{Pool: true, Market: union, Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{},
 		Bar: strings.ToLower(first.view.Frequency), Calendar: calendarOf(first), ViewColumns: commonColumns(views)}
 	for _, item := range views {
 		resolved.Tasks[item.market] = TaskBinding{FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
@@ -238,8 +241,8 @@ func PoolMemberDefs(raw string) ([]PoolMemberDef, error) {
 
 // CheckPoolReplayStart 核对策略池研究回放的起点：drift 写了 allocation.start（或 initial.at）时，回放的第一根必须就是漂移起点。
 // 回放从别的根开始时，漂移要么从回放的第一根重新开始、要么前面几根还没到起点，与实时结果不可比。没写起点时漂移从回放的第一根开始，不用核对。
-func CheckPoolReplayStart(resolved Resolved, pool dsl.StrategyPool, first PeriodBoundaries) error {
-	clock, err := PoolClock(resolved.Calendar, resolved.Bar, pool)
+func CheckPoolReplayStart(resolved Resolved, pool dsl.StrategyPool, first period.PeriodBoundaries) error {
+	clock, err := period.PoolClock(resolved.Calendar, resolved.Bar, pool)
 	if err != nil {
 		return err
 	}
@@ -248,7 +251,7 @@ func CheckPoolReplayStart(resolved Resolved, pool dsl.StrategyPool, first Period
 	}
 	text := pool.Allocation.DriftStart()
 	return fmt.Errorf("%s 是 %s，策略池回放的起点必须等于漂移起点才与实时结果可比，实际第一根从 %s 开始：请把 start_time 改为 %s",
-		driftStartField(pool), text, PeriodLabel(resolved.Calendar, resolved.Bar, first.StorageStart), text)
+		period.DriftStartField(pool), text, period.PeriodLabel(resolved.Calendar, resolved.Bar, first.StorageStart), text)
 }
 
 // MemberStrategies 返回成员 id → 编译后的成员策略（programs 与 members 下标一致），构造池配置时判定成员方向用。
@@ -263,7 +266,7 @@ func MemberStrategies(members []PoolMember, programs []*dsl.Program) map[string]
 }
 
 // CheckPoolMemberCoverage 在启用策略池时按每个成员自己的 min_age_bars 与 A 股行键校验 View 的覆盖（见 CheckCoverage）。
-func CheckPoolMemberCoverage(ctx context.Context, client Client, spaceID string, members []PoolMember, now time.Time) error {
+func CheckPoolMemberCoverage(ctx context.Context, client upstream.Client, spaceID string, members []PoolMember, now time.Time) error {
 	for _, member := range members {
 		if err := CheckCoverage(ctx, client, spaceID, member.Resolved, now); err != nil {
 			return fmt.Errorf("成员 %s：%w", member.ID, err)
@@ -302,29 +305,29 @@ const PoolWarmGrace = time.Minute
 // 起点晚于最后一期、或预热要推进的期数超过研究回放的上限 DefaultReplayMaxBars 时返回错误（启用时据此拒绝）。
 func PoolWarmWindow(resolved Resolved, pool dsl.StrategyPool, bars int, now time.Time, grace time.Duration) (start, end time.Time, err error) {
 	calendar, frequency := resolved.Calendar, resolved.Bar
-	closed, err := ClosedPeriod(calendar, frequency, now.Add(-grace))
+	closed, err := period.ClosedPeriod(calendar, frequency, now.Add(-grace))
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
 	from := closed
 	if text := pool.Allocation.DriftStart(); text != "" {
-		if from, err = anchorBoundaries(calendar, frequency, text); err != nil {
-			return time.Time{}, time.Time{}, fmt.Errorf("%s %w", driftStartField(pool), err)
+		if from, err = period.AnchorBoundaries(calendar, frequency, text); err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("%s %w", period.DriftStartField(pool), err)
 		}
 		if from.BarIndex > closed.BarIndex {
-			return time.Time{}, time.Time{}, fmt.Errorf("%s %s 晚于最新已收盘的一根（%s），还没有可以推进的历史", driftStartField(pool), text, BarEndLabel(calendar, frequency, closed.BarEnd))
+			return time.Time{}, time.Time{}, fmt.Errorf("%s %s 晚于最新已收盘的一根（%s），还没有可以推进的历史", period.DriftStartField(pool), text, period.BarEndLabel(calendar, frequency, closed.BarEnd))
 		}
 	}
 	if pool.Allocation.Start == "" {
-		if start, err = HistoryStart(calendar, frequency, from.StorageStart, bars); err != nil {
+		if start, err = period.HistoryStart(calendar, frequency, from.StorageStart, bars); err != nil {
 			return time.Time{}, time.Time{}, err
 		}
-		if from, err = FromStorageStart(calendar, frequency, start); err != nil {
+		if from, err = period.FromStorageStart(calendar, frequency, start); err != nil {
 			return time.Time{}, time.Time{}, err
 		}
 	}
 	if need := closed.BarIndex - from.BarIndex + 1; need > DefaultReplayMaxBars {
-		return time.Time{}, time.Time{}, fmt.Errorf("策略池预热需要推进 %d 根，超过上限 %d 根（预热与研究回放共用这个上限）：请把 %s 改晚一些", need, DefaultReplayMaxBars, driftStartField(pool))
+		return time.Time{}, time.Time{}, fmt.Errorf("策略池预热需要推进 %d 根，超过上限 %d 根（预热与研究回放共用这个上限）：请把 %s 改晚一些", need, DefaultReplayMaxBars, period.DriftStartField(pool))
 	}
 	return from.StorageStart, closed.StorageStart.Add(time.Nanosecond), nil
 }
@@ -333,8 +336,8 @@ func PoolWarmWindow(resolved Resolved, pool dsl.StrategyPool, bars int, now time
 // 校验起点（起点早于数据覆盖范围返回 *EarlyStartError）、截断终点（取各 View、各成员中最早的）；返回截断后的终点。
 // includeLatest 为真时终点放宽到每个 View 里已闭合的最新一根（但不超过 end）：研究回放把最新一根当作可能还没写完而排除在外，
 // 预热的终点之后没有别的路径会处理它，所以预热不能排除。views 是各市场的 View（不带覆盖统计）。
-func PoolWindow(ctx context.Context, client Client, spaceID string, resolved Resolved, members []PoolMember, programs []*dsl.Program, views map[string]ViewInfo, start, end, now time.Time, includeLatest bool) (time.Time, error) {
-	covered := make(map[string]ViewInfo, len(views))
+func PoolWindow(ctx context.Context, client upstream.Client, spaceID string, resolved Resolved, members []PoolMember, programs []*dsl.Program, views map[string]upstream.ViewInfo, start, end, now time.Time, includeLatest bool) (time.Time, error) {
+	covered := make(map[string]upstream.ViewInfo, len(views))
 	for market, view := range views {
 		var err error
 		if covered[market], err = WithCoverage(ctx, client, spaceID, view, true); err != nil {
@@ -376,17 +379,17 @@ func PoolWindow(ctx context.Context, client Client, spaceID string, resolved Res
 
 // CheckPoolWarmCoverage 在启用策略池时按精确的覆盖统计核对 View 的实际历史够不够预热（只核对配置的保留期不够：历史还没攒够的 View 上
 // 启用成功，预热随后会永久失败）。不够时返回说明原因的错误，不启用。
-func CheckPoolWarmCoverage(ctx context.Context, client Client, spaceID string, pooled PoolResolved, now time.Time) error {
+func CheckPoolWarmCoverage(ctx context.Context, client upstream.Client, spaceID string, pooled PoolResolved, now time.Time) error {
 	strategies := make([]dsl.Strategy, 0, len(pooled.Programs))
 	for _, program := range pooled.Programs {
 		strategies = append(strategies, program.Strategy)
 	}
-	clock := WarmClock(pooled.Resolved.Calendar, pooled.Resolved.Bar)
+	clock := period.WarmClock(pooled.Resolved.Calendar, pooled.Resolved.Bar)
 	start, end, err := PoolWarmWindow(pooled.Resolved, *pooled.Program.Strategy.Pool, dsl.PoolWarmBars(pooled.Program.Strategy, strategies, clock), now, PoolWarmGrace)
 	if err != nil {
 		return err
 	}
-	views := make(map[string]ViewInfo, len(pooled.Resolved.Tasks))
+	views := make(map[string]upstream.ViewInfo, len(pooled.Resolved.Tasks))
 	for market, task := range pooled.Resolved.Tasks {
 		view, err := client.GetView(ctx, spaceID, task.DatasetID)
 		if err != nil {

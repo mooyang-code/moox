@@ -62,13 +62,6 @@ type Universe struct {
 	AgeMarkets  string
 }
 
-// Pool 是规则级标的池。Explicit 为 true 时替代 universe 的标签与黑白名单。
-type Pool struct {
-	Explicit bool
-	Fixed    []string
-	Tags     []string
-}
-
 // Select 描述选择阶段（见 select.go）：top、bottom、range 三选一；top/bottom 是正整数个数或 (0, 1) 的比例，比例按
 // CountRound 取整后与 CountMin 取大；Range 是名次闭区间（未写时为零值）；Group 限制每组入选个数；Then 在第一段的结果上二次排序。
 // where 可选，buffer 是排名缓冲区。
@@ -109,8 +102,8 @@ type Rule struct {
 	ID   string
 	Name string
 	Type string
-	Pool Pool
-	// Universe 是规则级 universe（见 universe.go）；AllowEmpty 为真时这条规则不参与整期守门，候选为空或缺数时只是不出目标。
+	// Universe 是规则级 universe（见 universe.go）；DSL 里的规则级 pool 简写在解析时改写为这里的标的范围覆盖。
+	// AllowEmpty 为真时这条规则不参与整期守门，候选为空或缺数时只是不出目标。
 	Universe    *RuleUniverse
 	AllowEmpty  bool
 	Filter      string

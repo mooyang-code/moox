@@ -83,7 +83,7 @@ portfolio: {leverage: 1}
 	if err != nil {
 		t.Fatalf("Parse() 出错：%v", err)
 	}
-	if strategy.Rules[0].Holding == nil || len(strategy.Rules[0].Holding.Offsets) != 4 || strategy.Rules[1].Pool.Tags[0] != "majors" {
+	if strategy.Rules[0].Holding == nil || len(strategy.Rules[0].Holding.Offsets) != 4 || strategy.Rules[1].Universe == nil || len(strategy.Rules[1].Universe.Tags) != 1 || strategy.Rules[1].Universe.Tags[0] != "majors" {
 		t.Fatalf("规则不符：%+v", strategy.Rules)
 	}
 }
@@ -190,11 +190,80 @@ func TestNumericLiterals(t *testing.T) {
 func TestIdentifierListsAreCaseSensitive(t *testing.T) {
 	t.Parallel()
 	strategy, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: rank, pool: [BTC-USDT, btc-usdt], score: \"0\", select: {top: 10000}, weight: 1}\n"))
-	if err != nil || len(strategy.Rules[0].Pool.Fixed) != 2 {
+	if err != nil || strategy.Rules[0].Universe == nil || len(strategy.Rules[0].Universe.Include) != 2 {
 		t.Fatalf("大小写不同的两项都应保留：%+v err=%v", strategy.Rules, err)
 	}
 	if _, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: rank, pool: [BTC-USDT, BTC-USDT], score: \"0\", select: {top: 10000}, weight: 1}\n")); err == nil || !strings.Contains(err.Error(), "重复") {
 		t.Fatalf("完全相同的两项应拒绝：%v", err)
+	}
+}
+
+// 规则级 pool 解析期改写为规则级 universe：保留年龄字段、覆盖策略级标的范围、无论 YAML 书写顺序都保持互斥与语义等价，且固定列表按去重数校验 min_universe。
+func TestRulePoolRewritesToRuleUniverse(t *testing.T) {
+	t.Parallel()
+	// universe 在前、pool 在后：同样拒绝标的范围互斥。
+	if _, err := Parse([]byte(rankRule("universe: {exclude: [X]}, pool: [A, B], select: {top: 1}, weight: 1"))); err == nil || !strings.Contains(err.Error(), "规则级 universe 只能写 min_age_bars") {
+		t.Fatalf("universe 在前时也应拒绝与 pool 的标的范围互斥：%v", err)
+	}
+	// 空列表 pool 应拒绝。
+	if _, err := Parse([]byte(rankRule("pool: [], select: {top: 1}, weight: 1"))); err == nil || !strings.Contains(err.Error(), "pool 不能为空") {
+		t.Fatalf("空 pool 列表应拒绝：%v", err)
+	}
+	// pool 覆盖策略级 tags/include/exclude_tags/exclude，同时保留策略级与规则级年龄设置（不论 pool 与 universe 书写顺序）。
+	raw := `name: x
+universe:
+  tags: [all_coins]
+  exclude_tags: [stables]
+  include: [EXTRA]
+  exclude: [A]
+  min_age_bars: 10
+rules:
+  - id: fixed_after_age
+    type: rank
+    universe: {max_age_bars: 30, age_markets: all}
+    pool: [A, B]
+    allow_empty: true
+    score: close
+    select: {top: 1}
+    weight: 0.5
+  - id: tags_only
+    type: rank
+    pool: {tags: [majors]}
+    score: close
+    select: {top: 1}
+    weight: 0.5
+`
+	strategy, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	r0 := strategy.RuleUniverse(strategy.Rules[0])
+	if len(r0.Tags) != 0 || len(r0.ExcludeTags) != 0 || len(r0.Exclude) != 0 || !reflect.DeepEqual(r0.Include, []string{"A", "B"}) {
+		t.Fatalf("pool 固定列表应覆写全部标的范围字段：%+v", r0)
+	}
+	if r0.MinAgeBars != 10 || r0.MaxAgeBars != 30 || !r0.AllMarkets() {
+		t.Fatalf("pool 应保留策略级与规则级年龄设置：%+v", r0)
+	}
+	r1 := strategy.RuleUniverse(strategy.Rules[1])
+	if len(r1.Include) != 0 || len(r1.ExcludeTags) != 0 || len(r1.Exclude) != 0 || !reflect.DeepEqual(r1.Tags, []string{"majors"}) || r1.MinAgeBars != 10 {
+		t.Fatalf("pool.tags 应覆写全部标的范围字段并继承年龄设置：%+v", r1)
+	}
+	// 直接构造含重复 include 的结构体校验时，min_universe 按去重后的数量计算。
+	dup := Strategy{
+		Name:      "dup",
+		Portfolio: Portfolio{Leverage: strategy.Portfolio.Leverage, MaxMissing: strategy.Portfolio.MaxMissing, MinUniverse: 3},
+		Rules: []Rule{{
+			ID:        "a",
+			Type:      RuleTypeRank,
+			Score:     "close",
+			HasSelect: true,
+			Select:    Select{Top: 1},
+			Weight:    strategy.Rules[0].Weight,
+			Universe:  &RuleUniverse{Universe: Universe{Include: []string{"A", "A", "B"}}, Fields: map[string]struct{}{universeInclude: {}}},
+		}},
+	}
+	if err := Validate(&dup); err == nil || !strings.Contains(err.Error(), "给出 2 个标的") {
+		t.Fatalf("含重复 include 时应按去重数 2 报错：%v", err)
 	}
 }
 

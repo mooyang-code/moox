@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const tunedDSL = `name: tuned
@@ -24,38 +26,38 @@ rules:
 
 // tasksFake 是 FactorMgr 任务关联接口的替身：binds 记关联调用，gets 记读取任务的调用；status 是读取时返回的任务状态（空表示 enabled）。
 type tasksFake struct {
-	bound  BoundTask
+	bound  upstream.BoundTask
 	err    error
 	status string
 	binds  []string
 	gets   []string
-	submit []ParamSubmission
+	submit []upstream.ParamSubmission
 }
 
-func (f *tasksFake) GetFactorTask(_ context.Context, taskID string) (FactorTaskRecord, error) {
+func (f *tasksFake) GetFactorTask(_ context.Context, taskID string) (upstream.FactorTaskRecord, error) {
 	f.gets = append(f.gets, taskID)
 	if f.err != nil {
-		return FactorTaskRecord{}, f.err
+		return upstream.FactorTaskRecord{}, f.err
 	}
 	status := f.status
 	if status == "" {
 		status = "enabled"
 	}
-	return FactorTaskRecord{SpaceID: "space", Status: status}, nil
+	return upstream.FactorTaskRecord{SpaceID: "space", Status: status}, nil
 }
 
-func (f *tasksFake) BindFactorTask(_ context.Context, taskID, instanceID string) (BoundTask, error) {
+func (f *tasksFake) BindFactorTask(_ context.Context, taskID, instanceID string) (upstream.BoundTask, error) {
 	f.binds = append(f.binds, taskID+"@"+instanceID)
 	if f.err != nil {
-		return BoundTask{}, f.err
+		return upstream.BoundTask{}, f.err
 	}
 	if f.bound.TaskID == "" {
-		return BoundTask{TaskID: taskID, Status: "enabled", BoundInstanceID: instanceID}, nil
+		return upstream.BoundTask{TaskID: taskID, Status: "enabled", BoundInstanceID: instanceID}, nil
 	}
 	return f.bound, nil
 }
 
-func (f *tasksFake) SubmitFactorParams(_ context.Context, submission ParamSubmission) ([]MemberSubmitResult, error) {
+func (f *tasksFake) SubmitFactorParams(_ context.Context, submission upstream.ParamSubmission) ([]upstream.MemberSubmitResult, error) {
 	f.submit = append(f.submit, submission)
 	return nil, nil
 }
@@ -67,14 +69,14 @@ type lateColumns struct {
 	after int
 }
 
-func (c *lateColumns) GetView(ctx context.Context, space, datasetID string) (ViewInfo, error) {
+func (c *lateColumns) GetView(ctx context.Context, space, datasetID string) (upstream.ViewInfo, error) {
 	view, err := c.fakeClient.GetView(ctx, space, datasetID)
 	if datasetID != "dataset_factor_i1" {
 		return view, err
 	}
 	c.reads++
 	if c.reads <= c.after {
-		view.Columns = []ViewColumn{plainColumn("close")}
+		view.Columns = []upstream.ViewColumn{plainColumn("close")}
 	}
 	return view, err
 }
@@ -82,12 +84,12 @@ func (c *lateColumns) GetView(ctx context.Context, space, datasetID string) (Vie
 // tunedClient 是任务 ftask_i1 的结果 View：一个固定成员 ma、一个可变成员 bias__var（bias 的 window 参数可调）。
 func tunedClient() *fakeClient {
 	client := newFakeClient("spot")
-	client.factors["bias"] = FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
+	client.factors["bias"] = upstream.FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []upstream.ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
 	dataset := client.datasets["dataset_factor_1h"]
 	dataset.DatasetID = "dataset_factor_i1"
 	client.datasets["dataset_factor_i1"] = dataset
 	client.subjects["dataset_factor_i1"] = client.subjects["dataset_factor_1h"]
-	client.views["dataset_factor_i1"] = ViewInfo{DatasetID: "dataset_factor_i1", Frequency: "1h", Status: "active", ActiveIndexID: "idx_f", Columns: []ViewColumn{
+	client.views["dataset_factor_i1"] = upstream.ViewInfo{DatasetID: "dataset_factor_i1", Frequency: "1h", Status: "active", ActiveIndexID: "idx_f", Columns: []upstream.ViewColumn{
 		plainColumn("close"), memberColumn("ma", "ma", "ma", "fixed"), memberColumn("bias__var", "bias__var", "bias", "var"), paramsColumn(),
 	}}
 	return client
@@ -138,7 +140,7 @@ func TestResolveRejectsMismatchedFactorParams(t *testing.T) {
 	}
 	// 声明了 factor_params 的策略要驱动任务的全部可变成员：任务另有一个可变成员 ema__var 没有输出时拒绝。
 	twoVars := tunedClient()
-	twoVars.factors["ema"] = FactorInfo{FactorID: "ema", DefinitionHash: "sha256:ema", Params: []ParamDecl{{Name: "span", Type: "int", Min: 2, Max: 60, Default: 9}}}
+	twoVars.factors["ema"] = upstream.FactorInfo{FactorID: "ema", DefinitionHash: "sha256:ema", Params: []upstream.ParamDecl{{Name: "span", Type: "int", Min: 2, Max: 60, Default: 9}}}
 	view := twoVars.views["dataset_factor_i1"]
 	view.Columns = append(view.Columns, memberColumn("ema__var", "ema__var", "ema", "var"))
 	twoVars.views["dataset_factor_i1"] = view
@@ -172,11 +174,11 @@ func TestResolveParamsFunctionBindsMemberContract(t *testing.T) {
 // 任务必须已启用，且关联的就是本实例；缺依赖时不能启用。
 func TestResolveInstanceChecksTaskBinding(t *testing.T) {
 	strategy := parseStrategy(t, tunedDSL)
-	other := &tasksFake{bound: BoundTask{TaskID: "ftask_i1", Status: "enabled", BoundInstanceID: "i2"}}
+	other := &tasksFake{bound: upstream.BoundTask{TaskID: "ftask_i1", Status: "enabled", BoundInstanceID: "i2"}}
 	if _, _, err := (Service{Client: tunedClient(), Sets: other}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, strategy); err == nil || !strings.Contains(err.Error(), "关联的是实例") {
 		t.Fatalf("任务关联了别的实例应拒绝：%v", err)
 	}
-	disabled := &tasksFake{bound: BoundTask{TaskID: "ftask_i1", Status: "disabled", BoundInstanceID: "i1"}}
+	disabled := &tasksFake{bound: upstream.BoundTask{TaskID: "ftask_i1", Status: "disabled", BoundInstanceID: "i1"}}
 	if _, _, err := (Service{Client: tunedClient(), Sets: disabled}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, strategy); err == nil || !strings.Contains(err.Error(), "已启用的任务") {
 		t.Fatalf("任务未启用应拒绝：%v", err)
 	}
@@ -192,7 +194,7 @@ func TestResolveInstanceChecksTaskBinding(t *testing.T) {
 // 绑定解析里不固化参数声明（不提交参数）。任务被停用时启用被拒。
 func TestResolveInstanceWithoutFactorParamsDoesNotBind(t *testing.T) {
 	plain := strings.Replace(tunedDSL, "factor_params:\n  bias__var:\n    window: 20\n", "", 1)
-	tasks := &tasksFake{bound: BoundTask{TaskID: "ftask_i1", Status: "enabled", BoundInstanceID: "i_tuned"}}
+	tasks := &tasksFake{bound: upstream.BoundTask{TaskID: "ftask_i1", Status: "enabled", BoundInstanceID: "i_tuned"}}
 	resolved, program, err := Service{Client: tunedClient(), Sets: tasks}.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, plain))
 	if err != nil {
 		t.Fatalf("不调参的实例应能读带可变成员的任务：%v", err)

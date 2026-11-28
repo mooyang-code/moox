@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // sessionEngine 模拟因子引擎同时开多个会话：按会话 ID 路由到各自的 fakeEngine（每个市场一个）。
@@ -33,11 +34,11 @@ func (e *sessionEngine) CloseReplay(ctx context.Context, req *factorpb.CloseRepl
 // tunedDualClient 是现货、永续两个调参任务的结果 View，列与 tunedComputeClient 相同。
 type tunedDualClient struct{ *dualClient }
 
-func (c tunedDualClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+func (c tunedDualClient) GetView(ctx context.Context, spaceID, datasetID string) (upstream.ViewInfo, error) {
 	return tunedComputeClient{c.byDataset(datasetID)}.GetView(ctx, spaceID, datasetID)
 }
 
-func (c tunedDualClient) GetFactor(ctx context.Context, factorID string) (input.FactorInfo, error) {
+func (c tunedDualClient) GetFactor(ctx context.Context, factorID string) (upstream.FactorInfo, error) {
 	return tunedComputeClient{}.GetFactor(ctx, factorID)
 }
 
@@ -78,7 +79,7 @@ func TestComputeDualTasksWithFactorParams(t *testing.T) {
 	(&Runner{Store: repo, Client: client, Engine: engine, ChunkBars: 50, InitialEquity: 100}).Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "d1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 	bars := barsOf(t, repo, "d1")
 	require.Len(t, bars, 4)
 

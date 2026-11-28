@@ -75,7 +75,7 @@ describe("策略的待处理与进行中的回放", () => {
     expect(items[0].target).toEqual({ name: "trading-account-detail", params: { logical_account_id: "acc1" } });
   });
 
-  it("keeps only pending and running replays", () => {
-    expect(activeReplays([{ status: "pending" }, { status: "failed" }, { status: "running" }] as Replay[])).toHaveLength(2);
+  it("keeps only queued and running replays", () => {
+    expect(activeReplays([{ status: "queued" }, { status: "failed" }, { status: "running" }] as Replay[])).toHaveLength(2);
   });
 });

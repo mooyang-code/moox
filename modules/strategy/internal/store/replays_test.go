@@ -22,7 +22,7 @@ func TestReplayLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := repo.GetReplay(ctx, "p1")
-	if err != nil || got.Status != ReplayPending || got.SpotFeeBps != 10 || got.ProgressTime != nil || string(got.MetricsJSON) != "{}" {
+	if err != nil || got.Status != ReplayQueued || got.SpotFeeBps != 10 || got.ProgressTime != nil || string(got.MetricsJSON) != "{}" {
 		t.Fatalf("回放不符：%+v err=%v", got, err)
 	}
 	claimed, found, err := repo.ClaimNextReplay(ctx, testNow)
@@ -35,11 +35,11 @@ func TestReplayLifecycle(t *testing.T) {
 	if err := repo.AppendReplayBar(ctx, ReplayBar{ReplayID: "p1", BarEndTime: testNow.Add(time.Hour), Status: "ok", TargetsJSON: json.RawMessage(`[]`), PositionsJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`), Equity: 100}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.FinishReplay(ctx, "p1", ReplayDone, json.RawMessage(`{"total_return":0.1}`), "", testNow); err != nil {
+	if err := repo.FinishReplay(ctx, "p1", ReplaySucceeded, json.RawMessage(`{"total_return":0.1}`), "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	done, err := repo.GetReplay(ctx, "p1")
-	if err != nil || done.Status != ReplayDone || string(done.MetricsJSON) != `{"total_return":0.1}` || done.ProgressTime == nil {
+	if err != nil || done.Status != ReplaySucceeded || string(done.MetricsJSON) != `{"total_return":0.1}` || done.ProgressTime == nil {
 		t.Fatalf("完成状态不符：%+v err=%v", done, err)
 	}
 	bars, total, err := repo.ListReplayBars(ctx, "p1", 0, 10, false)
@@ -161,7 +161,7 @@ func TestRetentionDeletesReplaysInBatches(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := repo.FinishReplay(ctx, "p1", ReplayDone, nil, "", testNow); err != nil {
+	if err := repo.FinishReplay(ctx, "p1", ReplaySucceeded, nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
 	previous := retentionBatch

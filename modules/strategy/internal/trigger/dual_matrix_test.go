@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 本文件补齐现货、永续各一个任务的组合矩阵（第二轮总审查）：选币市场不可用、新上永续与永续下架在其他模式下、持有的永续空头或多头遇到
@@ -28,7 +29,7 @@ func TestDualMatrixSelectionMarketUnavailable(t *testing.T) {
 	failed := ucBase("{select: spot, prefer: swap}")
 	failed.failed["spot"] = []string{"A", "B", "C", "X"}
 	failed.rows["spot"] = map[string]float64{}
-	if decision, _ := evaluateDual(t, failed); decision.Status != engine.StatusSkipped || decision.SkipReason != input.SkipMarketFailed {
+	if decision, _ := evaluateDual(t, failed); decision.Status != engine.StatusSkipped || decision.SkipReason != upstream.SkipMarketFailed {
 		t.Fatalf("现货整体失败应整期 market_failed：%s(%s)", decision.Status, decision.SkipReason)
 	}
 }

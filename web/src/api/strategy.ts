@@ -43,7 +43,10 @@ function normalizeRequirement(value: any): StrategyTaskRequirement | null {
     taskKeys: (value.task_keys ?? []).map(String),
     sources: (value.sources ?? []).map((item: any) => ({ name: String(item?.name ?? ""), bar: String(item?.bar ?? "") })),
     problems: (value.problems ?? []).map(String),
-    referenceMarkets: (value.reference_markets ?? []).map(String)
+    referenceMarkets: (value.reference_markets ?? []).map(String),
+    tuned: Boolean(value.tuned),
+    poolAllocationMethod: value.pool_allocation_method ?? "",
+    poolDriftStart: value.pool_drift_start ?? ""
   };
 }
 
@@ -51,6 +54,7 @@ function normalizeInstance(value: any): StrategyInstance {
   return {
     instance_id: value?.instance_id ?? "",
     strategy_id: value?.strategy_id ?? "",
+    strategy_name: value?.strategy_name ?? "",
     space_id: value?.space_id ?? "",
     factor_tasks: { ...(value?.factor_tasks ?? {}) },
     logical_account_id: value?.logical_account_id ?? "",

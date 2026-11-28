@@ -5,8 +5,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 // Metrics 是回放的绩效与局限性说明，写入 metrics_json。
@@ -56,7 +57,7 @@ const minAnnualizedSpan = 7 * 24 * time.Hour
 // minAnnualizedBars 返回给出年化收益所需的最少根数：A 股是一周的 5 个交易日 × 每个交易日的根数（日线 5 根、5m 240 根），
 // 其余按根数 × bar 时长不短于一周。
 func minAnnualizedBars(calendar, bar string, duration time.Duration) int {
-	if perDay := input.TradingDayBars(calendar, bar); perDay > 0 {
+	if perDay := period.TradingDayBars(calendar, bar); perDay > 0 {
 		return 5 * perDay
 	}
 	if duration <= 0 {
@@ -158,8 +159,8 @@ func (a *accumulator) annualize(m *Metrics) string {
 
 // periodsPerYear 返回一年的 bar 数：A 股按 244 个交易日 × 每个交易日的根数（日线 244、5m 244×48），其余按自然时间。
 func periodsPerYear(calendar, bar string, duration time.Duration) float64 {
-	if perDay := input.TradingDayBars(calendar, bar); perDay > 0 {
-		return float64(input.StockTradingDaysPerYear * perDay)
+	if perDay := period.TradingDayBars(calendar, bar); perDay > 0 {
+		return float64(period.StockTradingDaysPerYear * perDay)
 	}
 	if duration <= 0 {
 		return 0

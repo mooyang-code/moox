@@ -11,6 +11,9 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // metadataStub 返回预设的数据集、一页列（含一列停用的）、标的绑定与标签。
@@ -95,7 +98,7 @@ func (s *coverageStub) QueryTimeSeriesRows(_ context.Context, req *storagepb.Que
 func TestViewCoverageProbesDataViewOnDemand(t *testing.T) {
 	metadata := &metadataStub{view: &storagepb.Dataset{DatasetId: "ds", Freq: "1h", Status: "active"}}
 	cached := &coverageStub{viewStateStub: viewStateStub{rsp: builtState("idx_a", "store", 1)}, cached: true}
-	client := &RPCClient{Metadata: metadata, DataView: cached}
+	client := &upstream.RPCClient{Metadata: metadata, DataView: cached}
 	info, err := client.GetView(context.Background(), "space", "ds")
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +143,7 @@ func TestSubjectSeriesTagAndTagErrors(t *testing.T) {
 		{SubjectId: "600000.SH", Status: "active", Attributes: map[string]string{"exchange": "SH"}},
 		{SubjectId: "BTC-USDT", Status: "active", Attributes: map[string]string{"series_tag": "venue:binance"}},
 	}}
-	subjects, err := (&RPCClient{Metadata: metadata}).ListDatasetSubjects(context.Background(), "space", "ds")
+	subjects, err := (&upstream.RPCClient{Metadata: metadata}).ListDatasetSubjects(context.Background(), "space", "ds")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +156,7 @@ func TestSubjectSeriesTagAndTagErrors(t *testing.T) {
 	}
 
 	metadata.tagCode = commonpb.ErrorCode_NOT_FOUND
-	if _, err := (&RPCClient{Metadata: metadata}).GetTag(context.Background(), "space", "missing"); !errors.Is(err, ErrTagNotFound) {
+	if _, err := (&upstream.RPCClient{Metadata: metadata}).GetTag(context.Background(), "space", "missing"); !errors.Is(err, upstream.ErrTagNotFound) {
 		t.Fatalf("标签不存在应返回 ErrTagNotFound：%v", err)
 	}
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "exclude_tags: [stablecoins]", "exclude_tags: [no_such_tag]", 1))
@@ -162,7 +165,7 @@ func TestSubjectSeriesTagAndTagErrors(t *testing.T) {
 	}
 	client := newFakeClient("spot")
 	client.tags["no_such_tag"] = nil
-	unreachable := &tagFailingClient{fakeClient: client, err: &TransportError{Operation: "读取标签 no_such_tag", Err: errors.New("dial tcp 10.0.0.1:443: i/o timeout")}}
+	unreachable := &tagFailingClient{fakeClient: client, err: &upstream.TransportError{Operation: "读取标签 no_such_tag", Err: errors.New("dial tcp 10.0.0.1:443: i/o timeout")}}
 	if _, _, err := Resolve(context.Background(), unreachable, "space", []string{"ftask_1h"}, strategy); err == nil || strings.Contains(err.Error(), "不存在") || !strings.Contains(err.Error(), "暂时不可用") {
 		t.Fatalf("读取标签的传输失败不应报成标签不存在：%v", err)
 	}
@@ -174,15 +177,15 @@ type tagFailingClient struct {
 	err error
 }
 
-func (c *tagFailingClient) GetTag(context.Context, string, string) (TagInfo, error) {
-	return TagInfo{}, c.err
+func (c *tagFailingClient) GetTag(context.Context, string, string) (upstream.TagInfo, error) {
+	return upstream.TagInfo{}, c.err
 }
 
 // 活跃序列可回溯的起点：索引最早时间可能来自已停更的序列（只会提前），以“最新一根往前 SeriesBars−1 根”为界。
 // min_age_bars 超过每序列保留根数、或覆盖范围未知时，启用时就拒绝。
 func TestCoverageStartAndAgeCoverage(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view"}}, Calendar: DefaultCalendar, Bar: "1h"}
-	view := ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view"}}, Calendar: period.DefaultCalendar, Bar: "1h"}
+	view := upstream.ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	if start := CoverageStartAt(view, resolved, time.Time{}); !start.Equal(barStart.Add(-99 * time.Hour)) {
 		t.Fatalf("活跃序列的覆盖起点应是最新一根往前 99 根：%s", start)
 	}
@@ -190,7 +193,7 @@ func TestCoverageStartAndAgeCoverage(t *testing.T) {
 	if start := CoverageStartAt(view, resolved, time.Time{}); !start.Equal(view.IndexedFrom) {
 		t.Fatalf("保留根数未知时以索引统计为准：%s", start)
 	}
-	if !CoverageStartAt(ViewInfo{}, resolved, time.Time{}).IsZero() {
+	if !CoverageStartAt(upstream.ViewInfo{}, resolved, time.Time{}).IsZero() {
 		t.Fatal("覆盖范围未知时应返回零值")
 	}
 	view.SeriesBars = 100
@@ -200,15 +203,15 @@ func TestCoverageStartAndAgeCoverage(t *testing.T) {
 	if err := checkAgeCoverage(view, resolved, 100, testNow); err != nil {
 		t.Fatalf("恰好等于保留根数应允许：%v", err)
 	}
-	if err := checkAgeCoverage(ViewInfo{}, resolved, 10, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
+	if err := checkAgeCoverage(upstream.ViewInfo{}, resolved, 10, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
 		t.Fatalf("覆盖范围未知时应拒绝启用：%v", err)
 	}
 }
 
 // 回放终点截到最新一根之前（最新一根可能还没写完）；起点以活跃序列的覆盖起点为准，不被停更序列的旧行放宽。
 func TestReplayWindowUsesActiveCoverage(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view"}}, Calendar: DefaultCalendar, Bar: "1h"}
-	view := ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view"}}, Calendar: period.DefaultCalendar, Bar: "1h"}
+	view := upstream.ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	end, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart.Add(10*time.Hour), testNow)
 	if err != nil || !end.Equal(barStart) {
 		t.Fatalf("终点应截到最新一根的 bar_start：%s err=%v", end, err)
@@ -216,7 +219,7 @@ func TestReplayWindowUsesActiveCoverage(t *testing.T) {
 	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-500*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "可用起点为 "+barStart.Add(-99*time.Hour).Format(time.RFC3339)) {
 		t.Fatalf("起点早于活跃序列的覆盖起点应给出可用起点：%v", err)
 	}
-	if _, err := ReplayWindow(resolved, nil, ViewInfo{}, barStart.Add(-5*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
+	if _, err := ReplayWindow(resolved, nil, upstream.ViewInfo{}, barStart.Add(-5*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
 		t.Fatalf("覆盖范围未知时应拒绝回放：%v", err)
 	}
 }
@@ -224,13 +227,13 @@ func TestReplayWindowUsesActiveCoverage(t *testing.T) {
 // A 股日历只解析一次，交易日序号用二分查找；回溯过远（溢出）报错而不是得到一个错误的时间。
 func TestStockCalendarCachedAndOverflowChecked(t *testing.T) {
 	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	first, err := FromStorageStart("cn_stock", "1d", day)
+	first, err := period.FromStorageStart("cn_stock", "1d", day)
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := time.Now()
 	for i := 0; i < 2000; i++ {
-		again, err := FromStorageStart("cn_stock", "1d", day)
+		again, err := period.FromStorageStart("cn_stock", "1d", day)
 		if err != nil || again.BarIndex != first.BarIndex {
 			t.Fatalf("同一交易日的序号应稳定：%d / %d err=%v", again.BarIndex, first.BarIndex, err)
 		}
@@ -238,14 +241,14 @@ func TestStockCalendarCachedAndOverflowChecked(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("日历应只加载一次：2000 次换算耗时 %s", elapsed)
 	}
-	next, err := FromBarEnd("cn_stock", "1d", first.NextEnd)
+	next, err := period.FromBarEnd("cn_stock", "1d", first.NextEnd)
 	if err != nil || next.BarIndex != first.BarIndex+1 {
 		t.Fatalf("下一个交易日的序号应加 1：%d / %d err=%v", next.BarIndex, first.BarIndex, err)
 	}
-	if _, err := HistoryStart(DefaultCalendar, "1d", barStart, 200000); err == nil {
+	if _, err := period.HistoryStart(period.DefaultCalendar, "1d", barStart, 200000); err == nil {
 		t.Fatal("回溯 20 万根日线超出时间范围，应报错")
 	}
-	if _, err := AdvanceBarEnd(DefaultCalendar, "1d", barStart, -200000); err == nil {
+	if _, err := period.AdvanceBarEnd(period.DefaultCalendar, "1d", barStart, -200000); err == nil {
 		t.Fatal("推进 20 万根日线超出时间范围，应报错")
 	}
 }
@@ -283,17 +286,17 @@ type countingClient struct {
 	views, subjects, members int
 }
 
-func (c *countingClient) GetView(ctx context.Context, spaceID, datasetID string) (ViewInfo, error) {
+func (c *countingClient) GetView(ctx context.Context, spaceID, datasetID string) (upstream.ViewInfo, error) {
 	c.views++
 	return c.fakeClient.GetView(ctx, spaceID, datasetID)
 }
 
-func (c *countingClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]Subject, error) {
+func (c *countingClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]upstream.Subject, error) {
 	c.subjects++
 	return c.fakeClient.ListDatasetSubjects(ctx, spaceID, datasetID)
 }
 
-func (c *countingClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]TagMember, error) {
+func (c *countingClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]upstream.TagMember, error) {
 	c.members++
 	return c.fakeClient.ListTagMembers(ctx, spaceID, tagID)
 }
@@ -305,14 +308,14 @@ func TestRangeLoaderRetriesTransportErrors(t *testing.T) {
 	defer func() { rangeRetryBackoff = previous }()
 	client := newFakeClient("spot")
 	failures := 2
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		if failures > 0 {
 			failures--
-			return nil, 0, &TransportError{Operation: "读取 View dataset_factor_1h 的行", Err: errors.New("connection reset")}
+			return nil, 0, &upstream.TransportError{Operation: "读取 View dataset_factor_1h 的行", Err: errors.New("connection reset")}
 		}
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10}}), 3, nil
 	}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: client.views["dataset_factor_1h"], Subjects: []Subject{subject("ETH-USDT", true)}, Columns: []string{"close"}}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: client.views["dataset_factor_1h"], Subjects: []upstream.Subject{subject("ETH-USDT", true)}, Columns: []string{"close"}}
 	rows, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
 	if err != nil || len(rows.Bars) != 1 || len(client.queries) != 3 {
 		t.Fatalf("两次传输失败后应重读成功：bars=%d queries=%d err=%v", len(rows.Bars), len(client.queries), err)

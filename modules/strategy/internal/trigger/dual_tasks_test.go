@@ -18,6 +18,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 本文件是现货、永续各一个任务的输入层场景测试：同样的行放进两个模拟 View，走就绪判断 → 汇合合并（checkReady）→ 输入装配（LoadBar）
@@ -32,19 +34,19 @@ var ucBar = time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
 
 // ucStorage 是内存里的 Storage 与 Factor 替身。
 type ucStorage struct {
-	views     map[string]input.ViewInfo
-	datasets  map[string]input.DatasetInfo
-	subjects  map[string][]input.Subject
+	views     map[string]upstream.ViewInfo
+	datasets  map[string]upstream.DatasetInfo
+	subjects  map[string][]upstream.Subject
 	tags      map[string][]string
 	tagMarket map[string]string
-	rows      func(query input.Query) []input.Row
-	queries   []input.Query
+	rows      func(query upstream.Query) []upstream.Row
+	queries   []upstream.Query
 }
 
-func (s *ucStorage) GetView(_ context.Context, _, datasetID string) (input.ViewInfo, error) {
+func (s *ucStorage) GetView(_ context.Context, _, datasetID string) (upstream.ViewInfo, error) {
 	view, ok := s.views[datasetID]
 	if !ok {
-		return input.ViewInfo{}, fmt.Errorf("View %s 不存在", datasetID)
+		return upstream.ViewInfo{}, fmt.Errorf("View %s 不存在", datasetID)
 	}
 	return view, nil
 }
@@ -54,41 +56,41 @@ func (s *ucStorage) ViewGeneration(ctx context.Context, spaceID, datasetID strin
 	return view.Generation, err
 }
 
-func (s *ucStorage) ViewCoverage(context.Context, string, input.ViewInfo, bool) (input.Coverage, error) {
-	return input.Coverage{IndexedFrom: ucBar.Add(-500 * time.Hour), IndexedTo: ucBar, SeriesBars: 1000}, nil
+func (s *ucStorage) ViewCoverage(context.Context, string, upstream.ViewInfo, bool) (upstream.Coverage, error) {
+	return upstream.Coverage{IndexedFrom: ucBar.Add(-500 * time.Hour), IndexedTo: ucBar, SeriesBars: 1000}, nil
 }
 
-func (s *ucStorage) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
+func (s *ucStorage) GetDataset(_ context.Context, _, datasetID string) (upstream.DatasetInfo, error) {
 	dataset, ok := s.datasets[datasetID]
 	if !ok {
-		return input.DatasetInfo{}, fmt.Errorf("数据集 %s 不存在", datasetID)
+		return upstream.DatasetInfo{}, fmt.Errorf("数据集 %s 不存在", datasetID)
 	}
 	return dataset, nil
 }
 
-func (s *ucStorage) ListDatasetSubjects(_ context.Context, _, datasetID string) ([]input.Subject, error) {
-	return append([]input.Subject(nil), s.subjects[datasetID]...), nil
+func (s *ucStorage) ListDatasetSubjects(_ context.Context, _, datasetID string) ([]upstream.Subject, error) {
+	return append([]upstream.Subject(nil), s.subjects[datasetID]...), nil
 }
 
-func (s *ucStorage) ListTagMembers(_ context.Context, _, tagID string) ([]input.TagMember, error) {
-	members := make([]input.TagMember, 0, len(s.tags[tagID]))
+func (s *ucStorage) ListTagMembers(_ context.Context, _, tagID string) ([]upstream.TagMember, error) {
+	members := make([]upstream.TagMember, 0, len(s.tags[tagID]))
 	for _, id := range s.tags[tagID] {
-		members = append(members, input.TagMember{SubjectID: id})
+		members = append(members, upstream.TagMember{SubjectID: id})
 	}
 	return members, nil
 }
 
-func (s *ucStorage) GetTag(_ context.Context, _, tagID string) (input.TagInfo, error) {
-	return input.TagInfo{MarketType: s.tagMarket[tagID]}, nil
+func (s *ucStorage) GetTag(_ context.Context, _, tagID string) (upstream.TagInfo, error) {
+	return upstream.TagInfo{MarketType: s.tagMarket[tagID]}, nil
 }
 
-func (s *ucStorage) QueryRows(_ context.Context, _ string, query input.Query) ([]input.Row, uint64, error) {
+func (s *ucStorage) QueryRows(_ context.Context, _ string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	s.queries = append(s.queries, query)
 	wanted := map[string]string{}
 	for _, subject := range query.Subjects {
 		wanted[subject.SubjectID] = subject.SeriesTag
 	}
-	var out []input.Row
+	var out []upstream.Row
 	for _, row := range s.rows(query) {
 		tag, ok := wanted[row.SubjectID]
 		if !ok || (tag != "" && tag != row.SeriesTag) {
@@ -99,8 +101,8 @@ func (s *ucStorage) QueryRows(_ context.Context, _ string, query input.Query) ([
 	return out, 1, nil
 }
 
-func (s *ucStorage) GetFactor(_ context.Context, factorID string) (input.FactorInfo, error) {
-	return input.FactorInfo{FactorID: factorID, DefinitionHash: "h1"}, nil
+func (s *ucStorage) GetFactor(_ context.Context, factorID string) (upstream.FactorInfo, error) {
+	return upstream.FactorInfo{FactorID: factorID, DefinitionHash: "h1"}, nil
 }
 
 // ucWorld 描述一期里两个市场的全部情况，用它生成夹具。
@@ -125,36 +127,36 @@ func (w ucWorld) tagOf(market string) string {
 	return ucSpotTag
 }
 
-func (w ucWorld) rowsFor(query input.Query, markets ...string) []input.Row {
-	var out []input.Row
+func (w ucWorld) rowsFor(query upstream.Query, markets ...string) []upstream.Row {
+	var out []upstream.Row
 	probe := len(query.Columns) == 1 && query.Columns[0] == "close"
 	for _, market := range markets {
 		if probe {
 			for _, id := range w.history[market] {
-				out = append(out, input.Row{SubjectID: id, SeriesTag: w.tagOf(market), DataTime: query.Start, Values: map[string]float64{"close": 1}})
+				out = append(out, upstream.Row{SubjectID: id, SeriesTag: w.tagOf(market), DataTime: query.Start, Values: map[string]float64{"close": 1}})
 			}
 			continue
 		}
 		for id, value := range w.rows[market] {
-			out = append(out, input.Row{SubjectID: id, SeriesTag: w.tagOf(market), DataTime: ucBar, Values: map[string]float64{"m": value, "close": 1}})
+			out = append(out, upstream.Row{SubjectID: id, SeriesTag: w.tagOf(market), DataTime: ucBar, Values: map[string]float64{"m": value, "close": 1}})
 		}
 	}
 	return out
 }
 
-func ucColumns() []input.ViewColumn {
-	m := input.ViewColumn{Name: "m", Attributes: map[string]string{"column_kind": "output", "member_key": "f", "factor_id": "f", "member_kind": "fixed", "output_name": "m"}}
-	return []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, m}
+func ucColumns() []upstream.ViewColumn {
+	m := upstream.ViewColumn{Name: "m", Attributes: map[string]string{"column_kind": "output", "member_key": "f", "factor_id": "f", "member_kind": "fixed", "output_name": "m"}}
+	return []upstream.ViewColumn{{Name: "close", Attributes: map[string]string{}}, m}
 }
 
 // ucSubjects 把标的列表变成数据集绑定：inactive 里的标的已停用。
-func ucSubjects(tag string, active, inactive []string) []input.Subject {
-	var out []input.Subject
+func ucSubjects(tag string, active, inactive []string) []upstream.Subject {
+	var out []upstream.Subject
 	for _, id := range active {
-		out = append(out, input.Subject{SubjectID: id, SeriesTag: tag, Active: true})
+		out = append(out, upstream.Subject{SubjectID: id, SeriesTag: tag, Active: true})
 	}
 	for _, id := range inactive {
-		out = append(out, input.Subject{SubjectID: id, SeriesTag: tag, Active: false})
+		out = append(out, upstream.Subject{SubjectID: id, SeriesTag: tag, Active: false})
 	}
 	return out
 }
@@ -197,18 +199,18 @@ func ucEvent(datasetID string, universe []string, state *factorpb.FactorPeriodSt
 func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*storagepb.ViewDataReady) {
 	t.Helper()
 	mode := parseMode(t, w.dsl)
-	client := &ucStorage{views: map[string]input.ViewInfo{}, datasets: map[string]input.DatasetInfo{}, subjects: map[string][]input.Subject{}, tags: map[string][]string{},
+	client := &ucStorage{views: map[string]upstream.ViewInfo{}, datasets: map[string]upstream.DatasetInfo{}, subjects: map[string][]upstream.Subject{}, tags: map[string][]string{},
 		tagMarket: map[string]string{"binance_spot": "spot", "binance_swap": "swap"}}
 	addView := func(task, dataset, source string, tagIDs []string) {
 		suffix := strings.TrimPrefix(task, "ftask_")
 		view := "dataset_factor_" + suffix
-		client.views[view] = input.ViewInfo{DatasetID: view, Frequency: "1h", Status: "active", ActiveIndexID: "idx", Columns: ucColumns()}
-		client.datasets[dataset] = input.DatasetInfo{DatasetID: dataset, Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": source}, SubjectTags: tagIDs}
-		client.datasets[source] = input.DatasetInfo{DatasetID: source, Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: tagIDs}
+		client.views[view] = upstream.ViewInfo{DatasetID: view, Frequency: "1h", Status: "active", ActiveIndexID: "idx", Columns: ucColumns()}
+		client.datasets[dataset] = upstream.DatasetInfo{DatasetID: dataset, Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": source}, SubjectTags: tagIDs}
+		client.datasets[source] = upstream.DatasetInfo{DatasetID: source, Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: tagIDs}
 	}
 	events := map[string]*storagepb.ViewDataReady{}
 	var tasks []string
-	client.rows = func(query input.Query) []input.Row {
+	client.rows = func(query upstream.Query) []upstream.Row {
 		var markets []string
 		switch query.DatasetID {
 		case "dataset_factor_sp":
@@ -278,14 +280,14 @@ func (w ucWorld) run(t *testing.T) engine.Decision {
 	if err != nil {
 		t.Fatalf("解析绑定失败：%v", err)
 	}
-	p := &period{runtime: &runtime{resolved: resolved, program: program}, events: events, input: store.InputRecord{Views: map[string]store.ViewInput{}}}
+	p := &periodContext{runtime: &runtime{resolved: resolved, program: program}, events: events, input: store.InputRecord{Views: map[string]store.ViewInput{}}}
 	ready := (&Handler{}).checkReady(p, nil)
 	if ready.Reason != "" {
 		return engine.Decision{Status: engine.StatusSkipped, SkipReason: ready.Reason}
 	}
 	loaded, err := input.Loader{Client: client}.LoadBar(ctx, "space", resolved, program, input.Bar{BarStart: ucBar, EventUniverse: p.eventUniverses(), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: w.state.HeldMarkets()})
 	if err != nil {
-		var skip *input.SkipError
+		var skip *upstream.SkipError
 		if asSkip(err, &skip) {
 			return engine.Decision{Status: engine.StatusSkipped, SkipReason: skip.Reason, Summary: engine.Summary{Notes: []string{skip.Detail}}}
 		}
@@ -298,8 +300,8 @@ func (w ucWorld) run(t *testing.T) engine.Decision {
 	return decision
 }
 
-func asSkip(err error, target **input.SkipError) bool {
-	skip, ok := err.(*input.SkipError)
+func asSkip(err error, target **upstream.SkipError) bool {
+	skip, ok := err.(*upstream.SkipError)
 	if ok {
 		*target = skip
 	}
@@ -467,7 +469,7 @@ func TestDualTasksWhenSwapHistoryHasGap(t *testing.T) {
 	world.history = map[string][]string{"spot": {"A", "B", "C", "X"}}
 	world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: []string{"D", "X"}}}, Targets: map[string]string{"D|swap": "0.5", "X|swap": "0.5"}}
 	decision, _ := evaluateDual(t, world)
-	if decision.Status != engine.StatusSkipped || decision.SkipReason != input.SkipHistoryInsufficient {
+	if decision.Status != engine.StatusSkipped || decision.SkipReason != upstream.SkipHistoryInsufficient {
 		t.Fatalf("永续整段历史缺口应整期 history_insufficient：%+v", decision)
 	}
 }
@@ -518,7 +520,7 @@ func TestDualTasksWhenSelectionMarketWhollyFailed(t *testing.T) {
 	world.failed["spot"] = world.members["spot"]
 	world.rows["spot"] = map[string]float64{}
 	decision, _ := evaluateDual(t, world)
-	if decision.Status != engine.StatusSkipped || decision.SkipReason != input.SkipMarketFailed {
+	if decision.Status != engine.StatusSkipped || decision.SkipReason != upstream.SkipMarketFailed {
 		t.Fatalf("选币市场整体失败应整期按 market_failed 跳过：%+v", decision)
 	}
 }
@@ -666,7 +668,7 @@ func TestDualTasksSkipDetailListsEveryUnavailableMarket(t *testing.T) {
 	world.failed["swap"] = world.members["swap"]
 	world.rows["swap"] = map[string]float64{}
 	decision := world.run(t)
-	if decision.SkipReason != input.SkipMarketFailed {
+	if decision.SkipReason != upstream.SkipMarketFailed {
 		t.Fatalf("应整期 market_failed：%+v", decision)
 	}
 	detail := strings.Join(decision.Summary.Notes, "")
@@ -694,7 +696,7 @@ func TestDualTasksSkipsProbeForWhollyFailedMarket(t *testing.T) {
 			world.failed["swap"] = []string{"B"}
 			world.rows["swap"] = map[string]float64{"C": 6, "D": 7, "X": 8}
 			decision, _ := evaluateDual(t, world)
-			if decision.SkipReason != input.SkipHistoryInsufficient {
+			if decision.SkipReason != upstream.SkipHistoryInsufficient {
 				t.Fatalf("永续只是部分失败时仍要探针：%+v", decision)
 			}
 		})

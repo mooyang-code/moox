@@ -10,6 +10,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // runtime 是一个会话在内存中的可执行状态：固化的解析结果与编译好的程序。重启后由会话快照重建。
@@ -56,7 +59,7 @@ func (h *Handler) refreshWarm(ctx context.Context, rt *runtime) error {
 // runtimeFor 按会话加载或复用运行时。存储错误原样返回（可重试）；快照损坏或编译失败返回 *input.SkipError。
 func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*runtime, error) {
 	if instance.SessionID == nil || *instance.SessionID == "" {
-		return nil, &input.SkipError{Reason: input.SkipConfigError, Detail: "启用实例没有会话"}
+		return nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: "启用实例没有会话"}
 	}
 	sessionID := *instance.SessionID
 	if cached, ok := h.programs[sessionID]; ok {
@@ -73,26 +76,26 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 	resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
 	if err != nil {
 		// 会话快照损坏：没有日历与周期，算不出这一期的 bar_end，调用方只记日志与计数、不写跳过记录。
-		return &runtime{sessionID: sessionID}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+		return &runtime{sessionID: sessionID}, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: err.Error()}
 	}
 	// 编译失败时仍用快照里的日历与周期记录跳过：零值会让周期按 crypto 日历换算，写错 bar_end 与有效期。
 	compiled, program, err := input.Compile(resolved, version.DSLYaml)
 	if err != nil {
-		return &runtime{sessionID: sessionID, resolved: resolved}, &input.SkipError{Reason: input.SkipConfigError, Detail: fmt.Sprintf("按会话快照重新编译 DSL 失败：%v", err)}
+		return &runtime{sessionID: sessionID, resolved: resolved}, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: fmt.Sprintf("按会话快照重新编译 DSL 失败：%v", err)}
 	}
 	loaded := &runtime{sessionID: sessionID, sessionStartedAt: session.StartedAt, resolved: compiled, program: program}
 	if session.MembersJSON != "" {
 		members, programs, err := input.ParseMembers(session.MembersJSON)
 		if err != nil {
-			return &runtime{sessionID: sessionID, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+			return &runtime{sessionID: sessionID, resolved: compiled}, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: err.Error()}
 		}
-		clock, err := input.PoolClock(compiled.Calendar, compiled.Bar, *program.Strategy.Pool)
+		clock, err := period.PoolClock(compiled.Calendar, compiled.Bar, *program.Strategy.Pool)
 		if err != nil {
-			return &runtime{sessionID: sessionID, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+			return &runtime{sessionID: sessionID, resolved: compiled}, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: err.Error()}
 		}
 		config, err := pool.NewConfig(program.Strategy, compiled.Market, input.MemberStrategies(members, programs), clock)
 		if err != nil {
-			return &runtime{sessionID: sessionID, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+			return &runtime{sessionID: sessionID, resolved: compiled}, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: err.Error()}
 		}
 		config.Degrading = func(reason string) bool { return degradingReasons[reason] }
 		loaded.pool = &poolRuntime{config: config, members: members, programs: programs}

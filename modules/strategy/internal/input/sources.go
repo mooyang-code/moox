@@ -11,6 +11,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/packages/factorname"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 本文件是附加列来源（S7）与参考市场（S3）的绑定：
@@ -43,12 +46,12 @@ func (s SourceBinding) ReadinessBinding() readiness.Binding {
 }
 
 // Period 返回主帧收盘于 barEnd 的这一根应读的来源 bar（收盘时刻不晚于 barEnd 的最新一根），以及两者收盘时刻是否相同（汇合 bar）。
-func (s SourceBinding) Period(barEnd time.Time) (PeriodBoundaries, bool, error) {
-	period, err := ClosedPeriod(s.Calendar, s.Bar, barEnd)
+func (s SourceBinding) Period(barEnd time.Time) (period.PeriodBoundaries, bool, error) {
+	boundary, err := period.ClosedPeriod(s.Calendar, s.Bar, barEnd)
 	if err != nil {
-		return PeriodBoundaries{}, false, err
+		return period.PeriodBoundaries{}, false, err
 	}
-	return period, period.BarEnd.Equal(barEnd), nil
+	return boundary, boundary.BarEnd.Equal(barEnd), nil
 }
 
 // HasSources 报告实例绑定了附加来源。
@@ -214,7 +217,7 @@ func slicesContains(values []string, value string) bool {
 }
 
 // ResolveTasks 按实例登记的任务（任务键 → 任务）解析绑定并编译策略：主帧按 Resolve 的规则，另外解析附加来源与参考市场。
-func ResolveTasks(ctx context.Context, client Client, spaceID string, tasks map[string]string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
+func ResolveTasks(ctx context.Context, client upstream.Client, spaceID string, tasks map[string]string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if client == nil {
 		return Resolved{}, nil, errors.New("Storage 客户端未配置")
 	}
@@ -240,7 +243,7 @@ func ResolveTasks(ctx context.Context, client Client, spaceID string, tasks map[
 }
 
 // bindReferences 解析参考市场：每个参考任务的市场必须就是登记的市场，周期、日历与主帧相同。
-func bindReferences(ctx context.Context, client Client, spaceID string, resolved *Resolved, references map[string]string) ([]resolvedView, error) {
+func bindReferences(ctx context.Context, client upstream.Client, spaceID string, resolved *Resolved, references map[string]string) ([]resolvedView, error) {
 	if len(references) == 0 {
 		return nil, nil
 	}
@@ -266,20 +269,20 @@ func bindReferences(ctx context.Context, client Client, spaceID string, resolved
 // checkSourceBar 校验来源周期与主帧的关系：日历相同；加密（定长周期）要求来源周期是主帧的整数倍且更长，收盘时刻才能对齐；
 // 股票市场（A 股、港股等）的来源只能是日线，且主帧必须是日内周期。
 func checkSourceBar(name, calendar, mainBar, sourceBar string) error {
-	if err := CheckCalendar(calendar, sourceBar); err != nil {
+	if err := period.CheckCalendar(calendar, sourceBar); err != nil {
 		return fmt.Errorf("来源 %s 的周期 %s 在日历 %s 上不受支持：%w", name, sourceBar, calendar, err)
 	}
-	if market := loadedSessionMarket(calendar); market != nil {
+	if period.SessionCalendar(calendar) {
 		if sourceBar != "1d" || mainBar == "1d" {
-			return fmt.Errorf("%s的附加来源只能是 1d，且主帧必须是日内周期：来源 %s 是 %s，主帧是 %s", market.name(), name, sourceBar, mainBar)
+			return fmt.Errorf("%s的附加来源只能是 1d，且主帧必须是日内周期：来源 %s 是 %s，主帧是 %s", period.MarketName(calendar), name, sourceBar, mainBar)
 		}
 		return nil
 	}
-	main, err := parseBarDuration(mainBar)
+	main, err := period.ParseBarDuration(mainBar)
 	if err != nil {
 		return err
 	}
-	source, err := parseBarDuration(sourceBar)
+	source, err := period.ParseBarDuration(sourceBar)
 	if err != nil {
 		return err
 	}
@@ -291,7 +294,7 @@ func checkSourceBar(name, calendar, mainBar, sourceBar string) error {
 
 // bindSources 解析附加来源：每个来源在主帧的每个任务键上各绑定一个任务（市场一致），周期与日历符合 checkSourceBar，
 // DSL 引用的来源列都存在、来源 View 没有可变成员（factor_params 只作用于主帧的任务），各市场里同名列的来源一致。
-func bindSources(ctx context.Context, client Client, spaceID string, resolved *Resolved, strategy dsl.Strategy, sources map[string]map[string]string, referenced []string) error {
+func bindSources(ctx context.Context, client upstream.Client, spaceID string, resolved *Resolved, strategy dsl.Strategy, sources map[string]map[string]string, referenced []string) error {
 	if len(strategy.Sources) == 0 {
 		return nil
 	}

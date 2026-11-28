@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 func undeclaredMember(t *testing.T, id string) PoolMemberDef {
@@ -40,7 +42,7 @@ func TestResolvePoolChecksFundingColumn(t *testing.T) {
 		t.Fatalf("永续 View 没有资金费列应拒绝：%v", err)
 	}
 	swap := client.views["dataset_factor_swap1h"]
-	swap.Columns = append(append([]ViewColumn(nil), swap.Columns...), plainColumn("funding_rate"))
+	swap.Columns = append(append([]upstream.ViewColumn(nil), swap.Columns...), plainColumn("funding_rate"))
 	client.views["dataset_factor_swap1h"] = swap
 	if _, err := ResolvePool(context.Background(), client, "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, funded), members); err != nil {
 		t.Fatalf("永续 View 有资金费列（现货 View 没有）时可以启用：%v", err)

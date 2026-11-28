@@ -59,7 +59,7 @@ func goldenDump(t *testing.T, scenario goldenScenario) map[string]any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if done.Status != "done" {
+	if done.Status != "succeeded" {
 		t.Fatalf("场景 %s 应完成：%+v", scenario.name, done)
 	}
 	var metrics any

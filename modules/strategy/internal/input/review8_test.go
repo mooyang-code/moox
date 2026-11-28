@@ -11,6 +11,8 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 写入冲突的退避期间回放被取消：醒来后先确认取消，不再读一次 Storage。
@@ -21,7 +23,7 @@ func TestRangeLoaderChecksAbortAfterWait(t *testing.T) {
 	aborted := errors.New("回放已取消")
 	checks := 0
 	client := &staleClient{fakeClient: newFakeClient("spot"), generation: "idx_a@b1"}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Abort: func(context.Context) error {
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: upstream.ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Abort: func(context.Context) error {
 		// 第一次确认在等待之前（还没取消），之后的确认都看到已取消。
 		checks++
 		if checks > 1 {
@@ -41,21 +43,21 @@ type generationProbeClient struct {
 	views    int
 }
 
-func (c *generationProbeClient) QueryRows(context.Context, string, Query) ([]Row, uint64, error) {
-	return []Row{{SubjectID: "BTC-USDT", DataTime: barStart, Values: map[string]float64{"close": 1}}}, 1, nil
+func (c *generationProbeClient) QueryRows(context.Context, string, upstream.Query) ([]upstream.Row, uint64, error) {
+	return []upstream.Row{{SubjectID: "BTC-USDT", DataTime: barStart, Values: map[string]float64{"close": 1}}}, 1, nil
 }
 
 func (c *generationProbeClient) ViewGeneration(context.Context, string, string) (string, error) {
 	return "idx_b@b2", nil
 }
 
-func (c *generationProbeClient) GetView(_ context.Context, _, datasetID string) (ViewInfo, error) {
+func (c *generationProbeClient) GetView(_ context.Context, _, datasetID string) (upstream.ViewInfo, error) {
 	c.views++
 	if c.viewErrs > 0 {
 		c.viewErrs--
-		return ViewInfo{}, transport("读取 View dataset_factor_1h", errors.New("connection refused"))
+		return upstream.ViewInfo{}, &upstream.TransportError{Operation: "读取 View dataset_factor_1h", Err: errors.New("connection refused")}
 	}
-	return ViewInfo{DatasetID: datasetID, ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, nil
+	return upstream.ViewInfo{DatasetID: datasetID, ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, nil
 }
 
 // 发现换代后读取完整 View 的传输失败按分段读取的退避重试；完整读到的仍是同一代时不算换代（不消耗换代名额）。
@@ -64,7 +66,7 @@ func TestGenerationChangeReadRetriesAndConfirms(t *testing.T) {
 	rangeRetryBackoff = time.Millisecond
 	t.Cleanup(func() { rangeRetryBackoff = backoff })
 	client := &generationProbeClient{fakeClient: newFakeClient("spot"), viewErrs: 2}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: upstream.ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []upstream.Subject{subject("BTC-USDT", true)}}
 	rows, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
 	if err != nil || len(rows.Bars[barStart.Unix()]) != 1 || client.views != 3 {
 		t.Fatalf("应重试读取 View 并确认没有换代：rows=%v views=%d err=%v", rows.Bars, client.views, err)
@@ -77,25 +79,17 @@ func TestStockEnableChecksRowKeyWithoutMinAge(t *testing.T) {
 	now := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	client := newFakeClient("spot")
-	client.views["view_stock"] = ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: shanghaiMidnight(t, 2026, 10, 9), SeriesBars: 500}
+	client.views["view_stock"] = upstream.ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: shanghaiMidnight(t, 2026, 10, 9), SeriesBars: 500}
 	if err := CheckCoverage(context.Background(), client, "space", resolved, now); err == nil || !strings.Contains(err.Error(), "不是 UTC 零点") || !strings.Contains(err.Error(), "不能启用实例") {
 		t.Fatalf("按上海零点写行的 A 股数据集应拒绝启用：%v", err)
 	}
-	client.views["view_stock"] = ViewInfo{DatasetID: "view_stock", IndexedFrom: shanghaiMidnight(t, 2026, 1, 5), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 500}
+	client.views["view_stock"] = upstream.ViewInfo{DatasetID: "view_stock", IndexedFrom: shanghaiMidnight(t, 2026, 1, 5), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 500}
 	if err := CheckCoverage(context.Background(), client, "space", resolved, now); err != nil {
 		t.Fatalf("最早一行的遗留数据不应阻止启用：%v", err)
 	}
-	client.views["view_stock"] = ViewInfo{DatasetID: "view_stock", SeriesBars: 500}
+	client.views["view_stock"] = upstream.ViewInfo{DatasetID: "view_stock", SeriesBars: 500}
 	if err := CheckCoverage(context.Background(), client, "space", resolved, now); err != nil {
 		t.Fatalf("还没有数据时应允许启用：%v", err)
-	}
-}
-
-// A 股超出内嵌日历的报错按上海时间书写，与其余 A 股报错一致。
-func TestBeyondCalendarErrorUsesShanghaiTime(t *testing.T) {
-	err := beyondCalendarError("cn_stock", time.Date(2026, 12, 31, 1, 0, 0, 0, time.UTC))
-	if !strings.Contains(err.Error(), "2026-12-31 09:00:00 上海时间 之后的周期") || strings.Contains(err.Error(), "T01:00:00Z") {
-		t.Fatalf("应按上海时间书写：%v", err)
 	}
 }
 
@@ -120,8 +114,8 @@ func TestCheckGenerationRetriesWhileStorageViewRestores(t *testing.T) {
 	t.Cleanup(func() { rangeRetryBackoff = backoff })
 	notFound := &storagepb.GetViewStateRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_FOUND}}
 	state := &sequenceViewState{rsps: []*storagepb.GetViewStateRsp{notFound, notFound, builtState("idx_a", "store_1", 7)}}
-	rpc := &RPCClient{DataView: state}
-	loader := &RangeLoader{Client: rpc, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@store_1#7"}}
+	rpc := &upstream.RPCClient{DataView: state}
+	loader := &RangeLoader{Client: rpc, SpaceID: "space", View: upstream.ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@store_1#7"}}
 	if err := loader.checkGeneration(context.Background()); err != nil || state.calls != 3 {
 		t.Fatalf("恢复期间应重试并确认没有换代：calls=%d err=%v", state.calls, err)
 	}

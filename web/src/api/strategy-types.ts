@@ -38,6 +38,8 @@ export interface Strategy {
 export interface StrategyInstance {
   instance_id: string;
   strategy_id: string;
+  /** 关联策略定义的名称（由服务端关联带出）。 */
+  strategy_name?: string;
   space_id: string;
   factor_tasks: Record<string, string>;
   logical_account_id: string;
@@ -121,6 +123,12 @@ export interface StrategyTaskRequirement {
   problems: string[];
   /** 参考市场（market.reference）：也在 taskKeys 里，只用于年龄判定，不是主帧市场 */
   referenceMarkets: string[];
+  /** 策略声明了 factor_params（动态调参） */
+  tuned?: boolean;
+  /** 策略池的分配方式：fixed | rotation | drift，非池为空 */
+  poolAllocationMethod?: string;
+  /** 策略池为 drift 时的 allocation.start 或 allocation.initial.at，其余为空 */
+  poolDriftStart?: string;
 }
 
 export interface ValidateStrategyResult {
@@ -155,7 +163,7 @@ export interface Replay {
   slippage_bps: number;
   /** 永续持仓结算资金费用的列（本根累计的资金费率）；空串表示不计。 */
   funding_column: string;
-  status: "pending" | "running" | "done" | "failed" | "cancelled" | string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | string;
   progress_time: string;
   metrics_json: string;
   error: string;

@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // counterByLabel 汇总某个指标族里带 result=<value> 标签的计数之和。
@@ -120,7 +121,7 @@ func TestObserverDoesNotTreatMarketFailedAsAccumulating(t *testing.T) {
 	require.NoError(t, err)
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	observer.now = func() time.Time { return now }
-	observer.ObservePeriod(context.Background(), instance, "1h", now.Add(-time.Hour), now, store.StatusSkipped, input.SkipMarketFailed)
+	observer.ObservePeriod(context.Background(), instance, "1h", now.Add(-time.Hour), now, store.StatusSkipped, upstream.SkipMarketFailed)
 	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"))
 	require.Zero(t, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"), "不归入积累中")
 	require.Zero(t, counterByLabel(t, registry, "moox_strategy_runs_total", "error"), "数据类原因，不计模块失败")

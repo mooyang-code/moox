@@ -18,6 +18,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/replay"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // Status 是一个池实例的预热状态。
@@ -45,7 +48,7 @@ const (
 type Manager struct {
 	Store *store.Store
 	// Client 是回放用的客户端（按较大的页分页读取较长的区间）。
-	Client input.Client
+	Client upstream.Client
 	Now    func() time.Time
 	Logf   func(format string, args ...any)
 	// Grace 是预热终点的宽限：最新一根刚收盘时因子结果还在路上，不把它算进预热终点；零值取一分钟。
@@ -218,7 +221,7 @@ func (m *Manager) finish(instanceID string, entry *job) {
 
 // fail 把预热任务标为失败并把实例标记为 degraded：失败原因留在实例上，需要人工修复（补数据、改配置）后重新启用。
 func (m *Manager) fail(ctx context.Context, instanceID string, entry *job, err error) {
-	m.logf("实例 %s 的策略池预热失败，不再重试：%v；原始错误：%v", instanceID, err, input.RawCause(err))
+	m.logf("实例 %s 的策略池预热失败，不再重试：%v；原始错误：%v", instanceID, err, upstream.RawCause(err))
 	m.mu.Lock()
 	entry.status, entry.reason = StatusFailed, err.Error()
 	m.mu.Unlock()
@@ -242,11 +245,11 @@ func (m *Manager) recordFailure(ctx context.Context, instanceID, sessionID strin
 		return err
 	}
 	now := m.now()
-	boundary, err := input.ClosedPeriod(resolved.Calendar, resolved.Bar, now)
+	boundary, err := period.ClosedPeriod(resolved.Calendar, resolved.Bar, now)
 	if err != nil {
 		return err
 	}
-	validUntil, err := input.AdvanceBarEnd(resolved.Calendar, resolved.Bar, boundary.BarEnd, 2)
+	validUntil, err := period.AdvanceBarEnd(resolved.Calendar, resolved.Bar, boundary.BarEnd, 2)
 	if err != nil {
 		return err
 	}
@@ -273,8 +276,8 @@ func (m *Manager) recordFailure(ctx context.Context, instanceID, sessionID strin
 // permanent 报告错误是永久性的：重试不会成功，要人工修复。
 func permanent(err error) bool {
 	var early *input.EarlyStartError
-	var skip *input.SkipError
-	return errors.As(err, &early) || errors.As(err, &skip) || errors.Is(err, input.ErrViewNotFound) || errors.Is(err, errPermanent)
+	var skip *upstream.SkipError
+	return errors.As(err, &early) || errors.As(err, &skip) || errors.Is(err, upstream.ErrViewNotFound) || errors.Is(err, errPermanent)
 }
 
 var errPermanent = errors.New("预热的配置无效")
@@ -317,7 +320,7 @@ func (m *Manager) warm(ctx context.Context, instanceID, sessionID string) (done 
 	if !strategy.IsPool() {
 		return false, fmt.Errorf("%w：会话的策略不是策略池", errPermanent)
 	}
-	clock, err := input.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
+	clock, err := period.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
 	if err != nil {
 		return false, fmt.Errorf("%w：%v", errPermanent, err)
 	}
@@ -403,7 +406,7 @@ func (m *Manager) continueWarm(ctx context.Context, instanceID, sessionID string
 	if err := json.Unmarshal(row.StateJSON, &state); err != nil {
 		return replay.PoolRunResult{}, warmFresh, fmt.Errorf("沿用的规则状态无法解析：%w", err)
 	}
-	reached, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, row.BarEndTime)
+	reached, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, row.BarEndTime)
 	if err != nil {
 		return replay.PoolRunResult{}, warmFresh, err
 	}
@@ -414,7 +417,7 @@ func (m *Manager) continueWarm(ctx context.Context, instanceID, sessionID string
 	if reached.NextEnd.IsZero() {
 		return carried, warmContinued, nil
 	}
-	next, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, reached.NextEnd)
+	next, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, reached.NextEnd)
 	if err != nil {
 		return replay.PoolRunResult{}, warmFresh, err
 	}
@@ -460,7 +463,7 @@ func WarmBars(resolved input.Resolved, pool dsl.Strategy, members []*dsl.Program
 	for _, program := range members {
 		strategies = append(strategies, program.Strategy)
 	}
-	return dsl.PoolWarmBars(pool, strategies, input.WarmClock(resolved.Calendar, resolved.Bar))
+	return dsl.PoolWarmBars(pool, strategies, period.WarmClock(resolved.Calendar, resolved.Bar))
 }
 
 // Window 返回预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期；起点是 drift 的

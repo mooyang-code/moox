@@ -26,22 +26,20 @@ CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_strategy_id TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT,
-    c_enabled INTEGER NOT NULL DEFAULT 0,
     c_confirmed_at DATETIME,
     c_session_id TEXT,
     c_health TEXT NOT NULL DEFAULT 'ok',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_enabled IN (0, 1)),
-    CHECK ((c_enabled = 1) = (c_session_id IS NOT NULL)),
-    CHECK (c_confirmed_at IS NULL OR c_enabled = 1),
+    CHECK (c_session_id IS NULL OR c_session_id <> ''),
+    CHECK (c_confirmed_at IS NULL OR c_session_id IS NOT NULL),
     CHECK (c_health IN ('ok', 'degraded')),
     FOREIGN KEY (c_strategy_id) REFERENCES t_strategy_defs (c_strategy_id)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account
 ON t_strategy_instances (c_space_id, c_logical_account_id)
-WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL;
+WHERE c_session_id IS NOT NULL AND c_logical_account_id IS NOT NULL;
 
 -- 实例登记的因子任务：每个市场（spot、swap、equity）一个。
 -- 一个任务可以被多个实例引用；只有声明了 factor_params 的实例启用时把主帧任务独占关联（关联记在 Factor 侧）。
@@ -202,7 +200,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('pending', 'running', 'done', 'failed', 'cancelled')),
+    CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
     CHECK (c_input IN ('view', 'compute')),
     CHECK (c_spot_fee_bps >= 0 AND c_spot_fee_bps <= 1000),
     CHECK (c_swap_fee_bps >= 0 AND c_swap_fee_bps <= 1000),

@@ -23,7 +23,7 @@ func definitionProto(value store.Definition) *strategypb.Strategy {
 
 func instanceProto(value store.Instance) *strategypb.StrategyInstance {
 	return &strategypb.StrategyInstance{
-		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, FactorTasks: value.FactorTasks,
+		InstanceId: value.InstanceID, StrategyId: value.StrategyID, StrategyName: value.StrategyName, SpaceId: value.SpaceID, FactorTasks: value.FactorTasks,
 		LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID),
 		ResolvedJson: string(value.ResolvedJSON), Health: value.Health, CreatedAt: millis(value.CreatedAt), UpdatedAt: millis(value.UpdatedAt),
 		ConfirmedAt: optionalMillis(value.ConfirmedAt),

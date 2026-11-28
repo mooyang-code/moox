@@ -21,7 +21,6 @@ import (
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -36,6 +35,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // strategyGatewayWire 同时充当本机网关的目录服务与同机的 Storage、Factor、Trade：策略直连它们的服务端口，
@@ -333,7 +334,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	require.Equal(t, "BTC", subjects[0].SubjectID)
 	_, err = reader.ListTagMembers(ctx, "crypto", "spot-tag")
 	require.NoError(t, err)
-	rows, revision, err := reader.QueryRows(ctx, "crypto", input.Query{DatasetID: "source", Frequency: "1m", Subjects: subjects, Start: time.Unix(60, 0), End: time.Unix(61, 0), Columns: []string{"close"}, ExpectedIndexID: "index-1"})
+	rows, revision, err := reader.QueryRows(ctx, "crypto", upstream.Query{DatasetID: "source", Frequency: "1m", Subjects: subjects, Start: time.Unix(60, 0), End: time.Unix(61, 0), Columns: []string{"close"}, ExpectedIndexID: "index-1"})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, uint64(7), revision)
@@ -343,7 +344,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	require.Equal(t, "sha256:fixture", factor.DefinitionHash)
 
 	// 回放“因子现算”经同一个网关客户端调因子引擎：超时按服务目录（OpenReplay 10 分钟、其余 2 分钟），不套 factor.timeout。
-	engineClient := input.NewEngineClient(gateway)
+	engineClient := upstream.NewEngineClient(gateway)
 	_, err = engineClient.OpenReplay(ctx, &factorpb.OpenReplayReq{ReplayId: "r1", TaskId: "ftask", From: "1970-01-01T01:00:00Z", To: "1970-01-01T02:00:00Z", Columns: []string{"close"}})
 	require.NoError(t, err)
 	_, err = engineClient.StepReplay(ctx, &factorpb.StepReplayReq{ReplayId: "r1", PeriodTime: 3600, Periods: 1})
@@ -388,7 +389,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	_, err = reader.GetFactor(ctx, "momentum")
 	require.Error(t, err)
 	// 没有网关客户端时调用返回配置错误而不是 panic。
-	_, err = input.NewGatewayClient(nil, 0, 0).GetFactor(ctx, "momentum")
+	_, err = upstream.NewGatewayClient(nil, 0, 0).GetFactor(ctx, "momentum")
 	require.Error(t, err)
-	require.ErrorContains(t, input.RawCause(err), "网关客户端未配置")
+	require.ErrorContains(t, upstream.RawCause(err), "网关客户端未配置")
 }

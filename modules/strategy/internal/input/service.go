@@ -8,13 +8,16 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // Service 把解析与装配封装成管理接口可用的形式。
 type Service struct {
-	Client Client
+	Client upstream.Client
 	// Sets 是 FactorMgr 的任务关联与读取接口；nil 时不能启用实例。
-	Sets FactorTasks
+	Sets upstream.FactorTasks
 	// ReadyWait 与 ReadyStep 是任务的结果 View 补齐成员列的最长等待与探测间隔（列由 Storage 异步扩展进 View）；
 	// 零值表示不等待。
 	ReadyWait time.Duration
@@ -84,7 +87,7 @@ func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string,
 		case <-time.After(s.ReadyStep):
 		}
 	}
-	keys := sortedMapKeys(tasks)
+	keys := sortedKeys(tasks)
 	for _, key := range keys {
 		task, err := s.Sets.GetFactorTask(ctx, tasks[key])
 		if err != nil {
@@ -219,7 +222,7 @@ func waitingForColumns(err error) bool {
 		return false
 	}
 	text := err.Error()
-	return errors.Is(err, ErrViewNotFound) || strings.Contains(text, "不存在于 View") || strings.Contains(text, "没有数据集或频率")
+	return errors.Is(err, upstream.ErrViewNotFound) || strings.Contains(text, "不存在于 View") || strings.Contains(text, "没有数据集或频率")
 }
 
 // Resolve 按登记的任务（任务键 → 任务）解析绑定并编译策略（不关联任务，只读；校验接口用）。
@@ -275,7 +278,7 @@ func (s Service) ComputeReplayWindow(ctx context.Context, spaceID string, resolv
 	if s.Client == nil {
 		return time.Time{}, nil, 0, errors.New("Storage 与 Factor 依赖未配置，不能回放")
 	}
-	closed, err := ClosedPeriod(resolved.Calendar, resolved.Bar, now)
+	closed, err := period.ClosedPeriod(resolved.Calendar, resolved.Bar, now)
 	if err != nil {
 		return time.Time{}, nil, 0, err
 	}
@@ -283,7 +286,7 @@ func (s Service) ComputeReplayWindow(ctx context.Context, spaceID string, resolv
 		end = closed.StorageStart
 	}
 	if !end.After(start) {
-		return time.Time{}, nil, 0, fmt.Errorf("%w：最近一根已收盘的 bar 是 %s，回放只到它之前", ErrNoCompleteBar, PeriodLabel(resolved.Calendar, resolved.Bar, closed.StorageStart))
+		return time.Time{}, nil, 0, fmt.Errorf("%w：最近一根已收盘的 bar 是 %s，回放只到它之前", ErrNoCompleteBar, period.PeriodLabel(resolved.Calendar, resolved.Bar, closed.StorageStart))
 	}
 	generations := make(map[string]string, len(resolved.Tasks))
 	for key, task := range resolved.AllTaskBindings() {
@@ -311,7 +314,7 @@ func (s Service) PoolReplayWindow(ctx context.Context, spaceID string, pooled Po
 	if s.Client == nil {
 		return time.Time{}, nil, errors.New("Storage 与 Factor 依赖未配置，不能回放")
 	}
-	views := make(map[string]ViewInfo, len(pooled.Resolved.Tasks))
+	views := make(map[string]upstream.ViewInfo, len(pooled.Resolved.Tasks))
 	generations := make(map[string]string, len(pooled.Resolved.Tasks))
 	for market, task := range pooled.Resolved.Tasks {
 		view, err := s.Client.GetView(ctx, spaceID, task.DatasetID)
@@ -352,12 +355,12 @@ func (s Service) LoadLatest(ctx context.Context, spaceID string, resolved Resolv
 	if s.Client == nil {
 		return Loaded{}, errors.New("Storage 与 Factor 依赖未配置，不能试算")
 	}
-	period, err := ClosedPeriod(resolved.Calendar, resolved.Bar, now)
+	boundary, err := period.ClosedPeriod(resolved.Calendar, resolved.Bar, now)
 	if err != nil {
 		return Loaded{}, err
 	}
 	loader := Loader{Client: s.Client}
-	barStart := period.StorageStart
+	barStart := boundary.StorageStart
 	var last Loaded
 	for attempt := 0; attempt < 3; attempt++ {
 		loaded, err := loader.LoadBar(ctx, spaceID, resolved, program, Bar{BarStart: barStart})
@@ -368,7 +371,7 @@ func (s Service) LoadLatest(ctx context.Context, spaceID string, resolved Resolv
 			return loaded, nil
 		}
 		last = loaded
-		barStart, err = PreviousStorageStart(resolved.Calendar, resolved.Bar, barStart)
+		barStart, err = period.PreviousStorageStart(resolved.Calendar, resolved.Bar, barStart)
 		if err != nil {
 			return Loaded{}, err
 		}

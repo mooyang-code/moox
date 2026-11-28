@@ -250,7 +250,7 @@ describe("strategy replay page", () => {
   });
 
   it("clears the previous replay while a new selection loads", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "succeeded")], page: { total: 2 } });
     let release!: (value: unknown) => void;
     api.getReplay.mockImplementation((id: string) =>
       id === "r1" ? Promise.resolve(replay("r1", "running")) : new Promise(resolve => (release = resolve))
@@ -265,14 +265,14 @@ describe("strategy replay page", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("正在加载回放详情");
     expect(wrapper.text()).not.toContain("取消回放");
-    release(replay("r2", "done"));
+    release(replay("r2", "succeeded"));
     await flushPromises();
     expect(wrapper.text()).not.toContain("正在加载回放详情");
     expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
   });
 
   it("按此配置重新发起：用回放详情里当时的配置填表单并打开发起抽屉，打开后表单不被重置", async () => {
-    const done = replay("r2", "done", "{}", { dsl_yaml: "name: old_version", spot_fee_bps: 7 });
+    const done = replay("r2", "succeeded", "{}", { dsl_yaml: "name: old_version", spot_fee_bps: 7 });
     api.listReplays.mockResolvedValue({ items: [done], page: { total: 1 } });
     api.getReplay.mockResolvedValue(done);
     const wrapper = mountPage();
@@ -289,7 +289,7 @@ describe("strategy replay page", () => {
 
   it("keeps polling the selected running replay across cycles when the list page has none", async () => {
     api.listReplays.mockResolvedValueOnce({ items: [replay("r1", "running")], page: { total: 30 } });
-    api.listReplays.mockResolvedValue({ items: [replay("r9", "done")], page: { total: 30 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r9", "succeeded")], page: { total: 30 } });
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     mountPage();
     await flushPromises();
@@ -303,17 +303,17 @@ describe("strategy replay page", () => {
   });
 
   it("waits for partial metrics only on the cancelled replay", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "succeeded")], page: { total: 2 } });
     api.getReplay.mockImplementation((id: string) =>
-      Promise.resolve(id === "r1" ? replay("r1", "running") : replay("r2", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'))
+      Promise.resolve(id === "r1" ? replay("r1", "running") : replay("r2", "succeeded", '{"bars":2,"ok_bars":2,"limitations":[]}'))
     );
     api.cancelReplay.mockResolvedValue({});
     const wrapper = mountPage();
     await flushPromises();
     api.getReplay.mockImplementation((id: string) =>
-      Promise.resolve(id === "r1" ? justCancelled("r1") : replay("r2", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'))
+      Promise.resolve(id === "r1" ? justCancelled("r1") : replay("r2", "succeeded", '{"bars":2,"ok_bars":2,"limitations":[]}'))
     );
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled"), replay("r2", "succeeded")], page: { total: 2 } });
     await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("正在等待写入截至取消时的部分指标");
@@ -323,7 +323,7 @@ describe("strategy replay page", () => {
     // 回到被取消的回放，指标写入后显示部分指标。
     api.getReplay.mockImplementation((id: string) =>
       Promise.resolve(
-        id === "r1" ? justCancelled("r1", '{"bars":3,"ok_bars":3,"total_return":0.01,"limitations":[]}') : replay("r2", "done")
+        id === "r1" ? justCancelled("r1", '{"bars":3,"ok_bars":3,"total_return":0.01,"limitations":[]}') : replay("r2", "succeeded")
       )
     );
     await wrapper.findAll("button.replay-row")[0].trigger("click");
@@ -332,8 +332,8 @@ describe("strategy replay page", () => {
   });
 
   it("does not wait when the cancelled replay has produced no bars", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "pending")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "pending"));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "queued")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "queued"));
     api.listReplayBars.mockResolvedValue(noBars);
     api.cancelReplay.mockResolvedValue({});
     const wrapper = mountPage();
@@ -386,7 +386,7 @@ describe("strategy replay page", () => {
     await vi.advanceTimersByTimeAsync(5000);
     api.listReplays.mockResolvedValueOnce({
       items: [
-        replay("r21", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_page2", dataset_id: "dataset_factor_a" } } })
+        replay("r21", "succeeded", "{}", { tasks: { spot: { factor_task_id: "ftask_page2", dataset_id: "dataset_factor_a" } } })
       ],
       page: { total: 30 }
     });
@@ -446,8 +446,8 @@ describe("strategy replay page", () => {
 
   it("starts a replay from an unsaved DSL draft", async () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
-    api.startReplay.mockResolvedValue({ replay: replay("r5", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
-    api.getReplay.mockResolvedValue(replay("r5", "pending"));
+    api.startReplay.mockResolvedValue({ replay: replay("r5", "queued"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    api.getReplay.mockResolvedValue(replay("r5", "queued"));
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -467,8 +467,8 @@ describe("strategy replay page", () => {
 
   it("starts a mixed-market replay with one task per market and both fees", async () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
-    api.startReplay.mockResolvedValue({ replay: replay("r6", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
-    api.getReplay.mockResolvedValue(replay("r6", "pending"));
+    api.startReplay.mockResolvedValue({ replay: replay("r6", "queued"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    api.getReplay.mockResolvedValue(replay("r6", "queued"));
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -494,8 +494,8 @@ describe("strategy replay page", () => {
 
   it("warns when the simulated account went bankrupt", async () => {
     const metrics = '{"bars":3,"ok_bars":3,"limitations":[],"bankrupt_at":"2026-09-01T07:00:00Z"}';
-    api.listReplays.mockResolvedValue({ items: [replay("r9", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r9", "done", metrics));
+    api.listReplays.mockResolvedValue({ items: [replay("r9", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r9", "succeeded", metrics));
     api.listReplayBars.mockResolvedValue({ items: [bar()], page: { total: 1 } });
     const wrapper = mountPage();
     await flushPromises();
@@ -504,8 +504,8 @@ describe("strategy replay page", () => {
 
   it("asks for one task per market when a saved definition uses both markets", async () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
-    api.startReplay.mockResolvedValue({ replay: replay("r8", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
-    api.getReplay.mockResolvedValue(replay("r8", "pending"));
+    api.startReplay.mockResolvedValue({ replay: replay("r8", "queued"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    api.getReplay.mockResolvedValue(replay("r8", "queued"));
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -542,7 +542,7 @@ describe("strategy replay page", () => {
   });
 
   it("shows the per-market values, the tasks, the fees and the no-funding-fee warning for a swap replay", async () => {
-    const mixed = replay("r7", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
+    const mixed = replay("r7", "succeeded", '{"bars":1,"ok_bars":1,"limitations":[]}', {
       tasks: {
         spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" },
         swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" }
@@ -574,7 +574,7 @@ describe("strategy replay page", () => {
   });
 
   it("因子现算的回放写明来源，每期明细显示生效的参数", async () => {
-    const computed = replay("r9", "done", '{"bars":2,"ok_bars":2,"limitations":[]}', { input: "compute" });
+    const computed = replay("r9", "succeeded", '{"bars":2,"ok_bars":2,"limitations":[]}', { input: "compute" });
     api.listReplays.mockResolvedValue({ items: [computed], page: { total: 1 } });
     api.getReplay.mockResolvedValue(computed);
     api.listReplayBars.mockResolvedValue({
@@ -597,7 +597,7 @@ describe("strategy replay page", () => {
   });
 
   it("names the funding column instead of the no-funding-fee warning when the replay charges funding", async () => {
-    const funded = replay("r8", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
+    const funded = replay("r8", "succeeded", '{"bars":1,"ok_bars":1,"limitations":[]}', {
       tasks: { swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" } },
       swap_fee_bps: 5,
       funding_column: "funding_rate"
@@ -613,7 +613,7 @@ describe("strategy replay page", () => {
   });
 
   it("策略池回放显示每期的池明细，资金费说明按池 DSL 的 fees.funding_column", async () => {
-    const pooled = replay("r9", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
+    const pooled = replay("r9", "succeeded", '{"bars":1,"ok_bars":1,"limitations":[]}', {
       tasks: { swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" } },
       swap_fee_bps: 5,
       dsl_yaml:
@@ -673,8 +673,8 @@ describe("strategy replay page", () => {
   });
 
   it("shows the bar detail with the buy scale and describes the curve in text", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded", '{"bars":1,"ok_bars":1,"limitations":[]}'));
     api.listReplayBars.mockResolvedValue({
       items: [bar('{"ledger":{"traded":0.5,"fee":0.001,"buy_scale":0.5}}')],
       page: { total: 1 }
@@ -765,8 +765,8 @@ describe("strategy replay page", () => {
   });
 
   it("keeps the loading state until the latest manual load finishes", async () => {
-    api.listReplays.mockResolvedValueOnce({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    api.listReplays.mockResolvedValueOnce({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded"));
     const wrapper = mountPage();
     await flushPromises();
     const first = deferred<unknown>();
@@ -775,11 +775,11 @@ describe("strategy replay page", () => {
     const refresh = () => wrapper.find('[aria-label="刷新回放"]');
     await refresh().trigger("click");
     await refresh().trigger("click");
-    first.resolve({ items: [replay("r1", "done")], page: { total: 1 } });
+    first.resolve({ items: [replay("r1", "succeeded")], page: { total: 1 } });
     await flushPromises();
     // 较早的一次手动加载结束时，较晚的一次还在进行：加载态保持。
     expect(refresh().attributes("loading")).toBe("true");
-    second.resolve({ items: [replay("r1", "done")], page: { total: 1 } });
+    second.resolve({ items: [replay("r1", "succeeded")], page: { total: 1 } });
     await flushPromises();
     expect(refresh().attributes("loading")).not.toBe("true");
   });
@@ -809,7 +809,7 @@ describe("strategy replay page", () => {
   });
 
   it("clears the polling warning after a successful selection", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "succeeded")], page: { total: 2 } });
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     const wrapper = mountPage();
     await flushPromises();
@@ -818,7 +818,7 @@ describe("strategy replay page", () => {
     await pollOnce();
     await pollOnce();
     expect(wrapper.text()).toContain("后台暂时无法访问");
-    api.getReplay.mockResolvedValue(replay("r2", "done"));
+    api.getReplay.mockResolvedValue(replay("r2", "succeeded"));
     await wrapper.findAll("button.replay-row")[1].trigger("click");
     await flushPromises();
     expect(wrapper.text()).not.toContain("后台暂时无法访问");
@@ -862,11 +862,11 @@ describe("strategy replay page", () => {
     expect((wrapper.vm as any).pollFailures).toBe(0);
     expect((wrapper.vm as any).awaitingMetrics).toBeNull();
     nextList.resolve({
-      items: [replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })],
+      items: [replay("s1", "succeeded", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })],
       page: { total: 1 }
     });
     api.getReplay.mockResolvedValue(
-      replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })
+      replay("s1", "succeeded", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })
     );
     await flushPromises();
     expect(listText(wrapper)).toContain("ftask_stock");
@@ -923,9 +923,9 @@ describe("strategy replay page", () => {
   });
 
   it("keeps the user's selection made while a started replay is being listed", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
-    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
-    api.startReplay.mockResolvedValue({ replay: replay("r9", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "succeeded")));
+    api.startReplay.mockResolvedValue({ replay: replay("r9", "queued"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -941,7 +941,7 @@ describe("strategy replay page", () => {
       .trigger("click");
     await flushPromises();
     await wrapper.findAll("button.replay-row")[1].trigger("click");
-    list.resolve({ items: [replay("r9", "pending"), replay("r1", "done"), replay("r2", "done")], page: { total: 3 } });
+    list.resolve({ items: [replay("r9", "queued"), replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 3 } });
     await flushPromises();
     expect(vm.selectedId).toBe("r2");
   });
@@ -987,21 +987,21 @@ describe("strategy replay page", () => {
   });
 
   it("drops in-flight requests after unmount", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
     const pending = deferred<unknown>();
     api.getReplay.mockImplementation(() => pending.promise);
     const wrapper = mountPage();
     await flushPromises();
     wrapper.unmount();
     api.listReplayBars.mockClear();
-    pending.resolve(replay("r1", "done"));
+    pending.resolve(replay("r1", "succeeded"));
     await flushPromises();
     expect(api.listReplayBars).not.toHaveBeenCalled();
     expect(api.chartSpecs.length).toBe(0);
   });
 
   it("clears the detail error when a new selection starts", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 2 } });
     api.getReplay.mockRejectedValueOnce(new Error("读取失败"));
     const wrapper = mountPage();
     await flushPromises();
@@ -1011,7 +1011,7 @@ describe("strategy replay page", () => {
     await wrapper.findAll("button.replay-row")[1].trigger("click");
     await flushPromises();
     expect(wrapper.text()).not.toContain("回放详情加载失败");
-    slow.resolve(replay("r2", "done"));
+    slow.resolve(replay("r2", "succeeded"));
     await flushPromises();
   });
 
@@ -1057,14 +1057,14 @@ describe("strategy replay page", () => {
   });
 
   it("ends the list loading state before the automatic selection finishes", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
     const slow = deferred<unknown>();
     api.getReplay.mockImplementation(() => slow.promise);
     const wrapper = mountPage();
     await flushPromises();
     expect(wrapper.text()).toContain("正在加载回放详情");
     expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).not.toBe("true");
-    slow.resolve(replay("r1", "done"));
+    slow.resolve(replay("r1", "succeeded"));
     await flushPromises();
   });
 
@@ -1086,8 +1086,8 @@ describe("strategy replay page", () => {
   });
 
   it("keeps the table mask until the latest manual table load finishes", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded"));
     const wrapper = mountPage();
     await flushPromises();
     const first = deferred<unknown>();
@@ -1118,7 +1118,7 @@ describe("strategy replay page", () => {
     await nextTick();
     api.listReplayBars.mockClear();
     // 轮询看到状态变化，正常会刷新表格；手动翻页还没返回时不做后台刷新。
-    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded", '{"bars":1,"ok_bars":1,"limitations":[]}'));
     await pollOnce();
     expect(api.listReplayBars.mock.calls.filter(call => !call[1]?.brief)).toHaveLength(0);
     const page2 = { items: [bar(), { ...bar(), bar_end_time: "1788228000000" }], page: { total: 102 } };
@@ -1143,7 +1143,7 @@ describe("strategy replay page", () => {
     (wrapper.vm as any).changeTablePage(2);
     await nextTick();
     // 轮询看到回放结束，但手动翻页还在途：跳过后台刷新；之后回放已是终态，轮询不会再刷新表格。
-    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":70,"ok_bars":70,"limitations":[]}'));
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded", '{"bars":70,"ok_bars":70,"limitations":[]}'));
     await pollOnce();
     api.listReplayBars.mockClear();
     api.listReplayBars.mockImplementation((_id: string, params: any) => Promise.resolve(params?.brief ? bars : fresh));
@@ -1158,7 +1158,7 @@ describe("strategy replay page", () => {
   });
 
   it("refreshes the table of a selected replay that ended while its first page was loading", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "running")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "running")], page: { total: 2 } });
     api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "done" : "running")));
     const wrapper = mountPage();
     await flushPromises();
@@ -1167,7 +1167,7 @@ describe("strategy replay page", () => {
     api.listReplayBars.mockImplementation((_id: string, params: any) => (params?.brief ? Promise.resolve(bars) : manual.promise));
     await wrapper.findAll("button.replay-row")[1].trigger("click");
     await flushPromises();
-    api.getReplay.mockResolvedValue(replay("r2", "done", '{"bars":35,"ok_bars":35,"limitations":[]}'));
+    api.getReplay.mockResolvedValue(replay("r2", "succeeded", '{"bars":35,"ok_bars":35,"limitations":[]}'));
     await pollOnce();
     api.listReplayBars.mockImplementation((_id: string, params: any) => Promise.resolve(params?.brief ? bars : fresh));
     manual.resolve({ items: Array.from({ length: 30 }, () => bar()), page: { total: 30 } });
@@ -1189,8 +1189,8 @@ describe("strategy replay page", () => {
       return tableCalls === 1 ? Promise.reject(new Error("网络中断")) : Promise.resolve(fresh);
     });
     // 轮询看到回放结束，同一轮的表格刷新失败；之后回放是终态、列表里也没有运行中的回放，只靠待刷新继续重试。
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":70,"ok_bars":70,"limitations":[]}'));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded", '{"bars":70,"ok_bars":70,"limitations":[]}'));
     await pollOnce();
     expect(tableCalls).toBe(1);
     expect((wrapper.vm as any).tableRows).toHaveLength(1);
@@ -1214,7 +1214,7 @@ describe("strategy replay page", () => {
     api.listReplayBars.mockImplementation((_id: string, params: any) => (params?.brief ? Promise.resolve(bars) : manual.promise));
     (wrapper.vm as any).changeTablePage(2);
     await nextTick();
-    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'));
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded", '{"bars":2,"ok_bars":2,"limitations":[]}'));
     await pollOnce();
     // 手动请求失败后仍补一次静默刷新（回放已结束，轮询不会再刷新表格）；补刷新读到最新数据，错误随之清除。
     api.listReplayBars.mockImplementation((_id: string, params: any) =>
@@ -1238,7 +1238,7 @@ describe("strategy replay page", () => {
     api.listReplayBars.mockImplementation((_id: string, params: any) => (params?.brief ? Promise.resolve(bars) : manual.promise));
     (wrapper.vm as any).changeTablePage(2);
     await nextTick();
-    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'));
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded", '{"bars":2,"ok_bars":2,"limitations":[]}'));
     await pollOnce();
     // 手动请求成功（读到的是旧快照，错误已清除），补刷新失败：表格上提示，并继续待刷新。
     api.listReplayBars.mockImplementation((_id: string, params: any) =>
@@ -1248,7 +1248,7 @@ describe("strategy replay page", () => {
     await flushPromises();
     expect((wrapper.vm as any).errors.table).toContain("周期记录加载失败");
     // 恢复后下一轮轮询把表格补上，错误随之清除。
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
     api.listReplayBars.mockImplementation((_id: string, params: any) =>
       Promise.resolve(params?.brief ? bars : { items: [bar(), bar()], page: { total: 2 } })
     );
@@ -1281,8 +1281,8 @@ describe("strategy replay page", () => {
     const wrapper = mountPage();
     await flushPromises();
     expect((wrapper.vm as any).tablePage).toBe(1);
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":120,"ok_bars":120,"limitations":[]}'));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded", '{"bars":120,"ok_bars":120,"limitations":[]}'));
     await pollOnce();
     expect(tableCalls).toBe(2);
     await pollOnce();
@@ -1291,8 +1291,8 @@ describe("strategy replay page", () => {
   });
 
   it("does not refresh a replay that is no longer shown when its manual page load finishes", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "done")], page: { total: 2 } });
-    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "running" : "done")));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "succeeded")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "running" : "succeeded")));
     const wrapper = mountPage();
     await flushPromises();
     const manual = deferred<unknown>();
@@ -1303,26 +1303,26 @@ describe("strategy replay page", () => {
     (wrapper.vm as any).changeTablePage(2);
     await nextTick();
     api.getReplay.mockImplementation((id: string) =>
-      Promise.resolve(replay(id, "done", '{"bars":1,"ok_bars":1,"limitations":[]}'))
+      Promise.resolve(replay(id, "succeeded", '{"bars":1,"ok_bars":1,"limitations":[]}'))
     );
     await pollOnce();
     // 用户切到另一个回放，它的详情还在加载（还没发出表格请求）时，旧回放的手动请求返回：不再为旧回放补刷新。
     const detail = deferred<unknown>();
-    api.getReplay.mockImplementation((id: string) => (id === "r2" ? detail.promise : Promise.resolve(replay(id, "done"))));
+    api.getReplay.mockImplementation((id: string) => (id === "r2" ? detail.promise : Promise.resolve(replay(id, "succeeded"))));
     await wrapper.findAll("button.replay-row")[1].trigger("click");
     await flushPromises();
     api.listReplayBars.mockClear();
     manual.resolve({ items: [bar()], page: { total: 60 } });
     await flushPromises();
     expect(api.listReplayBars.mock.calls.filter(call => call[0] === "r1")).toHaveLength(0);
-    detail.resolve(replay("r2", "done"));
+    detail.resolve(replay("r2", "succeeded"));
     await flushPromises();
     expect((wrapper.vm as any).selectedId).toBe("r2");
   });
 
   it("does not carry a pending refresh over to a later selection of the same replay", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "done")], page: { total: 2 } });
-    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "running" : "done")));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "succeeded")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "running" : "succeeded")));
     const wrapper = mountPage();
     await flushPromises();
     const manual = deferred<unknown>();
@@ -1333,7 +1333,7 @@ describe("strategy replay page", () => {
     (wrapper.vm as any).changeTablePage(2);
     await nextTick();
     api.getReplay.mockImplementation((id: string) =>
-      Promise.resolve(replay(id, "done", '{"bars":1,"ok_bars":1,"limitations":[]}'))
+      Promise.resolve(replay(id, "succeeded", '{"bars":1,"ok_bars":1,"limitations":[]}'))
     );
     await pollOnce();
     // 切走再切回 r1：选择自己的表格加载已经读到最新数据，不再多发一次后台刷新。
@@ -1349,8 +1349,8 @@ describe("strategy replay page", () => {
   });
 
   it("returns the page number to the last shown page when a manual page flip fails", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded"));
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -1375,8 +1375,8 @@ describe("strategy replay page", () => {
   });
 
   it("keeps retrying after a manual page flip fails on a finished replay", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded"));
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -1394,8 +1394,8 @@ describe("strategy replay page", () => {
   });
 
   it("retries a failed first table load of a finished replay and returns to page 1", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
-    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 2 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "succeeded")));
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -1420,8 +1420,8 @@ describe("strategy replay page", () => {
   });
 
   it("returns to page 1 when the table reload after a cancel fails", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done"));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded"));
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -1441,8 +1441,8 @@ describe("strategy replay page", () => {
 
   it("selects a replay started from an empty list only once", async () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
-    api.startReplay.mockResolvedValue({ replay: replay("r9", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
-    api.getReplay.mockResolvedValue(replay("r9", "pending"));
+    api.startReplay.mockResolvedValue({ replay: replay("r9", "queued"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    api.getReplay.mockResolvedValue(replay("r9", "queued"));
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
@@ -1450,7 +1450,7 @@ describe("strategy replay page", () => {
     vm.form.single_market = "spot";
     vm.form.tasks = { spot: "ftask_a" };
     await nextTick();
-    api.listReplays.mockResolvedValue({ items: [replay("r9", "pending")], page: { total: 1 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r9", "queued")], page: { total: 1 } });
     await wrapper
       .findAll("button")
       .find(button => button.text() === "开始回放")!
@@ -1477,7 +1477,7 @@ describe("strategy replay page", () => {
 
   it("shows A-share daily replay ranges as dates in the space zone", async () => {
     api.space = reactive({ selectedSpaceId: "stockcn", selectedSpace: { timezone: "Asia/Shanghai" } });
-    const stock = replay("r1", "done", "{}", {
+    const stock = replay("r1", "succeeded", "{}", {
       calendar: "cn_stock",
       start_time: "1788192000000",
       end_time: "1790784000000"
@@ -1491,8 +1491,8 @@ describe("strategy replay page", () => {
   });
 
   it("releases the chart on unmount", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r1", "succeeded", '{"bars":1,"ok_bars":1,"limitations":[]}'));
     const wrapper = mountPage();
     await flushPromises();
     expect(api.charts).toHaveLength(1);
@@ -1502,7 +1502,7 @@ describe("strategy replay page", () => {
 });
 
 describe("strategy replay page URL state and create drawer", () => {
-  const started = (id: string) => ({ replay: replay(id, "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+  const started = (id: string) => ({ replay: replay(id, "queued"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
   const click = async (wrapper: ReturnType<typeof mountPage>, text: string) => {
     await wrapper
       .findAll("button")
@@ -1534,8 +1534,8 @@ describe("strategy replay page URL state and create drawer", () => {
     api.loadAllStrategies.mockResolvedValue(undefined);
     api.listFactorTasks.mockResolvedValue({ factor_tasks: [], page_result: { has_more: false } });
     api.listReplayBars.mockResolvedValue(bars);
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
-    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "succeeded")));
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -1557,14 +1557,14 @@ describe("strategy replay page URL state and create drawer", () => {
     await flushPromises();
     expect(api.getReplay.mock.calls.map(call => call[0])).toEqual(["r9"]);
     expect(wrapper.text()).toContain("回放详情加载失败：找不到回放");
-    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "succeeded")));
     await click(wrapper, "重试");
     expect(api.getReplay.mock.calls.at(-1)?.[0]).toBe("r9");
     expect(wrapper.text()).not.toContain("回放详情加载失败");
   });
 
   it("writes the auto selection with replace and a user pick with push", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 2 } });
     const wrapper = mountPage();
     await flushPromises();
     expect(nav.history[0]).toEqual({ mode: "replace", query: { tab: "replay", replay_id: "r1" } });
@@ -1577,7 +1577,7 @@ describe("strategy replay page URL state and create drawer", () => {
   });
 
   it("follows back/forward navigation to another replay", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 2 } });
     const wrapper = mountPage();
     await flushPromises();
     nav.route.query = { tab: "replay", replay_id: "r2" };
@@ -1636,7 +1636,7 @@ describe("strategy replay page URL state and create drawer", () => {
   it("closes the drawer and points the URL at the new replay after a successful start", async () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     api.startReplay.mockResolvedValue(started("r5"));
-    api.getReplay.mockResolvedValue(replay("r5", "pending"));
+    api.getReplay.mockResolvedValue(replay("r5", "queued"));
     nav.route.query = { tab: "replay", create: "1" };
     const wrapper = mountPage();
     await flushPromises();
@@ -1686,11 +1686,11 @@ describe("strategy replay page URL state and create drawer", () => {
   it("does not re-select the old space's replay on a real space switch (async router)", async () => {
     nav.async = true;
     nav.route.query = { tab: "replay", replay_id: "r1" };
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
     mountPage();
     await flushPromises();
     api.getReplay.mockClear();
-    api.listReplays.mockResolvedValue({ items: [replay("rB", "done")], page: { total: 1 } });
+    api.listReplays.mockResolvedValue({ items: [replay("rB", "succeeded")], page: { total: 1 } });
     api.space.selectedSpaceId = "hk";
     await nextTick();
     await flushPromises();
@@ -1700,7 +1700,7 @@ describe("strategy replay page URL state and create drawer", () => {
 
   it("keeps the push entry when another write races it (async router)", async () => {
     nav.async = true;
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 40 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 40 } });
     const wrapper = mountPage();
     await flushPromises();
     nav.history.length = 0;
@@ -1712,7 +1712,7 @@ describe("strategy replay page URL state and create drawer", () => {
   });
 
   it("follows the default selection when the URL drops replay_id", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 2 } });
     const wrapper = mountPage();
     await flushPromises();
     await wrapper.findAll("button.replay-row")[1].trigger("click");
@@ -1725,7 +1725,7 @@ describe("strategy replay page URL state and create drawer", () => {
   });
 
   it("does not steal the selection after an external navigation during a start", async () => {
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "done"), replay("r2", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "succeeded")], page: { total: 2 } });
     let finish!: (value: unknown) => void;
     api.startReplay.mockReturnValue(new Promise(resolve => (finish = resolve)));
     const wrapper = mountPage();
@@ -1738,7 +1738,7 @@ describe("strategy replay page URL state and create drawer", () => {
     nav.route.query = { tab: "replay", replay_id: "r2" };
     await flushPromises();
     api.getReplay.mockClear();
-    api.listReplays.mockResolvedValue({ items: [replay("r5", "pending"), replay("r1", "done")], page: { total: 2 } });
+    api.listReplays.mockResolvedValue({ items: [replay("r5", "queued"), replay("r1", "succeeded")], page: { total: 2 } });
     finish(started("r5"));
     await flushPromises();
     expect(api.getReplay.mock.calls.map(call => call[0])).not.toContain("r5");

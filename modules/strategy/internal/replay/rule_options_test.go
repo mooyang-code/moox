@@ -10,6 +10,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 // 第 3 期的有状态写法（S2 进出场持有、S5 日历换仓与锚点、S6 仓位系数）在研究回放里与逐期实时装配 + 同一引擎的结果逐字节一致：
@@ -79,14 +81,14 @@ portfolio: {max_missing: 1}
 			(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
 			done, err := repo.GetReplay(context.Background(), "p1")
 			require.NoError(t, err)
-			require.Equal(t, store.ReplayDone, done.Status, done.Error)
+			require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 			strategy, err := dsl.Parse([]byte(dslYaml))
 			require.NoError(t, err)
 			resolved, program, err := input.Resolve(context.Background(), client, "crypto", []string{"ftask_a"}, strategy)
 			require.NoError(t, err)
 			state, compared, kept := engine.State{}, 0, false
 			for _, replayed := range barsOf(t, repo, "p1") {
-				boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+				boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 				require.NoError(t, err)
 				loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, EventUniverse: map[string][]string{resolved.Market.Select: {"A", "B"}}})
 				require.NoError(t, err)
@@ -133,7 +135,7 @@ portfolio: {max_missing: 1}
 	(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "g1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 	strategy, err := dsl.Parse([]byte(dslYaml))
 	require.NoError(t, err)
 	resolved, program, err := input.Resolve(context.Background(), client, "crypto", []string{"ftask_a"}, strategy)
@@ -149,7 +151,7 @@ portfolio: {max_missing: 1}
 			require.Positive(t, replayed.Holdings, "第 %d 小时断档期间持仓应保留", hour)
 			gaps++
 		}
-		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+		boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 		require.NoError(t, err)
 		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, EventUniverse: map[string][]string{resolved.Market.Select: names}})
 		require.NoError(t, err)

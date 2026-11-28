@@ -1,4 +1,4 @@
-package input
+package upstream
 
 import (
 	"context"

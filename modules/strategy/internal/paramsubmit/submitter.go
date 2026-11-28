@@ -17,6 +17,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 默认值。
@@ -37,7 +39,7 @@ const (
 // Submitter 投递待送达的因子参数。
 type Submitter struct {
 	Store   *store.Store
-	Factors input.FactorTasks
+	Factors upstream.FactorTasks
 	Now     func() time.Time
 	// Interval 是轮询的间隔；Batch 是每轮最多处理的条数；MaxBackoff 是失败重试退避的上限。
 	Interval   time.Duration
@@ -133,20 +135,20 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 	if len(taskIDs) == 0 {
 		return s.reject(ctx, delivery, "实例没有主帧因子任务")
 	}
-	members := map[string]map[string]input.ParamValue{}
+	members := map[string]map[string]upstream.ParamValue{}
 	if err := json.Unmarshal(delivery.Members, &members); err != nil {
 		return s.reject(ctx, delivery, "待投递的参数无法解析")
 	}
 	var accepted []string
 	for _, taskID := range taskIDs {
 		callCtx, cancel := context.WithTimeout(ctx, submissionTimeout)
-		results, err := s.Factors.SubmitFactorParams(callCtx, input.ParamSubmission{
+		results, err := s.Factors.SubmitFactorParams(callCtx, upstream.ParamSubmission{
 			RequestID: delivery.ResultID, Writer: delivery.InstanceID, TaskID: taskID,
 			PeriodTime: delivery.Period, Members: members,
 		})
 		cancel()
 		if err != nil {
-			var service *input.ServiceError
+			var service *upstream.ServiceError
 			if errors.As(err, &service) && service.Code == commonpb.ErrorCode_INVALID_PARAM {
 				// 请求本身被判为无效：重试也不会成功。
 				return s.reject(ctx, delivery, taskRejection(len(taskIDs), accepted, taskID, err.Error()))
@@ -205,10 +207,10 @@ func (s *Submitter) reject(ctx context.Context, delivery store.ParamDelivery, re
 }
 
 // rejection 汇总被拒绝的成员及原因；全部成员都被接受（或幂等重复）时返回空串。
-func rejection(results []input.MemberSubmitResult) string {
+func rejection(results []upstream.MemberSubmitResult) string {
 	var reasons []string
 	for _, result := range results {
-		if result.Result == input.SubmitRejected {
+		if result.Result == upstream.SubmitRejected {
 			reasons = append(reasons, fmt.Sprintf("%s：%s", result.Member, result.Reason))
 		}
 	}

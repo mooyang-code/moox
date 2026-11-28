@@ -11,6 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 本文件是策略池的实时求值（设计 3.5）：每个成员各自做就绪判断、读自己的输入、独立求值，再由 pool.Step 分配资金并合成池目标。
@@ -30,7 +32,7 @@ func processedThrough(rt *runtime, latest store.Result, hasLatest bool) time.Tim
 
 // checkPoolReady 对每个成员各自做就绪判断（只看它自己用到的市场与因子，相邻周期的核对也按成员的 View 与因子），
 // 池自己的结论只在所有成员都没通过时才有原因：取需要人工处理的原因优先，否则取第一个成员的原因。
-func (h *Handler) checkPoolReady(ctx context.Context, p *period) (mergedReadiness, error) {
+func (h *Handler) checkPoolReady(ctx context.Context, p *periodContext) (mergedReadiness, error) {
 	rt := p.runtime
 	out := mergedReadiness{Members: make(map[string]mergedReadiness, len(rt.pool.members)), Results: map[string]readiness.Result{}, Unavailable: map[string]string{}}
 	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
@@ -39,7 +41,7 @@ func (h *Handler) checkPoolReady(ctx context.Context, p *period) (mergedReadines
 		if len(member.Resolved.PreviousFactors) > 0 {
 			previousEnd, err := advance(calendar, bar, p.boundary.BarEnd, -1)
 			if err != nil {
-				out.Members[member.ID] = mergedReadiness{Reason: input.SkipConfigError, Detail: err.Error()}
+				out.Members[member.ID] = mergedReadiness{Reason: upstream.SkipConfigError, Detail: err.Error()}
 				continue
 			}
 			_, record, found, err := h.Store.AdjacentRecord(ctx, p.instance.InstanceID, member.Resolved.DatasetIDs(), bar, calendar, previousEnd, member.Resolved.PreviousFactors, rt.sessionID)
@@ -72,7 +74,7 @@ func (h *Handler) checkPoolReady(ctx context.Context, p *period) (mergedReadines
 
 // evaluatePool 读取各成员的输入并独立求值，再交给 pool.Step。成员本期没通过（就绪判断没过、输入配置类问题、求值被跳过）时
 // 沿用它上一期的目标权重；基础设施错误按（事件, 实例）计尝试预算，与普通策略一致。返回 nil 决策表示本期已作为 skipped 落库。
-func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready mergedReadiness) (*engine.Decision, input.Loaded, error) {
+func (h *Handler) evaluatePool(ctx context.Context, p *periodContext, key string, ready mergedReadiness) (*engine.Decision, input.Loaded, error) {
 	rt := p.runtime
 	evalStart := h.now()
 	defer func() { p.timing.eval = h.now().Sub(evalStart) }()
@@ -100,7 +102,7 @@ func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready
 		steps = append(steps, loaded.Steps...)
 		decision, err := engine.Evaluate(rt.pool.programs[i], loaded.Frame, previous.Members[member.ID])
 		if err != nil {
-			results[i] = pool.MemberResult{ID: member.ID, Reason: input.SkipConfigError, Detail: err.Error()}
+			results[i] = pool.MemberResult{ID: member.ID, Reason: upstream.SkipConfigError, Detail: err.Error()}
 			continue
 		}
 		results[i] = pool.MemberResult{ID: member.ID, Decision: &decision}
@@ -108,7 +110,7 @@ func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready
 	p.timing.evalRun = h.now().Sub(runStart)
 	keys, err := pool.PriceKeys(previous, results)
 	if err != nil {
-		return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
+		return nil, input.Loaded{}, h.commitSkipped(ctx, p, upstream.SkipConfigError, err.Error())
 	}
 	var prices, funding map[string]float64
 	skip, terminal, err := h.withReads(ctx, p, key, func() error {
@@ -126,14 +128,14 @@ func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready
 	decision, err := pool.Step(rt.pool.config, previous, pool.Input{BarIndex: p.boundary.BarIndex, Prices: prices, Funding: funding, Members: results})
 	p.timing.evalRun += h.now().Sub(stepStart)
 	if err != nil {
-		return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
+		return nil, input.Loaded{}, h.commitSkipped(ctx, p, upstream.SkipConfigError, err.Error())
 	}
 	return &decision, input.Loaded{Boundary: p.boundary, Steps: steps}, nil
 }
 
 // carriedSummary 是策略池 skipped 记录里写的摘要：成员的状态与原因（就绪判断阶段各成员的原因；没有逐成员原因时所有成员都记这条跳过原因），
 // 账本与比例取实例当前的规则状态（跳过的期不动它）。普通策略写空对象；池的状态读不到或无法解析时按空状态写摘要。
-func (h *Handler) carriedSummary(ctx context.Context, p *period, reason, detail string) (json.RawMessage, error) {
+func (h *Handler) carriedSummary(ctx context.Context, p *periodContext, reason, detail string) (json.RawMessage, error) {
 	rt := p.runtime
 	if rt.pool == nil {
 		return json.RawMessage(`{}`), nil

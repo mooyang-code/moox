@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // MetaCache 是进程级的标的元数据缓存：标的绑定、标签成员与标签详情只在 Storage 的标的修订号
@@ -14,9 +16,9 @@ type MetaCache struct {
 	space    string
 	revision uint64
 	known    bool
-	subjects map[string][]Subject
-	members  map[string][]TagMember
-	tags     map[string]TagInfo
+	subjects map[string][]upstream.Subject
+	members  map[string][]upstream.TagMember
+	tags     map[string]upstream.TagInfo
 
 	// ages 缓存已证明“年龄足够”的标的：上市时间只会越来越久，探针通过一次后不必每期重查。
 	// 键是（View、min_age_bars、市场），槽里记着当时的活动索引，索引重建（换了活动索引）后自动作废。
@@ -54,9 +56,9 @@ func NewMetaCache() *MetaCache {
 }
 
 func (m *MetaCache) reset() {
-	m.subjects = map[string][]Subject{}
-	m.members = map[string][]TagMember{}
-	m.tags = map[string]TagInfo{}
+	m.subjects = map[string][]upstream.Subject{}
+	m.members = map[string][]upstream.TagMember{}
+	m.tags = map[string]upstream.TagInfo{}
 }
 
 // sync 登记空间的修订号；与已缓存的不一致（或换了空间）时丢弃全部缓存。
@@ -84,26 +86,26 @@ func (l Loader) ForEvent() Loader {
 	if meta == nil {
 		meta = NewMetaCache()
 	}
-	return Loader{Meta: meta, Client: &eventClient{Client: l.Client, meta: meta, views: map[string]ViewInfo{}, coverage: map[string]Coverage{}, checked: map[string]bool{}}}
+	return Loader{Meta: meta, Client: &eventClient{Client: l.Client, meta: meta, views: map[string]upstream.ViewInfo{}, coverage: map[string]upstream.Coverage{}, checked: map[string]bool{}}}
 }
 
 // Invalidate 丢弃事件内缓存的 View 元数据。
 func (l Loader) Invalidate() {
 	if cache, ok := l.Client.(*eventClient); ok {
 		cache.mu.Lock()
-		cache.views = map[string]ViewInfo{}
-		cache.coverage = map[string]Coverage{}
+		cache.views = map[string]upstream.ViewInfo{}
+		cache.coverage = map[string]upstream.Coverage{}
 		cache.mu.Unlock()
 	}
 }
 
 // eventClient 缓存一次事件内的 View 元数据，并经 MetaCache 跨事件缓存标的元数据；只缓存成功的结果。
 type eventClient struct {
-	Client
+	upstream.Client
 	meta     *MetaCache
 	mu       sync.Mutex
-	views    map[string]ViewInfo
-	coverage map[string]Coverage
+	views    map[string]upstream.ViewInfo
+	coverage map[string]upstream.Coverage
 	checked  map[string]bool
 }
 
@@ -128,7 +130,7 @@ func (c *eventClient) Revalidate(ctx context.Context, spaceID, datasetID string)
 	return nil
 }
 
-func (c *eventClient) ViewCoverage(ctx context.Context, spaceID string, view ViewInfo, exact bool) (Coverage, error) {
+func (c *eventClient) ViewCoverage(ctx context.Context, spaceID string, view upstream.ViewInfo, exact bool) (upstream.Coverage, error) {
 	key := spaceID + "\x00" + view.DatasetID + "\x00" + view.Generation
 	c.mu.Lock()
 	coverage, ok := c.coverage[key]
@@ -138,7 +140,7 @@ func (c *eventClient) ViewCoverage(ctx context.Context, spaceID string, view Vie
 	}
 	coverage, err := c.Client.ViewCoverage(ctx, spaceID, view, exact)
 	if err != nil {
-		return Coverage{}, err
+		return upstream.Coverage{}, err
 	}
 	c.mu.Lock()
 	c.coverage[key] = coverage
@@ -146,7 +148,7 @@ func (c *eventClient) ViewCoverage(ctx context.Context, spaceID string, view Vie
 	return coverage, nil
 }
 
-func (c *eventClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo, error) {
+func (c *eventClient) GetTag(ctx context.Context, spaceID, tagID string) (upstream.TagInfo, error) {
 	key := spaceID + "\x00" + tagID
 	c.meta.mu.Lock()
 	tag, ok := c.meta.tags[key]
@@ -156,7 +158,7 @@ func (c *eventClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInf
 	}
 	tag, err := c.Client.GetTag(ctx, spaceID, tagID)
 	if err != nil {
-		return TagInfo{}, err
+		return upstream.TagInfo{}, err
 	}
 	c.meta.mu.Lock()
 	c.meta.tags[key] = tag
@@ -164,7 +166,7 @@ func (c *eventClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInf
 	return tag, nil
 }
 
-func (c *eventClient) GetView(ctx context.Context, spaceID, datasetID string) (ViewInfo, error) {
+func (c *eventClient) GetView(ctx context.Context, spaceID, datasetID string) (upstream.ViewInfo, error) {
 	key := spaceID + "\x00" + datasetID
 	c.mu.Lock()
 	view, ok := c.views[key]
@@ -174,7 +176,7 @@ func (c *eventClient) GetView(ctx context.Context, spaceID, datasetID string) (V
 	}
 	view, err := c.Client.GetView(ctx, spaceID, datasetID)
 	if err != nil {
-		return ViewInfo{}, err
+		return upstream.ViewInfo{}, err
 	}
 	c.mu.Lock()
 	c.views[key] = view
@@ -182,7 +184,7 @@ func (c *eventClient) GetView(ctx context.Context, spaceID, datasetID string) (V
 	return view, nil
 }
 
-func (c *eventClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]Subject, error) {
+func (c *eventClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]upstream.Subject, error) {
 	key := spaceID + "\x00" + datasetID
 	c.meta.mu.Lock()
 	subjects, ok := c.meta.subjects[key]
@@ -196,10 +198,10 @@ func (c *eventClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetI
 		c.meta.subjects[key] = subjects
 		c.meta.mu.Unlock()
 	}
-	return append([]Subject(nil), subjects...), nil
+	return append([]upstream.Subject(nil), subjects...), nil
 }
 
-func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]TagMember, error) {
+func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]upstream.TagMember, error) {
 	key := spaceID + "\x00" + tagID
 	c.meta.mu.Lock()
 	members, ok := c.meta.members[key]
@@ -213,7 +215,7 @@ func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string)
 		c.meta.members[key] = members
 		c.meta.mu.Unlock()
 	}
-	return append([]TagMember(nil), members...), nil
+	return append([]upstream.TagMember(nil), members...), nil
 }
 
 // ageSplit 把候选标的按是否已证明年龄足够拆成两组；键变化（换了活动索引或 min_age_bars）时换一份缓存，

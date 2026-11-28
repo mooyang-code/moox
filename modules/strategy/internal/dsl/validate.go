@@ -103,13 +103,10 @@ func Validate(s *Strategy) error {
 		if err := validateRuleMarket(s, rule); err != nil {
 			return err
 		}
-		// rank 规则的可用标的数达不到 min_universe 时整期跳过：固定写出的 pool、或只由 include 构成的白名单
-		// 比它还小，这条规则就永远无法运行。写了 allow_empty 的规则不参与守门，不做这项检查。
+		// rank 规则的可用标的数达不到 min_universe 时整期跳过：只由 include 构成的白名单（含 pool 简写改写而来）
+		// 去重后比它还小，这条规则就永远无法运行。写了 allow_empty 的规则不参与守门，不做这项检查。
 		universe := s.RuleUniverse(*rule)
-		if rule.Type == RuleTypeRank && !rule.AllowEmpty && rule.Pool.Explicit && len(rule.Pool.Fixed) > 0 && len(rule.Pool.Fixed) < s.Portfolio.MinUniverse {
-			return fmt.Errorf("规则 %s 的 pool 只有 %d 个标的，少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, len(rule.Pool.Fixed), s.Portfolio.MinUniverse)
-		}
-		if rule.Type == RuleTypeRank && !rule.AllowEmpty && !rule.Pool.Explicit && len(universe.Tags) == 0 && len(universe.Include) > 0 {
+		if rule.Type == RuleTypeRank && !rule.AllowEmpty && len(universe.Tags) == 0 && len(universe.Include) > 0 {
 			if size := includeOnlyUniverse(universe); size < s.Portfolio.MinUniverse {
 				return fmt.Errorf("规则 %s 使用的 universe 只由 include 给出 %d 个标的（去掉 exclude 后），少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, size, s.Portfolio.MinUniverse)
 			}
@@ -136,19 +133,20 @@ func Validate(s *Strategy) error {
 	return nil
 }
 
-// includeOnlyUniverse 返回只由 include 构成的白名单去掉 exclude 后的标的数。
+// includeOnlyUniverse 返回只由 include 构成的白名单去掉 exclude 并去重后的标的数。
 func includeOnlyUniverse(universe Universe) int {
 	excluded := make(map[string]struct{}, len(universe.Exclude))
 	for _, id := range universe.Exclude {
 		excluded[id] = struct{}{}
 	}
-	size := 0
+	seen := make(map[string]struct{}, len(universe.Include))
 	for _, id := range universe.Include {
-		if _, ok := excluded[id]; !ok {
-			size++
+		if _, ok := excluded[id]; ok {
+			continue
 		}
+		seen[id] = struct{}{}
 	}
-	return size
+	return len(seen)
 }
 
 func validatePortfolio(p *Portfolio) error {
@@ -197,19 +195,17 @@ func validateRule(rule *Rule, sources map[string]struct{}) error {
 	if err := validateWeight(prefix, &rule.Weight); err != nil {
 		return err
 	}
-	if rule.Pool.Explicit && len(rule.Pool.Fixed) == 0 && len(rule.Pool.Tags) == 0 {
-		return fmt.Errorf("%s 的 pool 不能为空", prefix)
-	}
 	if rule.Scale != nil {
 		if _, err := analyzeIn(rule.Scale.Expr, StageScale, sources); err != nil {
 			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, StageScale, err)
 		}
 	}
+	if rule.Type == "" {
+		rule.Type = RuleTypeRank
+	}
 	switch rule.Type {
 	case RuleTypeRank:
 		return validateRankRule(prefix, rule, sources)
-	case "":
-		return fmt.Errorf("%s 缺少 type（只能是 rank）", prefix)
 	default:
 		return fmt.Errorf("%s 的 type %q 不受支持，只能是 rank", prefix, rule.Type)
 	}

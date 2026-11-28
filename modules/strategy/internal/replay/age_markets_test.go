@@ -11,6 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 // 双市场、永续某几根缺行（A 的永续第 9、10 小时没有行，B 的永续第 8 小时才上线）：age_markets: all 规则与 each 的 max_age_bars 规则，
@@ -42,14 +44,14 @@ portfolio: {max_missing: 1}
 	(&Runner{Store: repo, Client: client, ChunkBars: 5, MissingPriceLiquidateBars: 3, InitialEquity: 100}).Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "a1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 	strategy, err := dsl.Parse([]byte(dslYaml))
 	require.NoError(t, err)
 	resolved, program, err := input.Resolve(context.Background(), client, "crypto", input.TaskIDs(map[string]string{"spot": spotTask.FactorTaskID, "swap": swapTask.FactorTaskID}), strategy)
 	require.NoError(t, err)
 	state, compared, aged := engine.State{}, 0, false
 	for _, replayed := range barsOf(t, repo, "a1") {
-		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+		boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 		require.NoError(t, err)
 		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, Held: state.HeldMarkets()})
 		require.NoError(t, err)
@@ -112,7 +114,7 @@ portfolio:
 	(&Runner{Store: repo, Client: client, ChunkBars: 5, MissingPriceLiquidateBars: 3, InitialEquity: 100}).Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "d1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 	strategy, err := dsl.Parse([]byte(dslYaml))
 	require.NoError(t, err)
 	resolved, program, err := input.Resolve(context.Background(), client, "crypto", input.TaskIDs(map[string]string{"spot": spotTask.FactorTaskID, "swap": swapTask.FactorTaskID}), strategy)
@@ -120,7 +122,7 @@ portfolio:
 	require.Nil(t, resolved.RuleAges, "这个场景只有策略级 min_age_bars")
 	state, compared, sawMissingD := engine.State{}, 0, false
 	for _, replayed := range barsOf(t, repo, "d1") {
-		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+		boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 		require.NoError(t, err)
 		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, Held: state.HeldMarkets()})
 		require.NoError(t, err)

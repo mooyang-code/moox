@@ -16,6 +16,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 策略池研究回放的用例：回放逐期复用预热的推进逻辑，所以拿同一区间、同一起点的预热（RunPool）逐期比对目标与 summary_json 的池明细。
@@ -53,7 +56,7 @@ func poolYaml(body, portfolio string, members ...input.PoolMemberDef) string {
 }
 
 // resolvePool 按发起回放时的做法解析池（成员取给定的定义）。
-func resolvePool(t *testing.T, client input.Client, raw string, members []input.PoolMemberDef) (dsl.Strategy, input.PoolResolved) {
+func resolvePool(t *testing.T, client upstream.Client, raw string, members []input.PoolMemberDef) (dsl.Strategy, input.PoolResolved) {
 	t.Helper()
 	strategy, err := dsl.Parse([]byte(raw))
 	if err != nil {
@@ -80,7 +83,7 @@ func resolvePool(t *testing.T, client input.Client, raw string, members []input.
 }
 
 // startPoolReplay 登记并认领一个池回放：成员快照取 members，区间从第 2 根开始共 hours 根。
-func startPoolReplay(t *testing.T, repo *store.Store, client input.Client, id, raw string, members []input.PoolMemberDef, hours int) store.Replay {
+func startPoolReplay(t *testing.T, repo *store.Store, client upstream.Client, id, raw string, members []input.PoolMemberDef, hours int) store.Replay {
 	t.Helper()
 	_, pooled := resolvePool(t, client, raw, members)
 	snapshot, err := pooled.MembersJSON()
@@ -105,10 +108,10 @@ func startPoolReplay(t *testing.T, repo *store.Store, client input.Client, id, r
 }
 
 // warmPool 用预热的历史推进（RunPool）从第 2 根推进 hours 根，返回每期的决策；配置与回放一样按池的日历换算漂移起点与锚点。
-func warmPool(t *testing.T, client input.Client, raw string, members []input.PoolMemberDef, hours, chunk int) []engine.Decision {
+func warmPool(t *testing.T, client upstream.Client, raw string, members []input.PoolMemberDef, hours, chunk int) []engine.Decision {
 	t.Helper()
 	strategy, pooled := resolvePool(t, client, raw, members)
-	clock, err := input.PoolClock(pooled.Resolved.Calendar, pooled.Resolved.Bar, *strategy.Pool)
+	clock, err := period.PoolClock(pooled.Resolved.Calendar, pooled.Resolved.Bar, *strategy.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +123,7 @@ func warmPool(t *testing.T, client input.Client, raw string, members []input.Poo
 	run := PoolRun{Client: client, SpaceID: "crypto", Resolved: pooled.Resolved, Members: pooled.Members, Programs: pooled.Programs, Config: cfg,
 		Start: origin.Add(2 * time.Hour), End: origin.Add(time.Duration(2+hours) * time.Hour), ChunkBars: chunk,
 		Now:   func() time.Time { return origin.Add(2000 * time.Hour) },
-		OnBar: func(_ input.PeriodBoundaries, decision engine.Decision) { decisions = append(decisions, decision) }}
+		OnBar: func(_ period.PeriodBoundaries, decision engine.Decision) { decisions = append(decisions, decision) }}
 	if _, err := RunPool(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +220,7 @@ func TestPoolReplayMatchesWarmUpBarByBar(t *testing.T) {
 	job := startPoolReplay(t, repo, client, "p1", raw, list, 30)
 	(&Runner{Store: repo, Client: client, ChunkBars: 7, InitialEquity: 1}).Execute(context.Background(), job)
 	done, metrics := replayMetrics(t, repo, "p1")
-	if done.Status != store.ReplayDone {
+	if done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v", done)
 	}
 	bars := barsOf(t, repo, "p1")
@@ -325,7 +328,7 @@ func TestPoolReplayFeaturesMatchWarmUp(t *testing.T) {
 			client := newDualClient()
 			job := startPoolReplay(t, repo, client, "p_"+item.name, raw, item.members, 24)
 			(&Runner{Store: repo, Client: client, ChunkBars: 5, InitialEquity: 1}).Execute(context.Background(), job)
-			if done, _ := replayMetrics(t, repo, job.ReplayID); done.Status != store.ReplayDone {
+			if done, _ := replayMetrics(t, repo, job.ReplayID); done.Status != store.ReplaySucceeded {
 				t.Fatalf("回放应完成：%+v", done)
 			}
 			decisions := warmPool(t, newDualClient(), raw, item.members, 24, 4)
@@ -354,7 +357,7 @@ func TestPoolReplayIgnoresMemberEditsWhileQueued(t *testing.T) {
 			beforeRun(repo)
 		}
 		(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 1}).Execute(context.Background(), job)
-		if done, _ := replayMetrics(t, repo, id); done.Status != store.ReplayDone {
+		if done, _ := replayMetrics(t, repo, id); done.Status != store.ReplaySucceeded {
 			t.Fatalf("回放应完成：%+v", done)
 		}
 		return barsOf(t, repo, id)
@@ -390,7 +393,7 @@ func TestPoolReplayFollowsIndexSwitchOnce(t *testing.T) {
 		job := startPoolReplay(t, repo, client, id, raw, list, 12)
 		(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 1}).Execute(context.Background(), job)
 		done, metrics := replayMetrics(t, repo, id)
-		if done.Status != store.ReplayDone {
+		if done.Status != store.ReplaySucceeded {
 			t.Fatalf("回放应完成：%+v", done)
 		}
 		return barsOf(t, repo, id), metrics
@@ -427,7 +430,7 @@ func TestPoolReplaySettlesFundingFromPoolFees(t *testing.T) {
 		job := startPoolReplay(t, repo, client, id, raw, list, 12)
 		(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 1}).Execute(context.Background(), job)
 		done, metrics := replayMetrics(t, repo, id)
-		if done.Status != store.ReplayDone {
+		if done.Status != store.ReplaySucceeded {
 			t.Fatalf("回放应完成：%+v", done)
 		}
 		return barsOf(t, repo, id), metrics

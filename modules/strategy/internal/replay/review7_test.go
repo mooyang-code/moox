@@ -11,6 +11,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 func metricsOf(t *testing.T, replay store.Replay) Metrics {
@@ -36,7 +38,7 @@ func TestFailedReplayKeepsSwitchNote(t *testing.T) {
 	repo := openStore(t)
 	job := submitReplay(t, repo, replayDSL, "idx", origin.Add(2*time.Hour), 12)
 	client := &fakeClient{marketType: "spot"}
-	client.onQuery = func(input.Query) {
+	client.onQuery = func(upstream.Query) {
 		if client.queries%2 == 1 {
 			client.build = fmt.Sprintf("b%d", client.queries)
 		}
@@ -56,7 +58,7 @@ func TestQueueTruncationIsNoted(t *testing.T) {
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
 	metrics := metricsOf(t, done)
-	if done.Status != store.ReplayDone || metrics.Bars != 6 || !hasNote(metrics, "排队期间 View 重建了索引") || !hasNote(metrics, "区间内最后一根 K 线结束于 2026-09-01T08:00:00Z") {
+	if done.Status != store.ReplaySucceeded || metrics.Bars != 6 || !hasNote(metrics, "排队期间 View 重建了索引") || !hasNote(metrics, "区间内最后一根 K 线结束于 2026-09-01T08:00:00Z") {
 		t.Fatalf("排队期间截短应写进说明：%+v", metrics)
 	}
 }
@@ -84,14 +86,14 @@ func TestCancelStopsStaleBackoff(t *testing.T) {
 	repo := openStore(t)
 	job := submitReplay(t, repo, replayDSL, "idx", origin.Add(2*time.Hour), 12)
 	client := &fakeClient{marketType: "spot"}
-	client.onQuery = func(input.Query) {
+	client.onQuery = func(upstream.Query) {
 		if client.queries == 1 {
 			if err := repo.CancelReplay(context.Background(), "p1", origin); err != nil {
 				t.Error(err)
 			}
 		}
 	}
-	client.failQuery = func(input.Query) error { return input.ErrStale }
+	client.failQuery = func(upstream.Query) error { return upstream.ErrStale }
 	started := time.Now()
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	cancelled, _ := repo.GetReplay(context.Background(), "p1")

@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 换代次数按整个回放累计：每段都换一次代的 View 在第 4 次换代时失败，而不是每段各自重新计数、永远跟下去。
@@ -18,7 +19,7 @@ func TestReplayCountsIndexSwitchesPerReplay(t *testing.T) {
 	job := submitReplay(t, repo, replayDSL, "idx", origin.Add(2*time.Hour), 12)
 	client := &fakeClient{marketType: "spot"}
 	// 每段的第一次读取前都换一代（索引 ID 不变、建成序号变），切换后的重读不再换代。
-	client.onQuery = func(input.Query) {
+	client.onQuery = func(upstream.Query) {
 		if client.queries%2 == 1 {
 			client.build = fmt.Sprintf("b%d", client.queries)
 		}
@@ -40,7 +41,7 @@ func TestReplayTruncatesAfterIndexSwitch(t *testing.T) {
 	client := &fakeClient{marketType: "spot", switchAtQuery: 2, switchedFrom: origin, switchedTo: origin.Add(8 * time.Hour)}
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
-	if done.Status != store.ReplayDone {
+	if done.Status != store.ReplaySucceeded {
 		t.Fatalf("新一代仍覆盖剩余区间的前段时应完成：%+v", done)
 	}
 	bars := barsOf(t, repo, "p1")
@@ -80,7 +81,7 @@ func TestReplayRecheckRereadsAfterStaleCoverage(t *testing.T) {
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
 	// 开始前复查一次（同一代索引也会删除最旧数据），回放中换代后重读两次，共 3 次。
-	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 12 || client.coverageCalls != 3 {
+	if done.Status != store.ReplaySucceeded || len(barsOf(t, repo, "p1")) != 12 || client.coverageCalls != 3 {
 		t.Fatalf("覆盖统计冲突一次后应重读并完成：%+v coverage=%d", done, client.coverageCalls)
 	}
 }

@@ -49,13 +49,26 @@ describe("strategy API", () => {
 
   it("creates a disabled instance bound to one factor task", async () => {
     call.mockResolvedValueOnce({
-      instance: { instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", factor_tasks: { swap: "ftask_a" }, enabled: false }
+      instance: {
+        instance_id: "i-1",
+        strategy_id: "s-1",
+        strategy_name: "动量",
+        space_id: "space-1",
+        factor_tasks: { swap: "ftask_a" },
+        enabled: false
+      }
     });
     const instance = await createInstance({ strategy_id: "s-1", factor_tasks: { swap: "ftask_a" }, logical_account_id: "" });
     expect(call).toHaveBeenCalledWith("strategy", "CreateStrategyInstance", {
       instance: { strategy_id: "s-1", factor_tasks: { swap: "ftask_a" }, logical_account_id: "", enabled: false }
     });
-    expect(instance).toMatchObject({ instance_id: "i-1", factor_tasks: { swap: "ftask_a" }, resolved_json: "{}", health: "ok" });
+    expect(instance).toMatchObject({
+      instance_id: "i-1",
+      strategy_name: "动量",
+      factor_tasks: { swap: "ftask_a" },
+      resolved_json: "{}",
+      health: "ok"
+    });
   });
 
   it("confirms a trial instance for its session and keeps confirmed_at", async () => {
@@ -147,11 +160,28 @@ describe("strategy API", () => {
   });
 
   it("passes success-path diagnostics (trial notes) through untouched", async () => {
-    call.mockResolvedValueOnce({ diagnostics: ["试算未完成：View 暂无数据"], resolved_json: '{"dataset_id":"d"}' });
-    await expect(validateStrategy("name: x", "v")).resolves.toMatchObject({
+    call.mockResolvedValueOnce({
       diagnostics: ["试算未完成：View 暂无数据"],
       resolved_json: '{"dataset_id":"d"}',
-      trial: null
+      requirement: {
+        pool: true,
+        market_declared: true,
+        task_keys: ["spot"],
+        tuned: false,
+        pool_allocation_method: "drift",
+        pool_drift_start: "2026-01-01T00:00:00Z"
+      }
+    });
+    await expect(validateStrategy("name: x", { spot: "ftask_a" })).resolves.toMatchObject({
+      diagnostics: ["试算未完成：View 暂无数据"],
+      resolved_json: '{"dataset_id":"d"}',
+      trial: null,
+      requirement: {
+        pool: true,
+        tuned: false,
+        poolAllocationMethod: "drift",
+        poolDriftStart: "2026-01-01T00:00:00Z"
+      }
     });
   });
 
@@ -167,7 +197,7 @@ describe("strategy API", () => {
     call.mockResolvedValueOnce({
       replay: {
         replay_id: "p1",
-        status: "pending",
+        status: "queued",
         spot_fee_bps: 10,
         tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" } },
         dsl_hash: "sha256:x"
@@ -180,15 +210,16 @@ describe("strategy API", () => {
       startReplay({
         instance_id: "i-1",
         factor_tasks: { spot: "ftask_a" },
-        start_time: "1788220800000",
-        end_time: "1790726400000",
+        start_time: 1788220800000,
+        end_time: 1790726400000,
         spot_fee_bps: 10,
-        swap_fee_bps: 0
+        swap_fee_bps: 0,
+        slippage_bps: 0
       })
     ).resolves.toMatchObject({
       replay: {
         replay_id: "p1",
-        status: "pending",
+        status: "queued",
         spot_fee_bps: 10,
         tasks: { spot: { factor_task_id: "ftask_a" } },
         dsl_hash: "sha256:x"

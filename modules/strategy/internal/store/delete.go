@@ -42,12 +42,12 @@ const (
 	sqlDeleteInstanceDisplaySettings = `DELETE FROM t_strategy_display_settings WHERE c_instance_id = ?`
 	sqlDeleteInstanceTasks           = `DELETE FROM t_strategy_instance_tasks WHERE c_instance_id = ?`
 	// sqlDeleteStoppedInstance 只删已停用的实例（停用的实例上没有会话）。
-	sqlDeleteStoppedInstance = `DELETE FROM t_strategy_instances WHERE c_instance_id = ? AND c_enabled = 0`
+	sqlDeleteStoppedInstance = `DELETE FROM t_strategy_instances WHERE c_instance_id = ? AND c_session_id IS NULL`
 	// sqlSelectActiveReplaysOfInstance 列出还在排队或执行、会读到实例数据的回放：从实例发起的，以及本空间里按定义或 DSL 发起、
 	// 但读取的因子任务（c_tasks_json 是 市场 → {factor_task_id, …}）在要删的任务（JSON 数组参数）里的。
 	sqlSelectActiveReplaysOfInstance = `
 		SELECT c_replay_id FROM t_strategy_replays
-		WHERE c_status IN ('pending', 'running')
+		WHERE c_status IN ('queued', 'running')
 		AND (c_instance_id = ? OR (c_space_id = ? AND EXISTS (
 			SELECT 1 FROM json_each(c_tasks_json) AS task
 			WHERE json_extract(task.value, '$.factor_task_id') IN (SELECT value FROM json_each(?))
@@ -107,7 +107,7 @@ func (s *Store) DeleteInstance(ctx context.Context, instanceID, spaceID string, 
 	if err != nil {
 		return err
 	}
-	if current.Enabled == 1 {
+	if current.SessionID.Valid {
 		return errors.New("实例已启用，不能删除")
 	}
 	batch := deleteInstanceBatch
@@ -135,7 +135,7 @@ func (s *Store) DeleteInstance(ctx context.Context, instanceID, spaceID string, 
 		if err != nil {
 			return err
 		}
-		if current.Enabled == 1 {
+		if current.SessionID.Valid {
 			return errors.New("实例在删除过程中被启用，没有删除")
 		}
 		for _, statement := range instanceFinalDeletes {
@@ -164,7 +164,7 @@ func (s *Store) deleteStoppedInstanceBatchLoop(ctx context.Context, instanceID s
 			if err != nil {
 				return err
 			}
-			if current.Enabled == 1 {
+			if current.SessionID.Valid {
 				return errors.New("实例在删除过程中被启用，没有删除")
 			}
 			affected, err = exec(tx)

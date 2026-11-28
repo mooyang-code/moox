@@ -69,7 +69,7 @@ export function equitySeries(bars: ReplayBar[]): { time: number; value: number }
 
 export function replayStatusLabel(status: string): string {
   return (
-    ({ pending: "排队中", running: "运行中", done: "已完成", failed: "失败", cancelled: "已取消" } as Record<string, string>)[
+    ({ queued: "排队中", running: "运行中", succeeded: "已完成", failed: "失败", cancelled: "已取消" } as Record<string, string>)[
       status
     ] ?? status
   );
@@ -77,7 +77,7 @@ export function replayStatusLabel(status: string): string {
 
 export function replayStatusColor(status: string): string {
   return (
-    ({ pending: "gray", running: "arcoblue", done: "green", failed: "red", cancelled: "orange" } as Record<string, string>)[
+    ({ queued: "gray", running: "arcoblue", succeeded: "green", failed: "red", cancelled: "orange" } as Record<string, string>)[
       status
     ] ?? "gray"
   );

@@ -7,6 +7,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 const holdCatchupDSL = `name: hold_demo
@@ -24,7 +26,7 @@ portfolio:
 
 func newHoldHarness(t *testing.T) *harness {
 	t.Helper()
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
 	h := newHarnessWith(t, holdCatchupDSL, nil, resolved)
 	// 每期分数轮换：入场序号、max_bars 出场与冷却都依赖之前每一期的状态。
 	scores := []map[string]float64{

@@ -14,6 +14,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const memberRank = `rules:
@@ -37,7 +40,7 @@ func memberDef(t *testing.T, id, market string) input.PoolMemberDef {
 }
 
 // buildPool 解析一个策略池：allocation 是 strategy_pool 里 allocation 之后的部分（缩进两格）。
-func buildPool(t *testing.T, client input.Client, tasks []string, allocation string, members ...input.PoolMemberDef) (input.PoolResolved, pool.Config) {
+func buildPool(t *testing.T, client upstream.Client, tasks []string, allocation string, members ...input.PoolMemberDef) (input.PoolResolved, pool.Config) {
 	t.Helper()
 	var list strings.Builder
 	for _, member := range members {
@@ -59,7 +62,7 @@ func buildPool(t *testing.T, client input.Client, tasks []string, allocation str
 	return pooled, cfg
 }
 
-func runOf(client input.Client, pooled input.PoolResolved, cfg pool.Config, startHour, endHour int) PoolRun {
+func runOf(client upstream.Client, pooled input.PoolResolved, cfg pool.Config, startHour, endHour int) PoolRun {
 	return PoolRun{Client: client, SpaceID: "crypto", Resolved: pooled.Resolved, Members: pooled.Members, Programs: pooled.Programs, Config: cfg,
 		Start: origin.Add(time.Duration(startHour) * time.Hour), End: origin.Add(time.Duration(endHour) * time.Hour), ChunkBars: 4,
 		Now: func() time.Time { return origin.Add(2000 * time.Hour) }}
@@ -90,7 +93,7 @@ func TestRunPoolSingleMemberMatchesResearchReplay(t *testing.T) {
 	pooled, cfg := buildPool(t, client, []string{"ftask_a"}, "  allocation: {method: fixed, ratios: {a: 1}}\n  fees: {spot_bps: 10, swap_bps: 5}\n", member)
 	var decisions []engine.Decision
 	run := runOf(client, pooled, cfg, 2, 14)
-	run.OnBar = func(_ input.PeriodBoundaries, decision engine.Decision) { decisions = append(decisions, decision) }
+	run.OnBar = func(_ period.PeriodBoundaries, decision engine.Decision) { decisions = append(decisions, decision) }
 	result, err := RunPool(context.Background(), run)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +148,7 @@ func TestRunPoolWarmStateContinuesLikeOneLongRun(t *testing.T) {
 	pooled, cfg := buildPool(t, client, []string{"ftask_a", "ftask_b"}, allocation, members...)
 	long := map[int]engine.Decision{}
 	run := runOf(client, pooled, cfg, 2, 40)
-	run.OnBar = func(bar input.PeriodBoundaries, decision engine.Decision) {
+	run.OnBar = func(bar period.PeriodBoundaries, decision engine.Decision) {
 		long[int(bar.BarEnd.Sub(origin)/time.Hour)] = decision
 	}
 	if _, err := RunPool(context.Background(), run); err != nil {
@@ -167,7 +170,7 @@ func TestRunPoolWarmStateContinuesLikeOneLongRun(t *testing.T) {
 	continued := runOf(client, pooled, cfg, 30, 40)
 	continued.State = restored
 	hours := 0
-	continued.OnBar = func(bar input.PeriodBoundaries, decision engine.Decision) {
+	continued.OnBar = func(bar period.PeriodBoundaries, decision engine.Decision) {
 		hour := int(bar.BarEnd.Sub(origin) / time.Hour)
 		want := long[hour]
 		got, wantRatios := ratiosOf(decision), ratiosOf(want)
@@ -246,7 +249,7 @@ func TestRunPoolStopsWhenAborted(t *testing.T) {
 		}
 		return nil
 	}
-	run.OnBar = func(input.PeriodBoundaries, engine.Decision) { bars++ }
+	run.OnBar = func(period.PeriodBoundaries, engine.Decision) { bars++ }
 	if _, err := RunPool(context.Background(), run); !errors.Is(err, stop) || bars != 3 {
 		t.Fatalf("应在第 3 期之后停止：%v bars=%d", err, bars)
 	}
@@ -259,17 +262,17 @@ type bigClient struct {
 	reads   int
 }
 
-func (c *bigClient) ListDatasetSubjects(context.Context, string, string) ([]input.Subject, error) {
-	subjects := make([]input.Subject, 0, len(c.symbols))
+func (c *bigClient) ListDatasetSubjects(context.Context, string, string) ([]upstream.Subject, error) {
+	subjects := make([]upstream.Subject, 0, len(c.symbols))
 	for _, id := range c.symbols {
-		subjects = append(subjects, input.Subject{SubjectID: id, Active: true})
+		subjects = append(subjects, upstream.Subject{SubjectID: id, Active: true})
 	}
 	return subjects, nil
 }
 
-func (c *bigClient) QueryRows(_ context.Context, _ string, query input.Query) ([]input.Row, uint64, error) {
+func (c *bigClient) QueryRows(_ context.Context, _ string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	c.reads++
-	var rows []input.Row
+	var rows []upstream.Row
 	for at := query.Start.Truncate(time.Hour); at.Before(query.End); at = at.Add(time.Hour) {
 		if at.Before(query.Start) {
 			continue
@@ -277,7 +280,7 @@ func (c *bigClient) QueryRows(_ context.Context, _ string, query input.Query) ([
 		hour := int(at.Sub(origin) / time.Hour)
 		for _, subject := range query.Subjects {
 			value := bigPrice(subject.SubjectID, hour)
-			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: map[string]float64{"close": value, "mom": value/bigPrice(subject.SubjectID, hour-1) - 1}})
+			rows = append(rows, upstream.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: map[string]float64{"close": value, "mom": value/bigPrice(subject.SubjectID, hour-1) - 1}})
 		}
 	}
 	return rows, 1, nil

@@ -1,4 +1,4 @@
-package input
+package period
 
 import (
 	"strings"

@@ -33,7 +33,7 @@ func seedInstanceRows(t *testing.T, repo *Store, instanceID, taskID, datasetID s
 		{`INSERT INTO t_strategy_ready_events (c_instance_id, c_session_id, c_dataset_id, c_bar_end_time, c_event_id, c_event_bytes) VALUES (?, ?, ?, 1, 'evt', x'00')`,
 			[]any{instanceID, sessionID, datasetID}},
 		{`INSERT INTO t_strategy_replays (c_replay_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_status)
-			VALUES (?, ?, ?, 'name: demo', ?, 'crypto_24x7', 'space', '{}', 1, 2, 'done')`, []any{replayID, instanceID, sessionID, testHash}},
+			VALUES (?, ?, ?, 'name: demo', ?, 'crypto_24x7', 'space', '{}', 1, 2, 'succeeded')`, []any{replayID, instanceID, sessionID, testHash}},
 		{`INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json) VALUES (?, 1, 'ok', '[]', '{}', '{}')`,
 			[]any{replayID}},
 		{`INSERT INTO t_strategy_display_settings (c_instance_id) VALUES (?)`, []any{instanceID}},

@@ -18,6 +18,8 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // fakeEngine 模拟因子引擎的 EngineControl：会话的各期是 [from, to) 的每个整点；不调参时按 fakeClient 的规则出行（与 View 来源
@@ -191,7 +193,7 @@ func (e *fakeEngine) CloseReplay(_ context.Context, req *factorpb.CloseReplayReq
 }
 
 // startComputeReplay 登记并认领一个“因子现算”回放：与 startReplay 相同，因子指纹按 client 解析。
-func startComputeReplay(t *testing.T, repo *store.Store, client input.Client, id, dslYaml string, hours int) store.Replay {
+func startComputeReplay(t *testing.T, repo *store.Store, client upstream.Client, id, dslYaml string, hours int) store.Replay {
 	t.Helper()
 	strategy, err := dsl.Parse([]byte(dslYaml))
 	require.NoError(t, err)
@@ -227,7 +229,7 @@ func TestComputeSourceMatchesViewSource(t *testing.T) {
 				(&Runner{Store: computeRepo, Client: client, Engine: engine, ChunkBars: scenario.chunk, MissingPriceLiquidateBars: scenario.liq, InitialEquity: 100}).Execute(context.Background(), job)
 				done, err := computeRepo.GetReplay(context.Background(), "c1")
 				require.NoError(t, err)
-				require.Equal(t, store.ReplayDone, done.Status, done.Error)
+				require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 				require.Equal(t, 1, engine.closed, "结束后关闭引擎上的会话")
 
 				want, got := barsOf(t, viewRepo, "v1"), barsOf(t, computeRepo, "c1")
@@ -290,9 +292,9 @@ portfolio:
 // f 声明了整型参数 window（5～60，默认 20）。
 type tunedComputeClient struct{ *fakeClient }
 
-func (c tunedComputeClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+func (c tunedComputeClient) GetView(ctx context.Context, spaceID, datasetID string) (upstream.ViewInfo, error) {
 	view, err := c.fakeClient.GetView(ctx, spaceID, datasetID)
-	view.Columns = []input.ViewColumn{
+	view.Columns = []upstream.ViewColumn{
 		{Name: "close", Attributes: map[string]string{}},
 		{Name: "m", Attributes: map[string]string{"column_kind": "output", "member_key": "f__var", "factor_id": "f", "member_kind": "var", "output_name": "m"}},
 		{Name: "p", Attributes: map[string]string{"column_kind": "output", "member_key": "p", "factor_id": "p", "member_kind": "fixed", "output_name": "p"}},
@@ -301,10 +303,10 @@ func (c tunedComputeClient) GetView(ctx context.Context, spaceID, datasetID stri
 	return view, err
 }
 
-func (tunedComputeClient) GetFactor(_ context.Context, factorID string) (input.FactorInfo, error) {
-	info := input.FactorInfo{FactorID: factorID, DefinitionHash: "h-" + factorID}
+func (tunedComputeClient) GetFactor(_ context.Context, factorID string) (upstream.FactorInfo, error) {
+	info := upstream.FactorInfo{FactorID: factorID, DefinitionHash: "h-" + factorID}
 	if factorID == "f" {
-		info.Params = []input.ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}
+		info.Params = []upstream.ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}
 	}
 	return info, nil
 }
@@ -348,7 +350,7 @@ func runTuned(t *testing.T, hours int, p map[int]float64, skip map[int]bool, rej
 	(&Runner{Store: repo, Client: client, Engine: engine, ChunkBars: 50, InitialEquity: 100}).Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "t1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 	bars := barsOf(t, repo, "t1")
 	require.Len(t, bars, hours)
 	require.Len(t, engine.steps, hours, "声明了 factor_params 时每步一期")
@@ -380,7 +382,7 @@ func tunedPick(t *testing.T, bar store.ReplayBar) string {
 // paramsWindow 返回一期记录里生效的 window（没有逐期提交的参数时为 0）。
 func paramsWindow(t *testing.T, bar store.ReplayBar) float64 {
 	t.Helper()
-	var params map[string]map[string]input.ParamValue
+	var params map[string]map[string]upstream.ParamValue
 	require.NoError(t, json.Unmarshal(bar.ParamsJSON, &params))
 	return params["f__var"]["window"].Default
 }
@@ -535,7 +537,7 @@ func TestComputeStepPeriods(t *testing.T) {
 // 上一期的同名列读上一根，年龄是（标的, series_tag）在 View 里最早一行起的根数。引擎与 View 给出相同的
 // 行时，因子现算与 View 来源的回放结果应当一致。views 是任务 → View（为空时都读 datasetID）；每个会话 ID 各有自己的状态。
 type viewEngine struct {
-	client    input.Client
+	client    upstream.Client
 	datasetID string
 	views     map[string]string
 	columns   []string
@@ -553,10 +555,10 @@ type viewSession struct {
 	first     map[string]int64
 }
 
-func (e *viewEngine) query(datasetID string, at time.Time, columns []string) []input.Row {
+func (e *viewEngine) query(datasetID string, at time.Time, columns []string) []upstream.Row {
 	view, _ := e.client.GetView(context.Background(), "crypto", datasetID)
 	subjects, _ := e.client.ListDatasetSubjects(context.Background(), "crypto", view.DatasetID)
-	rows, _, _ := e.client.QueryRows(context.Background(), "crypto", input.Query{DatasetID: datasetID, Frequency: "1h", Subjects: subjects, Start: at, End: at.Add(time.Nanosecond), Columns: columns})
+	rows, _, _ := e.client.QueryRows(context.Background(), "crypto", upstream.Query{DatasetID: datasetID, Frequency: "1h", Subjects: subjects, Start: at, End: at.Add(time.Nanosecond), Columns: columns})
 	return rows
 }
 
@@ -634,22 +636,22 @@ func TestComputeSourceMatchesViewSourceOnMarkets(t *testing.T) {
 	type scenario struct {
 		name    string
 		dsl     string
-		client  func() input.Client
+		client  func() upstream.Client
 		tasks   map[string]store.ReplayTask
 		hours   int
 		funding string
 	}
 	swapOnly := map[string]store.ReplayTask{"swap": swapTask}
 	dual := map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}
-	funded := func() input.Client {
+	funded := func() upstream.Client {
 		client := newDualClient()
 		client.swap.fundingRate = 0.001
 		return client
 	}
 	for _, tc := range []scenario{
-		{name: "swap_universe_pool_rank", dsl: baselineSwapDSL, client: func() input.Client { return newBaselineClient(baselineSwapClient()) }, tasks: swapOnly, hours: 16},
+		{name: "swap_universe_pool_rank", dsl: baselineSwapDSL, client: func() upstream.Client { return newBaselineClient(baselineSwapClient()) }, tasks: swapOnly, hours: 16},
 		{name: "swap_funding", dsl: swapOnlyDSL, client: funded, tasks: swapOnly, hours: 10, funding: "funding_rate"},
-		{name: "dual_two_tasks", dsl: baselineDualDSL, client: func() input.Client { return newBaselineClient(baselineDualClient()) }, tasks: dual, hours: 16},
+		{name: "dual_two_tasks", dsl: baselineDualDSL, client: func() upstream.Client { return newBaselineClient(baselineDualClient()) }, tasks: dual, hours: 16},
 		{name: "dual_funding", dsl: hedgeDSL, client: funded, tasks: dual, hours: 10, funding: "funding_rate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -672,7 +674,7 @@ func TestComputeSourceMatchesViewSourceOnMarkets(t *testing.T) {
 			(&Runner{Store: computeRepo, Client: client, Engine: engine, ChunkBars: 5, MissingPriceLiquidateBars: 3, InitialEquity: 100}).Execute(context.Background(), job)
 			done, err := computeRepo.GetReplay(context.Background(), "c1")
 			require.NoError(t, err)
-			require.Equal(t, store.ReplayDone, done.Status, done.Error)
+			require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 			require.Equal(t, len(tasks), engine.closed, "每个主帧任务一个会话，结束时都关")
 			if len(tasks) > 1 {
 				require.Equal(t, []string{"c1#spot", "c1#swap"}, engine.opened, "多个会话的 ID 加市场后缀")

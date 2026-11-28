@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // Membership 按标签查询成员；实时与回放共用。
@@ -15,18 +18,18 @@ type Membership func(ctx context.Context, tagID string) ([]string, error)
 
 // BuildSets 划分一期的标的集合：
 // U = 事件名单 ∩ 活跃标的（事件没有名单时为全部活跃标的）；
-// E(r) = 规则显式 pool 的范围或 universe 过滤后的 U。年龄剔除 G(r) 由 ApplyAge 另行计算，
+// E(r) = 规则级 universe（含解析期改写后的 pool 简写）或策略级 universe 过滤后的 U。年龄剔除 G(r) 由 ApplyAge 另行计算，
 // 以便实时装配先读当期行、再用同一修订号执行年龄探针。
-func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, subjects []Subject, eventUniverse []string) (Sets, error) {
-	sets := Sets{Expected: map[string][]string{}, AgedOut: map[string][]string{}, Subjects: map[string]Subject{}}
-	active := make(map[string]Subject, len(subjects))
+func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, subjects []upstream.Subject, eventUniverse []string) (Sets, error) {
+	sets := Sets{Expected: map[string][]string{}, AgedOut: map[string][]string{}, Subjects: map[string]upstream.Subject{}}
+	active := make(map[string]upstream.Subject, len(subjects))
 	for _, subject := range subjects {
 		if !subject.Active || subject.SubjectID == "" {
 			continue
 		}
 		active[subject.SubjectID] = subject
 	}
-	universe := make(map[string]Subject)
+	universe := make(map[string]upstream.Subject)
 	// nil 表示事件没有携带名单；非 nil 的空名单表示本期没有标的（回放中没有任何行的周期）。
 	if eventUniverse == nil {
 		sets.Notes = append(sets.Notes, "事件未携带标的名单，基础集合取数据集全部活跃标的")
@@ -67,7 +70,7 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 		}
 		return union, nil
 	}
-	inSet := func(subject Subject, set map[string]struct{}) bool {
+	inSet := func(subject upstream.Subject, set map[string]struct{}) bool {
 		_, ok := set[subject.SubjectID]
 		return ok
 	}
@@ -123,34 +126,14 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 	}
 	for _, rule := range strategy.Rules {
 		var expected []string
-		switch {
-		case rule.Pool.Explicit && len(rule.Pool.Fixed) > 0:
-			fixed := listed(rule.Pool.Fixed)
-			for _, subject := range universe {
-				if inSet(subject, fixed) {
-					expected = append(expected, subject.SubjectID)
-				}
-			}
-		case rule.Pool.Explicit && len(rule.Pool.Tags) > 0:
-			tagged, err := membersOf(rule.Pool.Tags)
-			if err != nil {
-				return Sets{}, err
-			}
-			for _, subject := range universe {
-				if inSet(subject, tagged) {
-					expected = append(expected, subject.SubjectID)
-				}
-			}
-		case rule.Universe.OverridesMembers():
-			var err error
-			if expected, err = filtered(strategy.RuleUniverse(rule)); err != nil {
-				return Sets{}, err
-			}
-		default:
-			var err error
-			if expected, err = computeDefault(); err != nil {
-				return Sets{}, err
-			}
+		var err error
+		if rule.Universe.OverridesMembers() {
+			expected, err = filtered(strategy.RuleUniverse(rule))
+		} else {
+			expected, err = computeDefault()
+		}
+		if err != nil {
+			return Sets{}, err
 		}
 		sort.Strings(expected)
 		sets.Expected[rule.ID] = append([]string(nil), expected...)
@@ -166,11 +149,11 @@ type AgeProbe func(ctx context.Context, instruments []string) (map[string]struct
 
 // AgeWindow 返回年龄探针的读取窗口：目标是 T − (N−1) 根，向前容忍两根，即 [T−(N+1), T−(N−1)] 三根 bar 的 bar_start。
 func AgeWindow(calendar, bar string, barStart time.Time, minAgeBars int) (time.Time, time.Time, error) {
-	from, err := HistoryStart(calendar, bar, barStart, minAgeBars+2)
+	from, err := period.HistoryStart(calendar, bar, barStart, minAgeBars+2)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	target, err := HistoryStart(calendar, bar, barStart, minAgeBars)
+	target, err := period.HistoryStart(calendar, bar, barStart, minAgeBars)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
@@ -180,7 +163,7 @@ func AgeWindow(calendar, bar string, barStart time.Time, minAgeBars int) (time.T
 // NewAgeProbe 构造每期一次、判定 n 根年龄的探针查询：读取年龄窗口内的 close 列，有行即满足。
 // revision 应与当期主查询一致；活跃序列的覆盖起点（CoverageStartAt）晚于目标根时无法判断年龄，返回 history_insufficient。
 // market 是 View 所属的市场，通过记录按（View、市场）保存。
-func NewAgeProbe(client Client, spaceID string, resolved Resolved, n int, view ViewInfo, market string, subjects map[string]Subject, barStart time.Time, revision uint64, meta *MetaCache) AgeProbe {
+func NewAgeProbe(client upstream.Client, spaceID string, resolved Resolved, n int, view upstream.ViewInfo, market string, subjects map[string]upstream.Subject, barStart time.Time, revision uint64, meta *MetaCache) AgeProbe {
 	return func(ctx context.Context, instruments []string) (map[string]struct{}, error) {
 		if n <= 0 || len(instruments) == 0 {
 			all := make(map[string]struct{}, len(instruments))
@@ -192,10 +175,10 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, n int, view V
 		from, to, err := AgeWindow(resolved.Calendar, resolved.Bar, barStart, n)
 		if err != nil {
 			// 日历换算是确定性的（数据不变、重试结果不变）：记 config_error，而不是按基础设施错误重试到预算耗尽。
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("%s 的探针窗口无法换算：%v", resolved.AgeLabel(n), err)}
+			return nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: fmt.Sprintf("%s 的探针窗口无法换算：%v", resolved.AgeLabel(n), err)}
 		}
 		if target, start := to.Add(-time.Nanosecond), CoverageStartAt(view, resolved, barStart); !start.IsZero() && target.Before(start) {
-			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.AgeLabel(n), PeriodLabel(resolved.Calendar, resolved.Bar, target), view.DatasetID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
+			return nil, &upstream.SkipError{Reason: upstream.SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.AgeLabel(n), period.PeriodLabel(resolved.Calendar, resolved.Bar, target), view.DatasetID, period.PeriodLabel(resolved.Calendar, resolved.Bar, start))}
 		}
 		// 已证明年龄足够的标的直接放行，只探针其余的；全部已知时不发查询。
 		cacheKey := AgeKey{SpaceID: spaceID, DatasetID: view.DatasetID, IndexID: view.ActiveIndexID, MinAgeBars: n, Market: market}
@@ -211,13 +194,13 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, n int, view V
 		if len(candidates) == 0 {
 			return satisfied, nil
 		}
-		selected := make([]Subject, 0, len(candidates))
+		selected := make([]upstream.Subject, 0, len(candidates))
 		for _, id := range candidates {
 			if subject, ok := subjects[id]; ok {
 				selected = append(selected, subject)
 			}
 		}
-		rows, _, err := client.QueryRows(ctx, spaceID, Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision})
+		rows, _, err := client.QueryRows(ctx, spaceID, upstream.Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision})
 		if err != nil {
 			return nil, fmt.Errorf("年龄探针查询：%w", err)
 		}
@@ -236,18 +219,18 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, n int, view V
 		if len(satisfied) == 0 {
 			// 候选全部不满足时，确认窗口内整个数据集是否有数据：一行都没有说明是历史缺口（停机、维护），
 			// 不能把全部标的当作新上市剔除。只需确认有一行。
-			all := make([]Subject, 0, len(subjects))
+			all := make([]upstream.Subject, 0, len(subjects))
 			for _, subject := range subjects {
 				all = append(all, subject)
 			}
 			sort.Slice(all, func(i, j int) bool { return all[i].SubjectID < all[j].SubjectID })
-			confirm := Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision, Limit: 1}
+			confirm := upstream.Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision, Limit: 1}
 			present, _, err := client.QueryRows(ctx, spaceID, confirm)
 			if err != nil {
 				return nil, fmt.Errorf("年龄探针确认查询：%w", err)
 			}
 			if len(present) == 0 {
-				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.AgeLabel(n), PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}
+				return nil, &upstream.SkipError{Reason: upstream.SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.AgeLabel(n), period.PeriodLabel(resolved.Calendar, resolved.Bar, from), period.PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}
 			}
 		}
 		return satisfied, nil

@@ -15,6 +15,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 // instantOf 读请求里的 Unix 毫秒时刻；0 或负数报错。
@@ -135,7 +137,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("永续的 View 没有资金费列 %s", fundingColumn))}, nil
 	}
 	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间（行键是交易日期的 UTC 零点，见 input.ReplayRange）。
-	if start, end, err = input.ReplayRange(resolved.Calendar, resolved.Bar, start, end); err != nil {
+	if start, end, err = period.ReplayRange(resolved.Calendar, resolved.Bar, start, end); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	// 同步校验起点、截断终点并检查根数上限：排队后才失败、或回放没有数据的未来 bar 都会误导用户。
@@ -155,7 +157,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
-	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, start, end, input.DefaultReplayMaxBars)
+	bars, err := period.ReplayBars(resolved.Calendar, resolved.Bar, start, end, input.DefaultReplayMaxBars)
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -212,7 +214,7 @@ func replayInputOf(raw string, strategy dsl.Strategy) (string, error) {
 // checkComputeReplay 是“因子现算”来源在解析出绑定后的限制：不支持股票市场（引擎回放的计算核心没有核对过交易日历与午休）。
 // 现货加永续两个主帧任务时每个任务在引擎上各开一个会话。
 func checkComputeReplay(resolved input.Resolved) error {
-	if resolved.Calendar != input.DefaultCalendar || resolved.Market.Has(dsl.MarketEquity) {
+	if resolved.Calendar != period.DefaultCalendar || resolved.Market.Has(dsl.MarketEquity) {
 		return fmt.Errorf("“因子现算”来源暂不支持股票市场（日历 %s）：请用 View 来源回放", resolved.Calendar)
 	}
 	return nil
