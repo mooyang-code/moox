@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 )
 
@@ -22,11 +23,12 @@ const (
 	// Forever keeps every row of a Dataset.
 	Forever = "forever"
 
-	// SourceDefault, SourceSpace and SourceRecord name where a Dataset's
-	// effective retention comes from.
-	SourceDefault = "default"
-	SourceSpace   = "space"
-	SourceRecord  = "record"
+	// SourceDefault、SourceSpace、SourceRecord、SourceDerived 与 SourceRetention 标识生效保留期的来源。
+	SourceDefault   = "default"
+	SourceSpace     = "space"
+	SourceRecord    = "record"
+	SourceDerived   = "derived"
+	SourceRetention = "retention"
 
 	// DefaultViewBars is the number of bars a series View keeps.
 	DefaultViewBars = 10_000
@@ -46,18 +48,20 @@ type Policy struct {
 }
 
 // Retention maps canonical frequencies to retention periods. A space entry
-// overrides the default for that space; the defaults cover every frequency,
-// so every time-series Dataset has a retention.
+// overrides the default for that space; for Dataset retention, defaults cover
+// every standard frequency, while View.MaxAge stores only explicit overrides.
 type Retention struct {
-	Defaults map[string]string            `json:"defaults"`
+	Defaults map[string]string            `json:"defaults,omitempty"`
 	Spaces   map[string]map[string]string `json:"spaces,omitempty"`
 }
 
 // View holds the View maintenance limits.
 type View struct {
-	// MaxAge 是 View 按空间 × 频率保留的最长历史：data_time 早于“当前时间 − 最长保留期”的行不写入 View，
-	// 补采、导入和因子历史重算带来的旧行同样丢弃。Dataset 与因子本地存储不受影响。
-	MaxAge Retention `json:"max_age"`
+	// MaxAge 是 View 按空间 × 频率的写入年龄上限例外：data_time 早于“当前时间 − 最长保留期”的行不写入 View，
+	// 补采、导入和因子历史重算带来的旧行同样丢弃，Dataset 与因子本地存储不受影响。
+	// 配置里只写需要覆盖默认推导的例外：未配置时，无交易时段空间按 Bars × 周期向上取整到整天推导（日线及以上永久），
+	// 有交易时段的空间（barclock 登记为 session 的市场）直接取对应数据集保留期。
+	MaxAge Retention `json:"max_age,omitempty"`
 	// Bars is the number of most recent bars a series View keeps.
 	Bars                     uint64 `json:"bars"`
 	MaintenanceCheckInterval string `json:"maintenance_check_interval"`
@@ -154,8 +158,9 @@ func fallbackStandard(freq string) (string, bool) {
 }
 
 // Default returns the generic policy: every standard frequency has a default
-// retention. Space overrides are deployment configuration (moox.toml), not
-// part of the package.
+// retention, while View.MaxAge stays empty so durations are derived from
+// View.Bars (or Dataset retention for session-based markets). Space overrides
+// belong to deployment configuration (moox.toml), not this package.
 func Default() Policy {
 	policy := Policy{
 		Retention: Retention{
@@ -165,7 +170,6 @@ func Default() Policy {
 			},
 		},
 		View: View{
-			MaxAge:                   defaultViewMaxAge(),
 			Bars:                     DefaultViewBars,
 			MaintenanceCheckInterval: "1m",
 			MaxViewFileBytes:         DefaultMaxViewFileBytes,
@@ -178,16 +182,62 @@ func Default() Policy {
 	return normalized
 }
 
-// defaultViewMaxAge 是 View 最长保留期的通用推荐值：7×24 市场恰好装下 DefaultViewBars 根，
-// 与 Dataset 保留期的区别只是 1m 不必留到因子的最大回看（35d），View 只服务截面与展示。
-// 各市场（交易时段更长）与系统空间的覆盖属于部署配置（moox.toml 的 [storage_view.max_age.spaces.*]），不写在代码里。
-func defaultViewMaxAge() Retention {
-	return Retention{
-		Defaults: map[string]string{
-			"30s": "90h", "1m": "7d", "5m": "35d", "15m": "105d", "30m": "210d",
-			"1h": "420d", "4h": "1700d", "1d": Forever, "1w": Forever, "1mo": Forever,
-		},
+// DeriveViewMaxAge 由每序列保留根数推导无交易时段空间（7×24）在规范频率 freq 下的 View 最长保留期：
+//   - 日线及以上（1d、1w、1mo）：永久（forever）；
+//   - 日内周期（30s、1m、5m、15m、30m、45m、1h、4h 等）：bars × 周期长度，向上取整到整天（24h 的整数倍）。
+//
+// 向上取整到整天保证自然时间能装下的根数不少于 bars（例如 1m 的 10000 根约 6.94 天，推导为 7 天），与 Coverage() 一致。
+func DeriveViewMaxAge(bars uint64, freq string) (Period, error) {
+	if bars == 0 || bars > maxViewBars {
+		return Period{}, fmt.Errorf("view.bars 必须在 1～%d 之间，当前为 %d", maxViewBars, bars)
 	}
+	parsed, err := frequencypkg.Parse(freq)
+	if err != nil || string(parsed) != freq {
+		return Period{}, fmt.Errorf("频率 %q 不是规范频率", freq)
+	}
+	if !parsed.IsIntraday() {
+		return Period{Forever: true}, nil
+	}
+	const secondsPerDay = 24 * 60 * 60
+	barSeconds := uint64(parsed.Duration() / time.Second)
+	totalSeconds := bars * barSeconds
+	days := (totalSeconds + secondsPerDay - 1) / secondsPerDay
+	return Period{Duration: time.Duration(days) * 24 * time.Hour}, nil
+}
+
+func isSessionSpace(spaceID string) bool {
+	market, err := barclock.MarketFor(spaceID)
+	return err == nil && market.Alignment == barclock.AlignmentSession
+}
+
+// ResolveViewMaxAge 返回 View 在 (spaceID, freq) 下生效的写入年龄上限及来源：
+//  1. 显式空间例外（view.max_age.spaces[spaceID][freq]）最优先；
+//  2. 有交易时段的空间（barclock 登记的 session 市场，如 stockcn/stockhk/stockus）直接取数据集保留期；
+//  3. 其余空间优先取显式默认例外（view.max_age.defaults[freq]），未配置时按 view.bars 推导。
+func (p Policy) ResolveViewMaxAge(spaceID, freq string) (Period, string, error) {
+	if !frequencypkg.IsCanonical(freq) {
+		return Period{}, "", fmt.Errorf("频率 %q 不是规范频率", freq)
+	}
+	if raw, ok := p.View.MaxAge.Spaces[spaceID][freq]; ok {
+		period, err := ParsePeriod(raw)
+		return period, SourceSpace, err
+	}
+	if isSessionSpace(spaceID) {
+		period, _, err := p.Retention.Resolve(spaceID, freq)
+		if err != nil {
+			return Period{}, "", err
+		}
+		return period, SourceRetention, nil
+	}
+	if raw, ok := p.View.MaxAge.Defaults[freq]; ok {
+		period, err := ParsePeriod(raw)
+		return period, SourceDefault, err
+	}
+	period, err := DeriveViewMaxAge(p.View.Bars, freq)
+	if err != nil {
+		return Period{}, "", err
+	}
+	return period, SourceDerived, nil
 }
 
 // Validate reports whether the policy is complete and within limits.
@@ -236,7 +286,25 @@ func (p Policy) Coverage() (errs, warnings []string) {
 		}
 	}
 	checkAll("retention", normalized.Retention)
-	checkAll("view.max_age", normalized.View.MaxAge)
+	// 对 view.max_age 检查生效的默认值（显式覆盖优先，未覆盖的标准频率用推导值）以及所有空间例外，
+	// 保证推导规则与显式覆盖都与 Coverage() 口径一致。
+	effectiveDefaults := make(map[string]string, len(frequencypkg.StandardStrings())+len(normalized.View.MaxAge.Defaults))
+	for _, freq := range frequencypkg.StandardStrings() {
+		if raw, ok := normalized.View.MaxAge.Defaults[freq]; ok {
+			effectiveDefaults[freq] = raw
+			continue
+		}
+		derived, deriveErr := DeriveViewMaxAge(normalized.View.Bars, freq)
+		if deriveErr != nil {
+			errs = append(errs, fmt.Sprintf("view.max_age.defaults.%s: %v", freq, deriveErr))
+			continue
+		}
+		effectiveDefaults[freq] = derived.String()
+	}
+	for freq, raw := range normalized.View.MaxAge.Defaults {
+		effectiveDefaults[freq] = raw
+	}
+	checkAll("view.max_age", Retention{Defaults: effectiveDefaults, Spaces: normalized.View.MaxAge.Spaces})
 	return errs, warnings
 }
 
@@ -276,7 +344,7 @@ func MinRetentionFor(freq string, bars int) Period {
 
 // normalized validates the policy and renders every period canonically.
 func (p Policy) normalized() (Policy, error) {
-	retention, err := p.Retention.normalized("retention")
+	retention, err := p.Retention.normalized("retention", true)
 	if err != nil {
 		return Policy{}, err
 	}
@@ -284,19 +352,25 @@ func (p Policy) normalized() (Policy, error) {
 		return Policy{}, err
 	}
 	out := Policy{View: p.View, Retention: retention}
-	if out.View.MaxAge, err = p.View.MaxAge.normalized("view.max_age"); err != nil {
+	if out.View.MaxAge, err = p.View.MaxAge.normalized("view.max_age", false); err != nil {
 		return Policy{}, err
 	}
 	return out, nil
 }
 
 // normalized 校验并把每个期限渲染成规范形式；path 是错误信息里的配置路径前缀。
-func (r Retention) normalized(path string) (Retention, error) {
-	out := Retention{Defaults: map[string]string{}}
-	for _, freq := range frequencypkg.StandardStrings() {
-		if _, ok := r.Defaults[freq]; !ok {
-			return Retention{}, fmt.Errorf("%s.defaults must cover every standard frequency; %q is missing", path, freq)
+// requireStandardDefaults 为真时要求 defaults 覆盖全部标准频率（数据集保留期）；为假时只校验显式填写的例外项（View 最大保留期）。
+func (r Retention) normalized(path string, requireStandardDefaults bool) (Retention, error) {
+	var out Retention
+	if requireStandardDefaults {
+		out.Defaults = make(map[string]string, len(r.Defaults))
+		for _, freq := range frequencypkg.StandardStrings() {
+			if _, ok := r.Defaults[freq]; !ok {
+				return Retention{}, fmt.Errorf("%s.defaults must cover every standard frequency; %q is missing", path, freq)
+			}
 		}
+	} else if len(r.Defaults) > 0 {
+		out.Defaults = make(map[string]string, len(r.Defaults))
 	}
 	for freq, raw := range r.Defaults {
 		if !frequencypkg.IsCanonical(freq) {

@@ -306,7 +306,7 @@ func runViewRole() error {
 	maintenanceInterval, _ := time.ParseDuration(policy.View.MaintenanceCheckInterval)
 	// 每序列保留根数随 DataView 查询响应告知调用方：不依赖维护器是否启动。
 	svc.SetSeriesBars(policy.View.Bars)
-	svc.SetMaxAge(policy.View.MaxAge)
+	svc.SetMaxAge(policy)
 	maintenanceOptions := viewservice.MaintenanceOptions{
 		Metadata:                metadataProxy,
 		PrimaryRange:            primaryProxy,

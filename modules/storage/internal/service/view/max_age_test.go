@@ -26,25 +26,27 @@ func maxAgeService(t *testing.T) *Service {
 		t.Fatal(err)
 	}
 	svc.now = func() time.Time { return maxAgeNow }
-	// 代码里的默认值不含业务空间；空间覆盖来自部署配置，这里模拟配置里的两个覆盖。
-	maxAge := storagepolicy.Default().View.MaxAge
-	maxAge.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}, "mooxsys": {"1m": "2d"}}
-	svc.SetMaxAge(maxAge)
+	// 无交易时段空间按 View.Bars 推导；有交易时段空间（stockcn）直接取数据集保留期；mooxsys 为显式空间例外。
+	policy := storagepolicy.Default()
+	policy.Retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
+	policy.View.MaxAge.Spaces = map[string]map[string]string{"mooxsys": {"1m": "2d"}}
+	svc.SetMaxAge(policy)
 	return svc
 }
 
 func TestDropExpiredWritesBoundaryAndFrequencies(t *testing.T) {
 	svc := maxAgeService(t)
-	// 默认：1m 7d、5m 35d、1d 永久；空间覆盖：stockcn 1m 60d、mooxsys 1m 2d。
+	// 默认 10000 根推导：1m 7d、5m 35d、45m 313d、1d 永久；stockcn 1m 取数据集保留期 60d；mooxsys 1m 显式例外 2d。
 	writes := []viewindex.RowWrite{
 		maxAgeWrite("crypto", "k", "5m", maxAgeNow.Add(-35*24*time.Hour)),                                                                             // 恰好等于期限：保留
 		maxAgeWrite("crypto", "k", "5m", maxAgeNow.Add(-35*24*time.Hour-time.Nanosecond)),                                                             // 早 1ns：丢弃
 		maxAgeWrite("crypto", "k", "1m", maxAgeNow.Add(-8*24*time.Hour)),                                                                              // 1m 期限更短：丢弃
 		maxAgeWrite("crypto", "k", "1m", maxAgeNow.Add(-6*24*time.Hour)),                                                                              // 保留
 		maxAgeWrite("crypto", "k", "1d", maxAgeNow.Add(-3000*24*time.Hour)),                                                                           // 永久：保留
-		maxAgeWrite("crypto", "k", "45m", maxAgeNow.Add(-100*24*time.Hour)),                                                                           // 45m 回落到 30m（210d）：保留
-		maxAgeWrite("mooxsys", "host", "1m", maxAgeNow.Add(-8*24*time.Hour)),                                                                          // 空间覆盖：2d，丢弃
-		maxAgeWrite("stockcn", "k", "1m", maxAgeNow.Add(-30*24*time.Hour)),                                                                            // 空间覆盖 stockcn 1m 60d：保留
+		maxAgeWrite("crypto", "k", "45m", maxAgeNow.Add(-100*24*time.Hour)),                                                                           // 45m 推导 313d：保留
+		maxAgeWrite("mooxsys", "host", "1m", maxAgeNow.Add(-8*24*time.Hour)),                                                                          // 空间例外：2d，丢弃
+		maxAgeWrite("stockcn", "k", "1m", maxAgeNow.Add(-30*24*time.Hour)),                                                                            // 有交易时段空间取数据集保留期 60d：保留
+		maxAgeWrite("stockcn", "k", "1m", maxAgeNow.Add(-61*24*time.Hour)),                                                                            // 超过 stockcn 数据集保留期 60d：丢弃
 		{Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "r", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "x"}}}}}, // 记录型行：保留
 	}
 	kept := svc.dropExpiredWrites("idx", writes)

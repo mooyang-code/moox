@@ -215,11 +215,10 @@ func mustMarshal(t *testing.T, policy Policy) []byte {
 	return raw
 }
 
-// view.max_age 要装得下 view.bars 根：默认值不足报错，空间覆盖不足只警告（空间可以有意少留历史）。
+// view.max_age 显式默认覆盖装不下 view.bars 根报错，空间覆盖装不下只警告（空间可以有意少留历史）。
 func TestCoverageChecksViewMaxAge(t *testing.T) {
 	policy := Default()
-	policy.View.MaxAge.Defaults = copyMap(policy.View.MaxAge.Defaults)
-	policy.View.MaxAge.Defaults["5m"] = "10d"
+	policy.View.MaxAge.Defaults = map[string]string{"5m": "10d"}
 	policy.View.MaxAge.Spaces = map[string]map[string]string{"stockcn": {"1m": "5d"}, "mooxsys": {"1m": "1d"}}
 	errs, warnings := policy.Coverage()
 	if len(errs) != 1 || !strings.Contains(errs[0], "view.max_age.defaults.5m = 240h") {
@@ -230,42 +229,131 @@ func TestCoverageChecksViewMaxAge(t *testing.T) {
 	}
 }
 
-// 代码里的默认值不含任何业务空间：没有空间覆盖时按默认值解析，空间覆盖来自部署配置。
-func TestDefaultViewMaxAgeResolvesPerFrequency(t *testing.T) {
-	policy := Default()
-	for space, want := range map[string]map[string]string{
-		"crypto":  {"1m": "168h", "5m": "840h", "1d": "forever", "45m": "5040h"},
-		"stockcn": {"1m": "168h", "5m": "840h"},
-		"mooxsys": {"1m": "168h", "30s": "90h"},
+// 推导规则：日内周期按 bars × 周期向上取整到整天，日线及以上永久；不同根数下推导结果都满足 Coverage()。
+func TestDeriveViewMaxAgeRoundingAndCoverage(t *testing.T) {
+	// 默认 10000 根下的各档标准频率及非标准频率 45m。
+	for freq, want := range map[string]string{
+		"30s": "96h",   // 3.47 天 -> 4d
+		"1m":  "168h",  // 6.94 天 -> 7d
+		"5m":  "840h",  // 34.72 天 -> 35d
+		"15m": "2520h", // 104.17 天 -> 105d
+		"30m": "5016h", // 208.33 天 -> 209d
+		"45m": "7512h", // 312.5 天 -> 313d
+		"1h":  "10008h",
+		"4h":  "40008h",
+		"1d":  Forever,
+		"1w":  Forever,
+		"1mo": Forever,
 	} {
-		for freq, expected := range want {
-			period, _, err := policy.View.MaxAge.Resolve(space, freq)
-			if err != nil || period.String() != expected {
-				t.Fatalf("%s %s = %v, %v; want %s", space, freq, period, err, expected)
-			}
+		got, err := DeriveViewMaxAge(DefaultViewBars, freq)
+		if err != nil || got.String() != want {
+			t.Fatalf("DeriveViewMaxAge(%d, %s) = %v, %v; want %s", DefaultViewBars, freq, got, err, want)
 		}
 	}
-	policy.View.MaxAge.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
-	if period, _, err := policy.View.MaxAge.Resolve("stockcn", "1m"); err != nil || period.String() != "1440h" {
-		t.Fatalf("空间覆盖 stockcn 1m = %v, %v; want 1440h", period, err)
+
+	// 调整根数时自动随根数缩放，且推导值始终满足 Coverage()。
+	for _, bars := range []uint64{1, 500, 5000, 10000} {
+		policy := Default()
+		policy.View.Bars = bars
+		errs, warnings := policy.Coverage()
+		if len(errs) != 0 || len(warnings) != 0 {
+			t.Fatalf("bars=%d 默认策略覆盖检查失败: errors=%v warnings=%v", bars, errs, warnings)
+		}
+	}
+	if got, err := DeriveViewMaxAge(5000, "1m"); err != nil || got.String() != "96h" {
+		t.Fatalf("5000 根 1m 约 3.47 天应向上取整为 4d(96h)，实际 %v, %v", got, err)
+	}
+	if _, err := DeriveViewMaxAge(0, "1m"); err == nil {
+		t.Fatal("bars=0 应报错")
+	}
+	if _, err := DeriveViewMaxAge(1000, "60m"); err == nil {
+		t.Fatal("非规范频率别名应报错")
+	}
+}
+
+// 默认由根数推导；有交易时段的空间直接取数据集保留期；配置里只写例外且优先级高于推导与数据集保留期。
+func TestResolveViewMaxAgeDerivationSessionAndOverrides(t *testing.T) {
+	policy := Default()
+	policy.Retention.Spaces = map[string]map[string]string{
+		"stockcn": {"1m": "60d", "5m": "300d", "30m": Forever},
+		"stockhk": {"1m": "45d"},
+		"stockus": {"1m": "40d"},
+	}
+
+	for _, tc := range []struct {
+		space, freq, want, source string
+	}{
+		{"crypto", "1m", "168h", SourceDerived},
+		{"crypto", "5m", "840h", SourceDerived},
+		{"crypto", "45m", "7512h", SourceDerived},
+		{"crypto", "1d", Forever, SourceDerived},
+		{"mooxsys", "1m", "168h", SourceDerived},
+		{"mooxsys", "30s", "96h", SourceDerived},
+		// 有交易时段的空间：直接取数据集保留期（含空间覆盖与未覆盖频率回落到数据集默认）。
+		{"stockcn", "1m", "1440h", SourceRetention},
+		{"stockcn", "5m", "7200h", SourceRetention},
+		{"stockcn", "45m", Forever, SourceRetention},
+		{"stockcn", "1d", Forever, SourceRetention},
+		{"stockhk", "1m", "1080h", SourceRetention},
+		{"stockus", "1m", "960h", SourceRetention},
+	} {
+		period, source, err := policy.ResolveViewMaxAge(tc.space, tc.freq)
+		if err != nil || period.String() != tc.want || source != tc.source {
+			t.Errorf("ResolveViewMaxAge(%s, %s) = %s/%s, %v; want %s/%s", tc.space, tc.freq, period, source, err, tc.want, tc.source)
+		}
+	}
+
+	// 显式例外：defaults 覆盖无交易时段空间的推导（不影响有交易时段空间），spaces 覆盖对应空间（含交易时段空间）。
+	policy.View.MaxAge.Defaults = map[string]string{"1m": "10d"}
+	policy.View.MaxAge.Spaces = map[string]map[string]string{
+		"stockcn": {"1m": "30d"},
+		"mooxsys": {"1m": "2d"},
+	}
+	for _, tc := range []struct {
+		space, freq, want, source string
+	}{
+		{"crypto", "1m", "240h", SourceDefault},
+		{"crypto", "5m", "840h", SourceDerived},
+		{"mooxsys", "1m", "48h", SourceSpace},
+		{"stockcn", "1m", "720h", SourceSpace},
+		{"stockcn", "5m", "7200h", SourceRetention},
+		{"stockhk", "1m", "1080h", SourceRetention},
+	} {
+		period, source, err := policy.ResolveViewMaxAge(tc.space, tc.freq)
+		if err != nil || period.String() != tc.want || source != tc.source {
+			t.Errorf("带例外 ResolveViewMaxAge(%s, %s) = %s/%s, %v; want %s/%s", tc.space, tc.freq, period, source, err, tc.want, tc.source)
+		}
 	}
 }
 
 func TestViewMaxAgeValidationAndRoundTrip(t *testing.T) {
+	// view.max_age 为空或只填部分例外频率都是合法的。
 	policy := Default()
-	policy.View.MaxAge.Defaults = copyMap(policy.View.MaxAge.Defaults)
-	delete(policy.View.MaxAge.Defaults, "15m")
-	if err := policy.Validate(); err == nil || !strings.Contains(err.Error(), "view.max_age.defaults must cover every standard frequency") {
-		t.Fatalf("缺频率应报错: %v", err)
+	if len(policy.View.MaxAge.Defaults) != 0 || len(policy.View.MaxAge.Spaces) != 0 {
+		t.Fatalf("默认策略的 view.max_age 应为空，实际 %+v", policy.View.MaxAge)
 	}
-	policy = Default()
-	policy.View.MaxAge.Spaces = map[string]map[string]string{"crypto": {"1M": "7d"}}
-	if err := policy.Validate(); err == nil || !strings.Contains(err.Error(), "view.max_age.spaces.crypto") {
-		t.Fatalf("非规范频率应报错: %v", err)
+	policy.View.MaxAge.Defaults = map[string]string{"1m": "10d"}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("只配置部分 view.max_age.defaults 例外应合法: %v", err)
 	}
-	withSpace := Default()
-	withSpace.View.MaxAge.Spaces = map[string]map[string]string{"mooxsys": {"1m": "7d"}}
-	raw, err := withSpace.Encode()
+
+	// 非规范频率与非法时长仍应拒绝。
+	bad := Default()
+	bad.View.MaxAge.Defaults = map[string]string{"60m": "7d"}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "view.max_age.defaults") {
+		t.Fatalf("view.max_age.defaults 非规范频率应报错: %v", err)
+	}
+	bad = Default()
+	bad.View.MaxAge.Spaces = map[string]map[string]string{"crypto": {"1M": "7d"}}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "view.max_age.spaces.crypto") {
+		t.Fatalf("view.max_age.spaces 非规范频率应报错: %v", err)
+	}
+
+	// 只含例外的策略编码与解析往返一致。
+	withOverrides := Default()
+	withOverrides.View.MaxAge.Defaults = map[string]string{"1m": "10d"}
+	withOverrides.View.MaxAge.Spaces = map[string]map[string]string{"mooxsys": {"1m": "2d"}}
+	raw, err := withOverrides.Encode()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +361,7 @@ func TestViewMaxAgeValidationAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.View.MaxAge.Defaults["5m"] != "840h" || parsed.View.MaxAge.Spaces["mooxsys"]["1m"] != "168h" {
-		t.Fatalf("round trip lost view.max_age: %+v", parsed.View.MaxAge)
+	if parsed.View.MaxAge.Defaults["1m"] != "240h" || len(parsed.View.MaxAge.Defaults) != 1 || parsed.View.MaxAge.Spaces["mooxsys"]["1m"] != "48h" {
+		t.Fatalf("round trip lost view.max_age overrides: %+v", parsed.View.MaxAge)
 	}
 }

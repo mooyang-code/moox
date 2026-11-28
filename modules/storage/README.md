@@ -18,4 +18,4 @@ go test -count=1 ./modules/storage/...
 
 Metadata 20100、PrimaryStore 20102 与 DataView 20103 仅提供 loopback 原生 tRPC，没有调用方密钥：访问控制由主机网关按服务目录做。健康检查是独立的 HTTP 端口，只监听本机。
 
-Storage policy 分别配置 Primary 保留期、View 根数与 View 写入年龄上限。View 默认每序列保留最近 10000 根，更旧的行定时删除；单个 View 文件超过 4GiB 只告警，不动数据；实时、补采及重建回填都会过滤超过 `[storage_view.max_age]` 的行（默认 1m 7d，Primary 1m 35d）。年龄过滤不返回写入错误，也不主动按年龄清理已有索引，具体默认值与边界见设计文档。
+Storage policy 分别配置 Primary 保留期、View 根数与 View 写入年龄上限例外。View 默认每序列保留最近 10000 根，更旧的行定时删除；单个 View 文件超过 4GiB 只告警，不动数据；实时、补采及重建回填都会过滤超过 View 写入年龄上限的行（默认由 `view_rows_per_series` 向上取整到整天推导，10000 根的 1m 为 7d，有交易时段空间取数据集保留期；Primary 1m 默认 35d）。年龄过滤不返回写入错误，也不主动按年龄清理已有索引，具体默认值与边界见设计文档。
