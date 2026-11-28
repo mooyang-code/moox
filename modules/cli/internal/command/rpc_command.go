@@ -32,6 +32,7 @@ var gatewayCallDenied = map[string]string{
 	"trpc.moox.ops.SecretMgr/ImportSecrets":                   "请求含口令与迁移包全文；导入由专用命令在进程内处理，不得经由通用入口传递",
 	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels":   "返回完整 webhook 地址；告警渠道请到管理台「资源与运维 › 监控告警」的“消息通知设置”查看",
 	"trpc.moox.monitor.MonitorMgr/ExportNotificationChannels": "返回完整 webhook 地址与签名密钥明文；仅供备份命令在进程内加密落盘，不得经由通用入口输出",
+	"trpc.moox.monitor.MonitorMgr/ImportNotificationChannels": "请求含完整 webhook 地址与签名密钥明文；仅供重装恢复流程在进程内调用，不得经由通用入口传递",
 	"trpc.moox.ops.SecretMgr/CreateSecret":                    secretWriteDenied,
 	"trpc.moox.ops.SecretMgr/UpdateSecret":                    secretWriteDenied,
 	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":              secretWriteDenied,
