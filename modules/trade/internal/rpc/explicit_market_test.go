@@ -58,7 +58,6 @@ type marketLedgerAdapter struct {
 	seen exchange.MarketType
 }
 
-func (a *marketLedgerAdapter) LedgerSupported() bool { return true }
 func (a *marketLedgerAdapter) ListLedger(_ context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	a.seen = query.Market
 	return exchange.LedgerPage{Entries: []exchange.LedgerEntry{

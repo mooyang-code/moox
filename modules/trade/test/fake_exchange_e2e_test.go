@@ -204,6 +204,8 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 		Exchange:   fakeExchangeName,
 		OrderTypes: []exchange.OrderType{exchange.OrderTypeMarket},
 		Session:    fakeSession{open: &open},
+	}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
+		return fakeAdapter{ExecutionAdapter: core}, nil
 	}, func(_ exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
 		if credential.Extra["gateway"] == "" {
 			return nil, fmt.Errorf("缺少券商网关地址")

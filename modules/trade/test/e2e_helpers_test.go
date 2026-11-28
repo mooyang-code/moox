@@ -13,7 +13,7 @@ import (
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -584,7 +584,7 @@ type fixture struct {
 	adapter execution.ExecutionAdapter
 	orders  *orderapp.Service
 	sync    *accountsync.Service
-	reducer *consumer.Reducer
+	reducer *fillreduce.Reducer
 	account *accountapp.Service
 }
 
@@ -645,7 +645,7 @@ func buildFixture(
 	accountService := &accountapp.Service{
 		Store: accountapp.Repository{Store: tradeStore}, SessionState: readySession(true),
 	}
-	reducer := &consumer.Reducer{Store: tradeStore, Now: func() time.Time { return testNow }}
+	reducer := &fillreduce.Reducer{Store: tradeStore, Now: func() time.Time { return testNow }}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: source, SessionState: readySession(true),
 		Fills: reducer, Now: func() time.Time { return testNow.Add(time.Minute) },

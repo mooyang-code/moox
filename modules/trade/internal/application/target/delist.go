@@ -199,7 +199,7 @@ func (e *Executor) truncationMatters(ctx context.Context, env *laneEnv, instrume
 			continue
 		}
 		delta := want.Quantity.Sub(confirmed)
-		quantity := floorToStep(delta.Abs(), mustBaseStep(instrument))
+		quantity := shared.FloorToStep(delta.Abs(), mustBaseStep(instrument))
 		if quantity.IsZero() {
 			return false
 		}

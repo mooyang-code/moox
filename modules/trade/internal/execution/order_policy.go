@@ -87,20 +87,38 @@ type OrderPolicy interface {
 	DefaultLeverage() (shared.Decimal, bool)
 }
 
-// ResolveOrderPolicy 优先使用适配器自身实现的 OrderPolicy；单元测试替身未实现时按账户执行模式提供一致策略。
+// ResolveOrderPolicy 按账户执行模式返回对应的订单策略（实盘或模拟盘）。
 func ResolveOrderPolicy(adapter ExecutionAdapter, account tradingaccount.Account) OrderPolicy {
-	if policy, ok := adapter.(OrderPolicy); ok && policy != nil {
-		return policy
-	}
-	return NewDefaultOrderPolicy(adapter, account)
-}
-
-// NewDefaultOrderPolicy 为未自定义 OrderPolicy 的适配器（实盘适配器或测试替身）提供标准策略实现。
-func NewDefaultOrderPolicy(adapter ExecutionAdapter, account tradingaccount.Account) OrderPolicy {
 	if account.ExecutionMode == exchange.ExecutionModePaper {
 		return PaperOrderPolicy{Adapter: adapter}
 	}
 	return LiveOrderPolicy{Adapter: adapter}
+}
+
+// resolveExecutableQuote 从适配器读取方向可执行价并校验新鲜度，实盘与模拟盘共用。
+func resolveExecutableQuote(
+	ctx context.Context,
+	adapter ExecutionAdapter,
+	key exchange.SymbolKey,
+	side exchange.Side,
+	now time.Time,
+	maxAge time.Duration,
+) (shared.Decimal, time.Time, error) {
+	if adapter == nil {
+		return shared.Decimal{}, time.Time{}, errors.New("execution: adapter is nil")
+	}
+	quote, err := adapter.GetQuote(ctx, key)
+	if err != nil {
+		return shared.Decimal{}, time.Time{}, err
+	}
+	if !QuoteWithinAge(quote, now, maxAge) {
+		return shared.Decimal{}, time.Time{}, fmt.Errorf("execution: quote is stale")
+	}
+	price, err := ExecutableQuotePrice(side, quote)
+	if err != nil {
+		return shared.Decimal{}, time.Time{}, err
+	}
+	return price, quote.SourceTime, nil
 }
 
 // ApplySlippage 是全模块唯一的滑点计算公式：买入放大 (1 + bps/10000)，卖出缩小 (1 - bps/10000)。
@@ -153,21 +171,7 @@ type LiveOrderPolicy struct {
 func (LiveOrderPolicy) NeedsExecutableQuote() bool { return false }
 
 func (p LiveOrderPolicy) ResolveExecutableQuote(ctx context.Context, key exchange.SymbolKey, side exchange.Side, now time.Time, maxAge time.Duration) (shared.Decimal, time.Time, error) {
-	if p.Adapter == nil {
-		return shared.Decimal{}, time.Time{}, errors.New("execution: adapter is nil")
-	}
-	quote, err := p.Adapter.GetQuote(ctx, key)
-	if err != nil {
-		return shared.Decimal{}, time.Time{}, err
-	}
-	if !QuoteWithinAge(quote, now, maxAge) {
-		return shared.Decimal{}, time.Time{}, fmt.Errorf("execution: quote is stale")
-	}
-	price, err := ExecutableQuotePrice(side, quote)
-	if err != nil {
-		return shared.Decimal{}, time.Time{}, err
-	}
-	return price, quote.SourceTime, nil
+	return resolveExecutableQuote(ctx, p.Adapter, key, side, now, maxAge)
 }
 
 func (LiveOrderPolicy) UsesLocalFundsLedger() bool  { return false }
@@ -226,21 +230,7 @@ type PaperOrderPolicy struct {
 func (PaperOrderPolicy) NeedsExecutableQuote() bool { return true }
 
 func (p PaperOrderPolicy) ResolveExecutableQuote(ctx context.Context, key exchange.SymbolKey, side exchange.Side, now time.Time, maxAge time.Duration) (shared.Decimal, time.Time, error) {
-	if p.Adapter == nil {
-		return shared.Decimal{}, time.Time{}, errors.New("execution: paper adapter is nil")
-	}
-	quote, err := p.Adapter.GetQuote(ctx, key)
-	if err != nil {
-		return shared.Decimal{}, time.Time{}, err
-	}
-	if !QuoteWithinAge(quote, now, maxAge) {
-		return shared.Decimal{}, time.Time{}, errors.New("trade order: paper quote is stale")
-	}
-	price, err := ExecutableQuotePrice(side, quote)
-	if err != nil {
-		return shared.Decimal{}, time.Time{}, err
-	}
-	return price, quote.SourceTime, nil
+	return resolveExecutableQuote(ctx, p.Adapter, key, side, now, maxAge)
 }
 
 func (PaperOrderPolicy) UsesLocalFundsLedger() bool  { return true }

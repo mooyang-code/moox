@@ -28,10 +28,10 @@ func (s *Service) convertDust(
 	account store.TradingAccountRecord,
 	adapter execution.ExecutionAdapter,
 ) error {
-	converter, ok := adapter.(execution.DustConverter)
-	if !ok {
+	if !execution.Supports(adapter, execution.CapabilityDust) {
 		return nil
 	}
+	converter := adapter.(execution.DustConverter)
 	now := s.now()
 	if account.LastDustConvertAt > 0 && now.Sub(time.UnixMilli(account.LastDustConvertAt)) < settings.DustConvertInterval {
 		return nil

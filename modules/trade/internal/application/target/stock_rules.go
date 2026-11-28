@@ -82,7 +82,7 @@ func SellQuantity(instrument store.InstrumentRecord, quantity, sellable shared.D
 	if quantity.Cmp(sellable) > 0 {
 		quantity = sellable
 	}
-	quantity = floorToStep(quantity, mustBaseStep(instrument))
+	quantity = shared.FloorToStep(quantity, mustBaseStep(instrument))
 	if belowMinimumQuantity(quantity, instrument) {
 		return shared.Zero(), false
 	}

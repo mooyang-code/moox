@@ -86,19 +86,19 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 		exchange.ExchangeBinance,
 		exchange.ExchangeOKX,
 	} {
-		adapter, err := registry.Bind(exchange.AccountConfig{
+		marketData, err := registry.BindMarketData(exchange.AccountConfig{
 			TradingAccountID: "account-1",
 			Exchange:         name,
 			Markets:          []exchange.MarketType{exchange.MarketTypeSpot},
 			ExecutionMode:    exchange.ExecutionModePaper,
 			SettlementAsset:  "USDT",
-		}, exchange.Credential{})
+		})
 		if err != nil {
-			t.Fatalf("Bind(%s) error = %v", name, err)
+			t.Fatalf("BindMarketData(%s) error = %v", name, err)
 		}
-		identity, ok := adapter.(execution.ExchangeIdentity)
+		identity, ok := marketData.(execution.ExchangeIdentity)
 		if !ok || identity.Exchange() != name {
-			t.Fatalf("Bind(%s) adapter identity = %v", name, identity)
+			t.Fatalf("BindMarketData(%s) identity = %v", name, identity)
 		}
 	}
 
@@ -123,9 +123,9 @@ func TestRegisterBuiltinsAShare(t *testing.T) {
 		Markets:       []exchange.MarketType{exchange.MarketTypeEquity},
 		ExecutionMode: exchange.ExecutionModePaper, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "CNY",
 	}
-	adapter, err := registry.Bind(config, exchange.Credential{})
+	marketData, err := registry.BindMarketData(config)
 	require.NoError(t, err)
-	_, isPublic := adapter.(*stockfeed.Adapter)
+	_, isPublic := marketData.(*stockfeed.Adapter)
 	require.True(t, isPublic)
 
 	config.ExecutionMode, config.Environment = exchange.ExecutionModeLive, exchange.AccountEnvironmentTestnet
@@ -151,9 +151,9 @@ func TestRegisterBuiltinsHKEX(t *testing.T) {
 		Markets:       []exchange.MarketType{exchange.MarketTypeEquity},
 		ExecutionMode: exchange.ExecutionModePaper, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "HKD",
 	}
-	adapter, err := registry.Bind(config, exchange.Credential{})
+	marketData, err := registry.BindMarketData(config)
 	require.NoError(t, err)
-	public, isPublic := adapter.(*stockfeed.Adapter)
+	public, isPublic := marketData.(*stockfeed.Adapter)
 	require.True(t, isPublic)
 	require.Equal(t, exchange.ExchangeHKEX, public.Exchange())
 
@@ -270,7 +270,9 @@ func (extraOnlyAdapter) Exchange() exchange.Exchange { return "FAKE_EXCHANGE" }
 func TestRegistryBindsExchangeWithOnlyExtraCredential(t *testing.T) {
 	registry := execution.NewRegistry()
 	fakeName := exchange.Exchange("FAKE_EXCHANGE")
-	registry.Register(execution.ExchangeDescriptor{Exchange: fakeName}, func(
+	registry.Register(execution.ExchangeDescriptor{Exchange: fakeName}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
+		return extraOnlyAdapter{}, nil
+	}, func(
 		_ exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {

@@ -9,17 +9,13 @@ type AccountEventSource interface {
 	Subscribe(context.Context, AccountEventHandler) error
 }
 
-// AccountEventsOf 返回适配器真实具备的私有流：没有实现，或合成适配器的某个子适配器没有私有流时返回 nil，
+// AccountEventsOf 返回适配器真实具备的私有流：没有实现或 CapabilityProbe 报告不支持时返回 nil，
 // 会话改为短周期同步，不会一个劲地订阅失败重连。
-func AccountEventsOf(adapter ExecutionAdapter) AccountEventSource {
-	source, ok := adapter.(AccountEventSource)
-	if !ok {
+func AccountEventsOf(adapter any) AccountEventSource {
+	if !Supports(adapter, CapabilityAccountEvents) {
 		return nil
 	}
-	if capable, ok := adapter.(interface{ SupportsAccountEvents() bool }); ok && !capable.SupportsAccountEvents() {
-		return nil
-	}
-	return source
+	return adapter.(AccountEventSource)
 }
 
 type AccountEventHandler interface {

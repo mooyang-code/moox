@@ -8,7 +8,7 @@ import (
 	"time"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -76,7 +76,7 @@ func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
 		})
 	}))
 
-	reducer := &consumer.Reducer{Store: s, Now: func() time.Time { return testNow }}
+	reducer := &fillreduce.Reducer{Store: s, Now: func() time.Time { return testNow }}
 	matcher := &paperexec.Matcher{Store: s, Reducer: reducer, DecideContext: func(ctx context.Context, candidate store.OrderRecord) (paperexec.Decision, error) {
 		quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol))
 		if err != nil {

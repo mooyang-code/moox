@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -55,8 +55,8 @@ func TestPaperSyncWriteBackKeepsFundingPositions(t *testing.T) {
 	}))
 	// 成交都在保护期（10 秒）之前：同步会按快照删除空仓、写墓碑，不会因为太新而跳过。
 	base := time.Now().Add(-3 * time.Hour).Truncate(time.Millisecond)
-	reducer := &consumer.Reducer{Store: db}
-	source := consumer.Source{SpaceID: "space-1", TradingAccountID: "paper-1", Kind: consumer.OriginPaperMatcher}
+	reducer := &fillreduce.Reducer{Store: db}
+	source := fillreduce.Source{SpaceID: "space-1", TradingAccountID: "paper-1", Kind: fillreduce.OriginPaperMatcher}
 	for index, step := range []struct {
 		symbol, quantity string
 		side             exchange.Side

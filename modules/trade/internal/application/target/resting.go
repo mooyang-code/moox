@@ -122,15 +122,15 @@ func reconcileResting(
 			continue
 		}
 		overshoot := lane.signedRemaining.IsNegative() != action.delta.IsNegative() ||
-			lane.signedRemaining.Abs().Cmp(floorToStep(action.delta.Abs(), step)) > 0
+			lane.signedRemaining.Abs().Cmp(shared.FloorToStep(action.delta.Abs(), step)) > 0
 		if overshoot {
 			cancel = append(cancel, lane.orders...)
 			continue
 		}
 		actions[index].delta = action.delta.Sub(lane.signedRemaining)
 		actions[index].hasResting = true
-		_, minimum, err := baseQuantityRules(action.instrument)
-		if err == nil && floorToStep(actions[index].delta.Abs(), step).Cmp(minimum) < 0 {
+		_, minimum, err := action.instrument.BaseQuantityRules()
+		if err == nil && shared.FloorToStep(actions[index].delta.Abs(), step).Cmp(minimum) < 0 {
 			covered[index] = struct{}{}
 		}
 	}

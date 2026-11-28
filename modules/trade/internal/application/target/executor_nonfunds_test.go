@@ -23,7 +23,7 @@ func realWalletFixture(t *testing.T, price, spot, futures, targetQty string) (*t
 	newExecutor := func() *Executor {
 		executor := f.executor()
 		executor.Prices = targetPriceStub{price: shared.MustDecimal(price)}
-		executor.Transfers = NewWalletTransfer(&wallet.Service{Store: f.store, Adapters: wallettest.Adapters{"account-a": fake}})
+		executor.Transfers = &wallet.Service{Store: f.store, Adapters: wallettest.Adapters{"account-a": fake}}
 		return executor
 	}
 	return f, fake, newExecutor

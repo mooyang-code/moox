@@ -91,9 +91,9 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 		Session:          fakeSession{open: &open},
 		SessionHours:     hkex.SessionHours,
 		InstrumentScope:  hkex.InstrumentScope,
-	}, func(exchange.AccountConfig, exchange.Credential) (execution.ExecutionAdapter, error) {
+	}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
 		return stockfeed.NewAdapter(market), nil
-	})
+	}, nil)
 
 	path := filepathForTest(t)
 	db, err := store.Open(path)

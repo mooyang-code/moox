@@ -108,7 +108,6 @@ type pnlLedgerAdapter struct {
 	calls []exchange.LedgerQuery
 }
 
-func (a *pnlLedgerAdapter) LedgerSupported() bool { return true }
 func (a *pnlLedgerAdapter) ListLedger(_ context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	a.calls = append(a.calls, query)
 	page := a.pages[0]

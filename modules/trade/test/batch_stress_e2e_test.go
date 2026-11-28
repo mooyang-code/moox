@@ -12,7 +12,7 @@ import (
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -258,7 +258,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	accountService := &accountapp.Service{Store: accountapp.Repository{Store: tradeStore}, SessionState: readySession(true)}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: source, SessionState: readySession(true),
-		Fills: &consumer.Reducer{Store: tradeStore, Now: now}, Now: now,
+		Fills: &fillreduce.Reducer{Store: tradeStore, Now: now}, Now: now,
 	}
 	orders := &orderapp.Service{
 		Store: tradeStore,

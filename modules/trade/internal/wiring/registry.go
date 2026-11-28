@@ -36,38 +36,43 @@ func RegisterCryptoExchanges(registry *execution.Registry) {
 	binanceDescriptor.WholeAccount = func(config exchange.AccountConfig) bool {
 		return config.AccountMode == exchange.AccountModeBinancePortfolioMargin
 	}
-	registry.Register(binanceDescriptor, func(
-		config exchange.AccountConfig,
-		credential exchange.Credential,
-	) (execution.ExecutionAdapter, error) {
-		if err := requireAPIKey(config, credential); err != nil {
-			return nil, err
-		}
-		if err := requireInspectedMode(config); err != nil {
-			return nil, err
-		}
-		if config.AccountMode == exchange.AccountModeBinancePortfolioMargin {
-			if config.Environment == exchange.AccountEnvironmentTestnet {
-				return nil, errors.New("币安测试网没有统一账户")
+	registry.Register(
+		binanceDescriptor,
+		func(config exchange.AccountConfig) (execution.PublicMarketData, error) {
+			return binance.New(config, exchange.Credential{}), nil
+		},
+		func(config exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
+			if err := requireAPIKey(credential); err != nil {
+				return nil, err
 			}
-			return binance.NewPortfolioMargin(config, credential), nil
-		}
-		return binance.New(config, credential), nil
-	})
+			if err := requireInspectedMode(config); err != nil {
+				return nil, err
+			}
+			if config.AccountMode == exchange.AccountModeBinancePortfolioMargin {
+				if config.Environment == exchange.AccountEnvironmentTestnet {
+					return nil, errors.New("币安测试网没有统一账户")
+				}
+				return binance.NewPortfolioMargin(config, credential), nil
+			}
+			return binance.New(config, credential), nil
+		},
+	)
 	okxExchange := cryptoExchange(exchange.ExchangeOKX, okx.Inspect)
-	registry.Register(okxExchange, func(
-		config exchange.AccountConfig,
-		credential exchange.Credential,
-	) (execution.ExecutionAdapter, error) {
-		if err := requireAPIKey(config, credential); err != nil {
-			return nil, err
-		}
-		if config.ExecutionMode == exchange.ExecutionModeLive &&
-			strings.TrimSpace(credential.Passphrase) == "" {
-			return nil, errors.New("OKX 实盘账户缺少 passphrase")
-		}
-		return okx.New(config, credential), nil
-	})
+	registry.Register(
+		okxExchange,
+		func(config exchange.AccountConfig) (execution.PublicMarketData, error) {
+			return okx.New(config, exchange.Credential{}), nil
+		},
+		func(config exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
+			if err := requireAPIKey(credential); err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(credential.Passphrase) == "" {
+				return nil, errors.New("OKX 实盘账户缺少 passphrase")
+			}
+			return okx.New(config, credential), nil
+		},
+	)
 }
 
 // RegisterBuiltins 是唯一的内置场所注册列表，新增场所时在这里加一行。
@@ -87,12 +92,9 @@ func RegisterBuiltins(registry *execution.Registry, ashareMarket, hkexMarket *st
 		LiveUnavailable:  errASharePending.Error(),
 		Session:          session,
 		SessionHours:     "A 股 09:30-11:30、13:00-14:57",
-	}, func(config exchange.AccountConfig, _ exchange.Credential) (execution.ExecutionAdapter, error) {
-		if config.ExecutionMode == exchange.ExecutionModeLive {
-			return nil, errASharePending
-		}
+	}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
 		return stockfeed.NewAdapter(ashareMarket), nil
-	})
+	}, nil)
 	// 港股：只有模拟盘，用腾讯实时快照做行情、由 Trade 撮合；没有实盘通道，建实盘账户和绑定都直接报错。
 	hkSession, err := hkex.NewSession()
 	if err != nil {
@@ -108,19 +110,15 @@ func RegisterBuiltins(registry *execution.Registry, ashareMarket, hkexMarket *st
 		Session:          hkSession,
 		SessionHours:     hkex.SessionHours,
 		InstrumentScope:  hkex.InstrumentScope,
-	}, func(config exchange.AccountConfig, _ exchange.Credential) (execution.ExecutionAdapter, error) {
-		if config.ExecutionMode == exchange.ExecutionModeLive {
-			return nil, errHKEXPaperOnly
-		}
+	}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
 		return stockfeed.NewAdapter(hkexMarket), nil
-	})
+	}, nil)
 	return nil
 }
 
-// requireAPIKey：模拟盘用空凭据绑定公共行情，只有实盘才要求 API Key 与 Secret。
-func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential) error {
-	if config.ExecutionMode == exchange.ExecutionModeLive &&
-		(strings.TrimSpace(credential.APIKey) == "" || strings.TrimSpace(credential.APISecret) == "") {
+// requireAPIKey 校验实盘凭据包含 API Key 与 Secret。
+func requireAPIKey(credential exchange.Credential) error {
+	if strings.TrimSpace(credential.APIKey) == "" || strings.TrimSpace(credential.APISecret) == "" {
 		return errors.New("实盘账户缺少交易密钥")
 	}
 	return nil
@@ -129,8 +127,7 @@ func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential
 // requireInspectedMode：币安生产环境的实盘账户必须先检测出账户类型（统一账户和普通账户的接口完全不同），不能按默认值猜。
 // 测试网跳过检测，一律按普通账户。
 func requireInspectedMode(config exchange.AccountConfig) error {
-	if config.ExecutionMode == exchange.ExecutionModeLive &&
-		config.Environment == exchange.AccountEnvironmentProduction &&
+	if config.Environment == exchange.AccountEnvironmentProduction &&
 		config.AccountMode == exchange.AccountModeUnspecified {
 		return errors.New("账户类型还没有检测出来：请先在管理台对这个账户“重新检测”")
 	}

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -47,7 +47,7 @@ func TestApplyIsolatedPositionEventPausesLogicalAccount(t *testing.T) {
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
 	service := &Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 
 	require.NoError(t, service.ApplyPosition(context.Background(), "account-1", isolatedMixedPositions()[1]))
@@ -139,7 +139,7 @@ func TestSyncWithIsolatedPositionKeepsCrossPositionsAndPausesLogicalAccount(t *t
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: isolatedPositionAdapter{&syncAdapter{}}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 	}
 
 	_, err := service.SyncAccount(context.Background(), "account-1")

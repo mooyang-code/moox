@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -145,7 +145,7 @@ func (c *SessionCloser) closeOrder(ctx context.Context, current store.OrderRecor
 		if err := aggregate.ConfirmCancel(); err != nil {
 			return err
 		}
-		reducer := &consumer.Reducer{Store: c.Store, Now: c.Now}
+		reducer := &fillreduce.Reducer{Store: c.Store, Now: c.Now}
 		if err := reducer.FinishOrderTx(tx, record, aggregate.State, orderdomain.RejectCodeSessionClose, ReasonSessionClose); err != nil {
 			return err
 		}

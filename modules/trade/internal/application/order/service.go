@@ -9,7 +9,7 @@ import (
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
@@ -1415,7 +1415,7 @@ func (s *Service) deliverSubmit(
 					send.closeReadiness = true
 					return nil
 				}
-				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), consumer.AwaitingBalanceReason)
+				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), fillreduce.AwaitingBalanceReason)
 			}
 		}
 		return nil

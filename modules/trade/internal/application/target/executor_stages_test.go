@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -229,17 +230,17 @@ type fakeTransfer struct {
 	// waitAccounts 只让这些账户等划转（beforePending 为真时所有账户都等）。
 	waitAccounts              map[string]bool
 	beforeCalls, collectCalls int
-	buys                      []TransferBuy
+	buys                      []wallet.Buy
 	scale                     map[string]shared.Decimal
 	reasons                   map[string]string
 	reasonCodes               map[string]string
 	collected                 []string
 }
 
-func (f *fakeTransfer) BeforeSpotBuy(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, buys []TransferBuy) (TransferOutcome, error) {
+func (f *fakeTransfer) BeforeSpotBuy(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, buys []wallet.Buy) (wallet.Outcome, error) {
 	f.beforeCalls++
 	f.buys = buys
-	outcome := TransferOutcome{BuyScale: f.scale, Reasons: f.reasons, ReasonCodes: f.reasonCodes}
+	outcome := wallet.Outcome{BuyScale: f.scale, Reasons: f.reasons, ReasonCodes: f.reasonCodes}
 	outcome.Waiting = map[string]string{}
 	for _, buy := range buys {
 		if f.beforePending || f.waitAccounts[buy.Account.TradingAccountID] {

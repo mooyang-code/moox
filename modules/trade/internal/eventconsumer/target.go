@@ -249,20 +249,6 @@ func acceptTarget(
 	if opts.Now != nil {
 		now = opts.Now().UTC()
 	}
-	record := store.LogicalAccountTargetRecord{
-		SpaceID:          message.GetSpaceId(),
-		LogicalAccountID: request.GetLogicalAccountId(),
-		TargetID:         request.GetTargetId(),
-		InstanceID:       request.GetInstanceId(),
-		SessionID:        request.GetSessionId(),
-		SessionStartedAt: request.GetSessionStartedAt(),
-		StrategyID:       request.GetStrategyId(),
-		Targets:          make([]store.InstrumentQuantity, 0, len(request.GetTargets())),
-		Status:           "PENDING",
-		AcceptedAt:       now.UnixMilli(),
-	}
-	record.BarEndTime = request.GetBarEndTime()
-	record.ValidUntil = request.GetValidUntil()
 	timeout := opts.ResolveTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -276,16 +262,24 @@ func acceptTarget(
 	if conversionErr != nil {
 		return conversionFailure(delivery, account.Name, "目标换算失败：", conversionErr, now)
 	}
-	record.Targets = append(record.Targets, conversion.QuantityTargets...)
+	quantityTargets := conversion.QuantityTargets
+	if quantityTargets == nil {
+		quantityTargets = []store.InstrumentQuantity{}
+	}
 	referencePrices, marshalErr := json.Marshal(referencePriceByInstrument(conversion))
 	if marshalErr != nil {
 		return retryTarget(marshalErr)
 	}
 	history := store.TargetHistoryRecord{
-		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), SessionStartedAt: request.GetSessionStartedAt(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), BarEndTime: record.BarEndTime, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), RecordedAt: now.UnixMilli(),
+		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), LogicalAccountID: request.GetLogicalAccountId(),
+		InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), SessionStartedAt: request.GetSessionStartedAt(),
+		StrategyID: request.GetStrategyId(), BarEndTime: request.GetBarEndTime(), ValidUntil: request.GetValidUntil(),
+		RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON,
+		Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime,
+		ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(quantityTargets), RecordedAt: now.UnixMilli(),
 	}
 	var accepted bool
-	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithHistoryLocked(ctx, record, history)
+	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithHistoryLocked(ctx, history)
 	if err != nil {
 		// 入口检查之后、拿到组合锁之前会话被关闭、来了更晚会话的目标或组合改成人工控制：落库时按同样的规则分类。
 		if errors.Is(err, store.ErrTargetSuperseded) || errors.Is(err, store.ErrTargetSessionConflict) || errors.Is(err, store.ErrTargetAuthorization) {
@@ -301,7 +295,7 @@ func acceptTarget(
 	}
 	if accepted {
 		if opts.WakeTarget != nil {
-			opts.WakeTarget(record.SpaceID, record.LogicalAccountID)
+			opts.WakeTarget(history.SpaceID, history.LogicalAccountID)
 		} else if opts.Wake != nil {
 			opts.Wake()
 		}

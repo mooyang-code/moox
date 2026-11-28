@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
@@ -127,7 +127,7 @@ func TestSyncClosesOrdersOfDelistedInstrument(t *testing.T) {
 	adapter := &delistedAdapter{}
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
+		SessionState: readySessionState(true), Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 	ctx := context.Background()
 
@@ -183,7 +183,7 @@ func TestSyncClosesStaleSubmittingOrderOfDelistedInstrument(t *testing.T) {
 	seedDelisted(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &delistedAdapter{}},
-		SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
+		SessionState: readySessionState(true), Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now: func() time.Time { return time.Now().Add(10 * time.Minute) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1")
@@ -248,7 +248,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 	adapter := &delistedAdapter{}
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
+		SessionState: readySessionState(true), Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 	// 生产路径造缺口：交易所订单更新报了成交（明细还没到），一笔部分成交仍挂着，一笔交易所已报全部成交
 	// （本地要等明细入账才落成 FILLED，所以仍是 OPEN），一笔交易所报过期、本地落成终态。
@@ -274,7 +274,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 	account, err = tradeStore.GetTradingAccountByID(ctx, "account-1")
 	require.NoError(t, err)
 	require.False(t, account.Ready)
-	require.Equal(t, consumer.AwaitingBalanceReason, account.LastError)
+	require.Equal(t, fillreduce.AwaitingBalanceReason, account.LastError)
 	require.True(t, account.HasBalancePending())
 
 	result, err := service.SyncAccount(ctx, "account-1")

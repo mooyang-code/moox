@@ -35,15 +35,17 @@ func (a *Adapter) sapiRequest(ctx context.Context, method, path string, values u
 }
 
 // Supports 说明可选能力在这个适配器上是否可用：币安普通账户按市场拆成现货、合约两个适配器，
-// 划转和小额兑换只放在现货适配器上，BNB 抵扣两个各设自己负责的那部分。
+// 划转和小额兑换只在现货适配器可用，资金费率与资金流水只在合约适配器可用，私有流与 BNB 抵扣两市场都支持。
 func (a *Adapter) Supports(capability string) bool {
 	switch capability {
 	case execution.CapabilityTransfer:
 		return a.papi == nil && a.config.Market() == exchange.MarketTypeSpot
-	case execution.CapabilityFeeDiscount:
+	case execution.CapabilityFeeDiscount, execution.CapabilityAccountEvents:
 		return true
 	case execution.CapabilityDust:
 		return a.config.Market() == exchange.MarketTypeSpot
+	case execution.CapabilityFundingRates, execution.CapabilityLedger:
+		return a.config.Market() == exchange.MarketTypeSwap
 	}
 	return false
 }

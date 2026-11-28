@@ -225,7 +225,7 @@ func (s *Service) flattenSpot(
 			result.addError(err)
 			continue
 		}
-		step, _, ruleErr := baseQuantityRules(instrument)
+		step, _, ruleErr := instrument.BaseQuantityRules()
 		if ruleErr != nil {
 			reasons[key] = flattenReason{text: ruleErr.Error(), final: true}
 			result.addError(flattenFinal{ruleErr})
@@ -253,7 +253,7 @@ func (s *Service) flattenSpot(
 			if available.Cmp(total) > 0 {
 				available = total
 			}
-			quantity = exposure.FloorToStep(available, step)
+			quantity = shared.FloorToStep(available, step)
 			if quantityRuleReason(quantity, instrument) != "" || exposure.SpotDust(quantity, price, instrument) {
 				reasons[key] = flattenReason{text: "可用余额不足，部分余额仍被挂单占用"}
 				continue
@@ -486,7 +486,7 @@ func quantityRuleReason(
 	quantity shared.Decimal,
 	instrument store.InstrumentRecord,
 ) string {
-	step, minimum, err := baseQuantityRules(instrument)
+	step, minimum, err := instrument.BaseQuantityRules()
 	if err != nil {
 		return err.Error()
 	}
@@ -496,29 +496,4 @@ func quantityRuleReason(
 		return "数量低于最小值或不符合步长"
 	}
 	return ""
-}
-
-func baseQuantityRules(
-	instrument store.InstrumentRecord,
-) (shared.Decimal, shared.Decimal, error) {
-	step, err := shared.ParseDecimal(instrument.ExchangeQuantityStep)
-	if err != nil || step.Cmp(shared.Zero()) <= 0 {
-		return shared.Decimal{}, shared.Decimal{},
-			errors.New("invalid exchange quantity step")
-	}
-	minimum, err := decimalOrZero(instrument.MinExchangeQuantity)
-	if err != nil || minimum.IsNegative() {
-		return shared.Decimal{}, shared.Decimal{},
-			errors.New("invalid minimum exchange quantity")
-	}
-	if exchange.RuleFor(instrument.MarketType).ContractValue {
-		contractValue, parseErr := shared.ParseDecimal(instrument.ContractValue)
-		if parseErr != nil || contractValue.Cmp(shared.Zero()) <= 0 {
-			return shared.Decimal{}, shared.Decimal{},
-				errors.New("invalid SWAP contract value")
-		}
-		step = step.Mul(contractValue)
-		minimum = minimum.Mul(contractValue)
-	}
-	return step, minimum, nil
 }

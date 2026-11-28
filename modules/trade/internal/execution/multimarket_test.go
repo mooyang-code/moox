@@ -186,7 +186,9 @@ func (*subscribeCounter) OnAccountSnapshot(context.Context, exchange.AccountSnap
 func TestRegistryBindsOneAdapterPerMarketAndWrapsMultiMarket(t *testing.T) {
 	registry := NewRegistry()
 	var bound []exchange.AccountConfig
-	registry.Register(ExchangeDescriptor{Exchange: exchange.ExchangeBinance}, func(config exchange.AccountConfig, _ exchange.Credential) (ExecutionAdapter, error) {
+	registry.Register(ExchangeDescriptor{Exchange: exchange.ExchangeBinance}, func(config exchange.AccountConfig) (PublicMarketData, error) {
+		return &marketStub{market: config.Market()}, nil
+	}, func(config exchange.AccountConfig, _ exchange.Credential) (ExecutionAdapter, error) {
 		bound = append(bound, config)
 		return &marketStub{market: config.Market()}, nil
 	})

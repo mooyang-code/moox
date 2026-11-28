@@ -90,9 +90,9 @@ func TestGetExecutionCapabilitiesThroughConsoleServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := execution.NewRegistry()
-	registry.Register(execution.ExchangeDescriptor{Exchange: exchange.ExchangeBinance, OrderTypes: testDescriptor.OrderTypes}, func(exchange.AccountConfig, exchange.Credential) (execution.ExecutionAdapter, error) {
+	registry.Register(execution.ExchangeDescriptor{Exchange: exchange.ExchangeBinance, OrderTypes: testDescriptor.OrderTypes}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
 		return nil, nil
-	})
+	}, nil)
 	server := &ConsoleServer{Store: tradeStore, Exchanges: registry}
 	response, err := server.GetExecutionCapabilities(
 		spacecontext.WithSpaceID(context.Background(), "space-1"),

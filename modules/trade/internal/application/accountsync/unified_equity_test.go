@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/equity"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -117,7 +117,7 @@ func TestSyncWritesUnifiedEquity(t *testing.T) {
 			}))
 			service := &Service{
 				Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-				SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
+				SessionState: readySessionState(true), Fills: &fillreduce.Reducer{Store: tradeStore},
 				Equity: &equity.Service{Store: tradeStore, Now: func() time.Time { return time.UnixMilli(now) }},
 				Now:    func() time.Time { return time.UnixMilli(now) },
 			}

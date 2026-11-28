@@ -85,7 +85,7 @@ func TestRejectedFirstMemberIsNotFundedButOtherMemberStillPlaces(t *testing.T) {
 	fakeB := &wallettest.Exchange{Spot: "100000", Futures: "0", Ask: "50000"}
 	executor := f.executor()
 	executor.Prices = targetPriceStub{price: shared.MustDecimal("50000")}
-	executor.Transfers = NewWalletTransfer(&wallet.Service{Store: f.store, Adapters: wallettest.Adapters{"account-a": fakeA, "account-b": fakeB}})
+	executor.Transfers = &wallet.Service{Store: f.store, Adapters: wallettest.Adapters{"account-a": fakeA, "account-b": fakeB}}
 
 	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)

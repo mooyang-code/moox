@@ -283,10 +283,10 @@ func (s *Service) warnOnce(key, message string) {
 
 // ensureBNBDiscount 只会把 BNB 抵扣打开，不会关：用户在交易所里自己开的开关，这里不动。
 func (s *Service) ensureBNBDiscount(ctx context.Context, account store.TradingAccountRecord, adapter execution.ExecutionAdapter) error {
-	configurer, ok := adapter.(execution.FeeDiscountConfigurer)
-	if !ok {
+	if !execution.Supports(adapter, execution.CapabilityFeeDiscount) {
 		return nil
 	}
+	configurer := adapter.(execution.FeeDiscountConfigurer)
 	s.mu.Lock()
 	applied := s.discountApplied[account.TradingAccountID]
 	s.mu.Unlock()

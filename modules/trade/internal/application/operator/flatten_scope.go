@@ -157,11 +157,11 @@ func (s *Service) reduceTargetsForAccount(
 	}
 	index := newInstrumentIndex(instruments, account.SettlementAsset)
 	add := func(instrument store.InstrumentRecord, current shared.Decimal) error {
-		step, minimum, ruleErr := baseQuantityRules(instrument)
+		step, minimum, ruleErr := instrument.BaseQuantityRules()
 		if ruleErr != nil {
 			return fmt.Errorf("标的 %s 的数量规则无法解析：%w", instrument.InstrumentID, ruleErr)
 		}
-		reduce := exposure.FloorToStep(current.Abs().Mul(command.ReduceRatio), step)
+		reduce := shared.FloorToStep(current.Abs().Mul(command.ReduceRatio), step)
 		// 现货零头和合约减仓量低于最小数量用同一个口径：减不动，不登记。
 		if reduce.IsZero() || reduce.Cmp(minimum) < 0 {
 			return nil

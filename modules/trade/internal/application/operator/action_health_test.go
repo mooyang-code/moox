@@ -8,7 +8,7 @@ import (
 	"time"
 
 	accountsyncapp "github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -75,7 +75,7 @@ func TestOperatorRealSyncMixedDatabaseFailureNeverBecomesHealthy(t *testing.T) {
 				require.NoError(t, s.ResumeOperatorAction(context.Background(), accepted.Action))
 				orderID = accepted.Order.OrderID
 			}
-			syncer := realOperatorSync{&accountsyncapp.Service{Store: f.store, Adapters: failedSyncAdapter{a}, Fills: &consumer.Reducer{Store: f.store}}}
+			syncer := realOperatorSync{&accountsyncapp.Service{Store: f.store, Adapters: failedSyncAdapter{a}, Fills: &fillreduce.Reducer{Store: f.store}}}
 			s.Syncer = syncer
 			if kind == string(operatordomain.ActionCancelOrder) {
 				orders := s.Orders.(*orderapp.Service)
@@ -110,7 +110,7 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 	for _, kind := range []string{string(operatordomain.ActionManualOrder), string(operatordomain.ActionFlatten), string(operatordomain.ActionCancelOrder)} {
 		t.Run(kind, func(t *testing.T) {
 			f, s, adapter := realSubmissionService(t)
-			s.Syncer = realOperatorSync{&accountsyncapp.Service{Store: f.store, Adapters: deadlineSyncAdapter{}, Fills: &consumer.Reducer{Store: f.store}}}
+			s.Syncer = realOperatorSync{&accountsyncapp.Service{Store: f.store, Adapters: deadlineSyncAdapter{}, Fills: &fillreduce.Reducer{Store: f.store}}}
 			var raw string
 			switch kind {
 			case string(operatordomain.ActionManualOrder):
