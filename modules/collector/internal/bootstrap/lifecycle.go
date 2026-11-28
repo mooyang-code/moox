@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,10 +25,9 @@ import (
 // 恢复模式只在进程内存里：重启后回到暂停，再 resume 即可。
 
 const (
-	collectorLifecycleStateFile = "lifecycle.json"
-	collectorLifecycleRefresh   = 30 * time.Second
-	recoveryTickEvery           = 20 * time.Second
-	collectorQuiesceTimeout     = 5 * time.Minute
+	collectorLifecycleRefresh = 30 * time.Second
+	recoveryTickEvery         = 20 * time.Second
+	collectorQuiesceTimeout   = 5 * time.Minute
 )
 
 // collectorControl 把生命周期钩子和 registerFetchPlanManager 里建好的组件连起来：生命周期在健康检查之后才创建，
@@ -253,7 +251,7 @@ func newCollectorLifecycle(dbPath string, control *collectorControl) (*lifecycle
 	return lifecycle.New(lifecycle.Options{
 		Audit:          logsink.Audit,
 		Module:         "collector",
-		StateFile:      filepath.Join(filepath.Dir(dbPath), collectorLifecycleStateFile),
+		StateFile:      lifecycle.StateFileForDB(dbPath),
 		QuiesceTimeout: collectorQuiesceTimeout,
 		Hooks: lifecycle.Hooks{
 			Quiesce: control.quiesce,

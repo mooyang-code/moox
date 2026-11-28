@@ -2,6 +2,7 @@ package sqlitedb
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -261,4 +262,75 @@ func TestEnsureSchemaRejectsLifecycleVersionMismatchOnExistingData(t *testing.T)
 	require.ErrorIs(t, err, dataformat.ErrIncompatibleFormat)
 	require.ErrorContains(t, err, dataformat.PartLifecycle)
 	require.ErrorContains(t, err, "setup install --wipe")
+}
+
+// 新版本仅新增表时，核对格式文件发生在建表事务之前：拒绝启动且不得先把新表建进旧库，之后旧二进制仍能正常启动。
+func TestEnsureSchemaVerifiesFormatBeforeApplyingNewTables(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "demo.db")
+
+	dbV1, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchemaSQL(context.Background(), dbV1, dbPath, "demo", testSchemaV1, nil))
+	require.NoError(t, dbV1.Close())
+
+	schemaWithExtraTable := testSchemaV1 + `
+CREATE TABLE IF NOT EXISTS t_extra_v2 (
+    c_id INTEGER NOT NULL PRIMARY KEY
+);
+`
+	dbV2, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	err = EnsureSchemaSQL(context.Background(), dbV2, dbPath, "demo", schemaWithExtraTable, nil)
+	require.ErrorIs(t, err, dataformat.ErrIncompatibleFormat)
+	require.ErrorContains(t, err, dataformat.PartSQLiteSchema)
+	require.ErrorContains(t, err, "setup install --wipe")
+
+	// 新表绝不能已经被建进旧库。
+	objects, err := readSchemaObjects(context.Background(), dbV2)
+	require.NoError(t, err)
+	_, hasExtra := objects["table\x00t_extra_v2"]
+	require.False(t, hasExtra, "格式不符拒绝启动时不得先把新增表建进已有库")
+	require.NoError(t, dbV2.Close())
+
+	// 回退旧二进制（testSchemaV1）仍可正常启动。
+	dbRollback, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	defer dbRollback.Close()
+	require.NoError(t, EnsureSchemaSQL(context.Background(), dbRollback, dbPath, "demo", testSchemaV1, nil))
+}
+
+// EnsureSchemaSQL 按调用方传入的实际状态文件路径判断是否已有本地数据，不再猜测同目录的 lifecycle.json。
+func TestEnsureSchemaUsesExplicitExtraDataPaths(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "demo.db")
+	actualStateFile := filepath.Join(dir, "state", "lifecycle.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actualStateFile), 0o755))
+	require.NoError(t, os.WriteFile(actualStateFile, []byte(`{"stage":"paused"}`), 0o600))
+
+	// 先在数据目录里放一份旧版本 data-format（lifecycle=1），但库里还没有任何表。
+	oldRec, err := FormatRecord("demo", testSchemaV1, map[string]string{dataformat.PartLifecycle: "1"})
+	require.NoError(t, err)
+	require.NoError(t, dataformat.WriteDir(dir, oldRec))
+
+	// 传入实际状态文件路径：识别为“已有数据”，在建表前即因 lifecycle 版本不符拒绝启动，且不建表。
+	db, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	err = EnsureSchemaSQL(context.Background(), db, dbPath, "demo", testSchemaV1, map[string]string{dataformat.PartLifecycle: "2"}, actualStateFile)
+	require.ErrorIs(t, err, dataformat.ErrIncompatibleFormat)
+	objects, err := readSchemaObjects(context.Background(), db)
+	require.NoError(t, err)
+	require.Empty(t, objects, "建表前拒启时不应在空库里建出表")
+	require.NoError(t, db.Close())
+
+	// 若仅在同目录放一个未传入的 lifecycle.json，sqlitedb 不应擅自猜测它。
+	dir2 := t.TempDir()
+	dbPath2 := filepath.Join(dir2, "demo.db")
+	require.NoError(t, os.WriteFile(filepath.Join(dir2, "lifecycle.json"), []byte(`{"stage":"paused"}`), 0o600))
+	require.NoError(t, dataformat.WriteDir(dir2, oldRec))
+
+	db2, err := OpenSQL(Options{Path: dbPath2})
+	require.NoError(t, err)
+	defer db2.Close()
+	require.NoError(t, EnsureSchemaSQL(context.Background(), db2, dbPath2, "demo", testSchemaV1, map[string]string{dataformat.PartLifecycle: "2"}))
 }

@@ -121,3 +121,45 @@ func TestApplySchemaRejectsMissingRequiredIndex(t *testing.T) {
 		t.Fatalf("缺少必需索引的 schema 应被拒绝：%v", err)
 	}
 }
+
+// 策略库与其余 SQLite 模块保持一致：空库时允许覆盖残留的旧格式文件，已有数据时则按格式文件拒绝不兼容启动。
+func TestApplySchemaMatchesUnifiedSQLiteFormatPolicy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "strategy.sqlite")
+	stale, err := dataformat.Build("strategy", map[string]string{
+		dataformat.PartSQLiteSchema: "sha256:stale",
+		dataformat.PartLifecycle:    "999",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dataformat.WriteDir(dir, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	// 空库尚无数据：应正常建表并覆盖残留格式文件。
+	repo, err := Open(path)
+	if err != nil {
+		t.Fatalf("空库打开失败：%v", err)
+	}
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		_ = repo.Close()
+		t.Fatalf("空库应覆盖残留格式文件：%v", err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 已有数据后若磁盘格式文件与当前版本不符：必须在建表前拒绝启动。
+	if err := dataformat.WriteDir(dir, stale); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("已有同结构库打开失败：%v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if err := reopened.ApplySchema(schema.AllSQL()); !errors.Is(err, dataformat.ErrIncompatibleFormat) {
+		t.Fatalf("已有数据且格式不符时应拒绝启动，实际：%v", err)
+	}
+}

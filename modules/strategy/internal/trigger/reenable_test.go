@@ -255,7 +255,7 @@ func TestReenabledSessionDoesNotReevaluateBarsAlreadyInState(t *testing.T) {
 func TestUnparsableRuleStateIsClearedAndRestarts(t *testing.T) {
 	h := newStopHarness(t)
 	h.run(1, 1)
-	if err := h.repo.ApplySchema(`UPDATE t_strategy_states SET c_state_json = '{"rules": 1}' WHERE c_instance_id = 'i1';`); err != nil {
+	if err := h.repo.ExecForTest(`UPDATE t_strategy_states SET c_state_json = '{"rules": 1}' WHERE c_instance_id = 'i1';`); err != nil {
 		t.Fatal(err)
 	}
 	h.run(2, 2)
@@ -275,7 +275,7 @@ func TestUnparsableRuleStateIsClearedAndRestarts(t *testing.T) {
 func TestPoolWithoutRuleStateIsNotEvaluatedFromScratch(t *testing.T) {
 	h := newPoolHarness(t, poolDSL("{a: 0.5, b: 0.5}"), standardMembers(), nil)
 	h.warm(barStart(1), "")
-	if err := h.repo.ApplySchema(`DELETE FROM t_strategy_states WHERE c_instance_id = 'i1';`); err != nil {
+	if err := h.repo.ExecForTest(`DELETE FROM t_strategy_states WHERE c_instance_id = 'i1';`); err != nil {
 		t.Fatal(err)
 	}
 	h.frame(2, abcFrame(3, 2, 1))

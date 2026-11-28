@@ -13,6 +13,7 @@ import (
 	sqlitedriver "github.com/glebarez/go-sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 )
@@ -166,7 +167,7 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.db.WithContext(ctx).Exec(sqlPing).Error
 }
 
-// ApplySchema 执行建表 SQL、校验结果与当前 schema 一致，并在校验通过后写入数据格式文件。
+// ApplySchema 先核对已有对象与数据格式文件，再执行建表 SQL、严格校验 schema，并在通过后写入数据格式文件。
 func (s *Store) ApplySchema(sqlText string) error {
 	if s == nil || s.db == nil {
 		return errors.New("策略数据库未打开")
@@ -174,14 +175,7 @@ func (s *Store) ApplySchema(sqlText string) error {
 	if strings.TrimSpace(sqlText) == "" {
 		return errors.New("策略 schema 为空")
 	}
-	// 多条建表语句放在一个事务里：首次启动中途崩溃不会留下残缺的 schema（残缺的库下次启动会被拒绝）。
-	if err := s.db.Transaction(func(tx *gorm.DB) error { return tx.Exec(sqlText).Error }); err != nil {
-		return err
-	}
-	if err := sqlitedb.ValidateGORM(s.db, "strategy", schema.AllSQL(), false); err != nil {
-		return err
-	}
-	return sqlitedb.RecordFormat(s.path, "strategy", schema.AllSQL(), dataformat.LifecycleParts())
+	return sqlitedb.EnsureSchemaGORM(s.db, s.path, "strategy", sqlText, dataformat.LifecycleParts(), lifecycle.StateFileForDB(s.path))
 }
 
 // ExecForTest 直接执行原始 SQL（仅测试里注入故障触发器或构造异常库状态使用，不走 schema 校验）。

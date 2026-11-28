@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -96,7 +97,7 @@ func (m *Store) ApplySchema(sqlText string) error {
 	if m == nil || m.db == nil {
 		return fmt.Errorf("监控数据库未打开")
 	}
-	return sqlitedb.EnsureSchemaGORM(m.db, m.path, "monitor", sqlText, dataformat.LifecycleParts())
+	return sqlitedb.EnsureSchemaGORM(m.db, m.path, "monitor", sqlText, dataformat.LifecycleParts(), lifecycle.StateFileForDB(m.path))
 }
 
 func (m *Store) Close() error {

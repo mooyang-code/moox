@@ -11,6 +11,7 @@ import (
 
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 )
@@ -81,7 +82,7 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("factor schema sql is empty")
 	}
-	return sqlitedb.EnsureSchemaGORM(s.db, s.path, "factor-mgr", sql, dataformat.LifecycleParts())
+	return sqlitedb.EnsureSchemaGORM(s.db, s.path, "factor-mgr", sql, dataformat.LifecycleParts(), lifecycle.StateFileForDB(s.path))
 }
 
 // WithTx runs fn inside a Factor SQLite transaction.

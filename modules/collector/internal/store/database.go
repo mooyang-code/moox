@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -270,7 +271,7 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("collector schema sql is empty")
 	}
-	return sqlitedb.EnsureSchemaGORM(s.db, s.path, "collector", sql, dataformat.LifecycleParts())
+	return sqlitedb.EnsureSchemaGORM(s.db, s.path, "collector", sql, dataformat.LifecycleParts(), lifecycle.StateFileForDB(s.path))
 }
 
 // Ping verifies that the database is available.

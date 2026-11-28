@@ -209,6 +209,28 @@ func VerifyOrWriteDir(dir string, rec Record, hasExistingData bool) error {
 	return VerifyOrWriteFile(filepath.Join(dir, FileName), rec, hasExistingData)
 }
 
+// VerifyExistingFile 仅做只读核对：若 path 处的格式文件不存在则放行（返回 nil）；
+// 若存在则解析并核对组件名与格式值，损坏或不符时返回 ErrIncompatibleFormat 并提示执行全新部署。
+// 用于组件在修改本地数据库或状态文件之前先完成格式核对，避免先改库再拒启导致旧二进制也无法回退启动。
+func VerifyExistingFile(path string, rec Record) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("数据格式文件路径不能为空")
+	}
+	validated, err := validateRecord(rec)
+	if err != nil {
+		return err
+	}
+	existing, err := ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("%w：组件 %s 的格式文件 %s 无法解析（%v）；请备份后执行全新部署（moox-cli setup install --wipe）",
+			ErrIncompatibleFormat, validated.Component, path, err)
+	}
+	return compareExistingRecord(path, validated, existing)
+}
+
 // VerifyOrWriteFile 是各组件启动时共用的格式核对与落盘逻辑：
 //   - 若尚无已有数据（hasExistingData 为假），或格式文件尚不存在：照常写入 rec。
 //   - 若已有数据且格式文件存在：解析并比对组件名与格式值；不一致或格式文件损坏时拒绝启动，提示执行全新部署（setup install --wipe）；一致时放行。
@@ -216,12 +238,9 @@ func VerifyOrWriteFile(path string, rec Record, hasExistingData bool) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("数据格式文件路径不能为空")
 	}
-	validated, err := Build(rec.Component, rec.Parts)
+	validated, err := validateRecord(rec)
 	if err != nil {
 		return err
-	}
-	if rec.Format != "" && rec.Format != validated.Format {
-		return fmt.Errorf("组件 %s 的数据格式摘要与组成部分不匹配", rec.Component)
 	}
 	if !hasExistingData {
 		return WriteFile(path, validated)
@@ -234,6 +253,21 @@ func VerifyOrWriteFile(path string, rec Record, hasExistingData bool) error {
 		return fmt.Errorf("%w：组件 %s 的格式文件 %s 无法解析（%v）；请备份后执行全新部署（moox-cli setup install --wipe）",
 			ErrIncompatibleFormat, validated.Component, path, err)
 	}
+	return compareExistingRecord(path, validated, existing)
+}
+
+func validateRecord(rec Record) (Record, error) {
+	validated, err := Build(rec.Component, rec.Parts)
+	if err != nil {
+		return Record{}, err
+	}
+	if rec.Format != "" && rec.Format != validated.Format {
+		return Record{}, fmt.Errorf("组件 %s 的数据格式摘要与组成部分不匹配", rec.Component)
+	}
+	return validated, nil
+}
+
+func compareExistingRecord(path string, validated, existing Record) error {
 	if existing.Component != validated.Component {
 		return fmt.Errorf("%w：目录 %s 的格式文件属于组件 %s，与当前组件 %s 不符；请备份后执行全新部署（moox-cli setup install --wipe）",
 			ErrIncompatibleFormat, filepath.Dir(path), existing.Component, validated.Component)

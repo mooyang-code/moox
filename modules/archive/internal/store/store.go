@@ -13,6 +13,7 @@ import (
 
 	archiveschema "github.com/mooyang-code/moox/modules/archive/schema"
 	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
@@ -69,7 +70,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开归档管理数据库失败：%w", err)
 	}
-	if err := sqlitedb.EnsureSchemaSQL(context.Background(), db, path, "archive-mgr", archiveschema.AllSQL(), dataformat.LifecycleParts()); err != nil {
+	if err := sqlitedb.EnsureSchemaSQL(context.Background(), db, path, "archive-mgr", archiveschema.AllSQL(), dataformat.LifecycleParts(), lifecycle.StateFileForDB(path)); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

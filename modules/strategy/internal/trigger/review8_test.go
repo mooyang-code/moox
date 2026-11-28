@@ -13,7 +13,7 @@ import (
 func corrupt(t *testing.T, h *harness, sessionJSON string) {
 	t.Helper()
 	h.handler.programs = nil
-	if err := h.repo.ApplySchema(`UPDATE t_strategy_sessions SET c_resolved_json = '` + sessionJSON + `' WHERE c_session_id = '` + h.session + `';`); err != nil {
+	if err := h.repo.ExecForTest(`UPDATE t_strategy_sessions SET c_resolved_json = '` + sessionJSON + `' WHERE c_session_id = '` + h.session + `';`); err != nil {
 		t.Fatal(err)
 	}
 }

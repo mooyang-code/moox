@@ -238,7 +238,7 @@ func TestReenabledPoolRewarmsWhenCarriedStateIsUnusable(t *testing.T) {
 			h.manager.Start(context.Background(), "i1", "session-1")
 			first := h.warmed(t, "session-1")
 			h.reenable(t, "session-1", "session-2")
-			if err := h.repo.ApplySchema(`UPDATE t_strategy_states SET c_state_json = '` + broken + `' WHERE c_instance_id = 'i1';`); err != nil {
+			if err := h.repo.ExecForTest(`UPDATE t_strategy_states SET c_state_json = '` + broken + `' WHERE c_instance_id = 'i1';`); err != nil {
 				t.Fatal(err)
 			}
 			h.manager.Now = hoursAt(103.5)

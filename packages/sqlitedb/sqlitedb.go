@@ -437,6 +437,10 @@ func ApplySchemaSQL(ctx context.Context, db *sql.DB, component, schemaSQL string
 	if err := ValidateSQL(ctx, db, component, schemaSQL, true); err != nil {
 		return err
 	}
+	return applySchemaSQLValidated(ctx, db, component, schemaSQL)
+}
+
+func applySchemaSQLValidated(ctx context.Context, db *sql.DB, component, schemaSQL string) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开启 %s schema 事务失败：%w", component, err)
@@ -451,21 +455,34 @@ func ApplySchemaSQL(ctx context.Context, db *sql.DB, component, schemaSQL string
 	return ValidateSQL(ctx, db, component, schemaSQL, false)
 }
 
-// EnsureSchemaSQL 应用并严格校验 schema，通过后核对并写入数据库同目录的 data-format 文件。
-// 已有数据、已有格式文件且格式值（如 lifecycle 版本常量）不同时拒绝启动；尚无数据或尚无格式文件时照常写入。
-// 内存库或 component 为空时不写格式文件。
-func EnsureSchemaSQL(ctx context.Context, db *sql.DB, dbPath, component, schemaSQL string, extraParts map[string]string) error {
-	hadData, err := hasExistingSQLiteData(ctx, db, dbPath, extraParts)
+// EnsureSchemaSQL 先按已有库对象与已有 data-format 文件做只读前置核对，再应用并严格校验 schema，最后写入数据库同目录的 data-format 文件。
+// extraDataPaths 传入组件除 SQLite 库文件之外的其他持久化状态文件路径（如该组件实际的 lifecycle.json 路径），用于判断“是否已有本地数据”。
+// 已有数据、已有格式文件且格式值（如新增表或 lifecycle 版本常量变化）不同时，会在建表事务执行前直接拒绝启动，不改动已有库。
+// 内存库或 component 为空时不核对也不写格式文件。
+func EnsureSchemaSQL(ctx context.Context, db *sql.DB, dbPath, component, schemaSQL string, extraParts map[string]string, extraDataPaths ...string) error {
+	if db == nil {
+		return fmt.Errorf("%s 数据库未打开", component)
+	}
+	if strings.TrimSpace(schemaSQL) == "" {
+		return fmt.Errorf("%s schema SQL 不能为空", component)
+	}
+	hadData, err := hasExistingSQLiteData(ctx, db, extraDataPaths...)
 	if err != nil {
 		return err
 	}
-	if err := ApplySchemaSQL(ctx, db, component, schemaSQL); err != nil {
+	if err := ValidateSQL(ctx, db, component, schemaSQL, true); err != nil {
+		return err
+	}
+	if err := verifyExistingFormat(dbPath, component, schemaSQL, extraParts, hadData); err != nil {
+		return err
+	}
+	if err := applySchemaSQLValidated(ctx, db, component, schemaSQL); err != nil {
 		return err
 	}
 	return recordFormat(dbPath, component, schemaSQL, extraParts, hadData)
 }
 
-func hasExistingSQLiteData(ctx context.Context, db *sql.DB, dbPath string, extraParts map[string]string) (bool, error) {
+func hasExistingSQLiteData(ctx context.Context, db *sql.DB, extraDataPaths ...string) (bool, error) {
 	if db == nil {
 		return false, nil
 	}
@@ -476,12 +493,27 @@ func hasExistingSQLiteData(ctx context.Context, db *sql.DB, dbPath string, extra
 	if len(objects) > 0 {
 		return true, nil
 	}
-	if _, hasLifecycle := extraParts[dataformat.PartLifecycle]; hasLifecycle && !isLocalPathSkipped(dbPath) {
-		if _, err := os.Stat(filepath.Join(filepath.Dir(dbPath), "lifecycle.json")); err == nil {
+	for _, path := range extraDataPaths {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "" {
+			continue
+		}
+		if info, err := os.Stat(trimmed); err == nil && !info.IsDir() {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func verifyExistingFormat(dbPath, component, schemaSQL string, extraParts map[string]string, hasExistingData bool) error {
+	if !hasExistingData || strings.TrimSpace(component) == "" || isLocalPathSkipped(dbPath) {
+		return nil
+	}
+	rec, err := FormatRecord(component, schemaSQL, extraParts)
+	if err != nil {
+		return err
+	}
+	return dataformat.VerifyExistingFile(filepath.Join(filepath.Dir(dbPath), dataformat.FileName), rec)
 }
 
 func isLocalPathSkipped(dbPath string) bool {
@@ -489,13 +521,8 @@ func isLocalPathSkipped(dbPath string) bool {
 	return trimmed == "" || IsMemoryPath(trimmed) || strings.HasPrefix(trimmed, "file:")
 }
 
-func fileNonEmpty(path string) bool {
-	info, err := os.Stat(strings.TrimSpace(path))
-	return err == nil && !info.IsDir() && info.Size() > 0
-}
-
 // EnsureSchemaGORM 是 EnsureSchemaSQL 的 GORM 封装。
-func EnsureSchemaGORM(db *gorm.DB, dbPath, component, schemaSQL string, extraParts map[string]string) error {
+func EnsureSchemaGORM(db *gorm.DB, dbPath, component, schemaSQL string, extraParts map[string]string, extraDataPaths ...string) error {
 	if db == nil {
 		return fmt.Errorf("%s 数据库未打开", component)
 	}
@@ -503,7 +530,7 @@ func EnsureSchemaGORM(db *gorm.DB, dbPath, component, schemaSQL string, extraPar
 	if err != nil {
 		return fmt.Errorf("获取 %s 底层数据库连接失败：%w", component, err)
 	}
-	return EnsureSchemaSQL(context.Background(), sqlDB, dbPath, component, schemaSQL, extraParts)
+	return EnsureSchemaSQL(context.Background(), sqlDB, dbPath, component, schemaSQL, extraParts, extraDataPaths...)
 }
 
 // ValidateGORM 是 ValidateSQL 的 GORM 封装。
@@ -530,12 +557,6 @@ func FormatRecord(component, schemaSQL string, extraParts map[string]string) (da
 		parts[k] = v
 	}
 	return dataformat.Build(component, parts)
-}
-
-// RecordFormat 核对并把格式记录写入 dbPath 所在目录的 data-format 文件；内存库或 component 为空时跳过。
-// 库文件非空且已有格式文件但格式值不符时拒绝启动并提示全新部署。
-func RecordFormat(dbPath, component, schemaSQL string, extraParts map[string]string) error {
-	return recordFormat(dbPath, component, schemaSQL, extraParts, fileNonEmpty(dbPath))
 }
 
 func recordFormat(dbPath, component, schemaSQL string, extraParts map[string]string, hasExistingData bool) error {

@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/cache"
 	"github.com/mooyang-code/moox/modules/trade/schema"
 	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
@@ -114,7 +115,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开交易数据库失败：%w", err)
 	}
-	if err := sqlitedb.EnsureSchemaGORM(db, path, "trade", schema.AllSQL(), dataformat.LifecycleParts()); err != nil {
+	if err := sqlitedb.EnsureSchemaGORM(db, path, "trade", schema.AllSQL(), dataformat.LifecycleParts(), lifecycle.StateFileForDB(path)); err != nil {
 		if sqlDB, dbErr := db.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}

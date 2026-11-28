@@ -82,7 +82,17 @@ func TestVerifyOrWriteFileBehavior(t *testing.T) {
 	require.ErrorIs(t, err, ErrIncompatibleFormat)
 	require.ErrorContains(t, err, "setup install --wipe")
 
-	// 6. DirHasEntries 忽略目录里孤立的 data-format 文件。
+	// 6. VerifyExistingFile 在文件缺失时放行，不写文件；文件不符时拒绝。
+	missingPath := filepath.Join(t.TempDir(), FileName)
+	require.NoError(t, VerifyExistingFile(missingPath, v1))
+	_, statErr := os.Stat(missingPath)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+
+	require.NoError(t, WriteFile(missingPath, v1))
+	require.NoError(t, VerifyExistingFile(missingPath, v1))
+	require.ErrorIs(t, VerifyExistingFile(missingPath, v2), ErrIncompatibleFormat)
+
+	// 7. DirHasEntries 忽略目录里孤立的 data-format 文件。
 	emptyDir := t.TempDir()
 	require.False(t, DirHasEntries(emptyDir))
 	require.NoError(t, WriteDir(emptyDir, v2))

@@ -18,9 +18,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
+
+// StateFileName 是 SQLite 模块在数据目录下持久化生命周期状态的默认文件名。
+const StateFileName = "lifecycle.json"
+
+// StateFileForDB 返回与本地 SQLite 数据库文件同目录的生命周期状态文件路径；
+// dbPath 为空或为内存库/URI 路径时返回空串（只在内存里保存）。
+func StateFileForDB(dbPath string) string {
+	trimmed := strings.TrimSpace(dbPath)
+	if trimmed == "" || trimmed == ":memory:" || strings.Contains(trimmed, "mode=memory") || strings.HasPrefix(trimmed, "file:") {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(trimmed), StateFileName)
+}
 
 // Stage 是模块的状态。
 type Stage string

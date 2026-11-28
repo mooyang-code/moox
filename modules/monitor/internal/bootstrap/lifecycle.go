@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"path/filepath"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
@@ -29,7 +28,7 @@ func newMonitorLifecycle(dbPath string, onChange func(from, to lifecycle.Stage, 
 	return lifecycle.New(lifecycle.Options{
 		Audit:     logsink.Audit,
 		Module:    "monitor",
-		StateFile: filepath.Join(filepath.Dir(dbPath), "lifecycle.json"),
+		StateFile: lifecycle.StateFileForDB(dbPath),
 		Hooks:     lifecycle.Hooks{OnChange: onChange},
 	})
 }

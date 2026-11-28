@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -17,10 +16,7 @@ import (
 // Trade 的生命周期（设计 3.8）：只有模块级的暂停、恢复追赶与放行。试运行中的策略实例（挂了账户、还没确认实盘）发来的目标带影子标记，
 // Trade 只换算并记录，管理台与 moox-cli trade shadow list 经 ListShadowTargets（rpc/shadow.go）查看。
 
-const (
-	lifecycleRefreshEvery  = 30 * time.Second
-	lifecycleStateFileName = "lifecycle.json"
-)
+const lifecycleRefreshEvery = 30 * time.Second
 
 // lifecycleGate 把生命周期门禁交给工人和事件消费者：门禁先建好分发出去，控制器在第一个工人启动之前绑定，
 // 所以工人的第一轮就能看到暂停状态；只有绑定之前（装配期间）才放行。
@@ -105,7 +101,7 @@ func newLifecycle(dbPath string, quiesce func(context.Context) error, catchup fu
 	return lifecycle.New(lifecycle.Options{
 		Audit:     logsink.Audit,
 		Module:    "trade",
-		StateFile: filepath.Join(filepath.Dir(dbPath), lifecycleStateFileName),
+		StateFile: lifecycle.StateFileForDB(dbPath),
 		Hooks: lifecycle.Hooks{
 			// 暂停之后等在途的订单提交结束才算真正停下；不撤单、不平仓。
 			Quiesce: quiesce,

@@ -923,8 +923,9 @@ func TestGetStrategyResultFailsWhenSnapshotReadErrors(t *testing.T) {
 	ok, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r1"})
 	requireOK(t, int32(ok.GetRetInfo().GetCode()), ok.GetRetInfo().GetMsg())
 	// 版本表读取出错（这里改掉列名模拟数据库读错误）：整体失败，不返回空 DSL 的成功响应。
-	// ApplySchema 在改动提交之后才校验 schema，会报“旧 schema”；这里要的正是这个被改坏的库，忽略它的错误。
-	_ = h.service.Store.ApplySchema(`ALTER TABLE t_strategy_def_versions RENAME COLUMN c_dsl_yaml TO c_dsl_yaml_broken;`)
+	if err := h.service.Store.ExecForTest(`ALTER TABLE t_strategy_def_versions RENAME COLUMN c_dsl_yaml TO c_dsl_yaml_broken;`); err != nil {
+		t.Fatal(err)
+	}
 	failed, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r1"})
 	if failed.GetRetInfo().GetCode() == 0 {
 		t.Fatalf("快照读取出错应失败：%+v", failed.GetRetInfo())

@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"errors"
-	"path/filepath"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -20,7 +19,7 @@ func newMgrLifecycle(dbPath string) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
 		Audit:     logsink.Audit,
 		Module:    "factor-mgr",
-		StateFile: filepath.Join(filepath.Dir(dbPath), "lifecycle.json"),
+		StateFile: lifecycle.StateFileForDB(dbPath),
 		Hooks: lifecycle.Hooks{
 			OnChange: func(from, to lifecycle.Stage, reason string) {
 				log.Infof("factor_mgr_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)

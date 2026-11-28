@@ -140,3 +140,10 @@ func TestStateIsACopy(t *testing.T) {
 	require.Equal(t, "a", state.Pause.Reason)
 	require.Equal(t, PauseSystem, state.Pause.Kind)
 }
+
+func TestStateFileForDB(t *testing.T) {
+	require.Equal(t, filepath.Join("/data/moox/data/trade", StateFileName), StateFileForDB("/data/moox/data/trade/moox_trade.db"))
+	require.Equal(t, "", StateFileForDB(""))
+	require.Equal(t, "", StateFileForDB(":memory:"))
+	require.Equal(t, "", StateFileForDB("file:memdb?mode=memory&cache=shared"))
+}

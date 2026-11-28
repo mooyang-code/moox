@@ -313,12 +313,10 @@ func factorEngineHasData(cfg *Config) bool {
 	paths := []string{
 		cfg.Watermark.StateFile,
 		cfg.Params.CacheFile,
+		cfg.Lifecycle.StateFile,
 	}
 	if dir := strings.TrimSpace(cfg.SeriesStore.Dir); dir != "" {
-		paths = append(paths,
-			filepath.Join(dir, "CURRENT"),
-			filepath.Join(filepath.Dir(dir), "lifecycle.json"),
-		)
+		paths = append(paths, filepath.Join(dir, "CURRENT"))
 	}
 	for _, p := range paths {
 		if strings.TrimSpace(p) == "" {
