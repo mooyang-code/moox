@@ -42,6 +42,12 @@ const (
 // Notice 是清空预览里固定的提醒：秘密文件只是初始值，管理台里后来改的、新加的密钥只在线上有。
 const Notice = "管理台里改过的密钥只在线上有，清空前先在管理台导出"
 
+// ComponentDataFormat 是目标机上单个有状态组件的本地数据存在性与 data-format 文件原文。
+type ComponentDataFormat struct {
+	HasData    bool   `json:"has_data"`
+	FormatText string `json:"format_text,omitempty"`
+}
+
 // HostReport 是一台主机的检测结果。
 type HostReport struct {
 	Host    string `json:"host"`
@@ -71,6 +77,8 @@ type HostReport struct {
 	Linger bool `json:"linger"`
 	// Journald 表示 /var/log/journal 存在（journald 持久化）。
 	Journald bool `json:"journald"`
+	// DataFormats 按组件 ID 记录本机各组件是否有本地数据及 data-format 文件原文。
+	DataFormats map[string]ComponentDataFormat `json:"data_formats,omitempty"`
 }
 
 // Options 是一次检测的参数。
@@ -88,19 +96,20 @@ type Dial func(context.Context, topology.Host) (setupssh.Client, error)
 
 // inspectResult 是 inspect.py 的输出：version.json 以文本带回，由这里判断是不是合法 JSON，保留原文字节。
 type inspectResult struct {
-	Root        string   `json:"root"`
-	RootExists  bool     `json:"root_exists"`
-	Entries     []string `json:"entries"`
-	Installed   bool     `json:"installed"`
-	VersionText string   `json:"version_text"`
-	Units       []string `json:"units"`
-	Active      []string `json:"active"`
-	Disabled    []string `json:"disabled"`
-	Processes   int      `json:"processes"`
-	ArchiveKB   int64    `json:"archive_kb"`
-	DiskFreeKB  int64    `json:"disk_free_kb"`
-	Linger      bool     `json:"linger"`
-	Journald    bool     `json:"journald"`
+	Root        string                         `json:"root"`
+	RootExists  bool                           `json:"root_exists"`
+	Entries     []string                       `json:"entries"`
+	Installed   bool                           `json:"installed"`
+	VersionText string                         `json:"version_text"`
+	Units       []string                       `json:"units"`
+	Active      []string                       `json:"active"`
+	Disabled    []string                       `json:"disabled"`
+	Processes   int                            `json:"processes"`
+	ArchiveKB   int64                          `json:"archive_kb"`
+	DiskFreeKB  int64                          `json:"disk_free_kb"`
+	Linger      bool                           `json:"linger"`
+	Journald    bool                           `json:"journald"`
+	DataFormats map[string]ComponentDataFormat `json:"data_formats"`
 }
 
 // Scan 只读检测全部启用的主机（并行），结果按 cfg.Hosts() 的顺序。moox.toml 里停用的主机不检测：
@@ -166,6 +175,11 @@ func inspect(ctx context.Context, dial Dial, host topology.Host, root string, si
 	report.Units, report.Active, report.Disabled, report.Processes = nonNil(result.Units), nonNil(result.Active), nonNil(result.Disabled), result.Processes
 	report.ArchiveKB, report.DiskFreeKB = result.ArchiveKB, result.DiskFreeKB
 	report.Linger, report.Journald = result.Linger, result.Journald
+	if result.DataFormats != nil {
+		report.DataFormats = result.DataFormats
+	} else {
+		report.DataFormats = map[string]ComponentDataFormat{}
+	}
 	return report, nil
 }
 

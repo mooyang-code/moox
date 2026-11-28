@@ -416,3 +416,66 @@ factor = ["factor-engine"]
 	require.ErrorContains(t, err, "connection refused")
 	require.ErrorContains(t, err, "从 moox.toml 删掉这台主机")
 }
+
+// inspect.py 按各组件真实落盘判据检查有没有数据并读回 data-format，忽略空目录、0 字节库文件与 factor-engine 可重拉目录。
+func TestInspectScriptReportsAllStatefulDataFormats(t *testing.T) {
+	env := newScriptEnv(t, false)
+	// 先建出全部空目录（模拟 install.sh prepare）以及 0 字节库文件、可重拉的 catalog.json / udf/。
+	for _, dir := range []string{
+		"data/admin", "data/monitor", "data/collector", "data/factor-mgr",
+		"data/archive-mgr", "data/strategy", "data/trade",
+		"data/storage-primary/metadata", "data/storage-primary/pebble/storage-primary",
+		"data/storage-view/view-indexes", "data/eventbus/jetstream",
+		"data/factor-engine/seriesstore", "data/factor-engine/engine", "data/factor-engine/gap", "data/factor-engine/udf",
+		"archive/.state",
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Join(env.root, dir), 0o700))
+	}
+	// 0 字节库文件不算有数据；factor-engine 的 catalog.json 与 udf/ 也不算有数据。
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "data/admin/admin.db"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "data/factor-engine/engine/catalog.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "data/factor-engine/udf/demo.wasm"), []byte("wasm"), 0o600))
+
+	out, err := env.run(t, inspectScript, map[string]any{"root": env.root, "sizes": false})
+	require.NoError(t, err)
+	var emptyResult inspectResult
+	require.NoError(t, decode(out, &emptyResult))
+	require.Len(t, emptyResult.DataFormats, 12)
+	for cid, entry := range emptyResult.DataFormats {
+		require.False(t, entry.HasData, "组件 %s 尚无有效数据时应为 false", cid)
+		require.Empty(t, entry.FormatText, "组件 %s 尚未写格式文件时应为空", cid)
+	}
+
+	// 写入各类真实数据文件与格式文件。
+	writeFile := func(rel, content string) {
+		t.Helper()
+		full := filepath.Join(env.root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o700))
+		require.NoError(t, os.WriteFile(full, []byte(content), 0o600))
+	}
+	writeFile("data/admin/admin.db", "sqlite-bytes")
+	writeFile("data/admin/data-format", `{"component":"admin"}`)
+	writeFile("data/storage-primary/pebble/storage-primary/CURRENT", "MANIFEST-000001\n")
+	writeFile("data/storage-primary/data-format", `{"component":"storage-primary"}`)
+	writeFile("data/storage-view/view-indexes/duckdb.db", "idx")
+	writeFile("data/storage-view/data-format", `{"component":"storage-view"}`)
+	writeFile("data/eventbus/jetstream/meta", "js")
+	writeFile("data/eventbus/data-format", `{"component":"eventbus"}`)
+	writeFile("data/factor-engine/engine/watermarks.json", "{}")
+	writeFile("data/factor-engine/data-format", `{"component":"factor-engine"}`)
+	writeFile("archive/.state/staging.db", "staging-bytes")
+	writeFile("archive/.state/data-format", `{"component":"archive-worker"}`)
+
+	out, err = env.run(t, inspectScript, map[string]any{"root": env.root, "sizes": false})
+	require.NoError(t, err)
+	var populated inspectResult
+	require.NoError(t, decode(out, &populated))
+	for _, cid := range []string{"admin", "storage-primary", "storage-view", "eventbus", "factor-engine", "archive-worker"} {
+		entry := populated.DataFormats[cid]
+		require.True(t, entry.HasData, "组件 %s 应判为已有数据", cid)
+		require.Contains(t, entry.FormatText, cid, "组件 %s 应带回 data-format 原文", cid)
+	}
+	for _, cid := range []string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy", "trade"} {
+		require.False(t, populated.DataFormats[cid].HasData, "未写入数据的组件 %s 应仍为 false", cid)
+	}
+}

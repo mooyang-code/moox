@@ -41,6 +41,11 @@ while IFS= read -r match; do
       ;;
   esac
 
+  # cli 预检需要按内嵌 SQLite schema 计算期望数据格式，允许引入各模块纯 embed 的 schema 包。
+  if [[ "${source_module}" == "cli" && "${target_rest}" == "schema" ]]; then
+    continue
+  fi
+
   violations+=("${file}:${line}: ${source_module} must not import ${target_module}/${target_rest}")
 done < <(rg -n "\"${IMPORT_PREFIX}[^\"]+\"" modules --glob '*.go' || true)
 
@@ -84,6 +89,7 @@ if (( ${#violations[@]} > 0 )); then
     echo
     echo "Allowed cross-module imports:"
     echo "  - generated protocol packages under modules/<name>/proto/..."
+    echo "  - cli may import embedded schema packages under modules/<name>/schema"
     echo "  - business modules may import stable root packages under packages/..."
     echo "  - root packages must not import modules/..."
     echo "  - repository must maintain a single root go.mod (no go.work or nested go.mod)"

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
+	setupdataformat "github.com/mooyang-code/moox/modules/cli/internal/setup/dataformat"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fetchunit"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
@@ -178,6 +179,13 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 		options.logf("服务目录和主机 %s 上记的不一样，主机网关一起升级", host.Name)
 	}
 	if selected, err = catalog.StartOrder(selected); err != nil {
+		return result, err
+	}
+	formatReport, err := setupdataformat.CheckHostNow(host.Name, selected, report.DataFormats)
+	if err != nil {
+		return result, err
+	}
+	if err := setupdataformat.IncompatibleError(formatReport); err != nil {
 		return result, err
 	}
 
