@@ -30,7 +30,7 @@ func (s *capturingPeriodStorage) UpsertFields(_ context.Context, rows []*storage
 }
 
 func swapTestPlan(period time.Time) *Plan {
-	return &Plan{V: 1,
+	return &Plan{V: 1, Executor: PlanExecutorSCF,
 		Market: PlanMarket{MarketID: "crypto", InstrumentType: "swap", Provider: "binance", SourceID: "swap_http", MarketType: "swap"},
 		Fetch:  PlanFetch{Concurrency: 4},
 		Datasets: []PlanDataset{{DatasetID: "bars_swap_1m", Frequency: "1m", LatenessS: 5, OutputFields: []string{"open", "close", "volume", "quote_volume", "trade_num", "provider_symbol"},

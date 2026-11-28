@@ -29,8 +29,8 @@ const (
 // 以及结果写到哪些数据集；不知道数据集的规则。
 type Plan struct {
 	V int `json:"v"`
-	// Executor 是计划的执行端：空表示 SCF 函数，stream 是 WS 推送，local 是本地执行端（见 PlanExecutor*）。
-	Executor         string            `json:"executor,omitempty"`
+	// Executor 是计划的执行端：scf 是云函数，stream 是 WS 推送，local 是本地执行端（见 PlanExecutor*）。
+	Executor         string            `json:"executor"`
 	Market           PlanMarket        `json:"market"`
 	Fetch            PlanFetch         `json:"fetch"`
 	SymbolExceptions map[string]string `json:"symbol_exceptions,omitempty"`
@@ -91,7 +91,7 @@ const (
 	MaxNotBeforeMS = 12000
 )
 
-// 计划执行端。SCF 函数的计划不写 executor（函数按未知字段拒绝解码），推送与本地执行端的计划写明自己的类型。
+// 计划执行端。三种执行端均显式写出，不再用空串表示 SCF。
 const (
 	PlanExecutorSCF       = "scf"
 	PlanExecutorStreaming = "stream"
@@ -199,7 +199,7 @@ func (p *Plan) Validate() error {
 	}
 	maxItems := MaxPlanItems
 	switch p.Executor {
-	case "":
+	case PlanExecutorSCF:
 	case PlanExecutorStreaming, PlanExecutorLocal:
 		maxItems = MaxStreamPlanItems
 	default:

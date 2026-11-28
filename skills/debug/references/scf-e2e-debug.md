@@ -33,7 +33,7 @@ MooX collector 的云函数没有按 Timer 运行，或者没有把 K 线数据�
 ## 构建与打包
 
 ```bash
-moox-cli collector function upload --space-id crypto --cloud-account-id <account-id> --package-name moox-collector-crypto-plan --version <version> --collector-root modules/collector
+moox-cli collector function upload --package-name moox-collector-plan --version <version> --collector-root modules/collector
 ```
 
 代码包里不带凭据；运行时的地址和密钥来自 Collector 写入的函数环境。用同一个代码包名上传新版本，Collector 就会把函数滚动升级到新版本（代码包在对账 / 补采准备时解析，成功的结果至少缓存 30 秒；常规对账每分钟一次）。

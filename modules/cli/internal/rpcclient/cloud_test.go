@@ -65,32 +65,32 @@ func TestCollectorCloudCallsRejectFailedOrIncompleteResponses(t *testing.T) {
 	}
 }
 
-// 最新代码包：同空间、名称完全相同、状态可用的第一条（Collector 按上传先后倒序返回）。
+// 最新代码包：全局按名称完全相同、状态可用的第一条（Collector 按上传先后倒序返回）。
 func TestLatestPackagePicksTheNewestAvailablePackageWithTheExactName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/admin/collector/ListFunctionPackages", r.URL.Path)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		assert.Equal(t, "crypto", body["space_id"])
+		assert.NotContains(t, body, "space_id")
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"packages":[
-			{"package_id":"pending-1","package_name":"moox-collector-crypto-plan","status":"pending"},
-			{"package_id":"other-1","package_name":"moox-collector-crypto-plan-experimental","status":"available"},
-			{"package_id":"exact-1","package_name":"moox-collector-crypto-plan","status":"available"},
-			{"package_id":"exact-0","package_name":"moox-collector-crypto-plan","status":"available"}]}`))
+			{"package_id":"pending-1","package_name":"moox-collector-plan","status":"pending"},
+			{"package_id":"other-1","package_name":"moox-collector-plan-experimental","status":"available"},
+			{"package_id":"exact-1","package_name":"moox-collector-plan","status":"available"},
+			{"package_id":"exact-0","package_name":"moox-collector-plan","status":"available"}]}`))
 	}))
 	defer server.Close()
-	client := spaceTestClient(server, "crypto")
-	id, found, err := client.LatestPackage(context.Background(), "moox-collector-crypto-plan")
+	client := collectorTestClient(server)
+	id, found, err := client.LatestPackage(context.Background(), "moox-collector-plan")
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "exact-1", id)
-	_, found, err = client.LatestPackage(context.Background(), "moox-collector-stockcn-plan")
+	_, found, err = client.LatestPackage(context.Background(), "moox-collector-missing")
 	require.NoError(t, err)
 	assert.False(t, found)
 }
 
-// 上传：Init 拿地址 → PUT 到 COS → Complete 核对大小与 MD5；三步的请求体都带同一个空间。
-func TestUploadPackageInitPutsAndCompletesInTheSameSpace(t *testing.T) {
+// 上传：Init 拿地址 → PUT 到 COS → Complete 核对大小与 MD5；代码包全局共享，不带 space_id 或 cloud_account_id。
+func TestUploadPackageInitPutsAndCompletes(t *testing.T) {
 	data := []byte("zip-bytes")
 	sum := md5.Sum(data)
 	cos := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -102,14 +102,13 @@ func TestUploadPackageInitPutsAndCompletesInTheSameSpace(t *testing.T) {
 	var methods []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		methods = append(methods, r.URL.Path)
-		assert.Equal(t, "stockcn", r.Header.Get("X-Space-Id"))
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		assert.Equal(t, "stockcn", body["space_id"])
+		assert.NotContains(t, body, "space_id")
+		assert.NotContains(t, body, "cloud_account_id")
 		switch r.URL.Path {
 		case "/api/admin/collector/InitPackageUpload":
-			assert.Equal(t, "moox-collector-stockcn-plan", body["package_name"])
-			assert.Equal(t, "account-1", body["cloud_account_id"])
+			assert.Equal(t, "moox-collector-plan", body["package_name"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"package":{"package_id":"pkg-1","status":"pending"},"upload_url":"` + cos.URL + `/pkg.zip"}`))
 		case "/api/admin/collector/CompletePackageUpload":
 			assert.Equal(t, "pkg-1", body["package_id"])
@@ -122,18 +121,13 @@ func TestUploadPackageInitPutsAndCompletesInTheSameSpace(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	pkg, err := spaceTestClient(server, "stockcn").UploadPackage(context.Background(), &collectorpb.InitPackageUploadReq{
-		PackageName: "moox-collector-stockcn-plan", Version: "v1", Runtime: "Go1", CloudAccountId: "account-1", Filename: "pkg.zip",
+	pkg, err := collectorTestClient(server).UploadPackage(context.Background(), &collectorpb.InitPackageUploadReq{
+		PackageName: "moox-collector-plan", Version: "v1", Runtime: "Go1", Filename: "pkg.zip",
 	}, data)
 	require.NoError(t, err)
 	assert.Equal(t, "pkg-1", pkg.GetPackageId())
 	assert.Equal(t, "available", pkg.GetStatus())
 	assert.Equal(t, []string{"/api/admin/collector/InitPackageUpload", "/api/admin/collector/CompletePackageUpload"}, methods)
-}
-
-func TestUploadPackageRequiresASpace(t *testing.T) {
-	_, err := (&Client{}).UploadPackage(context.Background(), &collectorpb.InitPackageUploadReq{}, nil)
-	require.ErrorContains(t, err, "空间")
 }
 
 func TestPackageUploadClientHasBoundedTimeout(t *testing.T) {

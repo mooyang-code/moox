@@ -74,7 +74,7 @@ func (i *TaskIndex) space(ctx context.Context, spaceID string) ([]*Task, error) 
 		if i.Source == nil {
 			return nil, fmt.Errorf("resample task index source is required")
 		}
-		params, parseErr := domain.ParseCollectParams(collection.CollectParams, "", "", collection.DataType)
+		params, parseErr := domain.ParseCollectParams(collection.CollectParams, collection.DataType)
 		if parseErr != nil {
 			log.WarnContextf(ctx, "[Collector] resample task %s has invalid params, skipped: %v", collection.TaskID, parseErr)
 			continue

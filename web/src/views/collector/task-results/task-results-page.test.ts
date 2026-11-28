@@ -55,7 +55,7 @@ describe("collector task result page deep links", () => {
           result: { dataset_id: "dataset-known", status: "active" }
         }
       ],
-      page: { page: 1, size: 100, total: 1 }
+      page_result: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail.mockReset();
     mocks.routeQuery = reactive({ tab: "results", resultTask: "missing" });
@@ -87,7 +87,7 @@ describe("collector task result page deep links", () => {
   });
 
   it("shows an invalid deep-link error when the task list is empty", async () => {
-    mocks.getTaskList.mockResolvedValue({ tasks: [], page: { page: 1, size: 100, total: 0 } });
+    mocks.getTaskList.mockResolvedValue({ tasks: [], page_result: { page: 1, size: 100, total: 0 } });
     mocks.getTaskDetail.mockRejectedValue(new Error("task not found"));
     const wrapper = mount(TaskResultsPage, {
       global: {
@@ -188,13 +188,13 @@ describe("collector task result page deep links", () => {
               created_at: "1790812800000",
               result: { dataset_id: `ds_${index}` }
             })),
-            page: { page: 1, size: 100, total: 101 }
+            page_result: { page: 1, size: 100, total: 101 }
           }
         : {
             tasks: [
               { task_id: "target", data_type: "kline", collect_params: { frequency: "5m" }, result: { dataset_id: "ds_5m" } }
             ],
-            page: { page: 2, size: 100, total: 101 }
+            page_result: { page: 2, size: 100, total: 101 }
           }
     );
     mocks.getTaskDetail.mockResolvedValue({
@@ -347,7 +347,7 @@ describe("collector task result page deep links", () => {
     mocks.routeQuery.tab = "results";
     mocks.getTaskList.mockResolvedValue({
       tasks: [{ task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }],
-      page: { page: 1, size: 100, total: 1 }
+      page_result: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail
       .mockResolvedValueOnce({
@@ -383,7 +383,7 @@ describe("collector task result page deep links", () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskList.mockResolvedValue({
       tasks: [{ task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }],
-      page: { page: 1, size: 100, total: 1 }
+      page_result: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail
       .mockResolvedValueOnce({
@@ -424,7 +424,7 @@ describe("collector task result page deep links", () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskList.mockResolvedValue({
       tasks: [{ task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }],
-      page: { page: 1, size: 100, total: 1 }
+      page_result: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail
       .mockResolvedValueOnce({
@@ -461,7 +461,7 @@ describe("collector task result page deep links", () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskList.mockResolvedValue({
       tasks: [{ task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }],
-      page: { page: 1, size: 100, total: 1 }
+      page_result: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail
       .mockResolvedValueOnce({

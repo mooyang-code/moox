@@ -125,7 +125,7 @@ func (r *JobRunner) advanceJob(ctx context.Context, job store.ResampleJob, now t
 		return nil // 任务停用或还没就绪：作业原地等待
 	}
 	*moved = true
-	params, err := domain.ParseCollectParams(collection.CollectParams, "", "", collection.DataType)
+	params, err := domain.ParseCollectParams(collection.CollectParams, collection.DataType)
 	if err != nil {
 		return r.fail(ctx, job, err, true)
 	}

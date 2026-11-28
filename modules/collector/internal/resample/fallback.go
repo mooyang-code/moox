@@ -95,7 +95,7 @@ func (f *Fallback) Tick(ctx context.Context, now time.Time) error {
 
 // checkTask 检查并补齐一个任务；返回用掉的桶数。
 func (f *Fallback) checkTask(ctx context.Context, collection domain.CollectionTask, now time.Time, cfg FallbackConfig, budget int) (int, error) {
-	params, err := domain.ParseCollectParams(collection.CollectParams, "", "", collection.DataType)
+	params, err := domain.ParseCollectParams(collection.CollectParams, collection.DataType)
 	if err != nil {
 		return 0, err
 	}

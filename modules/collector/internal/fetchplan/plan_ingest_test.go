@@ -3,7 +3,6 @@ package fetchplan
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +17,7 @@ type memWorkers struct{ worker *store.StreamWorker }
 func (w *memWorkers) Get(context.Context, string) (*store.StreamWorker, error) { return w.worker, nil }
 
 func (w *memWorkers) apply(id int64) {
-	w.worker = &store.StreamWorker{SpaceID: "crypto", InstanceID: "i", Applied: mustJSON(StreamApplied{ID: id}), Status: "{}", HeartbeatAt: time.Now()}
+	w.worker = &store.StreamWorker{SpaceID: "crypto", InstanceID: "i", AppliedPlanID: id, Status: "{}", HeartbeatAt: time.Now()}
 }
 
 type ingestHarness struct {
@@ -39,7 +38,7 @@ func newIngestHarness(t *testing.T, ingest string, frequencies ...string) *inges
 	for _, frequency := range frequencies {
 		h.tasks.tasks = append(h.tasks.tasks, domain.CollectionTask{
 			SpaceID: "crypto", TaskID: "spot-" + frequency, Enabled: true, DataType: "kline", Ingest: ingest, TagIDs: []string{"binance_spot"},
-			CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_` + frequency + `","frequency":"` + frequency + `"}`,
+			ResultDatasetID: "ds_spot_" + frequency, CollectParams: `{"frequency":"` + frequency + `"}`,
 		})
 	}
 	h.r = h.newReconciler()
@@ -50,7 +49,7 @@ func newIngestHarness(t *testing.T, ingest string, frequencies ...string) *inges
 func (h *ingestHarness) setIngest(datasetID, ingest string) {
 	h.t.Helper()
 	for i := range h.tasks.tasks {
-		if strings.Contains(h.tasks.tasks[i].CollectParams, `"target_dataset_id":"`+datasetID+`"`) {
+		if h.tasks.tasks[i].ResultDatasetID == datasetID {
 			h.tasks.tasks[i].Ingest = ingest
 			return
 		}
@@ -278,7 +277,7 @@ func TestHandoffDoesNotWaitForAnOfflineOldStreamWorker(t *testing.T) {
 	h.setIngest("ds_spot_1m", ingestSCF)
 	h.settle(false)
 	require.Nil(t, h.open())
-	require.Equal(t, ingestSCF, h.applied().Datasets["ds_spot_1m|1m"].IngestOrSCF())
+	require.Equal(t, ingestSCF, h.applied().Datasets["ds_spot_1m|1m"].Ingest)
 	require.NotEmpty(t, h.cloudTimers())
 }
 
@@ -411,7 +410,7 @@ func TestStreamPlanCarriesPairsOnly(t *testing.T) {
 			require.Equal(t, "ABCUSDT_X", function.Plan.Pair("ABC-USDT"), name)
 		} else {
 			require.NotContains(t, string(raw), "pairs", name)
-			require.NotContains(t, string(raw), "executor", name)
+			require.Equal(t, marketfetch.PlanExecutorSCF, function.Plan.Executor, name)
 		}
 	}
 }

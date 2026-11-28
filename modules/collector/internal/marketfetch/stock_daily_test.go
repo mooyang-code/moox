@@ -13,8 +13,9 @@ import (
 // 其他整点不到期。
 func TestPlanBuildRequestsStockDailyIsDueAtNextUTCMidnight(t *testing.T) {
 	plan := &Plan{
-		V:      1,
-		Market: PlanMarket{MarketID: "stockcn", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity"},
+		V:        1,
+		Executor: PlanExecutorSCF,
+		Market:   PlanMarket{MarketID: "stockcn", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity"},
 		Fetch:  PlanFetch{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8},
 		Datasets: []PlanDataset{{DatasetID: "dataset_stock_1d", Frequency: "1d", LatenessS: 90, Copies: []PlanCopy{
 			{From: 1000, Hash: "h", Count: 1, Subjects: []PlanSubject{{ID: "600519.XSHG", Index: 0}}},

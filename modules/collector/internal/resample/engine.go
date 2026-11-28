@@ -62,13 +62,12 @@ type Task struct {
 // NewTaskForSource 按源数据集元数据（alignment、calendar、活跃列）解析合成任务：
 // 校验周期规则与输出列交集，并构造目标周期的时钟与归约规则表。
 func NewTaskForSource(task domain.CollectionTask, sourceInfo storagesource.DatasetInfo) (*Task, error) {
-	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, task.DataType)
 	if err != nil {
 		return nil, err
 	}
-	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
-	params.TargetDatasetID = ids.DatasetID
-	if err := ValidateTaskParamsForSource(sourceInfo, params); err != nil {
+	targetDatasetID := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID).DatasetID
+	if err := ValidateTaskParamsForSource(sourceInfo, params, targetDatasetID); err != nil {
 		return nil, err
 	}
 	source, _ := ParseFixedFrequency(params.SourceFrequency)
@@ -89,7 +88,7 @@ func NewTaskForSource(task domain.CollectionTask, sourceInfo storagesource.Datas
 		Collection: task, Params: params, Source: source, Target: target, Market: market, Clock: clock,
 		Spec: TaskSpec{
 			TaskID: task.TaskID, SpaceID: task.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: source,
-			SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: target,
+			SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: targetDatasetID, TargetFrequency: target,
 			OutputFields: append([]string(nil), params.OutputFields...),
 			Rules:        rules,
 		},

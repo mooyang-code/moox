@@ -39,27 +39,28 @@ func (c *fakeCollectorTaskResultInventoryClient) GetTaskResultInventory(ctx cont
 	return c.responses[index], nil
 }
 
-func inventoryPage(page, size, total uint32, hasMore bool, snapshot string, observed int64, entries ...*collectorpb.TaskResultInventoryEntry) *collectorpb.GetTaskResultInventoryRsp {
+func inventoryResponse(observed int64, entries ...*collectorpb.TaskResultInventoryEntry) *collectorpb.GetTaskResultInventoryRsp {
 	return &collectorpb.GetTaskResultInventoryRsp{
 		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Entries: entries,
-		Page:       &commonpb.PageResult{Page: page, Size: size, Total: total, HasMore: hasMore},
-		SnapshotId: snapshot, ObservedAt: observed,
+		ObservedAt: observed,
 	}
 }
 
 func TestCollectorTaskResultInventorySourceReadsOneBoundedSnapshot(t *testing.T) {
 	observed := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
 	client := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
-		inventoryPage(1, 1, 2, true, "snapshot-1", observed, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m",
-			ObservedAt: observed, Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
-		}),
-		inventoryPage(2, 1, 2, false, "snapshot-1", observed, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "crypto", TaskId: "task-b", DatasetId: "dataset-b", Frequency: "5m",
-			ObservedAt: observed, Enabled: false, ResultStatus: "pending",
-		}),
+		inventoryResponse(observed,
+			&collectorpb.TaskResultInventoryEntry{
+				SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m",
+				ObservedAt: observed, Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
+			},
+			&collectorpb.TaskResultInventoryEntry{
+				SpaceId: "crypto", TaskId: "task-b", DatasetId: "dataset-b", Frequency: "5m",
+				ObservedAt: observed, Enabled: false, ResultStatus: "pending",
+			},
+		),
 	}}
-	source, err := NewCollectorTaskResultInventorySource(client, []string{" crypto "}, 1, 2)
+	source, err := NewCollectorTaskResultInventorySource(client, []string{" crypto "}, 100, 2)
 	require.NoError(t, err)
 	snapshot, err := source.FetchTaskResultInventory(context.Background())
 	require.NoError(t, err)
@@ -68,10 +69,8 @@ func TestCollectorTaskResultInventorySourceReadsOneBoundedSnapshot(t *testing.T)
 	require.True(t, snapshot.Entries[0].OwnershipVerified)
 	require.Equal(t, "dataset-a", snapshot.Entries[0].DatasetID)
 	require.False(t, snapshot.Entries[1].Enabled)
-	require.Equal(t, uint32(2), client.requests[1].GetPage().GetPage())
-	require.Equal(t, "snapshot-1", client.requests[1].GetSnapshotId())
-	require.Equal(t, []string{"crypto", "crypto"}, client.requestSpaces)
-	require.Equal(t, []string{"crypto", "crypto"}, client.metadataSpaces, "Admin Gateway space metadata must match the request body")
+	require.Equal(t, []string{"crypto"}, client.requestSpaces)
+	require.Equal(t, []string{"crypto"}, client.metadataSpaces, "Admin Gateway space metadata must match the request body")
 }
 
 func TestContextWithInventorySpaceIDMatchesBodyAndPreservesOtherMetadata(t *testing.T) {
@@ -89,72 +88,54 @@ func TestCollectorTaskResultInventorySourceReadsConfiguredSpacesIndependently(t 
 	observedCrypto := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
 	observedStock := mustParseInventoryTime(t, "2026-10-03T10:00:05Z").UnixMilli()
 	client := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
-		inventoryPage(1, 1, 1, false, "crypto-snapshot", observedCrypto, &collectorpb.TaskResultInventoryEntry{
+		inventoryResponse(observedCrypto, &collectorpb.TaskResultInventoryEntry{
 			SpaceId: "crypto", TaskId: "crypto-task", DatasetId: "crypto-dataset", Frequency: "1m", ObservedAt: observedCrypto,
 		}),
-		inventoryPage(1, 1, 2, true, "stock-snapshot", observedStock, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "stockcn", TaskId: "stock-task-a", DatasetId: "stock-dataset-a", Frequency: "1d", ObservedAt: observedStock,
-		}),
-		inventoryPage(2, 1, 2, false, "stock-snapshot", observedStock, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "stockcn", TaskId: "stock-task-b", DatasetId: "stock-dataset-b", Frequency: "1d", ObservedAt: observedStock,
-		}),
+		inventoryResponse(observedStock,
+			&collectorpb.TaskResultInventoryEntry{
+				SpaceId: "stockcn", TaskId: "stock-task-a", DatasetId: "stock-dataset-a", Frequency: "1d", ObservedAt: observedStock,
+			},
+			&collectorpb.TaskResultInventoryEntry{
+				SpaceId: "stockcn", TaskId: "stock-task-b", DatasetId: "stock-dataset-b", Frequency: "1d", ObservedAt: observedStock,
+			},
+		),
 	}}
-	source, err := NewCollectorTaskResultInventorySource(client, []string{"crypto", "stockcn"}, 1, 3)
+	source, err := NewCollectorTaskResultInventorySource(client, []string{"crypto", "stockcn"}, 100, 3)
 	require.NoError(t, err)
 	snapshot, err := source.FetchTaskResultInventory(context.Background())
 	require.NoError(t, err)
-	require.NotEmpty(t, snapshot.ID, "combined identity must bind both per-Space snapshot IDs")
-	require.NotEqual(t, "crypto-snapshot", snapshot.ID)
+	require.NotEmpty(t, snapshot.ID, "combined identity must bind per-Space inventories")
 	require.Equal(t, time.UnixMilli(observedCrypto).UTC(), snapshot.ObservedAt, "combined observation time is the oldest constituent snapshot")
-	require.Equal(t, []string{"crypto", "stockcn", "stockcn"}, client.requestSpaces)
-	require.Equal(t, []string{"crypto", "stockcn", "stockcn"}, client.metadataSpaces)
+	require.Equal(t, []string{"crypto", "stockcn"}, client.requestSpaces)
+	require.Equal(t, []string{"crypto", "stockcn"}, client.metadataSpaces)
 	require.Equal(t, []string{"crypto-task", "stock-task-a", "stock-task-b"}, []string{
 		snapshot.Entries[0].TaskID, snapshot.Entries[1].TaskID, snapshot.Entries[2].TaskID,
 	})
 }
 
-func TestCollectorTaskResultInventorySourceRejectsMixedIncompleteAndOversizedSnapshots(t *testing.T) {
+func TestCollectorTaskResultInventorySourceRejectsOversizedAndCrossSpaceSnapshots(t *testing.T) {
 	observed := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
 	entry := &collectorpb.TaskResultInventoryEntry{SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m", ObservedAt: observed}
-	tests := []struct {
-		name      string
-		maxItems  int
-		responses []*collectorpb.GetTaskResultInventoryRsp
-		wantError string
-	}{
-		{name: "mixed generation", maxItems: 2, responses: []*collectorpb.GetTaskResultInventoryRsp{
-			inventoryPage(1, 1, 2, true, "snapshot-1", observed, entry),
-			inventoryPage(2, 1, 2, false, "snapshot-2", observed, entry),
-		}, wantError: "snapshot changed"},
-		{name: "incomplete", maxItems: 2, responses: []*collectorpb.GetTaskResultInventoryRsp{
-			inventoryPage(1, 1, 2, false, "snapshot-1", observed, entry),
-		}, wantError: "incomplete"},
-		{name: "oversized", maxItems: 1, responses: []*collectorpb.GetTaskResultInventoryRsp{
-			inventoryPage(1, 1, 2, true, "snapshot-1", observed, entry),
-		}, wantError: "exceeds limit"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			client := &fakeCollectorTaskResultInventoryClient{responses: test.responses}
-			source, err := NewCollectorTaskResultInventorySource(client, []string{"crypto"}, 1, test.maxItems)
-			require.NoError(t, err)
-			_, err = source.FetchTaskResultInventory(context.Background())
-			require.ErrorContains(t, err, test.wantError)
-		})
-	}
+	oversizedClient := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
+		inventoryResponse(observed, entry, &collectorpb.TaskResultInventoryEntry{SpaceId: "crypto", TaskId: "task-b", DatasetId: "dataset-b", Frequency: "1m", ObservedAt: observed}),
+	}}
+	oversizedSource, err := NewCollectorTaskResultInventorySource(oversizedClient, []string{"crypto"}, 100, 1)
+	require.NoError(t, err)
+	_, err = oversizedSource.FetchTaskResultInventory(context.Background())
+	require.ErrorContains(t, err, "exceeds limit")
 
 	wrongSpaceClient := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
-		inventoryPage(1, 1, 1, false, "snapshot-1", observed, &collectorpb.TaskResultInventoryEntry{
+		inventoryResponse(observed, &collectorpb.TaskResultInventoryEntry{
 			SpaceId: "stockcn", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m", ObservedAt: observed,
 		}),
 	}}
-	wrongSpaceSource, err := NewCollectorTaskResultInventorySource(wrongSpaceClient, []string{"crypto"}, 1, 2)
+	wrongSpaceSource, err := NewCollectorTaskResultInventorySource(wrongSpaceClient, []string{"crypto"}, 100, 2)
 	require.NoError(t, err)
 	_, err = wrongSpaceSource.FetchTaskResultInventory(context.Background())
 	require.ErrorContains(t, err, "returned task from Space")
 
 	for _, spaces := range [][]string{nil, {""}, {"crypto", " crypto "}} {
-		_, err := NewCollectorTaskResultInventorySource(&fakeCollectorTaskResultInventoryClient{}, spaces, 1, 2)
+		_, err := NewCollectorTaskResultInventorySource(&fakeCollectorTaskResultInventoryClient{}, spaces, 100, 2)
 		require.Error(t, err)
 	}
 }

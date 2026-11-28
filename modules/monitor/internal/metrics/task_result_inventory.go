@@ -12,7 +12,6 @@ import (
 	"time"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -63,12 +62,10 @@ type collectorTaskResultInventoryClient interface {
 	GetTaskResultInventory(context.Context, *collectorpb.GetTaskResultInventoryReq, ...client.Option) (*collectorpb.GetTaskResultInventoryRsp, error)
 }
 
-// CollectorTaskResultInventorySource pages one stable snapshot per configured
-// Space and rejects partial or mixed-generation inventories.
+// CollectorTaskResultInventorySource 按配置的空间逐个拉取一次完整任务结果清单。
 type CollectorTaskResultInventorySource struct {
 	client   collectorTaskResultInventoryClient
 	spaceIDs []string
-	pageSize int
 	maxItems int
 }
 
@@ -98,7 +95,7 @@ func NewCollectorTaskResultInventorySource(client collectorTaskResultInventoryCl
 	if maxItems <= 0 || maxItems > maxCollectorTaskResultInventory {
 		return nil, fmt.Errorf("collector inventory max entries must be between 1 and %d", maxCollectorTaskResultInventory)
 	}
-	return &CollectorTaskResultInventorySource{client: client, spaceIDs: normalizedSpaces, pageSize: pageSize, maxItems: maxItems}, nil
+	return &CollectorTaskResultInventorySource{client: client, spaceIDs: normalizedSpaces, maxItems: maxItems}, nil
 }
 
 func (s *CollectorTaskResultInventorySource) FetchTaskResultInventory(ctx context.Context) (TaskResultInventorySnapshot, error) {
@@ -131,76 +128,40 @@ func (s *CollectorTaskResultInventorySource) fetchSpace(ctx context.Context, spa
 	if maxItems < 0 {
 		return snapshot, fmt.Errorf("combined collector inventory exceeds limit %d", s.maxItems)
 	}
-	var expectedTotal int
-	var snapshotID string
-	var observedAt int64
-	for page := 1; ; page++ {
-		if page > maxItems/s.pageSize+2 {
-			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory exceeded page bound %d", maxItems)
-		}
-		req := &collectorpb.GetTaskResultInventoryReq{
-			SpaceId: spaceID, Page: &commonpb.Page{Page: uint32(page), Size: uint32(s.pageSize)}, SnapshotId: snapshotID,
-		}
-		rpcCtx := contextWithInventorySpaceID(ctx, spaceID)
-		rsp, err := s.client.GetTaskResultInventory(rpcCtx, req)
-		if err != nil {
-			return TaskResultInventorySnapshot{}, fmt.Errorf("fetch collector task-result inventory page %d: %w", page, err)
-		}
-		if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != collectorpb.ErrorCode_SUCCESS {
-			message := "empty response"
-			if rsp != nil && rsp.GetRetInfo() != nil {
-				message = fmt.Sprintf("code=%s msg=%s", rsp.GetRetInfo().GetCode().String(), rsp.GetRetInfo().GetMsg())
-			}
-			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory page %d failed: %s", page, message)
-		}
-		pageInfo := rsp.GetPage()
-		if pageInfo == nil {
-			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory page %d omitted pagination metadata", page)
-		}
-		if pageInfo.GetPage() != uint32(page) || pageInfo.GetSize() != uint32(s.pageSize) {
-			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory page metadata mismatch on page %d", page)
-		}
-		if page == 1 {
-			if rsp.GetSnapshotId() == "" {
-				return TaskResultInventorySnapshot{}, errors.New("collector inventory omitted snapshot_id")
-			}
-			if pageInfo.GetTotal() > uint32(maxItems) {
-				return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory total %d exceeds limit %d", pageInfo.GetTotal(), maxItems)
-			}
-			snapshotID, expectedTotal, observedAt = rsp.GetSnapshotId(), int(pageInfo.GetTotal()), rsp.GetObservedAt()
-			snapshot.ID = snapshotID
-			parsed, err := inventoryInstant(observedAt)
-			if err != nil {
-				return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory observed_at: %w", err)
-			}
-			snapshot.ObservedAt = parsed
-		} else if rsp.GetSnapshotId() != snapshotID || int(pageInfo.GetTotal()) != expectedTotal || rsp.GetObservedAt() != observedAt {
-			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory snapshot changed while paging at page %d", page)
-		}
-		for _, raw := range rsp.GetEntries() {
-			entry, err := taskResultInventoryEntryFromProto(raw)
-			if err != nil {
-				return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory page %d: %w", page, err)
-			}
-			if entry.SpaceID != spaceID {
-				return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory returned task from Space %q for requested Space %q", entry.SpaceID, spaceID)
-			}
-			snapshot.Entries = append(snapshot.Entries, entry)
-		}
-		if len(snapshot.Entries) > maxItems {
-			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory exceeds limit %d", maxItems)
-		}
-		if pageInfo.GetHasMore() {
-			if len(rsp.GetEntries()) == 0 || len(snapshot.Entries) >= expectedTotal {
-				return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory page %d has invalid has_more state", page)
-			}
-			continue
-		}
-		if len(snapshot.Entries) != expectedTotal {
-			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory is incomplete: got %d of %d entries", len(snapshot.Entries), expectedTotal)
-		}
-		return snapshot, nil
+	req := &collectorpb.GetTaskResultInventoryReq{SpaceId: spaceID}
+	rpcCtx := contextWithInventorySpaceID(ctx, spaceID)
+	rsp, err := s.client.GetTaskResultInventory(rpcCtx, req)
+	if err != nil {
+		return TaskResultInventorySnapshot{}, fmt.Errorf("fetch collector task-result inventory: %w", err)
 	}
+	if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != collectorpb.ErrorCode_SUCCESS {
+		message := "empty response"
+		if rsp != nil && rsp.GetRetInfo() != nil {
+			message = fmt.Sprintf("code=%s msg=%s", rsp.GetRetInfo().GetCode().String(), rsp.GetRetInfo().GetMsg())
+		}
+		return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory failed: %s", message)
+	}
+	observedAt := rsp.GetObservedAt()
+	parsed, err := inventoryInstant(observedAt)
+	if err != nil {
+		return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory observed_at: %w", err)
+	}
+	if len(rsp.GetEntries()) > maxItems {
+		return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory exceeds limit %d", maxItems)
+	}
+	snapshot.ObservedAt = parsed
+	snapshot.ID = fmt.Sprintf("%s:%d:%d", spaceID, observedAt, len(rsp.GetEntries()))
+	for _, raw := range rsp.GetEntries() {
+		entry, err := taskResultInventoryEntryFromProto(raw)
+		if err != nil {
+			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory: %w", err)
+		}
+		if entry.SpaceID != spaceID {
+			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory returned task from Space %q for requested Space %q", entry.SpaceID, spaceID)
+		}
+		snapshot.Entries = append(snapshot.Entries, entry)
+	}
+	return snapshot, nil
 }
 
 func contextWithInventorySpaceID(ctx context.Context, spaceID string) context.Context {

@@ -2,7 +2,6 @@ package fetchplan
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -297,10 +296,7 @@ func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchP
 			return r.fail("store", err)
 		}
 		if worker != nil {
-			var applied StreamApplied
-			if json.Unmarshal([]byte(worker.Applied), &applied) == nil {
-				ok = applied.ID == record.ID
-			}
+			ok = worker.AppliedPlanID == record.ID
 		}
 	}
 	if !ok {
@@ -328,7 +324,7 @@ func (r *PlanReconciler) streamOffline(ctx context.Context) (bool, error) {
 // movesToWorker 判断计划里有数据集正从别的执行端切到推送或本地执行端（collector-stream 是新执行端）。
 func movesToWorker(content *FetchPlanContent) bool {
 	for _, dataset := range content.Datasets {
-		if dataset.changesCopies() && dataset.HandoffFrom() > 0 && dataset.Head().ingestOrSCF() != marketfetch.PlanExecutorSCF {
+		if dataset.changesCopies() && dataset.HandoffFrom() > 0 && dataset.Head().Ingest != marketfetch.PlanExecutorSCF {
 			return true
 		}
 	}

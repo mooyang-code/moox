@@ -67,7 +67,7 @@ message GetTaskListReq {
 message GetTaskListRsp {
   common.RetInfo ret_info = 1;
   repeated CollectionTask tasks = 2;
-  common.PageResult page = 3;
+  common.PageResult page_result = 3;
 }
 
 message GetTaskDetailReq {
@@ -109,22 +109,14 @@ message TaskResultInventoryEntry {
 }
 
 message GetTaskResultInventoryReq {
-  common.Page page = 1;
-  // Empty on page one creates a snapshot. Subsequent pages must echo the
-  // returned ID so a concurrent task change cannot silently mix snapshots.
-  string snapshot_id = 2;
-  // Inventory snapshots and page tokens are scoped to this Space. Admin
-  // Gateway also checks this field against the authenticated X-Space-Id.
-  string space_id = 3;
+  string space_id = 1;
 }
 
 message GetTaskResultInventoryRsp {
   common.RetInfo ret_info = 1;
   repeated TaskResultInventoryEntry entries = 2;
-  common.PageResult page = 3;
-  string snapshot_id = 4;
   // Unix 毫秒。
-  int64 observed_at = 5;
+  int64 observed_at = 3;
 }
 
 message CreateTaskReq {
@@ -168,42 +160,23 @@ message DeleteTaskRsp {
   common.RetInfo ret_info = 1;
 }
 
-// DataTypeConfig 数据类型配置。
+// FrequencyOption 是采集任务表单的可选频率。
+message FrequencyOption {
+  string value = 1;
+  string label = 2;
+}
+
+// DataTypeConfig 采集任务类型元数据：类型名、可选频率与输出字段目录。
 message DataTypeConfig {
-  int32 id = 1;
-  string data_type = 2;
-  string type_name = 3;
-  string type_desc = 4;
-  google.protobuf.Struct data_source_options = 5;
-  int32 sort_order = 6;
-  int32 version = 7;
-  int64 created_at = 8; // Unix 毫秒
-  int64 updated_at = 9; // Unix 毫秒
-}
-
-// DataTypeFieldConfig 字段配置。
-message DataTypeFieldConfig {
-  int32 id = 1;
-  string data_type = 2;
-  string field_key = 3;
-  string field_name = 4;
-  string field_type = 5;
-  bool is_required = 6;
-  google.protobuf.Value default_value = 7;
-  google.protobuf.Struct field_options = 8;
-  google.protobuf.Struct data_source_options = 9;
-  int32 sort_order = 10;
-  int64 created_at = 11; // Unix 毫秒
-  int64 updated_at = 12; // Unix 毫秒
-}
-
-// DataTypeConfigDetail 数据类型配置详情（含字段）。
-message DataTypeConfigDetail {
-  DataTypeConfig config = 1;
-  repeated DataTypeFieldConfig fields = 2;
-  repeated ExtraFieldOption extra_fields = 3;  // K 线任务可选的附加字段，默认都不选
-  // K 线任务可选的基础输出字段（结果数据集能建的列，按建列顺序）；附加字段另见 extra_fields。其他任务类型为空。
-  repeated OutputFieldOption base_output_fields = 4;
+  string data_type = 1;
+  string type_name = 2;
+  string type_desc = 3;
+  // K 线采集任务表单的可选频率；合成任务由预览接口给出，这里为空。
+  repeated FrequencyOption frequency_options = 4;
+  // 任务可选的基础输出字段（结果数据集能建的列，按建列顺序）。
+  repeated OutputFieldOption base_output_fields = 5;
+  // K 线任务可选的附加字段（默认都不选）；其他任务类型为空。
+  repeated ExtraFieldOption extra_fields = 6;
 }
 
 // OutputFieldOption 是 K 线任务可以选的一个基础输出字段。
@@ -233,15 +206,6 @@ message GetDataTypeConfigsReq {}
 message GetDataTypeConfigsRsp {
   common.RetInfo ret_info = 1;
   repeated DataTypeConfig configs = 2;
-}
-
-message GetDataTypeConfigWithFieldsReq {
-  string data_type = 1;
-}
-
-message GetDataTypeConfigWithFieldsRsp {
-  common.RetInfo ret_info = 1;
-  DataTypeConfigDetail detail = 2;
 }
 
 // ResampleJob 是一个历史合成作业：范围 [start, end) 按目标桶推进，next_bucket 是游标。
@@ -500,11 +464,11 @@ message KlineBackfillJob {
   // Unix 毫秒。
   int64 created_at = 12;
   int64 updated_at = 13;
-  int32 pending = 14;
+  int32 queued = 14;
   int32 running = 15;
   int32 succeeded = 16;
   int32 failed = 17;
-  int32 canceled = 18;
+  int32 cancelled = 18;
   // dataset_name 是数据集的展示名（所属采集任务名），不限数据集或任务已删除时为空。
   string dataset_name = 19;
 }
@@ -533,7 +497,7 @@ message ListKlineBackfillsReq {
 message ListKlineBackfillsRsp {
   common.RetInfo ret_info = 1;
   repeated KlineBackfillJob items = 2;
-  common.PageResult page = 3;
+  common.PageResult page_result = 3;
 }
 
 message CancelKlineBackfillReq {
@@ -658,7 +622,7 @@ message GetCollectorStatusRsp {
   int64 generated_at = 10;
   // stream 是该空间 collector-stream 实例的状态（心跳、连接、最近周期），没有实例时为空。
   StreamWorkerStatus stream = 11;
-  // ingest_modes 是各启用的 K 线任务的采集方式。
+  // ingest_modes 是各 K 线任务的采集方式（含停用的；启用状态见 enabled）。
   repeated IngestMode ingest_modes = 12;
   // unplanned_functions 是对账器最近一次读回时找到的计划外函数（Collector 内存里的结果，重启后到下一次读回之前为空）。
   repeated CollectorUnplannedFunction unplanned_functions = 13;
@@ -771,22 +735,11 @@ message IngestMode {
   string ingest = 4;
   // effective_periods 是正在交接的数据集按频率选定的生效周期 P（RFC3339，K 线开始时间），没有交接时为空。
   map<string, string> effective_periods = 5;
-}
-
-message GetIngestModeReq {
-  string space_id = 1;
-  // dataset_id 为空表示该空间全部数据集。
-  string dataset_id = 2;
-}
-
-message GetIngestModeRsp {
-  common.RetInfo ret_info = 1;
-  repeated IngestMode modes = 2;
-  StreamWorkerStatus stream = 3;
+  bool enabled = 6;
 }
 
 // SetIngestMode 按数据集切换采集方式：dataset_id 为空表示 space_id 的全部 K 线任务。切到 stream 或 local 要求 collector-stream 在线。
-// collector-stream 只是旧执行端且心跳超时时，交接计划不等它确认（固定规则，没有强制开关）。
+// 下一轮对账生成交接计划；collector-stream 只是旧执行端且心跳超时时，交接计划不等它确认（固定规则，没有强制开关）。
 message SetIngestModeReq {
   string space_id = 1;
   string dataset_id = 2;
@@ -798,8 +751,6 @@ message SetIngestModeRsp {
   common.RetInfo ret_info = 1;
   repeated IngestMode modes = 2;
   StreamWorkerStatus stream = 3;
-  // plan_id 是本次切换生成的采集计划（交接），0 表示没有需要交接的数据集。
-  int64 plan_id = 4;
 }
 
 // SubjectExclusion 是采集名单里的一条排除：叠加在标签成员之上，只作用于采集计划。
@@ -1018,7 +969,6 @@ service CollectMgr {
 
   // ----- 数据类型配置 -----
   rpc GetDataTypeConfigs(GetDataTypeConfigsReq) returns (GetDataTypeConfigsRsp);
-  rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
   rpc SubmitKlineResampleJob(SubmitKlineResampleJobReq) returns (SubmitKlineResampleJobRsp);
   rpc GetKlineResampleJob(GetKlineResampleJobReq) returns (GetKlineResampleJobRsp);
   rpc ListKlineResampleJobs(ListKlineResampleJobsReq) returns (ListKlineResampleJobsRsp);
@@ -1046,7 +996,6 @@ service CollectMgr {
   rpc ReregisterFetchPlan(ReregisterFetchPlanReq) returns (ReregisterFetchPlanRsp);
   rpc TriggerFetchPlan(TriggerFetchPlanReq) returns (TriggerFetchPlanRsp);
   rpc SetFetchPlanPaused(SetFetchPlanPausedReq) returns (SetFetchPlanPausedRsp);
-  rpc GetIngestMode(GetIngestModeReq) returns (GetIngestModeRsp);
   rpc SetIngestMode(SetIngestModeReq) returns (SetIngestModeRsp);
   // 采集名单干预：排除的标的从下一份采集计划里去掉（交接进行中时等交接完成），到期自动恢复。
   rpc SetSubjectExclusions(SetSubjectExclusionsReq) returns (SetSubjectExclusionsRsp);
@@ -1153,32 +1102,29 @@ message ListCloudRegionsRsp {
 
 // ===== 云函数代码包 =====
 
-// FunctionPackage 是一次上传的代码包。status 是 pending（已发上传地址）或 available（COS 对象已核对）。
+// FunctionPackage 是一次上传的代码包（不分空间）。status 是 pending（已发上传地址）或 available（COS 对象已核对）。
 message FunctionPackage {
-  string space_id = 1;
-  string package_id = 2;
-  string package_name = 3;
-  string version = 4;
-  string runtime = 5;
-  int64 file_size = 6;
-  string file_md5 = 7;
-  string cloud_account_id = 8;
-  string cos_region = 9;
-  string cos_bucket = 10;
-  string cos_path = 11;
-  string status = 12;
-  int64 created_at = 13; // Unix 毫秒
-  int64 updated_at = 14; // Unix 毫秒
-}
-
-// InitPackageUploadReq 登记一个待上传的代码包并返回 COS 预签名上传地址；filename 为空时用“包名-版本.zip”。
-message InitPackageUploadReq {
-  string space_id = 1;
+  string package_id = 1;
   string package_name = 2;
   string version = 3;
   string runtime = 4;
-  string cloud_account_id = 5;
-  string filename = 6;
+  int64 file_size = 5;
+  string file_md5 = 6;
+  string cloud_account_id = 7;
+  string cos_region = 8;
+  string cos_bucket = 9;
+  string cos_path = 10;
+  string status = 11;
+  int64 created_at = 12; // Unix 毫秒
+  int64 updated_at = 13; // Unix 毫秒
+}
+
+// InitPackageUploadReq 登记一个待上传的代码包并返回 COS 预签名上传地址；使用配置里的云账号，filename 为空时用“包名-版本.zip”。
+message InitPackageUploadReq {
+  string package_name = 1;
+  string version = 2;
+  string runtime = 3;
+  string filename = 4;
 }
 
 message InitPackageUploadRsp {
@@ -1190,10 +1136,9 @@ message InitPackageUploadRsp {
 
 // CompletePackageUploadReq 在上传完成后核对 COS 对象的大小与 MD5，通过后代码包变成可用。
 message CompletePackageUploadReq {
-  string space_id = 1;
-  string package_id = 2;
-  int64 file_size = 3;
-  string file_md5 = 4;
+  string package_id = 1;
+  int64 file_size = 2;
+  string file_md5 = 3;
 }
 
 message CompletePackageUploadRsp {
@@ -1201,10 +1146,8 @@ message CompletePackageUploadRsp {
   FunctionPackage package = 2;
 }
 
-// ListFunctionPackagesReq 的 space_id 为空时返回全部空间的代码包；按上传先后倒序。
-message ListFunctionPackagesReq {
-  string space_id = 1;
-}
+// ListFunctionPackagesReq 返回全部代码包，按上传先后倒序。
+message ListFunctionPackagesReq {}
 
 message ListFunctionPackagesRsp {
   common.RetInfo ret_info = 1;
@@ -1213,8 +1156,7 @@ message ListFunctionPackagesRsp {
 
 // DeleteFunctionPackageReq 先删 COS 对象再删记录；代码包不存在时也返回成功。
 message DeleteFunctionPackageReq {
-  string space_id = 1;
-  string package_id = 2;
+  string package_id = 1;
 }
 
 message DeleteFunctionPackageRsp {

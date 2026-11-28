@@ -87,7 +87,7 @@ func (r *PlanReconciler) planChange(ctx context.Context, latenessOK map[string]b
 	}
 	creates := false
 	for name, function := range desired.Functions {
-		if previousFunctions[name] == nil && function.Executor == "" {
+		if previousFunctions[name] == nil && function.Executor == marketfetch.PlanExecutorSCF {
 			lead, creates = planLeadTimeWithCreate, true
 			break
 		}
@@ -152,7 +152,7 @@ func firstStreamPlan(desired *DesiredState, previousFunctions map[string]*PlanFu
 		return false
 	}
 	for _, function := range desired.Functions {
-		if function.Executor == "" || function.Executor == marketfetch.PlanExecutorSCF {
+		if function.Executor != marketfetch.PlanExecutorStreaming && function.Executor != marketfetch.PlanExecutorLocal {
 			return false
 		}
 	}
@@ -166,7 +166,7 @@ func (r *PlanReconciler) waitForStream(ctx context.Context, desired *DesiredStat
 	}
 	needed := false
 	for name, function := range desired.Functions {
-		if function.Executor != "" && previous[name] == nil {
+		if (function.Executor == marketfetch.PlanExecutorStreaming || function.Executor == marketfetch.PlanExecutorLocal) && previous[name] == nil {
 			needed = true
 			break
 		}
@@ -410,7 +410,7 @@ func keepKeys(values map[string]string, keys []string) map[string]string {
 // handoffPending 判断期望状态里有已生效的数据集换了执行端。
 func handoffPending(desired *DesiredState, previous map[string]*PlanDatasetState) bool {
 	for key, dataset := range desired.Datasets {
-		if old := previous[key]; old != nil && old.IngestOrSCF() != dataset.IngestOrSCF() {
+		if old := previous[key]; old != nil && old.Ingest != dataset.Ingest {
 			return true
 		}
 	}
@@ -431,7 +431,7 @@ func subjectsChanging(desired *DesiredState, previous map[string]*PlanDatasetSta
 func appliedIngest(groups []TaskGroup, previous map[string]*PlanDatasetState) []TaskGroup {
 	current := map[string]string{}
 	for _, state := range previous {
-		current[state.DatasetID] = state.IngestOrSCF()
+		current[state.DatasetID] = state.Ingest
 	}
 	result := append([]TaskGroup(nil), groups...)
 	for i := range result {
@@ -446,7 +446,7 @@ func appliedIngest(groups []TaskGroup, previous map[string]*PlanDatasetState) []
 func scfFunctions(functions map[string]*PlanFunction) map[string]*PlanFunction {
 	result := make(map[string]*PlanFunction, len(functions))
 	for name, function := range functions {
-		if function != nil && function.Executor == "" {
+		if function != nil && function.Executor == marketfetch.PlanExecutorSCF {
 			result[name] = function
 		}
 	}

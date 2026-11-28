@@ -241,10 +241,8 @@ type PlanManager struct {
 	Offset   time.Duration
 	// Timeout 是单轮对账的超时。
 	Timeout time.Duration
-	// AfterTick 在每轮对账之后调用（推进补采作业、自动补采扫描），错误只记录日志。
-	AfterTick func(ctx context.Context, spaceID string) error
 
-	mu       sync.Mutex
+	mu sync.Mutex
 	workers  map[string]*planWorker
 	disabled map[string]bool
 	wg       sync.WaitGroup
@@ -509,15 +507,6 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 		}
 		if err := reconciler.Reconcile(tickCtx); err != nil {
 			log.WarnContextf(ctx, "collector fetch plan reconciliation failed space=%s: %v", space, err)
-		}
-		if m.AfterTick != nil {
-			// 补采推进与对账各用各的超时，对账等云端作业久了不会饿死补采。
-			followCtx, followCancel := context.WithTimeout(ctx, 30*time.Second)
-			err := m.AfterTick(followCtx, space)
-			followCancel()
-			if err != nil {
-				log.WarnContextf(ctx, "collector fetch plan follow-up failed space=%s: %v", space, err)
-			}
 		}
 		cancel()
 	}

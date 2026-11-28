@@ -35,14 +35,16 @@ func TestMethodSpacePolicyThreeTierMatrix(t *testing.T) {
 		{"collector", "UpdateCloudAccount", spacePolicyGlobal},
 		{"collector", "DeleteCloudAccount", spacePolicyGlobal},
 		{"collector", "ListCloudRegions", spacePolicyGlobal},
+		{"collector", "InitPackageUpload", spacePolicyGlobal},
+		{"collector", "CompletePackageUpload", spacePolicyGlobal},
+		{"collector", "ListFunctionPackages", spacePolicyGlobal},
+		{"collector", "DeleteFunctionPackage", spacePolicyGlobal},
 		{"collector", "GetDataTypeConfigs", spacePolicyGlobal},
-		{"collector", "GetDataTypeConfigWithFields", spacePolicyGlobal},
 		{"collector", "ListSubjectListers", spacePolicyGlobal},
 		{"collector", "RegisterDelistNotice", spacePolicyGlobal},
 		{"collector", "GetLifecycle", spacePolicyGlobal},
 		{"collector", "ControlLifecycle", spacePolicyGlobal},
 		{"collector", "GetTaskList", spacePolicyRequired},
-		{"collector", "ListFunctionPackages", spacePolicyRequired},
 		{"collector", "ListCloudFunctions", spacePolicyRequired},
 
 		// Trade 全局方法 vs 空间内方法

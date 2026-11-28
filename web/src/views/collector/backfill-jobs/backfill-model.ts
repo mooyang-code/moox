@@ -1,11 +1,11 @@
 import type { KlineBackfillJob } from "@/api/collector/runtime-status";
 
 const jobStatuses: Record<string, { text: string; color: string }> = {
-  pending: { text: "等待中", color: "gray" },
+  queued: { text: "等待中", color: "gray" },
   running: { text: "补采中", color: "arcoblue" },
   succeeded: { text: "已完成", color: "green" },
   failed: { text: "有失败", color: "red" },
-  canceled: { text: "已取消", color: "gray" }
+  cancelled: { text: "已取消", color: "gray" }
 };
 
 export function jobStatusInfo(status?: string) {
@@ -53,7 +53,7 @@ export function normalizeSegment(value: unknown): JobSegment {
 
 /** 作业还在进行：没有结束。 */
 export function jobActive(job: KlineBackfillJob) {
-  return job.status === "pending" || job.status === "running";
+  return job.status === "queued" || job.status === "running";
 }
 
 /** 作业可以重试：已结束且有失败分块。 */
@@ -66,12 +66,12 @@ export function jobSegments(job: KlineBackfillJob) {
   const succeeded = job.succeeded || 0;
   const failed = job.failed || 0;
   const running = job.running || 0;
-  const rest = (job.pending || 0) + (job.canceled || 0);
+  const rest = (job.queued || 0) + (job.cancelled || 0);
   const total = succeeded + failed + running + rest;
   const percent = (value: number) => (total === 0 ? 0 : Math.round((value / total) * 1000) / 10);
   return {
     total,
-    done: succeeded + failed + (job.canceled || 0),
+    done: succeeded + failed + (job.cancelled || 0),
     succeeded: percent(succeeded),
     failed: percent(failed),
     running: percent(running)

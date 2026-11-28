@@ -71,7 +71,7 @@ import { outputFieldSections, outputFieldSelectable, outputFieldVisible, type Ou
 defineOptions({ name: "OutputFieldPicker" });
 
 const props = defineProps<{
-  /** 输出字段目录：GetDataTypeConfigWithFields 的基础输出字段与附加字段。 */
+  /** 输出字段目录：GetDataTypeConfigs 的基础输出字段与附加字段。 */
   catalog: OutputFieldEntry[];
   /** 当前条件下可选的附加字段（小写字段 ID）。 */
   available: ReadonlySet<string>;

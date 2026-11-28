@@ -11,11 +11,11 @@ import (
 
 // 补采作业与分块状态。
 const (
-	BackfillPending   = "pending"
+	BackfillQueued    = "queued"
 	BackfillRunning   = "running"
 	BackfillSucceeded = "succeeded"
 	BackfillFailed    = "failed"
-	BackfillCanceled  = "canceled"
+	BackfillCancelled = "cancelled"
 )
 
 // 补采作业的来源与类型。
@@ -196,14 +196,14 @@ func (r *BackfillRepository) CreateJob(ctx context.Context, job BackfillJob, chu
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		row := backfillJobRow{
 			JobID: job.JobID, SpaceID: job.SpaceID, Source: job.Source, Kind: job.Kind, DatasetID: job.DatasetID, Frequency: job.Frequency, SubjectID: job.SubjectID,
-			From: toUnixMilli(job.From), To: toUnixMilli(job.To), AdvanceWatermark: job.AdvanceWatermark, Status: BackfillPending, CreatedAt: now, UpdatedAt: now,
+			From: toUnixMilli(job.From), To: toUnixMilli(job.To), AdvanceWatermark: job.AdvanceWatermark, Status: BackfillQueued, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
 		rows := make([]backfillChunkRow, 0, len(chunks))
 		for _, chunk := range chunks {
-			rows = append(rows, backfillChunkRow{JobID: job.JobID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, From: toUnixMilli(chunk.From), To: toUnixMilli(chunk.To), ChunkID: chunk.ChunkID, Status: BackfillPending, UpdatedAt: now})
+			rows = append(rows, backfillChunkRow{JobID: job.JobID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, From: toUnixMilli(chunk.From), To: toUnixMilli(chunk.To), ChunkID: chunk.ChunkID, Status: BackfillQueued, UpdatedAt: now})
 		}
 		return tx.CreateInBatches(&rows, 200).Error
 	})
@@ -240,7 +240,7 @@ func (r *BackfillRepository) ActiveJobs(ctx context.Context, spaceID string) ([]
 		return nil, err
 	}
 	var rows []backfillJobRow
-	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status IN ?", strings.TrimSpace(spaceID), []string{BackfillPending, BackfillRunning}).Order("c_id ASC").Find(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status IN ?", strings.TrimSpace(spaceID), []string{BackfillQueued, BackfillRunning}).Order("c_id ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	return jobsOf(rows), nil
@@ -260,7 +260,7 @@ func (r *BackfillRepository) SetJobStatus(ctx context.Context, jobID, status, la
 		return err
 	}
 	// 已取消的作业不会被改回运行中。
-	return r.db.WithContext(ctx).Model(&backfillJobRow{}).Where("c_job_id = ? AND c_status <> ?", jobID, BackfillCanceled).Updates(map[string]any{"c_status": status, "c_last_error": lastError, "c_mtime": nowUnixMilli()}).Error
+	return r.db.WithContext(ctx).Model(&backfillJobRow{}).Where("c_job_id = ? AND c_status <> ?", jobID, BackfillCancelled).Updates(map[string]any{"c_status": status, "c_last_error": lastError, "c_mtime": nowUnixMilli()}).Error
 }
 
 // CancelJob 取消作业：把尚未开始的分块标记为取消；运行中的分块等其结束。
@@ -270,10 +270,10 @@ func (r *BackfillRepository) CancelJob(ctx context.Context, jobID string) error 
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := nowUnixMilli()
-		if err := tx.Model(&backfillChunkRow{}).Where("c_job_id = ? AND c_status = ?", jobID, BackfillPending).Updates(map[string]any{"c_status": BackfillCanceled, "c_mtime": now}).Error; err != nil {
+		if err := tx.Model(&backfillChunkRow{}).Where("c_job_id = ? AND c_status = ?", jobID, BackfillQueued).Updates(map[string]any{"c_status": BackfillCancelled, "c_mtime": now}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&backfillJobRow{}).Where("c_job_id = ? AND c_status IN ?", jobID, []string{BackfillPending, BackfillRunning}).Updates(map[string]any{"c_status": BackfillCanceled, "c_mtime": now}).Error
+		return tx.Model(&backfillJobRow{}).Where("c_job_id = ? AND c_status IN ?", jobID, []string{BackfillQueued, BackfillRunning}).Updates(map[string]any{"c_status": BackfillCancelled, "c_mtime": now}).Error
 	})
 }
 
@@ -288,7 +288,7 @@ func (r *BackfillRepository) RetryJob(ctx context.Context, jobID string) (int, e
 	var retried int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := nowUnixMilli()
-		result := tx.Model(&backfillJobRow{}).Where("c_job_id = ? AND c_status = ?", jobID, BackfillFailed).Updates(map[string]any{"c_status": BackfillPending, "c_last_error": "", "c_mtime": now})
+		result := tx.Model(&backfillJobRow{}).Where("c_job_id = ? AND c_status = ?", jobID, BackfillFailed).Updates(map[string]any{"c_status": BackfillQueued, "c_last_error": "", "c_mtime": now})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -296,7 +296,7 @@ func (r *BackfillRepository) RetryJob(ctx context.Context, jobID string) (int, e
 			return ErrJobNotRetryable
 		}
 		chunks := tx.Model(&backfillChunkRow{}).Where("c_job_id = ? AND c_status = ?", jobID, BackfillFailed).
-			Updates(map[string]any{"c_status": BackfillPending, "c_attempts": 0, "c_missing": "", "c_last_error": "", "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": now})
+			Updates(map[string]any{"c_status": BackfillQueued, "c_attempts": 0, "c_missing": "", "c_last_error": "", "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": now})
 		retried = chunks.RowsAffected
 		return chunks.Error
 	})
@@ -317,7 +317,7 @@ func (r *BackfillRepository) ClaimChunks(ctx context.Context, jobID string, limi
 		now := nowUnixMilli()
 		latestEndMs := toUnixMilli(latestEnd)
 		var rows []backfillChunkRow
-		if err := tx.Where("c_job_id = ? AND (c_status = ? OR (c_status = ? AND c_latest_end_at IS NOT NULL AND c_latest_end_at < ?))", jobID, BackfillPending, BackfillRunning, now).Order("c_id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		if err := tx.Where("c_job_id = ? AND (c_status = ? OR (c_status = ? AND c_latest_end_at IS NOT NULL AND c_latest_end_at < ?))", jobID, BackfillQueued, BackfillRunning, now).Order("c_id ASC").Limit(limit).Find(&rows).Error; err != nil {
 			return err
 		}
 		for _, row := range rows {
@@ -439,7 +439,7 @@ func (r *BackfillRepository) RequeueChunk(ctx context.Context, id int64, attempt
 	if err := r.ready(); err != nil {
 		return err
 	}
-	return ownedResult(r.chunkOwned(ctx, id, attempt).Updates(map[string]any{"c_status": BackfillPending, "c_missing": missing, "c_last_error": note, "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": nowUnixMilli()}))
+	return ownedResult(r.chunkOwned(ctx, id, attempt).Updates(map[string]any{"c_status": BackfillQueued, "c_missing": missing, "c_last_error": note, "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": nowUnixMilli()}))
 }
 
 // RenewChunk 在真正调用函数之前把名额有效期续到新的最迟结束时间。
@@ -455,7 +455,7 @@ func (r *BackfillRepository) ReleaseChunk(ctx context.Context, id int64, attempt
 	if err := r.ready(); err != nil {
 		return err
 	}
-	return r.chunkOwned(ctx, id, attempt).Updates(map[string]any{"c_status": BackfillPending, "c_attempts": attempt - 1, "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": nowUnixMilli()}).Error
+	return r.chunkOwned(ctx, id, attempt).Updates(map[string]any{"c_status": BackfillQueued, "c_attempts": attempt - 1, "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": nowUnixMilli()}).Error
 }
 
 // ChunkStatusCounts 返回作业各状态的分块数。
@@ -513,7 +513,7 @@ func (r *BackfillRepository) ListJobs(ctx context.Context, spaceID string, filte
 		query = query.Where("c_source = ?", filter.Source)
 	}
 	if filter.Attention {
-		query = query.Where("c_status IN ?", []string{BackfillPending, BackfillRunning, BackfillFailed})
+		query = query.Where("c_status IN ?", []string{BackfillQueued, BackfillRunning, BackfillFailed})
 	}
 	if filter.DatasetID != "" {
 		// 不限数据集的手动作业也覆盖该数据集。
@@ -543,7 +543,7 @@ func (r *BackfillRepository) JobCounts(ctx context.Context, spaceID string, sinc
 	}
 	var active, failed int64
 	db := r.db.WithContext(ctx).Model(&backfillJobRow{})
-	if err := db.Where("c_space_id = ? AND c_status IN ?", spaceID, []string{BackfillPending, BackfillRunning}).Count(&active).Error; err != nil {
+	if err := db.Where("c_space_id = ? AND c_status IN ?", spaceID, []string{BackfillQueued, BackfillRunning}).Count(&active).Error; err != nil {
 		return BackfillJobCounts{}, err
 	}
 	if err := r.db.WithContext(ctx).Model(&backfillJobRow{}).Where("c_space_id = ? AND c_status = ? AND c_mtime >= ?", spaceID, BackfillFailed, toUnixMilli(since)).Count(&failed).Error; err != nil {
@@ -606,7 +606,7 @@ func (r *BackfillRepository) CleanupFinishedJobs(ctx context.Context, spaceID st
 		var jobIDs []string
 		if err := tx.Model(&backfillJobRow{}).Select("c_job_id").
 			Where("c_space_id = ? AND c_status IN ? AND ((c_source = ? AND c_mtime < ?) OR (c_source <> ? AND c_mtime < ?))",
-				spaceID, []string{BackfillSucceeded, BackfillFailed, BackfillCanceled}, BackfillSourceAuto, toUnixMilli(autoBefore), BackfillSourceAuto, toUnixMilli(manualBefore)).
+				spaceID, []string{BackfillSucceeded, BackfillFailed, BackfillCancelled}, BackfillSourceAuto, toUnixMilli(autoBefore), BackfillSourceAuto, toUnixMilli(manualBefore)).
 			Order("c_mtime ASC").Limit(limit).Pluck("c_job_id", &jobIDs).Error; err != nil {
 			return err
 		}

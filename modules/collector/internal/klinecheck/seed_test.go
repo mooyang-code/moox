@@ -300,7 +300,7 @@ func TestSkipSeedsCancelsJobsAndReleases(t *testing.T) {
 	require.Empty(t, invoker.events, "作业已取消，没有分块再被认领")
 	status, err := b.Status(ctx, seed.JobIDs[0])
 	require.NoError(t, err)
-	require.Equal(t, store.BackfillCanceled, status.Job.Status)
+	require.Equal(t, store.BackfillCancelled, status.Job.Status)
 
 	again, err := b.SkipSeeds(ctx, "crypto", "")
 	require.NoError(t, err)
@@ -409,7 +409,7 @@ func TestSeedChunksFailOverToTheNextRegion(t *testing.T) {
 	require.NoError(t, b.Tick(ctx, "crypto"))
 	b.Wait()
 	require.Len(t, provider.regionsUsed, 2, "两个地域都试过")
-	require.Equal(t, store.BackfillPending, onlyChunkStatus(t, b, seedOf(t, b).JobIDs[0]), "都建不出来：分块退回，不算失败")
+	require.Equal(t, store.BackfillQueued, onlyChunkStatus(t, b, seedOf(t, b).JobIDs[0]), "都建不出来：分块退回，不算失败")
 
 	provider.mu.Lock()
 	provider.broken["ap-singapore"] = false
@@ -710,8 +710,8 @@ func TestSeedMultiJobRetryWaitsUntilAllFailedJobsFinishAtomically(t *testing.T) 
 	for _, jobID := range seed.JobIDs {
 		st, stErr := b.Status(ctx, jobID)
 		require.NoError(t, stErr)
-		require.Equal(t, store.BackfillPending, st.Job.Status)
-		require.Equal(t, 1, st.Counts[store.BackfillPending])
+		require.Equal(t, store.BackfillQueued, st.Job.Status)
+		require.Equal(t, 1, st.Counts[store.BackfillQueued])
 	}
 
 	// 重试这一次后再次失败：不再二次重试，直接收尾为 SeedDone。

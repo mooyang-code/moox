@@ -74,7 +74,7 @@
             <a-table-column title="进度" :width="150">
               <template #cell="{ record }">
                 <a-tooltip
-                  :content="`成功 ${record.succeeded || 0} / 失败 ${record.failed || 0} / 执行中 ${record.running || 0} / 未开始 ${record.pending || 0}`"
+                  :content="`成功 ${record.succeeded || 0} / 失败 ${record.failed || 0} / 执行中 ${record.running || 0} / 未开始 ${record.queued || 0}`"
                 >
                   <div class="segments">
                     <span class="seg-ok" :style="{ width: `${jobSegments(record).succeeded}%` }" />
@@ -148,7 +148,7 @@
           /></a-descriptions-item>
           <a-descriptions-item label="分块" :span="2">
             成功 {{ detail.job.succeeded || 0 }} / 失败 {{ detail.job.failed || 0 }} / 执行中 {{ detail.job.running || 0 }} /
-            未开始 {{ detail.job.pending || 0 }} / 取消 {{ detail.job.canceled || 0 }}
+            未开始 {{ detail.job.queued || 0 }} / 取消 {{ detail.job.cancelled || 0 }}
           </a-descriptions-item>
           <a-descriptions-item v-if="detail.job.last_error" label="错误" :span="2">{{
             detail.job.last_error
@@ -271,7 +271,7 @@ async function load(options: { silent?: boolean } = {}) {
     const data = await listKlineBackfills(space, filterOf(), page.value, pageSize);
     if (!request.isLatest() || space !== spaceId.value) return;
     jobs.value = data.items || [];
-    total.value = Number(data.page?.total || 0);
+    total.value = Number(data.page_result?.total || 0);
   } catch (error) {
     if (request.isLatest() && !options.silent) Message.error(error instanceof Error ? error.message : "补采作业加载失败");
   } finally {

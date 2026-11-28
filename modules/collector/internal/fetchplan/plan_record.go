@@ -40,17 +40,10 @@ type DatasetCopy struct {
 	Count uint32 `json:"count"`
 	// LatenessS 是这一份的周期按哪个截止建立（交接时旧份记旧截止）。
 	LatenessS int `json:"lateness_s"`
-	// Ingest 是这一份的执行端（空按 scf）：两份执行端不同说明正在交接，生效点是后一份的 From。
-	Ingest string `json:"ingest,omitempty"`
+	// Ingest 是这一份的执行端（scf、stream 或 local）：两份执行端不同说明正在交接，生效点是后一份的 From。
+	Ingest string `json:"ingest"`
 	// Stop 表示从 From 起不再采集（没有标的）。
 	Stop bool `json:"stop,omitempty"`
-}
-
-func (c DatasetCopy) ingestOrSCF() string {
-	if c.Ingest == "" {
-		return marketfetch.PlanExecutorSCF
-	}
-	return c.Ingest
 }
 
 // PlanDataset 是一个数据集在本计划之后的完整状态，加上本计划对它做了什么。
@@ -84,7 +77,7 @@ func (d *PlanDataset) Head() *DatasetCopy {
 
 // HandoffFrom 返回交接的生效点：两份执行端不同时是后一份的 From，否则为 0。
 func (d *PlanDataset) HandoffFrom() int64 {
-	if d == nil || len(d.Copies) != 2 || d.Copies[0].ingestOrSCF() == d.Copies[1].ingestOrSCF() {
+	if d == nil || len(d.Copies) != 2 || d.Copies[0].Ingest == d.Copies[1].Ingest {
 		return 0
 	}
 	return d.Copies[1].From
@@ -101,8 +94,8 @@ type PlanFunctionChange struct {
 	Name   string `json:"name"`
 	Region string `json:"region"`
 	Market string `json:"market"`
-	// Executor 为空表示 SCF 函数；stream、local 由 collector-stream 心跳确认，没有云端步骤。
-	Executor string            `json:"executor,omitempty"`
+	// Executor 是执行端（scf、stream 或 local）；stream、local 由 collector-stream 心跳确认，没有云端步骤。
+	Executor string            `json:"executor"`
 	Old      *marketfetch.Plan `json:"old,omitempty"`
 	OldCron  string            `json:"old_cron,omitempty"`
 	New      *marketfetch.Plan `json:"new,omitempty"`
@@ -134,7 +127,7 @@ type FetchPlanProgress struct {
 
 // IsSCF 判断该项是 SCF 函数（需要云端创建、下发环境与定时器）。
 func (f *PlanFunctionChange) IsSCF() bool {
-	return f.Executor == "" || f.Executor == marketfetch.PlanExecutorSCF
+	return f.Executor == marketfetch.PlanExecutorSCF
 }
 
 func (p *FetchPlanProgress) mark(set *map[string]bool, key string) {
@@ -467,7 +460,7 @@ func decideDataset(key string, prev *PlanDataset, want *DesiredDataset, previous
 			out.Copies[len(out.Copies)-1] = DatasetCopy{From: replaced.From, Hash: replaced.Hash, Count: replaced.Count, LatenessS: replaced.LatenessS, Ingest: replaced.Ingest, Stop: true}
 			out.Stopped = true
 		} else {
-			out.Copies[len(out.Copies)-1] = DatasetCopy{From: replaced.From, Hash: want.Hash, Count: want.Count, LatenessS: want.LatenessS, Ingest: want.IngestOrSCF()}
+			out.Copies[len(out.Copies)-1] = DatasetCopy{From: replaced.From, Hash: want.Hash, Count: want.Count, LatenessS: want.LatenessS, Ingest: want.Ingest}
 			out.Register = want.Hash != replaced.Hash
 			stateFromWant()
 		}
@@ -482,7 +475,7 @@ func decideDataset(key string, prev *PlanDataset, want *DesiredDataset, previous
 			out.Copies = append(out.Copies, DatasetCopy{From: q, Hash: head.Hash, Count: head.Count, LatenessS: head.LatenessS, Ingest: head.Ingest, Stop: true})
 			out.Stopped = true
 		} else {
-			out.Copies = append(out.Copies, DatasetCopy{From: q, Hash: want.Hash, Count: want.Count, LatenessS: want.LatenessS, Ingest: want.IngestOrSCF()})
+			out.Copies = append(out.Copies, DatasetCopy{From: q, Hash: want.Hash, Count: want.Count, LatenessS: want.LatenessS, Ingest: want.Ingest})
 			out.Register = head == nil || want.Hash != head.Hash
 			stateFromWant()
 		}

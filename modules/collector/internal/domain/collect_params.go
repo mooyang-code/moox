@@ -10,66 +10,25 @@ import (
 	"strings"
 )
 
-// CollectParams describes how a rule generates concrete task instances.
+// CollectParams 描述一条采集或合成任务的持久化参数。
+// 任务与标签、结果数据集的关联保存在独立列与关联表中，不重复写进这里。
 type CollectParams struct {
-	// The persisted rule contract is flat and greenfield-only. The nested
-	// fields below are derived for the collector's internal planners and are
-	// deliberately excluded from JSON so old exchange/market aliases fail
-	// validation rather than becoming a second public contract.
-	Source          CollectSource   `json:"-"`
-	Collector       CollectorSpec   `json:"-"`
-	Target          CollectTarget   `json:"-"`
-	Schedule        CollectSchedule `json:"-"`
-	Provider        string          `json:"provider,omitempty"`
-	MarketType      string          `json:"market_type,omitempty"`
-	MarketID        string          `json:"market_id,omitempty"`
-	InstrumentType  string          `json:"instrument_type,omitempty"`
-	SourceID        string          `json:"source_id,omitempty"`
-	SeriesTag       string          `json:"series_tag,omitempty"`
-	SubjectTags     []string        `json:"subject_tags,omitempty"`
-	OutputFields    []string        `json:"output_fields,omitempty"`
-	TargetDatasetID string          `json:"target_dataset_id,omitempty"`
-	Frequency       string          `json:"frequency,omitempty"`
-	SourceDatasetID string          `json:"source_dataset_id,omitempty"`
-	SourceFrequency string          `json:"source_frequency,omitempty"`
-	SourceSeriesTag string          `json:"source_series_tag,omitempty"`
-	TargetFrequency string          `json:"target_frequency,omitempty"`
-	Alignment       string          `json:"alignment,omitempty"`
+	OutputFields []string `json:"output_fields,omitempty"`
+	Frequency    string   `json:"frequency,omitempty"`
 	// SourceTaskID 是合成的源采集任务：创建时由它推导 source_dataset_id、source_frequency、source_series_tag。
-	SourceTaskID string `json:"source_task_id,omitempty"`
+	SourceTaskID    string `json:"source_task_id,omitempty"`
+	SourceDatasetID string `json:"source_dataset_id,omitempty"`
+	SourceFrequency string `json:"source_frequency,omitempty"`
+	SourceSeriesTag string `json:"source_series_tag,omitempty"`
+	TargetFrequency string `json:"target_frequency,omitempty"`
 	// SymbolsPerFunction 是定时模式下每个函数负责的标的数；0 表示使用默认值。
 	SymbolsPerFunction int `json:"symbols_per_function,omitempty"`
 	// AllowedLatenessSeconds 是结果数据集的允许迟到时间；0 表示使用市场 market.yaml 里的默认值。
 	AllowedLatenessSeconds int `json:"allowed_lateness_seconds,omitempty"`
 }
 
-// CollectSource describes where target objects come from.
-type CollectSource struct {
-	Kind      string `json:"kind"`
-	DatasetID string `json:"dataset_id"`
-}
-
-// CollectorSpec describes the exchange/data adapter.
-type CollectorSpec struct {
-	Exchange  string   `json:"exchange"`
-	Market    string   `json:"market"`
-	DataType  string   `json:"data_type"`
-	Intervals []string `json:"intervals"`
-	Live      bool     `json:"live,omitempty"`
-}
-
-// CollectTarget describes where collected rows should be written.
-type CollectTarget struct {
-	DatasetID string `json:"dataset_id"`
-}
-
-// CollectSchedule describes task frequency dimensions.
-type CollectSchedule struct {
-	Interval string `json:"interval"`
-}
-
-// ParseCollectParams parses rule JSON and normalizes the standard shape.
-func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType string, fallbackDataType string) (*CollectParams, error) {
+// ParseCollectParams 解析并规范化任务参数 JSON；未知字段与不匹配的字段组合直接报错。
+func ParseCollectParams(raw string, dataType string) (*CollectParams, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		raw = "{}"
@@ -83,10 +42,10 @@ func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType 
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("parse collect params: trailing JSON value")
 	}
-	if err := validateCollectParamsShape(raw, fallbackDataType); err != nil {
+	if err := validateCollectParamsShape(raw, dataType); err != nil {
 		return nil, err
 	}
-	params.Normalize(fallbackProvider, fallbackMarketType, fallbackDataType)
+	params.Normalize(dataType)
 	if err := params.validatePlanOptions(); err != nil {
 		return nil, err
 	}
@@ -103,64 +62,31 @@ func (p *CollectParams) validatePlanOptions() error {
 	return nil
 }
 
-// Normalize canonicalizes the standard collect params shape.
-func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType string, fallbackDataType string) {
-	p.Provider = strings.ToLower(firstNonEmpty(p.Provider, fallbackProvider))
-	p.MarketType = strings.ToLower(firstNonEmpty(p.MarketType, fallbackMarketType))
-	p.MarketID = strings.ToLower(strings.TrimSpace(p.MarketID))
-	p.InstrumentType = strings.ToLower(strings.TrimSpace(p.InstrumentType))
-	p.SourceID = strings.ToLower(strings.TrimSpace(p.SourceID))
-	p.SeriesTag = strings.TrimSpace(p.SeriesTag)
-	p.SubjectTags = normalizeTags(p.SubjectTags)
+// Normalize 规范化参数里的空白、大小写与频率写法。
+func (p *CollectParams) Normalize(dataType string) {
 	p.OutputFields = normalizeOutputFields(p.OutputFields)
-	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
 	p.Frequency = strings.TrimSpace(p.Frequency)
+	p.SourceTaskID = strings.TrimSpace(p.SourceTaskID)
 	p.SourceDatasetID = strings.TrimSpace(p.SourceDatasetID)
 	p.SourceSeriesTag = strings.TrimSpace(p.SourceSeriesTag)
-	p.Alignment = strings.ToLower(strings.TrimSpace(p.Alignment))
-	dataType := strings.ToLower(strings.TrimSpace(fallbackDataType))
-	if dataType == "kline_resample" {
+	dt := strings.ToLower(strings.TrimSpace(dataType))
+	if dt == "kline_resample" {
 		p.SourceFrequency = normalizeFrequency(p.SourceFrequency)
 		p.TargetFrequency = normalizeFrequency(p.TargetFrequency)
 	}
-	if dataType == "kline" {
+	if dt == DataTypeKline {
 		p.Frequency = normalizeFrequency(p.Frequency)
-	}
-
-	// The source is the target Dataset's subject range. It is no longer a
-	// separate symbol Dataset or a persisted subject-set relation.
-	p.Source = CollectSource{Kind: "dataset"}
-	if dataType == "kline_resample" {
-		p.Source.DatasetID = p.SourceDatasetID
-	}
-	intervals := []string(nil)
-	if dataType == "kline_resample" && p.TargetFrequency != "" {
-		intervals = []string{p.TargetFrequency}
-	} else if p.Frequency != "" {
-		intervals = []string{p.Frequency}
-	}
-	p.Collector = CollectorSpec{
-		Exchange:  p.Provider,
-		Market:    p.MarketType,
-		DataType:  dataType,
-		Intervals: intervals,
-	}
-	p.Target = CollectTarget{DatasetID: p.TargetDatasetID}
-	if dataType == "kline_resample" {
-		p.Schedule = CollectSchedule{Interval: "1m"}
-	} else {
-		p.Schedule = CollectSchedule{Interval: p.Frequency}
 	}
 }
 
-func validateCollectParamsShape(raw string, fallbackDataType string) error {
+func validateCollectParamsShape(raw string, dataType string) error {
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return nil // the strict struct decoder reports the useful JSON error first
+		return nil
 	}
-	resample := strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline_resample")
+	resample := strings.EqualFold(strings.TrimSpace(dataType), "kline_resample")
 	standardOnly := []string{"frequency"}
-	resampleOnly := []string{"source_task_id", "source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment"}
+	resampleOnly := []string{"source_task_id", "source_dataset_id", "source_frequency", "source_series_tag", "target_frequency"}
 	for _, key := range standardOnly {
 		if _, exists := values[key]; exists && resample {
 			return fmt.Errorf("parse collect params: field %q is not valid for kline_resample", key)
@@ -174,96 +100,33 @@ func validateCollectParamsShape(raw string, fallbackDataType string) error {
 	return nil
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
-// ValidateTaskDefinition validates task-level parameters that are independent
-// from a concrete Provider route. Direct collection tasks derive Provider and
-// market from each selected Tag, so those fields are intentionally not required
-// here.
-func (p *CollectParams) ValidateTaskDefinition() error {
+// ValidateKline 校验 K 线采集任务的参数。
+func (p *CollectParams) ValidateKline() error {
 	if p == nil {
 		return fmt.Errorf("collect params are required")
 	}
-	if p.Collector.DataType == "" {
-		return fmt.Errorf("collector data_type is required")
+	if p.Frequency == "" {
+		return fmt.Errorf("frequency is required for kline")
 	}
-	if p.Target.DatasetID == "" {
-		return fmt.Errorf("target.dataset_id is required")
-	}
-	if _, err := ParseScheduleInterval(p.Schedule.Interval); err != nil {
-		return fmt.Errorf("schedule.interval: %w", err)
-	}
-	switch p.Collector.DataType {
-	case "kline":
-		if len(p.Collector.Intervals) == 0 {
-			return fmt.Errorf("collector.intervals is required for kline")
-		}
-		for _, value := range p.Collector.Intervals {
-			if value == "" {
-				return fmt.Errorf("collector.intervals must not contain empty values")
-			}
-		}
-	case "kline_resample":
-		// 合成任务的契约由 resample.ValidateTaskParams 校验（domain 不能反向依赖 resample 包），这里不接受。
-		return fmt.Errorf("kline_resample params must be validated by resample.ValidateTaskParams")
-	default:
-		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)
+	if _, err := ParseScheduleInterval(p.Frequency); err != nil {
+		return fmt.Errorf("frequency: %w", err)
 	}
 	return nil
 }
 
-// Validate checks the single supported rule JSON contract.
-func (p *CollectParams) Validate() error {
-	if p == nil {
-		return fmt.Errorf("collect params are required")
-	}
-	if p.Collector.Exchange == "" || p.Collector.Market == "" {
-		return fmt.Errorf("collector exchange and market are required")
-	}
-	return p.ValidateTaskDefinition()
-}
-
-// SplitSubjectTags extracts the transient task input. Tags are persisted on
-// the result Dataset rather than duplicated in the task's collect_params.
-func SplitSubjectTags(raw string) (string, []string, error) {
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return "", nil, fmt.Errorf("parse collect params: %w", err)
-	}
-	var tags []string
-	if value, ok := values["subject_tags"]; ok {
-		if err := json.Unmarshal(value, &tags); err != nil {
-			return "", nil, fmt.Errorf("parse subject_tags: %w", err)
-		}
-		delete(values, "subject_tags")
-	}
-	clean, err := json.Marshal(values)
-	if err != nil {
-		return "", nil, err
-	}
-	return string(clean), normalizeTags(tags), nil
-}
-
-func normalizeTags(tags []string) []string {
-	seen := make(map[string]struct{}, len(tags))
-	result := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		if tag == "" {
+func normalizeUniqueSorted(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
 			continue
 		}
-		if _, ok := seen[tag]; ok {
+		if _, ok := seen[item]; ok {
 			continue
 		}
-		seen[tag] = struct{}{}
-		result = append(result, tag)
+		seen[item] = struct{}{}
+		result = append(result, item)
 	}
 	sort.Strings(result)
 	return result
@@ -286,5 +149,5 @@ func normalizeOutputFields(fields []string) []string {
 	for i := range fields {
 		fields[i] = strings.ToLower(strings.TrimSpace(fields[i]))
 	}
-	return normalizeTags(fields)
+	return normalizeUniqueSorted(fields)
 }

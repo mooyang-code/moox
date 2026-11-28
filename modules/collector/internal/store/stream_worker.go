@@ -12,19 +12,19 @@ import (
 
 // StreamWorker 是 collector-stream 实例的心跳记录。
 type StreamWorker struct {
-	SpaceID     string
-	InstanceID  string
-	Applied     string
-	Status      string
-	HeartbeatAt time.Time
+	SpaceID       string
+	InstanceID    string
+	AppliedPlanID int64
+	Status        string
+	HeartbeatAt   time.Time
 }
 
 type streamWorkerRow struct {
-	SpaceID     string `gorm:"column:c_space_id;primaryKey"`
-	InstanceID  string `gorm:"column:c_instance_id"`
-	Applied     string `gorm:"column:c_applied"`
-	Status      string `gorm:"column:c_status"`
-	HeartbeatAt int64  `gorm:"column:c_heartbeat_at"`
+	SpaceID       string `gorm:"column:c_space_id;primaryKey"`
+	InstanceID    string `gorm:"column:c_instance_id"`
+	AppliedPlanID int64  `gorm:"column:c_applied_plan_id"`
+	Status        string `gorm:"column:c_status"`
+	HeartbeatAt   int64  `gorm:"column:c_heartbeat_at"`
 }
 
 func (streamWorkerRow) TableName() string { return "t_collector_stream_workers" }
@@ -41,8 +41,17 @@ func (r *StreamWorkerRepository) Heartbeat(ctx context.Context, worker StreamWor
 	if r == nil || r.db == nil {
 		return fmt.Errorf("stream worker repository is not initialized")
 	}
-	row := streamWorkerRow{SpaceID: strings.ToLower(worker.SpaceID), InstanceID: worker.InstanceID, Applied: worker.Applied, Status: worker.Status, HeartbeatAt: toUnixMilli(worker.HeartbeatAt)}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_space_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_instance_id", "c_applied", "c_status", "c_heartbeat_at"})}).Create(&row).Error
+	row := streamWorkerRow{
+		SpaceID:       strings.ToLower(worker.SpaceID),
+		InstanceID:    worker.InstanceID,
+		AppliedPlanID: worker.AppliedPlanID,
+		Status:        worker.Status,
+		HeartbeatAt:   toUnixMilli(worker.HeartbeatAt),
+	}
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "c_space_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"c_instance_id", "c_applied_plan_id", "c_status", "c_heartbeat_at"}),
+	}).Create(&row).Error
 }
 
 // Get 返回该空间的实例记录；没有返回 nil。
@@ -58,5 +67,11 @@ func (r *StreamWorkerRepository) Get(ctx context.Context, spaceID string) (*Stre
 	if result.RowsAffected == 0 {
 		return nil, nil
 	}
-	return &StreamWorker{SpaceID: row.SpaceID, InstanceID: row.InstanceID, Applied: row.Applied, Status: row.Status, HeartbeatAt: fromUnixMilli(row.HeartbeatAt)}, nil
+	return &StreamWorker{
+		SpaceID:       row.SpaceID,
+		InstanceID:    row.InstanceID,
+		AppliedPlanID: row.AppliedPlanID,
+		Status:        row.Status,
+		HeartbeatAt:   fromUnixMilli(row.HeartbeatAt),
+	}, nil
 }

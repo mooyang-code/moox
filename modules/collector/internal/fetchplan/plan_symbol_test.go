@@ -72,7 +72,7 @@ func TestSymbolChangeWritesATimelineRowFromP(t *testing.T) {
 // 拉取参数、输出字段都相同。任务删掉、频率不匹配时找不到路由。
 func TestBackfillRouteMatchesThePlanOfTheTask(t *testing.T) {
 	h := newPlanHarness(t, 3)
-	h.tasks.tasks[0].CollectParams = `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m","output_fields":["close","open","volume"]}`
+	h.tasks.tasks[0].CollectParams = `{"frequency":"1m","output_fields":["close","open","volume"]}`
 	r := h.reconciler()
 	planBaselineSettle(t, h, r)
 	applied, err := h.store.LatestApplied(context.Background(), "crypto")
@@ -112,7 +112,7 @@ func TestBackfillRouteReadsTagsFromTheTaskRepository(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "spot-1m", TaskName: "spot-1m", DataType: "kline", Ingest: domain.IngestSCF, Enabled: true, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"target_dataset_id":"ds_spot","frequency":"1m"}`, ResultDatasetID: "ds_spot",
+		CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds_spot",
 	}))
 
 	routes := &BackfillRoutes{Tasks: db.Tasks(), Tags: &planSymbolsStub{}, Options: func(string) (PlanOptions, error) { return testPlanOptions(), nil }}

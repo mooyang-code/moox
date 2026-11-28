@@ -21,10 +21,10 @@ func TestStreamWorkerHeartbeatKeepsOneRowPerSpace(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, worker)
 	at := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
-	require.NoError(t, workers.Heartbeat(ctx, StreamWorker{SpaceID: "crypto", InstanceID: "i1", Applied: `{"id":1}`, Status: "{}", HeartbeatAt: at}))
-	require.NoError(t, workers.Heartbeat(ctx, StreamWorker{SpaceID: "crypto", InstanceID: "i2", Applied: `{"id":2}`, Status: "{}", HeartbeatAt: at.Add(time.Second)}))
+	require.NoError(t, workers.Heartbeat(ctx, StreamWorker{SpaceID: "crypto", InstanceID: "i1", AppliedPlanID: 1, Status: "{}", HeartbeatAt: at}))
+	require.NoError(t, workers.Heartbeat(ctx, StreamWorker{SpaceID: "crypto", InstanceID: "i2", AppliedPlanID: 2, Status: "{}", HeartbeatAt: at.Add(time.Second)}))
 	worker, err = workers.Get(ctx, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, "i2", worker.InstanceID)
-	require.Equal(t, `{"id":2}`, worker.Applied)
+	require.EqualValues(t, 2, worker.AppliedPlanID)
 }

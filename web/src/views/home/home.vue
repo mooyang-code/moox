@@ -508,12 +508,12 @@ async function loadSpaceScoped() {
     listDataSources({ space_id: spaceId, page }).then(rsp => {
       if (isCurrent()) counts.sources = Number(rsp.page_result?.total ?? rsp.data_sources?.length ?? 0);
     }),
-    call<{ space_id: string; page: { page: number; size: number } }, { tasks?: unknown[]; page?: { total?: number } }>(
+    call<{ space_id: string; page: { page: number; size: number } }, { tasks?: unknown[]; page_result?: { total?: number } }>(
       "collector",
       "GetTaskList",
       { space_id: spaceId, page: { page: 1, size: 1 } }
     ).then(rsp => {
-      if (isCurrent()) counts.rules = Number(rsp.page?.total) || rsp.tasks?.length || 0;
+      if (isCurrent()) counts.rules = Number(rsp.page_result?.total) || rsp.tasks?.length || 0;
     }),
     listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       if (isCurrent()) counts.accounts = Number(rsp.page_result?.total ?? rsp.accounts?.length ?? 0);

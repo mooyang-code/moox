@@ -123,9 +123,9 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	return printJSON(out, map[string]any{"status": "created", "task_id": rsp.GetTaskId()})
 }
 
-// collectorTaskCreateParams 拼出建任务的采集参数。未显式指定 Fields 或 AllFields 为真时不带 output_fields。
+// collectorTaskCreateParams 拼出建任务的采集参数。标的标签只走 task.tag_ids，未显式指定 Fields 或 AllFields 为真时不带 output_fields。
 func collectorTaskCreateParams(flags collectorTaskCreateFlags) map[string]any {
-	params := map[string]any{"subject_tags": stringsToAny(flags.TagIDs), "frequency": flags.Frequency}
+	params := map[string]any{"frequency": flags.Frequency}
 	if !flags.AllFields && len(flags.Fields) > 0 {
 		params["output_fields"] = stringsToAny(flags.Fields)
 	}

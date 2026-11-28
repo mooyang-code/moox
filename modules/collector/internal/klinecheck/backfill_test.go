@@ -221,7 +221,7 @@ func TestBackfillBeforeTheFirstPlanIsVerifiedByReadingBack(t *testing.T) {
 	step(t, backfiller, 1)
 	_, stored, err := backfiller.Store.GetJob(ctx, jobID)
 	require.NoError(t, err)
-	require.Equal(t, store.BackfillPending, stored[0].Status)
+	require.Equal(t, store.BackfillQueued, stored[0].Status)
 	require.Contains(t, stored[0].LastError, "3 bars are still missing")
 
 	step(t, backfiller, 2)
@@ -277,7 +277,7 @@ func TestBackfillCancelStopsPendingChunks(t *testing.T) {
 	backfiller.Wait()
 	require.Empty(t, invoker.events)
 	status, _ := backfiller.Status(ctx, jobID)
-	require.Equal(t, store.BackfillCanceled, status.Job.Status)
+	require.Equal(t, store.BackfillCancelled, status.Job.Status)
 }
 
 func TestAutoScanAdvancesWatermarkOnlyAfterTheJobSucceeds(t *testing.T) {
@@ -402,7 +402,7 @@ func TestBackfillConfirmsMultiBarSourceGapsAfterTwoIdenticalAttempts(t *testing.
 	step(t, backfiller, 1)
 	_, chunks, err := backfiller.Store.GetJob(ctx, jobID)
 	require.NoError(t, err)
-	require.Equal(t, store.BackfillPending, chunks[0].Status, "第一次缺失还不能确认，退回重跑")
+	require.Equal(t, store.BackfillQueued, chunks[0].Status, "第一次缺失还不能确认，退回重跑")
 	require.NotEmpty(t, chunks[0].Missing)
 
 	step(t, backfiller, 2)

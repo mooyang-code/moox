@@ -55,7 +55,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		}
 	}
 	s.fillCloudReadbacks(spaceID, rsp)
-	if rsp.IngestModes, err = s.ingestModes(ctx, spaceID, "", true); err != nil {
+	if rsp.IngestModes, err = s.ingestModes(ctx, spaceID, "", false); err != nil {
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	if s.stream != nil {
@@ -64,7 +64,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		}
 	}
 	for _, mode := range rsp.IngestModes {
-		if mode.GetIngest() != domain.IngestSCF && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
+		if mode.GetEnabled() && mode.GetIngest() != domain.IngestSCF && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
 			raise(klinecheck.HealthError, "collector-stream 不在线：采集方式是 stream 或 local 的数据集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --ingest scf 切回（它离线超过心跳超时后交接不等它确认）")
 			break
 		}
@@ -187,13 +187,9 @@ func planFunctions(source *store.FetchPlanRecord) ([]*pb.CollectorFunctionStatus
 	var out []*pb.CollectorFunctionStatus
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		executor := function.Executor
-		if executor == "" {
-			executor = marketfetch.PlanExecutorSCF
-		}
 		// 未生效计划里 Push 且未确认的是 pending；Target 为空的是退役（已生效计划里不再列出）。
 		plan := function.Target
-		state := &pb.CollectorFunctionStatus{Name: name, Region: function.Region, Market: function.Market, State: "applied", Cron: function.Cron, Executor: executor}
+		state := &pb.CollectorFunctionStatus{Name: name, Region: function.Region, Market: function.Market, State: "applied", Cron: function.Cron, Executor: function.Executor}
 		switch {
 		case plan == nil:
 			if appliedPlan || function.Old == nil {

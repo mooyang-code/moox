@@ -36,13 +36,16 @@ describe("collector backfill helpers", () => {
   });
 
   it("computes job segments and actions", () => {
-    const job = { status: "failed", succeeded: 6, failed: 2, running: 1, pending: 1, canceled: 0 };
+    const job = { status: "failed", succeeded: 6, failed: 2, running: 1, queued: 1, cancelled: 0 };
     expect(jobSegments(job)).toEqual({ total: 10, done: 8, succeeded: 60, failed: 20, running: 10 });
     expect(jobSegments({})).toEqual({ total: 0, done: 0, succeeded: 0, failed: 0, running: 0 });
     expect(jobRetryable(job)).toBe(true);
     expect(jobRetryable({ status: "failed", failed: 0 })).toBe(false);
+    expect(jobActive({ status: "queued" })).toBe(true);
     expect(jobActive({ status: "running" })).toBe(true);
     expect(jobActive(job)).toBe(false);
+    expect(jobStatusInfo("queued").text).toBe("等待中");
+    expect(jobStatusInfo("cancelled").text).toBe("已取消");
   });
 
   it("快捷范围是取整到分钟的两个时刻，和显示时区无关", () => {

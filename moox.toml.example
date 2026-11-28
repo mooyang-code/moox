@@ -149,7 +149,7 @@ enabled = false
 
 # [[scf_plan.spaces]]
 # space_id = "crypto"
-# # package_name 默认 moox-collector-<space>-plan，namespace 默认 moox-<space>-plan，均可覆盖
+# # package_name 默认全局共用 moox-collector-plan，namespace 默认 moox-<space>-plan，均可覆盖
 # # 采集方式不在这里配置：它记在采集任务上（stream / scf / local），建任务不写时用市场默认值（crypto 是 stream，其余是 scf），
 # # 之后用 moox-cli collector ingest-mode set 切换。
 # [scf_plan.spaces.markets]
@@ -186,7 +186,7 @@ enabled = false
 # equity = ["ap-nanjing"]
 
 # 港股：恒生指数成分股 5m K 线（东方财富），与 A 股共用南京的 [scf_plan.regions.ap-nanjing]。
-# 命名空间默认 moox-stockhk-plan，代码包默认 moox-collector-stockhk-plan；固定每函数 25 只标的（95 只共 4 个函数），
+# 命名空间默认 moox-stockhk-plan，代码包默认共用 moox-collector-plan；固定每函数 25 只标的（95 只共 4 个函数），
 # 每 5 分钟触发一次，午休、收市后、非交易日函数直接返回不采集。
 # backfill_region（可选）：补采函数单独放的地域，不写时与定时函数同在市场的第一个地域；写了要有对应的 [scf_plan.regions.<地域>]。
 # 定时函数放别的地域（如 ap-hongkong）、补采留在南京时，补采的重发不占定时函数那批出口地址。
@@ -197,7 +197,7 @@ enabled = false
 # equity = ["ap-nanjing"]
 
 # 美股：标普 500 或纳斯达克 100 成分股 5m K 线（东方财富），与 A 股、港股共用南京的 [scf_plan.regions.ap-nanjing]。
-# 命名空间默认 moox-stockus-plan，代码包默认 moox-collector-stockus-plan；固定每函数 50 只标的（标普 500 共 11 个函数），
+# 命名空间默认 moox-stockus-plan，代码包默认共用 moox-collector-plan；固定每函数 50 只标的（标普 500 共 11 个函数），
 # 每 5 分钟触发一次，盘前、收市后、非交易日（含半日市 13:00 之后）函数直接返回不采集。
 # [[scf_plan.spaces]]
 # space_id = "stockus"

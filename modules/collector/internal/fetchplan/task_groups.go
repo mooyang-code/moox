@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -54,16 +55,17 @@ func (r *GroupBuilder) groups(ctx context.Context, spaceID string) ([]TaskGroup,
 		r.lastGroups = make(map[string][]TaskGroup)
 	}
 	for _, task := range tasks {
-		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		if !strings.EqualFold(strings.TrimSpace(task.DataType), domain.DataTypeKline) {
+			continue
+		}
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.DataType)
 		if parseErr != nil {
 			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: parse task: %v", task.TaskID, parseErr)
 			continue
 		}
-		if params.Collector.DataType != "kline" {
-			continue
-		}
-		if _, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID); datasetErr != nil {
-			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, params.Target.DatasetID, datasetErr)
+		datasetID := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID).DatasetID
+		if _, datasetErr := r.Symbols.GetDataset(ctx, spaceID, datasetID); datasetErr != nil {
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, datasetID, datasetErr)
 			groups = append(groups, r.cachedGroups(task)...)
 			continue
 		}
@@ -152,13 +154,13 @@ func normalizedTaskTagIDs(values []string) []string {
 
 // routeMarket 是任务按一个标签路由（provider、market_type）采集时的市场身份：计划的任务组与补采的路由都用它，
 // 两边推出的来源（以及由它决定的 series_tag）才会一致。
-func routeMarket(task domain.CollectionTask, params *domain.CollectParams, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (marketfetch.PlanMarket, error) {
+func routeMarket(spaceID, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (marketfetch.PlanMarket, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	marketType = strings.ToLower(strings.TrimSpace(marketType))
 	if provider == "" || marketType == "" {
 		return marketfetch.PlanMarket{}, fmt.Errorf("provider and market_type are required")
 	}
-	marketID, instrumentType, err := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, marketType)
+	marketID, instrumentType, err := marketIdentity(spaceID, "", marketType)
 	if err != nil {
 		return marketfetch.PlanMarket{}, err
 	}
@@ -173,7 +175,7 @@ func routeMarket(task domain.CollectionTask, params *domain.CollectParams, provi
 }
 
 func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, provider, marketType string, subjects []domain.Subject) ([]TaskGroup, error) {
-	route, err := routeMarket(task, params, provider, marketType, r.ResolveSourceID)
+	route, err := routeMarket(task.SpaceID, provider, marketType, r.ResolveSourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -209,24 +211,24 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 	if len(invalidSubjects) > 0 {
 		log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s task=%s skipped=%d subjects=%s", task.SpaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 	}
-	result := make([]TaskGroup, 0, len(params.Collector.Intervals))
-	for _, frequency := range params.Collector.Intervals {
-		result = append(result, TaskGroup{
-			Provider: provider, MarketType: marketType, MarketID: marketID, InstrumentType: instrumentType,
-			SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID,
-			Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
-			Subjects: symbolIDs, ExternalSymbols: externalSymbols, Pairs: pairs,
-			SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
-			Ingest: task.Ingest,
-		})
+	if params.Frequency == "" {
+		return nil, nil
 	}
-	return result, nil
+	datasetID := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID).DatasetID
+	return []TaskGroup{{
+		Provider: provider, MarketType: marketType, MarketID: marketID, InstrumentType: instrumentType,
+		SourceID: sourceID, DatasetID: datasetID,
+		Frequency: params.Frequency, OutputFields: append([]string(nil), params.OutputFields...),
+		Subjects: symbolIDs, ExternalSymbols: externalSymbols, Pairs: pairs,
+		SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
+		Ingest: task.Ingest,
+	}}, nil
 }
 
 // TaskSeriesTag 返回 kline 采集任务按标签路由（provider、market_type）写入行时用的 series_tag，
 // 与 taskGroupsForRoute 生成的计划使用同一套推导（含 source_id 的解析）。
-func TaskSeriesTag(spaceID string, params *domain.CollectParams, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (string, error) {
-	route, err := routeMarket(domain.CollectionTask{SpaceID: spaceID}, params, provider, marketType, resolveSourceID)
+func TaskSeriesTag(spaceID, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (string, error) {
+	route, err := routeMarket(spaceID, provider, marketType, resolveSourceID)
 	if err != nil {
 		return "", err
 	}
@@ -256,7 +258,7 @@ func (r *BackfillRoutes) BackfillRoute(ctx context.Context, spaceID, datasetID, 
 		return nil, false, fmt.Errorf("list collection tasks of dataset %s: %w", datasetID, err)
 	}
 	for _, task := range tasks {
-		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.DataType)
 		if parseErr != nil {
 			return nil, false, fmt.Errorf("parse collection task %s: %w", task.TaskID, parseErr)
 		}
@@ -272,7 +274,7 @@ func (r *BackfillRoutes) BackfillRoute(ctx context.Context, spaceID, datasetID, 
 		if tagErr != nil || tag == nil {
 			return nil, false, fmt.Errorf("load tag %s of collection task %s: %v", tagIDs[0], task.TaskID, tagErr)
 		}
-		market, routeErr := routeMarket(task, params, tagattr.Source(tag), tagattr.MarketType(tag), r.ResolveSourceID)
+		market, routeErr := routeMarket(task.SpaceID, tagattr.Source(tag), tagattr.MarketType(tag), r.ResolveSourceID)
 		if routeErr != nil {
 			return nil, false, fmt.Errorf("route of collection task %s: %w", task.TaskID, routeErr)
 		}
@@ -281,7 +283,11 @@ func (r *BackfillRoutes) BackfillRoute(ctx context.Context, spaceID, datasetID, 
 			return nil, false, optionsErr
 		}
 		sample := TaskGroup{Provider: market.Provider, MarketType: market.MarketType, MarketID: market.MarketID, InstrumentType: market.InstrumentType, SourceID: market.SourceID, DatasetID: datasetID, Frequency: frequency}
-		return &marketfetch.Plan{V: 1, Market: market, Fetch: options.planFetch(sample), Datasets: []marketfetch.PlanDataset{{
+		executor := task.Ingest
+		if executor == "" {
+			executor = marketfetch.PlanExecutorSCF
+		}
+		return &marketfetch.Plan{V: 1, Executor: executor, Market: market, Fetch: options.planFetch(sample), Datasets: []marketfetch.PlanDataset{{
 			DatasetID: datasetID, Frequency: frequency, OutputFields: normalizeOutputFields(params.OutputFields),
 		}}}, true, nil
 	}

@@ -119,7 +119,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { GetDataTypeConfigWithFields } from "@/api/collector";
+import { GetDataTypeConfigs } from "@/api/collector";
 import { listAllDatasetColumns, listAllDatasets } from "@/api/storage/metadata";
 import GroupFilterPanel from "@/components/group-filter-panel/index.vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -289,15 +289,15 @@ async function load() {
   loadWarning.value = "";
 
   try {
-    const [specResult, datasetsResult] = await Promise.allSettled([
-      GetDataTypeConfigWithFields("kline"),
-      listAllDatasets(spaceId)
-    ]);
+    const [specResult, datasetsResult] = await Promise.allSettled([GetDataTypeConfigs(), listAllDatasets(spaceId)]);
     if (!request.isLatest() || spaceId !== props.spaceId.trim()) return;
 
     const specFailed = specResult.status === "rejected";
     const datasetsFailed = datasetsResult.status === "rejected";
-    const detail = specResult.status === "fulfilled" ? specResult.value.detail : undefined;
+    const detail =
+      specResult.status === "fulfilled"
+        ? specResult.value.configs?.find(item => item.data_type === "kline")
+        : undefined;
 
     const bundles: DatasetColumnBundle[] = [];
     let failedColumns = 0;

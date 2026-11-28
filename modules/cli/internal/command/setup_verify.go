@@ -189,7 +189,7 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 	input.PlanIssue = strings.Join(status.GetReasons(), "；")
 	input.StreamOnline = status.GetStream().GetOnline()
 	for _, mode := range status.GetIngestModes() {
-		if mode.GetIngest() == "stream" || mode.GetIngest() == "local" {
+		if mode.GetEnabled() && (mode.GetIngest() == "stream" || mode.GetIngest() == "local") {
 			input.NeedsStream = true
 		}
 	}

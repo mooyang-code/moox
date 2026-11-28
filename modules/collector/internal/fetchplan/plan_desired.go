@@ -76,8 +76,8 @@ type PlanDatasetState struct {
 	Count        uint32   `json:"count"`
 	LatenessS    int      `json:"lateness_s"`
 	OutputFields []string `json:"output_fields,omitempty"`
-	// Ingest 是数据集所在的执行端（scf、stream、local），空表示 scf。
-	Ingest string `json:"ingest,omitempty"`
+	// Ingest 是数据集所在的执行端（scf、stream、local）。
+	Ingest string `json:"ingest"`
 	// Symbols 是每个标的的交易所符号（标的 → 符号，与函数计划的 ExchangeSymbol 一致）。不进 Hash；
 	// 变化时数据集在标的时间线上写一行，补采按时间线取改名前的旧符号。
 	Symbols map[string]string `json:"symbols,omitempty"`
@@ -96,14 +96,6 @@ func sameSymbols(left, right map[string]string) bool {
 		}
 	}
 	return true
-}
-
-// IngestOrSCF 返回数据集的执行端，空视为 scf。
-func (s PlanDatasetState) IngestOrSCF() string {
-	if s.Ingest == "" {
-		return marketfetch.PlanExecutorSCF
-	}
-	return s.Ingest
 }
 
 // DesiredDataset 是期望状态里的一个数据集，带完整序列（标的加 series_tag，规范顺序，序号即下标）。
@@ -126,8 +118,8 @@ type PlanFunction struct {
 	Name   string `json:"name"`
 	Region string `json:"region"`
 	Market string `json:"market"`
-	// Executor 为空表示 SCF 函数；stream、local 是推送与本地执行端（没有地域与 cron）。
-	Executor string            `json:"executor,omitempty"`
+	// Executor 是执行端（scf、stream 或 local）；stream、local 没有地域与 cron。
+	Executor string            `json:"executor"`
 	Cron     string            `json:"cron"`
 	Plan     *marketfetch.Plan `json:"plan"`
 }
@@ -285,13 +277,10 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		info := markets[key]
 		// newPlan 构造一项计划：subjects 是这一项负责的标的，datasetKeys 是它服务的数据集。
 		newPlan := func(executor string, subjects []string, datasetKeys []string) *marketfetch.Plan {
-			plan := &marketfetch.Plan{V: 1, Fetch: opts.planFetch(info.sample), Market: marketfetch.PlanMarket{
+			plan := &marketfetch.Plan{V: 1, Executor: executor, Fetch: opts.planFetch(info.sample), Market: marketfetch.PlanMarket{
 				MarketID: info.sample.MarketID, InstrumentType: info.sample.InstrumentType, Provider: info.sample.Provider,
 				SourceID: info.sample.SourceID, MarketType: info.sample.MarketType,
 			}}
-			if executor != marketfetch.PlanExecutorSCF {
-				plan.Executor = executor
-			}
 			for _, subject := range subjects {
 				derived := strings.ReplaceAll(subject, "-", "")
 				if external := info.external[subject]; external != "" && external != derived {
@@ -385,7 +374,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 				}
 				sort.Strings(subjects)
 				plan := newPlan(executor, subjects, datasetKeys)
-				state.Functions[name] = &PlanFunction{Name: name, Region: regionOf[name], Market: key, Cron: planCron(plan), Plan: plan}
+				state.Functions[name] = &PlanFunction{Name: name, Region: regionOf[name], Market: key, Executor: executor, Cron: planCron(plan), Plan: plan}
 			}
 		}
 	}
@@ -463,7 +452,7 @@ func (o PlanOptions) fetchFor(marketType string) marketfetch.PlanFetch {
 func previousAssignment(previous map[string]*PlanFunction, marketKey string) map[string]string {
 	result := map[string]string{}
 	for name, function := range previous {
-		if function == nil || function.Plan == nil || function.Market != marketKey || function.Executor != "" {
+		if function == nil || function.Plan == nil || function.Market != marketKey || function.Executor != marketfetch.PlanExecutorSCF {
 			continue
 		}
 		for _, dataset := range function.Plan.Datasets {

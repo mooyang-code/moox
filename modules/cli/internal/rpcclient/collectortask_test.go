@@ -24,12 +24,12 @@ func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 		case "/api/admin/collector/GetTaskDetail":
 			assert.Equal(t, "stockcn", body["space_id"])
 			assert.Equal(t, "d5v5n3p8r7c9m2k4j6h1", body["task_id"])
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task":{"space_id":"stockcn","task_id":"d5v5n3p8r7c9m2k4j6h1","task_name":"A 股 K 线 1m","data_type":"kline","tag_ids":["cn_a_share"],"enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"dataset_d5v5n3p8r7c9m2k4j6h1"}}}`))
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task":{"space_id":"stockcn","task_id":"d5v5n3p8r7c9m2k4j6h1","task_name":"A 股 K 线 1m","data_type":"kline","tag_ids":["cn_a_share"],"enabled":false,"collect_params":{"frequency":"1m","allowed_lateness_seconds":30}}}`))
 		case "/api/admin/collector/UpdateTask":
 			task, ok := body["task"].(map[string]any)
 			require.True(t, ok)
 			assert.Equal(t, true, task["enabled"])
-			assert.Equal(t, "dataset_d5v5n3p8r7c9m2k4j6h1", task["collect_params"].(map[string]any)["target_dataset_id"])
+			assert.Equal(t, float64(30), task["collect_params"].(map[string]any)["allowed_lateness_seconds"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -101,7 +101,7 @@ func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 					"data_kind":"time_series"
 				}
 			}],
-			"page":{"has_more":false}
+			"page_result":{"has_more":false}
 		}`))
 	}))
 	defer server.Close()

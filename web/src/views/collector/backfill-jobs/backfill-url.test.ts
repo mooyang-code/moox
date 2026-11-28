@@ -8,7 +8,7 @@ const ctx = vi.hoisted(() => ({
   replace: vi.fn()
 }));
 const api = vi.hoisted(() => ({
-  listKlineBackfills: vi.fn(async () => ({ items: [], page: { total: 0 } })),
+  listKlineBackfills: vi.fn(async () => ({ items: [], page_result: { total: 0 } })),
   getCollectorStatus: vi.fn(async () => ({ datasets: [] }))
 }));
 vi.mock("vue-router", () => ({ useRoute: () => ctx.route, useRouter: () => ({ replace: ctx.replace }) }));

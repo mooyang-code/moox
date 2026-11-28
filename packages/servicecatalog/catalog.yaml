@@ -311,8 +311,6 @@ components:
           - name: DeleteTask
           - name: GetDataTypeConfigs
             read_only: true
-          - name: GetDataTypeConfigWithFields
-            read_only: true
           - name: SubmitKlineResampleJob
           - name: GetKlineResampleJob
             read_only: true
@@ -357,8 +355,6 @@ components:
             operators: [moox-cli]
           - name: SetFetchPlanPaused
             operators: [moox-cli]
-          - name: GetIngestMode
-            read_only: true
           - name: SetIngestMode
             operators: [moox-cli]
           # 采集名单干预：控制台、moox-cli。

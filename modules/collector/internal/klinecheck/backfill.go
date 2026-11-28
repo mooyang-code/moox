@@ -561,7 +561,7 @@ func (b *Backfiller) settleJob(ctx context.Context, job store.BackfillJob) error
 	if err != nil {
 		return err
 	}
-	if counts[store.BackfillPending] == 0 && counts[store.BackfillRunning] == 0 {
+	if counts[store.BackfillQueued] == 0 && counts[store.BackfillRunning] == 0 {
 		status, message := store.BackfillSucceeded, ""
 		if counts[store.BackfillFailed] > 0 {
 			status, message = store.BackfillFailed, fmt.Sprintf("%d chunks failed", counts[store.BackfillFailed])

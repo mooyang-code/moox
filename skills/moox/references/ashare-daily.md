@@ -25,10 +25,10 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 可采哪些字段、它们的中文名与分组只在 Collector 的字段规格里登记，管理台新建任务的输出字段清单与数据源页都直接取自它，不需要导入字段目录。先看日线能选哪些附加字段：
 
 ```bash
-./bin/moox-cli collector data-type show --data-type kline
+./bin/moox-cli collector data-type list
 ```
 
-输出的 `extra_fields` 里 `market_id=stockcn`、`frequencies` 含 `1d` 的条目应有 `adj_factor`、`sw_l1`～`sw_l3`、`fin_*`、`turnover_rate`、`total_shares`、`float_shares`、`dividend_per_share`、`is_st`，每个都带 `display_name` 与 `group`。结果数据集建列时 Collector 把显示名与分组写在列上，管理台按列自己的显示名与分组展示。
+输出中 `data_type=kline` 的 `extra_fields` 里 `market_id=stockcn`、`frequencies` 含 `1d` 的条目应有 `adj_factor`、`sw_l1`～`sw_l3`、`fin_*`、`turnover_rate`、`total_shares`、`float_shares`、`dividend_per_share`、`is_st`，每个都带 `display_name` 与 `group`。结果数据集建列时 Collector 把显示名与分组写在列上，管理台按列自己的显示名与分组展示。
 
 ## 2. 打开采集任务
 

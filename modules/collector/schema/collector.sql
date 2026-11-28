@@ -31,11 +31,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_name ON t_collector_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_definition
 ON t_collector_tasks (c_space_id, c_definition_hash)
 WHERE c_definition_hash <> '';
-CREATE INDEX IF NOT EXISTS idx_collector_tasks_space ON t_collector_tasks (c_space_id);
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_type ON t_collector_tasks (c_data_type);
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_enabled ON t_collector_tasks (c_enabled);
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_prepare ON t_collector_tasks (c_data_type, c_prepare_state, c_enabled);
-CREATE INDEX IF NOT EXISTS idx_collector_tasks_result
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_result
 ON t_collector_tasks (c_space_id, c_result_dataset_id)
 WHERE c_result_dataset_id <> '';
 
@@ -108,17 +107,15 @@ CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_series_timeline_space ON t_collector_series_timeline (c_space_id, c_id);
 
--- 空间的采集暂停开关：暂停期间 Collector 不对账、不推进补采，并已停用该空间的 SCF 定时器；重启后保持。
--- c_paused 是手工暂停，c_system_paused 是模块生命周期的系统暂停，任一个为 1 空间就是暂停的，两者各自恢复、互不覆盖。
+-- 空间的手工采集暂停开关：暂停期间 Collector 不对账、不推进补采，并已停用该空间的 SCF 定时器；重启后保持。
+-- 模块级的系统暂停保存在 lifecycle.json，不落这张表；空间是否暂停等于“手工开关为 1，或模块阶段不是运行”。
 CREATE TABLE IF NOT EXISTS t_collector_fetch_plan_pauses (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_paused INTEGER NOT NULL DEFAULT 0,
-    c_system_paused INTEGER NOT NULL DEFAULT 0,
     c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_paused IN (0, 1)),
-    CHECK (c_system_paused IN (0, 1)),
     UNIQUE (c_space_id)
 );
 
@@ -144,13 +141,13 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_jobs (
     c_from INTEGER NOT NULL,
     c_to INTEGER NOT NULL,
     c_advance_watermark INTEGER NOT NULL DEFAULT 0,
-    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_status TEXT NOT NULL DEFAULT 'queued',
     c_last_error TEXT NOT NULL DEFAULT '',
     c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_source IN ('manual', 'auto', 'seed', 'close_refetch', 'catchup')),
     CHECK (c_kind IN ('gap', 'force')),
-    CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
+    CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
     UNIQUE (c_job_id)
 );
 
@@ -180,7 +177,7 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_from INTEGER NOT NULL,
     c_to INTEGER NOT NULL,
     c_chunk_id TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_status TEXT NOT NULL DEFAULT 'queued',
     c_attempts INTEGER NOT NULL DEFAULT 0,
     c_rows INTEGER NOT NULL DEFAULT 0,
     c_missing TEXT NOT NULL DEFAULT '',
@@ -188,7 +185,7 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_latest_end_at INTEGER,
     c_last_error TEXT NOT NULL DEFAULT '',
     c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
-    CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
+    CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
     FOREIGN KEY (c_job_id) REFERENCES t_collector_kline_backfill_jobs (c_job_id) ON DELETE CASCADE,
     UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from)
 );
@@ -266,12 +263,12 @@ BEGIN
     WHERE c_space_id = OLD.c_space_id AND c_dataset_id = OLD.c_dataset_id AND c_frequency = OLD.c_frequency;
 END;
 
--- collector-stream 实例的心跳与已应用的计划：c_applied 是已应用的计划记录 ID 与阶段，c_status 是连接状态；
+-- collector-stream 实例的心跳与已应用的计划：c_applied_plan_id 是已应用的计划记录 ID，c_status 是连接状态；
 -- 同一空间只部署一个实例，一空间一行，不设租约与写权限到期。
 CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
     c_space_id TEXT NOT NULL,
     c_instance_id TEXT NOT NULL,
-    c_applied TEXT NOT NULL DEFAULT '{}',
+    c_applied_plan_id INTEGER NOT NULL DEFAULT 0,
     c_status TEXT NOT NULL DEFAULT '{}',
     c_heartbeat_at INTEGER NOT NULL,
     PRIMARY KEY (c_space_id)
@@ -448,12 +445,11 @@ BEGIN
     UPDATE t_collector_cloud_accounts SET c_mtime = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE c_id = OLD.c_id;
 END;
 
--- 云函数代码包：每次上传一行，c_status 从 pending（已发上传地址）变成 available（COS 对象已核对）。
--- 函数总是滚动到同一包名的最新可用包；每个（空间、包名）只留最新 3 个可用包，更早的连同 COS 对象删除，
+-- 云函数代码包：不分空间，每次上传一行，c_status 从 pending（已发上传地址）变成 available（COS 对象已核对）。
+-- 函数总是滚动到同一包名的最新可用包；每个包名只留最新 3 个可用包，更早的连同 COS 对象删除，
 -- 超过 6 小时仍是 pending 的也删除。重置时保留。
 CREATE TABLE IF NOT EXISTS t_collector_function_packages (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
     c_package_id TEXT NOT NULL,
     c_package_name TEXT NOT NULL,
     c_version TEXT NOT NULL DEFAULT '',
@@ -468,11 +464,11 @@ CREATE TABLE IF NOT EXISTS t_collector_function_packages (
     c_ctime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     c_mtime INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     CHECK (c_status IN ('pending', 'available')),
-    UNIQUE (c_space_id, c_package_id)
+    UNIQUE (c_package_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_function_packages_name
-ON t_collector_function_packages (c_space_id, c_package_name, c_id);
+ON t_collector_function_packages (c_package_name, c_id);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_collector_function_packages_mtime
 AFTER UPDATE ON t_collector_function_packages

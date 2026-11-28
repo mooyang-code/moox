@@ -160,11 +160,11 @@ func (c *Client) ListTasks(ctx context.Context, spaceID, dataType string, enable
 	var result []CollectionTaskSummary
 	for page := 1; page <= 100; page++ {
 		var response struct {
-			RetInfo retInfo                 `json:"ret_info"`
-			Tasks   []CollectionTaskSummary `json:"tasks"`
-			Page    struct {
+			RetInfo    retInfo                 `json:"ret_info"`
+			Tasks      []CollectionTaskSummary `json:"tasks"`
+			PageResult struct {
 				HasMore bool `json:"has_more"`
-			} `json:"page"`
+			} `json:"page_result"`
 		}
 		request := map[string]any{
 			"space_id": spaceID,
@@ -183,7 +183,7 @@ func (c *Client) ListTasks(ctx context.Context, spaceID, dataType string, enable
 			return nil, fmt.Errorf("GetTaskList rejected: %s", response.RetInfo.Msg)
 		}
 		result = append(result, response.Tasks...)
-		if !response.Page.HasMore {
+		if !response.PageResult.HasMore {
 			return result, nil
 		}
 	}

@@ -183,14 +183,14 @@ func TestDataKlineResolvesDatasetByTagAndIntervalAcrossPages(t *testing.T) {
 				Tasks: []*collectorpb.CollectionTask{
 					makeTestKlineTask("crypto", "t_swap", "合约 1m", "1m", "dataset_swap_1m", []string{"binance_swap"}, true),
 				},
-				Page: &commonpb.PageResult{Page: 1, Size: 100, HasMore: true},
+				PageResult: &commonpb.PageResult{Page: 1, Size: 100, HasMore: true},
 			},
 			{
 				RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
 				Tasks: []*collectorpb.CollectionTask{
 					makeTestKlineTask("crypto", "t_spot", "现货 1m", "1m", "dataset_spot_1m", []string{"binance_spot"}, true),
 				},
-				Page: &commonpb.PageResult{Page: 2, Size: 100, HasMore: false},
+				PageResult: &commonpb.PageResult{Page: 2, Size: 100, HasMore: false},
 			},
 		},
 	}

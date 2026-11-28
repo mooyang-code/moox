@@ -8,12 +8,12 @@ import (
 
 // 采集方式不在任务参数里：旧的 ingest、executor 两项（含“推送加云函数补采”这个组合）写不进去。
 func TestCollectParamsRejectIngestAndExecutor(t *testing.T) {
-	base := `{"provider":"binance","market_type":"spot","subject_tags":["t"],"target_dataset_id":"ds","frequency":"1m"`
-	_, err := ParseCollectParams(base+`}`, "", "", "kline")
+	base := `{"frequency":"1m"`
+	_, err := ParseCollectParams(base+`}`, DataTypeKline)
 	require.NoError(t, err)
-	_, err = ParseCollectParams(base+`,"ingest":"stream"}`, "", "", "kline")
+	_, err = ParseCollectParams(base+`,"ingest":"stream"}`, DataTypeKline)
 	require.ErrorContains(t, err, "ingest")
-	_, err = ParseCollectParams(base+`,"ingest":"stream","executor":"scf"}`, "", "", "kline")
+	_, err = ParseCollectParams(base+`,"ingest":"stream","executor":"scf"}`, DataTypeKline)
 	require.Error(t, err)
 }
 

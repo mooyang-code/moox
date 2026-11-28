@@ -15,8 +15,9 @@ import (
 
 func testPlan() *Plan {
 	return &Plan{
-		V:      1,
-		Market: PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
+		V:        1,
+		Executor: PlanExecutorSCF,
+		Market:   PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Fetch:  PlanFetch{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10},
 		Datasets: []PlanDataset{
 			{DatasetID: "bars_1m", Frequency: "1m", LatenessS: 15, Copies: []PlanCopy{
@@ -158,8 +159,9 @@ func TestFrequencyDueWeeklyUsesMonday(t *testing.T) {
 // A 股股票的计划请求不写死来源：由路由按标的分配、失败回落；加密货币仍固定用标签的来源。计划本身（含来源）不变。
 func TestPlanBuildRequestsLeavesStockSourcesToTheRoute(t *testing.T) {
 	plan := &Plan{
-		V:      1,
-		Market: PlanMarket{MarketID: "stockcn", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity"},
+		V:        1,
+		Executor: PlanExecutorSCF,
+		Market:   PlanMarket{MarketID: "stockcn", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity"},
 		Fetch:  PlanFetch{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8},
 		Datasets: []PlanDataset{{DatasetID: "dataset_stock_5m", Frequency: "5m", LatenessS: 90, Copies: []PlanCopy{
 			{From: 1000, Hash: "h", Count: 2, Subjects: []PlanSubject{{ID: "600000.XSHG", Index: 0}, {ID: "600519.XSHG", Index: 1}}},

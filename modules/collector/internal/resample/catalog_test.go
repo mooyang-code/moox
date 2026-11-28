@@ -203,7 +203,7 @@ func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, dom
 	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample"}
 	params := &domain.CollectParams{
 		SourceDatasetID: "source-bars", SourceFrequency: "1m", SourceSeriesTag: "venue:binance",
-		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m",
+		TargetFrequency: "5m",
 	}
 	source := storagesource.DatasetInfo{DataSourceID: "crypto", Alignment: "epoch_utc", ColumnTypes: cryptoColumnTypes()}
 	subjects := []domain.Subject{{SubjectID: "BTC", Status: "active"}}
@@ -266,7 +266,6 @@ func TestPrepareTargetCompensatesCreatedDatasetAfterLaterFailure(t *testing.T) {
 
 	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
-	require.Equal(t, taskresult.ResultIDs(rule.TaskID).DatasetID, params.TargetDatasetID)
 	require.Empty(t, metadata.datasets)
 	require.Equal(t, []string{"dataset"}, metadata.deleteOrder)
 }

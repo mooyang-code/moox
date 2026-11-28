@@ -82,7 +82,7 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 	}
 	dataset := batch.Dataset
 	dataset.Copies = []PlanCopy{selected}
-	plan := &Plan{V: 1, Market: batch.Market, Datasets: []PlanDataset{dataset}}
+	plan := &Plan{V: 1, Executor: PlanExecutorStreaming, Market: batch.Market, Datasets: []PlanDataset{dataset}}
 	frequency, err := marketdata.ParseFrequency(dataset.Frequency)
 	if err != nil {
 		return Request{}, nil, result, err

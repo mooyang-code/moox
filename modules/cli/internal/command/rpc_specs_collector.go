@@ -92,12 +92,9 @@ func init() {
 				strFlag("name", "task.task_name", "任务名称"), strFlag("description", "task.description", "说明"), boolFlag("enabled", "task.enabled", "启用状态（--enabled=false 停用）")}},
 		rpcSpec{Path: []string{"collector", "task", "disable"}, Destructive: true, Short: "停用采集任务（默认只预览，--yes 才执行）", Service: collectMgr, Method: "DisableTask", SpaceField: "space_id",
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},
-		rpcSpec{Path: []string{"collector", "task", "inventory"}, Short: "查看采集结果清单（任务拥有的结果数据集）", Service: collectMgr, Method: "GetTaskResultInventory", SpaceField: "space_id", Page: rpcPageSize,
-			Flags: []rpcFlag{strFlag("snapshot-id", "snapshot_id", "指定清单快照 ID")}},
+		rpcSpec{Path: []string{"collector", "task", "inventory"}, Short: "查看采集结果清单（任务拥有的结果数据集）", Service: collectMgr, Method: "GetTaskResultInventory", SpaceField: "space_id"},
 
-		rpcSpec{Path: []string{"collector", "data-type", "list"}, Short: "列出采集数据类型", Service: collectMgr, Method: "GetDataTypeConfigs", NoSpace: true},
-		rpcSpec{Path: []string{"collector", "data-type", "show"}, Short: "查看数据类型及其字段", Service: collectMgr, Method: "GetDataTypeConfigWithFields", NoSpace: true,
-			Flags: []rpcFlag{reqFlag("data-type", "data_type", "数据类型")}},
+		rpcSpec{Path: []string{"collector", "data-type", "list"}, Short: "列出采集数据类型及其频率与输出字段", Service: collectMgr, Method: "GetDataTypeConfigs", NoSpace: true},
 
 		rpcSpec{Path: []string{"collector", "subjects", "status"}, Short: "各标签最近一次标的同步的状态", Service: collectMgr, Method: "ListTagSyncStatus", SpaceField: "space_id"},
 		rpcSpec{Path: []string{"collector", "subjects", "listers"}, Short: "列出可用的标的来源（交易所列表器）", Service: collectMgr, Method: "ListSubjectListers", NoSpace: true},
@@ -116,8 +113,8 @@ func init() {
 		rpcSpec{Path: []string{"collector", "account", "delete"}, Destructive: true, NoSpace: true, Service: collectMgr, Method: "DeleteCloudAccount",
 			Short: "删除云账号登记（默认只预览，--yes 才执行；还被 scf_plan 引用、还有代码包或名下还有函数时拒绝。旧账号下建的函数 collector function delete 删不到，要用 collector function inspect 查出来再到腾讯云控制台手工删）",
 			Flags: []rpcFlag{reqFlag("account-id", "account_id", "云账号 ID")}},
-		rpcSpec{Path: []string{"collector", "package", "list"}, Short: "列出空间的云函数代码包（按上传先后倒序，每个包名保留最新 3 个）", Service: collectMgr, Method: "ListFunctionPackages", SpaceField: "space_id"},
-		rpcSpec{Path: []string{"collector", "package", "delete"}, Destructive: true, Short: "删除代码包（先删 COS 对象再删记录；默认只预览，--yes 才执行）", Service: collectMgr, Method: "DeleteFunctionPackage", SpaceField: "space_id",
+		rpcSpec{Path: []string{"collector", "package", "list"}, Short: "列出云函数代码包（按上传先后倒序，每个包名保留最新 3 个）", Service: collectMgr, Method: "ListFunctionPackages", NoSpace: true},
+		rpcSpec{Path: []string{"collector", "package", "delete"}, Destructive: true, Short: "删除代码包（先删 COS 对象再删记录；默认只预览，--yes 才执行）", Service: collectMgr, Method: "DeleteFunctionPackage", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("package-id", "package_id", "代码包 ID")}},
 	)
 }

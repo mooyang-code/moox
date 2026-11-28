@@ -1117,8 +1117,8 @@ func TestUpgradeBeforeEnableIgnoresFunctionsGoneFromTheCloudAndWaitsOnReadbackEr
 func TestFirstStreamPlanUsesShortLead(t *testing.T) {
 	stream := &DesiredState{Functions: map[string]*PlanFunction{"a": {Executor: marketfetch.PlanExecutorStreaming}}}
 	require.True(t, firstStreamPlan(stream, nil, nil))
-	require.False(t, firstStreamPlan(stream, map[string]*PlanFunction{"a": {}}, nil), "已有计划要走正常提前量")
-	require.False(t, firstStreamPlan(&DesiredState{Functions: map[string]*PlanFunction{"a": {}}}, nil, nil), "云函数要创建，不能缩短")
+	require.False(t, firstStreamPlan(stream, map[string]*PlanFunction{"a": {Executor: marketfetch.PlanExecutorSCF}}, nil), "已有计划要走正常提前量")
+	require.False(t, firstStreamPlan(&DesiredState{Functions: map[string]*PlanFunction{"a": {Executor: marketfetch.PlanExecutorSCF}}}, nil, nil), "云函数要创建，不能缩短")
 	require.False(t, firstStreamPlan(&DesiredState{}, nil, nil))
 }
 

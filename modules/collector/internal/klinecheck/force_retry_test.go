@@ -26,7 +26,7 @@ func TestForcedChunkIsRetriedUntilTheAttemptsRunOut(t *testing.T) {
 		require.Len(t, invoker.events, attempt, "一次对账只执行一次，失败后不自己触发补位")
 		_, stored, err := backfiller.Store.GetJob(ctx, jobID)
 		require.NoError(t, err)
-		require.Equal(t, store.BackfillPending, stored[0].Status, "第 %d 次失败后退回待执行", attempt)
+		require.Equal(t, store.BackfillQueued, stored[0].Status, "第 %d 次失败后退回待执行", attempt)
 		require.Equal(t, attempt, stored[0].Attempts)
 		require.Contains(t, stored[0].LastError, "provider error")
 		status, err := backfiller.Status(ctx, jobID)

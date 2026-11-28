@@ -16,8 +16,9 @@ import (
 func testPlanEnv(t *testing.T) string {
 	t.Helper()
 	encoded, err := marketfetch.EncodePlan(&marketfetch.Plan{
-		V:      1,
-		Market: marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
+		V:        1,
+		Executor: marketfetch.PlanExecutorSCF,
+		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Fetch:  marketfetch.PlanFetch{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10},
 		Datasets: []marketfetch.PlanDataset{
 			{DatasetID: "bars_1m", Frequency: "1m", LatenessS: 15, Copies: []marketfetch.PlanCopy{{From: 1000, Hash: "h1", Count: 2, Subjects: []marketfetch.PlanSubject{{ID: "BTC-USDT", Index: 0}, {ID: "ETH-USDT", Index: 1}}}}},

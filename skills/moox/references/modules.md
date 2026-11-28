@@ -46,7 +46,7 @@
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
 ./bin/moox-cli collector ingest-mode get|set                          # 采集方式 stream / scf / local（set --ingest ...，没有 --force）
 ./bin/moox-cli collector fetch-plan show|pause|resume                 # 查看、暂停或恢复整个空间的采集（pause 默认只预览，--yes 才执行）
-./bin/moox-cli collector data-type list|show                          # 可采集的数据类型
+./bin/moox-cli collector data-type list                               # 可采集的数据类型、频率与输出字段
 ```
 
 - 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。
@@ -56,7 +56,7 @@
   `probe-egress`（取各采集函数此刻的公网出口 IP）、`inspect|attach-vpc|invoke`（直调腾讯云 SCF 检查网络配置、绑定 VPC 子网或直接调用函数）。
 - 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台“数据采集 › 采集运行”的“运行状态”页签里的“云账号”对话框，初始账号由 `setup init` 登记。
   换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `collector function inspect` 查出来再到腾讯云控制台手工删。
-- 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
+- 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type list` 中 `kline` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
 - **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `attention:collector:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
 - 长历史导入：[`initial-import.md`](initial-import.md)。取 K 线数据：[`data-query.md`](data-query.md)。
 

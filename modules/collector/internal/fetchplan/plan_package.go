@@ -42,7 +42,7 @@ func (r *PlanReconciler) latestPackage(ctx context.Context) (cloud.Package, erro
 	if name == "" {
 		return cloud.Package{}, fmt.Errorf("%w: scf_plan has no package_name for space %s", errNoCodePackage, r.SpaceID)
 	}
-	pkg, err := r.Cloud.LatestPackage(ctx, r.SpaceID, name)
+	pkg, err := r.Cloud.LatestPackage(ctx, name)
 	if err != nil {
 		return cloud.Package{}, fmt.Errorf("%w: resolve code package %q: %w", errNoCodePackage, name, err)
 	}

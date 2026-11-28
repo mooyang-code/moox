@@ -22,7 +22,7 @@ func TestCollectorTaskCreateParamsOutputFields(t *testing.T) {
 	params := collectorTaskCreateParams(flags)
 	require.Equal(t, []any{"open", "close"}, params["output_fields"])
 	require.Equal(t, "5m", params["frequency"])
-	require.Equal(t, []any{"hk_hsi"}, params["subject_tags"])
+	require.NotContains(t, params, "subject_tags")
 
 	flags.AllFields = true
 	params = collectorTaskCreateParams(flags)
