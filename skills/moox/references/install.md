@@ -181,7 +181,7 @@ cd moox-${VER}
 
 > 检测到目标机已经装过 MooX（状态：`<没装完 / 已装好>`，涉及 `<主机、IP、版本、组件>`）。数据格式比对结果：`<全部兼容 / 以下组件格式已变化或未知：...>`。请确认选择哪种方式：
 > 1. **保留数据（`--keep`）**：`<若为已装好>`只换新版本的二进制与配置，K 线、因子、策略、交易记录、管理台账号等数据全部保留，不重新初始化，也不重新启用手工停掉的任务（需更新/新装/删掉的组件与换主机列表见预检 `options.keep.hosts` / `moves`）；`<若为没装完>`保留已有数据，接着跑完剩余安装步骤并验收；`<若 data_format.can_keep 为 false>`**本次不可选**，因格式已变化或未知。
-> 2. **全部覆盖（`--wipe`）**：先自动将全部非系统密钥与告警渠道加密备份到本机 `moox.backup`（预计备份 `<secret_count>` 把密钥、`<channel_count>` 个告警渠道；**交易账户与组合账户不纳入备份**），再清空全部主机的部署根——**归档文件（`archive/`，当前 `<大小>`）会一起清掉，它是唯一可能补不回来的数据**（外部 `[archive_object_store]` 远端桶不删）——然后全新安装，并在全部组件就绪后自动覆盖导入备份。
+> 2. **全部覆盖（`--wipe`）**：先自动将全部非系统密钥与告警渠道加密备份到本机 `moox.backup`（预计备份 `<secret_count>` 把密钥、`<channel_count>` 个告警渠道；**交易账户与组合账户不纳入备份**），再清空全部主机的部署根——**归档文件（`archive/`，当前 `<大小>`）会一起清掉，它是唯一可能补不回来的数据**（外部 `[archive_object_store]` 远端桶不删）——然后全新安装，在控制机 Admin 起来后先自动覆盖导入密钥，全部组件就绪后再导入告警渠道。
 
 - 用户选**保留数据**：带 `--keep --yes` 执行（`installed` 不要求 `--space-id`；`incomplete` 带 `--space-id <空间>`）。
 - 用户选**全部覆盖**：带 `--space-id <空间> --wipe <预检里的 wipe.digest> --yes` 执行；若清空前自动备份失败，命令会立即停下不清空任何主机，修好后重试，或经用户明确同意加 `--no-backup` 跳过在线备份（本机已有 `moox.backup` 时会自动沿用并打上待导入标记）。
@@ -235,14 +235,15 @@ cd moox-${VER}
 1. 准备这台电脑的操作身份（`setup operator`）：没有 `~/.config/moox/moox-cli.key` 就生成一把签名私钥，有就复用；它的公钥在下一步部署控制机时登记；
 2. 放行防火墙端口；
 3. 控制机先装 Admin、主机网关和 HostAgent（其余主机要向 Admin 要身份材料）；
-4. 带 EventBus、Storage 的主机（默认是存储机）；
-5. `setup init --stage storage`：业务空间、默认云账号密钥、元数据（控制机上的 Collector 启动时要核对元数据）；
-6. 控制机其余组件；
-7. 其余主机，因子机排最后；
-8. 统一等一次全部组件就绪；
-9. **自动导入待恢复备份**（在全部组件就绪之后、完整初始化之前）：若本机有带“卸载后待导入”标记的 `moox.backup`，按覆盖导入密钥（`SecretMgr.ImportSecrets`，保留原密钥 ID）与告警渠道（`MonitorMgr.ImportNotificationChannels`，按地址幂等覆盖），成功后清掉待导入标记；没有备份则提示去管理台录入；
-10. `setup init`：写入默认云账号密钥（只建不改）、只读检查告警渠道（为空时提醒）、登记云账号、日志服务、采集计划，并输出管理台及密钥/监控入口地址；
-11. `setup start` 启动空间，先跑安装后自检（`doctor bootstrap`，逐台核对本机/SSH 事实与 Monitor 总览），再跑逐空间验收（`setup verify`）；自检与验收通过后在控制机部署根下单独写出完成标记 `install-complete.json`。
+4. **自动导入待恢复的密钥备份**（在控制机 Admin 起来之后、部署其余主机之前）：若本机有带“卸载后待导入”标记的 `moox.backup`，先按覆盖导入密钥（`SecretMgr.ImportSecrets`，保留原密钥 ID），使部署 `archive-worker` 等组件时能从 Admin 读到 `[archive_object_store]` 等外部密钥；此时保留“待导入”标记，中途失败重跑幂等；
+5. 带 EventBus、Storage 的主机（默认是存储机）；
+6. `setup init --stage storage`：业务空间、默认云账号密钥、元数据（控制机上的 Collector 启动时要核对元数据）；
+7. 控制机其余组件；
+8. 其余主机，因子机排最后；
+9. 统一等一次全部组件就绪；
+10. **自动导入待恢复的告警渠道备份**（在全部组件就绪之后、完整初始化之前）：若本机有带“卸载后待导入”标记的 `moox.backup`，按地址幂等覆盖导入告警渠道（`MonitorMgr.ImportNotificationChannels`），两部分都完成后清掉待导入标记；没有备份则提示去管理台录入；
+11. `setup init`：写入默认云账号密钥（只建不改）、只读检查告警渠道（为空时提醒）、登记云账号、日志服务、采集计划，并输出管理台及密钥/监控入口地址；
+12. `setup start` 启动空间，先跑安装后自检（`doctor bootstrap --node <主机>`，逐台核对本机/SSH 事实与 Monitor 总览，失败报 `doctor_failed`），再跑逐空间验收（`setup verify`）；自检与验收通过后在控制机部署根下单独写出完成标记 `install-complete.json`。
 
 - 每台主机的部署做的事：把登记同步到 Admin，预检本机组件的数据格式，目标机按产物包清单下载组件包（下载不了时由这台电脑下载再推送），向控制机要身份材料，
   渲染配置、环境文件和单元文件，装好后按启动顺序重启有变化的组件，写 `version.json`，再等这次装的组件就绪。
@@ -374,6 +375,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `version_invalid` | 目标机的 `version.json` 损坏 | 告诉用户；确认后删掉它重跑（会把全部组件当成有变化重启一遍） |
 | `config_invalid: [overrides…]` | `[overrides]` 写错：组件没有这个配置文件，或键路径不存在 | 按报错改 `moox.toml`；键路径以渲染出的配置为准（目标机 `<部署根>/config/<组件>/`） |
 | `install_step_failed` | `setup install` 的某一步失败，后面是那一步的原因和单独重跑它的命令 | 按原因处理后重跑对应的 `setup install`（装过时带 `--keep --yes` 或 `--wipe <摘要> --yes`） |
+| `doctor_failed` | 安装末尾逐主机自检（`doctor bootstrap --node <主机>`）未通过：本机探查（服务目录、身份、`/healthz`、`/readyz` 等）失败或 Monitor 视角存在未上报、未就绪或严重告警 | 按报错列出的主机和检查项排查，用 `moox-cli doctor bootstrap --node <主机>` 单独复检，修好后重跑 `setup install --space-id <空间> --keep --yes` |
 | `install_choice_required`、`install_choice_conflict` | 目标机装过（`incomplete` 或 `installed`）时带 `--yes` 却未明确选 `--keep` / `--wipe`，或两者同时指定 | 先不带 `--yes` 跑 `setup install` 看预检，把结果给用户确认后明确二选一 |
 | `data_format_incompatible` | 已有数据组件的格式与新版本不兼容或缺少 `data-format`（格式未知），拒绝保留数据 | 把不兼容组件列表给用户看，确认后走 `setup install --space-id <空间> --wipe <摘要> --yes` |
 | `backup_failed` | 清空前自动备份密钥与告警渠道失败，已中止且未清空任何主机 | 先排查 Admin/Monitor 连通性后重试；若旧服务已无法恢复，经用户确认后加 `--no-backup`（本机已有 `moox.backup` 会被沿用并标记待导入） |

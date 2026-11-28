@@ -42,7 +42,7 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 ## 其余情况
 
 - 常用配置与秘密修改：让用户跑 `moox-cli config edit` 在本机网页里改，Agent 不填也不读。
-- 交易所密钥与告警通知渠道已从 `moox.secrets.toml` 移除：不要往秘密文件里手写 `[[exchange_keys]]` 或 `[notification]`（校验会拒绝）；请用户在管理台「系统设置 › 密钥管理」录入交易所密钥、在「资源与运维 › 监控告警」的“消息通知设置”录入告警渠道，备份与恢复走 `setup backup` / `moox.backup`。
+- 交易所密钥与告警通知渠道已从 `moox.secrets.toml` 移除：不要往秘密文件里手写 `[[exchange_keys]]` 或 `[notification]`（解析时会忽略并提示不再使用）；请用户在管理台「系统设置 › 密钥管理」录入交易所密钥、在「资源与运维 › 监控告警」的“消息通知设置”录入告警渠道，备份与恢复走 `setup backup` / `moox.backup`。
 - 手写的明文 `moox.secrets.toml`：`moox-cli config encrypt` 加密。
 - 新电脑：从原电脑拷两份文件和解密密钥（系统钥匙串里的，或 `~/.config/moox/config.key`）。
 - `config get` 报“这台电脑上没有解密秘密文件的密钥”：文件来自另一台电脑或钥匙串条目被删，把原电脑的解密密钥带过来；不要重新生成密钥覆盖。
