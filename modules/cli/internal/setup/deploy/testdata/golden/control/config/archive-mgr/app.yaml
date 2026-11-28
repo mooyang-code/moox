@@ -17,11 +17,3 @@ retention:
   other: 2160h
 # worker 暂存区保留最近多久的数据，之后分区定稿。
 staging_retention: 72h
-# 各空间的本地收盘时刻（HH:MM）；空间时区由 Storage 的空间元数据提供。未配置的空间按全天交易处理。
-spaces:
-  stockcn:
-    local_close: "15:00"
-  stockhk:
-    local_close: "16:10"
-  stockus:
-    local_close: "16:00"

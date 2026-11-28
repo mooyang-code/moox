@@ -68,6 +68,43 @@ func TestRegularCloseAndFullDayBuckets(t *testing.T) {
 	}
 }
 
+// 日终时刻：港股 16:10（等收市竞价，不改变 16:00 的交易时段），其余 session 市场等于最后一个交易时段收盘，24 小时市场为空。
+func TestMarketDayClose(t *testing.T) {
+	want := map[string]string{
+		"crypto":  "",
+		"stockcn": "15:00",
+		"stockhk": "16:10",
+		"stockus": "16:00",
+	}
+	for _, market := range Markets() {
+		expected, ok := want[market.ID]
+		if !ok {
+			t.Fatalf("未覆盖市场 %s 的日终时刻断言", market.ID)
+		}
+		if market.DayClose != expected {
+			t.Fatalf("%s DayClose = %q，期望 %q", market.ID, market.DayClose, expected)
+		}
+		if market.Alignment != AlignmentSession {
+			if market.DayClose != "" {
+				t.Fatalf("全天市场 %s 不应设置 DayClose：%q", market.ID, market.DayClose)
+			}
+			continue
+		}
+		parsed, err := time.Parse("15:04", market.DayClose)
+		if err != nil {
+			t.Fatalf("%s DayClose %q 必须是 HH:MM：%v", market.ID, market.DayClose, err)
+		}
+		regular, err := market.RegularClose()
+		if err != nil {
+			t.Fatalf("%s RegularClose：%v", market.ID, err)
+		}
+		dayCloseOffset := time.Duration(parsed.Hour())*time.Hour + time.Duration(parsed.Minute())*time.Minute
+		if dayCloseOffset < regular {
+			t.Fatalf("%s DayClose(%v) 早于 RegularClose(%v)", market.ID, dayCloseOffset, regular)
+		}
+	}
+}
+
 func TestMarketAndClockForDataset(t *testing.T) {
 	for _, tc := range []struct {
 		alignment, calendar string

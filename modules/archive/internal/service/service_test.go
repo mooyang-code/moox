@@ -1336,3 +1336,24 @@ func TestPullArchiveRunDoesNotLockLeaseWhenSpaceTimezoneFails(t *testing.T) {
 		t.Fatalf("仅剩已删空间时不能锁定租约: %+v", active)
 	}
 }
+
+// 下发的本地日终时刻取自 packages/barclock：港股 16:10（等收市竞价）、A 股 15:00、美股 16:00，加密货币与未登记空间为空。
+func TestAssignmentLocalCloseComesFromBarclock(t *testing.T) {
+	h := newHarness(t)
+	cases := []struct {
+		space string
+		want  string
+	}{
+		{"crypto", ""},
+		{"stockcn", "15:00"},
+		{"stockhk", "16:10"},
+		{"stockus", "16:00"},
+		{"stockjp", ""},
+	}
+	for _, tc := range cases {
+		got := h.svc.assignment(store.Claimed{Task: store.Task{SpaceID: tc.space, DatasetID: "ds_1m"}}, nil, "UTC").GetLocalClose()
+		if got != tc.want {
+			t.Errorf("space %s local_close = %q，期望 %q", tc.space, got, tc.want)
+		}
+	}
+}

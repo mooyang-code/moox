@@ -123,7 +123,7 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 
 // assignment 把领取到的运行与任务打包成下发给 worker 的参数。
 func (s *Service) assignment(c store.Claimed, registered []store.Partition, spaceTZ string) *archivepb.RunAssignment {
-	spaceCfg := s.cfg.Space(c.Task.SpaceID)
+	dayClose, _ := spaceMarket(c.Task.SpaceID)
 	reports := make([]*archivepb.PartitionReport, 0, len(registered))
 	for _, p := range registered {
 		reports = append(reports, registeredPartitionToPB(p))
@@ -133,7 +133,7 @@ func (s *Service) assignment(c store.Claimed, registered []store.Partition, spac
 		Purpose: c.Task.Purpose, DirName: c.Task.DirName,
 		Freq: c.Task.Freq, PartitionUnit: c.Task.PartitionUnit, Retention: c.Task.Retention,
 		AllowedLatenessSeconds: uint32(s.cfg.AllowedLateness / time.Second),
-		SpaceTz:                spaceTZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
+		SpaceTz:                spaceTZ, LocalClose: dayClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
 		ScheduledAt: millisOf(c.Run.ScheduledAt), StartedAt: millisOf(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
 		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskId: strconv.FormatInt(c.Task.ID, 10), DatasetMetaJson: c.Task.MetaJSON, LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
 		LastSuccessAt: millisOf(c.Task.LastSuccessAt), RegisteredPartitions: reports,

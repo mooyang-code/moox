@@ -32,26 +32,18 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		cfg.StagingRetention != 72*time.Hour || cfg.Database.Path != "./data/archive-mgr/archive.db" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
-	if cn := cfg.Space("StockCN"); cn.LocalClose != "15:00" {
-		t.Fatalf("stockcn = %+v", cn)
-	}
-	if unknown := cfg.Space("newspace"); unknown.LocalClose != "" {
-		t.Fatalf("未配置的空间按全天交易: %+v", unknown)
-	}
 }
 
 func TestLoadRejectsUnknownKeysMultipleDocumentsAndBadValues(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown key":    minimal + "mystery: 1\n",
-		"two documents":  minimal + "---\ndatabase:\n  path: x\n",
-		"wrong caller":   strings.Replace(minimal, "archive-mgr", "someone", 1),
-		"short lease":    minimal + "run:\n  lease_ttl: 10s\n",
-		"low lateness":   minimal + "allowed_lateness: 5m\n",
-		"bad retention":  minimal + "retention:\n  other: 24h\n",
-		"short staging":  minimal + "staging_retention: 1h\n",
-		"legacy tz key":  minimal + "spaces:\n  crypto:\n    tz: UTC\n",
-		"bad close":      minimal + "spaces:\n  stockcn:\n    local_close: \"25:61\"\n",
-		"upper space id": minimal + "spaces:\n  Crypto:\n    local_close: \"15:00\"\n",
+		"unknown key":   minimal + "mystery: 1\n",
+		"legacy spaces": minimal + "spaces:\n  stockcn:\n    local_close: \"15:00\"\n",
+		"two documents": minimal + "---\ndatabase:\n  path: x\n",
+		"wrong caller":  strings.Replace(minimal, "archive-mgr", "someone", 1),
+		"short lease":   minimal + "run:\n  lease_ttl: 10s\n",
+		"low lateness":  minimal + "allowed_lateness: 5m\n",
+		"bad retention": minimal + "retention:\n  other: 24h\n",
+		"short staging": minimal + "staging_retention: 1h\n",
 	} {
 		if _, err := Load(writeConfig(t, body)); err == nil {
 			t.Fatalf("%s: Load 应报错", name)
@@ -67,7 +59,7 @@ func TestShippedConfigIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GatewayClient.Caller != Caller || cfg.Space("stockus").LocalClose != "16:00" {
+	if cfg.GatewayClient.Caller != Caller || cfg.AllowedLateness != 15*time.Minute {
 		t.Fatalf("shipped config = %+v", cfg)
 	}
 }
