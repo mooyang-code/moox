@@ -108,7 +108,7 @@ func TestUpsertFieldsForwardsTheParamsJSONColumn(t *testing.T) {
 	buildCache := func(withParams bool) *metacache.DatasetCache {
 		ds := proto.Clone(factorRowsDataset()).(*pb.Dataset)
 		ds.DataKind = pb.DataKind_DATA_KIND_TIME_SERIES
-		ds.Freq = "5m"
+		ds.Frequency = "5m"
 		columns := []*pb.DatasetColumn{{SpaceId: "space", DatasetId: "result", ColumnName: "value", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 		if withParams {
 			columns = append(columns, &pb.DatasetColumn{SpaceId: "space", DatasetId: "result", ColumnName: "__params", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON})
@@ -117,7 +117,7 @@ func TestUpsertFieldsForwardsTheParamsJSONColumn(t *testing.T) {
 	}
 	row := func() *pb.Row {
 		return &pb.Row{
-			Key: &pb.RowKey{SpaceId: "space", DatasetId: "result", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "5m", DataTime: "2026-10-25T16:35:00Z"}}},
+			Key: &pb.RowKey{SpaceId: "space", DatasetId: "result", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Frequency: "5m", DataTime: "2026-10-25T16:35:00Z"}}},
 			Fields: []*pb.FieldValue{
 				{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}},
 				{FieldId: "__params", Value: &pb.TypedValue{Value: &pb.TypedValue_JsonValue{JsonValue: params}}},

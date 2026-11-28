@@ -170,14 +170,14 @@ func TestServiceUsesDatasetCacheSnapshotWithoutStoreAccess(t *testing.T) {
 func barsRow(freq string) *pb.Row {
 	return &pb.Row{
 		Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "bars", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", Freq: freq, DataTime: "2026-10-08T10:00:00Z",
+			SubjectId: "BTC-USDT", Frequency: freq, DataTime: "2026-10-08T10:00:00Z",
 		}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}
 }
 
 func TestSchemaValidationRejectsRowFreqOtherThanTheDatasetFreq(t *testing.T) {
-	dataset := &pb.Dataset{SpaceId: "crypto", DatasetId: "bars", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"}
+	dataset := &pb.Dataset{SpaceId: "crypto", DatasetId: "bars", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1h", Status: "active"}
 	cache := newTestDatasetCache(t, []*pb.Dataset{dataset}, []*pb.DatasetColumn{{
 		SpaceId: "crypto", DatasetId: "bars", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
 	}})

@@ -138,11 +138,11 @@ export function freshnessRows(overview: HealthOverview | undefined, names: NameB
       // 数据已写到的最近一根的收线时刻，由后端按交易日历算出。
       const closeMs = tone === "idle" ? null : toMillis(item.latest_bar_close_at);
       const row: FreshnessRow = {
-        key: `${producer}/${item.space_id}/${id}/${item.freq}`,
+        key: `${producer}/${item.space_id}/${id}/${item.frequency}`,
         datasetId: id,
         stage: STAGE_LABELS[producer] || stage.name || producer,
         name: names.datasets[id] || id,
-        freq: item.freq || "",
+        freq: item.frequency || "",
         lag: behind === null ? "—" : waiting > 0 ? `等待 ${humanizeDuration(behind)}` : "已追平",
         tone,
         status: statusLabel(item.status),
@@ -185,14 +185,14 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
     .map(info => {
       const set = info.factor_task;
       const health = taskHealth(set, info.last_run);
-      const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
+      const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.frequency, info.last_run).seconds : null;
       // last_period_time 是数据坐标的 Unix 秒
       const periodOpenSeconds = toSeconds(info.last_run?.last_period_time);
       const periodOpenMs = periodOpenSeconds ? periodOpenSeconds * 1000 : null;
-      const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
+      const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.frequency) * 1000;
       return {
         taskId: set.task_id,
-        label: `${set.name || names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`,
+        label: `${set.name || names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.frequency}`,
         factors: (info.members || []).filter(member => member.status === "enabled").length,
         health,
         tone: FACTOR_TONE[health.key] || "idle",
@@ -338,7 +338,7 @@ export function attentionItems(input: {
   const alerted = new Set(
     input.alerts
       .filter(alert => alert.object?.type === "dataset")
-      .map(alert => `${alert.object?.dataset_id}/${alert.object?.freq}`)
+      .map(alert => `${alert.object?.dataset_id}/${alert.object?.frequency}`)
   );
   for (const row of input.freshness) {
     if (row.tone !== "warn" && row.tone !== "bad") continue;

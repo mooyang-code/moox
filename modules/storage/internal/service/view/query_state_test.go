@@ -72,7 +72,7 @@ func TestQueriesDoNotWaitForLongIndexWrite(t *testing.T) {
 			started := time.Now()
 			rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 				SpaceId: "space", DatasetId: "market",
-				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 				TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 			})
 			elapsed := time.Since(started)

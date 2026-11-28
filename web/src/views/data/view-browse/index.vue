@@ -25,7 +25,7 @@
 
           <section class="view-status-line">
             <span>数据集: {{ currentDatasetName }} ({{ activeDataset?.dataset_id || "-" }})</span>
-            <span v-if="activeDataset?.freq">频率: {{ activeDataset.freq }}</span>
+            <span v-if="activeDataset?.frequency">频率: {{ activeDataset.frequency }}</span>
             <span v-if="currentDatasetRetention">保留期: {{ currentDatasetRetention }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="viewIndexTag.color">{{ viewIndexTag.text }}</a-tag>
@@ -554,7 +554,7 @@ async function loadTimeSeriesRows(retainRowsOnError = false, { background = fals
     const rows = rsp.rows || [];
     const tableItems = timeSeriesRowsToTableRows(rows, props.zone).map((row, index) => ({
       ...row,
-      freq: rows[index]?.key?.time_series?.freq || "-",
+      freq: rows[index]?.key?.time_series?.frequency || "-",
       seriesTag: rows[index]?.key?.time_series?.series_tag || "",
       rawKey: rows[index]?.key
     }));

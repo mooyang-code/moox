@@ -97,7 +97,7 @@ type CountTimeSeriesViewRowsReq struct {
 
 	SpaceId   string `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
 	DatasetId string `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
-	// selectors 需要 subject_id 与 freq；time_range 是左闭右开时间范围。
+	// selectors 需要 subject_id 与 frequency；time_range 是左闭右开时间范围。
 	Selectors []*TimeSeriesSelector `protobuf:"bytes,4,rep,name=selectors,proto3" json:"selectors,omitempty"`
 	TimeRange *TimeRange            `protobuf:"bytes,5,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
 }

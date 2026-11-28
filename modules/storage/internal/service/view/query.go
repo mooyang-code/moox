@@ -319,11 +319,11 @@ func timeSeriesSelectors(selectors []*pb.TimeSeriesSelector) ([]viewindex.TimeSe
 		if selector == nil {
 			return nil, errors.New("time-series selector is required")
 		}
-		if selector.GetSubjectId() == "" || selector.GetFreq() == "" {
+		if selector.GetSubjectId() == "" || selector.GetFrequency() == "" {
 			return nil, errors.New("selector subject_id and freq are required")
 		}
 		out = append(out, viewindex.TimeSeriesSelector{
-			SubjectID: selector.GetSubjectId(), Freq: selector.GetFreq(),
+			SubjectID: selector.GetSubjectId(), Freq: selector.GetFrequency(),
 			SeriesTag: selector.SeriesTag,
 		})
 	}

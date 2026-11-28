@@ -394,7 +394,7 @@ func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times [
 		keys = append(keys, &storagepb.RowKey{
 			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: config.SubjectID, Freq: frequency,
+				SubjectId: config.SubjectID, Frequency: frequency,
 				DataTime: at.Format(time.RFC3339Nano), SeriesTag: *config.SeriesTag,
 			}},
 		})

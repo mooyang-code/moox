@@ -74,7 +74,7 @@ func newE2EPrimary() *e2ePrimary { return &e2ePrimary{rows: map[string]*storagep
 
 func e2eKeyText(key *storagepb.RowKey) string {
 	ts := key.GetTimeSeries()
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%s", key.GetSpaceId(), key.GetDatasetId(), ts.GetSubjectId(), ts.GetFreq(), ts.GetDataTime(), ts.GetSeriesTag())
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%s", key.GetSpaceId(), key.GetDatasetId(), ts.GetSubjectId(), ts.GetFrequency(), ts.GetDataTime(), ts.GetSeriesTag())
 }
 
 func (p *e2ePrimary) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, _ []string) ([]*storagepb.Row, error) {
@@ -104,7 +104,7 @@ func e2eRow(space, dataset, subject, freq string, at time.Time, closeValue float
 		return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}}}
 	}
 	return &storagepb.Row{
-		Key:    &storagepb.RowKey{SpaceId: space, DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: freq, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"}}},
+		Key:    &storagepb.RowKey{SpaceId: space, DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Frequency: freq, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"}}},
 		Fields: []*storagepb.FieldValue{double("open", closeValue-1), double("high", closeValue+1), double("low", closeValue-2), double("close", closeValue), double("volume", 2), double("quote_volume", 20), {FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 3}}}},
 	}
 }

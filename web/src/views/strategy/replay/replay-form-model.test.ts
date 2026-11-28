@@ -113,8 +113,8 @@ describe("replay form model", () => {
 
   it("picks dates only when every chosen task is daily", () => {
     const tasks = [
-      { task_id: "ftask_swap", freq: "1d" },
-      { task_id: "ftask_5m", freq: "5m" }
+      { task_id: "ftask_swap", frequency: "1d" },
+      { task_id: "ftask_5m", frequency: "5m" }
     ];
     expect(replayDateOnly(base, strategies, tasks)).toBe(true);
     expect(replayDateOnly({ ...base, tasks: { swap: "ftask_5m" } }, strategies, tasks)).toBe(false);

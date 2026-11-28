@@ -36,7 +36,7 @@ func TestImportUpsertThroughput(t *testing.T) {
 			}
 			rows = append(rows, &pb.Row{
 				Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "dataset_kline_5m", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-					SubjectId: subject, Freq: "5m", DataTime: start.Add(time.Duration(i) * 5 * time.Minute).Format(time.RFC3339), SeriesTag: "tag"}}},
+					SubjectId: subject, Frequency: "5m", DataTime: start.Add(time.Duration(i) * 5 * time.Minute).Format(time.RFC3339), SeriesTag: "tag"}}},
 				Fields: fields,
 			})
 		}

@@ -218,11 +218,11 @@ func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	manager := NewManagerWithAPI(fake)
 	ids, err := manager.Ensure(context.Background(), "crypto", "task-5m", "kline", "spot", Config{Frequency: "5m"})
 	require.NoError(t, err)
-	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFreq())
+	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFrequency())
 
 	ids, err = manager.Ensure(context.Background(), "crypto", "task-1h", "kline", "spot", Config{Frequency: "1H"})
 	require.NoError(t, err)
-	require.Equal(t, "1h", fake.datasets[ids.DatasetID].GetFreq(), "a frequency alias is declared in canonical form")
+	require.Equal(t, "1h", fake.datasets[ids.DatasetID].GetFrequency(), "a frequency alias is declared in canonical form")
 }
 
 func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {

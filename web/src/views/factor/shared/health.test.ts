@@ -23,11 +23,11 @@ describe("freqSeconds", () => {
 });
 
 describe("taskHealth", () => {
-  const enabled = { status: "enabled" as const, freq: "1m" };
+  const enabled = { status: "enabled" as const, frequency: "1m" };
 
   it("reports lifecycle states before run state", () => {
-    expect(taskHealth({ status: "pending", freq: "1m" }, run()).key).toBe("pending");
-    expect(taskHealth({ status: "disabled", freq: "1m" }, run()).key).toBe("disabled");
+    expect(taskHealth({ status: "pending", frequency: "1m" }, run()).key).toBe("pending");
+    expect(taskHealth({ status: "disabled", frequency: "1m" }, run()).key).toBe("disabled");
   });
 
   it("is idle without any completed period", () => {
@@ -45,8 +45,8 @@ describe("taskHealth", () => {
     expect(taskHealth(enabled, run({ lag_seconds: 0 })).key).toBe("ok");
     expect(taskHealth(enabled, run({ lag_seconds: 60 })).key).toBe("ok"); // 落后 1 根：刚收盘还在计算
     expect(taskHealth(enabled, run({ lag_seconds: 120 })).key).toBe("lagging"); // 落后 2 根
-    expect(taskHealth({ status: "enabled", freq: "1h" }, run({ lag_seconds: 3600 })).key).toBe("ok");
-    expect(taskHealth({ status: "enabled", freq: "5m" }, run({ lag_seconds: 600 })).key).toBe("lagging");
+    expect(taskHealth({ status: "enabled", frequency: "1h" }, run({ lag_seconds: 3600 })).key).toBe("ok");
+    expect(taskHealth({ status: "enabled", frequency: "5m" }, run({ lag_seconds: 600 })).key).toBe("lagging");
   });
 });
 

@@ -27,7 +27,7 @@ export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOpti
     .map(info => ({
       taskId: info.factor_task.task_id,
       name: info.factor_task.name || info.factor_task.task_id,
-      freq: info.factor_task.freq,
+      freq: info.factor_task.frequency,
       columns: taskColumns(info),
       varMembers: (info.members || []).filter(member => member.kind === "var").map(member => member.member_key),
       boundInstanceId: info.factor_task.bound_instance_id || ""

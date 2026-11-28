@@ -142,7 +142,7 @@ func TestDataKlineDirectDatasetIDBuildsRequest(t *testing.T) {
 	require.Len(t, gw.readReq.GetSelectors(), 1)
 	selector := gw.readReq.GetSelectors()[0]
 	assert.Equal(t, "BTC-USDT", selector.GetSubjectId())
-	assert.Equal(t, "1m", selector.GetFreq())
+	assert.Equal(t, "1m", selector.GetFrequency())
 	assert.Nil(t, selector.SeriesTag, "未传 --series-tag 时不限制序列标签")
 	assert.Contains(t, stdout.String(), "ret_info")
 	deadline, ok := gw.readCtx.Deadline()
@@ -167,7 +167,7 @@ func TestDataKlineExplicitSeriesTagAndLatestQuery(t *testing.T) {
 	require.Len(t, gw.readReq.GetSelectors(), 1)
 	selector := gw.readReq.GetSelectors()[0]
 	assert.Equal(t, "600519.SH", selector.GetSubjectId())
-	assert.Equal(t, "5m", selector.GetFreq())
+	assert.Equal(t, "5m", selector.GetFrequency())
 	require.NotNil(t, selector.SeriesTag)
 	assert.Equal(t, "default", *selector.SeriesTag)
 	assert.Equal(t, uint32(100), gw.readReq.GetLatestPerSeries(), "没有时间范围时取最新的 limit 根")
@@ -202,7 +202,7 @@ func TestDataKlineResolvesDatasetByTagAndIntervalAcrossPages(t *testing.T) {
 	assert.Equal(t, "kline", gw.taskReqs[0].GetDataType())
 	require.NotNil(t, gw.readReq)
 	assert.Equal(t, "dataset_spot_1m", gw.readReq.GetDatasetId())
-	assert.Equal(t, "1m", gw.readReq.GetSelectors()[0].GetFreq())
+	assert.Equal(t, "1m", gw.readReq.GetSelectors()[0].GetFrequency())
 }
 
 func TestDataKlineResolveByTagHandlesDisambiguationAndErrors(t *testing.T) {

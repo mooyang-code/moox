@@ -20,7 +20,7 @@ vi.mock("@/api/factor", async () => {
 import TrialPanel from "./strategy-trial-panel.vue";
 
 const taskInfo = (taskId: string) => ({
-  factor_task: { task_id: taskId, name: taskId, space_id: "s1", freq: "1h", status: "enabled" },
+  factor_task: { task_id: taskId, name: taskId, space_id: "s1", frequency: "1h", status: "enabled" },
   members: []
 });
 

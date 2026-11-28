@@ -25,7 +25,7 @@ func setStages(overview *monitorpb.HealthOverview, stages ...*monitorpb.HealthPi
 // healthyOverview 返回一份全部健康的概览和它唯一的数据链路阶段（测试往阶段里加数据集）。
 func healthyOverview() (*monitorpb.HealthOverview, *monitorpb.HealthPipelineStage) {
 	stage := &monitorpb.HealthPipelineStage{Id: "view", Name: "视图", Datasets: []*monitorpb.HealthDataset{
-		{Producer: "storage_view", DatasetId: "view_a", Freq: "1h", Status: "healthy"},
+		{Producer: "storage_view", DatasetId: "view_a", Frequency: "1h", Status: "healthy"},
 	}}
 	overview := &monitorpb.HealthOverview{
 		GeneratedAt:    time.Date(2026, 10, 24, 3, 0, 0, 0, time.UTC).UnixMilli(),
@@ -55,12 +55,12 @@ func TestBuildAlertsReportCollectsEveryUnhealthySource(t *testing.T) {
 	overview.Alerts = []*monitorpb.HealthAlert{{
 		Id: "a1", Severity: "critical", Title: "数据集 view_b", Reason: "数据生产端长时间未更新", RawError: "producer stale",
 		TriggeredAt: time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC).UnixMilli(),
-		Object:      &monitorpb.HealthObject{Type: "dataset", SpaceId: "crypto", Producer: "storage_view", DatasetId: "view_b", Freq: "1h"},
+		Object:      &monitorpb.HealthObject{Type: "dataset", SpaceId: "crypto", Producer: "storage_view", DatasetId: "view_b", Frequency: "1h"},
 	}}
 	stage.Datasets = append(stage.Datasets,
-		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_view", DatasetId: "view_b", Freq: "1h", Status: "degraded", Reason: "数据生产端长时间未更新"},
-		&monitorpb.HealthDataset{Producer: "factor", DatasetId: "factor_c", Freq: "1m", Status: "degraded", Reason: "warming"},
-		&monitorpb.HealthDataset{Producer: "collector", DatasetId: "ds_d", Freq: "1m", Status: "degraded", Reason: "success stale"},
+		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_view", DatasetId: "view_b", Frequency: "1h", Status: "degraded", Reason: "数据生产端长时间未更新"},
+		&monitorpb.HealthDataset{Producer: "factor", DatasetId: "factor_c", Frequency: "1m", Status: "degraded", Reason: "warming"},
+		&monitorpb.HealthDataset{Producer: "collector", DatasetId: "ds_d", Frequency: "1m", Status: "degraded", Reason: "success stale"},
 	)
 	overview.BusinessChecks = append(overview.BusinessChecks, &monitorpb.HealthBusinessCheck{CheckId: "c3", Name: "行情采集", Status: "down", Reason: "Collector 采集计划指标已停止上报"})
 	overview.Components = append(overview.Components, &monitorpb.HealthComponent{HostId: "storage", ComponentId: "storage-primary", Status: "unknown", Reason: "从未收到监控上报"})
@@ -104,7 +104,7 @@ func TestBuildAlertsReportCollectsEveryUnhealthySource(t *testing.T) {
 // 只有警告时结论是降级；只有“积累中”提示时仍是正常。
 func TestBuildAlertsReportConclusionByWorstSeverity(t *testing.T) {
 	overview, stage := healthyOverview()
-	stage.Datasets = append(stage.Datasets, &monitorpb.HealthDataset{DatasetId: "w", Freq: "1m", Status: "degraded", Reason: "warming"})
+	stage.Datasets = append(stage.Datasets, &monitorpb.HealthDataset{DatasetId: "w", Frequency: "1m", Status: "degraded", Reason: "warming"})
 	require.Equal(t, core.ConclusionHealthy, BuildAlertsReport(overview).Conclusion)
 
 	overview.Components = append(overview.Components, &monitorpb.HealthComponent{HostId: "h", ComponentId: "c", Status: "degraded"})
@@ -142,15 +142,15 @@ func TestBuildAlertsReportDedupIncludesSpaceIDAndProducer(t *testing.T) {
 	overview.Summary = &monitorpb.HealthSummary{AlertCount: 1}
 	overview.Alerts = []*monitorpb.HealthAlert{{
 		Id: "a1", Severity: "critical", Title: "crypto view kline_1m", Reason: "数据生产端长时间未更新",
-		Object: &monitorpb.HealthObject{Type: "dataset", SpaceId: "crypto", Producer: "storage_view", DatasetId: "kline_1m", Freq: "1m"},
+		Object: &monitorpb.HealthObject{Type: "dataset", SpaceId: "crypto", Producer: "storage_view", DatasetId: "kline_1m", Frequency: "1m"},
 	}}
 	stage.Datasets = append(stage.Datasets,
 		// 同一 space_id + producer + dataset_id + freq：应去重。
-		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_view", DatasetId: "kline_1m", Freq: "1m", Status: "stale", Reason: "重复"},
+		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_view", DatasetId: "kline_1m", Frequency: "1m", Status: "stale", Reason: "重复"},
 		// 不同 space_id：不能被合并。
-		&monitorpb.HealthDataset{SpaceId: "ashare", Producer: "storage_view", DatasetId: "kline_1m", Freq: "1m", Status: "degraded", Reason: "另一空间异常"},
+		&monitorpb.HealthDataset{SpaceId: "ashare", Producer: "storage_view", DatasetId: "kline_1m", Frequency: "1m", Status: "degraded", Reason: "另一空间异常"},
 		// 同一 space_id、不同 producer：不能被合并。
-		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_primary", DatasetId: "kline_1m", Freq: "1m", Status: "degraded", Reason: "主存异常"},
+		&monitorpb.HealthDataset{SpaceId: "crypto", Producer: "storage_primary", DatasetId: "kline_1m", Frequency: "1m", Status: "degraded", Reason: "主存异常"},
 	)
 
 	report := BuildAlertsReport(overview)

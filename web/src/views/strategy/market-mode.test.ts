@@ -58,7 +58,7 @@ describe("任务键", () => {
       ...declared,
       marketDeclared: false,
       taskKeys: [],
-      sources: [{ name: "daily", bar: "1d" }],
+      sources: [{ name: "daily", frequency: "1d" }],
       referenceMarkets: []
     };
     expect(requirementTaskKeys(open, "")).toEqual([]);

@@ -53,7 +53,7 @@ func init() {
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},
 		rpcSpec{Path: []string{"factor", "task", "create"}, Short: "创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写成因子任务文件后用 factor task apply", Service: factorMgr, Method: "CreateFactorTask",
 			SpaceField: "factor_task.space_id",
-			Flags:      []rpcFlag{reqFlag("source-dataset-id", "factor_task.source_dataset_id", "源数据集 ID"), reqFlag("frequency", "factor_task.freq", "频率：1m、5m、1h……"), strFlag("name", "factor_task.name", "任务名称")}},
+			Flags:      []rpcFlag{reqFlag("source-dataset-id", "factor_task.source_dataset_id", "源数据集 ID"), reqFlag("frequency", "factor_task.frequency", "频率：1m、5m、1h……"), strFlag("name", "factor_task.name", "任务名称")}},
 		rpcSpec{Path: []string{"factor", "task", "enable"}, Short: "启用计算任务", Service: factorMgr, Method: "SetFactorTaskStatus", Fixed: map[string]any{"status": "enabled"},
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},
 		rpcSpec{Path: []string{"factor", "task", "disable"}, Destructive: true, Short: "停用计算任务（默认只预览，--yes 才执行）", Service: factorMgr, Method: "SetFactorTaskStatus", Fixed: map[string]any{"status": "disabled"},

@@ -20,7 +20,7 @@ func TestQueryJSONPreservesTextAndDistinguishesJSONNull(t *testing.T) {
 	const payload = `{"large":18446744073709551615,"decimal":0.12345678901234567890123456789}`
 	var writes []viewindex.RowWrite
 	for subject, raw := range map[string]string{"BTC": payload, "ETH": "null"} {
-		writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: "1m", DataTime: "2026-09-13T00:00:00Z"}}}}, Fields: []*pb.FieldValue{{FieldId: "payload", Value: &pb.TypedValue{Value: &pb.TypedValue_JsonValue{JsonValue: raw}}}}})
+		writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Frequency: "1m", DataTime: "2026-09-13T00:00:00Z"}}}}, Fields: []*pb.FieldValue{{FieldId: "payload", Value: &pb.TypedValue{Value: &pb.TypedValue_JsonValue{JsonValue: raw}}}}})
 	}
 	require.NoError(t, m.Write(ctx, "idx", viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}))
 	for _, spec := range []viewindex.QuerySpec{{TotalMode: pb.TotalMode_NONE}} {

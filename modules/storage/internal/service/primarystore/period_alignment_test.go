@@ -50,7 +50,7 @@ func TestCommitTimeSeriesBatchUsesDeclaredPeriodEndAt(t *testing.T) {
 			datasets := newTestDatasetCache(t,
 				[]*pb.Dataset{{
 					SpaceId: "stockcn", DatasetId: "dataset_kline_1d", Status: "active",
-					DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1d",
+					DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1d",
 					Alignment: "session", AllowedLatenessSeconds: 300,
 					Attributes: map[string]string{"calendar": "cn_stock"},
 				}},
@@ -76,7 +76,7 @@ func TestCommitTimeSeriesBatchUsesDeclaredPeriodEndAt(t *testing.T) {
 						Key: &pb.RowKey{
 							SpaceId: "stockcn", DatasetId: "dataset_kline_1d",
 							Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-								SubjectId: "SH600519", Freq: "1d", DataTime: periodDay.Format(time.RFC3339Nano), SeriesTag: "default",
+								SubjectId: "SH600519", Frequency: "1d", DataTime: periodDay.Format(time.RFC3339Nano), SeriesTag: "default",
 							}},
 						},
 						Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1500}}}},

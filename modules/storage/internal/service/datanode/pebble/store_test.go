@@ -18,9 +18,9 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 	old := "2026-07-18T00:00:00Z"
 	newer := "2026-07-19T00:00:00Z"
 	rows := []*pb.Row{
-		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: old}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
-		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: old, SeriesTag: "venue:okx"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
-		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: newer}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Frequency: "1d", DataTime: old}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Frequency: "1d", DataTime: old, SeriesTag: "venue:okx"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Frequency: "1d", DataTime: newer}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
 	}
 	if err := upsertTestRows(s, context.Background(), rows); err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestCleanupExpiredBucketsDoesNotCreateMarker(t *testing.T) {
 		Key: &pb.RowKey{
 			SpaceId: "s", DatasetId: "d",
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: "x", Freq: "1d", DataTime: "2026-07-18T00:00:00Z",
+				SubjectId: "x", Frequency: "1d", DataTime: "2026-07-18T00:00:00Z",
 			}},
 		},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
@@ -82,7 +82,7 @@ func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 	defer s.Close()
 	row := func(space string) *pb.Row {
 		return &pb.Row{
-			Key:    &pb.RowKey{SpaceId: space, DatasetId: "shared", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: "2026-07-18T00:00:00Z"}}},
+			Key:    &pb.RowKey{SpaceId: space, DatasetId: "shared", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Frequency: "1d", DataTime: "2026-07-18T00:00:00Z"}}},
 			Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: space}}}},
 		}
 	}
@@ -105,7 +105,7 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 		t.Fatal(err)
 	}
 	defer store.Close()
-	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-07-19T10:00:00Z"}}}
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Frequency: "1m", DataTime: "2026-07-19T10:00:00Z"}}}
 	row := &pb.Row{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
 	if err := upsertTestRows(store, context.Background(), []*pb.Row{row}); err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
 	key := &pb.RowKey{
 		SpaceId: "s", DatasetId: "d",
 		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: "x", Freq: "1m", DataTime: "2026-07-19T10:00:00Z",
+			SubjectId: "x", Frequency: "1m", DataTime: "2026-07-19T10:00:00Z",
 		}},
 	}
 	write := func(value *pb.TypedValue) {
@@ -179,7 +179,7 @@ func TestSeriesTagsKeepSameTimestampRowsDistinct(t *testing.T) {
 			DatasetId: "prices",
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 				SubjectId: "BTC-USDT",
-				Freq:      "1m",
+				Frequency: "1m",
 				DataTime:  "2026-07-26T01:02:00Z",
 				SeriesTag: tag,
 			}},
@@ -215,7 +215,7 @@ func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
 
 	for _, tag := range []string{"市场:现货", "venue/binance@spot+v2"} {
 		key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-26T01:02:00Z", SeriesTag: tag,
+			SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-07-26T01:02:00Z", SeriesTag: tag,
 		}}}
 		if err := upsertTestRows(store, context.Background(), []*pb.Row{{
 			Key: key, Fields: []*pb.FieldValue{{FieldId: "tag", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: tag}}}},

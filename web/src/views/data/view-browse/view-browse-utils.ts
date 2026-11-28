@@ -442,7 +442,7 @@ export function timeSeriesRowsToTableRows(rows: Row[], zone?: string): BrowseTab
   return rows.map(row => {
     const ts = row.key?.time_series;
     return {
-      id: `ts-${ts?.subject_id || ""}-${ts?.freq || ""}-${ts?.series_tag || ""}-${ts?.data_time || ""}`,
+      id: `ts-${ts?.subject_id || ""}-${ts?.frequency || ""}-${ts?.series_tag || ""}-${ts?.data_time || ""}`,
       key: ts?.subject_id || "-",
       version: ts?.data_time || "-",
       seriesTag: ts?.series_tag || "",

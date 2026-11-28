@@ -108,7 +108,7 @@ type fakeFactorResponse struct {
 		Name            string `json:"name,omitempty"`
 		SpaceID         string `json:"space_id,omitempty"`
 		SourceDatasetID string `json:"source_dataset_id,omitempty"`
-		Freq            string `json:"freq,omitempty"`
+		Frequency       string `json:"frequency,omitempty"`
 		Status          string `json:"status,omitempty"`
 		ResultDatasetID string `json:"result_dataset_id,omitempty"`
 	} `json:"factor_task"`
@@ -148,7 +148,7 @@ func (f *fakeFactorMgr) handle(method string, request map[string]any, result *fa
 			return nil
 		}
 		result.FactorTask.TaskID, result.FactorTask.Name = task.TaskID, task.Name
-		result.FactorTask.SpaceID, result.FactorTask.SourceDatasetID, result.FactorTask.Freq = task.SpaceID, task.SourceDatasetID, task.Freq
+		result.FactorTask.SpaceID, result.FactorTask.SourceDatasetID, result.FactorTask.Frequency = task.SpaceID, task.SourceDatasetID, task.Freq
 		result.FactorTask.Status = f.taskStatus[task.TaskID]
 		if result.FactorTask.Status == "" {
 			result.FactorTask.Status = "enabled"
@@ -159,7 +159,7 @@ func (f *fakeFactorMgr) handle(method string, request map[string]any, result *fa
 		f.createdTasks = append(f.createdTasks, create)
 		id := create["task_id"].(string)
 		f.tasks[id] = setupFactorTask{TaskID: id, Name: create["name"].(string), SpaceID: create["space_id"].(string),
-			SourceDatasetID: create["source_dataset_id"].(string), Freq: create["freq"].(string)}
+			SourceDatasetID: create["source_dataset_id"].(string), Freq: create["frequency"].(string)}
 		f.taskStatus[id] = "enabled"
 		// 与 FactorMgr 一致：结果数据集 ID 由任务 ID 派生（ftask_x → dataset_factor_x）。
 		result.FactorTask.TaskID, result.FactorTask.ResultDatasetID = id, "dataset_factor_"+strings.TrimPrefix(id, "ftask_")

@@ -48,7 +48,7 @@ export function barLagText(freq: string, lastRun?: Pick<TaskRunSummary, "last_pe
   return bars === 0 ? "已追平" : `落后 ${bars} 根（${formatLag(seconds)}）`;
 }
 
-export function taskHealth(set: Pick<FactorTask, "status" | "freq">, lastRun?: TaskRunSummary): TaskHealth {
+export function taskHealth(set: Pick<FactorTask, "status" | "frequency">, lastRun?: TaskRunSummary): TaskHealth {
   if (set.status === "pending" || set.status === "disabled") {
     const tag = taskStatusTag(set.status);
     return { key: set.status, ...tag };
@@ -56,7 +56,7 @@ export function taskHealth(set: Pick<FactorTask, "status" | "freq">, lastRun?: T
   if (!lastRun || !lastRun.last_period_time) return { key: "idle", label: "暂无周期", color: "gray" };
   if (lastRun.last_status === "failed") return { key: "failed", label: "失败", color: "red" };
   if (lastRun.last_status === "degraded") return { key: "degraded", label: "降级", color: "orange" };
-  if (runBarLag(set.freq, lastRun).bars >= LAG_TOLERANCE_BARS) return { key: "lagging", label: "滞后", color: "red" };
+  if (runBarLag(set.frequency, lastRun).bars >= LAG_TOLERANCE_BARS) return { key: "lagging", label: "滞后", color: "red" };
   return { key: "ok", label: "正常", color: "green" };
 }
 

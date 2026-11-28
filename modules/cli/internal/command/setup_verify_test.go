@@ -224,7 +224,7 @@ func (g fakeVerifyGateway) Forward(context.Context, string, string, int, []byte)
 }
 
 func TestSetupVerifyReaderMatchesDatasetsByTaskResult(t *testing.T) {
-	factors := &factorpb.ListFactorTasksRsp{FactorTasks: []*factorpb.FactorTaskInfo{{FactorTask: &factorpb.FactorTask{TaskId: "f", SpaceId: "crypto", Freq: "1m", SourceDatasetId: "dataset_task_a"}}}}
+	factors := &factorpb.ListFactorTasksRsp{FactorTasks: []*factorpb.FactorTaskInfo{{FactorTask: &factorpb.FactorTask{TaskId: "f", SpaceId: "crypto", Frequency: "1m", SourceDatasetId: "dataset_task_a"}}}}
 	reader := setupVerifyReader{gateway: fakeVerifyGateway{strategy: `{"instances":[]}`, factors: factors}, spaceID: "crypto", factorDeployed: true}
 	input, err := reader.read(context.Background(), map[string]int64{})
 	require.NoError(t, err)
@@ -250,8 +250,8 @@ func TestSetupVerifyReaderMatchesDatasetsByTaskResult(t *testing.T) {
 // 已完成或放行的、频率不同的都不算。全新安装时 crypto 两个 1m 数据集补 34 天要几小时，验收不能因此超时失败。
 func TestSetupVerifyReaderMarksSeedingFactors(t *testing.T) {
 	factors := &factorpb.ListFactorTasksRsp{FactorTasks: []*factorpb.FactorTaskInfo{
-		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_1m", SpaceId: "crypto", Freq: "1m", SourceDatasetId: "dataset_task_a"}},
-		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_5m", SpaceId: "crypto", Freq: "5m", SourceDatasetId: "dataset_task_a"}},
+		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_1m", SpaceId: "crypto", Frequency: "1m", SourceDatasetId: "dataset_task_a"}},
+		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_5m", SpaceId: "crypto", Frequency: "5m", SourceDatasetId: "dataset_task_a"}},
 	}}
 	seeds := []*collectorpb.HistorySeed{{DatasetId: "dataset_task_a", Frequency: "1m", Status: "running"}, {DatasetId: "dataset_task_a", Frequency: "5m", Status: "done"}}
 	reader := setupVerifyReader{gateway: fakeVerifyGateway{strategy: `{"instances":[]}`, factors: factors, seeds: seeds}, spaceID: "crypto", factorDeployed: true}

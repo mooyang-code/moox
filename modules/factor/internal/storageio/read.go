@@ -45,7 +45,7 @@ func (c *Client) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq st
 		selectors := make([]*storagepb.TimeSeriesSelector, 0, limit-offset)
 		for _, subject := range subjects[offset:limit] {
 			selectors = append(selectors, &storagepb.TimeSeriesSelector{
-				SubjectId: subject, Freq: freq,
+				SubjectId: subject, Frequency: freq,
 			})
 		}
 		rsp, callErr := c.primary.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
@@ -69,7 +69,7 @@ func (c *Client) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq st
 		row := rsp.GetRows()[0]
 		ts := row.GetKey().GetTimeSeries()
 		if row == nil || row.GetKey() == nil || ts == nil || row.GetKey().GetSpaceId() != spaceID ||
-			row.GetKey().GetDatasetId() != datasetID || ts.GetFreq() != freq {
+			row.GetKey().GetDatasetId() != datasetID || ts.GetFrequency() != freq {
 			return time.Time{}, false, fmt.Errorf("%w: earliest dataset period returned an invalid row identity", ErrInfra)
 		}
 		period, parseErr := time.Parse(time.RFC3339Nano, ts.GetDataTime())
@@ -123,7 +123,7 @@ func (c *Client) ReadWindow(ctx context.Context, req ReadRequest) (map[string]*F
 		selectors := make([]*storagepb.TimeSeriesSelector, 0, len(batch))
 		for _, subject := range batch {
 			selectors = append(selectors, &storagepb.TimeSeriesSelector{
-				SubjectId: subject, Freq: req.Freq,
+				SubjectId: subject, Frequency: req.Freq,
 			})
 		}
 		cursor := ""

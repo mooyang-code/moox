@@ -193,7 +193,7 @@ func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*p
 		SpaceID:      req.GetSpaceId(),
 		DataSourceID: req.GetDataSourceId(),
 		DataKind:     req.GetDataKind(),
-		Freq:         req.GetFreq(),
+		Freq:         req.GetFrequency(),
 		Status:       req.GetStatus(),
 		Page:         req.GetPage(),
 	}

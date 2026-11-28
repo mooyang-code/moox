@@ -28,7 +28,7 @@ const api = vi.hoisted(() => ({
       data_source_id: "binance",
       name: "现货 1m",
       data_kind: "DATA_KIND_TIME_SERIES",
-      freq: "1m",
+      frequency: "1m",
       status: "active",
       attributes: { owner_module: "collector", dataset_role: "raw_collection" }
     },
@@ -46,7 +46,7 @@ const api = vi.hoisted(() => ({
       data_source_id: "factor",
       name: "因子结果",
       data_kind: "DATA_KIND_TIME_SERIES",
-      freq: "1m",
+      frequency: "1m",
       status: "active",
       attributes: { owner_module: "factor", dataset_role: "factor_result" }
     }

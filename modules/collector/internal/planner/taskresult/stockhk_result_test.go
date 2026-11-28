@@ -37,7 +37,7 @@ func TestEnsureStockHKResultUsesTheTagQuoteSourceAndStockColumns(t *testing.T) {
 	})
 	require.Equal(t, "eastmoney", hk.GetDataSourceId())
 	require.Equal(t, []string{"hk_hsi"}, hk.GetSubjectTags())
-	require.Equal(t, "5m", hk.GetFreq())
+	require.Equal(t, "5m", hk.GetFrequency())
 	require.Equal(t, "equity", hk.GetAttributes()["market_type"])
 	require.Equal(t, "hk_stock", hk.GetAttributes()["calendar"])
 	require.Equal(t, "session", hk.GetAlignment())

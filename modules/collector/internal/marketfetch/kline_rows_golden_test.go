@@ -135,7 +135,7 @@ func dumpRows(title string, rows []*storagepb.Row) string {
 	for _, row := range rows {
 		series := row.GetKey().GetTimeSeries()
 		fmt.Fprintf(&out, "space=%s dataset=%s subject=%s freq=%s data_time=%s series_tag=%s\n",
-			row.GetKey().GetSpaceId(), row.GetKey().GetDatasetId(), series.GetSubjectId(), series.GetFreq(), series.GetDataTime(), series.GetSeriesTag())
+			row.GetKey().GetSpaceId(), row.GetKey().GetDatasetId(), series.GetSubjectId(), series.GetFrequency(), series.GetDataTime(), series.GetSeriesTag())
 		for _, field := range row.GetFields() {
 			switch value := field.GetValue().GetValue().(type) {
 			case *storagepb.TypedValue_DoubleValue:

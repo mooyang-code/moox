@@ -155,7 +155,7 @@ func freshnessSpec() *viewSpec {
 
 func viewFreshnessRow(subject, frequency, seriesTag, dataTime string) *pb.Row {
 	return &pb.Row{
-		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market_prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: frequency, SeriesTag: seriesTag, DataTime: dataTime}}},
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market_prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Frequency: frequency, SeriesTag: seriesTag, DataTime: dataTime}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}
 }
@@ -231,7 +231,7 @@ func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testi
 				SpaceId:   "space",
 				DatasetId: "market",
 				Selectors: []*pb.TimeSeriesSelector{{
-					SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: tc.tag,
+					SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: tc.tag,
 				}},
 			})
 			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -263,7 +263,7 @@ func TestQueryTimeSeriesRowsValidatesSelectors(t *testing.T) {
 		selector *pb.TimeSeriesSelector
 	}{
 		{name: "nil selector"},
-		{name: "missing subject", selector: &pb.TimeSeriesSelector{Freq: "1m"}},
+		{name: "missing subject", selector: &pb.TimeSeriesSelector{Frequency: "1m"}},
 		{name: "missing freq", selector: &pb.TimeSeriesSelector{SubjectId: "BTC-USDT"}},
 	}
 	for _, tc := range cases {
@@ -308,7 +308,7 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 			svc := queryTestService(engine, tc.active)
 			req := &pb.QueryTimeSeriesRowsReq{
 				SpaceId: "space", DatasetId: "market",
-				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 				TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 			}
 			if tc.noRange {
@@ -330,7 +330,7 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 	svc := queryTestService(&queryEngine{stats: validStats}, false)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market",
-		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
@@ -343,7 +343,7 @@ func TestQueryTimeSeriesRowsRejectsActiveIndexMismatchBeforeQuery(t *testing.T) 
 	svc := queryTestService(engine, true)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market", Pin: &pb.IndexVersion{IndexId: "prices-old"},
-		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
@@ -360,7 +360,7 @@ func TestQueryTimeSeriesRowsRejectsInPlaceRevisionMismatch(t *testing.T) {
 	svc.runtimeOf(marketRef).revision.Store(8)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market", Pin: &pb.IndexVersion{IndexId: marketIndexID, Revision: 6},
-		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
@@ -386,7 +386,7 @@ func TestQueryTimeSeriesRowsUsesRuntimeStatsForNoTotal(t *testing.T) {
 
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market", TotalMode: pb.TotalMode_NONE,
-		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -419,7 +419,7 @@ func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing
 
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market",
-		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -473,7 +473,7 @@ func TestQueryTimeSeriesRowsCoverageUsesHalfOpenNanosecondBoundary(t *testing.T)
 			svc := queryTestService(engine, true)
 			rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 				SpaceId: "space", DatasetId: "market",
-				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 				TimeRange: tc.rng,
 			})
 			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -505,7 +505,7 @@ func timeSeriesTestRowKey(tag string) *pb.RowKey {
 	return &pb.RowKey{
 		SpaceId: "space", DatasetId: "market",
 		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-29T00:00:00Z", SeriesTag: tag,
+			SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-07-29T00:00:00Z", SeriesTag: tag,
 		}},
 	}
 }
@@ -601,7 +601,7 @@ func TestQueryTimeSeriesRowsUsesMonotonicAtomicRevisionWithoutStatMetadata(t *te
 	req := func(pin *pb.IndexVersion) *pb.QueryTimeSeriesRowsReq {
 		return &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "space", DatasetId: "market", TotalMode: pb.TotalMode_NONE, Pin: pin,
-			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		}
 	}
 
@@ -712,7 +712,7 @@ func TestViewRevisionSeqlockWriteInProgressFailureAndSwitching(t *testing.T) {
 	queryReq := func() *pb.QueryTimeSeriesRowsReq {
 		return &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "space", DatasetId: "market", TotalMode: pb.TotalMode_NONE,
-			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		}
 	}
 	sampleBatch := viewindex.ViewIndexWriteBatch{
@@ -950,7 +950,7 @@ func TestViewRevisionSeqlockConcurrentReadWriteNeverReturnsTornSnapshot(t *testi
 	}
 	req := &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market", TotalMode: pb.TotalMode_NONE,
-		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 	}
 
 	const totalWrites = 300

@@ -303,7 +303,7 @@ func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, rou
 	fields = append(fields, extraFieldValues(bar.Extra)...)
 	return &storagepb.Row{
 		Key: &storagepb.RowKey{SpaceId: req.SpaceID, DatasetId: req.DatasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-			SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
+			SubjectId: bar.SubjectID, Frequency: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
 		}}},
 		Fields: fields,
 	}, nil

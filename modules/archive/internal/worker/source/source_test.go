@@ -112,7 +112,7 @@ func TestReadRangeConvertsRowsAndPassesTheCursorAndRange(t *testing.T) {
 	key := func(subject, at, series string) *storagepb.RowKey {
 		return &storagepb.RowKey{
 			SpaceId: "crypto", DatasetId: "ds",
-			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, DataTime: at, SeriesTag: series, Freq: "1m"}},
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, DataTime: at, SeriesTag: series, Frequency: "1m"}},
 		}
 	}
 	gw := &fakeGateway{reads: []*storagepb.ReadTimeSeriesRowsRsp{{

@@ -233,7 +233,7 @@ func (c datasetCleanup) run(ctx context.Context, now time.Time) error {
 }
 
 func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset, now time.Time) error {
-	period, _, err := c.retention.Resolve(dataset.GetSpaceId(), dataset.GetFreq())
+	period, _, err := c.retention.Resolve(dataset.GetSpaceId(), dataset.GetFrequency())
 	if err != nil {
 		return err
 	}
@@ -251,7 +251,7 @@ func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset,
 	elapsed := time.Since(started)
 	c.metrics.ObserveCleanup(dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff, elapsed, deleted)
 	tlog.Infof("storage cleanup space=%s dataset=%s freq=%s retention=%s cutoff=%s deleted_ranges=%d elapsed=%s",
-		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFreq(), period, cutoff.Format(time.RFC3339), deleted, elapsed.Round(time.Millisecond))
+		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFrequency(), period, cutoff.Format(time.RFC3339), deleted, elapsed.Round(time.Millisecond))
 	return nil
 }
 

@@ -135,9 +135,9 @@ message Dataset {
   string description = 5;
   // data_kind 是数据集的结构形态。
   DataKind data_kind = 6;
-  // freq 是时序 Dataset 的唯一频率，必须是规范值（见 packages/frequency），创建后不可修改；
+  // frequency 是时序 Dataset 的唯一频率，必须是规范值（见 packages/frequency），创建后不可修改；
   // 记录型 Dataset 可以为空或使用描述性取值。
-  string freq = 7;
+  string frequency = 7;
   // status 取值 active 或 disabled。
   string status = 8;
   // created_at 是创建时刻，Unix 毫秒。
@@ -146,7 +146,7 @@ message Dataset {
   int64 updated_at = 10;
   // attributes 是调用方自用的扩展属性，Storage 不解释。
   map<string, string> attributes = 11;
-  // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, freq) 解析，取值为 "<n>h" 或
+  // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, frequency) 解析，取值为 "<n>h" 或
   // "forever"；记录型 Dataset 为 "forever"。写接口忽略该字段。
   string retention = 18;
   // revision 是 Dataset 元数据的单调递增修订号，用于并发控制。
@@ -485,8 +485,8 @@ message ListDatasetsReq {
   string data_source_id = 3;
   // data_kind 是可选数据形态过滤条件。
   DataKind data_kind = 4;
-  // freq 是可选频率过滤条件。
-  string freq = 5;
+  // frequency 是可选频率过滤条件。
+  string frequency = 5;
   // page 是分页参数。
   common.Page page = 6;
   // status 是可选状态过滤条件：active 或 disabled。

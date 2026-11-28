@@ -185,14 +185,14 @@ describe("目录过滤、分页与取值", () => {
         dataset_id: "d",
         time_series: {
           subject_id: "BTC",
-          freq: "1m",
+          frequency: "1m",
           series_tag: undefined,
           data_time: "2026-10-24T10:00:00Z"
         }
       },
       ["boll__mid"]
     );
-    expect(req.selectors).toEqual([{ subject_id: "BTC", freq: "1m", series_tag: "" }]);
+    expect(req.selectors).toEqual([{ subject_id: "BTC", frequency: "1m", series_tag: "" }]);
     expect(req.time_range).toEqual({ start_time: "2026-10-24T10:00:00.000Z", end_time: "2026-10-24T10:00:00.001Z" });
     expect(req).toMatchObject({
       space_id: "crypto",

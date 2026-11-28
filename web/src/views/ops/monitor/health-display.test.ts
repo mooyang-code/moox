@@ -16,7 +16,7 @@ describe("health display", () => {
     });
     expect(alertLink({ type: "dataset", producer: "strategy" }).href).toBe("#/strategy/tasks");
     // 采集数据集的告警直达这个数据集的采集结果，并带上它所在的空间（打开前先切过去）
-    expect(alertLink({ type: "dataset", producer: "collector", dataset_id: "ds_5m", freq: "5m", space_id: "stockcn" })).toEqual({
+    expect(alertLink({ type: "dataset", producer: "collector", dataset_id: "ds_5m", frequency: "5m", space_id: "stockcn" })).toEqual({
       href: "#/collector/tasks?tab=results&dataset=ds_5m&freq=5m",
       label: "查看采集结果",
       spaceId: "stockcn"

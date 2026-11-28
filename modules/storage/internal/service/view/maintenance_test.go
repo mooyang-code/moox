@@ -258,7 +258,7 @@ func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 		t.Helper()
 		rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "space", DatasetId: "market",
-			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
+			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 {
 			t.Fatalf("rsp=%v err=%v", rsp, err)

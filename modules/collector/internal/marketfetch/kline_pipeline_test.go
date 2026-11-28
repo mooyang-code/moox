@@ -584,7 +584,7 @@ func TestKlinePipelineAcceptsCryptoHourFrequency(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.Status)
 	require.Len(t, storage.rows, 1)
-	require.Equal(t, "1h", storage.rows[0].GetKey().GetTimeSeries().GetFreq())
+	require.Equal(t, "1h", storage.rows[0].GetKey().GetTimeSeries().GetFrequency())
 }
 
 func TestRequestKlineRouteIDUsesCryptoFrequency(t *testing.T) {

@@ -90,7 +90,7 @@ func (v *viewSpec) engineName() string {
 func newViewSpec(dataset *pb.Dataset, columns []*pb.DatasetColumn) *viewSpec {
 	spec := &viewSpec{
 		SpaceID: dataset.GetSpaceId(), DatasetID: dataset.GetDatasetId(), DataKind: dataset.GetDataKind(),
-		Freq: dataset.GetFreq(), Status: dataset.GetStatus(), MaintenancePriority: dataset.GetMaintenancePriority(),
+		Freq: dataset.GetFrequency(), Status: dataset.GetStatus(), MaintenancePriority: dataset.GetMaintenancePriority(),
 		CreatedAt: dataset.GetCreatedAt(), DisplayNames: make(map[string]string, len(columns)),
 	}
 	for _, column := range columns {

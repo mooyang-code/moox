@@ -62,7 +62,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 
 func rowKey(spaceID, datasetID, subjectID, frequency string, at time.Time, seriesTag string) *storagepb.RowKey {
 	return &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-		SubjectId: subjectID, Freq: frequency, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
+		SubjectId: subjectID, Frequency: frequency, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
 	}}}
 }
 
@@ -126,7 +126,7 @@ func decodeSourceBar(row *storagepb.Row, rules []FieldRule) (SourceBar, error) {
 		SpaceID:   row.GetKey().GetSpaceId(),
 		DatasetID: row.GetKey().GetDatasetId(),
 		SubjectID: k.GetSubjectId(),
-		Frequency: k.GetFreq(),
+		Frequency: k.GetFrequency(),
 		DataTime:  at.UTC(),
 		SeriesTag: k.GetSeriesTag(),
 		Values:    values,

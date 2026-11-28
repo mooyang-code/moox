@@ -87,7 +87,7 @@ func TestQueryRowsConcatenatesPagesAndConvertsValues(t *testing.T) {
 	if _, ok := rows[2].Values["close"]; ok {
 		t.Fatalf("无法解析的值应视为缺失：%+v", rows[2])
 	}
-	if got := stub.requests[0].GetSelectors(); len(got) != 2 || stub.requests[0].GetDatasetId() != "ds" || got[0].GetSeriesTag() != "venue:binance" || got[0].GetFreq() != "1h" {
+	if got := stub.requests[0].GetSelectors(); len(got) != 2 || stub.requests[0].GetDatasetId() != "ds" || got[0].GetSeriesTag() != "venue:binance" || got[0].GetFrequency() != "1h" {
 		t.Fatalf("选择器不符：%+v", got)
 	}
 	if len(stub.requests[0].GetColumnNames()) != 1 {

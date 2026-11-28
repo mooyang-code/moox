@@ -117,7 +117,7 @@ describe("ViewBrowse 扩展点", () => {
             dataset_id: "dataset-factor",
             time_series: {
               subject_id: "BTC",
-              freq: "1m",
+              frequency: "1m",
               series_tag: "",
               data_time: "t1"
             }
@@ -221,7 +221,7 @@ describe("ViewBrowse 扩展点", () => {
       dataset_id: "dataset-factor",
       time_series: {
         subject_id: "BTC",
-        freq: "1m",
+        frequency: "1m",
         series_tag: "",
         data_time: "t1"
       }

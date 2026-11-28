@@ -502,7 +502,7 @@ func physicalRowKeyID(key *pb.RowKey) string {
 		// Length-prefix every component instead of joining with a delimiter.
 		// User-controlled subject/frequency/tag values may contain any byte
 		// sequence accepted by the protobuf contract, including NUL.
-		return encodePhysicalKeyParts(series.GetSubjectId(), series.GetFreq(), dataTime, series.GetSeriesTag())
+		return encodePhysicalKeyParts(series.GetSubjectId(), series.GetFrequency(), dataTime, series.GetSeriesTag())
 	}
 	return viewindex.RowKeyID(key)
 }
@@ -591,7 +591,7 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 		values[field.GetFieldId()] = value
 	}
 	args := make([]any, 0, len(names))
-	args = append(args, key.GetSubjectId(), key.GetFreq(), when, key.GetSeriesTag())
+	args = append(args, key.GetSubjectId(), key.GetFrequency(), when, key.GetSeriesTag())
 	for _, name := range names[4:] {
 		args = append(args, values[name])
 	}
@@ -733,7 +733,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		if err != nil {
 			return nil, err
 		}
-		row := &pb.Row{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Freq: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
+		row := &pb.Row{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Frequency: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
 		for index, name := range selectColumns[4:] {
 			value := values[index+4]
 			if value == nil {
@@ -1398,7 +1398,7 @@ func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) 
 				return whereClause{}, nil, err
 			}
 			keys = append(keys, "(subject_id = ? AND freq = ? AND data_time = ? AND series_tag = ?)")
-			args = append(args, row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag())
+			args = append(args, row.GetSubjectId(), row.GetFrequency(), when, row.GetSeriesTag())
 		}
 		parts = append(parts, "("+strings.Join(keys, " OR ")+")")
 	}
@@ -1450,16 +1450,16 @@ func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) 
 			args = append(args,
 				when,
 				when, row.GetSubjectId(),
-				when, row.GetSubjectId(), row.GetFreq(),
-				when, row.GetSubjectId(), row.GetFreq(), row.GetSeriesTag(),
+				when, row.GetSubjectId(), row.GetFrequency(),
+				when, row.GetSubjectId(), row.GetFrequency(), row.GetSeriesTag(),
 			)
 		} else {
 			parts = append(parts, "(subject_id > ? OR (subject_id = ? AND freq > ?) OR (subject_id = ? AND freq = ? AND data_time > ?) OR (subject_id = ? AND freq = ? AND data_time = ? AND series_tag > ?))")
 			args = append(args,
 				row.GetSubjectId(),
-				row.GetSubjectId(), row.GetFreq(),
-				row.GetSubjectId(), row.GetFreq(), when,
-				row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag(),
+				row.GetSubjectId(), row.GetFrequency(),
+				row.GetSubjectId(), row.GetFrequency(), when,
+				row.GetSubjectId(), row.GetFrequency(), when, row.GetSeriesTag(),
 			)
 		}
 	}

@@ -154,7 +154,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if a.GetPartitionUnit() != "day" && a.GetPartitionUnit() != "month" {
 		return nil, fmt.Errorf("run %s has invalid partition unit %q", a.GetRunId(), a.GetPartitionUnit())
 	}
-	span, err := schedule.BarSpan(a.GetFreq())
+	span, err := schedule.BarSpan(a.GetFrequency())
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +281,7 @@ func (s *runState) prepareTable(ctx context.Context) error {
 		return err
 	}
 	if err := r.Files.WriteDatasetJSON(r.Files.BuildDatasetMeta(export.DatasetMetaInput{
-		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Purpose: a.GetPurpose(), DirName: a.GetDirName(), Freq: a.GetFreq(), PartitionUnit: a.GetPartitionUnit(),
+		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Purpose: a.GetPurpose(), DirName: a.GetDirName(), Freq: a.GetFrequency(), PartitionUnit: a.GetPartitionUnit(),
 		Timezone: a.GetSpaceTz(), DatasetJSON: a.GetDatasetMetaJson(), Columns: columns, Infos: r.columnMetas(a.GetSpaceId(), a.GetDatasetId()),
 	}, r.now())); err != nil {
 		return fmt.Errorf("写 dataset.json 失败: %w", err)
@@ -414,7 +414,7 @@ func (s *runState) readChunk(ctx context.Context, start, end time.Time, subjects
 		}
 		page, err := s.readPage(ctx, source.Range{
 			SpaceID: s.a.GetSpaceId(), DatasetID: s.a.GetDatasetId(), Columns: s.task.Columns, Start: start, End: end,
-			Subjects: subjects, Freq: s.a.GetFreq(), Cursor: cursor, PageRows: pageRows,
+			Subjects: subjects, Freq: s.a.GetFrequency(), Cursor: cursor, PageRows: pageRows,
 		})
 		if err != nil {
 			return err
@@ -511,7 +511,7 @@ func (s *runState) stage(ctx context.Context, rows []staging.Row) (staging.Stage
 
 // closeAt 返回分区的收盘时间。
 func (s *runState) closeAt(p staging.PartitionState) (time.Time, error) {
-	return schedule.PartitionClose(s.unit, s.loc, s.a.GetLocalClose(), s.a.GetFreq(), p.Start, p.End)
+	return schedule.PartitionClose(s.unit, s.loc, s.a.GetLocalClose(), s.a.GetFrequency(), p.Start, p.End)
 }
 
 // exportDue 导出所有到时间且需要导出的分区：运行开始 ≥ 分区收盘时间 + 允许迟到。

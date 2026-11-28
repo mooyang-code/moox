@@ -80,7 +80,7 @@ function collectorDatasetLink(object: HealthObject): AlertLink {
   const query = new URLSearchParams({
     tab: "results",
     dataset: object.dataset_id,
-    ...(object.freq ? { freq: object.freq } : {})
+    ...(object.frequency ? { freq: object.frequency } : {})
   });
   return { href: `#/collector/tasks?${query}`, label: "查看采集结果", ...(object.space_id ? { spaceId: object.space_id } : {}) };
 }

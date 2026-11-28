@@ -26,7 +26,7 @@ func appendRelayTestMarker(t *testing.T, store *Store, cause string) string {
 func upsertRelayTestRow(t *testing.T, store *Store, minute int) {
 	t.Helper()
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC-USDT", Freq: "1m", DataTime: fmt.Sprintf("2026-08-16T00:%02d:00Z", minute),
+		SubjectId: "BTC-USDT", Frequency: "1m", DataTime: fmt.Sprintf("2026-08-16T00:%02d:00Z", minute),
 	}}}
 	row := &pb.Row{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
 	require.NoError(t, store.UpsertFields(context.Background(), "s", "d", []*pb.Row{row}))

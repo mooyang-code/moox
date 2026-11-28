@@ -339,7 +339,7 @@ func requireViewRows(t *testing.T, ctx context.Context, env readyBenchEnv, datas
 func readyBenchRow(dataset readyBenchDataset, subject string, at time.Time, round int) *pb.Row {
 	return &pb.Row{
 		Key: &pb.RowKey{SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: subject, SeriesTag: "default", Freq: readyBenchFreq, DataTime: at.UTC().Format(time.RFC3339Nano),
+			SubjectId: subject, SeriesTag: "default", Frequency: readyBenchFreq, DataTime: at.UTC().Format(time.RFC3339Nano),
 		}}},
 		Fields: readyBenchFields(dataset.columns, at, round),
 	}

@@ -31,7 +31,7 @@ func (s *Service) taskRequirement(ctx context.Context, strategy dsl.Strategy) *s
 		}
 	}
 	for _, source := range strategy.Sources {
-		requirement.Sources = append(requirement.Sources, &strategypb.StrategySourceRequirement{Name: source.Name, Bar: source.Bar})
+		requirement.Sources = append(requirement.Sources, &strategypb.StrategySourceRequirement{Name: source.Name, Frequency: source.Bar})
 	}
 	var markets []string
 	if strategy.IsPool() {

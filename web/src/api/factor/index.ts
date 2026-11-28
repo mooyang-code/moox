@@ -28,7 +28,7 @@ import type {
   SetTaskMemberStatusResult
 } from "./types";
 
-export type CreateFactorTaskInput = Pick<FactorTask, "space_id" | "source_dataset_id" | "freq" | "name"> &
+export type CreateFactorTaskInput = Pick<FactorTask, "space_id" | "source_dataset_id" | "frequency" | "name"> &
   Partial<Pick<FactorTask, "task_id" | "result_dataset_id" | "status">>;
 
 export async function createFactorTask(factorTask: CreateFactorTaskInput) {

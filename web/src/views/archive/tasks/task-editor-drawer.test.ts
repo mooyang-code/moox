@@ -19,7 +19,7 @@ Object.defineProperty(window, "matchMedia", {
 const EARLIEST = "2026-10-04T00:00:00Z";
 const task = (over: Partial<ArchiveTask> = {}): ArchiveTask => ({
   dataset_id: "ds_1m",
-  freq: "1m",
+  frequency: "1m",
   retention: "840h",
   status: "enabled",
   backfill_from: "2026-10-01T00:00:00Z",
@@ -29,7 +29,7 @@ const task = (over: Partial<ArchiveTask> = {}): ArchiveTask => ({
 
 let wrapper: VueWrapper;
 beforeEach(() => {
-  api.prepareArchiveTask.mockReset().mockResolvedValue({ freq: "1m", retention: "840h", earliest_backfill_from: EARLIEST });
+  api.prepareArchiveTask.mockReset().mockResolvedValue({ frequency: "1m", retention: "840h", earliest_backfill_from: EARLIEST });
   api.updateArchiveTask.mockClear();
 });
 afterEach(() => {
@@ -72,9 +72,9 @@ describe("编辑归档任务", () => {
 });
 
 describe("新建时的回补起点", () => {
-  const datasets = [{ dataset_id: "ds_1m", name: "现货分钟K线", freq: "1m", retention: "840h" }];
+  const datasets = [{ dataset_id: "ds_1m", name: "现货分钟K线", frequency: "1m", retention: "840h" }];
   const prepared = {
-    freq: "1m",
+    frequency: "1m",
     partition_unit: "day",
     purpose: "collect",
     suggested_dir_name: "binance-spot-kline-1m",
@@ -107,9 +107,9 @@ describe("新建时的回补起点", () => {
 });
 
 describe("新建时的目录名", () => {
-  const datasets = [{ dataset_id: "ds_1m", name: "现货分钟K线", freq: "1m", retention: "840h" }];
+  const datasets = [{ dataset_id: "ds_1m", name: "现货分钟K线", frequency: "1m", retention: "840h" }];
   const prepared = {
-    freq: "1m",
+    frequency: "1m",
     partition_unit: "day",
     purpose: "collect",
     suggested_dir_name: "binance-spot-kline-1m",

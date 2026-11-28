@@ -184,7 +184,7 @@ export function useViewKline(options: UseViewKlineOptions) {
     }
     return timeSeriesRowsToTableRows(rows).map((row, index) => ({
       ...row,
-      freq: rows[index]?.key?.time_series?.freq || "-",
+      freq: rows[index]?.key?.time_series?.frequency || "-",
       seriesTag: rows[index]?.key?.time_series?.series_tag || "",
       rawKey: rows[index]?.key
     }));

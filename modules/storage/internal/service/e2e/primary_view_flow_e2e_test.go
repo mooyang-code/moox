@@ -69,7 +69,7 @@ func newPrimaryViewEnv(t *testing.T, datasets []readyBenchDataset) *followEnv {
 				rsp, err := metadataService.UpsertDataset(ctx, &pb.UpsertDatasetReq{
 					Dataset: &pb.Dataset{
 						SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Name: fmt.Sprintf("压测数据%d", i),
-						DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: readyBenchFreq,
+						DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: readyBenchFreq,
 						AllowedLatenessSeconds: uint32(readyBenchLatenessSeconds),
 					},
 					Columns: columns,

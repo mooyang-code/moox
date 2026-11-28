@@ -145,7 +145,7 @@ func changeRanges(rows []*pb.Row) []*pb.DatasetChangeRange {
 			continue
 		}
 		// 行键已经规范化成固定宽度的 UTC 时间串，字符串比较与时间比较一致。
-		k := key{subject: ts.GetSubjectId(), freq: ts.GetFreq()}
+		k := key{subject: ts.GetSubjectId(), freq: ts.GetFrequency()}
 		at := ts.GetDataTime()
 		if cur := spans[k]; cur == nil {
 			spans[k] = &span{lo: at, hi: at}
@@ -171,7 +171,7 @@ func changeRanges(rows []*pb.Row) []*pb.DatasetChangeRange {
 	out := make([]*pb.DatasetChangeRange, 0, len(keys))
 	for _, k := range keys {
 		sp := spans[k]
-		out = append(out, &pb.DatasetChangeRange{SubjectId: k.subject, Freq: k.freq, StartTime: canonicalToRFC3339Nano(sp.lo), EndTime: canonicalToRFC3339Nano(sp.hi)})
+		out = append(out, &pb.DatasetChangeRange{SubjectId: k.subject, Frequency: k.freq, StartTime: canonicalToRFC3339Nano(sp.lo), EndTime: canonicalToRFC3339Nano(sp.hi)})
 	}
 	return out
 }

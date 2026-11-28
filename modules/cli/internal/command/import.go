@@ -137,8 +137,8 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 		if dataset == nil {
 			return fmt.Errorf("dataset %s/%s not found", opts.Space, opts.Dataset)
 		}
-		if dataset.GetFreq() != "" && dataset.GetFreq() != opts.Freq {
-			return fmt.Errorf("dataset %s freq is %s, not %s", opts.Dataset, dataset.GetFreq(), opts.Freq)
+		if dataset.GetFrequency() != "" && dataset.GetFrequency() != opts.Freq {
+			return fmt.Errorf("dataset %s freq is %s, not %s", opts.Dataset, dataset.GetFrequency(), opts.Freq)
 		}
 		columns, err := metaClient.ListDatasetColumns(ctx, opts.Space, opts.Dataset)
 		if err != nil {
@@ -465,7 +465,7 @@ func importUpserts(c runner.Chunk, types map[string]pb.FieldValueType) ([]*pb.Ro
 		}
 		rows = append(rows, &pb.Row{
 			Key: &pb.RowKey{SpaceId: c.Space, DatasetId: c.Dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: subject, Freq: c.Freq, DataTime: c.Batch.Times[i].UTC().Format(time.RFC3339Nano), SeriesTag: c.Batch.Tags[i],
+				SubjectId: subject, Frequency: c.Freq, DataTime: c.Batch.Times[i].UTC().Format(time.RFC3339Nano), SeriesTag: c.Batch.Tags[i],
 			}}},
 			Fields: values,
 		})

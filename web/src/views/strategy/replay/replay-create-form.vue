@@ -54,7 +54,7 @@
           :placeholder="`选择${marketLabel(market)}计算任务`"
         >
           <a-option v-for="task in taskChoices(market)" :key="task.task_id" :value="task.task_id"
-            >{{ task.name || task.task_id }}（{{ task.task_id }} · {{ task.freq || "无周期" }}）</a-option
+            >{{ task.name || task.task_id }}（{{ task.task_id }} · {{ task.frequency || "无周期" }}）</a-option
           >
         </a-select>
         <template v-if="market === markets[0]" #extra

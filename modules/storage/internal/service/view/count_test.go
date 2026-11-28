@@ -25,8 +25,8 @@ func TestCountTimeSeriesRowsCountsTheActiveIndex(t *testing.T) {
 	svc := queryTestService(engine, true)
 	timeRange := &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T01:00:00Z"}
 	selectors := []*pb.TimeSeriesSelector{
-		{SubjectId: "BTC-USDT", Freq: "1m"},
-		{SubjectId: "ETH-USDT", Freq: "1m"},
+		{SubjectId: "BTC-USDT", Frequency: "1m"},
+		{SubjectId: "ETH-USDT", Frequency: "1m"},
 	}
 	rsp, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesViewRowsReq{SpaceId: "space", DatasetId: "market", Selectors: selectors, TimeRange: timeRange})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {

@@ -59,7 +59,7 @@ Object.defineProperty(window, "matchMedia", {
 
 const task = (over: Partial<ArchiveTask> = {}): ArchiveTask => ({
   dataset_id: "ds_1m",
-  freq: "1m",
+  frequency: "1m",
   retention: "840h",
   status: "enabled",
   last_success_at: String(Date.parse("2026-11-07T04:41:25Z")),

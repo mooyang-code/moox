@@ -10,7 +10,7 @@ import "common.proto";
 // TimeSeriesRowKey 标识一行时序数据。series_tag 为空表示该标的与频率下的默认序列。
 message TimeSeriesRowKey {
   string subject_id = 1;
-  string freq = 2;
+  string frequency = 2;
   string data_time = 3;
   string series_tag = 4;
 }
@@ -52,7 +52,7 @@ message Row {
 // series_tag 为 optional：未设置表示匹配该标的与频率下的全部序列，显式设为空串表示只要默认序列。
 message TimeSeriesSelector {
   string subject_id = 1;
-  string freq = 2;
+  string frequency = 2;
   optional string series_tag = 3;
 }
 
@@ -63,7 +63,7 @@ message TimeSeriesSelector {
 message ReadTimeSeriesRowsReq {
   string space_id = 2;
   string dataset_id = 3;
-  // selectors 最多 100 个；每个带 subject_id 与 freq，series_tag 可选（不带表示该标的全部序列）。
+  // selectors 最多 100 个；每个带 subject_id 与 frequency，series_tag 可选（不带表示该标的全部序列）。
   repeated TimeSeriesSelector selectors = 4;
   // column_names 必填，返回这些列的值。
   repeated string column_names = 5;
@@ -80,7 +80,7 @@ message ReadTimeSeriesRowsReq {
 message CountTimeSeriesRowsReq {
   string space_id = 2;
   string dataset_id = 3;
-  // selectors 需要 subject_id 与 freq，同一请求属于同一数据集。
+  // selectors 需要 subject_id 与 frequency，同一请求属于同一数据集。
   repeated TimeSeriesSelector selectors = 4;
   TimeRange time_range = 5;
 }
@@ -107,7 +107,7 @@ message DatasetChangeCursor {
 // DatasetChangeRange 是一个时间序列标的在一次写入里受影响的时间点范围（含两端，RFC3339Nano UTC）。
 message DatasetChangeRange {
   string subject_id = 1;
-  string freq = 2;
+  string frequency = 2;
   string start_time = 3;
   string end_time = 4;
 }

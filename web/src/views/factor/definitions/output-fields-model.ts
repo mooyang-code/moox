@@ -112,7 +112,7 @@ export function expandFactorOutputFields(
           task_id: task.task_id,
           task_label: taskLabel,
           task_status: task.status,
-          freq: task.freq,
+          freq: task.frequency,
           result_dataset_id: task.result_dataset_id,
           input_columns: factor?.input_columns || [],
           lookback_periods: factor?.lookback_periods ?? 0

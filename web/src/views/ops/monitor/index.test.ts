@@ -123,7 +123,7 @@ describe("monitor page", () => {
       severity: "warning",
       title: id,
       triggered_at: ms("2026-10-16T02:58:20Z"),
-      object: { type: "dataset" as const, producer: "collector", dataset_id: `ds_${id}`, freq: "5m", space_id }
+      object: { type: "dataset" as const, producer: "collector", dataset_id: `ds_${id}`, frequency: "5m", space_id }
     });
     const page = render({ ...healthy, alerts: [alert("a", "stockcn"), alert("b", "crypto")] });
     await flushPromises();
@@ -236,7 +236,7 @@ describe("monitor page", () => {
           id: "storage",
           status: "healthy",
           datasets: [
-            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", freq: "1m", status: "healthy", timezone: "UTC" }
+            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", frequency: "1m", status: "healthy", timezone: "UTC" }
           ]
         }
       ]
@@ -308,7 +308,7 @@ describe("monitor page", () => {
               producer: "storage",
               space_id: "crypto",
               dataset_id: "dataset_abc",
-              freq: "1m",
+              frequency: "1m",
               status: "stale",
               reason: "最近成功结果已过期",
               output_watermark_at: "2026-10-16T02:40:00Z",
@@ -323,7 +323,7 @@ describe("monitor page", () => {
               producer: "storage",
               space_id: "crypto",
               dataset_id: "dataset_def",
-              freq: "1h",
+              frequency: "1h",
               status: "healthy",
               output_watermark_at: "2026-10-16T01:00:00Z",
               latest_bar_close_at: ms("2026-10-16T02:00:00Z"),
@@ -361,7 +361,7 @@ describe("monitor page", () => {
           id: "storage",
           status: "healthy",
           datasets: [
-            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", freq: "1m", status: "healthy", timezone: "UTC" }
+            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", frequency: "1m", status: "healthy", timezone: "UTC" }
           ]
         }
       ]
@@ -376,7 +376,7 @@ describe("monitor page", () => {
     expect(mockedCallControl).toHaveBeenCalledWith(
       "monitor",
       "QueryPipelineArrivalHistory",
-      expect.objectContaining({ space_id: "crypto", dataset_id: "dataset_abc", freq: "1m" })
+      expect.objectContaining({ space_id: "crypto", dataset_id: "dataset_abc", frequency: "1m" })
     );
     await page.findAll(".view-toggle button")[0].trigger("click");
     expect(page.find(".arrival-chart").exists()).toBe(false);

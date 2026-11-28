@@ -88,7 +88,7 @@ func goldenRegister(t *testing.T, store *Store, clock *goldenClock, spaceID, dat
 func goldenRow(spaceID, datasetID, frequency string, series seriesset.Series, at time.Time, value float64) *pb.Row {
 	return &pb.Row{
 		Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: series.SubjectID, SeriesTag: series.SeriesTag, Freq: frequency, DataTime: at.UTC().Format(time.RFC3339Nano),
+			SubjectId: series.SubjectID, SeriesTag: series.SeriesTag, Frequency: frequency, DataTime: at.UTC().Format(time.RFC3339Nano),
 		}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}},
 	}

@@ -25,14 +25,14 @@ func openReadStore(t *testing.T) *Store {
 func tsRow(subject, tag string, at time.Time, close float64) *pb.Row {
 	return &pb.Row{
 		Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: subject, Freq: "1m", DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: tag,
+			SubjectId: subject, Frequency: "1m", DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: tag,
 		}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: close}}}},
 	}
 }
 
 func sel(subject string) *pb.TimeSeriesSelector {
-	return &pb.TimeSeriesSelector{SubjectId: subject, Freq: "1m"}
+	return &pb.TimeSeriesSelector{SubjectId: subject, Frequency: "1m"}
 }
 
 func selTag(subject, tag string) *pb.TimeSeriesSelector {
@@ -192,7 +192,7 @@ func TestRangeReadRejectsInvalidShapes(t *testing.T) {
 		"inverted range": func(r *pb.ReadTimeSeriesRowsReq) {
 			r.TimeRange.StartTime, r.TimeRange.EndTime = r.TimeRange.EndTime, r.TimeRange.StartTime
 		},
-		"selector no subj": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = []*pb.TimeSeriesSelector{{Freq: "1m"}} },
+		"selector no subj": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = []*pb.TimeSeriesSelector{{Frequency: "1m"}} },
 	}
 	for name, mutate := range cases {
 		req := base()

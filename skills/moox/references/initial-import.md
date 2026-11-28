@@ -160,7 +160,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 
   退出码非零或有“行数不一致 / 读取失败”的标的就停下汇报（读取失败多半是 Storage 忙，稍后重跑脚本即可）。
 - **因子机本地**：每个标的本地最早一根等于 `manifest.json` 的 `first_utc`；因子机同步器接上之后本地最晚一根等于 Storage 最晚一根；
-  `[文件末根, 现在]` 内没有填充行（有说明缺口没补全）。本地边界用引擎接口：`moox-cli gateway call trpc.moox.factor.EngineControl GetSeriesBounds --file ./moox.toml --data '{"space_id":"…","dataset_id":"…","freq":"…","subject_id":"…"}'`。
+  `[文件末根, 现在]` 内没有填充行（有说明缺口没补全）。本地边界用引擎接口：`moox-cli gateway call trpc.moox.factor.EngineControl GetSeriesBounds --file ./moox.toml --data '{"space_id":"…","dataset_id":"…","frequency":"…","subject_id":"…"}'`。
 
 ## 10. 解除屏蔽
 

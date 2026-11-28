@@ -27,7 +27,7 @@ func TestStrategyTaskRequirement(t *testing.T) {
 	if !got.GetMarketDeclared() || got.GetPool() || keys(got) != "spot,swap,daily:spot,daily:swap" || len(got.GetProblems()) != 0 {
 		t.Fatalf("双市场带来源：%+v", got)
 	}
-	if !reflect.DeepEqual(got.GetSources(), []*strategypb.StrategySourceRequirement{{Name: "daily", Bar: "1d"}}) {
+	if !reflect.DeepEqual(got.GetSources(), []*strategypb.StrategySourceRequirement{{Name: "daily", Frequency: "1d"}}) {
 		t.Fatalf("来源：%+v", got.GetSources())
 	}
 	reference := "name: r\nbar: 1h\nmarket: {select: swap, reference: [spot]}\nuniverse: {min_age_bars: 3, age_markets: all}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n"

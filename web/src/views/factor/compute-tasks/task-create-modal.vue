@@ -53,7 +53,7 @@ const form = reactive({ source_dataset_id: "", name: "" });
 const nameError = computed(() => (form.name ? validateTaskName(form.name) : ""));
 
 // A Dataset has exactly one frequency, so the factor task takes the source's. 任务的标的就是源数据集当前的标的。
-const sourceFreq = computed(() => sourceDatasets.value.find(item => item.dataset_id === form.source_dataset_id)?.freq || "");
+const sourceFreq = computed(() => sourceDatasets.value.find(item => item.dataset_id === form.source_dataset_id)?.frequency || "");
 
 async function loadSourceDatasets(spaceId: string) {
   const items: Dataset[] = [];
@@ -66,7 +66,7 @@ async function loadSourceDatasets(spaceId: string) {
     item =>
       item.status === "active" &&
       isTimeSeriesDataKind(item.data_kind) &&
-      Boolean(item.freq) &&
+      Boolean(item.frequency) &&
       item.attributes?.dataset_role !== "factor_result"
   );
 }
@@ -109,7 +109,7 @@ async function submit() {
     const created = await createFactorTask({
       space_id: spaceId,
       source_dataset_id: form.source_dataset_id,
-      freq: sourceFreq.value,
+      frequency: sourceFreq.value,
       name: form.name
     });
     if (stale()) {

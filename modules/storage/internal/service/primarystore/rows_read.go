@@ -33,7 +33,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	if err := validateSelectorFreqs(req.GetSelectors(), dataset.GetFreq()); err != nil {
+	if err := validateSelectorFreqs(req.GetSelectors(), dataset.GetFrequency()); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	rsp, err := s.store.ReadTimeSeriesRows(ctx, req)
@@ -62,7 +62,7 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 	if err != nil {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	if err := validateSelectorFreqs(req.GetSelectors(), dataset.GetFreq()); err != nil {
+	if err := validateSelectorFreqs(req.GetSelectors(), dataset.GetFrequency()); err != nil {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	counts, err := s.store.CountTimeSeriesRows(ctx, req)
@@ -135,7 +135,7 @@ func validateSelectors(selectors []*pb.TimeSeriesSelector, limit int, required b
 		return fmt.Errorf("selectors exceed the limit of %d", limit)
 	}
 	for _, selector := range selectors {
-		if selector == nil || selector.GetSubjectId() == "" || selector.GetFreq() == "" {
+		if selector == nil || selector.GetSubjectId() == "" || selector.GetFrequency() == "" {
 			return errors.New("selector subject_id and freq are required")
 		}
 	}
@@ -147,8 +147,8 @@ func validateSelectorFreqs(selectors []*pb.TimeSeriesSelector, freq string) erro
 		return nil
 	}
 	for _, selector := range selectors {
-		if selector.GetFreq() != freq {
-			return fmt.Errorf("selector freq %q does not match the dataset frequency %q", selector.GetFreq(), freq)
+		if selector.GetFrequency() != freq {
+			return fmt.Errorf("selector freq %q does not match the dataset frequency %q", selector.GetFrequency(), freq)
 		}
 	}
 	return nil

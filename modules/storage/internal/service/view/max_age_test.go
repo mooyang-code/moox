@@ -15,7 +15,7 @@ var maxAgeNow = time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
 func maxAgeWrite(space, dataset, freq string, dataTime time.Time) viewindex.RowWrite {
 	return viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{
 		SpaceId: space, DatasetId: dataset,
-		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC", Freq: freq, DataTime: dataTime.Format(time.RFC3339Nano)}},
+		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC", Frequency: freq, DataTime: dataTime.Format(time.RFC3339Nano)}},
 	}}}
 }
 
@@ -54,7 +54,7 @@ func TestDropExpiredWritesBoundaryAndFrequencies(t *testing.T) {
 		t.Fatalf("保留 %d 行，期望 6", len(kept))
 	}
 	for _, write := range kept {
-		if ts := write.Key.Key.GetTimeSeries(); ts != nil && ts.GetFreq() == "1m" && ts.GetDataTime() == maxAgeNow.Add(-8*24*time.Hour).Format(time.RFC3339Nano) {
+		if ts := write.Key.Key.GetTimeSeries(); ts != nil && ts.GetFrequency() == "1m" && ts.GetDataTime() == maxAgeNow.Add(-8*24*time.Hour).Format(time.RFC3339Nano) {
 			t.Fatalf("超期的 1m 行被保留: %v", write.Key.Key)
 		}
 	}

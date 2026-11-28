@@ -212,14 +212,14 @@ const rows = computed(() =>
     info,
     label: store.taskLabel(info.factor_task),
     sourceName: store.datasetNames[info.factor_task.source_dataset_id] || info.factor_task.source_dataset_id,
-    freq: info.factor_task.freq,
+    freq: info.factor_task.frequency,
     boundInstance: info.factor_task.bound_instance_id || "",
     members: memberCountText(info),
     statusTag: taskStatusTag(info.factor_task.status),
     action: taskActionKind(info.factor_task),
     remove: deleteState(info),
     lastPeriod: info.last_run?.last_period_time ? formatPeriod(info.last_run.last_period_time, displayZone.value) : "-",
-    lag: barLagText(info.factor_task.freq, info.last_run)
+    lag: barLagText(info.factor_task.frequency, info.last_run)
   }))
 );
 
@@ -286,7 +286,7 @@ function retryActivation(set: FactorTask) {
         name: set.name,
         space_id: set.space_id,
         source_dataset_id: set.source_dataset_id,
-        freq: set.freq,
+        frequency: set.frequency,
         result_dataset_id: set.result_dataset_id
       }),
     "已重新提交激活",

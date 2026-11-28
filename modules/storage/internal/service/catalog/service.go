@@ -70,7 +70,7 @@ func (s *Service) datasetRetention(dataset *pb.Dataset) (string, string) {
 	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return storagepolicy.Forever, storagepolicy.SourceRecord
 	}
-	period, source, err := s.retention.Resolve(dataset.GetSpaceId(), dataset.GetFreq())
+	period, source, err := s.retention.Resolve(dataset.GetSpaceId(), dataset.GetFrequency())
 	if err != nil {
 		return "", ""
 	}

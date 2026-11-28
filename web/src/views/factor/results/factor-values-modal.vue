@@ -117,7 +117,7 @@ const title = computed(() => {
   if (!ts) return "因子值";
   const parts = [
     ts.subject_id,
-    ts.freq,
+    ts.frequency,
     ts.series_tag || "默认序列",
     ts.data_time ? formatInstant(ts.data_time, displayZone.value) : ""
   ];

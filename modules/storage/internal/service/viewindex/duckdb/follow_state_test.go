@@ -15,7 +15,7 @@ import (
 func testRow(subject string, at time.Time, value float64) viewindex.RowWrite {
 	return viewindex.RowWrite{
 		Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: subject, Freq: "1m", DataTime: at.Format(time.RFC3339), SeriesTag: "venue:x",
+			SubjectId: subject, Frequency: "1m", DataTime: at.Format(time.RFC3339), SeriesTag: "venue:x",
 		}}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}},
 	}

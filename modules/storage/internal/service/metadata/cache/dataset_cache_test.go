@@ -62,7 +62,7 @@ func TestDatasetCache_GetListAndFilters(t *testing.T) {
 		datasets: []*pb.Dataset{
 			{
 				SpaceId: "crypto", DatasetId: "dataset_kline_5m", DataSourceId: "binance",
-				Name: "K线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Revision: 7,
+				Name: "K线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "5m", Status: "active", Revision: 7,
 			},
 			{
 				SpaceId: "crypto", DatasetId: "dataset_record_a", DataSourceId: "internal",
@@ -70,7 +70,7 @@ func TestDatasetCache_GetListAndFilters(t *testing.T) {
 			},
 			{
 				SpaceId: "stockcn", DatasetId: "dataset_kline_1d", DataSourceId: "baostock",
-				Name: "A股日线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1d", Status: "active", Revision: 3,
+				Name: "A股日线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1d", Status: "active", Revision: 3,
 			},
 		},
 		columns: []*pb.DatasetColumn{

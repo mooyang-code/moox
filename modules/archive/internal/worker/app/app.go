@@ -504,7 +504,7 @@ func followAssignment(task *archivepb.FollowTask, startedAt time.Time) *archivep
 		TaskId:                  task.GetTaskId(),
 		Purpose:                 task.GetPurpose(),
 		DirName:                 task.GetDirName(),
-		Freq:                    task.GetFreq(),
+		Frequency:               task.GetFrequency(),
 		PartitionUnit:           task.GetPartitionUnit(),
 		Retention:               task.GetRetention(),
 		AllowedLatenessSeconds:  task.GetAllowedLatenessSeconds(),

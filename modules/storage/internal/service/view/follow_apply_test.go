@@ -17,7 +17,7 @@ import (
 )
 
 func changeRange(subject, freq string, start, end time.Time) *pb.DatasetChangeRange {
-	return &pb.DatasetChangeRange{SubjectId: subject, Freq: freq, StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}
+	return &pb.DatasetChangeRange{SubjectId: subject, Frequency: freq, StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}
 }
 
 // 回读计划：结束时间加一个频率步长（月按日历）；先按 max_age 截掉过期部分；同一标的相接的范围合并；

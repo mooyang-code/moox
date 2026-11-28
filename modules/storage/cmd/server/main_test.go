@@ -24,7 +24,7 @@ type cleanupDatasetReader struct{}
 
 func (cleanupDatasetReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	dataset := func(spaceID, datasetID, freq string) *pb.Dataset {
-		return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: freq, Status: "active"}
+		return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: freq, Status: "active"}
 	}
 	return []*pb.Dataset{
 		dataset("crypto", "prices_1m", "1m"),

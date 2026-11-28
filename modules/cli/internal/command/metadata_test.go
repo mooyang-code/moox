@@ -188,8 +188,8 @@ func TestMetadataContractsEqualAllResources(t *testing.T) {
 		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active"},
 	))
 	assert.True(t, metadataContractsEqual("datasets",
-		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
-		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
+		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active"},
+		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active"},
 	))
 	assert.True(t, metadataContractsEqual("dataset_columns",
 		&pb.DatasetColumn{SpaceId: "crypto", DatasetId: "kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},

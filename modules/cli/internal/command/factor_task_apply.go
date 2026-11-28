@@ -695,7 +695,7 @@ func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask
 	got := get.GetFactorTask()
 	var diffs []string
 	for _, field := range []struct{ name, online, file string }{
-		{"空间", got.GetSpaceId(), task.SpaceID}, {"源数据集", got.GetSourceDatasetId(), task.SourceDatasetID}, {"频率", got.GetFreq(), task.Freq}, {"名称", got.GetName(), task.Name},
+		{"空间", got.GetSpaceId(), task.SpaceID}, {"源数据集", got.GetSourceDatasetId(), task.SourceDatasetID}, {"频率", got.GetFrequency(), task.Freq}, {"名称", got.GetName(), task.Name},
 	} {
 		if field.online != field.file {
 			diffs = append(diffs, fmt.Sprintf("%s：线上 %q，文件 %q", field.name, field.online, field.file))
@@ -795,7 +795,7 @@ func (r *remoteSetupFactor) write(ctx context.Context, writes factorWrites, summ
 			created := &factorpb.CreateFactorTaskRsp{}
 			request := &factorpb.CreateFactorTaskReq{FactorTask: &factorpb.FactorTask{
 				TaskId: task.TaskID, Name: task.Name, SpaceId: task.SpaceID, SourceDatasetId: task.SourceDatasetID,
-				Freq: task.Freq, Status: "pending",
+				Frequency: task.Freq, Status: "pending",
 			}}
 			if err := r.call(ctx, "CreateFactorTask", request, created); err != nil {
 				return err

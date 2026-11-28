@@ -15,7 +15,7 @@ import (
 func upsert(subject string, at time.Time, open, close float64) *storagepb.Row {
 	return &storagepb.Row{
 		Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "ds_1m", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-			SubjectId: subject, Freq: "1m", DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "spot",
+			SubjectId: subject, Frequency: "1m", DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "spot",
 		}}},
 		Fields: []*storagepb.FieldValue{
 			{FieldId: "open", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: open}}},

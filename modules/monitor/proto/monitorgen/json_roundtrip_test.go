@@ -16,7 +16,7 @@ import (
 func TestMonitorTRPCJSONRoundTrip(t *testing.T) {
 	const at = int64(1700000000123)
 	dataset := &HealthDataset{
-		DatasetId: "bars", Freq: "1m",
+		DatasetId: "bars", Frequency: "1m",
 		InputWatermarkAt: "2023-11-14T22:13:00Z", OutputWatermarkAt: "2023-11-14T22:12:00Z", ExpectedBarAt: "2023-11-14T22:12:00Z",
 		LastSuccessAt: at, LastRunAt: at + 1, LastReportedAt: at + 2, LatestBarCloseAt: at + 3, ArrivedAt: at + 4, WaitingSince: at + 5, ExpectedBarCloseAt: at + 6,
 	}

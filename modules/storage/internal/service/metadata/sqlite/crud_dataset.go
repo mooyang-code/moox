@@ -80,7 +80,7 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset, columns ...
 			c_revision, c_status, c_item_json, c_subject_tags_json, c_ctime, c_mtime
 		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetName(), dataKindSQL(item.GetDataKind()), item.GetFreq(), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
+	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetName(), dataKindSQL(item.GetDataKind()), item.GetFrequency(), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
 	if err != nil {
 		if code, ok := sqlitedb.ErrorCode(err); ok && code == 2067 {
 			if strings.Contains(strings.ToLower(err.Error()), "c_name") {
@@ -133,7 +133,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_UNSPECIFIED && item.GetDataKind() != existing.GetDataKind() {
 		return nil, storeerr.Invalidf("dataset data_kind is immutable")
 	}
-	if freq := strings.TrimSpace(item.GetFreq()); freq != "" && freq != existing.GetFreq() {
+	if freq := strings.TrimSpace(item.GetFrequency()); freq != "" && freq != existing.GetFrequency() {
 		return nil, storeerr.Invalidf("dataset freq is immutable")
 	}
 	// alignment 设置后不能修改，没有设置过的可以补上；请求里为空、allowed_lateness_seconds 为 0 时沿用已有值，
@@ -162,7 +162,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	}
 	item.DataSourceId = dataSourceID
 	item.DataKind = existing.GetDataKind()
-	item.Freq = existing.GetFreq()
+	item.Frequency = existing.GetFrequency()
 	item.Retention, item.RetentionSource = "", ""
 	item.SubjectTags = normalizeSubjectTags(item.GetSubjectTags())
 	if err := validateSubjectTagsExist(ctx, tx, item.GetSpaceId(), item.GetSubjectTags()); err != nil {
@@ -285,9 +285,9 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 	}
 	// Retention is resolved from the Storage policy on read, never stored.
 	item.Retention, item.RetentionSource = "", ""
-	item.Freq = strings.TrimSpace(item.GetFreq())
-	if item.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && !frequencypkg.IsCanonical(item.GetFreq()) {
-		return nil, storeerr.Invalidf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFreq())
+	item.Frequency = strings.TrimSpace(item.GetFrequency())
+	if item.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && !frequencypkg.IsCanonical(item.GetFrequency()) {
+		return nil, storeerr.Invalidf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFrequency())
 	}
 	return item, nil
 }

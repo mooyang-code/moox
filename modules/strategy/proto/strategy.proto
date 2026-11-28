@@ -166,7 +166,7 @@ message StrategyTaskRequirement {
 
 message StrategySourceRequirement {
   string name = 1;
-  string bar = 2;
+  string frequency = 2;
 }
 message ListStrategiesReq { common.Page page = 1; }
 message ListStrategiesRsp { common.RetInfo ret_info = 1; repeated Strategy strategies = 2; common.PageResult page_result = 3; }

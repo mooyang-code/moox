@@ -22,7 +22,7 @@ message ResultColumn {
 message CountTimeSeriesViewRowsReq {
   string space_id = 2;
   string dataset_id = 3;
-  // selectors 需要 subject_id 与 freq；time_range 是左闭右开时间范围。
+  // selectors 需要 subject_id 与 frequency；time_range 是左闭右开时间范围。
   repeated TimeSeriesSelector selectors = 4;
   TimeRange time_range = 5;
 }

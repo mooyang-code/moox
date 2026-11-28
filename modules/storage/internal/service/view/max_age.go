@@ -62,7 +62,7 @@ func (s *Service) dropExpiredWrites(indexID string, writes []viewindex.RowWrite)
 	for i, write := range writes {
 		expired := false
 		if series := write.Key.Key.GetTimeSeries(); series != nil {
-			key := seriesKey{write.Key.Key.GetSpaceId(), series.GetFreq()}
+			key := seriesKey{write.Key.Key.GetSpaceId(), series.GetFrequency()}
 			if cutoff := cutoffOf(key); !cutoff.IsZero() {
 				if dataTime, err := time.Parse(time.RFC3339Nano, series.GetDataTime()); err == nil && dataTime.Before(cutoff) {
 					expired = true

@@ -28,7 +28,7 @@ func newDatasetFixture(t *testing.T) (*sqlite.Store, *Service, *pb.Dataset) {
 	require.NoError(t, err)
 	dataset, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "factor-space", DatasetId: "dataset_factor_btc_1m", DataSourceId: "factor",
-		Name: "BTC 因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+		Name: "BTC 因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m",
 	})
 	require.NoError(t, err)
 	for _, column := range []struct{ name, display string }{{"close", "收盘"}, {"bias_20", "偏离"}} {
@@ -152,7 +152,7 @@ func TestDatasetMaintenancePriorityAndStatusFilter(t *testing.T) {
 	_, service, dataset := newDatasetFixture(t)
 	created, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: &pb.Dataset{
 		SpaceId: dataset.GetSpaceId(), DatasetId: "dataset_factor_eth_1m", DataSourceId: "factor",
-		Name: "ETH 因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", MaintenancePriority: 10,
+		Name: "ETH 因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", MaintenancePriority: 10,
 	}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo().GetMsg())
@@ -200,7 +200,7 @@ func TestUpsertDataSourceAndDatasetCreateOnly(t *testing.T) {
 
 	newDataset := &pb.Dataset{
 		SpaceId: spaceID, DatasetId: "dataset_upsert_only", DataSourceId: "ds_upsert",
-		Name: "只建数据集", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+		Name: "只建数据集", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m",
 	}
 	first, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: newDataset, CreateOnly: true})
 	require.NoError(t, err)
@@ -236,7 +236,7 @@ func TestMetadataReturnsDatasetRetentionFromPolicy(t *testing.T) {
 	require.Equal(t, "forever", retention)
 	require.Equal(t, "record", source)
 	service.retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
-	retention, source = service.datasetRetention(&pb.Dataset{SpaceId: "stockcn", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m"})
+	retention, source = service.datasetRetention(&pb.Dataset{SpaceId: "stockcn", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m"})
 	require.Equal(t, "1440h", retention)
 	require.Equal(t, "space", source)
 }

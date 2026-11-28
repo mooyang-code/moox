@@ -193,7 +193,7 @@ export function rowValuesRequest(datasetId: string, key: RowKey, columns: string
     selectors: [
       {
         subject_id: ts?.subject_id ?? "",
-        freq: ts?.freq ?? "",
+        frequency: ts?.frequency ?? "",
         series_tag: ts?.series_tag ?? ""
       }
     ],

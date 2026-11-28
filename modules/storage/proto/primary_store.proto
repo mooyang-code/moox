@@ -36,9 +36,9 @@ message TimeSeriesBatchRow {
 message RowsCursor {
   // 区间读取：最后一行的键。
   TimeSeriesRowKey last = 1;
-  // 最近 N 根：当前序列（subject_id、freq、series_tag）、续读位置（该序列已返回的最早一根的 data_time）及该序列已返回的根数。
+  // 最近 N 根：当前序列（subject_id、frequency、series_tag）、续读位置（该序列已返回的最早一根的 data_time）及该序列已返回的根数。
   string subject_id = 2;
-  string freq = 3;
+  string frequency = 3;
   string series_tag = 4;
   string resume_before = 5;
   uint32 returned = 6;

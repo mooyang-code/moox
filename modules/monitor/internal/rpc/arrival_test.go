@@ -11,7 +11,7 @@ import (
 )
 
 func TestQueryPipelineArrivalHistoryReportsInvalidAndUnavailable(t *testing.T) {
-	req := &monitorpb.QueryPipelineArrivalHistoryReq{SpaceId: "crypto", DatasetId: "dataset_spot_1m", Freq: "1m"}
+	req := &monitorpb.QueryPipelineArrivalHistoryReq{SpaceId: "crypto", DatasetId: "dataset_spot_1m", Frequency: "1m"}
 	rsp, err := New(nil, Options{}).QueryPipelineArrivalHistory(t.Context(), req)
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
@@ -21,7 +21,7 @@ func TestQueryPipelineArrivalHistoryReportsInvalidAndUnavailable(t *testing.T) {
 	rsp, err = service.QueryPipelineArrivalHistory(t.Context(), req)
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-	rsp, err = service.QueryPipelineArrivalHistory(t.Context(), &monitorpb.QueryPipelineArrivalHistoryReq{SpaceId: "crypto", Freq: "1m"})
+	rsp, err = service.QueryPipelineArrivalHistory(t.Context(), &monitorpb.QueryPipelineArrivalHistoryReq{SpaceId: "crypto", Frequency: "1m"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }

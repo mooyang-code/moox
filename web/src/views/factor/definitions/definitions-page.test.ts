@@ -48,7 +48,7 @@ vi.mock("@/views/factor/shared/use-factor-scope", async () => {
     reload: mocks.reloadTasks,
     isLoadedFor: () => mocks.storeLoaded!.value,
     taskLabel: (set: { name?: string; freq?: string; task_id: string }) =>
-      set.name ? `${set.name} · ${set.freq || ""}` : set.task_id
+      set.name ? `${set.name} · ${set.frequency || ""}` : set.task_id
   });
   return {
     useFactorScope: () => ({
@@ -326,7 +326,7 @@ describe("factor definitions page", () => {
           task_id: "ftask_swap_1m",
           space_id: "crypto",
           source_dataset_id: "ds_1",
-          freq: "1m",
+          frequency: "1m",
           name: "合约一分钟",
           result_dataset_id: "dataset_factor_swap_1m",
           status: "enabled"
@@ -391,7 +391,7 @@ describe("factor definitions page", () => {
         task_id: "ftask_crypto",
         space_id: "crypto",
         source_dataset_id: "ds_1",
-        freq: "1m",
+        frequency: "1m",
         name: "币安一分钟",
         result_dataset_id: "dataset_factor_crypto",
         status: "enabled"
@@ -414,7 +414,7 @@ describe("factor definitions page", () => {
         task_id: "ftask_stock",
         space_id: "stockcn",
         source_dataset_id: "ds_2",
-        freq: "1d",
+        frequency: "1d",
         name: "A股日线",
         result_dataset_id: "dataset_factor_stock",
         status: "enabled"
@@ -440,7 +440,7 @@ describe("factor definitions page", () => {
         task_id: "ftask_stock_other",
         space_id: "stockcn",
         source_dataset_id: "ds_3",
-        freq: "1w",
+        frequency: "1w",
         name: "A股周线",
         result_dataset_id: "dataset_factor_stock_other",
         status: "enabled"

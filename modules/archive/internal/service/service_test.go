@@ -197,7 +197,7 @@ func TestCreateArchiveTaskDefaultsTheBackfillToTheRetentionStart(t *testing.T) {
 	rsp := h.createOnly("ds_1m", nil)
 	requireOK(t, rsp.GetRetInfo())
 	task := rsp.GetTask()
-	if task.GetFreq() != "1m" || task.GetPartitionUnit() != "day" || task.GetStatus() != "enabled" || task.GetRetention() != "168h" ||
+	if task.GetFrequency() != "1m" || task.GetPartitionUnit() != "day" || task.GetStatus() != "enabled" || task.GetRetention() != "168h" ||
 		task.GetBackfillFrom() != "2026-10-11T01:00:00Z" {
 		t.Fatalf("task = %v", task)
 	}
@@ -325,7 +325,7 @@ func TestPrepareArchiveTaskReportsTheEarliestBackfill(t *testing.T) {
 	ctx := context.Background()
 	prep, _ := h.mgr.PrepareArchiveTask(ctx, &archivepb.PrepareArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, prep.GetRetInfo())
-	if prep.GetFreq() != "1m" || prep.GetPartitionUnit() != "day" || prep.GetEarliestBackfillFrom() != "2026-10-11T01:00:00Z" || prep.GetExists() {
+	if prep.GetFrequency() != "1m" || prep.GetPartitionUnit() != "day" || prep.GetEarliestBackfillFrom() != "2026-10-11T01:00:00Z" || prep.GetExists() {
 		t.Fatalf("prepare = %v", prep)
 	}
 	forever, _ := h.mgr.PrepareArchiveTask(ctx, &archivepb.PrepareArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1h"})
@@ -423,7 +423,7 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 		t.Fatalf("runs = %v", runs)
 	}
 	run := runs[0]
-	if run.GetLeaseToken() == "" || run.GetKind() != "manual" || run.GetFreq() != "1m" || run.GetPartitionUnit() != "day" ||
+	if run.GetLeaseToken() == "" || run.GetKind() != "manual" || run.GetFrequency() != "1m" || run.GetPartitionUnit() != "day" ||
 		run.GetAllowedLatenessSeconds() != 900 || run.GetStagingRetentionSeconds() != 72*3600 || run.GetSpaceTz() != "UTC" || run.GetLocalClose() != "" ||
 		run.GetBackfillFrom() != "2026-10-15T00:00:00Z" || run.GetStartedAt() != rfcMillis("2026-10-17T01:00:00Z") || run.GetLeaseTtlSeconds() != 600 ||
 		run.GetPurpose() != "data" || run.GetDirName() != "ds-1m" {

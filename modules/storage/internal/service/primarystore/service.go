@@ -146,7 +146,7 @@ func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.Row, res
 			continue
 		}
 		datasetKey := report.DatasetKey{
-			SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), Freq: timeSeries.GetFreq(),
+			SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), Freq: timeSeries.GetFrequency(),
 		}
 		item := groups[datasetKey]
 		if item == nil {

@@ -13,7 +13,7 @@ message FactorTask {
   string task_id = 1;
   string space_id = 2;
   string source_dataset_id = 3;
-  string freq = 4;
+  string frequency = 4;
   // name 是任务的展示名，直接用作 Storage 结果数据集的名称（含汉字、不超过 10 个字、空间内唯一）。
   string name = 5;
   string result_dataset_id = 7;
@@ -1049,7 +1049,7 @@ message SeriesColumn {
 message WriteSeriesReq {
   string space_id = 1;
   string dataset_id = 2;
-  string freq = 3;
+  string frequency = 3;
   string subject_id = 4;
   // from、to 是整段替换的区间（RFC3339，左闭右开），行时间与区间都是真实时间。
   string from = 5;
@@ -1082,7 +1082,7 @@ message WriteSeriesRsp {
 message GetSeriesFieldsReq {
   string space_id = 1;
   string dataset_id = 2;
-  string freq = 3;
+  string frequency = 3;
 }
 
 // SeriesField 是数据集的一个字段：type 是 Storage 的字段类型，fill 是缺期时的填充规则（prev、prev_close、zero，空表示留空）。
@@ -1111,7 +1111,7 @@ message CheckSeriesSubjectRsp {
 message GetSeriesBoundsReq {
   string space_id = 1;
   string dataset_id = 2;
-  string freq = 3;
+  string frequency = 3;
   string subject_id = 4;
 }
 

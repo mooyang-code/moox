@@ -724,7 +724,7 @@ func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID st
 		Key: &storagepb.RowKey{
 			SpaceId: key.SpaceID, DatasetId: strings.TrimSpace(key.DatasetID),
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: key.SeriesTag,
+				SubjectId: bar.SubjectID, Frequency: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: key.SeriesTag,
 			}},
 		},
 		Fields: fields,

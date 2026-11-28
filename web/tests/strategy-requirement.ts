@@ -32,7 +32,7 @@ function marketRequirement(dslYaml: string): MarketRequirement {
 
 /** 附加来源与参考市场：sources 是 DSL 声明的附加来源（名字与周期，声明顺序），references 是 market.reference 写出的参考市场。 */
 interface SourceRequirement {
-  sources: { name: string; bar: string }[];
+  sources: { name: string; frequency: string }[];
   references: string[];
 }
 
@@ -43,7 +43,7 @@ function sourceRequirement(dslYaml: string): SourceRequirement {
     const sources = document?.sources && typeof document.sources === "object" ? document.sources : {};
     const reference = Array.isArray(document?.market?.reference) ? document.market.reference : [];
     return {
-      sources: Object.entries(sources).map(([name, value]: [string, any]) => ({ name, bar: String(value?.bar ?? "") })),
+      sources: Object.entries(sources).map(([name, value]: [string, any]) => ({ name, frequency: String(value?.bar ?? "") })),
       references: reference.map((item: unknown) => String(item)).filter((item: string) => item === "spot" || item === "swap")
     };
   } catch {

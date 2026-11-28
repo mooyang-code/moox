@@ -9,7 +9,7 @@ const factorTask = {
   task_id: "ftask_binance_kline_1m",
   space_id: "crypto",
   source_dataset_id: "dataset_binance_kline_1m",
-  freq: "1m",
+  frequency: "1m",
   result_dataset_id: "dataset_factor_binance_kline_1m",
   status: "enabled"
 };
@@ -94,7 +94,7 @@ async function mockGateway(route: Route) {
             dataset_id: "dataset_binance_kline_1m",
             name: "现货K线",
             status: "active",
-            freq: "1m",
+            frequency: "1m",
             attributes: { owner_module: "collector", dataset_role: "raw_collection" }
           },
           {
@@ -102,7 +102,7 @@ async function mockGateway(route: Route) {
             dataset_id: factorTask.result_dataset_id,
             name: "现货K线因子结果",
             status: "active",
-            freq: "1m",
+            frequency: "1m",
             attributes: { owner_module: "factor", dataset_role: "factor_result" }
           }
         ],
@@ -168,7 +168,7 @@ async function mockGateway(route: Route) {
           dataset_id: body.dataset_id,
           name: "现货K线",
           status: "active",
-          freq: "1m",
+          frequency: "1m",
           attributes: {}
         }
       })

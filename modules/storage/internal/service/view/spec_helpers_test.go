@@ -30,7 +30,7 @@ func metadataFor(specs ...*viewSpec) *testMetadata {
 	metadata := &testMetadata{}
 	for _, spec := range specs {
 		metadata.datasets = append(metadata.datasets, &pb.Dataset{
-			SpaceId: spec.SpaceID, DatasetId: spec.DatasetID, DataKind: spec.DataKind, Freq: spec.Freq,
+			SpaceId: spec.SpaceID, DatasetId: spec.DatasetID, DataKind: spec.DataKind, Frequency: spec.Freq,
 			Status: spec.Status, MaintenancePriority: spec.MaintenancePriority, CreatedAt: spec.CreatedAt,
 		})
 		for _, column := range spec.Columns {
@@ -67,7 +67,7 @@ func testSpec(space, dataset string, kind pb.DataKind, freq string, columns ...s
 	for _, name := range columns {
 		items = append(items, &pb.DatasetColumn{ColumnName: name, ValueType: valueType, DisplayName: name, Status: "active"})
 	}
-	return newViewSpec(&pb.Dataset{SpaceId: space, DatasetId: dataset, DataKind: kind, Freq: freq, Status: "active", CreatedAt: testCreatedAt}, items)
+	return newViewSpec(&pb.Dataset{SpaceId: space, DatasetId: dataset, DataKind: kind, Frequency: freq, Status: "active", CreatedAt: testCreatedAt}, items)
 }
 
 // testRuntime 给声明建运行时（引擎按数据类型从服务里取）。

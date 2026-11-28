@@ -316,7 +316,7 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			return items
 		}, wantErr: "invalid"},
 		{name: "月频不是分钟频", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
-			items[1].Row.Key.GetTimeSeries().Freq = "1mo"
+			items[1].Row.Key.GetTimeSeries().Frequency = "1mo"
 			return items
 		}, wantErr: "invalid"},
 		{name: "目标时间带小数秒", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
@@ -351,11 +351,11 @@ func TestGoldenLedgerRejections(t *testing.T) {
 		// 快照标签是 binance：去掉空白后能对上，不去空白就对不上，必须拒绝。
 		{name: "标签带空白", prepare: "waiting", seriesTag: "binance", mutate: tagged(" binance "), wantErr: "invalid"},
 		{name: "频率带空白", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
-			items[1].Row.Key.GetTimeSeries().Freq = " 1m "
+			items[1].Row.Key.GetTimeSeries().Frequency = " 1m "
 			return items
 		}, wantErr: "invalid"},
 		{name: "小时频率的大小写别名", frequency: "1h", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
-			items[1].Row.Key.GetTimeSeries().Freq = "1H"
+			items[1].Row.Key.GetTimeSeries().Frequency = "1H"
 			return items
 		}, wantErr: "invalid"},
 	}
@@ -677,7 +677,7 @@ func TestGoldenDeleteDatasetClearsLedgerAndMarkers(t *testing.T) {
 		require.NoError(t, err)
 		_, err = store.AppendDatasetMarker(ctx, raw)
 		require.NoError(t, err)
-		record := &pb.Row{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
+		record := &pb.Row{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Frequency: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
 		require.NoError(t, store.UpsertFields(ctx, goldenSpace, dataset, []*pb.Row{record}))
 	}
 
@@ -710,7 +710,7 @@ func TestGoldenDeleteDatasetClearsLedgerAndMarkers(t *testing.T) {
 	require.Len(t, goldenMarkers(t, store, goldenSpace, "delete-me"), 1, "已删数据集不再产生新的完成标记")
 
 	// 重建后照常写入，同一触发事件可以重新上报。
-	record := &pb.Row{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
+	record := &pb.Row{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Frequency: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
 	require.NoError(t, store.UpsertFields(ctx, goldenSpace, "delete-me", []*pb.Row{record}))
 	marker := goldenProducerMarker("source-ready", goldenPeriod.Unix(), "degraded")
 	marker.DatasetId = "delete-me"

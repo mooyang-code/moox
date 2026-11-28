@@ -420,7 +420,7 @@ func (m *MgrService) PrepareArchiveTask(ctx context.Context, req *archivepb.Prep
 	if err != nil {
 		return &archivepb.PrepareArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	rsp := &archivepb.PrepareArchiveTaskRsp{RetInfo: success(), Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention}
+	rsp := &archivepb.PrepareArchiveTaskRsp{RetInfo: success(), Frequency: ds.Freq, PartitionUnit: unit, Retention: ds.Retention}
 	if earliest, ok, _ := earliestBackfill(ds.Retention, s.clock()); ok {
 		rsp.EarliestBackfillFrom = fmtRFC(earliest)
 	}

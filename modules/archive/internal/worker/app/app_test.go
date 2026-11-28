@@ -232,7 +232,7 @@ func newHarness(t *testing.T) *harness {
 
 func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: runID, LeaseToken: "tok-" + runID, Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
+		RunId: runID, LeaseToken: "tok-" + runID, Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Frequency: "1m", PartitionUnit: "day",
 		Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: rfcMillis("2026-10-17T01:04:43Z"), ScheduledAt: rfcMillis("2026-10-17T01:04:43Z"),
 	}
@@ -783,7 +783,7 @@ func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 	row := func(subject string, close float64) *storagepb.PrimaryUpsertFieldsReq {
 		return &storagepb.PrimaryUpsertFieldsReq{SpaceId: "crypto", DatasetId: "ds_1m", Rows: []*storagepb.Row{{
 			Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "ds_1m", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: subject, Freq: "1m", DataTime: "2026-09-01T00:00:00Z"}}},
+				SubjectId: subject, Frequency: "1m", DataTime: "2026-09-01T00:00:00Z"}}},
 			Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: close}}}},
 		}}}
 	}
@@ -831,7 +831,7 @@ func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 func followTask(dataset string, mutate func(*archivepb.FollowTask)) *archivepb.FollowTask {
 	t := &archivepb.FollowTask{
 		SpaceId: "crypto", DatasetId: dataset, TaskId: "1", Purpose: "collect", DirName: "kline-" + strings.ReplaceAll(dataset, "_", "-"),
-		Freq: "1m", PartitionUnit: "day", Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
+		Frequency: "1m", PartitionUnit: "day", Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 	}
 	if mutate != nil {
 		mutate(t)

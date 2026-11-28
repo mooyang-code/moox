@@ -39,7 +39,7 @@ vi.mock("@/api/factor", () => ({
   listFactorTasks: vi.fn(async () => ({
     factor_tasks: [
       {
-        factor_task: { task_id: "f1", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+        factor_task: { task_id: "f1", space_id: "crypto", source_dataset_id: "dataset_abc", frequency: "1m", status: "enabled" },
         members: [{ status: "enabled" }],
         last_run: {
           task_id: "f1",
@@ -121,7 +121,7 @@ describe("home page", () => {
       pipeline: [
         {
           name: "存储",
-          datasets: [{ producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "healthy" }]
+          datasets: [{ producer: "storage", dataset_id: "dataset_abc", frequency: "1m", status: "healthy" }]
         }
       ]
     };
@@ -252,7 +252,7 @@ describe("home page", () => {
         severity: "warning",
         title: "数据中断",
         triggered_at: String(Date.now()),
-        object: { type: "dataset", producer: "collector", dataset_id: "ds_cn", freq: "5m", space_id: "stockcn" }
+        object: { type: "dataset", producer: "collector", dataset_id: "ds_cn", frequency: "5m", space_id: "stockcn" }
       }
     ];
     const wrapper = await render();
@@ -272,7 +272,7 @@ describe("home page", () => {
           {
             producer: "storage",
             dataset_id: "dataset_abc",
-            freq: "1m",
+            frequency: "1m",
             status: "degraded",
             latest_bar_close_at: String(Date.now() - 52980_000),
             waiting_bars: 882,

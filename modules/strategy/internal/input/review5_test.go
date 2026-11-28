@@ -171,7 +171,7 @@ func TestRangeLoaderReportsIndexChange(t *testing.T) {
 // 原地重建后索引 ID 不变、建成序号变，存储重建后 store_id 变，两种情况都算换代。索引还没建好或 storage-view 还没登记
 // 该 View 时活动索引与代次为空，不当作 View 被删；复核代次遇到还没登记返回可重试错误。
 func TestGetViewReadsGenerationFromViewState(t *testing.T) {
-	metadata := &metadataStub{view: &storagepb.Dataset{DatasetId: "ds", Freq: "1h", Status: "active"}}
+	metadata := &metadataStub{view: &storagepb.Dataset{DatasetId: "ds", Frequency: "1h", Status: "active"}}
 	state := &viewStateStub{rsp: builtState("idx_a", "store_1", 7)}
 	client := &upstream.RPCClient{Metadata: metadata, DataView: state}
 	info, err := client.GetView(context.Background(), "space", "ds")

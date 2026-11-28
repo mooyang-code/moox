@@ -414,7 +414,7 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 // peekChange 读出的定位字段与完整解码一致，三种条目都能跳过其余字段。
 func TestPeekChangeMatchesFullDecode(t *testing.T) {
 	for _, change := range []*pb.DatasetChange{
-		{Sequence: 7, SpaceId: "s", DatasetId: "d", CreatedAt: 1790812800500, Ranges: []*pb.DatasetChangeRange{{SubjectId: "BTC", Freq: "1m", StartTime: "a", EndTime: "b"}}},
+		{Sequence: 7, SpaceId: "s", DatasetId: "d", CreatedAt: 1790812800500, Ranges: []*pb.DatasetChangeRange{{SubjectId: "BTC", Frequency: "1m", StartTime: "a", EndTime: "b"}}},
 		{Sequence: 8, SpaceId: "s", DatasetId: "notes", CreatedAt: 1790812800501, Records: []*pb.RecordRowKey{{RecordId: "r", Version: "1"}}},
 		{Sequence: 9, SpaceId: "s", DatasetId: "d", CreatedAt: 1, Marker: []byte("marker")},
 	} {

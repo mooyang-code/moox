@@ -64,7 +64,7 @@ func legacyEnsureSeriesRowsAndCounts(ctx context.Context, tx *sql.Tx, writes []v
 			return fmt.Errorf("invalid data_time: %w", err)
 		}
 		when = when.UTC()
-		item := candidate{subject: key.GetSubjectId(), freq: key.GetFreq(), tag: key.GetSeriesTag(), when: when}
+		item := candidate{subject: key.GetSubjectId(), freq: key.GetFrequency(), tag: key.GetSeriesTag(), when: when}
 		unique[encodePhysicalKeyParts(item.subject, item.freq, canonicalCoverageTime(when), item.tag)] = item
 	}
 	items := make([]candidate, 0, len(unique))

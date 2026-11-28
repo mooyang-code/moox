@@ -74,7 +74,7 @@ func (s *Service) observeViewWatermark(spec *viewSpec, rows []*pb.Row) {
 			watermark = at
 		}
 		subjectID := strings.TrimSpace(timeSeries.GetSubjectId())
-		rowFrequency := strings.TrimSpace(timeSeries.GetFreq())
+		rowFrequency := strings.TrimSpace(timeSeries.GetFrequency())
 		if subjectID == "" || rowFrequency == "" {
 			continue
 		}

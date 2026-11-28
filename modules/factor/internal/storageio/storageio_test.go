@@ -83,7 +83,7 @@ func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
 	for _, request := range primary.readRequests {
 		require.Equal(t, uint32(1), request.GetPage().GetSize())
 		require.Equal(t, "0001-01-01T00:00:00Z", request.GetTimeRange().GetStartTime())
-		require.Equal(t, "1m", request.GetSelectors()[0].GetFreq())
+		require.Equal(t, "1m", request.GetSelectors()[0].GetFrequency())
 	}
 	require.Len(t, primary.readRequests[0].GetSelectors(), earliestPeriodSelectorBatchSize)
 	require.Len(t, primary.readRequests[1].GetSelectors(), 29)
@@ -124,7 +124,7 @@ func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
 	require.Equal(t, []string{"BTC", "ETH"}, []string{selectors[0].GetSubjectId(), selectors[1].GetSubjectId()})
 	for _, selector := range selectors {
 		require.Nil(t, selector.SeriesTag)
-		require.Equal(t, "1m", selector.GetFreq())
+		require.Equal(t, "1m", selector.GetFrequency())
 	}
 	require.Equal(t, base.Format(time.RFC3339Nano), primary.readRequests[0].GetTimeRange().GetStartTime())
 	require.Equal(t, base.Add(time.Minute).Format(time.RFC3339Nano), primary.readRequests[0].GetTimeRange().GetEndTime())
@@ -133,7 +133,7 @@ func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
 func TestWriteRowsEncodesNullFields(t *testing.T) {
 	primary := &primaryFake{}
 	metadata := &metadataFake{dataset: &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: "factor_result", Freq: "1m", Status: "active",
+		SpaceId: "crypto", DatasetId: "factor_result", Frequency: "1m", Status: "active",
 	}}
 	store := NewClient(primary, metadata)
 	err := store.WriteRows(context.Background(), "crypto", "factor_result", []ResultRow{{
@@ -143,7 +143,7 @@ func TestWriteRowsEncodesNullFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, primary.writeRequests, 1)
 	row := primary.writeRequests[0].GetRows()[0]
-	require.Equal(t, "1m", row.GetKey().GetTimeSeries().GetFreq())
+	require.Equal(t, "1m", row.GetKey().GetTimeSeries().GetFrequency())
 	fields := row.GetFields()
 	require.Len(t, fields, 3)
 	for _, field := range fields {
@@ -249,7 +249,7 @@ func TestCreateResultDatasetUsesSourceOwnershipAndRetention(t *testing.T) {
 	dataset := metadata.createRequests[0].GetDataset()
 	require.Equal(t, spec.DataSourceID, dataset.GetDataSourceId())
 	require.Equal(t, DatasetStatusActive, dataset.GetStatus())
-	require.Equal(t, spec.Frequency, dataset.GetFreq())
+	require.Equal(t, spec.Frequency, dataset.GetFrequency())
 	require.Equal(t, []string{"tag-b", "tag-a"}, dataset.GetSubjectTags())
 	require.Equal(t, DatasetRoleFactorResult, dataset.GetAttributes()["dataset_role"])
 	require.Equal(t, spec.SourceDatasetID, dataset.GetAttributes()["source_dataset_id"])
@@ -547,7 +547,7 @@ func readRow(subject string, at time.Time, tag string, fields map[string]*storag
 	return &storagepb.Row{
 		Key: &storagepb.RowKey{
 			SpaceId: "crypto", DatasetId: "bars",
-			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: "1m", DataTime: at.Format(time.RFC3339Nano), SeriesTag: tag}},
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Frequency: "1m", DataTime: at.Format(time.RFC3339Nano), SeriesTag: tag}},
 		},
 		Fields: values,
 	}
@@ -616,7 +616,7 @@ func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
 			{Sequence: 6, DatasetId: "d", Marker: []byte("marker")},
 			{Sequence: 7, DatasetId: "d", Records: []*storagepb.RecordRowKey{{RecordId: "r", Version: "1"}}},
 			{Sequence: 8, DatasetId: "d", Ranges: []*storagepb.DatasetChangeRange{
-				{SubjectId: "BTC", Freq: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00.5Z"},
+				{SubjectId: "BTC", Frequency: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00.5Z"},
 			}},
 		},
 	}}

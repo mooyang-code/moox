@@ -54,7 +54,7 @@ func (f *fakeInvoker) Invoke(_ context.Context, svc, method string, req, rsp any
 func TestGatewayDatasetsMapsStorageDatasets(t *testing.T) {
 	inv := &fakeInvoker{rsp: &storagepb.GetDatasetRsp{
 		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-		Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "ds", Name: "K线", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Retention: "168h"},
+		Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "ds", Name: "K线", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active", Retention: "168h"},
 	}}
 	ds, err := newGatewayDatasets(inv).GetDataset(context.Background(), "crypto", "ds")
 	if err != nil {
@@ -135,12 +135,12 @@ func TestGatewayDatasetsListsDatasetsAcrossPages(t *testing.T) {
 	inv := &fakeInvoker{listRsps: map[uint32]*storagepb.ListDatasetsRsp{
 		1: {
 			RetInfo:    &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-			Datasets:   []*storagepb.Dataset{{SpaceId: "crypto", DatasetId: "ds_1m", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Retention: "168h"}},
+			Datasets:   []*storagepb.Dataset{{SpaceId: "crypto", DatasetId: "ds_1m", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active", Retention: "168h"}},
 			PageResult: &commonpb.PageResult{Page: 1, Size: 200, HasMore: true},
 		},
 		2: {
 			RetInfo:    &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-			Datasets:   []*storagepb.Dataset{{SpaceId: "stockcn", DatasetId: "cn_5m", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Retention: "720h"}},
+			Datasets:   []*storagepb.Dataset{{SpaceId: "stockcn", DatasetId: "cn_5m", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "5m", Status: "active", Retention: "720h"}},
 			PageResult: &commonpb.PageResult{Page: 2, Size: 200, HasMore: false},
 		},
 	}}

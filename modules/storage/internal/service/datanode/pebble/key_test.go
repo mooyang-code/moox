@@ -8,7 +8,7 @@ import (
 )
 
 func TestFieldAndAttributeNamespacesDoNotCollide(t *testing.T) {
-	key := &pb.RowKey{SpaceId: "空间|%/\x00", DatasetId: "dataset", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-19T10:01:02Z"}}}
+	key := &pb.RowKey{SpaceId: "空间|%/\x00", DatasetId: "dataset", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-07-19T10:01:02Z"}}}
 	field, err := encodeFieldKey(key, "volume")
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestFieldAndAttributeNamespacesDoNotCollide(t *testing.T) {
 }
 
 func TestTimeSeriesKeyContainsBucketStart(t *testing.T) {
-	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-07-19T23:59:59Z"}}}
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Frequency: "1m", DataTime: "2026-07-19T23:59:59Z"}}}
 	a, err := encodeFieldKey(key, "close")
 	if err != nil {
 		t.Fatal(err)
@@ -39,8 +39,8 @@ func TestTimeSeriesKeyContainsBucketStart(t *testing.T) {
 }
 
 func TestTimeSeriesKeyNormalizesEquivalentInstants(t *testing.T) {
-	first := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-01-01T00:00:00Z"}}}
-	second := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-01-01T08:00:00+08:00"}}}
+	first := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Frequency: "1m", DataTime: "2026-01-01T00:00:00Z"}}}
+	second := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Frequency: "1m", DataTime: "2026-01-01T08:00:00+08:00"}}}
 	a, err := encodeFieldKey(first, "close")
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestTimeSeriesKeyNormalizesEquivalentInstants(t *testing.T) {
 }
 
 func TestTimeSeriesBucketPrecedesSubjectInPhysicalKey(t *testing.T) {
-	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "subject", Freq: "1m", DataTime: "2026-07-19T10:14:59Z", SeriesTag: "venue:okx"}}}
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "subject", Frequency: "1m", DataTime: "2026-07-19T10:14:59Z", SeriesTag: "venue:okx"}}}
 	encoded, err := encodeFieldKey(key, "close")
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestTimeSeriesBucketPrecedesSubjectInPhysicalKey(t *testing.T) {
 
 func TestFieldAndAttributeKeysShareCompleteRowIdentity(t *testing.T) {
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-19T10:14:59Z", SeriesTag: "venue:binance",
+		SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-07-19T10:14:59Z", SeriesTag: "venue:binance",
 	}}}
 	field, err := encodeFieldKey(key, "close")
 	if err != nil {
@@ -105,7 +105,7 @@ func TestFieldAndAttributeKeysShareCompleteRowIdentity(t *testing.T) {
 func TestTimeSeriesKeyAlwaysEndsWithSeriesTagComponent(t *testing.T) {
 	key := func(tag string) *pb.RowKey {
 		return &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-19T10:14:59Z", SeriesTag: tag,
+			SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-07-19T10:14:59Z", SeriesTag: tag,
 		}}}
 	}
 	encoded := make([][]byte, 0, 3)
@@ -127,7 +127,7 @@ func TestTimeSeriesKeyAlwaysEndsWithSeriesTagComponent(t *testing.T) {
 
 func TestNormalizeRowKeyPreservesSeriesTagAndNormalizesTime(t *testing.T) {
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-01-01T08:00:00+08:00", SeriesTag: "市场:现货",
+		SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-01-01T08:00:00+08:00", SeriesTag: "市场:现货",
 	}}}
 	normalized, err := NormalizeRowKey(key)
 	if err != nil {
@@ -146,7 +146,7 @@ func TestNormalizeRowKeyPreservesSeriesTagAndNormalizesTime(t *testing.T) {
 
 func TestNormalizeRowKeyRejectsInvalidSeriesTag(t *testing.T) {
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-01-01T00:00:00Z", SeriesTag: " venue:okx",
+		SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-01-01T00:00:00Z", SeriesTag: " venue:okx",
 	}}}
 	if _, err := NormalizeRowKey(key); err == nil {
 		t.Fatal("invalid series tag accepted")

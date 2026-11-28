@@ -44,7 +44,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	defer store.Close()
 	datasets := newTestDatasetCache(t,
-		[]*pb.Dataset{{SpaceId: "quant", DatasetId: "prices", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"}},
+		[]*pb.Dataset{{SpaceId: "quant", DatasetId: "prices", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active"}},
 		[]*pb.DatasetColumn{
 			{SpaceId: "quant", DatasetId: "prices", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
 			{SpaceId: "quant", DatasetId: "prices", ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
@@ -167,7 +167,7 @@ func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.
 		rsp, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "quant", DatasetId: "prices",
 			Selectors: []*pb.TimeSeriesSelector{{
-				SubjectId: "BTC-USDT", Freq: "1m",
+				SubjectId: "BTC-USDT", Frequency: "1m",
 			}},
 			TimeRange: &pb.TimeRange{
 				StartTime: "2026-07-20T00:00:00Z",
@@ -196,7 +196,7 @@ func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.
 
 func seriesTagKey(tag string) *pb.RowKey {
 	return &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z", SeriesTag: tag,
+		SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-07-20T00:00:00Z", SeriesTag: tag,
 	}}}
 }
 
@@ -235,7 +235,7 @@ func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.S
 		}
 		return rsp.GetRows()
 	}
-	base := &pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Freq: "1m"}
+	base := &pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Frequency: "1m"}
 	all := query(base)
 	if len(all) != 3 {
 		t.Fatalf("unset selector rows=%v", all)
@@ -249,12 +249,12 @@ func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.S
 		t.Fatalf("field patch replaced untouched volume: %v", all[1])
 	}
 	empty := ""
-	defaultRows := query(&pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty})
+	defaultRows := query(&pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: &empty})
 	if len(defaultRows) != 1 || defaultRows[0].GetKey().GetTimeSeries().GetSeriesTag() != "" {
 		t.Fatalf("explicit empty selector rows=%v", defaultRows)
 	}
 	okx := "venue:okx"
-	okxRows := query(&pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &okx})
+	okxRows := query(&pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: &okx})
 	if len(okxRows) != 1 || okxRows[0].GetKey().GetTimeSeries().GetSeriesTag() != okx {
 		t.Fatalf("exact selector rows=%v", okxRows)
 	}

@@ -37,7 +37,7 @@ func TestUnifiedRowAndKeyTRPCJSONRoundTrip(t *testing.T) {
 	emptyTag := ""
 	queryReq := &QueryTimeSeriesRowsReq{
 		SpaceId: "crypto", DatasetId: "ds_kline",
-		Selectors: []*TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &emptyTag}},
+		Selectors: []*TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: &emptyTag}},
 	}
 	raw, err := serializer.Marshal(queryReq)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestUnifiedRowAndKeyTRPCJSONRoundTrip(t *testing.T) {
 		Key: &RowKey{
 			SpaceId: "crypto", DatasetId: "ds_kline",
 			Kind: &RowKey_TimeSeries{TimeSeries: &TimeSeriesRowKey{
-				SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-10-01T00:00:00Z", SeriesTag: "venue:binance",
+				SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-10-01T00:00:00Z", SeriesTag: "venue:binance",
 			}},
 		},
 		Fields: []*FieldValue{{FieldId: "close", Value: &TypedValue{Value: &TypedValue_DoubleValue{DoubleValue: 100.5}}}},

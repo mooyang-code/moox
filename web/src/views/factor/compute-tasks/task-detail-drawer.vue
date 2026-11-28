@@ -35,7 +35,7 @@
         <a-descriptions :column="2" bordered size="small">
           <a-descriptions-item label="任务名称">{{ set.name || "-" }}</a-descriptions-item>
           <a-descriptions-item label="计算任务 ID">{{ set.task_id }}</a-descriptions-item>
-          <a-descriptions-item label="频率">{{ set.freq }}</a-descriptions-item>
+          <a-descriptions-item label="频率">{{ set.frequency }}</a-descriptions-item>
           <a-descriptions-item label="关联策略实例">
             <a-link
               v-if="set.bound_instance_id"
@@ -108,7 +108,7 @@ const store = useFactorStore();
 const set = computed(() => props.info?.factor_task as FactorTask);
 const title = computed(() => (props.info ? store.taskLabel(set.value) : ""));
 const statusTag = computed(() => taskStatusTag(set.value?.status || ""));
-const health = computed(() => taskHealth(set.value ?? { status: "pending", freq: "" }, props.info?.last_run));
+const health = computed(() => taskHealth(set.value ?? { status: "pending", frequency: "" }, props.info?.last_run));
 const actionKind = computed(() => (set.value ? taskActionKind(set.value) : "none"));
 const removeState = computed(() => (props.info ? deleteState(props.info) : { disabled: true, reason: "" }));
 const sourceName = computed(() =>

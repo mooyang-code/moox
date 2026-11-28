@@ -61,7 +61,7 @@ async function mockGateway(route: Route) {
           dataset_id: "dataset_binance_kline_1m",
           name: "现货K线",
           data_kind: 2,
-          freq: "1m",
+          frequency: "1m",
           status: "active",
           attributes: { owner_module: "collector", dataset_role: "raw_collection" }
         }
@@ -77,7 +77,7 @@ async function mockGateway(route: Route) {
             dataset_id: "dataset_binance_kline_1m",
             name: "现货K线",
             data_kind: 2,
-            freq: "1m",
+            frequency: "1m",
             status: "active",
             attributes: { owner_module: "collector", dataset_role: "raw_collection" }
           }
@@ -170,7 +170,7 @@ async function mockGateway(route: Route) {
               dataset_id: "dataset_binance_kline_1m",
               time_series: {
                 subject_id: "BTC-USDT",
-                freq: "1m",
+                frequency: "1m",
                 data_time: "2026-09-18T06:57:00Z",
                 series_tag: "venue:binance"
               }

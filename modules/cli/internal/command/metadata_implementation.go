@@ -379,7 +379,7 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetName() == y.GetName() &&
 			x.GetDescription() == y.GetDescription() &&
 			x.GetDataKind() == y.GetDataKind() &&
-			x.GetFreq() == y.GetFreq() &&
+			x.GetFrequency() == y.GetFrequency() &&
 			x.GetStatus() == y.GetStatus() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
@@ -457,7 +457,7 @@ func (s seedDataset) toPB() (*pb.Dataset, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "active", Attributes: s.Attributes}, nil
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Frequency: s.Freq, SubjectTags: s.SubjectTags, Status: "active", Attributes: s.Attributes}, nil
 }
 
 func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {

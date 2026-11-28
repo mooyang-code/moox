@@ -263,7 +263,7 @@ func (a *StorageAdapter) ListFactorResultDatasets(ctx context.Context, spaceID, 
 	}
 	var out []FactorResultDataset
 	for page := uint32(1); page <= maxFactorResultScans; page++ {
-		rsp, err := a.metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{SpaceId: spaceID, Freq: freq,
+		rsp, err := a.metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{SpaceId: spaceID, Frequency: freq,
 			Page: &commonpb.Page{Page: page, Size: factorResultPageSize},
 		})
 		if err != nil {

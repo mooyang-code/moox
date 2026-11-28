@@ -98,7 +98,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	}
 	row := &storagegen.Row{
 		Key: &storagegen.RowKey{SpaceId: expectation.SpaceID, DatasetId: expectation.DatasetID, Kind: &storagegen.RowKey_TimeSeries{TimeSeries: &storagegen.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", SeriesTag: "default", Freq: expectation.Frequency, DataTime: period.Format(time.RFC3339Nano),
+			SubjectId: "BTC-USDT", SeriesTag: "default", Frequency: expectation.Frequency, DataTime: period.Format(time.RFC3339Nano),
 		}}},
 		Fields: []*storagegen.FieldValue{{FieldId: "close", Value: &storagegen.TypedValue{Value: &storagegen.TypedValue_DoubleValue{DoubleValue: 68000}}}},
 	}

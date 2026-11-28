@@ -36,7 +36,7 @@ const info = (status: "enabled" | "disabled"): FactorTaskInfo =>
       task_id: "t1",
       space_id: "crypto",
       source_dataset_id: "ds",
-      freq: "5m",
+      frequency: "5m",
       name: "任务",
       result_dataset_id: "r",
       status

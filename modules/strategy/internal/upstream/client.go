@@ -93,7 +93,7 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, datasetID string) (Vie
 	if dataset == nil {
 		return ViewInfo{}, viewNotFound(datasetID)
 	}
-	info := ViewInfo{DatasetID: dataset.GetDatasetId(), Frequency: dataset.GetFreq(), Status: dataset.GetStatus()}
+	info := ViewInfo{DatasetID: dataset.GetDatasetId(), Frequency: dataset.GetFrequency(), Status: dataset.GetStatus()}
 	// storage-view 还没登记时当作索引还没建好：数据集是否被删以上面的 Metadata 为准。
 	if info.ActiveIndexID, info.Generation, err = c.viewState(ctx, spaceID, datasetID); err != nil && !errors.Is(err, errViewNotRegistered) {
 		return ViewInfo{}, err
@@ -184,7 +184,7 @@ func (c *RPCClient) GetDataset(ctx context.Context, spaceID, datasetID string) (
 	for key, value := range dataset.GetAttributes() {
 		attributes[key] = value
 	}
-	return DatasetInfo{DatasetID: dataset.GetDatasetId(), Status: dataset.GetStatus(), Frequency: dataset.GetFreq(), Retention: dataset.GetRetention(), Alignment: dataset.GetAlignment(), Attributes: attributes, SubjectTags: append([]string(nil), dataset.GetSubjectTags()...), SubjectsRevision: rsp.GetSubjectsRevision()}, nil
+	return DatasetInfo{DatasetID: dataset.GetDatasetId(), Status: dataset.GetStatus(), Frequency: dataset.GetFrequency(), Retention: dataset.GetRetention(), Alignment: dataset.GetAlignment(), Attributes: attributes, SubjectTags: append([]string(nil), dataset.GetSubjectTags()...), SubjectsRevision: rsp.GetSubjectsRevision()}, nil
 }
 
 // GetTag 读取标签的市场类型。
@@ -333,7 +333,7 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 	}
 	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(query.Subjects))
 	for _, subject := range query.Subjects {
-		selector := &storagepb.TimeSeriesSelector{SubjectId: subject.SubjectID, Freq: query.Frequency}
+		selector := &storagepb.TimeSeriesSelector{SubjectId: subject.SubjectID, Frequency: query.Frequency}
 		if subject.SeriesTag != "" {
 			tag := subject.SeriesTag
 			selector.SeriesTag = &tag

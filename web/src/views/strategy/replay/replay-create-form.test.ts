@@ -37,7 +37,7 @@ describe("回放表单的区间", () => {
       props: {
         modelValue: form,
         strategies: [{ strategy_id: "s1", name: "日线", dsl_yaml: "name: a\n" }] as never,
-        tasks: [{ task_id: "ftask_d", freq: "1d" }] as never,
+        tasks: [{ task_id: "ftask_d", frequency: "1d" }] as never,
         tasksLoading: false
       },
       global: { plugins: [ArcoVue] }
@@ -78,7 +78,7 @@ describe("回放表单的资金费列", () => {
       props: {
         modelValue: form,
         strategies: strategies as never,
-        tasks: [{ task_id: "ftask_b", freq: "1h" }] as never,
+        tasks: [{ task_id: "ftask_b", frequency: "1h" }] as never,
         tasksLoading: false
       },
       global: { plugins: [ArcoVue] }
@@ -106,7 +106,7 @@ describe("回放表单的因子数据来源", () => {
       props: {
         modelValue: form,
         strategies: [{ strategy_id: "s1", name: "策略", dsl_yaml: dsl }] as never,
-        tasks: [{ task_id: "ftask_a", freq: "1h" }] as never,
+        tasks: [{ task_id: "ftask_a", frequency: "1h" }] as never,
         tasksLoading: false
       },
       global: { plugins: [ArcoVue] }

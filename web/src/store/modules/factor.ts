@@ -39,9 +39,9 @@ export const useFactorStore = defineStore("factorStore", () => {
   const current = computed(() => tasks.value.find(item => item.factor_task.task_id === currentTaskId.value));
 
   /** 计算任务的展示名：任务名 · 频率；没有任务名时回落为数据集名称 · 频率，再回落为 source_dataset_id。 */
-  function taskLabel(set: Pick<FactorTask, "source_dataset_id" | "freq"> & Partial<Pick<FactorTask, "name">>) {
+  function taskLabel(set: Pick<FactorTask, "source_dataset_id" | "frequency"> & Partial<Pick<FactorTask, "name">>) {
     const base = set.name || datasetNames.value[set.source_dataset_id] || set.source_dataset_id;
-    return `${base} · ${set.freq}`;
+    return `${base} · ${set.frequency}`;
   }
 
   /** 该空间的计算任务是否已经成功加载过（页面重新挂载时据此跳过重置）。 */

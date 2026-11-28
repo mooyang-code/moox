@@ -66,7 +66,7 @@ describe("文案", () => {
 });
 
 describe("跟随", () => {
-  const task = (over: Partial<ArchiveTask>): ArchiveTask => ({ freq: "1m", status: "enabled", ...over });
+  const task = (over: Partial<ArchiveTask>): ArchiveTask => ({ frequency: "1m", status: "enabled", ...over });
 
   it("启用写每分钟跟随，停用写已停用；最近成功与整段重读进度到分钟、带空间时区后缀", () => {
     expect(followText(task({}))).toBe("每分钟跟随变更日志");

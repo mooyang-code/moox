@@ -60,7 +60,7 @@ func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID string, rows 
 		upserts = append(upserts, &storagepb.Row{
 			Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID,
 				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-					SubjectId: row.SubjectID, Freq: frequency,
+					SubjectId: row.SubjectID, Frequency: frequency,
 					DataTime: row.DataTime.UTC().Format(time.RFC3339Nano), SeriesTag: row.SeriesTag,
 				}},
 			},

@@ -157,7 +157,7 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 		Page:      &commonpb.Page{Size: uint32(req.PageRows), Cursor: req.Cursor},
 	}
 	for _, subject := range req.Subjects {
-		call.Selectors = append(call.Selectors, &storagepb.TimeSeriesSelector{SubjectId: subject, Freq: req.Freq})
+		call.Selectors = append(call.Selectors, &storagepb.TimeSeriesSelector{SubjectId: subject, Frequency: req.Freq})
 	}
 	if err := c.gateway.Invoke(gatewayclient.WithoutRetry(ctx), "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", call, rsp); err != nil {
 		return Page{}, fmt.Errorf("read rows %s/%s: %w", req.SpaceID, req.DatasetID, err)

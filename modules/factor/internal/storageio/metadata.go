@@ -352,7 +352,7 @@ func datasetFromResultSpec(spec ResultDatasetSpec) *storagepb.Dataset {
 	return &storagepb.Dataset{
 		SpaceId: spec.SpaceID, DatasetId: spec.DatasetID, DataSourceId: spec.DataSourceID,
 		Name: spec.Name, Description: spec.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Freq: spec.Frequency, Status: DatasetStatusActive, Attributes: attributes,
+		Frequency: spec.Frequency, Status: DatasetStatusActive, Attributes: attributes,
 		SubjectTags:         append([]string(nil), spec.SubjectTags...),
 		MaintenancePriority: resultMaintenancePriority,
 	}
@@ -367,7 +367,7 @@ func validateExistingResultDataset(expected, actual *storagepb.Dataset) error {
 		actual.GetName() != expected.GetName() || actual.GetDescription() != expected.GetDescription() ||
 		actual.GetAttributes()["dataset_role"] != DatasetRoleFactorResult ||
 		actual.GetAttributes()["source_dataset_id"] != expected.GetAttributes()["source_dataset_id"] ||
-		actual.GetFreq() != expected.GetFreq() ||
+		actual.GetFrequency() != expected.GetFrequency() ||
 		!equalStrings(actual.GetSubjectTags(), expected.GetSubjectTags()) ||
 		!containsAttributes(actual.GetAttributes(), expected.GetAttributes()) {
 		return fmt.Errorf("result dataset %s conflicts with the requested factor result contract", expected.GetDatasetId())
@@ -380,7 +380,7 @@ func datasetInfoFromProto(item *storagepb.Dataset) DatasetInfo {
 		SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(),
 		Name: item.GetName(), Description: item.GetDescription(),
 		DataKind: dataKindFromProto(item.GetDataKind()),
-		Freq:     item.GetFreq(), Retention: item.GetRetention(),
+		Freq:     item.GetFrequency(), Retention: item.GetRetention(),
 		Status: item.GetStatus(), SubjectTags: append([]string(nil), item.GetSubjectTags()...),
 		Attributes: cloneStringMap(item.GetAttributes()), Revision: item.GetRevision(),
 	}

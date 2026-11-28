@@ -69,7 +69,7 @@ var dataRowsExportCmd = &cobra.Command{
 
 func timeSeriesSelectorForExport(exactSeriesTag bool) *pb.TimeSeriesSelector {
 	selector := &pb.TimeSeriesSelector{
-		SubjectId: dataSubjectID, Freq: dataFreq,
+		SubjectId: dataSubjectID, Frequency: dataFreq,
 	}
 	if exactSeriesTag {
 		selector.SeriesTag = &dataSeriesTag

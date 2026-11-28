@@ -84,7 +84,7 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.Equal(t, "crypto", reader.request.GetKeys()[0].GetSpaceId())
 	require.Equal(t, "market_kline", reader.request.GetKeys()[0].GetDatasetId())
 	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetTimeSeries().GetSubjectId())
-	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
+	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFrequency())
 	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
 	// 只取已收盘的桶（不含 12:00 这根未收盘的），按时间升序。
 	require.Len(t, reader.request.GetKeys(), 24)
@@ -233,7 +233,7 @@ func TestMarketCanaryStockCNChecksLatestClosedBucketsAndOHLCV(t *testing.T) {
 	require.Equal(t, []string{"open", "high", "low", "close", "volume", "amount", "source_provider"}, reader.request.GetColumnNames())
 	require.Equal(t, []string{"2026-08-28T01:30:00Z", "2026-08-28T01:31:00Z", "2026-08-28T01:32:00Z"}, requestedTimes(reader))
 	require.Equal(t, "default", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
-	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
+	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFrequency())
 }
 
 func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
@@ -319,7 +319,7 @@ func TestMarketCanaryStockCN5mExpectedBars(t *testing.T) {
 			}
 			require.Empty(t, result.Diagnostic)
 			require.Equal(t, want, requestedTimes(reader))
-			require.Equal(t, "5m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
+			require.Equal(t, "5m", reader.request.GetKeys()[0].GetTimeSeries().GetFrequency())
 		})
 	}
 }

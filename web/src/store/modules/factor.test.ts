@@ -17,7 +17,7 @@ const info = (taskId: string, spaceId = "crypto", members: FactorTaskInfo["membe
     task_id: taskId,
     space_id: spaceId,
     source_dataset_id: "d",
-    freq: "1m",
+    frequency: "1m",
     result_dataset_id: `dataset_factor_${taskId}`,
     status: "enabled"
   },

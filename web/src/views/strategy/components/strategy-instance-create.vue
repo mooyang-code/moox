@@ -311,7 +311,7 @@ const extraHint = computed(() => {
   const sources = requirement.value?.sources ?? [];
   if (sources.length)
     parts.push(
-      `附加来源 ${sources.map(source => `${source.name}（${source.bar || "?"}）`).join("、")} 按主帧的市场各绑一个计算任务：周期要与来源的 bar 一致、是主帧周期的整数倍，任务不能有可变成员`
+      `附加来源 ${sources.map(source => `${source.name}（${source.frequency || "?"}）`).join("、")} 按主帧的市场各绑一个计算任务：周期要与来源的 bar 一致、是主帧周期的整数倍，任务不能有可变成员`
     );
   return parts.join("；") + "。";
 });

@@ -41,7 +41,7 @@ function normalizeRequirement(value: any): StrategyTaskRequirement | null {
     pool: Boolean(value.pool),
     marketDeclared: Boolean(value.market_declared),
     taskKeys: (value.task_keys ?? []).map(String),
-    sources: (value.sources ?? []).map((item: any) => ({ name: String(item?.name ?? ""), bar: String(item?.bar ?? "") })),
+    sources: (value.sources ?? []).map((item: any) => ({ name: String(item?.name ?? ""), frequency: String(item?.frequency ?? "") })),
     problems: (value.problems ?? []).map(String),
     referenceMarkets: (value.reference_markets ?? []).map(String),
     tuned: Boolean(value.tuned),

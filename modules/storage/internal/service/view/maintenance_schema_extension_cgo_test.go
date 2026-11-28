@@ -38,7 +38,7 @@ func prepareBuiltExtensionIndex(t *testing.T, ctx context.Context, svc *Service)
 		t.Fatal(err)
 	}
 	rowKey := &pb.RowKey{SpaceId: "space", DatasetId: extensionDatasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-10-04T00:00:00Z",
+		SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-10-04T00:00:00Z",
 	}}}
 	if err := engine.Write(ctx, indexID, viewindex.ViewIndexWriteBatch{
 		ViewRevision: 1, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite,

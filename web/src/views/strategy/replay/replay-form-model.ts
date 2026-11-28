@@ -158,10 +158,10 @@ export function replayFundingColumn(form: ReplayFormState, strategies: Strategy[
 }
 
 /** 选的计算任务都是日线时区间只选日期（按空间时区的整天）；没选任务或有日内任务时选到分钟。 */
-export function replayDateOnly(form: ReplayFormState, tasks: Pick<FactorTask, "task_id" | "freq">[]): boolean {
+export function replayDateOnly(form: ReplayFormState, tasks: Pick<FactorTask, "task_id" | "frequency">[]): boolean {
   const chosen = Object.values(replayFactorTasks(form)).filter(Boolean);
   if (!chosen.length) return false;
-  return chosen.every(id => freqSeconds(tasks.find(task => task.task_id === id)?.freq ?? "") === 86_400);
+  return chosen.every(id => freqSeconds(tasks.find(task => task.task_id === id)?.frequency ?? "") === 86_400);
 }
 
 /**

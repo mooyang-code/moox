@@ -93,7 +93,7 @@ const form = reactive({
   job_id: ""
 });
 
-const freq = computed(() => props.info?.factor_task.freq || "");
+const freq = computed(() => props.info?.factor_task.frequency || "");
 const sessionMarket = computed(() => isSessionMarket(props.info?.factor_task.space_id || ""));
 const candidates = computed(() => (props.info ? enabledMemberIds(props.info) : []));
 const estimate = computed(() =>

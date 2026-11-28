@@ -144,7 +144,7 @@ func validatePeriodDataset(snapshot *metacache.DatasetSnapshot, expectation *pb.
 	if !frequencypkg.IsCanonical(frequency) {
 		return nil, storeerr.Invalidf("period frequency is invalid")
 	}
-	if dataset.GetFreq() != frequency {
+	if dataset.GetFrequency() != frequency {
 		return nil, storeerr.Invalidf("period frequency does not match the Dataset declaration")
 	}
 	return dataset, nil

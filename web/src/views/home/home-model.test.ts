@@ -112,11 +112,11 @@ describe("home data rows", () => {
         {
           name: "存储",
           datasets: [
-            { producer: "storage", dataset_id: "dataset_abc", freq: "1h", status: "healthy" },
+            { producer: "storage", dataset_id: "dataset_abc", frequency: "1h", status: "healthy" },
             {
               producer: "storage",
               dataset_id: "dataset_abc",
-              freq: "1m",
+              frequency: "1m",
               status: "degraded",
               waiting_bars: 850,
               overdue_seconds: "51035",
@@ -126,7 +126,7 @@ describe("home data rows", () => {
         },
         {
           name: "视图",
-          datasets: [{ producer: "storage_view", dataset_id: "dataset_xyz", freq: "1m", status: "healthy" }]
+          datasets: [{ producer: "storage_view", dataset_id: "dataset_xyz", frequency: "1m", status: "healthy" }]
         }
       ]
     };
@@ -142,7 +142,7 @@ describe("home data rows", () => {
   it("summarizes factor tasks of the current space with health and lag", () => {
     const sets = [
       {
-        factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+        factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "dataset_abc", frequency: "1m", status: "enabled" },
         members: [{ status: "enabled" }, { status: "enabled" }, { status: "disabled" }],
         last_run: {
           task_id: "a",
@@ -152,7 +152,7 @@ describe("home data rows", () => {
         }
       },
       {
-        factor_task: { task_id: "b", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+        factor_task: { task_id: "b", space_id: "crypto", source_dataset_id: "dataset_abc", frequency: "1m", status: "enabled" },
         members: [],
         last_run: {
           task_id: "b",
@@ -161,7 +161,7 @@ describe("home data rows", () => {
           lag_seconds: String(engineLag("1m", 600))
         }
       },
-      { factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", freq: "1h", status: "enabled" }, members: [] }
+      { factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", frequency: "1h", status: "enabled" }, members: [] }
     ] as unknown as FactorTaskInfo[];
     const rows = factorRows(sets, "crypto", names, NOW, "UTC");
     expect(rows.map(row => [row.taskId, row.label, row.factors, row.health.label, row.tone])).toEqual([
@@ -327,7 +327,7 @@ describe("home tiles", () => {
               {
                 producer: "storage",
                 dataset_id: "d1",
-                freq: "1m",
+                frequency: "1m",
                 status: "degraded",
                 latest_bar_close_at: new Date(NOW - 840_000).toISOString(),
                 waiting_bars: 14,
@@ -336,7 +336,7 @@ describe("home tiles", () => {
               {
                 producer: "storage",
                 dataset_id: "d2",
-                freq: "1m",
+                frequency: "1m",
                 status: "healthy",
                 latest_bar_close_at: new Date(NOW - 5_000).toISOString()
               }
@@ -368,7 +368,7 @@ describe("home tiles", () => {
 
   it("writes the close time on the factor and freshness cards and keeps the abnormal count", () => {
     const set = (id: string, openedSecondsAgo: number, status = "ok") => ({
-      factor_task: { task_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+      factor_task: { task_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", frequency: "1m", status: "enabled" },
       members: [{ status: "enabled" }, { status: "enabled" }],
       last_run: {
         task_id: id,
@@ -400,7 +400,7 @@ describe("home tiles", () => {
         {
           producer: "storage",
           dataset_id: "dataset_abc",
-          freq: "1m",
+          frequency: "1m",
           status: "healthy",
           output_watermark_at: at(120),
           latest_bar_close_at: at(60)
@@ -415,7 +415,7 @@ describe("home tiles", () => {
         {
           producer: "storage",
           dataset_id: "dataset_abc",
-          freq: "1m",
+          frequency: "1m",
           status: "healthy",
           output_watermark_at: at(120),
           latest_bar_close_at: at(60)
@@ -423,7 +423,7 @@ describe("home tiles", () => {
         {
           producer: "storage",
           dataset_id: "dataset_xyz",
-          freq: "1m",
+          frequency: "1m",
           status: "degraded",
           output_watermark_at: at(7200),
           latest_bar_close_at: at(7140),
@@ -465,7 +465,7 @@ describe("home tiles", () => {
               {
                 producer: "storage",
                 dataset_id: "dataset_abc",
-                freq: "1m",
+                frequency: "1m",
                 status: "degraded",
                 waiting_bars: 882,
                 overdue_seconds: "52920"
@@ -473,7 +473,7 @@ describe("home tiles", () => {
               {
                 producer: "storage",
                 dataset_id: "dataset_abc",
-                freq: "1h",
+                frequency: "1h",
                 status: "degraded",
                 waiting_bars: 5,
                 overdue_seconds: "18660"
@@ -501,7 +501,7 @@ describe("home tiles", () => {
     const covered = attentionItems({
       ...base,
       alerts: [
-        { id: "a", severity: "warning", title: "入库落后", object: { type: "dataset", dataset_id: "dataset_abc", freq: "1m" } }
+        { id: "a", severity: "warning", title: "入库落后", object: { type: "dataset", dataset_id: "dataset_abc", frequency: "1m" } }
       ]
     });
     expect(covered.map(item => item.source)).toEqual(["监控", "数据"]);
@@ -536,7 +536,7 @@ describe("home tiles", () => {
     const sets = (lagSeconds: string) =>
       [
         {
-          factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "d", freq: "1m", status: "enabled" },
+          factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "d", frequency: "1m", status: "enabled" },
           members: [],
           last_run: { task_id: "a", last_period_time: "1791900000", last_status: "ok", lag_seconds: lagSeconds }
         }

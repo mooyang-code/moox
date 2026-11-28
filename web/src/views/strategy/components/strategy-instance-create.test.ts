@@ -93,7 +93,7 @@ describe("strategy instance creation behavior", () => {
     }
   ];
   const taskInfo = (patch: Record<string, unknown> = {}, taskId = "ftask_a") => ({
-    factor_task: { task_id: taskId, name: "现货因子", space_id: "crypto", freq: "1h", status: "enabled", ...patch },
+    factor_task: { task_id: taskId, name: "现货因子", space_id: "crypto", frequency: "1h", status: "enabled", ...patch },
     members: [
       { member_key: "ma", kind: "fixed", output_columns: ["ma"] },
       { member_key: "bias__var", kind: "var", output_columns: ["bias__var"] }
@@ -166,7 +166,7 @@ describe("strategy instance creation behavior", () => {
 
   it("写了参考市场与附加来源时，为参考市场和每个来源各选一个计算任务，按任务键提交", async () => {
     const plainTask = (taskId: string) => ({
-      factor_task: { task_id: taskId, name: taskId, space_id: "crypto", freq: "1h", status: "enabled" },
+      factor_task: { task_id: taskId, name: taskId, space_id: "crypto", frequency: "1h", status: "enabled" },
       members: [{ member_key: "ma", kind: "fixed", output_columns: ["ma"] }]
     });
     api.listFactorTasks.mockResolvedValue({

@@ -57,7 +57,7 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 	require.Equal(t, "crypto", fixture.request.GetKeys()[0].GetSpaceId())
 	require.Equal(t, "market_kline", fixture.request.GetKeys()[0].GetDatasetId())
 	require.Equal(t, "BTC-USDT", fixture.request.GetKeys()[0].GetTimeSeries().GetSubjectId())
-	require.Equal(t, "1m", fixture.request.GetKeys()[0].GetTimeSeries().GetFreq())
+	require.Equal(t, "1m", fixture.request.GetKeys()[0].GetTimeSeries().GetFrequency())
 	require.Equal(t, "venue:binance", fixture.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
 	// 只读已收盘的桶（12:00 那根未收盘），按时间升序。
 	require.Equal(t, now.Add(-24*time.Minute).Format(time.RFC3339Nano), fixture.request.GetKeys()[0].GetTimeSeries().GetDataTime())

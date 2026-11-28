@@ -169,7 +169,7 @@ export interface Dataset {
   description?: string;
   data_kind: DataKind;
   /** 时序 Dataset 的唯一频率；记录型 Dataset 可为空。 */
-  freq?: string;
+  frequency?: string;
   status: string;
   /** 只读的生效保留期："<n>h" 或 "forever"，由 Storage 策略按空间与频率解析。 */
   retention?: string;
@@ -216,13 +216,13 @@ export interface ResultColumn {
 
 export interface TimeSeriesSelector {
   subject_id: string;
-  freq: string;
+  frequency: string;
   series_tag?: string;
 }
 
 export interface TimeSeriesRowKey {
   subject_id: string;
-  freq: string;
+  frequency: string;
   data_time: string;
   series_tag?: string;
 }

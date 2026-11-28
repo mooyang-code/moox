@@ -19,7 +19,7 @@ func commitMetricsService(t *testing.T, commit commitFunc) (*Service, *recording
 	t.Helper()
 	metrics := &recordingDatasetMetrics{}
 	datasets := newTestDatasetCache(t,
-		[]*pb.Dataset{{SpaceId: "crypto", DatasetId: "market_kline", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m"}},
+		[]*pb.Dataset{{SpaceId: "crypto", DatasetId: "market_kline", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m"}},
 		[]*pb.DatasetColumn{{SpaceId: "crypto", DatasetId: "market_kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}},
 	)
 	svc, err := New(Options{
@@ -36,7 +36,7 @@ func commitRequest(times ...time.Time) *pb.PrimaryCommitTimeSeriesBatchReq {
 	for i, at := range times {
 		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: uint32(i), Row: &pb.Row{
 			Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "market_kline", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: "BTC-USDT", Freq: "1m", DataTime: at.UTC().Format(time.RFC3339Nano),
+				SubjectId: "BTC-USDT", Frequency: "1m", DataTime: at.UTC().Format(time.RFC3339Nano),
 			}}},
 			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 		}})

@@ -54,7 +54,7 @@ export interface ArchiveRun {
 export interface ArchiveTask {
   space_id?: string;
   dataset_id?: string;
-  freq?: string;
+  frequency?: string;
   /** day：按空间本地日；month：按月 */
   partition_unit?: "day" | "month" | string;
   retention?: string;
@@ -179,7 +179,7 @@ export interface ListArchiveTasksRsp {
 }
 
 export interface PrepareArchiveTaskRsp {
-  freq?: string;
+  frequency?: string;
   partition_unit?: string;
   retention?: string;
   earliest_backfill_from?: string;

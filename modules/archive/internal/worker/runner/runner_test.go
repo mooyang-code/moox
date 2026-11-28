@@ -189,7 +189,7 @@ func (e *env) runner(pageRows int) *Runner {
 
 func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: "run_1", LeaseToken: "tok", Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
+		RunId: "run_1", LeaseToken: "tok", Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Frequency: "1m", PartitionUnit: "day",
 		Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: e.now.UnixMilli(), ScheduledAt: e.now.UnixMilli(),
 	}
@@ -537,7 +537,7 @@ func TestStockCNPartitionWaitsForTheLocalCloseAndMonthPartitionsUseTheTwelveHour
 	}
 	m.now = time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	out = m.run(2000, func(a *archivepb.RunAssignment) {
-		a.Freq, a.PartitionUnit, a.Retention = "1d", "month", "forever"
+		a.Frequency, a.PartitionUnit, a.Retention = "1d", "month", "forever"
 		a.BackfillFrom = "2026-09-25T00:00:00Z"
 	}, nil)
 	oct, sep := report(out, "2026-10"), report(out, "2026-09")
@@ -558,7 +558,7 @@ func TestExecuteRejectsBadAssignmentsAndMissingColumns(t *testing.T) {
 		"bad range":          func(a *archivepb.RunAssignment) { a.Kind, a.RangeStart, a.RangeEnd = "range", "x", "y" },
 		"bad backfill":       func(a *archivepb.RunAssignment) { a.BackfillFrom = "later" },
 		"bad retention":      func(a *archivepb.RunAssignment) { a.Retention = "soon" },
-		"bad freq":           func(a *archivepb.RunAssignment) { a.Freq = "7x" },
+		"bad freq":           func(a *archivepb.RunAssignment) { a.Frequency = "7x" },
 		"no dir name":        func(a *archivepb.RunAssignment) { a.DirName = "" },
 		"no purpose":         func(a *archivepb.RunAssignment) { a.Purpose = "" },
 		"unsafe dir":         func(a *archivepb.RunAssignment) { a.DirName = "../x" },

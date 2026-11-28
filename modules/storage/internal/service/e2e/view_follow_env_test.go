@@ -69,7 +69,7 @@ func (e *followEnv) CountViewRows(ctx context.Context, datasetID, subject string
 		Page:      &pb.Page{Page: 1, Size: 1}, TotalMode: pb.TotalMode_FORCE_EXACT,
 	}
 	if subject != "" {
-		req.Selectors = []*pb.TimeSeriesSelector{{SubjectId: subject, Freq: readyBenchFreq}}
+		req.Selectors = []*pb.TimeSeriesSelector{{SubjectId: subject, Frequency: readyBenchFreq}}
 	}
 	rsp, err := e.view.QueryTimeSeriesRows(ctx, req)
 	if err != nil {
@@ -317,7 +317,7 @@ func newFollowEnvDatasetCache(t *testing.T, datasets []readyBenchDataset) *metac
 func followEnvDataset(dataset readyBenchDataset) *pb.Dataset {
 	return &pb.Dataset{
 		SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Name: dataset.datasetID,
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: readyBenchFreq, Status: "active",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: readyBenchFreq, Status: "active",
 		AllowedLatenessSeconds: uint32(readyBenchLatenessSeconds), CreatedAt: followEnvDatasetCreatedAt,
 	}
 }

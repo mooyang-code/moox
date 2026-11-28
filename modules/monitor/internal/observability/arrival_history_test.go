@@ -32,7 +32,7 @@ func (m taskMetadata) ListTags(context.Context, *storagepb.ListTagsReq, ...clien
 func (m taskMetadata) ListDatasets(_ context.Context, req *storagepb.ListDatasetsReq, _ ...client.Option) (*storagepb.ListDatasetsRsp, error) {
 	var out []*storagepb.Dataset
 	for _, dataset := range m.datasets {
-		if dataset.GetSpaceId() == req.GetSpaceId() && dataset.GetFreq() == req.GetFreq() {
+		if dataset.GetSpaceId() == req.GetSpaceId() && dataset.GetFrequency() == req.GetFrequency() {
 			out = append(out, dataset)
 		}
 	}
@@ -41,7 +41,7 @@ func (m taskMetadata) ListDatasets(_ context.Context, req *storagepb.ListDataset
 
 // factorResult 是一个因子任务建出的结果数据集（Storage 里的属性与 Factor 建数据集时一致）。
 func factorResult(spaceID, datasetID, name, sourceID, freq string) *storagepb.Dataset {
-	return &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Name: name, Freq: freq,
+	return &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Name: name, Frequency: freq,
 		Attributes: map[string]string{"dataset_role": "factor_result", "source_dataset_id": sourceID}}
 }
 

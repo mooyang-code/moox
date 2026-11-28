@@ -20,7 +20,7 @@ type viewMetadataReader struct {
 
 func (r *viewMetadataReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	return []*pb.Dataset{{
-		SpaceId: "crypto", DatasetId: "dataset_kline_5m", Freq: "5m", Status: "active",
+		SpaceId: "crypto", DatasetId: "dataset_kline_5m", Frequency: "5m", Status: "active",
 		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Alignment: "epoch_utc", AllowedLatenessSeconds: 30,
 	}}, nil, nil
 }

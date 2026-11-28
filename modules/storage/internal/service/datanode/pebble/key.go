@@ -48,7 +48,7 @@ func rowParts(key *pb.RowKey) (kind byte, parts [][]byte, err error) {
 	switch value := key.GetKind().(type) {
 	case *pb.RowKey_TimeSeries:
 		row := value.TimeSeries
-		if row == nil || row.GetSubjectId() == "" || row.GetFreq() == "" || row.GetDataTime() == "" {
+		if row == nil || row.GetSubjectId() == "" || row.GetFrequency() == "" || row.GetDataTime() == "" {
 			return 0, nil, invalid("time-series row key requires subject_id, freq and data_time")
 		}
 		at, parseErr := time.Parse(time.RFC3339Nano, row.GetDataTime())
@@ -61,7 +61,7 @@ func rowParts(key *pb.RowKey) (kind byte, parts [][]byte, err error) {
 		if tagErr := rowidentity.ValidateSeriesTag(row.GetSeriesTag()); tagErr != nil {
 			return 0, nil, invalidf("invalid series_tag: %w", tagErr)
 		}
-		return timeSeriesKind, append(base, []byte(bucket), []byte(row.GetSubjectId()), []byte(row.GetFreq()), []byte(dataTime), []byte(row.GetSeriesTag())), nil
+		return timeSeriesKind, append(base, []byte(bucket), []byte(row.GetSubjectId()), []byte(row.GetFrequency()), []byte(dataTime), []byte(row.GetSeriesTag())), nil
 	case *pb.RowKey_Record:
 		row := value.Record
 		if row == nil || row.GetRecordId() == "" || row.GetVersion() == "" {

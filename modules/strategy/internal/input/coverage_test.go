@@ -96,7 +96,7 @@ func (s *coverageStub) QueryTimeSeriesRows(_ context.Context, req *storagepb.Que
 // 覆盖统计由 ViewCoverage 按需向 DataView 读取该 View 活动索引的统计。探测查询固定活动索引、只带时间范围、
 // 不命中任何行；非精确读取只用已缓存的统计，精确读取在未缓存时再要求现算一次。
 func TestViewCoverageProbesDataViewOnDemand(t *testing.T) {
-	metadata := &metadataStub{view: &storagepb.Dataset{DatasetId: "ds", Freq: "1h", Status: "active"}}
+	metadata := &metadataStub{view: &storagepb.Dataset{DatasetId: "ds", Frequency: "1h", Status: "active"}}
 	cached := &coverageStub{viewStateStub: viewStateStub{rsp: builtState("idx_a", "store", 1)}, cached: true}
 	client := &upstream.RPCClient{Metadata: metadata, DataView: cached}
 	info, err := client.GetView(context.Background(), "space", "ds")

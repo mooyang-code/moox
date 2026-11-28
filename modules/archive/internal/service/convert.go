@@ -139,7 +139,7 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 func (s *Service) taskToPB(t store.Task, retention string) *archivepb.ArchiveTask {
 	unit, _ := schedule.PartitionUnit(t.Freq)
 	out := &archivepb.ArchiveTask{
-		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Freq: t.Freq, PartitionUnit: unit, Retention: retention,
+		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Frequency: t.Freq, PartitionUnit: unit, Retention: retention,
 		BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status,
 		LastFollowAt: millisOf(t.LastFollowAt), LastSuccessAt: millisOf(t.LastSuccessAt),
 		LastFollowError: t.LastFollowError, LastFollowMessage: t.LastFollowMessage,

@@ -273,7 +273,7 @@ func (s *Service) buildFollowTask(task store.Task, ds Dataset, spaceTZ string, r
 		TaskId:                  strconv.FormatInt(task.ID, 10),
 		Purpose:                 task.Purpose,
 		DirName:                 task.DirName,
-		Freq:                    task.Freq,
+		Frequency:               task.Freq,
 		PartitionUnit:           unit,
 		Retention:               ds.Retention,
 		AllowedLatenessSeconds:  uint32(s.cfg.AllowedLateness / time.Second),
@@ -296,7 +296,7 @@ func (s *Service) assignment(c store.Claimed, ds Dataset, spaceTZ string, regist
 	return &archivepb.RunAssignment{
 		RunId: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Kind: c.Run.Kind,
 		SpaceId: ft.SpaceId, DatasetId: ft.DatasetId, TaskId: ft.TaskId,
-		Purpose: ft.Purpose, DirName: ft.DirName, Freq: ft.Freq, PartitionUnit: ft.PartitionUnit, Retention: ft.Retention,
+		Purpose: ft.Purpose, DirName: ft.DirName, Frequency: ft.Frequency, PartitionUnit: ft.PartitionUnit, Retention: ft.Retention,
 		AllowedLatenessSeconds: ft.AllowedLatenessSeconds, SpaceTz: ft.SpaceTz, LocalClose: ft.LocalClose,
 		StagingRetentionSeconds: ft.StagingRetentionSeconds,
 		ScheduledAt:             millisOf(c.Run.ScheduledAt), StartedAt: millisOf(c.Run.StartedAt),

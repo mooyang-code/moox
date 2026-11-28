@@ -30,7 +30,7 @@
 
       <a-descriptions :column="{ xs: 1, sm: 1, md: 2 }" size="small" bordered class="summary">
         <a-descriptions-item label="频率 / 分区"
-          >{{ task.freq || "—" }} / {{ partitionUnitText(task.partition_unit) }}</a-descriptions-item
+          >{{ task.frequency || "—" }} / {{ partitionUnitText(task.partition_unit) }}</a-descriptions-item
         >
         <a-descriptions-item label="跟随方式">执行器每分钟本地跟随 Storage 变更日志</a-descriptions-item>
         <a-descriptions-item label="最近成功的跟随">{{ formatInstant(task.last_success_at, zone) }}</a-descriptions-item>

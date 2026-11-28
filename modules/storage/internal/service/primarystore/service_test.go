@@ -55,7 +55,7 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	store := openTestStore(t)
 	cache := newTestDatasetCache(t, []*pb.Dataset{
 		{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
-		{SpaceId: "space", DatasetId: "factor-data", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}},
+		{SpaceId: "space", DatasetId: "factor-data", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}},
 	}, []*pb.DatasetColumn{
 		{SpaceId: "space", DatasetId: "dataset", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
 	})
@@ -91,7 +91,7 @@ func TestCommitTimeSeriesBatchValidatesPeriodDataset(t *testing.T) {
 	runPeriodValidationCases(t, "commit", func(svc *Service, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
 		row := &pb.Row{Key: &pb.RowKey{
 			SpaceId: exp.GetSpaceId(), DatasetId: exp.GetDatasetId(),
-			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: exp.GetFrequency(), DataTime: "2026-09-30T00:00:00Z"}},
+			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Frequency: exp.GetFrequency(), DataTime: "2026-09-30T00:00:00Z"}},
 		}}
 		rsp, err := svc.CommitTimeSeriesBatch(context.Background(), &pb.PrimaryCommitTimeSeriesBatchReq{
 			Expectation: exp, Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}},
@@ -121,12 +121,12 @@ func runPeriodValidationCases(t *testing.T, method string, invoke func(*Service,
 	t.Helper()
 	validDataset := func() *pb.Dataset {
 		return &pb.Dataset{
-			SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active",
+			SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1h", Status: "active",
 			Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
 		}
 	}
 	withAttrs := func(kind pb.DataKind, freq string, attrs map[string]string) *pb.Dataset {
-		return &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: kind, Freq: freq, Status: "active", Attributes: attrs}
+		return &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: kind, Frequency: freq, Status: "active", Attributes: attrs}
 	}
 	disabledDataset := func() *pb.Dataset {
 		ds := validDataset()
@@ -237,8 +237,8 @@ func (m *recordingDatasetMetrics) ObserveRun(observation report.DatasetObservati
 func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 	metrics := &recordingDatasetMetrics{}
 	cache := newTestDatasetCache(t, []*pb.Dataset{
-		{SpaceId: "crypto", DatasetId: "market_kline_1m", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
-		{SpaceId: "crypto", DatasetId: "market_kline_5m", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active"},
+		{SpaceId: "crypto", DatasetId: "market_kline_1m", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active"},
+		{SpaceId: "crypto", DatasetId: "market_kline_5m", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "5m", Status: "active"},
 	}, []*pb.DatasetColumn{
 		{SpaceId: "crypto", DatasetId: "market_kline_1m", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
 		{SpaceId: "crypto", DatasetId: "market_kline_5m", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
@@ -252,7 +252,7 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 			Key: &pb.RowKey{
 				SpaceId: "crypto", DatasetId: datasetID,
 				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-					SubjectId: "BTC-USDT", Freq: freq, DataTime: at.UTC().Format(time.RFC3339Nano),
+					SubjectId: "BTC-USDT", Frequency: freq, DataTime: at.UTC().Format(time.RFC3339Nano),
 				}},
 			},
 			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{
@@ -296,7 +296,7 @@ func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 	}
 	metrics := &recordingDatasetMetrics{}
 	cache := newTestDatasetCache(t, []*pb.Dataset{
-		{SpaceId: "crypto", DatasetId: "market_kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
+		{SpaceId: "crypto", DatasetId: "market_kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active"},
 	}, []*pb.DatasetColumn{
 		{SpaceId: "crypto", DatasetId: "market_kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
 	})
@@ -310,7 +310,7 @@ func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 			Key: &pb.RowKey{
 				SpaceId: "crypto", DatasetId: "market_kline",
 				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-					SubjectId: "BTC-USDT", Freq: "1m", DataTime: at.Format(time.RFC3339Nano),
+					SubjectId: "BTC-USDT", Frequency: "1m", DataTime: at.Format(time.RFC3339Nano),
 				}},
 			},
 			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{
@@ -496,7 +496,7 @@ func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 
 func TestPrimaryReadRowsRoundTripsThroughPebble(t *testing.T) {
 	cache := newTestDatasetCache(t, []*pb.Dataset{
-		{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"},
+		{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1h", Status: "active"},
 	}, []*pb.DatasetColumn{
 		{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
 	})
@@ -531,7 +531,7 @@ func timeSeriesRowKey(spaceID, datasetID, subjectID, freq, dataTime, seriesTag s
 	return &pb.RowKey{
 		SpaceId: spaceID, DatasetId: datasetID,
 		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: subjectID, Freq: freq, DataTime: dataTime, SeriesTag: seriesTag,
+			SubjectId: subjectID, Frequency: freq, DataTime: dataTime, SeriesTag: seriesTag,
 		}},
 	}
 }

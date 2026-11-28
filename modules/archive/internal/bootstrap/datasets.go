@@ -29,7 +29,7 @@ func newGatewayDatasets(gateway gatewayclient.Invoker) *gatewayDatasets {
 
 func datasetFromPB(ds *storagepb.Dataset) service.Dataset {
 	return service.Dataset{
-		SpaceID: ds.GetSpaceId(), DatasetID: ds.GetDatasetId(), Name: ds.GetName(), DataKind: dataKind(ds.GetDataKind()), Freq: ds.GetFreq(),
+		SpaceID: ds.GetSpaceId(), DatasetID: ds.GetDatasetId(), Name: ds.GetName(), DataKind: dataKind(ds.GetDataKind()), Freq: ds.GetFrequency(),
 		Status: ds.GetStatus(), Retention: ds.GetRetention(),
 		Description: ds.GetDescription(), DataSourceID: ds.GetDataSourceId(), RetentionSource: ds.GetRetentionSource(), SubjectTags: ds.GetSubjectTags(),
 		Attributes: ds.GetAttributes(), CreatedAt: ds.GetCreatedAt(), UpdatedAt: ds.GetUpdatedAt(), Revision: ds.GetRevision(),

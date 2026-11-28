@@ -35,7 +35,7 @@ func newFakeStorage() *fakeStorage { return &fakeStorage{rows: map[string]*stora
 
 func keyText(key *storagepb.RowKey) string {
 	series := key.GetTimeSeries()
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%s", key.GetSpaceId(), key.GetDatasetId(), series.GetSubjectId(), series.GetFreq(), series.GetDataTime(), series.GetSeriesTag())
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%s", key.GetSpaceId(), key.GetDatasetId(), series.GetSubjectId(), series.GetFrequency(), series.GetDataTime(), series.GetSeriesTag())
 }
 
 func (f *fakeStorage) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, _ []string) ([]*storagepb.Row, error) {

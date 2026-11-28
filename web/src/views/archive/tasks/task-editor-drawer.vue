@@ -24,7 +24,7 @@
               :key="item.dataset_id"
               :value="item.dataset_id"
               :disabled="taskIds.has(item.dataset_id)"
-              >{{ item.name || item.dataset_id }} · {{ item.freq || "—" }} · {{ formatRetention(item.retention)
+              >{{ item.name || item.dataset_id }} · {{ item.frequency || "—" }} · {{ formatRetention(item.retention)
               }}{{ taskIds.has(item.dataset_id) ? "（已有任务）" : "" }}</a-option
             >
           </a-select>

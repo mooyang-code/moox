@@ -36,7 +36,7 @@ func newRangeStore(t *testing.T) *rangeStore {
 func newRangeService(t *testing.T, store *rangeStore) *Service {
 	t.Helper()
 	datasets := newTestDatasetCache(t, []*pb.Dataset{{
-		SpaceId: "space", DatasetId: "market", Freq: "1m", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		SpaceId: "space", DatasetId: "market", Frequency: "1m", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
 	}}, nil)
 	svc, err := New(Options{
 		Store:    store,
@@ -50,7 +50,7 @@ func validRangeReq() *pb.ReadTimeSeriesRowsReq {
 	empty := ""
 	return &pb.ReadTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market",
-		Selectors:   []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty}},
+		Selectors:   []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: &empty}},
 		ColumnNames: []string{"close"},
 		TimeRange:   &pb.TimeRange{StartTime: "2026-10-04T00:00:00Z", EndTime: "2026-10-04T01:00:00Z"},
 		Page:        &pb.Page{Size: 2000, Cursor: "abc"},
@@ -70,7 +70,7 @@ func TestRangeReadGoesToTheStore(t *testing.T) {
 
 func TestRangeReadRejectsInvalidRequestsBeforeTheStore(t *testing.T) {
 	selector := func(freq string) []*pb.TimeSeriesSelector {
-		return []*pb.TimeSeriesSelector{{SubjectId: "S", Freq: freq}}
+		return []*pb.TimeSeriesSelector{{SubjectId: "S", Frequency: freq}}
 	}
 	many := make([]*pb.TimeSeriesSelector, 101)
 	for i := range many {
@@ -85,7 +85,7 @@ func TestRangeReadRejectsInvalidRequestsBeforeTheStore(t *testing.T) {
 		"page number":         func(r *pb.ReadTimeSeriesRowsReq) { r.Page = &pb.Page{Page: 2, Size: 10} },
 		"range page too big":  func(r *pb.ReadTimeSeriesRowsReq) { r.Page.Size = 2001 },
 		"too many selectors":  func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = many },
-		"selector no subject": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = []*pb.TimeSeriesSelector{{Freq: "1m"}} },
+		"selector no subject": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = []*pb.TimeSeriesSelector{{Frequency: "1m"}} },
 		"selector wrong freq": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = selector("5m") },
 		"latest too big":      func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange, r.LatestPerSeries = nil, 10001 },
 		"latest page too big": func(r *pb.ReadTimeSeriesRowsReq) {
@@ -137,7 +137,7 @@ func TestReadRowsOmitsMissingRowsAndKeepsRequestOrder(t *testing.T) {
 		return []*pb.Row{{Key: keys[0]}, {Key: keys[2]}}, nil
 	}
 	datasets := newTestDatasetCache(t, []*pb.Dataset{{
-		SpaceId: "space", DatasetId: "dataset", Freq: "1m", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		SpaceId: "space", DatasetId: "dataset", Frequency: "1m", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
 	}}, nil)
 	svc, err := New(Options{Store: store, Datasets: datasets})
 	require.NoError(t, err)

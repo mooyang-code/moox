@@ -512,7 +512,7 @@ func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, f
 
 // seriesSelector 构造读取一个标的序列的选择器（数据集里每个标的只有一条序列，不带 series_tag）。
 func seriesSelector(subject, frequency string) *storagepb.TimeSeriesSelector {
-	return &storagepb.TimeSeriesSelector{SubjectId: subject, Freq: frequency}
+	return &storagepb.TimeSeriesSelector{SubjectId: subject, Frequency: frequency}
 }
 
 // absentBars 返回每个标的在 bars 里已确认行情源没有的 K 线开始时间。

@@ -6,7 +6,7 @@ const task = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "ftask_a",
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
-  freq: "1m",
+  frequency: "1m",
   name: "现货因子",
   result_dataset_id: "dataset_factor_a",
   status: "enabled",

@@ -274,7 +274,7 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	ids := taskresult.ResultIDs(rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID,
-		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Alignment: "epoch_utc",
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "5m", Status: "active", Alignment: "epoch_utc",
 		Attributes: map[string]string{
 			"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID,
 			"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
@@ -351,7 +351,7 @@ func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 	}
 	dataset := &storagepb.Dataset{
 		DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Freq:       "5m",
+		Frequency:  "5m",
 		Attributes: cloneStringMap(want),
 	}
 	require.NoError(t, validateTargetDataset(dataset, want, "5m"))
@@ -368,7 +368,7 @@ func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 	wrongSource.DataSourceId = "binance"
 	require.ErrorContains(t, validateTargetDataset(wrongSource, want, "5m"), "must not declare a single data source")
 	monthly := proto.Clone(dataset).(*storagepb.Dataset)
-	monthly.Freq = "1mo"
+	monthly.Frequency = "1mo"
 	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m"), `freq is "1mo", not 5m`)
 }
 

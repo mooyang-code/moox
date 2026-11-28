@@ -55,8 +55,8 @@ message ArchiveTask {
   // purpose：collect（采集结果）、factor（因子结果）、data（其他）；分区文件在 <space>/<purpose>/<dir_name>/ 下，建好后不改。
   string purpose = 3;
   string dir_name = 4;
-  string freq = 5;
-  // partition_unit：day、month（由 freq 推出）。
+  string frequency = 5;
+  // partition_unit：day、month（由 frequency 推出）。
   string partition_unit = 6;
   // retention：线上保留期（从 Storage 元数据内存缓存读取）。
   string retention = 7;
@@ -212,7 +212,7 @@ message PrepareArchiveTaskReq {
 }
 message PrepareArchiveTaskRsp {
   common.RetInfo ret_info = 1;
-  string freq = 2;
+  string frequency = 2;
   string partition_unit = 3;
   string retention = 4;
   string earliest_backfill_from = 5;
@@ -423,7 +423,7 @@ message FollowTask {
   // 任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/<yyyy>/ 下。
   string purpose = 4;
   string dir_name = 5;
-  string freq = 6;
+  string frequency = 6;
   string partition_unit = 7;
   string retention = 8;
   // 允许迟到（秒）：分区收盘后再等这么久才导出。
@@ -493,7 +493,7 @@ message RunAssignment {
   // 任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/<yyyy>/ 下。
   string purpose = 7;
   string dir_name = 8;
-  string freq = 9;
+  string frequency = 9;
   string partition_unit = 10;
   string retention = 11;
   // 允许迟到（秒）：分区收盘后再等这么久才导出。

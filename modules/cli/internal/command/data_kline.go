@@ -140,7 +140,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 
 			selector := &pb.TimeSeriesSelector{
 				SubjectId: symbol,
-				Freq:      interval,
+				Frequency: interval,
 			}
 			if cmd.Flags().Changed("series-tag") {
 				st := seriesTag

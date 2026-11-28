@@ -24,7 +24,7 @@
           </template>
         </a-table-column>
         <a-table-column title="频率 / 线上保留" :width="130">
-          <template #cell="{ record }">{{ record.freq || "—" }} / {{ formatRetention(record.retention) }}</template>
+          <template #cell="{ record }">{{ record.frequency || "—" }} / {{ formatRetention(record.retention) }}</template>
         </a-table-column>
         <a-table-column title="跟随" :width="250">
           <template #cell="{ record }">

@@ -24,7 +24,7 @@ func duckRowKey(space, dataset, subject, freq, at, tag string) *pb.RowKey {
 	return &pb.RowKey{
 		SpaceId: space, DatasetId: dataset,
 		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: subject, Freq: freq, DataTime: at, SeriesTag: tag,
+			SubjectId: subject, Frequency: freq, DataTime: at, SeriesTag: tag,
 		}},
 	}
 }
@@ -896,7 +896,7 @@ func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := func(subject, when string, close float64, volume int64) viewindex.RowWrite {
-		return viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: "1m", DataTime: when}}}}, Fields: []*pb.FieldValue{
+		return viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Frequency: "1m", DataTime: when}}}}, Fields: []*pb.FieldValue{
 			{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: close}}},
 			{FieldId: "volume", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: volume}}},
 		}}
@@ -1057,7 +1057,7 @@ func TestDuckDBNanosecondDataTimeIdentityAndRange(t *testing.T) {
 			Key: viewindex.RowKey{Key: &pb.RowKey{
 				SpaceId: "s", DatasetId: "prices",
 				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-					SubjectId: "BTC", Freq: "1m", DataTime: at.Format(time.RFC3339Nano),
+					SubjectId: "BTC", Frequency: "1m", DataTime: at.Format(time.RFC3339Nano),
 				}},
 			}},
 			Fields: []*pb.FieldValue{{
@@ -1203,7 +1203,7 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 		t.Fatalf("unexpected table ddl: %s", tableSQL)
 	}
 
-	key := &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}}
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC", Frequency: "1m", DataTime: "2026-07-20T00:00:00Z"}}}
 	write := func(mode viewindex.WriteMode, fields []*pb.FieldValue) {
 		t.Helper()
 		if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
@@ -1340,10 +1340,10 @@ func TestDuckDBDuplicatePhysicalRowKeyCollapsesMetadataDifferences(t *testing.T)
 
 func TestPhysicalRowKeyIDAvoidsDelimiterCollisions(t *testing.T) {
 	first := &pb.RowKey{Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "a", Freq: "b\x00c", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "tag",
+		SubjectId: "a", Frequency: "b\x00c", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "tag",
 	}}}
 	second := &pb.RowKey{Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "a\x00b", Freq: "c", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "tag",
+		SubjectId: "a\x00b", Frequency: "c", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "tag",
 	}}}
 	if got, want := physicalRowKeyID(first), physicalRowKeyID(second); got == want {
 		t.Fatalf("physical row key IDs collide: %q", got)
@@ -1352,10 +1352,10 @@ func TestPhysicalRowKeyIDAvoidsDelimiterCollisions(t *testing.T) {
 
 func TestPhysicalRowKeyIDCanonicalizesEquivalentTimes(t *testing.T) {
 	first := &pb.RowKey{Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC", Freq: "1m", DataTime: "2026-01-01T00:00:00Z", SeriesTag: "venue:binance",
+		SubjectId: "BTC", Frequency: "1m", DataTime: "2026-01-01T00:00:00Z", SeriesTag: "venue:binance",
 	}}}
 	second := &pb.RowKey{Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC", Freq: "1m", DataTime: "2026-01-01T08:00:00+08:00", SeriesTag: "venue:binance",
+		SubjectId: "BTC", Frequency: "1m", DataTime: "2026-01-01T08:00:00+08:00", SeriesTag: "venue:binance",
 	}}}
 	if got, want := physicalRowKeyID(first), physicalRowKeyID(second); got != want {
 		t.Fatalf("equivalent RFC3339 times have different IDs: %q != %q", got, want)

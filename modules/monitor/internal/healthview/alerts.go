@@ -33,7 +33,7 @@ func alertObject(spaceID, checkID string) *pb.HealthObject {
 		object.ComponentId, object.AttentionKind = service, kind
 	}
 	if len(parts) >= 4 && parts[0] == "dataset" {
-		object.Type, object.Producer, object.DatasetId, object.Freq = "dataset", parts[1], strings.Join(parts[2:len(parts)-1], ":"), parts[len(parts)-1]
+		object.Type, object.Producer, object.DatasetId, object.Frequency = "dataset", parts[1], strings.Join(parts[2:len(parts)-1], ":"), parts[len(parts)-1]
 	}
 	if len(parts) == 2 && parts[0] == "module" {
 		for _, check := range report.BuiltInModuleHealthChecks() {
@@ -98,7 +98,7 @@ func (b Builder) projectAlert(ctx context.Context, check domain.Check, facts obs
 	}
 	if object.Type == "dataset" {
 		for _, dataset := range facts.Datasets {
-			if dataset.SpaceID != check.SpaceID || dataset.Producer != object.Producer || dataset.DatasetID != object.DatasetId || !strings.EqualFold(dataset.Freq, object.Freq) {
+			if dataset.SpaceID != check.SpaceID || dataset.Producer != object.Producer || dataset.DatasetID != object.DatasetId || !strings.EqualFold(dataset.Freq, object.Frequency) {
 				continue
 			}
 			// 恢复确认期间保留失败时的原因，不用已经恢复的数据集状态覆盖；水位等事实单独给出。

@@ -95,7 +95,7 @@ func objectLabel(object *monitorpb.HealthObject) string {
 		return ""
 	}
 	parts := []string{}
-	for _, part := range []string{object.GetType(), object.GetHostId(), object.GetComponentId(), object.GetProducer(), object.GetDatasetId(), object.GetFreq(), object.GetKind()} {
+	for _, part := range []string{object.GetType(), object.GetHostId(), object.GetComponentId(), object.GetProducer(), object.GetDatasetId(), object.GetFrequency(), object.GetKind()} {
 		if part != "" {
 			parts = append(parts, part)
 		}
@@ -143,22 +143,22 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 			Hint: alertHint(alert.GetReason(), alert.GetRawError()),
 		})
 		if object := alert.GetObject(); object != nil && object.GetType() == "dataset" {
-			alerted[newDatasetAlertKey(object.GetSpaceId(), object.GetProducer(), object.GetDatasetId(), object.GetFreq())] = true
+			alerted[newDatasetAlertKey(object.GetSpaceId(), object.GetProducer(), object.GetDatasetId(), object.GetFrequency())] = true
 		}
 	}
 	for _, stage := range overview.GetPipeline() {
 		for _, dataset := range stage.GetDatasets() {
 			severity := statusSeverity(dataset.GetStatus())
-			if severity == "" || alerted[newDatasetAlertKey(dataset.GetSpaceId(), dataset.GetProducer(), dataset.GetDatasetId(), dataset.GetFreq())] {
+			if severity == "" || alerted[newDatasetAlertKey(dataset.GetSpaceId(), dataset.GetProducer(), dataset.GetDatasetId(), dataset.GetFrequency())] {
 				continue
 			}
 			if dataset.GetReason() == datasetWarmingReason {
 				severity = AlertSeverityInfo
 			}
-			title := fmt.Sprintf("[%s] %s · %s · %s", stage.GetName(), dataset.GetProducer(), dataset.GetDatasetId(), dataset.GetFreq())
+			title := fmt.Sprintf("[%s] %s · %s · %s", stage.GetName(), dataset.GetProducer(), dataset.GetDatasetId(), dataset.GetFrequency())
 			report.Items = append(report.Items, AlertItem{
 				Source: AlertSourceDataset, Severity: severity, Title: title, Reason: dataset.GetReason(), RawError: dataset.GetRawError(),
-				Since: msText(dataset.GetLastReportedAt()), Object: dataset.GetSpaceId() + "/" + dataset.GetDatasetId() + "/" + dataset.GetFreq(),
+				Since: msText(dataset.GetLastReportedAt()), Object: dataset.GetSpaceId() + "/" + dataset.GetDatasetId() + "/" + dataset.GetFrequency(),
 				Hint: alertHint(dataset.GetReason(), dataset.GetRawError()),
 			})
 		}

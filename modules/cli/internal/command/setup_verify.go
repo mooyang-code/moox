@@ -238,9 +238,9 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 				continue
 			}
 			input.Factors = append(input.Factors, verify.Factor{
-				TaskID: task.GetTaskId(), Frequency: task.GetFreq(), LastPeriod: info.GetLastRun().GetLastPeriodTime(), Baseline: baseline[task.GetTaskId()],
+				TaskID: task.GetTaskId(), Frequency: task.GetFrequency(), LastPeriod: info.GetLastRun().GetLastPeriodTime(), Baseline: baseline[task.GetTaskId()],
 				LastStatus: info.GetLastRun().GetLastStatus(), SourceEnabled: sources[task.GetSourceDatasetId()],
-				SourceSeeding: seeding[[2]string{task.GetSourceDatasetId(), task.GetFreq()}],
+				SourceSeeding: seeding[[2]string{task.GetSourceDatasetId(), task.GetFrequency()}],
 			})
 		}
 	}

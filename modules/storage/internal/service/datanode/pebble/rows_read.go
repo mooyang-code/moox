@@ -52,10 +52,10 @@ func parseSelectors(req []*pb.TimeSeriesSelector, limit int) ([]seriesSelector, 
 	}
 	out := make([]seriesSelector, 0, len(req))
 	for _, selector := range req {
-		if selector == nil || selector.GetSubjectId() == "" || selector.GetFreq() == "" {
+		if selector == nil || selector.GetSubjectId() == "" || selector.GetFrequency() == "" {
 			return nil, invalid("selector subject_id and freq are required")
 		}
-		out = append(out, seriesSelector{subject: selector.GetSubjectId(), freq: selector.GetFreq(), tag: selector.GetSeriesTag(), hasTag: selector.SeriesTag != nil})
+		out = append(out, seriesSelector{subject: selector.GetSubjectId(), freq: selector.GetFrequency(), tag: selector.GetSeriesTag(), hasTag: selector.SeriesTag != nil})
 	}
 	return out, nil
 }
@@ -175,7 +175,7 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 					row.Key = &pb.RowKey{
 						SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
 						Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-							SubjectId: ts.GetSubjectId(), Freq: ts.GetFreq(),
+							SubjectId: ts.GetSubjectId(), Frequency: ts.GetFrequency(),
 							DataTime: outputTime(ts.GetDataTime()), SeriesTag: ts.GetSeriesTag(),
 						}},
 					}
@@ -321,7 +321,7 @@ func enumerateSeries(iter *cpebble.Iterator, spaceID, datasetID string, selector
 			continue
 		}
 		row := key.GetTimeSeries()
-		id := seriesID{row.GetSubjectId(), row.GetFreq(), row.GetSeriesTag()}
+		id := seriesID{row.GetSubjectId(), row.GetFrequency(), row.GetSeriesTag()}
 		tagPrefix := seriesKeyPrefix(spaceID, datasetID, id)
 		out = append(out, seriesCursor{id: id, prefix: tagPrefix})
 		valid = iter.SeekGE(nextPrefix(tagPrefix))
@@ -463,7 +463,7 @@ func (r *latestReader) resume(cursor *pb.RowsCursor) error {
 	if cursor == nil {
 		return nil
 	}
-	id := seriesID{cursor.GetSubjectId(), cursor.GetFreq(), cursor.GetSeriesTag()}
+	id := seriesID{cursor.GetSubjectId(), cursor.GetFrequency(), cursor.GetSeriesTag()}
 	if id.subject == "" || id.freq == "" {
 		return invalid("invalid page cursor")
 	}
@@ -485,7 +485,7 @@ func (r *latestReader) state() *pb.RowsCursor {
 	if r.cur == nil {
 		return nil
 	}
-	return &pb.RowsCursor{SubjectId: r.cur.id.subject, Freq: r.cur.id.freq, SeriesTag: r.cur.id.tag, ResumeBefore: r.before, Returned: uint32(r.returned)}
+	return &pb.RowsCursor{SubjectId: r.cur.id.subject, Frequency: r.cur.id.freq, SeriesTag: r.cur.id.tag, ResumeBefore: r.before, Returned: uint32(r.returned)}
 }
 
 // next 返回下一个键；读完时返回 nil。
@@ -512,7 +512,7 @@ func (r *latestReader) next() (*pb.RowKey, error) {
 				return nil, invalid("corrupt series index key")
 			}
 			row := key.GetTimeSeries()
-			id := seriesID{row.GetSubjectId(), row.GetFreq(), row.GetSeriesTag()}
+			id := seriesID{row.GetSubjectId(), row.GetFrequency(), row.GetSeriesTag()}
 			prefix := seriesKeyPrefix(r.spaceID, r.datasetID, id)
 			r.cur, r.returned, r.before, r.positioned = &seriesCursor{id: id, prefix: prefix}, 0, "", false
 			r.seekFrom = nextPrefix(prefix)
@@ -862,8 +862,8 @@ func historyKeyLess(a, b *pb.TimeSeriesRowKey) bool {
 	if a.GetSubjectId() != b.GetSubjectId() {
 		return a.GetSubjectId() < b.GetSubjectId()
 	}
-	if a.GetFreq() != b.GetFreq() {
-		return a.GetFreq() < b.GetFreq()
+	if a.GetFrequency() != b.GetFrequency() {
+		return a.GetFrequency() < b.GetFrequency()
 	}
 	return a.GetSeriesTag() < b.GetSeriesTag()
 }
@@ -886,7 +886,7 @@ func parseHistoryKey(key []byte) (*pb.RowKey, bool) {
 	if !ok {
 		return nil, false
 	}
-	return &pb.RowKey{SpaceId: parts[0], DatasetId: parts[1], Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{DataTime: parts[2], SubjectId: parts[3], Freq: parts[4], SeriesTag: parts[5]}}}, true
+	return &pb.RowKey{SpaceId: parts[0], DatasetId: parts[1], Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{DataTime: parts[2], SubjectId: parts[3], Frequency: parts[4], SeriesTag: parts[5]}}}, true
 }
 
 func parseSeriesHistoryKey(key []byte) (*pb.RowKey, bool) {
@@ -897,7 +897,7 @@ func parseSeriesHistoryKey(key []byte) (*pb.RowKey, bool) {
 	if !ok {
 		return nil, false
 	}
-	return &pb.RowKey{SpaceId: parts[0], DatasetId: parts[1], Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: parts[2], Freq: parts[3], SeriesTag: parts[4], DataTime: parts[5]}}}, true
+	return &pb.RowKey{SpaceId: parts[0], DatasetId: parts[1], Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: parts[2], Frequency: parts[3], SeriesTag: parts[4], DataTime: parts[5]}}}, true
 }
 
 func decodeParts(rest []byte, count int) ([]string, bool) {

@@ -134,7 +134,7 @@ func (stub *klineStorageStub) ReadTimeSeriesRows(_ context.Context, req *pb.Read
 		Rows: []*pb.Row{{Key: &pb.RowKey{
 			SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m",
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
+				SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
 			}},
 		}}},
 	}, nil

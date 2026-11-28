@@ -172,7 +172,7 @@ func (w *strategyGatewayWire) GetDataset(ctx context.Context, req *storagepb.Get
 	if err := w.verifyStorage(ctx, "Metadata", "GetDataset", req); err != nil {
 		return nil, err
 	}
-	return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{}, Dataset: &storagepb.Dataset{DatasetId: req.GetDatasetId(), Status: "active", Freq: "1m"}}, nil
+	return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{}, Dataset: &storagepb.Dataset{DatasetId: req.GetDatasetId(), Status: "active", Frequency: "1m"}}, nil
 }
 
 func (w *strategyGatewayWire) GetTag(ctx context.Context, req *storagepb.GetTagReq) (*storagepb.GetTagRsp, error) {

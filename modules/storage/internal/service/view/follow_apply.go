@@ -347,7 +347,7 @@ func (s *Service) planFollowReads(spec *viewSpec, changes []*pb.DatasetChange) [
 	spans := make(map[string][]span)
 	for _, change := range changes {
 		for _, item := range change.GetRanges() {
-			if !strings.EqualFold(strings.TrimSpace(item.GetFreq()), freq) || item.GetSubjectId() == "" {
+			if !strings.EqualFold(strings.TrimSpace(item.GetFrequency()), freq) || item.GetSubjectId() == "" {
 				continue
 			}
 			start, startErr := time.Parse(time.RFC3339Nano, item.GetStartTime())
@@ -422,7 +422,7 @@ func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, spec *vi
 	spaceID, datasetID, freq := spec.SpaceID, spec.DatasetID, spec.Freq
 	selectors := make([]*pb.TimeSeriesSelector, 0, len(read.subjects))
 	for _, subject := range read.subjects {
-		selectors = append(selectors, &pb.TimeSeriesSelector{SubjectId: subject, Freq: freq})
+		selectors = append(selectors, &pb.TimeSeriesSelector{SubjectId: subject, Frequency: freq})
 	}
 	cursor := ""
 	for {
@@ -442,7 +442,7 @@ func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, spec *vi
 		writes := make([]viewindex.RowWrite, 0, len(rsp.GetRows()))
 		for _, row := range rsp.GetRows() {
 			ts := row.GetKey().GetTimeSeries()
-			if ts == nil || !strings.EqualFold(strings.TrimSpace(ts.GetFreq()), freq) {
+			if ts == nil || !strings.EqualFold(strings.TrimSpace(ts.GetFrequency()), freq) {
 				continue
 			}
 			writes = append(writes, viewindex.RowWrite{

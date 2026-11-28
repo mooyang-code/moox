@@ -60,7 +60,7 @@ const klineDataset: Dataset = {
   data_source_id: "tdx",
   name: "A 股日线",
   data_kind: "DATA_KIND_TIME_SERIES",
-  freq: "1d",
+  frequency: "1d",
   status: "active"
 };
 

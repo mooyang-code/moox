@@ -254,7 +254,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, runtime *viewRunti
 		writes := make([]viewindex.RowWrite, 0, len(rsp.GetRows()))
 		for _, row := range rsp.GetRows() {
 			ts := row.GetKey().GetTimeSeries()
-			if ts == nil || !strings.EqualFold(strings.TrimSpace(ts.GetFreq()), strings.TrimSpace(frequency)) {
+			if ts == nil || !strings.EqualFold(strings.TrimSpace(ts.GetFrequency()), strings.TrimSpace(frequency)) {
 				continue
 			}
 			writes = append(writes, viewindex.RowWrite{

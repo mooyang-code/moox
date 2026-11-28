@@ -138,7 +138,7 @@ func (c *DatasetCache) ListDatasets(ctx context.Context, query metadata.DatasetQ
 		if query.DataKind != pb.DataKind_DATA_KIND_UNSPECIFIED && item.GetDataKind() != query.DataKind {
 			continue
 		}
-		if query.Freq != "" && item.GetFreq() != query.Freq {
+		if query.Freq != "" && item.GetFrequency() != query.Freq {
 			continue
 		}
 		if query.Status != "" && item.GetStatus() != query.Status {

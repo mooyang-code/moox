@@ -118,7 +118,7 @@ export interface StrategyTaskRequirement {
   /** 要绑定的任务键（市场确定时才有）：主帧市场（现货在前）、参考市场、附加来源的 来源名:市场 */
   taskKeys: string[];
   /** 附加来源（声明顺序） */
-  sources: { name: string; bar: string }[];
+  sources: { name: string; frequency: string }[];
   /** 据此建不了实例的问题（中文） */
   problems: string[];
   /** 参考市场（market.reference）：也在 taskKeys 里，只用于年龄判定，不是主帧市场 */

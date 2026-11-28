@@ -17,7 +17,7 @@ export interface FactorTask {
   task_id: string;
   space_id: string;
   source_dataset_id: string;
-  freq: string;
+  frequency: string;
   /** 展示名：直接用作结果数据集的名称（含汉字、不超过 10 个字、空间内唯一）。 */
   name: string;
   result_dataset_id: string;

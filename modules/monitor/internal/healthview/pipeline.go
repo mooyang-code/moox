@@ -77,7 +77,7 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 func projectDataset(item observability.DatasetFrequencyStatus) *pb.HealthDataset {
 	status := domain.HealthStatus(item.Status)
 	return &pb.HealthDataset{
-		Producer: item.Producer, SpaceId: item.SpaceID, DatasetId: item.DatasetID, DisplayName: item.DisplayName, Freq: item.Freq,
+		Producer: item.Producer, SpaceId: item.SpaceID, DatasetId: item.DatasetID, DisplayName: item.DisplayName, Frequency: item.Freq,
 		Status: status, Reason: ChineseReason(item.Reason), RawError: unhealthyRaw(status, item.Reason, ""),
 		InputWatermarkAt: dataTimeText(item.InputWatermarkAt), OutputWatermarkAt: dataTimeText(item.OutputWatermarkAt),
 		LastSuccessAt: stamp(item.LastSuccessAt), LastRunAt: stamp(item.LastRunAt), LastReportedAt: stamp(item.LastReportedAt),

@@ -60,8 +60,8 @@ func validateRowSchema(snapshot *metacache.DatasetSnapshot, dataset *pb.Dataset,
 		return fmt.Errorf("dataset %q requires record row key", key.GetDatasetId())
 	}
 	// 每个 Dataset 只有一个规范频率，频率不同（含 1H 这类别名）的行一律拒绝。
-	if series := key.GetTimeSeries(); series != nil && series.GetFreq() != dataset.GetFreq() {
-		return fmt.Errorf("row freq %q does not match dataset %q freq %q", series.GetFreq(), key.GetDatasetId(), dataset.GetFreq())
+	if series := key.GetTimeSeries(); series != nil && series.GetFrequency() != dataset.GetFrequency() {
+		return fmt.Errorf("row freq %q does not match dataset %q freq %q", series.GetFrequency(), key.GetDatasetId(), dataset.GetFrequency())
 	}
 	spaceID, datasetID := dataset.GetSpaceId(), dataset.GetDatasetId()
 	for _, field := range row.GetFields() {

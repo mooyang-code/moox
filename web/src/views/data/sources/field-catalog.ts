@@ -235,7 +235,7 @@ export function mergeFieldCatalog(input: {
           dataset_id: dataset.dataset_id,
           dataset_name: dataset.name?.trim() || dataset.dataset_id,
           data_kind: dataKind,
-          freq: (dataset.freq || "").trim(),
+          freq: (dataset.frequency || "").trim(),
           dataset_status: (dataset.status || "active").trim(),
           column_status: columnStatus,
           required: Boolean(column.required),

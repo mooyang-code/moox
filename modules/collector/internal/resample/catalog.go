@@ -109,7 +109,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			// 数据集名称在空间内唯一且必须含中文：用目标 ID 派生一个稳定的短后缀，避免不同合成目标重名。
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			// 周期的迟到容忍（收盘后 2 分钟）：Storage 据此算周期截止，写入目标与引擎的截止判断一致。
-			Freq: targetFreq.Storage, Alignment: market.Alignment, AllowedLatenessSeconds: TargetLatenessSeconds,
+			Frequency: targetFreq.Storage, Alignment: market.Alignment, AllowedLatenessSeconds: TargetLatenessSeconds,
 			Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...),
 		}, Columns: columns})
 		if createErr != nil {
@@ -337,8 +337,8 @@ func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, f
 	if err != nil {
 		return fmt.Errorf("target Dataset frequency %q is invalid: %w", frequency, err)
 	}
-	if dataset.GetFreq() != wantedFrequency {
-		return fmt.Errorf("target Dataset freq is %q, not %s", dataset.GetFreq(), frequency)
+	if dataset.GetFrequency() != wantedFrequency {
+		return fmt.Errorf("target Dataset freq is %q, not %s", dataset.GetFrequency(), frequency)
 	}
 	return nil
 }

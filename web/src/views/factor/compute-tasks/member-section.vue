@@ -99,7 +99,7 @@
     </p>
     <p v-if="props.info.last_run?.last_period_time" class="member-section__hint">
       最近周期 {{ formatPeriod(props.info.last_run.last_period_time, displayZone) }}，{{
-        barLagText(props.info.factor_task.freq, props.info.last_run)
+        barLagText(props.info.factor_task.frequency, props.info.last_run)
       }}
     </p>
 

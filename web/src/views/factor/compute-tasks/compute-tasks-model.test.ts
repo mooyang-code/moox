@@ -16,7 +16,7 @@ const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "ftask_a",
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
-  freq: "1m",
+  frequency: "1m",
   name: "现货因子",
   result_dataset_id: "dataset_factor_a",
   status: "enabled",
@@ -40,7 +40,7 @@ const info = (patch: Partial<FactorTask> = {}, members: FactorMember[] = []): Fa
   members
 });
 const labelOf = (item: FactorTask) =>
-  `${item.source_dataset_id === "dataset_kline" ? "现货K线" : item.source_dataset_id} · ${item.freq}`;
+  `${item.source_dataset_id === "dataset_kline" ? "现货K线" : item.source_dataset_id} · ${item.frequency}`;
 
 describe("compute task list model", () => {
   it("filterTasks by keyword and status", () => {

@@ -227,7 +227,7 @@ describe("时间值的显示", () => {
           key: {
             space_id: "crypto",
             dataset_id: "d",
-            time_series: { subject_id: "BTC", freq: "1m", series_tag: "", data_time: "2026-11-07T01:30:00Z" }
+            time_series: { subject_id: "BTC", frequency: "1m", series_tag: "", data_time: "2026-11-07T01:30:00Z" }
           },
           fields: [{ field_id: "close_time", value: { time_value: "2026-11-07T01:31:00Z" } }]
         }

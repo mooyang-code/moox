@@ -53,7 +53,7 @@ func TestFactorTaskOperationsAreScopedToTheCallerSpace(t *testing.T) {
 	all, _ := svc.ListFactorTasks(spaceCtx(""), &factorpb.ListFactorTasksReq{})
 	require.Len(t, all.GetFactorTasks(), 2)
 
-	created, _ := svc.CreateFactorTask(spaceCtx("crypto"), &factorpb.CreateFactorTaskReq{FactorTask: &factorpb.FactorTask{TaskId: "ftask_new", SpaceId: "stockcn", SourceDatasetId: "d", Freq: "1m"}})
+	created, _ := svc.CreateFactorTask(spaceCtx("crypto"), &factorpb.CreateFactorTaskReq{FactorTask: &factorpb.FactorTask{TaskId: "ftask_new", SpaceId: "stockcn", SourceDatasetId: "d", Frequency: "1m"}})
 	require.Equal(t, denied, created.GetRetInfo().GetCode(), "不能在请求空间之外创建任务")
 }
 

@@ -16,7 +16,7 @@ message HealthObject {
   string host_id = 2;
   string component_id = 3;
   string dataset_id = 4;
-  string freq = 5;
+  string frequency = 5;
   string kind = 7;
   string space_id = 8;
   string producer = 9;
@@ -107,7 +107,7 @@ message HealthDataset {
   string producer = 1;
   string space_id = 2;
   string dataset_id = 3;
-  string freq = 4;
+  string frequency = 4;
   string status = 5;
   string reason = 6;
   string raw_error = 7;
@@ -349,7 +349,7 @@ message QueryPipelineArrivalHistoryReq {
   string space_id = 1;
   // 链路的源数据集（入库的数据集）与周期。
   string dataset_id = 2;
-  string freq = 3;
+  string frequency = 3;
   // YYYY-MM-DD，按市场时区（加密货币 UTC，A 股 Asia/Shanghai）的自然日；为空取市场时区的今天。
   string day = 4;
   // 因子任务 ID：给了就查它的结果数据集；没给且源数据集上只有一个任务，就查这个任务；有多个任务时只返回任务列表和源数据集这一段。

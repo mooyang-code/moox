@@ -571,7 +571,7 @@ func validatePeriodRow(exp DatasetPeriodExpectation, seriesIndex uint32, row *pb
 	}
 	key := row.GetKey()
 	series := key.GetTimeSeries()
-	if key.GetSpaceId() != exp.SpaceID || key.GetDatasetId() != exp.DatasetID || series.GetFreq() != exp.Frequency {
+	if key.GetSpaceId() != exp.SpaceID || key.GetDatasetId() != exp.DatasetID || series.GetFrequency() != exp.Frequency {
 		return false, invalid("period batch row identity does not match expectation")
 	}
 	if series.GetSubjectId() != exp.SeriesSnapshot[seriesIndex].SubjectID || series.GetSeriesTag() != exp.SeriesSnapshot[seriesIndex].SeriesTag {

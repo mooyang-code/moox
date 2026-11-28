@@ -459,7 +459,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		// 数据集连同列在一次调用里建好，建好即可写入。
 		created, createErr := m.metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID,
-			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: datasetFrequency(cfg.Frequency), Alignment: alignment, Attributes: attrs, SubjectTags: subjectTags,
+			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Frequency: datasetFrequency(cfg.Frequency), Alignment: alignment, Attributes: attrs, SubjectTags: subjectTags,
 		}, Columns: columns})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))

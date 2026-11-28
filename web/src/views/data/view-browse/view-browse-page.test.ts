@@ -94,7 +94,7 @@ describe("View result refresh", () => {
     mocks.catalog.mockReset().mockResolvedValue([{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]);
     mocks.columns.mockReset().mockResolvedValue([]);
     mocks.queryTimeSeries.mockReset().mockResolvedValue({
-      rows: [{ key: { space_id: "crypto", dataset_id: "dataset-known", time_series: { subject_id: "BTC", freq: "1m" } } }]
+      rows: [{ key: { space_id: "crypto", dataset_id: "dataset-known", time_series: { subject_id: "BTC", frequency: "1m" } } }]
     });
     mocks.queryRecords.mockReset().mockResolvedValue({
       rows: [{ key: { space_id: "crypto", dataset_id: "dataset-known", record: { record_id: "record-known" } } }]
@@ -367,7 +367,7 @@ describe("切换空间", () => {
       );
     mocks.columns.mockReset().mockResolvedValue([]);
     mocks.queryTimeSeries.mockReset().mockResolvedValue({
-      rows: [{ key: { space_id: "crypto", dataset_id: "dataset-known", time_series: { subject_id: "BTC", freq: "1m" } } }]
+      rows: [{ key: { space_id: "crypto", dataset_id: "dataset-known", time_series: { subject_id: "BTC", frequency: "1m" } } }]
     });
     mocks.viewState.mockReset().mockResolvedValue({ index_id: "index-a", columns: [] });
     mocks.messageError.mockReset();

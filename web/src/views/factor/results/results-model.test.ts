@@ -8,7 +8,7 @@ const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "task_a",
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
-  freq: "1m",
+  frequency: "1m",
   result_dataset_id: "dataset_factor_task_a",
   status: "enabled",
   ...patch

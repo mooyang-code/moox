@@ -57,7 +57,7 @@ func benchData(b *testing.B) *Store {
 				}
 				batch = append(batch, &pb.Row{
 					Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-						SubjectId: subject, Freq: "1m", DataTime: benchStart.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
+						SubjectId: subject, Frequency: "1m", DataTime: benchStart.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
 					}}},
 					Fields: fields,
 				})
@@ -86,7 +86,7 @@ func TestMain(m *testing.M) {
 func benchSelectors(n int) []*pb.TimeSeriesSelector {
 	out := make([]*pb.TimeSeriesSelector, 0, n)
 	for s := 0; s < n; s++ {
-		out = append(out, &pb.TimeSeriesSelector{SubjectId: fmt.Sprintf("S%04d", s*7%benchSubjects), Freq: "1m"})
+		out = append(out, &pb.TimeSeriesSelector{SubjectId: fmt.Sprintf("S%04d", s*7%benchSubjects), Frequency: "1m"})
 	}
 	return out
 }

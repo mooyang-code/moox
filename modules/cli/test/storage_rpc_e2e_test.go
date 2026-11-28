@@ -40,7 +40,7 @@ func (*storageOperationsWire) GetSpace(context.Context, *pb.GetSpaceReq) (*pb.Ge
 }
 
 func (*storageOperationsWire) GetDataset(context.Context, *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {
-	return &pb.GetDatasetRsp{RetInfo: &pb.RetInfo{}, Dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "prices", Freq: "1m"}}, nil
+	return &pb.GetDatasetRsp{RetInfo: &pb.RetInfo{}, Dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "prices", Frequency: "1m"}}, nil
 }
 
 func (*storageOperationsWire) GetSubject(context.Context, *pb.GetSubjectReq) (*pb.GetSubjectRsp, error) {
