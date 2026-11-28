@@ -89,6 +89,7 @@ import { RequestError } from "@/api/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import { useRoute, useRouter } from "vue-router";
 import { GetTaskDetail, GetTaskList, listKlineResampleJobs, type CollectorTask } from "@/api/collector";
+import { readAllPages } from "@/api/read-all-pages";
 import { frequencyMinutes } from "@/utils/frequency";
 import { useSpaceStore } from "@/store/modules/space";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
@@ -207,15 +208,15 @@ function clearTaskResultCache(taskId: string) {
 }
 
 /** 读取当前空间的全部采集任务（按页读完，不再分页展示）。 */
-async function fetchAllTasks(spaceId: string) {
-  const all: CollectorTask[] = [];
-  for (let page = 1; ; page += 1) {
+function fetchAllTasks(spaceId: string) {
+  let loaded = 0;
+  return readAllPages(async page => {
     const response = await GetTaskList({ space_id: spaceId, page: { page, size: TASK_PAGE_SIZE } });
-    const batch = response.tasks || [];
-    all.push(...batch);
-    const total = response.page_result?.total ?? all.length;
-    if (!batch.length || all.length >= total) return all;
-  }
+    const items = response.tasks || [];
+    loaded += items.length;
+    const total = response.page_result?.total ?? loaded;
+    return { items, hasMore: response.page_result?.has_more ?? loaded < total };
+  });
 }
 
 async function load() {

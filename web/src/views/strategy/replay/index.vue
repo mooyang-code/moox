@@ -295,7 +295,7 @@ import { Message, Modal } from "@arco-design/web-vue";
 import type VChart from "@visactor/vchart";
 import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getInstance, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
-import type { PageResult } from "@/api/strategy";
+import type { PagedList } from "@/api/strategy";
 import type { InstrumentWeight, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportError, serverNow } from "@/api/http";
 import { listAllFactorTasks } from "@/api/factor";
@@ -514,7 +514,7 @@ async function loadStrategies() {
  * 应用一次列表响应：已有更新的响应、页码已变或空间已切换时丢弃，返回是否应用。
  * 还没有选中回放时选中第一条：手动加载与轮询哪个先应用都会触发，选择在后台进行，不拖住列表的加载态。
  */
-function applyReplayList(gen: number, seq: number, page: number, result: PageResult<Replay>): boolean {
+function applyReplayList(gen: number, seq: number, page: number, result: PagedList<Replay>): boolean {
   if (gen !== generation || seq <= listApplied || page !== replayPage.value) return false;
   listApplied = seq;
   readAt.value = formatInstant(Date.now(), displayZone.value, "clock");

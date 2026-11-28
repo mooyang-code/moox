@@ -1,4 +1,5 @@
 import { call } from "@/api/http";
+import type { Page, PageResult } from "@/api/page";
 
 export interface ActivityLogItem {
   id?: number | string;
@@ -23,12 +24,12 @@ export interface ListActivityLogsRequest {
   /** 起止是 Unix 毫秒（[since, until)），不传表示不限 */
   since?: string;
   until?: string;
-  page?: { page: number; size: number };
+  page?: Page;
 }
 
 export interface ListActivityLogsResponse {
   items?: ActivityLogItem[];
-  page_result?: { page?: number; size?: number; total?: number; has_more?: boolean };
+  page_result?: PageResult;
 }
 
 export function listActivityLogs(request: ListActivityLogsRequest) {

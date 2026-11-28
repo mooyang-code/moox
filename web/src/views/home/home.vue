@@ -284,7 +284,7 @@ import { listTradingAccounts } from "@/api/trade";
 import { usePolling } from "@/hooks/usePolling";
 import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { datasetMatchesAttribution, isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
+import { datasetMatchesAttribution, isFactorResultDataset } from "@/views/data/shared/module-attribution";
 import { alertHref } from "@/views/ops/monitor/health-display";
 import { instancesLink, replayLink, resultsLink } from "@/views/strategy/links";
 import {
@@ -497,10 +497,10 @@ async function loadSpaceScoped() {
       names.datasets = Object.fromEntries(datasets.map(item => [item.dataset_id, item.name || item.dataset_id]));
       counts.datasets = datasets.filter(
         item =>
-          !isLikelyFactorResultDataset(item) &&
+          !isFactorResultDataset(item) &&
           datasetMatchesAttribution(item, {
             ownerModules: ["collector"],
-            datasetRoles: ["raw_collection", "import"],
+            datasetRoles: ["raw_collection", "kline_resample_result"],
             includeUnowned: true
           })
       ).length;

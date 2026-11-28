@@ -107,6 +107,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import { deleteFactor, deleteFactorCategory, listFactors, setFactorCategory, upsertFactorCategory } from "@/api/factor";
+import { readAllPages } from "@/api/read-all-pages";
 import type { FactorCategory, FactorInfo, FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import DefinitionBatchBar from "./definition-batch-bar.vue";
@@ -311,13 +312,10 @@ async function load() {
   const token = gate.begin();
   loading.value = true;
   try {
-    const all: FactorInfo[] = [];
-    for (let page = 1; ; page += 1) {
+    const all = await readAllPages(async page => {
       const rsp = await listFactors({ page: { page, size: PAGE_SIZE } });
-      const batch = rsp.factors || [];
-      all.push(...batch);
-      if (!rsp.page_result?.has_more || !batch.length) break;
-    }
+      return { items: rsp.factors || [], hasMore: Boolean(rsp.page_result?.has_more) };
+    });
     if (!token.isLatest()) return;
     items.value = all;
     loadError.value = "";

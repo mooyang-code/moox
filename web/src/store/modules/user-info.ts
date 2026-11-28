@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
 import { getUserInfoAPI, logoutAPI } from "@/api/modules/user/index";
-import { setSessionExpiredListener } from "@/api/admin/space-client";
+import { setSessionExpiredListener } from "@/api/admin/session-expiry";
 
 // 系统只有一个超级用户：没有角色、权限与个人资料，登录即拥有全部功能。
 // 登录会话在 HttpOnly Cookie 里，这里不存任何令牌；是否登录以 GetUserInfo 的结果为准。

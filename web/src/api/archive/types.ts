@@ -4,7 +4,7 @@
  * - uint64 经 protojson 是字符串，写成 number | string，显示前用 toNum 转换；uint32 是数字；
  * - 时间是 RFC3339（UTC）字符串，空串表示没有。
  */
-import type { Page, PageResult } from "@/api/storage/types";
+import type { Page, PageResult } from "@/api/page";
 
 export type { Page, PageResult };
 

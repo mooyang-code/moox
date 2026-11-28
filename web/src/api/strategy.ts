@@ -1,10 +1,9 @@
 import { call, RequestError } from "@/api/http";
+import type { Page, PageResult } from "@/api/page";
 import { readAllPages } from "@/api/read-all-pages";
 import type {
   DisplayHidden,
   InstrumentWeight,
-  PageRequest,
-  PageResponse,
   Replay,
   ReplayBar,
   StartedReplay,
@@ -165,29 +164,23 @@ function normalizeReplayBar(value: any): ReplayBar {
   };
 }
 
-export interface PageResult<T> {
-  items: T[];
-  page: PageResponse;
-}
-
-interface WirePage {
+export interface NormalizedPageResult extends PageResult {
   page: number;
   size: number;
+  total: number;
+  has_more: boolean;
 }
 
-interface WirePageResult {
-  page?: number;
-  size?: number;
-  total?: number | string;
-  has_more?: boolean;
-  total_state?: PageResponse["total_state"];
+export interface PagedList<T> {
+  items: T[];
+  page: NormalizedPageResult;
 }
 
-function pageRequest(params: PageRequest, defaultSize = 20): WirePage {
+function pageRequest(params: Page, defaultSize = 20): { page: number; size: number } {
   return { page: params.page ?? 1, size: params.size ?? defaultSize };
 }
 
-function normalizePageResult(value: WirePageResult | undefined, fallback: WirePage): PageResponse {
+function normalizePageResult(value: PageResult | undefined, fallback: { page: number; size: number }): NormalizedPageResult {
   return {
     page: Number(value?.page ?? fallback.page),
     size: Number(value?.size ?? fallback.size),
@@ -230,12 +223,11 @@ export async function deleteStrategy(strategy_id: string) {
   await callStrategy<{ strategy_id: string }, Record<string, never>>("DeleteStrategy", { strategy_id });
 }
 
-export async function listStrategies(params: PageRequest = {}): Promise<PageResult<Strategy>> {
+export async function listStrategies(params: Page = {}): Promise<PagedList<Strategy>> {
   const page = pageRequest(params);
-  const response = await callStrategy<{ page: WirePage }, { strategies?: Strategy[]; page_result?: WirePageResult }>(
-    "ListStrategies",
-    { page }
-  );
+  const response = await callStrategy<{ page: Page }, { strategies?: Strategy[]; page_result?: PageResult }>("ListStrategies", {
+    page
+  });
   return {
     items: (response.strategies ?? []).map(normalizeStrategy),
     page: normalizePageResult(response.page_result, page)
@@ -304,12 +296,12 @@ export async function getInstance(instance_id: string) {
 }
 
 export async function listInstances(
-  params: PageRequest & { strategy_id?: string; enabled?: boolean } = {}
-): Promise<PageResult<StrategyInstance>> {
+  params: Page & { strategy_id?: string; enabled?: boolean } = {}
+): Promise<PagedList<StrategyInstance>> {
   const page = pageRequest(params);
   const response = await callStrategy<
-    { page: WirePage; strategy_id?: string; enabled?: boolean },
-    { instances?: StrategyInstance[]; page_result?: WirePageResult }
+    { page: Page; strategy_id?: string; enabled?: boolean },
+    { instances?: StrategyInstance[]; page_result?: PageResult }
   >("ListStrategyInstances", {
     page,
     strategy_id: params.strategy_id || undefined,
@@ -359,12 +351,12 @@ export async function deleteInstance(instance_id: string) {
 
 export async function listStrategyResults(
   instance_id: string,
-  params: PageRequest & { session_id?: string } = {}
-): Promise<PageResult<StrategyResult>> {
+  params: Page & { session_id?: string } = {}
+): Promise<PagedList<StrategyResult>> {
   const page = pageRequest(params);
   const response = await callStrategy<
-    { instance_id: string; session_id?: string; page: WirePage },
-    { results?: StrategyResult[]; page_result?: WirePageResult }
+    { instance_id: string; session_id?: string; page: Page },
+    { results?: StrategyResult[]; page_result?: PageResult }
   >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page });
   return {
     items: (response.results ?? []).map(normalizeResult),
@@ -418,9 +410,9 @@ export async function getReplay(replay_id: string) {
   return normalizeReplay(response.replay);
 }
 
-export async function listReplays(params: PageRequest = {}): Promise<PageResult<Replay>> {
+export async function listReplays(params: Page = {}): Promise<PagedList<Replay>> {
   const page = pageRequest(params);
-  const response = await callStrategy<{ page: WirePage }, { replays?: Replay[]; page_result?: WirePageResult }>("ListReplays", {
+  const response = await callStrategy<{ page: Page }, { replays?: Replay[]; page_result?: PageResult }>("ListReplays", {
     page
   });
   return {
@@ -435,12 +427,12 @@ export async function listReplays(params: PageRequest = {}): Promise<PageResult<
  */
 export async function listReplayBars(
   replay_id: string,
-  params: PageRequest & { brief?: boolean } = {}
-): Promise<PageResult<ReplayBar>> {
+  params: Page & { brief?: boolean } = {}
+): Promise<PagedList<ReplayBar>> {
   const page = pageRequest(params, 50);
   const response = await callStrategy<
-    { replay_id: string; page: WirePage; brief: boolean },
-    { bars?: ReplayBar[]; page_result?: WirePageResult }
+    { replay_id: string; page: Page; brief: boolean },
+    { bars?: ReplayBar[]; page_result?: PageResult }
   >("ListReplayBars", {
     replay_id,
     page,

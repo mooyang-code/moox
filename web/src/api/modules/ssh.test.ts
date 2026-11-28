@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
-import { setSessionExpiredListener } from "@/api/admin/space-client";
+import { setSessionExpiredListener } from "@/api/admin/session-expiry";
 
 const { call } = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock("@/api/http", () => ({ call }));

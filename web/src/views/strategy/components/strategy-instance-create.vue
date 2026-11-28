@@ -195,6 +195,7 @@ import { Message } from "@arco-design/web-vue";
 import { createInstance, getInstance, listInstances, validateStrategy } from "@/api/strategy";
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
 import { listAllFactorTasks } from "@/api/factor";
+import { readAllPages } from "@/api/read-all-pages";
 import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import {
@@ -367,13 +368,11 @@ function close() {
   emit("update:visible", false);
 }
 
-async function loadAllAccounts() {
-  const items: LogicalAccount[] = [];
-  for (let page = 1; ; page += 1) {
+function loadAllAccounts() {
+  return readAllPages(async page => {
     const rsp = await listLogicalAccounts({ page, size: 200 });
-    items.push(...(rsp.logical_accounts || []));
-    if (!rsp.page_result?.has_more || !(rsp.logical_accounts || []).length) return items;
-  }
+    return { items: rsp.logical_accounts || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }
 
 async function loadTasksList() {

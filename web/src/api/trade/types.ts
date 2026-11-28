@@ -1,18 +1,10 @@
+import type { Page, PageResult } from "@/api/page";
+
+export type { Page, PageResult };
+
 export interface RetInfo {
   code: number | string;
   msg: string;
-}
-
-export interface Page {
-  page?: number;
-  size?: number;
-}
-
-export interface PageResult {
-  page: number;
-  size: number;
-  total: number;
-  has_more?: boolean;
 }
 
 /** 交易所：binance 币安、okx OKX、ashare A 股、hkex 港股（接口里的小写文本） */

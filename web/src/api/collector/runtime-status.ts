@@ -1,4 +1,5 @@
 import { call, type CallOptions } from "@/api/http";
+import type { Page, PageResult } from "@/api/page";
 
 export type HealthLevel = "ok" | "warn" | "error";
 
@@ -241,10 +242,11 @@ export function getCollectorStatus(spaceId: string, options: CallOptions = {}) {
 }
 
 export function listKlineBackfills(spaceId: string, filter: BackfillJobFilter, page = 1, size = 20) {
-  return call<
-    { space_id: string; page: { page: number; size: number } } & BackfillJobFilter,
-    { items?: KlineBackfillJob[]; page_result?: { total?: number; has_more?: boolean } }
-  >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size }, ...filter });
+  return call<{ space_id: string; page: Page } & BackfillJobFilter, { items?: KlineBackfillJob[]; page_result?: PageResult }>(
+    "collector",
+    "ListKlineBackfills",
+    { space_id: spaceId, page: { page, size }, ...filter }
+  );
 }
 
 export function getKlineBackfill(spaceId: string, jobId: string) {

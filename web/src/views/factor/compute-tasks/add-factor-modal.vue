@@ -98,6 +98,7 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, h, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addFactorToTask, listFactorCategories, listFactors, setFactorMemberStatus } from "@/api/factor";
+import { readAllPages } from "@/api/read-all-pages";
 import type { FactorCategory, FactorDef, FactorParamDecl, FactorTaskInfo, MemberKind } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
@@ -201,26 +202,18 @@ function setParam(factorId: string, name: string, value: number | undefined) {
   else draft.params[name] = value;
 }
 
-async function fetchAllFactors() {
-  const items: FactorDef[] = [];
-  for (let page = 1; ; page += 1) {
+function fetchAllFactors() {
+  return readAllPages(async page => {
     const rsp = await listFactors({ page: { page, size: PAGE_SIZE } });
-    const batch = rsp.factors || [];
-    items.push(...batch.map(item => item.factor));
-    if (!rsp.page_result?.has_more || !batch.length) break;
-  }
-  return items;
+    return { items: (rsp.factors || []).map(item => item.factor), hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }
 
-async function fetchSourceColumns(spaceId: string, datasetId: string) {
-  const names: string[] = [];
-  for (let page = 1; ; page += 1) {
+function fetchSourceColumns(spaceId: string, datasetId: string) {
+  return readAllPages(async page => {
     const rsp = await listDatasetColumns({ space_id: spaceId, dataset_id: datasetId, page: { page, size: PAGE_SIZE } });
-    const batch = rsp.columns || [];
-    names.push(...batch.map(column => column.column_name));
-    if (!rsp.page_result?.has_more || !batch.length) break;
-  }
-  return names;
+    return { items: (rsp.columns || []).map(column => column.column_name), hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }
 
 async function prepare() {

@@ -1,15 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthSessionExpiredError } from "./admin/auth-errors";
+import { setSessionExpiredListener } from "./admin/session-expiry";
+import { setSelectedSpaceIdCache } from "./admin/space-header";
 import { StaleSpaceRequestError } from "./admin/stale-space";
 import { NETWORK_ERROR_MESSAGE } from "./network-error";
 
-const transport = vi.hoisted(() => ({ post: vi.fn(), responseUse: vi.fn() }));
+const transport = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock("axios", () => ({
-  default: { create: () => ({ post: transport.post, interceptors: { response: { use: transport.responseUse } } }) }
-}));
-vi.mock("./admin/space-client", async importOriginal => ({
-  ...(await importOriginal<typeof import("./admin/space-client")>()),
-  installSpaceAwareClient: vi.fn()
+  default: { create: () => ({ post: transport.post }) }
 }));
 const { messageError } = vi.hoisted(() => ({ messageError: vi.fn() }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: messageError } }));
@@ -19,6 +17,15 @@ import { call, recordServerDate, reportError, RequestError, serverNow } from "./
 beforeEach(() => {
   transport.post.mockReset().mockResolvedValue({ data: { ret_info: { code: 0 } } });
   messageError.mockReset();
+  setSessionExpiredListener(null);
+  setSelectedSpaceIdCache("");
+  window.location.hash = "#/collector/tasks";
+});
+
+afterEach(() => {
+  setSessionExpiredListener(null);
+  setSelectedSpaceIdCache("");
+  window.location.hash = "#/";
 });
 
 describe("call：请求层不弹提示，失败抛给页面", () => {
@@ -39,16 +46,29 @@ describe("call：请求层不弹提示，失败抛给页面", () => {
     expect(messageError).not.toHaveBeenCalled();
   });
 
-  it("HTTP 失败时保留随错误返回的响应体；401 是会话失效，403 是普通失败", async () => {
+  it("HTTP 失败时保留随错误返回的响应体；401 清登录态并跳登录页（authProbe 不跳），403 是普通失败", async () => {
+    const cleared = vi.fn();
+    setSessionExpiredListener(cleared);
+
     const response = { ret_info: { code: 1, msg: "enable failed" }, instance: { instance_id: "instance-1" } };
     transport.post.mockRejectedValueOnce({ response: { status: 500, data: response } });
     await expect(call("strategy", "EnableStrategyInstance", {})).rejects.toMatchObject({ message: "enable failed", response });
-    transport.post.mockRejectedValueOnce({ response: { status: 401, data: { ret_info: { code: 4, msg: "登录已失效" } } } });
-    await expect(call("strategy", "ListStrategies", {})).rejects.toBeInstanceOf(AuthSessionExpiredError);
+
+    transport.post.mockRejectedValueOnce({ response: { status: 401, data: { ret_info: { code: 4, msg: "未登录" } } } });
+    await expect(call("auth", "GetUserInfo", {}, { authProbe: true })).rejects.toBeInstanceOf(AuthSessionExpiredError);
+    expect(cleared).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe("#/collector/tasks");
+
     transport.post.mockRejectedValueOnce({ response: { status: 403, data: { ret_info: { code: 4, msg: "来源不对" } } } });
     const forbidden = await call("strategy", "ListStrategies", {}).catch(cause => cause);
     expect(forbidden).toBeInstanceOf(RequestError);
     expect(forbidden.message).toBe("来源不对");
+    expect(cleared).not.toHaveBeenCalled();
+
+    transport.post.mockRejectedValueOnce({ response: { status: 401, data: { ret_info: { code: 4, msg: "登录已失效" } } } });
+    await expect(call("strategy", "ListStrategies", {})).rejects.toBeInstanceOf(AuthSessionExpiredError);
+    expect(cleared).toHaveBeenCalledTimes(1);
+    expect(window.location.hash).toBe(`#/login?redirect=${encodeURIComponent("/collector/tasks")}`);
     expect(messageError).not.toHaveBeenCalled();
   });
 
@@ -69,15 +89,18 @@ describe("call：请求层不弹提示，失败抛给页面", () => {
     await expect(call("trade", "SubmitOrder", {})).rejects.toThrow("缺少 ret_info");
   });
 
-  it("显式空间、超时、登录探测写进请求配置", async () => {
+  it("显式空间与超时写进请求配置，未指定时按选中空间自动注入 X-Space-Id", async () => {
     await call("storage", "ListDatasets", { space_id: "other" }, { spaceId: "other", timeout: 5000 });
     expect(transport.post).toHaveBeenLastCalledWith(
       "/api/admin/storage/ListDatasets",
       { space_id: "other" },
       { headers: { "X-Space-Id": "other" }, timeout: 5000 }
     );
+    setSelectedSpaceIdCache("crypto");
+    await call("trade", "SubmitOrder", {});
+    expect(transport.post).toHaveBeenLastCalledWith("/api/admin/trade/SubmitOrder", {}, { headers: { "X-Space-Id": "crypto" } });
     await call("auth", "GetUserInfo", {}, { authProbe: true });
-    expect(transport.post).toHaveBeenLastCalledWith("/api/admin/auth/GetUserInfo", {}, { authProbe: true });
+    expect(transport.post).toHaveBeenLastCalledWith("/api/admin/auth/GetUserInfo", {}, {});
   });
 });
 
@@ -126,11 +149,18 @@ describe("服务端时间", () => {
   });
 
   it("每个响应都记录 Date 头；trpc-ret 非 0 时按失败处理", async () => {
-    const fulfilled = transport.responseUse.mock.calls[0][0];
-    const response = { data: {}, headers: { date: "Fri, 09 Oct 2026 08:20:00 GMT" } };
-    expect(fulfilled(response)).toBe(response);
+    transport.post.mockResolvedValueOnce({
+      data: { ret_info: { code: 0 } },
+      headers: { date: "Fri, 09 Oct 2026 08:20:00 GMT" }
+    });
+    await call("collector", "GetTaskDetail", {});
     expect(serverNow()).toBe(Date.parse("2026-10-09T08:20:00Z"));
-    await expect(fulfilled({ data: {}, headers: { "trpc-ret": "21", "trpc-func-ret": "超时" } })).rejects.toThrow("超时");
+
+    transport.post.mockResolvedValueOnce({
+      data: {},
+      headers: { "trpc-ret": "21", "trpc-func-ret": "超时" }
+    });
+    await expect(call("collector", "GetTaskDetail", {})).rejects.toThrow("超时");
   });
 });
 

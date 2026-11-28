@@ -1,23 +1,15 @@
 import { call } from "@/api/http";
-import type {
-  CatalogResponse,
-  ComponentDeployment,
-  DeploymentHost,
-  DeploymentStatus,
-  HostRoutesResponse,
-  PageReq,
-  PageResult
-} from "./types";
+import type { Page, PageResult } from "@/api/page";
+import { readAllPages } from "@/api/read-all-pages";
+import type { CatalogResponse, ComponentDeployment, DeploymentHost, DeploymentStatus, HostRoutesResponse } from "./types";
 
 export function getCatalog() {
   return call<Record<string, never>, CatalogResponse>("sysdeploy", "GetCatalog", {});
 }
-export function listDeploymentHosts(req: { host_id?: string; status?: DeploymentStatus; page?: PageReq } = {}) {
+export function listDeploymentHosts(req: { host_id?: string; status?: DeploymentStatus; page?: Page } = {}) {
   return call<typeof req, { hosts?: DeploymentHost[]; page_result?: PageResult }>("sysdeploy", "ListHosts", req);
 }
-export function listDeployments(
-  req: { host_id?: string; component_id?: string; status?: DeploymentStatus; page?: PageReq } = {}
-) {
+export function listDeployments(req: { host_id?: string; component_id?: string; status?: DeploymentStatus; page?: Page } = {}) {
   return call<typeof req, { deployments?: ComponentDeployment[]; page_result?: PageResult }>("sysdeploy", "ListDeployments", req);
 }
 export function getHostRoutes(hostId: string) {
@@ -25,20 +17,21 @@ export function getHostRoutes(hostId: string) {
 }
 // Admin caps each page at 100. Do not silently hide later hosts or deployments.
 async function allPages<T>(read: (page: number) => Promise<{ items: T[]; page_result?: PageResult }>, key: (row: T) => string) {
-  const rows: T[] = [];
   const keys = new Set<string>();
-  for (let page = 1; ; page += 1) {
+  let count = 0;
+  return readAllPages(async page => {
     const result = await read(page);
     for (const row of result.items) {
       const id = key(row);
       if (keys.has(id)) throw new Error("部署清单在分页期间变化，请刷新重试");
       keys.add(id);
-      rows.push(row);
     }
-    if (rows.length > 1500) throw new Error("部署清单超过 1500 项，无法完整展示");
-    if (!result.page_result?.has_more) return rows;
-    if (result.items.length === 0) throw new Error("部署清单分页返回空页，请刷新重试");
-  }
+    count += result.items.length;
+    if (count > 1500) throw new Error("部署清单超过 1500 项，无法完整展示");
+    const hasMore = Boolean(result.page_result?.has_more);
+    if (hasMore && result.items.length === 0) throw new Error("部署清单分页返回空页，请刷新重试");
+    return { items: result.items, hasMore };
+  }, 100);
 }
 export function listAllDeploymentHosts() {
   return allPages(

@@ -1,12 +1,5 @@
 import { call } from "@/api/http";
-
-export interface CollectorPage {
-  page?: number;
-  size?: number;
-  total?: number;
-  has_more?: boolean;
-  next_cursor?: string;
-}
+import type { Page, PageResult } from "@/api/page";
 
 export interface CollectorTaskResult {
   result_name?: string;
@@ -65,12 +58,12 @@ export interface GetTaskListRequest {
   enabled?: boolean;
   task_id?: string;
   keyword?: string;
-  page?: { page?: number; size?: number; cursor?: string };
+  page?: Page;
 }
 
 export interface GetTaskListResponse {
   tasks?: CollectorTask[];
-  page_result?: CollectorPage;
+  page_result?: PageResult;
 }
 
 export interface GetTaskDetailRequest {

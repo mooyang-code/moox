@@ -1,4 +1,5 @@
-import type { Page, PageResult, RetInfo } from "@/api/storage/types";
+import type { Page, PageResult } from "@/api/page";
+import type { RetInfo } from "@/api/storage/types";
 
 export type MemberStatus = "enabled" | "disabled";
 export type FactorTaskStatus = "pending" | "enabled" | "disabled";

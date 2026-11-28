@@ -1,21 +1,11 @@
+export type { Page, PageResult } from "@/api/page";
+
 export type ControlResponse<T> = T & {
   ret_info: {
     code?: number;
     msg?: string;
   };
 };
-
-export interface PageReq {
-  page?: number;
-  size?: number;
-}
-
-export interface PageResult {
-  page: number;
-  size: number;
-  total: number;
-  has_more?: boolean;
-}
 
 export type DeploymentStatus = "enabled" | "disabled";
 export interface DeploymentHost {

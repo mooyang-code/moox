@@ -5,7 +5,8 @@ import { gatewayOrigin } from "@/api/gateway";
 import pinia from "@/store/index";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { isRetInfoSuccess } from "./ret-info";
-import { installSpaceAwareClient } from "./admin/space-client";
+import { expireBrowserSession } from "./admin/session-expiry";
+import { runWithSpaceContext } from "./admin/space-client";
 import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "./admin/space-header";
 import { AuthSessionExpiredError } from "./admin/auth-errors";
 import { StaleSpaceRequestError } from "./admin/stale-space";
@@ -139,25 +140,39 @@ onSpaceGenerationChange(invalidateStorageReadCache);
 const serviceLabels: Record<string, string> = { storage: "Storage", trade: "Trade" };
 
 async function send<TRsp>(service: string, method: string, req: object, options: CallOptions): Promise<TRsp> {
-  const config: AxiosRequestConfig = {};
-  // 显式空间的请求带上自己的 X-Space-Id，签名客户端不再注入当前所选空间。
-  if (options.spaceId) config.headers = { "X-Space-Id": options.spaceId };
-  if (options.timeout) config.timeout = options.timeout;
-  if (options.authProbe) config.authProbe = true;
+  const url = `/api/admin/${service}/${method}`;
   let rsp;
   try {
-    rsp = await client.post<TRsp & { ret_info?: RetInfo }>(`/api/admin/${service}/${method}`, req, config);
+    rsp = await runWithSpaceContext({ url, data: req, explicitSpaceId: options.spaceId }, ({ spaceId, signal }) => {
+      const config: AxiosRequestConfig = {};
+      // 显式空间或当前选中空间写入 X-Space-Id；全局接口由 runWithSpaceContext 置空。
+      if (spaceId) config.headers = { "X-Space-Id": spaceId };
+      if (options.timeout) config.timeout = options.timeout;
+      if (signal) config.signal = signal;
+      return client.post<TRsp & { ret_info?: RetInfo }>(url, req, config);
+    });
   } catch (error) {
     // 切换空间造成的取消与会话失效保持原类型，调用方按类型处理
     if (error instanceof StaleSpaceRequestError) throw error;
-    const data = (error as { response?: { data?: unknown; status?: number } })?.response?.data as
+    const status = (error as { response?: { status?: number } })?.response?.status;
+    const data = (error as { response?: { data?: unknown } })?.response?.data as
       | ({ ret_info?: RetInfo } & Record<string, unknown>)
       | undefined;
     const message = explainTimeout(
       data?.ret_info?.msg || explainTransportError(error, `${serviceLabels[service] || "Control"} 请求失败`)
     );
-    if ((error as { response?: { status?: number } })?.response?.status === 401) throw new AuthSessionExpiredError(message);
+    if (status === 401) {
+      if (!options.authProbe) throw expireBrowserSession(message);
+      throw new AuthSessionExpiredError(message);
+    }
     throw new RequestError(message, data?.ret_info ? data : undefined);
+  }
+  recordServerDate(rsp.headers?.date);
+  // 框架错误：HTTP 200 但 trpc-ret != 0，body 为空，错误信息在 header。
+  const trpcRet = rsp.headers?.["trpc-ret"] ?? rsp.headers?.["Trpc-Ret"];
+  if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== "0") {
+    const funcRet = rsp.headers?.["trpc-func-ret"] ?? "";
+    throw new RequestError(String(funcRet || `框架错误(${trpcRet})`));
   }
   const body = rsp.data;
   const retInfo = body?.ret_info;
@@ -207,16 +222,3 @@ export async function call<TReq extends object, TRsp>(
     if (storageReadInflight.get(key) === request) storageReadInflight.delete(key);
   }
 }
-
-installSpaceAwareClient(client);
-
-client.interceptors.response.use(rsp => {
-  recordServerDate(rsp.headers?.date);
-  // 框架错误：HTTP 200 但 trpc-ret != 0，body 为空，错误信息在 header。
-  const trpcRet = rsp.headers?.["trpc-ret"] ?? rsp.headers?.["Trpc-Ret"];
-  if (trpcRet !== undefined && trpcRet !== null && String(trpcRet) !== "0") {
-    const funcRet = rsp.headers?.["trpc-func-ret"] ?? "";
-    return Promise.reject(new Error(funcRet || `框架错误(${trpcRet})`));
-  }
-  return rsp;
-});

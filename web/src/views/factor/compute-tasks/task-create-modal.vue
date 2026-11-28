@@ -31,6 +31,7 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createFactorTask } from "@/api/factor";
+import { readAllPages } from "@/api/read-all-pages";
 import { listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
@@ -56,12 +57,10 @@ const nameError = computed(() => (form.name ? validateTaskName(form.name) : ""))
 const sourceFreq = computed(() => sourceDatasets.value.find(item => item.dataset_id === form.source_dataset_id)?.frequency || "");
 
 async function loadSourceDatasets(spaceId: string) {
-  const items: Dataset[] = [];
-  for (let page = 1; ; page += 1) {
+  const items = await readAllPages(async page => {
     const rsp = await listDatasets({ space_id: spaceId, page: { page, size: 500 } });
-    items.push(...(rsp.datasets || []));
-    if (!rsp.page_result?.has_more || !(rsp.datasets || []).length) break;
-  }
+    return { items: rsp.datasets || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
   return items.filter(
     item =>
       item.status === "active" &&

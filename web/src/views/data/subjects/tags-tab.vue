@@ -172,6 +172,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { listSubjectListers, listTagSyncStatus, type SubjectLister, type TagSyncStatus } from "@/api/collector";
 import { deleteTag, listTags, upsertTag } from "@/api/storage/metadata";
+import { readAllPages } from "@/api/read-all-pages";
 import type { Tag, TagReference } from "@/api/storage/types";
 import { tagCron, tagMarketType, tagSource, tagTimezone } from "@/views/data/shared/catalog-attributes";
 import { defaultPagination } from "@/views/data/shared/metadata-utils";
@@ -312,14 +313,20 @@ async function submit(): Promise<boolean> {
   if (!isEditing) {
     const tagId = formSnapshot.tag_id.trim().toLowerCase();
     try {
-      for (let page = 1; ; page += 1) {
+      let duplicated = false;
+      await readAllPages(async page => {
         const response = await listTags(spaceId, { page, size: 500 });
-        if (!submission.isCurrent()) return false;
+        if (!submission.isCurrent()) return { items: [], hasMore: false };
         if ((response.tags || []).some(tag => tag.tag_id.trim().toLowerCase() === tagId)) {
-          Message.warning(`标签 ID “${tagId}”已存在，请使用其他 ID`);
-          return false;
+          duplicated = true;
+          return { items: [], hasMore: false };
         }
-        if (!response.page_result?.has_more || !(response.tags || []).length) break;
+        return { items: response.tags || [], hasMore: Boolean(response.page_result?.has_more) };
+      });
+      if (!submission.isCurrent()) return false;
+      if (duplicated) {
+        Message.warning(`标签 ID “${tagId}”已存在，请使用其他 ID`);
+        return false;
       }
     } catch (error) {
       if (!submission.isCurrent()) return false;

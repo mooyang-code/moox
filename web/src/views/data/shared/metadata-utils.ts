@@ -16,7 +16,7 @@ export interface SelectOption<T extends string | number = string> {
 }
 
 export interface PageResultTotal {
-  total: number;
+  total?: number;
 }
 
 export const defaultPagination = (): AdminPagination => ({

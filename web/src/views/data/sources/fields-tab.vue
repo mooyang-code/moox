@@ -124,7 +124,7 @@ import { listAllDatasetColumns, listAllDatasets } from "@/api/storage/metadata";
 import GroupFilterPanel from "@/components/group-filter-panel/index.vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { canonicalFieldValueTypeOptions, defaultPagination, normalizeFieldValueType } from "@/views/data/shared/metadata-utils";
-import { isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
+import { isFactorResultDataset } from "@/views/data/shared/module-attribution";
 import FieldCatalogTable from "./components/FieldCatalogTable.vue";
 import FieldDetailDrawer from "./components/FieldDetailDrawer.vue";
 import { extraFieldProviderName } from "./extra-field-sources";
@@ -300,7 +300,7 @@ async function load() {
     const bundles: DatasetColumnBundle[] = [];
     let failedColumns = 0;
     if (datasetsResult.status === "fulfilled") {
-      const nonFactorDatasets = datasetsResult.value.filter(dataset => !isLikelyFactorResultDataset(dataset));
+      const nonFactorDatasets = datasetsResult.value.filter(dataset => !isFactorResultDataset(dataset));
       const columnResults = await mapWithConcurrency(nonFactorDatasets, 6, async dataset => ({
         dataset,
         columns: await listAllDatasetColumns(spaceId, dataset.dataset_id)

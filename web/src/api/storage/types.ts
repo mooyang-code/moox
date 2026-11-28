@@ -11,28 +11,11 @@ export type FieldValueType =
   | "FIELD_VALUE_TYPE_BYTES"
   | number;
 
-export type TotalMode = "AUTO" | "NONE" | "FORCE_EXACT" | number;
-
-export type TotalState = "UNKNOWN" | "EXACT" | "SKIPPED" | number;
+export type { Page, PageResult, TotalMode, TotalState } from "@/api/page";
 
 export interface RetInfo {
   code: number | string;
   msg: string;
-}
-
-export interface Page {
-  page?: number;
-  size?: number;
-  cursor?: string;
-}
-
-export interface PageResult {
-  page: number;
-  size: number;
-  total: number;
-  has_more: boolean;
-  next_cursor: string;
-  total_state?: TotalState;
 }
 
 export interface TimeRange {
