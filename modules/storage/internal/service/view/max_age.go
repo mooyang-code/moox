@@ -9,19 +9,19 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// SetMaxAge 设置 View 按空间 × 频率的最长保留历史：data_time 早于“当前时间 − 期限”的行不写入 View。
-// 不调用（零值）表示不限制。
-func (s *Service) SetMaxAge(maxAge storagepolicy.Retention) {
+// SetMaxAge 设置 View 按空间 × 频率的最长保留策略：data_time 早于“当前时间 − 期限”的行不写入 View。
+// 不调用（或零值策略）表示不限制。
+func (s *Service) SetMaxAge(policy storagepolicy.Policy) {
 	s.mu.Lock()
-	s.maxAge = maxAge
-	s.maxAgeEnabled = len(maxAge.Defaults) > 0
+	s.maxAge = policy
+	s.maxAgeEnabled = policy.View.Bars > 0 || len(policy.View.MaxAge.Defaults) > 0 || len(policy.View.MaxAge.Spaces) > 0
 	s.mu.Unlock()
 }
 
 // maxAgeCutoff 返回空间 × 频率的最长保留期分界：data_time 早于它的行不写入 View；不限制时返回零值。
 func (s *Service) maxAgeCutoff(spaceID, freq string) time.Time {
 	s.mu.RLock()
-	maxAge, enabled := s.maxAge, s.maxAgeEnabled
+	policy, enabled := s.maxAge, s.maxAgeEnabled
 	s.mu.RUnlock()
 	if !enabled {
 		return time.Time{}
@@ -30,8 +30,8 @@ func (s *Service) maxAgeCutoff(spaceID, freq string) time.Time {
 	if s.now != nil {
 		now = s.now()
 	}
-	// 没配置的频率（Resolve 报错）不限制：宁可多留，不能误删。
-	if period, _, err := maxAge.Resolve(spaceID, freq); err == nil && !period.Forever {
+	// 没配置的频率（ResolveViewMaxAge 报错）不限制：宁可多留，不能误删。
+	if period, _, err := policy.ResolveViewMaxAge(spaceID, freq); err == nil && !period.Forever {
 		return now.Add(-period.Duration)
 	}
 	return time.Time{}

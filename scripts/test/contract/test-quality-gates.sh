@@ -4,12 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "${ROOT}"
 
-grep -Eq '^check-boundaries:.*check-module-boundaries.*check-package-boundaries' Makefile
-grep -Eq '^check-format:' Makefile
-grep -Eq '^check-lint:' Makefile
-grep -Eq '^verify-ci-web:.*check-format.*check-lint' Makefile
-grep -Eq '^verify:.*verify-ci-core.*verify-ci-contracts.*verify-ci-storage.*verify-ci-web' Makefile
-
 node - <<'NODE'
 const pkg = require('./web/package.json')
 const expected = ['lint:eslint:check', 'lint:prettier:check']

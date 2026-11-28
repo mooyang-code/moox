@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -24,10 +25,6 @@ const (
 	// deleteOldestRoundRowsFactor：一个索引一轮最多删除“每批行数 × 这个倍数”行，超出的部分留到下一轮。
 	// 稳态时每个序列每轮只超出一两根，一批不到 64 个序列就删不满每批行数，所以按行数而不是批数封顶。
 	deleteOldestRoundRowsFactor = 10
-	// DefaultDeleteOldestBatchSize 是每批最多删除的最旧行数的默认值（2026-10-30 用线上 1m 因子索引实测，单批持锁约 30～50ms）。
-	DefaultDeleteOldestBatchSize = 2000
-	// MaxDeleteOldestBatchSize 是每批行数配置的上限。
-	MaxDeleteOldestBatchSize = 20000
 	// slowDeleteOldestBatch 是需要打日志的单批持锁时长。
 	slowDeleteOldestBatch = 200 * time.Millisecond
 )
@@ -43,7 +40,7 @@ type DeleteOldestOptions struct {
 // StartMinuteTasks 启动每分钟的定时任务，返回停止函数。还没建好索引的 View 由两件事各自跳过。
 func (s *Service) StartMinuteTasks(ctx context.Context, opts DeleteOldestOptions) func() {
 	if opts.BatchSize <= 0 {
-		opts.BatchSize = DefaultDeleteOldestBatchSize
+		opts.BatchSize = storageconfig.DefaultViewDeleteOldestBatchSize
 	}
 	now := opts.now
 	if now == nil {

@@ -17,8 +17,10 @@ const (
 	DefaultViewBackfillPageSize        uint32 = 2000
 	MaxViewBackfillPageSize            uint32 = 10000
 	DefaultViewBackfillRequestInterval        = 100 * time.Millisecond
-	DefaultViewDeleteOldestBatchSize          = 2000
-	MaxViewDeleteOldestBatchSize              = 20000
+	// DefaultViewDeleteOldestBatchSize 是定时删除最旧数据时每批最多删除行数的默认值（2026-10-30 用线上 1m 因子索引实测，单批持锁约 30～50ms）。
+	DefaultViewDeleteOldestBatchSize = 2000
+	// MaxViewDeleteOldestBatchSize 是定时删除最旧数据时每批行数配置的上限。
+	MaxViewDeleteOldestBatchSize = 20000
 )
 
 // ConfigLoader 配置加载器
@@ -181,13 +183,13 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.Devices.ViewIndexRoot = filepath.Join(c.Root, "view-indexes")
 	}
 	if c.View.BackfillPageSize == 0 {
-		c.View.BackfillPageSize = 2000
+		c.View.BackfillPageSize = DefaultViewBackfillPageSize
 	}
 	if c.View.DeleteOldestBatchSize == 0 {
-		c.View.DeleteOldestBatchSize = 2000
+		c.View.DeleteOldestBatchSize = DefaultViewDeleteOldestBatchSize
 	}
 	if strings.TrimSpace(c.View.BackfillRequestInterval) == "" {
-		c.View.BackfillRequestInterval = "100ms"
+		c.View.BackfillRequestInterval = DefaultViewBackfillRequestInterval.String()
 	}
 }
 

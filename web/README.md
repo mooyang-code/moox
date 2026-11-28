@@ -18,7 +18,6 @@ pnpm build:prod               # vue-tsc 类型检查 + 生产构建，输出 dis
 pnpm lint:eslint:check        # ESLint（零 warning）
 pnpm lint:prettier:check      # Prettier
 pnpm test:e2e                 # Playwright 页面测试；本机有 Google Chrome 时加 PLAYWRIGHT_CHANNEL=chrome
-pnpm check:deployments        # 其余 check:* 为页面结构契约检查脚本
 ```
 
 页面测试只在本地跑，不进 CI。已知问题：macOS 上用 `PLAYWRIGHT_CHANNEL=chrome`（本机安装的 Google Chrome）时，用例全过也可能在最后报
@@ -42,7 +41,6 @@ GoogleUpdater（日志里的 `app_wakeall.cc ... GoogleUpdater --wake`），偶�
 ```text
 build/            Vite 插件配置
 public/           静态资源
-scripts/          页面契约检查脚本（node）
 tests/            跨页面的契约与 e2e 测试
 src/api/          后端 API 封装
 src/components/   通用组件（自动注册）

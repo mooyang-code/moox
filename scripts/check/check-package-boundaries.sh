@@ -4,9 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
-go run ./scripts/check/check-trade-exchange-terminology.go
-
 violations=()
+
+# Trade 协议字段统一使用 exchange，不再使用 provider / broker / venue / platform。
+while IFS= read -r match; do
+	violations+=("${match}: Trade proto 字段名应使用 exchange，禁止使用 provider/broker/venue/platform")
+done < <(rg -n '^[[:space:]]*(optional[[:space:]]+|repeated[[:space:]]+)?[A-Za-z0-9_.]+[[:space:]]+(provider|broker|venue|platform)[[:space:]]*=' \
+	modules/trade/proto packages/tradeeventpb --glob '*.proto' || true)
 
 # Domain and core packages contain business rules and must not depend on delivery
 # or persistence details. Infrastructure is the opposite direction of the edge.
