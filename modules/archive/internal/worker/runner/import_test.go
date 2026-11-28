@@ -135,7 +135,7 @@ func TestImportCancelExportsWrittenRows(t *testing.T) {
 	}
 	run.cancel()
 	out := run.wait(t)
-	if out.Status != "canceled" || !strings.Contains(out.Message, "重跑") || report(out, "2026-10-01").GetFilePath() == "" {
+	if out.Status != "cancelled" || !strings.Contains(out.Message, "重跑") || report(out, "2026-10-01").GetFilePath() == "" {
 		t.Fatalf("out = %+v", out)
 	}
 }

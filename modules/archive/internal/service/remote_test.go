@@ -85,10 +85,10 @@ func withRemote(p store.Partition, r store.Remote) store.Partition {
 
 func TestRemoteHealthRuleAppliesOnlyWhenEnabled(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	base := store.Task{SpaceID: "crypto", DatasetID: "ds", Freq: "1m", PartitionUnit: "day", Retention: "168h", Status: store.StatusEnabled,
+	base := store.Task{SpaceID: "crypto", DatasetID: "ds", Freq: "1m", Status: store.StatusEnabled,
 		CreatedAt: now.Add(-240 * time.Hour), LastSuccessAt: now.Add(-10 * time.Minute)}
 	eval := func(enabled bool, age time.Duration, lastErr string) (string, string) {
-		return evaluateHealth(healthInput{Now: now, Task: base, Lateness: 15 * time.Minute, SpaceTZ: "UTC", RemoteEnabled: enabled,
+		return evaluateHealth(healthInput{Now: now, Task: base, Retention: "168h", WorkerLastSeen: now, Lateness: 15 * time.Minute, SpaceTZ: "UTC", RemoteEnabled: enabled,
 			Remote: store.RemoteBacklog{Unreplicated: 2, OldestExportedAt: now.Add(-age), OldestKey: "2026-10-13", LastError: lastErr}})
 	}
 	if level, _ := eval(false, 100*time.Hour, ""); level != HealthOK {
@@ -125,9 +125,9 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 		t.Fatalf("总览里的对象存储 = %v", os)
 	}
 	run := h.pull(1)[0]
-	report := func(key, sha, exportedAt, remoteSHA, remoteErr string) *archivepb.PartitionReport {
+	report := func(key, sha, exportedAt, remoteSHA, remoteErr string) *archivepb.ArchivePartition {
 		exported := rfcMillis(exportedAt)
-		r := &archivepb.PartitionReport{PartitionKey: key, Status: "exported", RangeStart: key + "T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", RowCount: 10, SubjectCount: 1,
+		r := &archivepb.ArchivePartition{PartitionKey: key, Status: "exported", RangeStart: key + "T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", RowCount: 10, SubjectCount: 1,
 			FilePath: "crypto/ds_1m/2026/" + key + ".csv.gz", FileBytes: 100, FileSha256: sha, ExportCount: 1, ExportedAt: exported, RemoteError: remoteErr}
 		if remoteSHA != "" {
 			r.RemoteKey, r.RemoteSha256, r.RemoteEtag, r.RemoteUploadedAt, r.RemoteVerifiedAt = "crypto/ds_1m/2026/"+key+"."+remoteSHA[:3]+".csv.gz", remoteSHA, "md5", exported, exported
@@ -135,7 +135,7 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 		return r
 	}
 	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded", PartitionsUploaded: 1,
-		Partitions: []*archivepb.PartitionReport{
+		Partitions: []*archivepb.ArchivePartition{
 			report("2026-10-16", "aaa111", "2026-10-17T00:30:00Z", "aaa111", ""),
 			report("2026-10-15", "bbb222", "2026-10-15T00:30:00Z", "", "上传 x: 访问被拒绝"),
 		}})
@@ -184,7 +184,7 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 // 重导出后计时从新的导出时间算：新版本刚导出，旧版本远端副本不算数，但还没到 24 小时。
 func TestRemoteHealthRestartsFromTheNewExport(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	in := healthInput{Now: now, Task: store.Task{Retention: "168h", Status: store.StatusEnabled, LastSuccessAt: now}, RemoteEnabled: true, Remote: store.RemoteBacklog{Unreplicated: 1, OldestExportedAt: now.Add(-time.Hour), OldestKey: "2026-10-01"}}
+	in := healthInput{Now: now, Task: store.Task{Status: store.StatusEnabled, LastSuccessAt: now}, Retention: "168h", WorkerLastSeen: now, RemoteEnabled: true, Remote: store.RemoteBacklog{Unreplicated: 1, OldestExportedAt: now.Add(-time.Hour), OldestKey: "2026-10-01"}}
 	if level, reason := evaluateHealth(in); level != HealthOK {
 		t.Fatalf("重导出 1 小时内 = %s %s", level, reason)
 	}

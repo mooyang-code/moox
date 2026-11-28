@@ -16,7 +16,9 @@ func TestArchiveSchemaContainsTheFourManagerTables(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS t_archive_runs",
 		"CREATE TABLE IF NOT EXISTS t_archive_partitions",
 		"CREATE TABLE IF NOT EXISTS t_archive_workers",
-		"CHECK (c_kind IN ('follow', 'manual', 'range', 'import'))",
+		"CHECK (c_status IN ('enabled', 'disabled'))",
+		"CHECK (c_kind IN ('manual', 'range', 'import'))",
+		"CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled'))",
 		"CHECK (c_purpose IN ('collect', 'factor', 'data'))",
 		"UNIQUE (c_space_id, c_dataset_id)",
 		"UNIQUE (c_space_id, c_purpose, c_dir_name)",
@@ -34,9 +36,9 @@ func TestArchiveSchemaContainsTheFourManagerTables(t *testing.T) {
 	if got := strings.Count(sql, "CREATE TABLE IF NOT EXISTS"); got != 4 {
 		t.Fatalf("archive schema creates %d tables, want exactly 4", got)
 	}
-	for _, forbidden := range []string{"c_create_time", "c_update_time", "c_subjects_total", "DATETIME", "CURRENT_TIMESTAMP"} {
+	for _, forbidden := range []string{"c_create_time", "c_update_time", "c_subjects_total", "c_creator", "c_partition_unit", "c_retention", "c_meta_json", "DATETIME", "CURRENT_TIMESTAMP", "'paused'", "'canceled'", "'follow'"} {
 		if strings.Contains(sql, forbidden) {
-			t.Fatalf("AllSQL() must use Unix ms INTEGER timestamps and drop dead columns, found %q", forbidden)
+			t.Fatalf("AllSQL() must drop dead columns and legacy status words, found %q", forbidden)
 		}
 	}
 }
@@ -69,8 +71,8 @@ func TestArchiveSchemaConstraints(t *testing.T) {
 		_, err := db.Exec(query, args...)
 		return err
 	}
-	insertTask := `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_backfill_from)
-VALUES (?, ?, ?, ?, '1m', 'day', 1793491200000)`
+	insertTask := `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_backfill_from)
+VALUES (?, ?, ?, ?, '1m', 1793491200000)`
 	if err := exec(insertTask, "crypto", "ds_a", "collect", "binance-spot-kline-1m"); err != nil {
 		t.Fatal(err)
 	}
@@ -95,9 +97,18 @@ VALUES (?, ?, ?, ?, '1m', 'day', 1793491200000)`
 		t.Fatal("目录名不能为空")
 	}
 
-	if err := exec(`INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit)
-VALUES ('crypto', 'ds_g', 'data', 'g', '1m', 'day')`); err == nil {
+	if err := exec(`INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq)
+VALUES ('crypto', 'ds_g', 'data', 'g', '1m')`); err == nil {
 		t.Fatal("归档起点不能为空")
+	}
+	if err := exec(`UPDATE t_archive_tasks SET c_rescan_from = 1793491200000, c_rescan_until = 0 WHERE c_dataset_id = 'ds_a'`); err == nil {
+		t.Fatal("重读进度起止必须同时为 0 或同时大于 0")
+	}
+	if err := exec(`UPDATE t_archive_tasks SET c_status = 'paused' WHERE c_dataset_id = 'ds_a'`); err == nil {
+		t.Fatal("任务状态不再接受 paused")
+	}
+	if err := exec(`UPDATE t_archive_tasks SET c_status = 'disabled' WHERE c_dataset_id = 'ds_a'`); err != nil {
+		t.Fatalf("任务状态应接受 disabled: %v", err)
 	}
 
 	insertRun := `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_scheduled_at)
@@ -108,15 +119,21 @@ VALUES (?, 'crypto', 'ds_a', ?, ?, ?, 1794096000000)`
 	if err := exec(insertRun, "r2", "range", 1793491200000, 1793577600000); err != nil {
 		t.Fatalf("合法的补拉区间: %v", err)
 	}
-	for i, kind := range []string{"follow", "manual", "import"} {
+	for i, kind := range []string{"manual", "import"} {
 		if err := exec(insertRun, fmt.Sprintf("r3_%d", i), kind, 0, 0); err != nil {
 			t.Fatalf("合法的 %s 运行: %v", kind, err)
 		}
 	}
-	for i, kind := range []string{"unknown", "tick", "scheduled"} {
+	for i, kind := range []string{"follow", "unknown", "tick", "scheduled"} {
 		if err := exec(insertRun, fmt.Sprintf("r4_%d", i), kind, 0, 0); err == nil {
 			t.Fatalf("运行类型 %s 必须被拒", kind)
 		}
+	}
+	if err := exec(`UPDATE t_archive_runs SET c_status = 'canceled' WHERE c_run_id = 'r2'`); err == nil {
+		t.Fatal("运行状态不再接受 canceled")
+	}
+	if err := exec(`UPDATE t_archive_runs SET c_status = 'cancelled' WHERE c_run_id = 'r2'`); err != nil {
+		t.Fatalf("运行状态应接受 cancelled: %v", err)
 	}
 
 	if err := exec(`INSERT INTO t_archive_workers (c_worker_id, c_disk_used_bytes, c_min_free_bytes) VALUES ('w', -1, 0)`); err == nil {

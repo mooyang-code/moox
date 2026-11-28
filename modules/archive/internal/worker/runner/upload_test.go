@@ -46,7 +46,7 @@ func countRequests(srv *fakes3.Server, method, contains string) int {
 }
 
 // finalDay 把 10-10 的分区一路导出并定稿（补拉一周前的区间），返回它的登记。
-func finalDay(t *testing.T, e *env) *archivepb.PartitionReport {
+func finalDay(t *testing.T, e *env) *archivepb.ArchivePartition {
 	t.Helper()
 	day := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	e.src.rows = rows("BTC", day.Add(time.Hour), 30, 1)
@@ -304,7 +304,7 @@ func TestRestoredRegistrationFetchesFromTheObjectStoreOnANewMachine(t *testing.T
 	fresh.now = old.now.Add(time.Hour)
 	out := fresh.run(2000, func(a *archivepb.RunAssignment) {
 		rangeOfDay(a)
-		a.RegisteredPartitions = []*archivepb.PartitionReport{registered}
+		a.RegisteredPartitions = []*archivepb.ArchivePartition{registered}
 	}, nil)
 	got := report(out, "2026-10-10")
 	if out.Status != "succeeded" || got.GetRowCount() != 31 || !strings.Contains(out.Message, "已从对象存储取回") {
@@ -325,7 +325,7 @@ func TestRestoredPartitionWithoutALocalFileReportsWhyItCannotUpload(t *testing.T
 	fresh.now = old.now.Add(time.Hour)
 	out := fresh.run(2000, func(a *archivepb.RunAssignment) {
 		a.Kind, a.RangeStart, a.RangeEnd = "range", "2026-10-12T00:00:00Z", "2026-10-12T01:00:00Z"
-		a.RegisteredPartitions = []*archivepb.PartitionReport{registered}
+		a.RegisteredPartitions = []*archivepb.ArchivePartition{registered}
 	}, nil)
 	if !strings.Contains(out.Message, "本地文件不存在") {
 		t.Fatalf("out = %+v", out)

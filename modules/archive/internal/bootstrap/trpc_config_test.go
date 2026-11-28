@@ -39,10 +39,13 @@ func TestShippedTRPCConfigMatchesTheServiceCatalogAndTimers(t *testing.T) {
 		}
 		ports[svc.Port], byName[svc.Name] = svc.Name, svc
 	}
-	for _, name := range []string{healthService, mgrService, workerService, triggerService, maintainService, metricsService} {
+	for _, name := range []string{healthService, mgrService, workerService, maintainService, metricsService} {
 		if _, ok := byName[name]; !ok {
 			t.Fatalf("trpc_go.yaml 缺少服务 %s", name)
 		}
+	}
+	if _, legacy := byName["trpc.moox.archive.mgr.trigger.timer"]; legacy {
+		t.Fatal("trpc_go.yaml 不再需要 trigger.timer（跟随已改由 worker 本地循环）")
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
@@ -60,10 +63,7 @@ func TestShippedTRPCConfigMatchesTheServiceCatalogAndTimers(t *testing.T) {
 	if byName[healthService].Port != component.Health.Port {
 		t.Fatalf("健康端口 trpc_go.yaml=%d 服务目录=%d", byName[healthService].Port, component.Health.Port)
 	}
-	trigger, maintain := byName[triggerService], byName[maintainService]
-	if trigger.Protocol != "timer" || trigger.Network != "25 * * * * *" || trigger.Timeout != int(triggerTimeout.Milliseconds()) {
-		t.Fatalf("全局触发器配置不对: %+v", trigger)
-	}
+	maintain := byName[maintainService]
 	if maintain.Protocol != "timer" || !strings.HasPrefix(maintain.Network, "13 ") || maintain.Timeout != int(maintainTimeout.Milliseconds()) {
 		t.Fatalf("维护定时器配置不对: %+v", maintain)
 	}

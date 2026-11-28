@@ -216,7 +216,7 @@ func rows(subject string, from time.Time, n int, base float64) []staging.Row {
 	return out
 }
 
-func report(out *Outcome, key string) *archivepb.PartitionReport {
+func report(out *Outcome, key string) *archivepb.ArchivePartition {
 	for _, p := range out.Partitions {
 		if p.GetPartitionKey() == key {
 			return p
@@ -469,7 +469,7 @@ func TestCancellationLeavesStagedBatchesAndKeepsTheRescanProgress(t *testing.T) 
 	e.src.rows = rows("BTC", day, 60, 1) // 00:00–00:59
 	backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = day.Format(time.RFC3339) }
 	out := e.run(20, backfill, func(p Progress) bool { return p.RowsRead >= 40 })
-	if out.Status != "canceled" || out.Progress.RowsRead != 40 {
+	if out.Status != "cancelled" || out.Progress.RowsRead != 40 {
 		t.Fatalf("out = %+v", out)
 	}
 	if from, _, ok, _ := e.store.Rescan(context.Background(), "crypto", "ds_1m"); !ok || !from.Equal(day) {
@@ -670,7 +670,7 @@ func TestLostStagingIsRebuiltFromTheManagerRegistrationWithoutLosingRows(t *test
 	e.now = e.now.Add(time.Hour)
 	out = e.run(2000, func(a *archivepb.RunAssignment) {
 		a.LastSuccessAt = lastSuccess.UnixMilli()
-		a.RegisteredPartitions = []*archivepb.PartitionReport{registered}
+		a.RegisteredPartitions = []*archivepb.ArchivePartition{registered}
 	}, nil)
 	if out.Status != "succeeded" {
 		t.Fatalf("out = %+v", out)

@@ -47,7 +47,7 @@ type Progress struct {
 	RowsRead     uint64
 }
 
-// Outcome 是一次运行的结果，用来填 CompleteArchiveRun。
+// Outcome 是一次跟随或运行的结果，用来填 ReportFollowResult 或 CompleteArchiveRun。
 type Outcome struct {
 	Status      string
 	Message     string
@@ -56,13 +56,16 @@ type Outcome struct {
 	RowsChanged uint64
 	Exported    uint32
 	Finalized   uint32
-	// Uploaded 是本次运行上传到对象存储并校验通过的分区数。
+	// Uploaded 是本次执行上传到对象存储并校验通过的分区数。
 	Uploaded   uint32
-	Partitions []*archivepb.PartitionReport
+	Partitions []*archivepb.ArchivePartition
 	// ReportedKeys 是 Partitions 里的分区键；mgr 确认登记之后调用方据此清除待上报标记。
 	ReportedKeys  []string
 	Unrecoverable []*archivepb.UnrecoverableRange
 	FinalUntil    time.Time
+	// RescanFrom、RescanUntil 是执行结束时暂存库里的整段重读进度（零值表示当前不在重读）。
+	RescanFrom  time.Time
+	RescanUntil time.Time
 }
 
 // Runner 执行运行。
@@ -169,7 +172,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		// 不论成功、失败还是取消，都带上本次涉及的分区的当前登记。
 		out.Progress = s.progress
 		out.RowsAdded, out.RowsChanged = s.added, s.changed
-		// 任务绑定之前暂存库里可能还是旧任务的状态，不能把它的分区报给新任务。
+		// 任务绑定之前暂存库里可能还是旧任务的状态，不能把它的分区或重读进度报给新任务。
 		if s.bound {
 			if reports, rerr := s.partitionReports(context.WithoutCancel(ctx), out); rerr == nil {
 				out.Partitions = reports
@@ -177,10 +180,13 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 					out.ReportedKeys = append(out.ReportedKeys, p.GetPartitionKey())
 				}
 			}
+			if from, until, ok, rerr := s.r.Staging.Rescan(context.WithoutCancel(ctx), s.task.SpaceID, s.task.DatasetID); rerr == nil && ok {
+				out.RescanFrom, out.RescanUntil = from, until
+			}
 		}
 		switch {
 		case errors.Is(err, errStopped) || errors.Is(err, context.Canceled):
-			out.Status, out.Message, err = "canceled", "运行已取消", nil
+			out.Status, out.Message, err = "cancelled", "运行已取消", nil
 			if s.cancelNote != "" {
 				out.Message += "；" + s.cancelNote
 			}
@@ -586,7 +592,7 @@ func (s *runState) finalize(ctx context.Context, out *Outcome, until time.Time) 
 
 // partitionReports 为所有「最新状态还没被 mgr 确认」的分区生成登记：本次涉及的，加上之前上报失败而遗留的。
 // 已定稿分区的统计来自定稿时记下的值，未定稿的分区现算。
-func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archivepb.PartitionReport, error) {
+func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archivepb.ArchivePartition, error) {
 	pending, err := s.r.Staging.PendingReports(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return nil, err
@@ -595,7 +601,7 @@ func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archi
 	for _, c := range s.task.Columns {
 		names = append(names, c.Name)
 	}
-	var reports []*archivepb.PartitionReport
+	var reports []*archivepb.ArchivePartition
 	for _, p := range pending {
 		rows, subjects, minTime, maxTime := p.RowCount, p.SubjectCount, p.MinDataTime, p.MaxDataTime
 		if p.Status != staging.StatusFinal {
@@ -605,7 +611,7 @@ func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archi
 			}
 			rows, subjects, minTime, maxTime = st.Rows, st.Subjects, st.Min, st.Max
 		}
-		report := &archivepb.PartitionReport{
+		report := &archivepb.ArchivePartition{
 			PartitionKey: p.Key, RangeStart: p.Start.Format(time.RFC3339), RangeEnd: p.End.Format(time.RFC3339), Status: p.Status,
 			RowCount: rows, SubjectCount: subjects, ExportCount: p.ExportCount,
 			LastChangedAt: millisOf(p.LastChangedAt), ExportedAt: millisOf(p.ExportedAt), FinalizedAt: millisOf(p.FinalizedAt),

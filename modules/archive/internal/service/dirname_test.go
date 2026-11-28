@@ -157,7 +157,7 @@ func TestDirNameConflictIsReportedNotRenamed(t *testing.T) {
 	again, _ := h.mgr.CreateArchiveTask(ctx, swap)
 	requireCode(t, again.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "已经有归档任务")
 	// 修改任务不改目录名。
-	updated, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "dataset_dasftksvjhj2jom4vhdg", Status: "paused"})
+	updated, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "dataset_dasftksvjhj2jom4vhdg", Status: "disabled"})
 	requireOK(t, updated.GetRetInfo())
 	if updated.GetTask().GetDirName() != "binance-perp-kline-1m" {
 		t.Fatalf("task = %v", updated.GetTask())

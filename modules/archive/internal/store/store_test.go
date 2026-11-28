@@ -31,8 +31,8 @@ func openTest(t *testing.T) *Store {
 // task 返回一个测试任务；目录名按数据集取，同一空间里多个任务不会撞目录名。
 func task(space, dataset string) Task {
 	return Task{
-		SpaceID: space, DatasetID: dataset, Purpose: "collect", DirName: "dir-" + strings.ReplaceAll(dataset, "_", "-"), Freq: "1m", PartitionUnit: "day", Retention: "168h",
-		BackfillFrom: t0.Add(-6 * 24 * time.Hour).Truncate(time.Second), Status: StatusEnabled, Creator: "tester",
+		SpaceID: space, DatasetID: dataset, Purpose: "collect", DirName: "dir-" + strings.ReplaceAll(dataset, "_", "-"), Freq: "1m",
+		BackfillFrom: t0.Add(-6 * 24 * time.Hour).Truncate(time.Second), Status: StatusEnabled,
 	}
 }
 
@@ -75,7 +75,7 @@ func TestOpenCreatesIncrementalVacuumDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("应写入 archive-mgr 数据格式文件：%v", err)
 	}
-	if rec.Component != "archive-mgr" || rec.Parts[dataformat.PartSQLiteSchema] == "" || rec.Parts[dataformat.PartLifecycle] == "" {
+	if rec.Component != "archive-mgr" || rec.Parts[dataformat.PartSQLiteSchema] == "" || rec.Parts[dataformat.PartLifecycle] != "" {
 		t.Fatalf("格式记录异常：%+v", rec)
 	}
 
@@ -100,7 +100,7 @@ func TestCreateTaskAllowsOneTaskPerDatasetAndKeepsTheBackfillStart(t *testing.T)
 	if created.Status != StatusEnabled || !created.BackfillFrom.Equal(task("crypto", "ds1").BackfillFrom) {
 		t.Fatalf("task = %+v", created)
 	}
-	if runs, total, _ := s.ListRuns(context.Background(), "crypto", "ds1", "", true, 10, 0); total != 0 || len(runs) != 0 {
+	if runs, total, _ := s.ListRuns(context.Background(), "crypto", "ds1", "", 10, 0); total != 0 || len(runs) != 0 {
 		t.Fatalf("创建任务不生成运行: %v", runs)
 	}
 	if _, err := s.CreateTask(context.Background(), task("crypto", "ds1")); !errors.Is(err, ErrConflict) {
@@ -124,12 +124,11 @@ func TestCreateTaskAllowsOneTaskPerDatasetAndKeepsTheBackfillStart(t *testing.T)
 	}
 }
 
-// 设计 6.1 第 1 条：启用且空闲的任务各生成一条 follow；有任何排队中或运行中运行（含排队中的导入）的不生成；
-// 停用任务不生成；整点窗口内照常生成。
-func TestCreateFollowRunsOnlyForEnabledIdleTasks(t *testing.T) {
+// 可跟随清单只返回启用、源数据集未缺失且当前无排队/运行中一次性运行的任务。
+func TestListFollowableTasksReturnsOnlyEnabledIdleTasks(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	for _, ds := range []string{"idle", "busy", "importing", "paused"} {
+	for _, ds := range []string{"idle", "busy", "importing", "disabled", "missing"} {
 		mustTask(t, s, "crypto", ds, false)
 	}
 	if _, err := s.CreateRun(ctx, "crypto", "busy", RunSpec{Kind: KindManual}, t0); err != nil {
@@ -138,57 +137,38 @@ func TestCreateFollowRunsOnlyForEnabledIdleTasks(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "importing", RunSpec{Kind: KindImport}, t0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateTask(ctx, "crypto", "paused", TaskUpdate{Status: StatusPaused}, t0); err != nil {
+	if _, err := s.UpdateTask(ctx, "crypto", "disabled", TaskUpdate{Status: StatusDisabled}, t0); err != nil {
 		t.Fatal(err)
 	}
-	// 整点窗口内（:59:25）照常生成。
-	quiet := time.Date(2026, 10, 17, 0, 59, 25, 0, time.UTC)
-	created, err := s.CreateFollowRuns(ctx, quiet)
-	if err != nil || created != 1 {
-		t.Fatalf("created = %d err=%v", created, err)
+	if err := s.SetTaskSourceMissing(ctx, "crypto", "missing", true); err != nil {
+		t.Fatal(err)
 	}
-	runs, _, _ := s.ListRuns(ctx, "crypto", "idle", RunQueued, true, 10, 0)
-	if len(runs) != 1 || runs[0].Kind != KindFollow || !runs[0].ScheduledAt.Equal(quiet) {
-		t.Fatalf("idle 任务的 follow = %+v", runs)
-	}
-	for _, ds := range []string{"busy", "importing", "paused"} {
-		if runs, _, _ := s.ListRuns(ctx, "crypto", ds, "", true, 10, 0); len(runs) > 1 || (len(runs) == 1 && runs[0].Kind == KindFollow) {
-			t.Fatalf("%s 不应生成 follow: %+v", ds, runs)
-		}
-	}
-	// 上一条 follow 还在排队：下一分钟不再生成。
-	if created, err := s.CreateFollowRuns(ctx, quiet.Add(time.Minute)); err != nil || created != 0 {
-		t.Fatalf("排队中时 created = %d err=%v", created, err)
+	followable, err := s.ListFollowableTasks(ctx)
+	if err != nil || len(followable) != 1 || followable[0].DatasetID != "idle" {
+		t.Fatalf("followable = %+v err=%v", followable, err)
 	}
 }
 
-func TestPausingCancelsQueuedRunsAndResumeKeepsTheTaskState(t *testing.T) {
+func TestDisablingCancelsQueuedRunsAndResumeKeepsTheTaskState(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", false)
-	if _, err := s.CreateFollowRuns(ctx, t0); err != nil {
-		t.Fatal(err)
+	_, queued := mustTask(t, s, "crypto", "ds1", true)
+	disabled, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusDisabled}, t0.Add(time.Minute))
+	if err != nil || disabled.Status != StatusDisabled {
+		t.Fatalf("停用: %+v err=%v", disabled, err)
 	}
-	queued, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunQueued, true, 10, 0)
-	if len(queued) != 1 {
-		t.Fatalf("queued = %v", queued)
-	}
-	paused, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusPaused}, t0.Add(time.Minute))
-	if err != nil || paused.Status != StatusPaused {
-		t.Fatalf("停用: %+v err=%v", paused, err)
-	}
-	if got, _ := s.GetRun(ctx, queued[0].RunID); got.Status != RunCanceled || got.FinishedAt.IsZero() {
+	if got, _ := s.GetRun(ctx, queued.RunID); got.Status != RunCancelled || got.FinishedAt.IsZero() {
 		t.Fatalf("停用应取消排队中的运行: %+v", got)
 	}
-	if created, _ := s.CreateFollowRuns(ctx, t0.Add(time.Minute)); created != 0 {
-		t.Fatal("停用的任务不生成 follow")
+	if tasks, _ := s.ListFollowableTasks(ctx); len(tasks) != 0 {
+		t.Fatalf("停用的任务不进入跟随清单: %+v", tasks)
 	}
 	resumed, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusEnabled}, t0.Add(2*time.Minute))
-	if err != nil || resumed.Status != StatusEnabled || !resumed.BackfillFrom.Equal(paused.BackfillFrom) {
+	if err != nil || resumed.Status != StatusEnabled || !resumed.BackfillFrom.Equal(disabled.BackfillFrom) {
 		t.Fatalf("重新启用: %+v err=%v", resumed, err)
 	}
-	if created, _ := s.CreateFollowRuns(ctx, t0.Add(2*time.Minute)); created != 1 {
-		t.Fatal("重新启用后照常生成 follow")
+	if tasks, _ := s.ListFollowableTasks(ctx); len(tasks) != 1 {
+		t.Fatalf("重新启用后恢复进入跟随清单: %+v", tasks)
 	}
 	if _, err := s.UpdateTask(ctx, "crypto", "missing", TaskUpdate{Status: StatusEnabled}, t0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing: %v", err)
@@ -210,7 +190,7 @@ func TestCreateRunRejectsConcurrentRunsAndUnknownTasks(t *testing.T) {
 			t.Fatalf("%s 应被排队中的补拉挡住并给出挡住它的运行: %v", kind, err)
 		}
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindFollow}, t0); err == nil {
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: "follow"}, t0); err == nil {
 		t.Fatal("CreateRun 不能生成 follow 运行")
 	}
 	if _, err := s.CreateRun(ctx, "crypto", "nope", RunSpec{Kind: KindManual}, t0); !errors.Is(err, ErrNotFound) {
@@ -223,54 +203,84 @@ func TestCreateRunRejectsConcurrentRunsAndUnknownTasks(t *testing.T) {
 	}
 }
 
-// 设计 6.1 第 2 条：manual、range、import 取消排队中的 follow；只有运行中的 follow 时不冲突，
-// ClaimRuns 在 follow 结束前不领取新运行。
-func TestCreateRunPreemptsQueuedFollowAndQueuesBehindARunningOne(t *testing.T) {
-	for _, spec := range []RunSpec{{Kind: KindManual}, {Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, {Kind: KindImport}} {
-		t.Run(spec.Kind, func(t *testing.T) {
-			s := openTest(t)
-			ctx := context.Background()
-			mustTask(t, s, "crypto", "ds1", false)
-			if created, err := s.CreateFollowRuns(ctx, t0); err != nil || created != 1 {
-				t.Fatalf("follow = %d err=%v", created, err)
-			}
-			follow, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunQueued, true, 10, 0)
-			run, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0.Add(time.Second))
-			if err != nil {
-				t.Fatalf("排队中的 follow 不应挡住: %v", err)
-			}
-			if got, _ := s.GetRun(ctx, follow[0].RunID); got.Status != RunCanceled || !strings.Contains(got.Message, "让位") {
-				t.Fatalf("排队中的 follow 应被取消: %+v", got)
-			}
-			// 新运行完成后再起一条 follow，领取后再建一条同类运行：运行中的 follow 不挡。
-			c := mustClaim(t, s, t0.Add(2*time.Second))
-			if c.Run.RunID != run.RunID {
-				t.Fatalf("claimed = %+v", c.Run)
-			}
-			if err := s.CompleteRun(ctx, CompleteRequest{RunID: run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(3 * time.Second)}); err != nil {
-				t.Fatal(err)
-			}
-			if created, _ := s.CreateFollowRuns(ctx, t0.Add(time.Minute)); created != 1 {
-				t.Fatal("应生成新的 follow")
-			}
-			running := mustClaim(t, s, t0.Add(time.Minute))
-			if running.Run.Kind != KindFollow {
-				t.Fatalf("应领到 follow: %+v", running.Run)
-			}
-			next, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0.Add(time.Minute+time.Second))
-			if err != nil {
-				t.Fatalf("运行中的 follow 不应挡住: %v", err)
-			}
-			if claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, Now: t0.Add(time.Minute), LeaseTTL: time.Minute}); err != nil || len(claimed) != 0 {
-				t.Fatalf("follow 结束前不领取同任务的新运行: %+v err=%v", claimed, err)
-			}
-			if err := s.CompleteRun(ctx, CompleteRequest{RunID: running.Run.RunID, LeaseToken: running.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Minute)}); err != nil {
-				t.Fatal(err)
-			}
-			if c := mustClaim(t, s, t0.Add(2*time.Minute)); c.Run.RunID != next.RunID {
-				t.Fatalf("follow 结束后领取新运行: %+v", c.Run)
-			}
-		})
+func TestReportFollowUpdatesTaskStateVerifiesTaskIDAndBlocksRegression(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	created, _ := mustTask(t, s, "crypto", "ds1", false)
+	final := t0.Add(-72 * time.Hour)
+	rescanFrom := t0.Add(-24 * time.Hour)
+	rescanUntil := t0
+
+	// 1. 成功上报：更新跟随状态、重读进度、定稿边界、分区与无法补齐区间。
+	err := s.ReportFollow(ctx, FollowReport{
+		SpaceID: "crypto", DatasetID: "ds1", TaskID: created.ID, Status: RunSucceeded,
+		StartedAt: t0, FinishedAt: t0.Add(10 * time.Second), Message: "导出 1 个分区",
+		Partitions:    []Partition{finishedPartition("2026-10-16", PartitionExported)},
+		Unrecoverable: []Unrecoverable{{SubjectID: "BTC", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}},
+		FinalUntil:    final, RescanFrom: rescanFrom, RescanUntil: rescanUntil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetTask(ctx, "crypto", "ds1")
+	if !got.LastSuccessAt.Equal(t0) || !got.LastFollowAt.Equal(t0.Add(10*time.Second)) || got.LastFollowError != "" ||
+		got.LastFollowMessage != "导出 1 个分区" || !got.FinalUntil.Equal(final) ||
+		!got.RescanFrom.Equal(rescanFrom) || !got.RescanUntil.Equal(rescanUntil) || !got.IsRescanning() || len(got.Unrecoverable) != 1 {
+		t.Fatalf("task = %+v", got)
+	}
+
+	// 2. 失败上报：写 last_follow_error、不推进 last_success_at、不清空重读进度。
+	err = s.ReportFollow(ctx, FollowReport{
+		SpaceID: "crypto", DatasetID: "ds1", TaskID: created.ID, Status: RunFailed,
+		StartedAt: t0.Add(time.Minute), FinishedAt: t0.Add(time.Minute + 5*time.Second), Message: "storage timeout",
+		RescanFrom: rescanFrom, RescanUntil: rescanUntil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetTask(ctx, "crypto", "ds1")
+	if !got.LastSuccessAt.Equal(t0) || got.LastFollowError != "storage timeout" || !got.IsRescanning() {
+		t.Fatalf("失败后 task = %+v", got)
+	}
+
+	// 3. 再次成功且重读完成：清空 last_follow_error 与 rescan 进度。
+	err = s.ReportFollow(ctx, FollowReport{
+		SpaceID: "crypto", DatasetID: "ds1", TaskID: created.ID, Status: RunSucceeded,
+		StartedAt: t0.Add(2 * time.Minute), FinishedAt: t0.Add(2*time.Minute + 5*time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetTask(ctx, "crypto", "ds1")
+	if !got.LastSuccessAt.Equal(t0.Add(2*time.Minute)) || got.LastFollowError != "" || got.IsRescanning() {
+		t.Fatalf("成功后 task = %+v", got)
+	}
+
+	// 4. task_id 不匹配（任务已删除重建）：返回 ErrConflict；任务不存在返回 ErrNotFound。
+	if err := s.ReportFollow(ctx, FollowReport{
+		SpaceID: "crypto", DatasetID: "ds1", TaskID: created.ID + 1, Status: RunSucceeded, StartedAt: t0, FinishedAt: t0,
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("task_id 不匹配应返回 ErrConflict: %v", err)
+	}
+	if err := s.ReportFollow(ctx, FollowReport{
+		SpaceID: "crypto", DatasetID: "nope", TaskID: 1, Status: RunSucceeded, StartedAt: t0, FinishedAt: t0,
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("不存在的任务应返回 ErrNotFound: %v", err)
+	}
+
+	// 5. 分区倒退被拒并记下 blocked_reason。
+	shrunk := finishedPartition("2026-10-16", PartitionExported)
+	shrunk.RowCount = 1
+	if err := s.ReportFollow(ctx, FollowReport{
+		SpaceID: "crypto", DatasetID: "ds1", TaskID: created.ID, Status: RunSucceeded,
+		StartedAt: t0.Add(3 * time.Minute), FinishedAt: t0.Add(3*time.Minute + time.Second),
+		Partitions: []Partition{shrunk},
+	}); !errors.Is(err, ErrPartitionRegression) {
+		t.Fatalf("分区倒退应返回 ErrPartitionRegression: %v", err)
+	}
+	got, _ = s.GetTask(ctx, "crypto", "ds1")
+	if got.BlockedReason == "" || got.LastFollowError == "" {
+		t.Fatalf("倒退应记录 blocked_reason 与 last_follow_error: %+v", got)
 	}
 }
 
@@ -310,46 +320,6 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndStorageLimit(t *testing.T) {
 	last, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 5, MaxStorageRuns: 3, BusyStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(last) != 1 || last[0].Task.DatasetID != "c" {
 		t.Fatalf("last = %+v err=%v", last, err)
-	}
-}
-
-// 两个数据集各有一大段变更要读、每轮 follow 都读满预算：一轮结束交还名额后，先领到的是其余任务早就排着的 follow，
-// 长任务下一分钟才生成的 follow 排在它们后面，其余任务不会被饿死。
-func TestClaimRunsServesQueuedFollowsBeforeTheNextRoundOfALongFollow(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	for _, name := range []string{"long1", "long2", "short1", "short2"} {
-		if _, err := s.CreateTask(ctx, task("crypto", name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n, err := s.CreateFollowRuns(ctx, t0); err != nil || n != 4 {
-		t.Fatalf("follow = %d err=%v", n, err)
-	}
-	claim := func(now time.Time, busy int) []Claimed {
-		t.Helper()
-		claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 4, MaxStorageRuns: 2, BusyStorageRuns: busy, Now: now, LeaseTTL: 10 * time.Minute})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return claimed
-	}
-	long := claim(t0, 0)
-	if len(long) != 2 || long[0].Task.DatasetID != "long1" || long[1].Task.DatasetID != "long2" {
-		t.Fatalf("claimed = %+v", long)
-	}
-	for i, c := range long {
-		// 一轮读满预算后结束；下一分钟触发器给它生成新的 follow。
-		if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(time.Minute)}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.CreateFollowRuns(ctx, t0.Add(time.Minute+time.Duration(i)*time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		got := claim(t0.Add(time.Minute+time.Duration(i)*time.Second), 1)
-		if want := []string{"short1", "short2"}[i]; len(got) != 1 || got[0].Task.DatasetID != want {
-			t.Fatalf("第 %d 个交还的名额应给 %s: %+v", i+1, want, got)
-		}
 	}
 }
 
@@ -711,11 +681,11 @@ func TestCreateTaskKeepsDirNamesUniquePerSpaceAndPurpose(t *testing.T) {
 	if _, ok, err := s.DirNameHolder(ctx, "crypto", "collect", "unused"); err != nil || ok {
 		t.Fatalf("没人用的目录名: %v %v", ok, err)
 	}
-	// 修改任务与每小时的数据集刷新都不动用途与目录名。
-	if _, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusPaused}, t0); err != nil {
+	// 修改任务与源缺失标记更新都不动用途与目录名。
+	if _, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusDisabled}, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "720h", `{"name":"x"}`); err != nil {
+	if err := s.SetTaskSourceMissing(ctx, "crypto", "ds1", true); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.GetTask(ctx, "crypto", "ds1"); got.Purpose != "collect" || got.DirName != "binance-spot-kline-1m" {
@@ -787,23 +757,23 @@ func TestProgressRenewsLeaseAndSignalsCancellation(t *testing.T) {
 		t.Fatalf("unknown run: %v", err)
 	}
 	cancelledRun, err := s.CancelRun(ctx, c.Run.RunID, "crypto", t0.Add(6*time.Minute))
-	if err != nil || cancelledRun.Status != RunCanceled {
+	if err != nil || cancelledRun.Status != RunCancelled {
 		t.Fatalf("cancel = %+v err=%v", cancelledRun, err)
 	}
 	if gone, _ := s.Progress(ctx, c.Run.RunID, c.Run.LeaseToken, RunStats{}, t0, time.Minute); !gone {
 		t.Fatal("取消后 worker 应得知")
 	}
-	ids, err := s.RunningRunIDsCanceled(ctx, []string{c.Run.RunID, "ghost"})
+	ids, err := s.RunningRunIDsCancelled(ctx, []string{c.Run.RunID, "ghost"})
 	if err != nil || len(ids) != 2 {
-		t.Fatalf("canceled ids = %v err=%v", ids, err)
+		t.Fatalf("cancelled ids = %v err=%v", ids, err)
 	}
-	// 取消后的运行仍接受 worker 的收尾统计，状态保持 canceled，已导出的分区照常登记。
+	// 取消后的运行仍接受 worker 的收尾统计，状态保持 cancelled，已导出的分区照常登记。
 	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunFailed, Now: t0.Add(7 * time.Minute),
 		Stats: RunStats{RowsRead: 50}, Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}); err != nil {
 		t.Fatal(err)
 	}
 	run, _ = s.GetRun(ctx, c.Run.RunID)
-	if run.Status != RunCanceled || run.Stats.RowsRead != 50 {
+	if run.Status != RunCancelled || run.Stats.RowsRead != 50 {
 		t.Fatalf("run = %+v", run)
 	}
 	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.IsZero() {
@@ -825,7 +795,7 @@ func TestCancelRunRespectsSpaceScope(t *testing.T) {
 		t.Fatalf("其他空间不能取消: %v", err)
 	}
 	got, err := s.CancelRun(ctx, run.RunID, "crypto", t0)
-	if err != nil || got.Status != RunCanceled || got.FinishedAt.IsZero() {
+	if err != nil || got.Status != RunCancelled || got.FinishedAt.IsZero() {
 		t.Fatalf("cancel queued = %+v err=%v", got, err)
 	}
 }
@@ -845,56 +815,13 @@ func TestExpireLeasesFailsLostRunsAndCleanupHonorsRetention(t *testing.T) {
 	if run.Status != RunFailed || run.Message != LeaseExpiredWorkerOffline {
 		t.Fatalf("run = %+v", run)
 	}
-	// 清理：成功的 follow 保留 24 小时，失败与取消的 follow 7 天，其余运行（含失败的 manual）用 other（90 天）。
+	// 运行记录统一按单档 retention（90 天）清理。
 	const day = 24 * time.Hour
-	now := t0.AddDate(0, 0, 45)
-	if n, _ := s.CleanupRuns(ctx, now, day, 90*day); n != 0 {
-		t.Fatalf("失败的运行 45 天内不清理: %d", n)
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 45), 90*day); err != nil || n != 0 {
+		t.Fatalf("45 天内不清理: %d %v", n, err)
 	}
-	mustTask(t, s, "crypto", "ds2", false)
-	mustTask(t, s, "crypto", "ds3", false)
-	// ds1 有一条失败的 manual：不生成 follow 之外的影响；只给 ds2、ds3 生成 follow。
-	if _, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusPaused}, t0); err != nil {
-		t.Fatal(err)
-	}
-	finish := func(at time.Time, status string) {
-		t.Helper()
-		if created, err := s.CreateFollowRuns(ctx, at); err != nil || created != 2 {
-			t.Fatalf("follow = %d err=%v", created, err)
-		}
-		claimed, _ := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 5, Now: at, LeaseTTL: time.Minute})
-		if len(claimed) != 2 {
-			t.Fatalf("claimed = %v", claimed)
-		}
-		for _, cl := range claimed {
-			if err := s.CompleteRun(ctx, CompleteRequest{RunID: cl.Run.RunID, LeaseToken: cl.Run.LeaseToken, Status: status, Now: at.Add(time.Second)}); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	finish(t0.Add(10*time.Minute), RunSucceeded)
-	finish(t0.Add(11*time.Minute), RunFailed)
-	// 成功的 follow 推进最近成功时间，失败的不推进。
-	if got, _ := s.GetTask(ctx, "crypto", "ds2"); !got.LastSuccessAt.Equal(t0.Add(10 * time.Minute)) {
-		t.Fatalf("last_success_at = %s", got.LastSuccessAt)
-	}
-	if runs, total, _ := s.ListRuns(ctx, "crypto", "ds2", "", false, 10, 0); total != 1 || runs[0].Status != RunFailed {
-		t.Fatalf("默认不列成功的 follow: %v", runs)
-	}
-	if _, total, _ := s.ListRuns(ctx, "crypto", "ds2", "", true, 10, 0); total != 2 {
-		t.Fatalf("include_follow 时列出成功的 follow: %d", total)
-	}
-	if n, err := s.CleanupRuns(ctx, t0.Add(day), day, 90*day); err != nil || n != 0 {
-		t.Fatalf("成功的 follow 24 小时内不清理: n=%d err=%v", n, err)
-	}
-	if n, err := s.CleanupRuns(ctx, t0.Add(day+12*time.Minute), day, 90*day); err != nil || n != 2 {
-		t.Fatalf("成功的 follow 超过 24 小时应清理 2 条: n=%d err=%v", n, err)
-	}
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 8), day, 90*day); err != nil || n != 2 {
-		t.Fatalf("失败的 follow 超过 7 天应清理 2 条: n=%d err=%v", n, err)
-	}
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 100), day, 90*day); err != nil || n != 1 {
-		t.Fatalf("失败的 manual 超过 90 天应清理: n=%d err=%v", n, err)
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 100), 90*day); err != nil || n != 1 {
+		t.Fatalf("超过 90 天应清理: %d %v", n, err)
 	}
 }
 
@@ -917,28 +844,11 @@ func TestDeleteTaskRefusesTasksWithPartitionsOrRunningRuns(t *testing.T) {
 	if _, err := s.DeleteTask(ctx, "crypto", "ds2"); err != nil {
 		t.Fatal(err)
 	}
-	if runs, _, _ := s.ListRuns(ctx, "crypto", "ds2", "", true, 10, 0); len(runs) != 0 {
+	if runs, _, _ := s.ListRuns(ctx, "crypto", "ds2", "", 10, 0); len(runs) != 0 {
 		t.Fatalf("删除任务应级联删除运行: %v", runs)
 	}
 	if _, err := s.DeleteTask(ctx, "crypto", "ds2"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("again: %v", err)
-	}
-}
-
-func TestUpdateTaskDatasetRefreshesRetention(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", false)
-	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "336h", ""); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	if got.Retention != "336h" {
-		t.Fatalf("task = %+v", got)
-	}
-	runsByTask, err := s.LastRuns(ctx, "crypto")
-	if err != nil || len(runsByTask) != 0 {
-		t.Fatalf("runs = %v err=%v", runsByTask, err)
 	}
 }
 
@@ -959,7 +869,7 @@ func TestCanceledRunsAcceptOneCompletionAndNeverAdvanceTheTask(t *testing.T) {
 	if !got.LastSuccessAt.IsZero() || !got.FinalUntil.IsZero() {
 		t.Fatalf("取消的运行不能推进任务状态: %+v", got)
 	}
-	if run, _ := s.GetRun(ctx, c.Run.RunID); run.Status != RunCanceled || run.LeaseToken != "" {
+	if run, _ := s.GetRun(ctx, c.Run.RunID); run.Status != RunCancelled || run.LeaseToken != "" {
 		t.Fatalf("run = %+v", run)
 	}
 	// 重复上报（响应丢失后的重试）必须被拒绝，不能覆盖之后的登记。
@@ -993,47 +903,42 @@ func TestLastSuccessOnlyMovesForward(t *testing.T) {
 	}
 }
 
-func TestLastRunsStayFastWithManyFollowRuns(t *testing.T) {
+func TestLastRunsAndQueuedTasks(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	for _, ds := range []string{"ds1", "ds2"} {
 		mustTask(t, s, "crypto", ds, false)
 	}
-	// 每个任务 1.5 万条成功的 follow（约 10 天），最后一条 follow 失败、再之后一条 range 在排队。
-	base := time.Date(2026, 10, 17, 0, 40, 25, 0, time.UTC).UnixMilli()
-	_, err := s.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 15000)
-INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at)
-SELECT 'follow_' || t.c_dataset_id || '_' || n.i, t.c_space_id, t.c_dataset_id, 'follow', 'succeeded', ? + n.i * 60000
-FROM n, t_archive_tasks t`, base)
+	if runsByTask, err := s.LastRuns(ctx, "crypto"); err != nil || len(runsByTask) != 0 {
+		t.Fatalf("runs = %v err=%v", runsByTask, err)
+	}
+	r1, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	failedAt := time.Date(2026, 11, 30, 0, 0, 25, 0, time.UTC).UnixMilli()
-	rangeAt := time.Date(2026, 11, 30, 0, 1, 25, 0, time.UTC).UnixMilli()
-	rangeStart := time.Date(2026, 11, 29, 0, 0, 0, 0, time.UTC).UnixMilli()
-	rangeEnd := time.Date(2026, 11, 29, 1, 0, 0, 0, time.UTC).UnixMilli()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at, c_range_start, c_range_end)
-SELECT 'failed_' || c_dataset_id, c_space_id, c_dataset_id, 'follow', 'failed', ?, 0, 0 FROM t_archive_tasks
-UNION ALL SELECT 'range_' || c_dataset_id, c_space_id, c_dataset_id, 'range', 'queued', ?, ?, ? FROM t_archive_tasks`, failedAt, rangeAt, rangeStart, rangeEnd)
+	c := mustClaim(t, s, t0)
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunFailed, Now: t0.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0.Add(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := time.Now()
+	r3, err := s.CreateRun(ctx, "crypto", "ds2", RunSpec{Kind: KindImport}, t0.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
 	last, err := s.LastRuns(ctx, "crypto")
-	if err != nil || len(last) != 2 || last["crypto/ds1"].RunID != "range_ds1" {
+	if err != nil || len(last) != 2 || last["crypto/ds1"].RunID != r2.RunID || last["crypto/ds2"].RunID != r3.RunID || r1.RunID == r2.RunID {
 		t.Fatalf("last = %+v err=%v", last, err)
 	}
-	follows, err := s.LastFollowSuccesses(ctx, "")
-	if err != nil || len(follows) != 2 || follows["crypto/ds2"].RunID != "follow_ds2_15000" {
-		t.Fatalf("follows = %+v err=%v", follows, err)
+	queued, err := s.QueuedTasks(ctx)
+	if err != nil || len(queued) != 2 || queued[0].DatasetID != "ds1" || queued[1].DatasetID != "ds2" {
+		t.Fatalf("queued = %+v err=%v", queued, err)
 	}
-	if took := time.Since(started); took > 2*time.Second {
-		t.Fatalf("最近运行查询耗时 %s", took)
-	}
-	t.Logf("两次查询耗时 %s", time.Since(started))
 }
 
-// 导入运行不带文件，成功的按“其余运行”保留（other），不按 follow 的 24 小时。
+// 导入运行按统一的 retention 保留。
 func TestImportRunsAreKeptLikeOtherRuns(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
@@ -1049,10 +954,10 @@ func TestImportRunsAreKeptLikeOtherRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	day := 24 * time.Hour
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 40), day, 90*day); err != nil || n != 0 {
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 40), 90*day); err != nil || n != 0 {
 		t.Fatalf("40 天时不应清理导入运行: %d %v", n, err)
 	}
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 91), day, 90*day); err != nil || n != 1 {
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 91), 90*day); err != nil || n != 1 {
 		t.Fatalf("超过 90 天应清理导入运行: %d %v", n, err)
 	}
 }
@@ -1076,6 +981,14 @@ func TestClearUnrecoverableKeepsPartlyOverlappingRanges(t *testing.T) {
 	}
 	if removed, err := s.ClearUnrecoverable(ctx, "crypto", "ds1", start, end); err != nil || len(removed) != 0 {
 		t.Fatalf("再清一次应为空: %+v %v", removed, err)
+	}
+	// 起止都为零值时清空全部剩余区间。
+	if removed, err := s.ClearUnrecoverable(ctx, "crypto", "ds1", time.Time{}, time.Time{}); err != nil || len(removed) != 1 {
+		t.Fatalf("清空全部应返回剩余 1 条: %+v %v", removed, err)
+	}
+	task, _ = s.GetTask(ctx, "crypto", "ds1")
+	if len(task.Unrecoverable) != 0 {
+		t.Fatalf("应已全部清空: %+v", task.Unrecoverable)
 	}
 	if _, err := s.ClearUnrecoverable(ctx, "crypto", "nope", start, end); err != ErrNotFound {
 		t.Fatalf("不存在的任务: %v", err)
@@ -1217,20 +1130,15 @@ func TestMergeUnrecoverableCapsAfterMergingAndAccumulatesAcrossRuns(t *testing.T
 func TestSourceDatasetMissingLifecycleAndIsolationFromPartitionRegression(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", false)
+	ds1, _ := mustTask(t, s, "crypto", "ds1", true)
 	mustTask(t, s, "crypto", "ds2", false)
 
-	// ds1 排入一条 follow；ds2 已有分区登记倒退原因。
-	if n, err := s.CreateFollowRuns(ctx, t0); err != nil || n != 2 {
-		t.Fatalf("created=%d err=%v", n, err)
-	}
 	c2 := mustClaim(t, s, t0) // ds1
 	if c2.Task.DatasetID != "ds1" {
 		t.Fatalf("claimed = %+v", c2.Task)
 	}
-	// 再给 ds1 补一条排队中的 follow（等 ds1 跑完前先测在途 CompleteRun 不清源缺失）。
-	// 标记 ds1 源数据集不存在：ds1 状态仍是 enabled，不再生成 follow；在途运行的带分区完成上报不误清该标记。
-	if err := s.MarkTaskSourceMissing(ctx, "crypto", "ds1", t0.Add(time.Minute)); err != nil {
+	// 标记 ds1 源数据集不存在：ds1 状态仍是 enabled，不再进入跟随清单；在途运行的带分区完成上报不误清该标记。
+	if err := s.SetTaskSourceMissing(ctx, "crypto", "ds1", true); err != nil {
 		t.Fatal(err)
 	}
 	task1, _ := s.GetTask(ctx, "crypto", "ds1")
@@ -1247,30 +1155,16 @@ func TestSourceDatasetMissingLifecycleAndIsolationFromPartitionRegression(t *tes
 	if !task1.SourceMissing {
 		t.Fatalf("在途运行的带分区完成上报不能清掉源数据集不存在标记: %+v", task1)
 	}
-	// 此时再给 ds1 触发 CreateFollowRuns：ds1 被跳过，ds2 已有 queued 的 follow 也不重复生成。
-	if n, err := s.CreateFollowRuns(ctx, t0.Add(3*time.Minute)); err != nil || n != 0 {
-		t.Fatalf("ds1 源缺失不应生成 follow: n=%d err=%v", n, err)
-	}
-	// ds2 原本的排队 follow 在 MarkTaskSourceMissing 时被取消。
-	if err := s.MarkTaskSourceMissing(ctx, "crypto", "ds2", t0.Add(3*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if active, err := s.ListActiveRuns(ctx, "crypto"); err != nil || len(active) != 0 {
-		t.Fatalf("排队中的 follow 应已取消: active=%+v err=%v", active, err)
+	// ds1 源缺失不在跟随清单里，ds2 在清单里。
+	if followable, err := s.ListFollowableTasks(ctx); err != nil || len(followable) != 1 || followable[0].DatasetID != "ds2" {
+		t.Fatalf("ds1 源缺失不应进入跟随清单: followable=%+v err=%v", followable, err)
 	}
 	// 分区登记被拒与源数据集不存在互相独立：ds1 同时出现分区倒退时，c_blocked_reason 写入且不盖掉 c_source_missing。
-	regRun, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(3*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	claimedReg := mustClaim(t, s, t0.Add(3*time.Minute))
-	if claimedReg.Run.RunID != regRun.RunID {
-		t.Fatalf("claimed = %+v, want %s", claimedReg.Run, regRun.RunID)
-	}
 	shrunk := finishedPartition("2026-10-16", PartitionExported)
 	shrunk.RowCount = 1
-	if err := s.CompleteRun(ctx, CompleteRequest{
-		RunID: claimedReg.Run.RunID, LeaseToken: claimedReg.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(3*time.Minute + time.Second),
+	if err := s.ReportFollow(ctx, FollowReport{
+		SpaceID: "crypto", DatasetID: "ds1", TaskID: ds1.ID, Status: RunSucceeded,
+		StartedAt: t0.Add(3 * time.Minute), FinishedAt: t0.Add(3*time.Minute + time.Second),
 		Partitions: []Partition{shrunk},
 	}); !errors.Is(err, ErrPartitionRegression) {
 		t.Fatalf("期望分区倒退错误，实际 %v", err)
@@ -1279,31 +1173,23 @@ func TestSourceDatasetMissingLifecycleAndIsolationFromPartitionRegression(t *tes
 	if !task1.SourceMissing || task1.BlockedReason == "" {
 		t.Fatalf("分区登记被拒不能盖掉源缺失标记: %+v", task1)
 	}
-	// 再次 MarkTaskSourceMissing 也不能盖掉既有的分区登记被拒原因。
-	if err := s.MarkTaskSourceMissing(ctx, "crypto", "ds1", t0.Add(3*time.Minute+2*time.Second)); err != nil {
+	// 再次 SetTaskSourceMissing 也不能盖掉既有的分区登记被拒原因。
+	if err := s.SetTaskSourceMissing(ctx, "crypto", "ds1", true); err != nil {
 		t.Fatal(err)
 	}
 	task1, _ = s.GetTask(ctx, "crypto", "ds1")
 	if !task1.SourceMissing || task1.BlockedReason == "" {
-		t.Fatalf("MarkTaskSourceMissing 不能盖掉既有的分区登记被拒原因: %+v", task1)
+		t.Fatalf("SetTaskSourceMissing 不能盖掉既有的分区登记被拒原因: %+v", task1)
 	}
-	// UpdateTaskDataset 清掉源数据集不存在标记（即使保留期和元数据未变），但不误清分区登记被拒原因，随后恢复生成 follow。
-	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", task1.Retention, task1.MetaJSON); err != nil {
+	// 恢复源数据集存在：只清掉源缺失标记，保留分区登记被拒原因，随后恢复进入跟随清单。
+	if err := s.SetTaskSourceMissing(ctx, "crypto", "ds1", false); err != nil {
 		t.Fatal(err)
 	}
 	task1, _ = s.GetTask(ctx, "crypto", "ds1")
 	if task1.SourceMissing || task1.BlockedReason == "" {
 		t.Fatalf("数据集重现后应只清空源缺失标记、保留分区被拒原因: %+v", task1)
 	}
-	if n, err := s.CreateFollowRuns(ctx, t0.Add(4*time.Minute)); err != nil || n != 1 {
-		t.Fatalf("ds1 恢复后应生成 1 条 follow: n=%d err=%v", n, err)
-	}
-	// UpdateTaskDataset 刷新保留期与元数据时同样保留分区被拒原因。
-	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "336h", `{"name":"updated"}`); err != nil {
-		t.Fatal(err)
-	}
-	task1, _ = s.GetTask(ctx, "crypto", "ds1")
-	if task1.BlockedReason == "" || task1.Retention != "336h" {
-		t.Fatalf("UpdateTaskDataset 不能误清分区倒退原因: %+v", task1)
+	if followable, err := s.ListFollowableTasks(ctx); err != nil || len(followable) != 2 {
+		t.Fatalf("ds1 恢复后应重新进入跟随清单: followable=%+v err=%v", followable, err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 )
@@ -49,8 +50,8 @@ func runToPB(r store.Run) *archivepb.ArchiveRun {
 		Status: r.Status, ScheduledAt: millisOf(r.ScheduledAt), StartedAt: millisOf(r.StartedAt), FinishedAt: millisOf(r.FinishedAt),
 		LeaseUntil: millisOf(r.LeaseUntil), SubjectsDone: r.Stats.SubjectsDone,
 		RequestCount: r.Stats.RequestCount, BytesRead: r.Stats.BytesRead, RowsRead: r.Stats.RowsRead, RowsAdded: r.Stats.RowsAdded,
-		RowsChanged: r.Stats.RowsChanged, PartitionsExported: r.Stats.PartitionsExported, PartitionsFinalized: r.Stats.PartitionsFinalized, Message: r.Message,
-		PartitionsUploaded: r.Stats.PartitionsUploaded,
+		RowsChanged: r.Stats.RowsChanged, PartitionsExported: r.Stats.PartitionsExported, PartitionsFinalized: r.Stats.PartitionsFinalized,
+		PartitionsUploaded: r.Stats.PartitionsUploaded, Message: r.Message,
 	}
 	for _, item := range r.Unrecoverable {
 		out.Unrecoverable = append(out.Unrecoverable, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})
@@ -134,12 +135,16 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 	}
 }
 
-// taskToPB 把任务转成接口消息。
-func (s *Service) taskToPB(t store.Task) *archivepb.ArchiveTask {
+// taskToPB 把任务转成接口消息；partition_unit 由频率推出，retention 来自 Storage 元数据内存缓存。
+func (s *Service) taskToPB(t store.Task, retention string) *archivepb.ArchiveTask {
+	unit, _ := schedule.PartitionUnit(t.Freq)
 	out := &archivepb.ArchiveTask{
-		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Freq: t.Freq, PartitionUnit: t.PartitionUnit, Retention: t.Retention,
+		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Freq: t.Freq, PartitionUnit: unit, Retention: retention,
 		BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status,
-		LastSuccessAt: millisOf(t.LastSuccessAt), FinalUntil: fmtRFC(t.FinalUntil), Creator: t.Creator, CreatedAt: millisOf(t.CreatedAt), UpdatedAt: millisOf(t.UpdatedAt),
+		LastFollowAt: millisOf(t.LastFollowAt), LastSuccessAt: millisOf(t.LastSuccessAt),
+		LastFollowError: t.LastFollowError, LastFollowMessage: t.LastFollowMessage,
+		RescanFrom: fmtRFC(t.RescanFrom), RescanUntil: fmtRFC(t.RescanUntil),
+		FinalUntil: fmtRFC(t.FinalUntil), CreatedAt: millisOf(t.CreatedAt), UpdatedAt: millisOf(t.UpdatedAt),
 		BlockedReason: t.BlockedReason,
 	}
 	for _, item := range t.Unrecoverable {

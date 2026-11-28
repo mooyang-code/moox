@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 
-	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	_ "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -49,11 +48,6 @@ type ArchiveMgrService interface {
 	StartArchiveImport(ctx context.Context, req *StartArchiveImportReq) (*StartArchiveImportRsp, error)
 
 	ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq) (*ClearArchiveUnrecoverableRsp, error)
-	// GetLifecycle GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
-	//  暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
-	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
-	// ControlLifecycle ControlLifecycle 暂停、恢复归档管理模块。
-	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
 }
 
 func ArchiveMgrService_GetArchiveOverview_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -326,42 +320,6 @@ func ArchiveMgrService_ClearArchiveUnrecoverable_Handler(svr interface{}, ctx co
 	return rsp, nil
 }
 
-func ArchiveMgrService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &commonpb.GetLifecycleReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(ArchiveMgrService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func ArchiveMgrService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &commonpb.ControlLifecycleReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(ArchiveMgrService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // ArchiveMgrServer_ServiceDesc descriptor for server.RegisterService.
 var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.archive.ArchiveMgr",
@@ -427,14 +385,6 @@ var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
 			Func: ArchiveMgrService_ClearArchiveUnrecoverable_Handler,
 		},
-		{
-			Name: "/trpc.moox.archive.ArchiveMgr/GetLifecycle",
-			Func: ArchiveMgrService_GetLifecycle_Handler,
-		},
-		{
-			Name: "/trpc.moox.archive.ArchiveMgr/ControlLifecycle",
-			Func: ArchiveMgrService_ControlLifecycle_Handler,
-		},
 	},
 }
 
@@ -448,6 +398,10 @@ func RegisterArchiveMgrService(s server.Service, svr ArchiveMgrService) {
 // ArchiveWorkerService defines service.
 type ArchiveWorkerService interface {
 	ArchiveWorkerHeartbeat(ctx context.Context, req *ArchiveWorkerHeartbeatReq) (*ArchiveWorkerHeartbeatRsp, error)
+
+	ListFollowTasks(ctx context.Context, req *ListFollowTasksReq) (*ListFollowTasksRsp, error)
+
+	ReportFollowResult(ctx context.Context, req *ReportFollowResultReq) (*ReportFollowResultRsp, error)
 
 	PullArchiveRun(ctx context.Context, req *PullArchiveRunReq) (*PullArchiveRunRsp, error)
 
@@ -464,6 +418,42 @@ func ArchiveWorkerService_ArchiveWorkerHeartbeat_Handler(svr interface{}, ctx co
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(ArchiveWorkerService).ArchiveWorkerHeartbeat(ctx, reqbody.(*ArchiveWorkerHeartbeatReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func ArchiveWorkerService_ListFollowTasks_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFollowTasksReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ArchiveWorkerService).ListFollowTasks(ctx, reqbody.(*ListFollowTasksReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func ArchiveWorkerService_ReportFollowResult_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReportFollowResultReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ArchiveWorkerService).ReportFollowResult(ctx, reqbody.(*ReportFollowResultReq))
 	}
 
 	var rsp interface{}
@@ -538,6 +528,14 @@ var ArchiveWorkerServer_ServiceDesc = server.ServiceDesc{
 			Func: ArchiveWorkerService_ArchiveWorkerHeartbeat_Handler,
 		},
 		{
+			Name: "/trpc.moox.archive.ArchiveWorker/ListFollowTasks",
+			Func: ArchiveWorkerService_ListFollowTasks_Handler,
+		},
+		{
+			Name: "/trpc.moox.archive.ArchiveWorker/ReportFollowResult",
+			Func: ArchiveWorkerService_ReportFollowResult_Handler,
+		},
+		{
 			Name: "/trpc.moox.archive.ArchiveWorker/PullArchiveRun",
 			Func: ArchiveWorkerService_PullArchiveRun_Handler,
 		},
@@ -609,22 +607,16 @@ func (s *UnimplementedArchiveMgr) ClearArchiveUnrecoverable(ctx context.Context,
 	return nil, errors.New("rpc ClearArchiveUnrecoverable of service ArchiveMgr is not implemented")
 }
 
-// GetLifecycle GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
-//
-//	暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
-func (s *UnimplementedArchiveMgr) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
-	return nil, errors.New("rpc GetLifecycle of service ArchiveMgr is not implemented")
-}
-
-// ControlLifecycle ControlLifecycle 暂停、恢复归档管理模块。
-func (s *UnimplementedArchiveMgr) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
-	return nil, errors.New("rpc ControlLifecycle of service ArchiveMgr is not implemented")
-}
-
 type UnimplementedArchiveWorker struct{}
 
 func (s *UnimplementedArchiveWorker) ArchiveWorkerHeartbeat(ctx context.Context, req *ArchiveWorkerHeartbeatReq) (*ArchiveWorkerHeartbeatRsp, error) {
 	return nil, errors.New("rpc ArchiveWorkerHeartbeat of service ArchiveWorker is not implemented")
+}
+func (s *UnimplementedArchiveWorker) ListFollowTasks(ctx context.Context, req *ListFollowTasksReq) (*ListFollowTasksRsp, error) {
+	return nil, errors.New("rpc ListFollowTasks of service ArchiveWorker is not implemented")
+}
+func (s *UnimplementedArchiveWorker) ReportFollowResult(ctx context.Context, req *ReportFollowResultReq) (*ReportFollowResultRsp, error) {
+	return nil, errors.New("rpc ReportFollowResult of service ArchiveWorker is not implemented")
 }
 func (s *UnimplementedArchiveWorker) PullArchiveRun(ctx context.Context, req *PullArchiveRunReq) (*PullArchiveRunRsp, error) {
 	return nil, errors.New("rpc PullArchiveRun of service ArchiveWorker is not implemented")
@@ -673,11 +665,6 @@ type ArchiveMgrClientProxy interface {
 	StartArchiveImport(ctx context.Context, req *StartArchiveImportReq, opts ...client.Option) (rsp *StartArchiveImportRsp, err error)
 
 	ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq, opts ...client.Option) (rsp *ClearArchiveUnrecoverableRsp, err error)
-	// GetLifecycle GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
-	//  暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
-	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
-	// ControlLifecycle ControlLifecycle 暂停、恢复归档管理模块。
-	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
 }
 
 type ArchiveMgrClientProxyImpl struct {
@@ -989,49 +976,13 @@ func (c *ArchiveMgrClientProxyImpl) ClearArchiveUnrecoverable(ctx context.Contex
 	return rsp, nil
 }
 
-func (c *ArchiveMgrClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/GetLifecycle")
-	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("archive")
-	msg.WithCalleeService("ArchiveMgr")
-	msg.WithCalleeMethod("GetLifecycle")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &commonpb.GetLifecycleRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *ArchiveMgrClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/ControlLifecycle")
-	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("archive")
-	msg.WithCalleeService("ArchiveMgr")
-	msg.WithCalleeMethod("ControlLifecycle")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &commonpb.ControlLifecycleRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // ArchiveWorkerClientProxy defines service client proxy
 type ArchiveWorkerClientProxy interface {
 	ArchiveWorkerHeartbeat(ctx context.Context, req *ArchiveWorkerHeartbeatReq, opts ...client.Option) (rsp *ArchiveWorkerHeartbeatRsp, err error)
+
+	ListFollowTasks(ctx context.Context, req *ListFollowTasksReq, opts ...client.Option) (rsp *ListFollowTasksRsp, err error)
+
+	ReportFollowResult(ctx context.Context, req *ReportFollowResultReq, opts ...client.Option) (rsp *ReportFollowResultRsp, err error)
 
 	PullArchiveRun(ctx context.Context, req *PullArchiveRunReq, opts ...client.Option) (rsp *PullArchiveRunRsp, err error)
 
@@ -1063,6 +1014,46 @@ func (c *ArchiveWorkerClientProxyImpl) ArchiveWorkerHeartbeat(ctx context.Contex
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ArchiveWorkerHeartbeatRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *ArchiveWorkerClientProxyImpl) ListFollowTasks(ctx context.Context, req *ListFollowTasksReq, opts ...client.Option) (*ListFollowTasksRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveWorker/ListFollowTasks")
+	msg.WithCalleeServiceName(ArchiveWorkerServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("archive")
+	msg.WithCalleeService("ArchiveWorker")
+	msg.WithCalleeMethod("ListFollowTasks")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListFollowTasksRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *ArchiveWorkerClientProxyImpl) ReportFollowResult(ctx context.Context, req *ReportFollowResultReq, opts ...client.Option) (*ReportFollowResultRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveWorker/ReportFollowResult")
+	msg.WithCalleeServiceName(ArchiveWorkerServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("archive")
+	msg.WithCalleeService("ArchiveWorker")
+	msg.WithCalleeMethod("ReportFollowResult")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReportFollowResultRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

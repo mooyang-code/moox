@@ -6,38 +6,38 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/archive/proto/archivegen;archivepb";
 
-// 墙钟时刻（创建、开始、心跳、过期等）是 Unix 毫秒，0 表示没有；分区范围、数据时间、回补起点是 data_time 口径的 RFC3339 文本，空串表示没有。
+// 墙钟时刻（创建、开始、心跳、过期等）是 Unix 毫秒，0 表示没有；分区范围、数据时间、回补起点、定稿边界与重读进度是 data_time 口径的 RFC3339 文本，空串表示没有。
 
-// ArchiveRun 是一次跟随、整段重读、补拉区间或导入的执行。
+// ArchiveRun 是一次整段重读（manual）、补拉区间（range）或导入（import）的执行。
+// 日常的每分钟变更日志跟随由 archive-worker 本地循环执行，结果直接写回 ArchiveTask，不进运行表。
 message ArchiveRun {
   string run_id = 1;
   string space_id = 2;
   string dataset_id = 3;
-  // kind：follow（mgr 每分钟生成，按 Storage 变更日志读改动过的行并导出定稿）、
-  // manual（整段重读线上保留期内的数据，之后的 follow 分段读完）、range（补拉区间）、
+  // kind：manual（整段重读线上保留期内的数据，之后的本地跟随分段读完）、range（补拉区间）、
   // import（moox-cli import 的归档目标：经 worker 数据端口写入暂存区，结束后统一导出；不推进位点、不更新最近成功时间）。
   string kind = 4;
   string range_start = 5;
   string range_end = 6;
-  // status：queued、running、succeeded、failed、canceled。
+  // status：queued、running、succeeded、failed、cancelled。
   string status = 7;
   // 以下四个时刻都是 Unix 毫秒，没有时为 0；range_start、range_end 是 data_time 口径的 RFC3339 文本。
   int64 scheduled_at = 8;
   int64 started_at = 9;
   int64 finished_at = 10;
-  int64 lease_until = 12;
-  uint64 subjects_done = 14;
-  uint64 request_count = 15;
-  uint64 bytes_read = 16;
-  uint64 rows_read = 17;
-  uint64 rows_added = 18;
-  uint64 rows_changed = 19;
-  uint32 partitions_exported = 20;
-  uint32 partitions_finalized = 21;
-  repeated UnrecoverableRange unrecoverable = 22;
-  string message = 23;
+  int64 lease_until = 11;
+  uint64 subjects_done = 12;
+  uint64 request_count = 13;
+  uint64 bytes_read = 14;
+  uint64 rows_read = 15;
+  uint64 rows_added = 16;
+  uint64 rows_changed = 17;
+  uint32 partitions_exported = 18;
+  uint32 partitions_finalized = 19;
   // partitions_uploaded：本次运行上传到对象存储并校验通过的分区数。
-  uint32 partitions_uploaded = 24;
+  uint32 partitions_uploaded = 20;
+  repeated UnrecoverableRange unrecoverable = 21;
+  string message = 22;
 }
 
 // UnrecoverableRange 是超出线上保留期、无法补齐的区间（按序列合并）。
@@ -52,46 +52,57 @@ message UnrecoverableRange {
 message ArchiveTask {
   string space_id = 1;
   string dataset_id = 2;
-  string freq = 3;
-  // partition_unit：day、month。
-  string partition_unit = 4;
-  string retention = 6;
+  // purpose：collect（采集结果）、factor（因子结果）、data（其他）；分区文件在 <space>/<purpose>/<dir_name>/ 下，建好后不改。
+  string purpose = 3;
+  string dir_name = 4;
+  string freq = 5;
+  // partition_unit：day、month（由 freq 推出）。
+  string partition_unit = 6;
+  // retention：线上保留期（从 Storage 元数据内存缓存读取）。
+  string retention = 7;
   // 归档起点（回补起点）：创建时确定，之后不改；暂存区没有分区时整段重读从这里读起。
-  string backfill_from = 9;
-  // status：enabled、paused。
-  string status = 10;
-  // 最近一次成功的 follow 或 manual 的开始时刻（Unix 毫秒），没有时为 0。
-  int64 last_success_at = 15;
+  string backfill_from = 8;
+  // status：enabled、disabled。
+  string status = 9;
+  // 最近一次跟随（或整段重读）的开始时刻（Unix 毫秒），没有时为 0。
+  int64 last_follow_at = 10;
+  // 最近一次成功的跟随或整段重读的开始时刻（Unix 毫秒），没有时为 0。
+  int64 last_success_at = 11;
+  // 最近一次跟随失败的原因；跟随或整段重读成功后清空。
+  string last_follow_error = 12;
+  // 最近一次跟随的说明（例如变更日志剩余段数、上传失败摘要等）。
+  string last_follow_message = 13;
+  // 整段重读进度（data_time 口径的 RFC3339 文本）：两者都非空表示整段重读进行中（已读到 rescan_from，截止 rescan_until）。
+  string rescan_from = 14;
+  string rescan_until = 15;
   string final_until = 16;
-  string creator = 17;
   // 创建、更新时刻（Unix 毫秒）。
-  int64 created_at = 18;
-  int64 updated_at = 19;
-  // health：ok、warning、error、paused。
-  string health = 20;
-  string health_reason = 21;
+  int64 created_at = 17;
+  int64 updated_at = 18;
+  // health：ok、warning、error、disabled。
+  string health = 19;
+  string health_reason = 20;
   // 汇总（来自分区登记）。
-  uint32 partition_count = 22;
-  uint32 file_count = 23;
-  uint64 total_rows = 24;
-  uint64 total_file_bytes = 25;
-  string min_data_time = 26;
-  string max_data_time = 27;
-  ArchiveRun last_run = 28;
-  // 按任务累积的无法补齐区间（超出线上保留期）。
-  repeated UnrecoverableRange unrecoverable = 29;
-  // 分区登记被拒的原因（上报的行数或标的数比已登记的少）；非空时任务为异常，下一次被接受的完成上报清空。
-  string blocked_reason = 30;
+  uint32 partition_count = 21;
+  uint32 file_count = 22;
+  uint64 total_rows = 23;
+  uint64 total_file_bytes = 24;
+  string min_data_time = 25;
+  string max_data_time = 26;
   // remote_verified_count：有文件且远端是当前版本、已校验的分区数；remote_pending_count：有文件但不满足上一条的分区数（含失败的）。
   // 没有启用对象存储时两者都是 0。
-  uint32 remote_verified_count = 31;
-  uint32 remote_pending_count = 32;
-  // purpose：collect（采集结果）、factor（因子结果）、data（其他）；分区文件在 <space>/<purpose>/<dir_name>/ 下，建好后不改。
-  string purpose = 33;
-  string dir_name = 34;
+  uint32 remote_verified_count = 27;
+  uint32 remote_pending_count = 28;
+  // 最近一次手动、补拉区间或导入运行。
+  ArchiveRun last_run = 29;
+  // 按任务累积的无法补齐区间（超出线上保留期）。
+  repeated UnrecoverableRange unrecoverable = 30;
+  // 分区登记被拒的原因（上报的行数或标的数比已登记的少）；非空时任务为异常，下一次被接受的带分区上报清空。
+  string blocked_reason = 31;
 }
 
-// ArchivePartition 是一个任务的一个分区（本地日；1d 及以上为月）。
+// ArchivePartition 是一个任务的一个分区（本地日；1d 及以上为月）；对外查询、mgr 下发分区登记与 worker 上报分区登记共用此消息。
+// worker 上报与 mgr 下发分区登记时 space_id、dataset_id、last_run_id、remote_state 可省略。
 message ArchivePartition {
   string space_id = 1;
   string dataset_id = 2;
@@ -100,52 +111,52 @@ message ArchivePartition {
   string range_end = 5;
   // status：open、exported、final。
   string status = 6;
-  uint64 row_count = 8;
-  uint64 subject_count = 9;
-  string min_data_time = 10;
-  string max_data_time = 11;
-  string file_path = 12;
-  uint64 file_bytes = 13;
-  string file_sha256 = 14;
-  repeated string columns = 15;
-  string preview = 16;
-  uint32 export_count = 17;
+  uint64 row_count = 7;
+  uint64 subject_count = 8;
+  string min_data_time = 9;
+  string max_data_time = 10;
+  string file_path = 11;
+  uint64 file_bytes = 12;
+  string file_sha256 = 13;
+  repeated string columns = 14;
+  string preview = 15;
+  uint32 export_count = 16;
   // last_changed_at、exported_at、finalized_at 与 remote_uploaded_at、remote_verified_at 是 Unix 毫秒，没有时为 0。
-  int64 last_changed_at = 18;
-  int64 exported_at = 19;
-  int64 finalized_at = 20;
-  string last_run_id = 21;
+  int64 last_changed_at = 17;
+  int64 exported_at = 18;
+  int64 finalized_at = 19;
+  string last_run_id = 20;
   // 远端副本：remote_key 是相对对象存储 prefix 的键；remote_sha256 等于 file_sha256 且 remote_verified_at 非 0 时远端是当前版本。
-  string remote_key = 22;
-  string remote_sha256 = 23;
-  string remote_etag = 24;
-  int64 remote_uploaded_at = 25;
-  int64 remote_verified_at = 26;
-  string remote_error = 27;
+  string remote_key = 21;
+  string remote_sha256 = 22;
+  string remote_etag = 23;
+  int64 remote_uploaded_at = 24;
+  int64 remote_verified_at = 25;
+  string remote_error = 26;
   // remote_state（mgr 计算）：off 未启用对象存储、none 没有文件、verified 已校验、failed 失败、pending 待上传。
-  string remote_state = 28;
+  string remote_state = 27;
 }
 
 // ArchiveWorkerInfo 是 worker 最近一次心跳的状态。
 message ArchiveWorkerInfo {
   string worker_id = 1;
-  string version = 3;
-  string root_dir = 4;
+  string version = 2;
+  string root_dir = 3;
   // 磁盘（statfs）：总量、可用（不含 root 保留空间，worker 按它判断）、已用；已用 + 可用小于总量，差额是 root 保留空间。
-  uint64 disk_total_bytes = 5;
-  uint64 disk_free_bytes = 6;
-  uint64 staging_bytes = 7;
-  bool maintaining = 8;
-  string pacing_json = 9;
-  repeated string running_run_ids = 10;
+  uint64 disk_total_bytes = 4;
+  uint64 disk_free_bytes = 5;
+  uint64 disk_used_bytes = 6;
+  // min_free_bytes 是 worker 配置的可用空间下限：disk_free_bytes 低于它时 worker 停止跟随与领取新运行。
+  uint64 min_free_bytes = 7;
+  uint64 staging_bytes = 8;
+  bool maintaining = 9;
+  string pacing_json = 10;
+  repeated string running_run_ids = 11;
   // 最近一次心跳的时刻（Unix 毫秒）。
   int64 last_heartbeat_at = 12;
   // active：最近 2 分钟内有心跳。
   bool active = 13;
   ObjectStoreInfo object_store = 14;
-  uint64 disk_used_bytes = 15;
-  // min_free_bytes 是 worker 配置的可用空间下限：disk_free_bytes 低于它时 worker 停止领取新运行。
-  uint64 min_free_bytes = 16;
 }
 
 // ObjectStoreInfo 是 worker 使用的对象存储摘要，不含任何凭据；endpoint 为空表示没有配置对象存储。
@@ -175,11 +186,11 @@ message GetArchiveOverviewReq {}
 message GetArchiveOverviewRsp {
   common.RetInfo ret_info = 1;
   ArchiveWorkerInfo worker = 2;
-  repeated ArchiveRun running_runs = 4;
-  uint32 task_count = 5;
-  uint32 enabled_task_count = 6;
-  uint32 queued_run_count = 7;
-  repeated string alerts = 8;
+  repeated ArchiveRun running_runs = 3;
+  uint32 task_count = 4;
+  uint32 enabled_task_count = 5;
+  uint32 queued_run_count = 6;
+  repeated string alerts = 7;
 }
 
 message ListArchiveTasksReq {
@@ -205,24 +216,24 @@ message PrepareArchiveTaskRsp {
   string partition_unit = 3;
   string retention = 4;
   string earliest_backfill_from = 5;
-  bool exists = 8;
+  bool exists = 6;
   // 用途（collect、factor、data），由数据集角色决定。
-  string purpose = 9;
+  string purpose = 7;
   // 建议的目录名（交易所 + 品种 + 类型 + 频率）。
-  string suggested_dir_name = 10;
+  string suggested_dir_name = 8;
   // 要检查的目录名（请求带了 dir_name 时是它，否则是建议值）已被同空间同用途的其他任务使用；不自动改名。
-  bool dir_name_conflict = 11;
+  bool dir_name_conflict = 9;
 }
 
 message CreateArchiveTaskReq {
   string space_id = 1;
   string dataset_id = 2;
   // 回补起点（归档起点）：为空时取现在 − 线上保留期 + 1 天；保留期为 forever 时必填。
-  string backfill_from = 4;
-  // 创建后是否启用；默认启用。
-  bool paused = 5;
+  string backfill_from = 3;
+  // 创建后是否先停用；默认启用。
+  bool disabled = 4;
   // 目录名（小写字母、数字与连字符，最长 64）；为空取建议值。同空间同用途内唯一，建好后不能改。
-  string dir_name = 6;
+  string dir_name = 5;
 }
 message CreateArchiveTaskRsp {
   common.RetInfo ret_info = 1;
@@ -232,10 +243,8 @@ message CreateArchiveTaskRsp {
 message UpdateArchiveTaskReq {
   string space_id = 1;
   string dataset_id = 2;
-  // status：enabled、paused；为空表示不修改。重新启用后从原位点继续跟随。
-  string status = 5;
-  // 清除任务累积的无法补齐区间（确认过、不再需要提示时）。
-  bool clear_unrecoverable = 6;
+  // status：enabled、disabled；为空表示不修改。重新启用后从原位点继续跟随。
+  string status = 3;
 }
 message UpdateArchiveTaskRsp {
   common.RetInfo ret_info = 1;
@@ -285,8 +294,6 @@ message ListArchiveRunsReq {
   string status = 2;
   common.Page page = 3;
   string space_id = 4;
-  // 是否列出成功的 follow 运行；默认不列（每分钟一条），排队、运行中、失败和取消的 follow 照常列出。
-  bool include_follow = 5;
 }
 message ListArchiveRunsRsp {
   common.RetInfo ret_info = 1;
@@ -339,7 +346,8 @@ message StartArchiveImportRsp {
   string worker_id = 3;
 }
 
-// ClearArchiveUnrecoverableReq 删掉任务累积的、整段落在 [start, end) 里的无法补齐区间（只给 moox-cli）。
+// ClearArchiveUnrecoverableReq 清除任务累积的无法补齐区间：start 与 end 都不填表示清除全部；
+// 填了则两者都必填且 start 必须早于 end，只删整段落在 [start, end) 里的区间。
 // 导入补齐历史缺口后由人确认再清；区间不带标的，按时间范围自动判断会把真实缺口藏掉，所以不自动删。
 message ClearArchiveUnrecoverableReq {
   string space_id = 1;
@@ -369,91 +377,148 @@ service ArchiveMgr {
   rpc GetArchivePartition(GetArchivePartitionReq) returns (GetArchivePartitionRsp);
   rpc StartArchiveImport(StartArchiveImportReq) returns (StartArchiveImportRsp);
   rpc ClearArchiveUnrecoverable(ClearArchiveUnrecoverableReq) returns (ClearArchiveUnrecoverableRsp);
-  // GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
-  // 暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
-  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
-  // ControlLifecycle 暂停、恢复归档管理模块。
-  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
 }
 
-// ---- ArchiveWorker：mgr 与 worker 之间的内部契约，只有外部身份 archive-worker 可以调用 ----
+// ---- ArchiveWorker：mgr 与 worker 之间的内部契约，只有调用方 archive-worker 可以调用 ----
 
 message ArchiveWorkerHeartbeatReq {
   string worker_id = 1;
-  string version = 3;
-  string root_dir = 4;
-  uint64 disk_total_bytes = 5;
-  uint64 disk_free_bytes = 6;
-  uint64 staging_bytes = 7;
-  bool maintaining = 8;
+  string version = 2;
+  string root_dir = 3;
+  uint64 disk_total_bytes = 4;
+  uint64 disk_free_bytes = 5;
   // 已用（statfs Blocks − Bfree）；disk_free_bytes 是可用（Bavail）。
-  uint64 disk_used_bytes = 9;
+  uint64 disk_used_bytes = 6;
+  // worker 配置的可用空间下限（worker.min_free_bytes）。
+  uint64 min_free_bytes = 7;
+  uint64 staging_bytes = 8;
+  bool maintaining = 9;
   string pacing_json = 10;
   repeated string running_run_ids = 11;
   ObjectStoreInfo object_store = 12;
-  // worker 配置的可用空间下限（worker.min_free_bytes）。
-  uint64 min_free_bytes = 13;
   // include_tasks：仅在维护对账时置为 true，要求 mgr 返回当前全部任务列表；普通心跳不查任务表。
-  bool include_tasks = 14;
+  bool include_tasks = 13;
 }
 message ArchiveWorkerHeartbeatRsp {
   common.RetInfo ret_info = 1;
   // 需要取消的运行（用户取消，或运行已结束）。
-  repeated string cancel_run_ids = 4;
-  // 当前全部任务：仅在请求 include_tasks 为 true 时返回，worker 维护时删掉不在列表里的数据集的暂存状态。
-  repeated TaskRef tasks = 5;
+  repeated string cancel_run_ids = 2;
+  // 当前全部任务（含停用）：仅在请求 include_tasks 为 true 时返回，worker 维护时删掉不在列表里的数据集的暂存状态。
+  repeated TaskRef tasks = 3;
+}
+
+// ListFollowTasksReq 拉取当前全部启用且源数据集存在的归档任务及执行所需参数，供 worker 本地循环跟随。
+message ListFollowTasksReq {
+  // worker 本地暂存库已完成分区同步的任务列表（含 task_id）；不在此列表或 task_id 变化时（暂存库新建/丢失或任务重建），
+  // mgr 才下发 registered_partitions。
+  repeated TaskRef synced_tasks = 1;
+}
+
+// FollowTask 是下发给 worker 执行本地跟随所需的全部任务参数。
+message FollowTask {
+  string space_id = 1;
+  string dataset_id = 2;
+  // 任务自增 ID（不复用）。任务删除后重建会得到新值，worker 据此丢弃旧任务遗留的位点和暂存数据，上报结果也按它校验。
+  string task_id = 3;
+  // 任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/<yyyy>/ 下。
+  string purpose = 4;
+  string dir_name = 5;
+  string freq = 6;
+  string partition_unit = 7;
+  string retention = 8;
+  // 允许迟到（秒）：分区收盘后再等这么久才导出。
+  uint32 allowed_lateness_seconds = 9;
+  // 空间时区与本地日终时刻（"15:00"；空串表示全天交易）。
+  string space_tz = 10;
+  string local_close = 11;
+  // 暂存保留期（秒）。
+  uint32 staging_retention_seconds = 12;
+  // 归档起点（任务的回补起点）：暂存区没有分区时整段重读的下界。
+  string backfill_from = 13;
+  // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进 <space>/<purpose>/<dir_name>/dataset.json。
+  string dataset_meta_json = 14;
+  // 最近一次成功的跟随或整段重读的开始时刻（Unix 毫秒，没有时为 0）；位点断档时据此判断无法补齐的区间。
+  int64 last_success_at = 15;
+  // 该任务在 mgr 的分区登记（不带预览与列名）；worker 本地缺分区状态时据此补齐。
+  repeated ArchivePartition registered_partitions = 16;
+}
+message ListFollowTasksRsp {
+  common.RetInfo ret_info = 1;
+  repeated FollowTask tasks = 2;
+}
+
+// ReportFollowResultReq 上报一轮本地跟随的结果到任务上（按 task_id 校验，挡住任务重建后的迟到上报）。
+message ReportFollowResultReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string task_id = 3;
+  // status：succeeded、failed、cancelled。
+  string status = 4;
+  // 本轮跟随的开始与结束时刻（Unix 毫秒）。
+  int64 started_at = 5;
+  int64 finished_at = 6;
+  string message = 7;
+  repeated UnrecoverableRange unrecoverable = 8;
+  repeated ArchivePartition partitions = 9;
+  // 定稿边界：此时间之前的分区均已定稿；空串表示不更新。
+  string final_until = 10;
+  // 整段重读进度（data_time 口径的 RFC3339 文本）：都为空表示当前不在重读中（仅 status=succeeded 时写回任务）。
+  string rescan_from = 11;
+  string rescan_until = 12;
+}
+message ReportFollowResultRsp {
+  common.RetInfo ret_info = 1;
 }
 
 message PullArchiveRunReq {
   // 空闲的并发槽数，最多返回这么多个运行。
-  uint32 free_slots = 3;
-  // 读 Storage 的运行（导入除外）同时运行的全局上限，以及 worker 当前正在运行的这类运行数。
-  uint32 max_storage_runs = 4;
-  uint32 busy_storage_runs = 5;
+  uint32 free_slots = 1;
+  // 读 Storage 的执行（含本地跟随与手动、补拉运行，导入除外）同时进行的全局上限，以及 worker 当前已占用的这类并发数。
+  uint32 max_storage_runs = 2;
+  uint32 busy_storage_runs = 3;
   // worker 本地暂存库已完成分区同步的任务列表（含 task_id）；不在此列表或 task_id 变化时（暂存库新建/丢失或任务重建），
   // mgr 才下发 registered_partitions。
-  repeated TaskRef synced_tasks = 6;
+  repeated TaskRef synced_tasks = 4;
 }
 
-// RunAssignment 是下发给 worker 的一次运行的全部参数。
+// RunAssignment 是下发给 worker 的一次手动、补拉区间或导入运行的全部参数。
 message RunAssignment {
   string run_id = 1;
   string lease_token = 2;
   string kind = 3;
   string space_id = 4;
   string dataset_id = 5;
-  string freq = 6;
-  string partition_unit = 7;
-  string retention = 9;
-  // 允许迟到（秒）：分区收盘后再等这么久才导出。
-  uint32 allowed_lateness_seconds = 11;
-  // 空间时区与本地收盘时刻（"15:00"；空串表示全天交易）。
-  string space_tz = 12;
-  string local_close = 13;
-  // 暂存保留期（秒）。
-  uint32 staging_retention_seconds = 14;
-  // 计划时刻（Unix 毫秒）。
-  int64 scheduled_at = 15;
-  // 本次运行开始的时刻（Unix 毫秒），也是读取区间的终点。
-  int64 started_at = 16;
-  // 读取区间（kind=range 时有值）。
-  string range_start = 17;
-  string range_end = 18;
-  // 归档起点（任务的回补起点）：暂存区没有分区时整段重读的下界。
-  string backfill_from = 19;
-  uint32 lease_ttl_seconds = 20;
   // 任务自增 ID（不复用）。任务删除后重建会得到新值，worker 据此丢弃旧任务遗留的位点和暂存数据。
-  string task_id = 21;
+  string task_id = 6;
+  // 任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/<yyyy>/ 下。
+  string purpose = 7;
+  string dir_name = 8;
+  string freq = 9;
+  string partition_unit = 10;
+  string retention = 11;
+  // 允许迟到（秒）：分区收盘后再等这么久才导出。
+  uint32 allowed_lateness_seconds = 12;
+  // 空间时区与本地日终时刻（"15:00"；空串表示全天交易）。
+  string space_tz = 13;
+  string local_close = 14;
+  // 暂存保留期（秒）。
+  uint32 staging_retention_seconds = 15;
+  // 计划时刻（Unix 毫秒）。
+  int64 scheduled_at = 16;
+  // 本次运行开始的时刻（Unix 毫秒），也是读取区间的终点。
+  int64 started_at = 17;
+  // 读取区间（kind=range 时有值）。
+  string range_start = 18;
+  string range_end = 19;
+  // 归档起点（任务的回补起点）：暂存区没有分区时整段重读的下界。
+  string backfill_from = 20;
+  uint32 lease_ttl_seconds = 21;
   // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进 <space>/<purpose>/<dir_name>/dataset.json。
   string dataset_meta_json = 22;
-  // 最近一次成功的 follow 或 manual 的开始时刻（Unix 毫秒，没有时为 0）；位点断档时据此判断无法补齐的区间。
+  // 最近一次成功的跟随或整段重读的开始时刻（Unix 毫秒，没有时为 0）；位点断档时据此判断无法补齐的区间。
   int64 last_success_at = 23;
-  // 该任务在 mgr 的分区登记（只含结束时间晚于「本次开始 − 线上保留期」的，kind=import 时为全部；不带预览与列名）；
-  // worker 本地缺分区状态时据此补齐。
-  repeated PartitionReport registered_partitions = 24;
-  // 任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/<yyyy>/ 下。
-  string purpose = 25;
-  string dir_name = 26;
+  // 该任务在 mgr 的分区登记（不带预览与列名）；worker 本地缺分区状态时据此补齐。
+  repeated ArchivePartition registered_partitions = 24;
 }
 message PullArchiveRunRsp {
   common.RetInfo ret_info = 1;
@@ -461,68 +526,41 @@ message PullArchiveRunRsp {
 }
 
 message ReportArchiveRunProgressReq {
-  string run_id = 2;
-  string lease_token = 3;
+  string run_id = 1;
+  string lease_token = 2;
+  uint64 subjects_done = 3;
+  uint64 request_count = 4;
+  uint64 bytes_read = 5;
+  uint64 rows_read = 6;
+}
+message ReportArchiveRunProgressRsp {
+  common.RetInfo ret_info = 1;
+  // cancelled：运行已被取消或租约已丢失，worker 应停止。
+  bool cancelled = 2;
+}
+
+message CompleteArchiveRunReq {
+  string run_id = 1;
+  string lease_token = 2;
+  // status：succeeded、failed、cancelled。
+  string status = 3;
+  string message = 4;
   uint64 subjects_done = 5;
   uint64 request_count = 6;
   uint64 bytes_read = 7;
   uint64 rows_read = 8;
-}
-message ReportArchiveRunProgressRsp {
-  common.RetInfo ret_info = 1;
-  // canceled：运行已被取消或租约已丢失，worker 应停止。
-  bool canceled = 2;
-}
-
-// PartitionReport 是本次运行涉及的一个分区的登记信息。
-message PartitionReport {
-  string partition_key = 1;
-  string range_start = 2;
-  string range_end = 3;
-  // status：open、exported、final。
-  string status = 4;
-  uint64 row_count = 5;
-  uint64 subject_count = 6;
-  string min_data_time = 7;
-  string max_data_time = 8;
-  string file_path = 9;
-  uint64 file_bytes = 10;
-  string file_sha256 = 11;
-  repeated string columns = 12;
-  string preview = 13;
-  uint32 export_count = 14;
-  // 时刻含义与单位同 ArchivePartition（Unix 毫秒，没有时为 0）。
-  int64 last_changed_at = 15;
-  int64 exported_at = 16;
-  int64 finalized_at = 17;
-  // 远端副本（worker 上报与 mgr 下发两个方向都用），含义同 ArchivePartition。
-  string remote_key = 18;
-  string remote_sha256 = 19;
-  string remote_etag = 20;
-  int64 remote_uploaded_at = 21;
-  int64 remote_verified_at = 22;
-  string remote_error = 23;
-}
-
-message CompleteArchiveRunReq {
-  string run_id = 2;
-  string lease_token = 3;
-  // status：succeeded、failed、canceled。
-  string status = 4;
-  string message = 5;
-  uint64 subjects_done = 7;
-  uint64 request_count = 8;
-  uint64 bytes_read = 9;
-  uint64 rows_read = 10;
-  uint64 rows_added = 11;
-  uint64 rows_changed = 12;
-  uint32 partitions_exported = 13;
-  uint32 partitions_finalized = 14;
-  repeated UnrecoverableRange unrecoverable = 15;
-  repeated PartitionReport partitions = 16;
+  uint64 rows_added = 9;
+  uint64 rows_changed = 10;
+  uint32 partitions_exported = 11;
+  uint32 partitions_finalized = 12;
+  uint32 partitions_uploaded = 13;
+  repeated UnrecoverableRange unrecoverable = 14;
+  repeated ArchivePartition partitions = 15;
   // 定稿边界：此时间之前的分区均已定稿；空串表示不更新。
-  string final_until = 17;
-  uint32 partitions_uploaded = 18;
+  string final_until = 16;
+  // 整段重读进度（data_time 口径的 RFC3339 文本）：kind=manual 且 status=succeeded 时写回任务。
+  string rescan_from = 17;
+  string rescan_until = 18;
 }
 message CompleteArchiveRunRsp {
   common.RetInfo ret_info = 1;
@@ -530,6 +568,8 @@ message CompleteArchiveRunRsp {
 
 service ArchiveWorker {
   rpc ArchiveWorkerHeartbeat(ArchiveWorkerHeartbeatReq) returns (ArchiveWorkerHeartbeatRsp);
+  rpc ListFollowTasks(ListFollowTasksReq) returns (ListFollowTasksRsp);
+  rpc ReportFollowResult(ReportFollowResultReq) returns (ReportFollowResultRsp);
   rpc PullArchiveRun(PullArchiveRunReq) returns (PullArchiveRunRsp);
   rpc ReportArchiveRunProgress(ReportArchiveRunProgressReq) returns (ReportArchiveRunProgressRsp);
   rpc CompleteArchiveRun(CompleteArchiveRunReq) returns (CompleteArchiveRunRsp);
