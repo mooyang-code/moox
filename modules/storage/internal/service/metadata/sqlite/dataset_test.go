@@ -238,8 +238,8 @@ func TestTimeSeriesDatasetRequiresOneCanonicalImmutableFreq(t *testing.T) {
 			SpaceId: "space", DatasetId: "dataset_bad", DataSourceId: "source",
 			Name: "Bad", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: freq,
 		})
-		if err == nil || !strings.Contains(err.Error(), "time_series dataset freq must be one of") {
-			t.Fatalf("freq %q error = %v, want canonical freq rejection", freq, err)
+		if err == nil || !strings.Contains(err.Error(), "time_series dataset frequency must be one of") {
+			t.Fatalf("freq %q error = %v, want canonical frequency rejection", freq, err)
 		}
 	}
 	record, err := store.CreateDataset(ctx, &pb.Dataset{
@@ -251,7 +251,7 @@ func TestTimeSeriesDatasetRequiresOneCanonicalImmutableFreq(t *testing.T) {
 	}
 
 	created := createTestDataset(t, ctx, store, "dataset")
-	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Frequency: "5m"}); err == nil || !strings.Contains(err.Error(), "freq is immutable") {
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Frequency: "5m"}); err == nil || !strings.Contains(err.Error(), "frequency is immutable") {
 		t.Fatalf("freq change error = %v, want immutable", err)
 	}
 	updated, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Description: "renamed"})

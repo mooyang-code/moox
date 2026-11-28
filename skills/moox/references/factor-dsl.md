@@ -524,7 +524,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
        name: 现货一分钟
        space_id: crypto
        source_dataset_id: dataset_dasftksvjhj2jom4vhd0
-       freq: 1m
+       frequency: 1m
        members:
          - {factor: zf_abs_mean, status: disabled}   # → 列 zf_abs_mean
    definitions:

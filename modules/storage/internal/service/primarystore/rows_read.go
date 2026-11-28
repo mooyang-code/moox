@@ -148,7 +148,7 @@ func validateSelectorFreqs(selectors []*pb.TimeSeriesSelector, freq string) erro
 	}
 	for _, selector := range selectors {
 		if selector.GetFrequency() != freq {
-			return fmt.Errorf("selector freq %q does not match the dataset frequency %q", selector.GetFrequency(), freq)
+			return fmt.Errorf("selector frequency %q does not match the dataset frequency %q", selector.GetFrequency(), freq)
 		}
 	}
 	return nil

@@ -281,7 +281,7 @@ tasks:
     name: 行情因子
     space_id: crypto
     source_dataset_id: dataset_prices
-    freq: 1m
+    frequency: 1m
     members:
       - {factor: bias}
       - {factor: bias, params: {window: 10}, status: disabled}
@@ -290,7 +290,7 @@ tasks:
     name: A股因子
     space_id: stockcn
     source_dataset_id: dataset_cn
-    freq: 5m
+    frequency: 5m
     members:
       - {factor: cci}
 definitions:

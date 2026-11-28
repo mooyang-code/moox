@@ -139,7 +139,7 @@ type seedDataset struct {
 	Name         string   `yaml:"name"`
 	Description  string   `yaml:"description"`
 	DataKind     string   `yaml:"data_kind"`
-	Freq         string   `yaml:"freq"`
+	Freq         string   `yaml:"frequency"`
 	SubjectTags  []string `yaml:"subject_tags"`
 	seedCommon   `yaml:",inline"`
 }

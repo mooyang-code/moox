@@ -165,7 +165,7 @@ output: fin_net_profit_parent_ttm / fin_equity_parent
       name: A股日线
       space_id: stockcn
       source_dataset_id: dataset_<task_id>
-      freq: 1d
+      frequency: 1d
       members:
         - {factor: mom_adj}
         - {factor: roe_ttm}

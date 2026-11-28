@@ -15,7 +15,7 @@ type metadataSeedContract struct {
 		SpaceID    string            `yaml:"space_id"`
 		DatasetID  string            `yaml:"dataset_id"`
 		DataKind   string            `yaml:"data_kind"`
-		Freq       string            `yaml:"freq"`
+		Frequency  string            `yaml:"frequency"`
 		Attributes map[string]string `yaml:"attributes"`
 	} `yaml:"datasets"`
 	DatasetColumns []struct {
@@ -58,7 +58,7 @@ func TestDefaultSetupSeedTimeSeriesDatasetsDeclareCanonicalFreq(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal(raw, &seed))
 	for _, dataset := range seed.Datasets {
 		if dataset.DataKind == "time_series" {
-			require.True(t, frequencypkg.IsCanonical(dataset.Freq), "%s/%s freq %q", dataset.SpaceID, dataset.DatasetID, dataset.Freq)
+			require.True(t, frequencypkg.IsCanonical(dataset.Frequency), "%s/%s frequency %q", dataset.SpaceID, dataset.DatasetID, dataset.Frequency)
 		}
 	}
 }

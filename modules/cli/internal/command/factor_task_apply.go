@@ -45,7 +45,7 @@ type factorSeedTask struct {
 	Name            string             `yaml:"name"`
 	SpaceID         string             `yaml:"space_id"`
 	SourceDatasetID string             `yaml:"source_dataset_id"`
-	Freq            string             `yaml:"freq"`
+	Freq            string             `yaml:"frequency"`
 	Members         []factorSeedMember `yaml:"members"`
 }
 
@@ -278,7 +278,7 @@ func (s *factorSeed) validate() error {
 		task.ID, task.Name = strings.TrimSpace(task.ID), strings.TrimSpace(task.Name)
 		task.SpaceID, task.SourceDatasetID, task.Freq = strings.TrimSpace(task.SpaceID), strings.TrimSpace(task.SourceDatasetID), strings.TrimSpace(task.Freq)
 		if task.ID == "" || task.Name == "" || task.SpaceID == "" || task.SourceDatasetID == "" || task.Freq == "" {
-			return fmt.Errorf("%s requires id, name, space_id, source_dataset_id and freq", path)
+			return fmt.Errorf("%s requires id, name, space_id, source_dataset_id and frequency", path)
 		}
 		if _, err := factorname.ParseTaskID(task.ID); err != nil {
 			return fmt.Errorf("%s.id is invalid: %v", path, err)

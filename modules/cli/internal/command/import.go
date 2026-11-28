@@ -138,7 +138,7 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 			return fmt.Errorf("dataset %s/%s not found", opts.Space, opts.Dataset)
 		}
 		if dataset.GetFrequency() != "" && dataset.GetFrequency() != opts.Freq {
-			return fmt.Errorf("dataset %s freq is %s, not %s", opts.Dataset, dataset.GetFrequency(), opts.Freq)
+			return fmt.Errorf("dataset %s frequency is %s, not %s", opts.Dataset, dataset.GetFrequency(), opts.Freq)
 		}
 		columns, err := metaClient.ListDatasetColumns(ctx, opts.Space, opts.Dataset)
 		if err != nil {

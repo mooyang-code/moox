@@ -33,7 +33,7 @@ import-pack/
   {
     "space_id": "crypto",
     "dataset_id": "dataset_xxx",
-    "freq": "5m",
+    "frequency": "5m",
     "series_tag": "venue:binance|market:swap|source:swap_http",
     "files": [
       {"subject_id": "BTC-USDT", "file": "5m/BTC-USDT.csv", "rows": 60000,

@@ -26,7 +26,7 @@ tasks:
     name: 现货一分钟
     space_id: crypto
     source_dataset_id: dataset_dasftksvjhj2jom4vhd0
-    freq: 1m
+    frequency: 1m
     members:
       - {factor: bias}
       - {factor: cci}
@@ -47,7 +47,7 @@ tasks:
     name: 合约一分钟
     space_id: crypto
     source_dataset_id: dataset_dasftksvjhj2jom4vhdg
-    freq: 1m
+    frequency: 1m
     members:
       - {factor: bias}
       - {factor: cci}
@@ -74,7 +74,7 @@ tasks:
     name: A股五分钟
     space_id: stockcn
     source_dataset_id: dataset_dasftksvjhj2jom4vhh0
-    freq: 5m
+    frequency: 5m
     members:
       - {factor: ma, params: {window: 5}}
       - {factor: ma, params: {window: 10}}
@@ -86,7 +86,7 @@ tasks:
     name: 港股五分钟
     space_id: stockhk
     source_dataset_id: dataset_dasftksvjhj2jom4vhk0
-    freq: 5m
+    frequency: 5m
     members:
       - {factor: ma, params: {window: 5}}
       - {factor: ma, params: {window: 10}}

@@ -134,7 +134,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 		return nil, storeerr.Invalidf("dataset data_kind is immutable")
 	}
 	if freq := strings.TrimSpace(item.GetFrequency()); freq != "" && freq != existing.GetFrequency() {
-		return nil, storeerr.Invalidf("dataset freq is immutable")
+		return nil, storeerr.Invalidf("dataset frequency is immutable")
 	}
 	// alignment 设置后不能修改，没有设置过的可以补上；请求里为空、allowed_lateness_seconds 为 0 时沿用已有值，
 	// 只改名称、说明的更新不会把它们清掉。
@@ -287,7 +287,7 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 	item.Retention, item.RetentionSource = "", ""
 	item.Frequency = strings.TrimSpace(item.GetFrequency())
 	if item.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && !frequencypkg.IsCanonical(item.GetFrequency()) {
-		return nil, storeerr.Invalidf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFrequency())
+		return nil, storeerr.Invalidf("time_series dataset frequency must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFrequency())
 	}
 	return item, nil
 }

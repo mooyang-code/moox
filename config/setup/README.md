@@ -34,7 +34,7 @@ moox-cli setup init \
 它的外部入口私网地址写入；没有 MooX 主机的地域写 `network = "public"` 和 `entry_host`，函数不绑 VPC，经公网连入口主机的 11004。
 规则见 `skills/moox/references/private-network.md`。
 
-默认因子任务在 `factor-tasks.yaml`：`tasks` 声明因子任务（`id`、`name`、`space_id`、`source_dataset_id`、`freq`），
+默认因子任务在 `factor-tasks.yaml`：`tasks` 声明因子任务（`id`、`name`、`space_id`、`source_dataset_id`、`frequency`），
 任务的成员用内嵌的 `members` 写：`{factor: ema, params: {span: 20, warmup: 50000}}` 是固定成员，`{factor: ma, var: true}` 是可变成员（由关联的策略逐期提交参数）；
 `definitions` 声明因子定义（`factor_id` 加因子库文件，路径相对 `source_dir`，`source_dir` 相对这个文件所在的目录）。
 `setup start --space-id <空间>` 导入这个空间的任务（定义全部导入），没有因子机时跳过。

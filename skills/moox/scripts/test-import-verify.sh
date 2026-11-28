@@ -7,7 +7,7 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/pack/5m"
 printf 'data_time,close\n2026-10-01T00:00:00Z,1\n2026-10-01T00:05:00Z,2\n2026-10-01T00:10:00Z,3\n' > "$tmp/pack/5m/AAA-USDT.csv"
 cat > "$tmp/pack/manifest.json" <<JSON
-{"space_id":"crypto","dataset_id":"d","freq":"5m","series_tag":"t","files":[{"subject_id":"AAA-USDT","file":"5m/AAA-USDT.csv","rows":3,"first_utc":"2026-10-01T00:00:00Z","last_utc":"2026-10-01T00:10:00Z","sha256":"x"}]}
+{"space_id":"crypto","dataset_id":"d","frequency":"5m","series_tag":"t","files":[{"subject_id":"AAA-USDT","file":"5m/AAA-USDT.csv","rows":3,"first_utc":"2026-10-01T00:00:00Z","last_utc":"2026-10-01T00:10:00Z","sha256":"x"}]}
 JSON
 cat > "$tmp/preflight.json" <<JSON
 {"files":[{"file":"$tmp/pack/5m/AAA-USDT.csv","tail_from":"2026-10-01T00:05:00Z","tail_rows":2}]}
