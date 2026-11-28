@@ -30,7 +30,9 @@ deployment:
 observability:
   enabled: true
   deliver_policy: all
-  eventbus_urls:
+
+eventbus:
+  urls:
     - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/monitor-observability.yaml
 

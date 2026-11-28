@@ -43,8 +43,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Metrics.MaxNewSeriesPerHour != 2000 || cfg.Metrics.MaxNewSeriesPerDay != 10000 {
 		t.Fatalf("new series limits = %d/%d", cfg.Metrics.MaxNewSeriesPerHour, cfg.Metrics.MaxNewSeriesPerDay)
 	}
-	if !cfg.Observability.Enabled || len(cfg.Observability.EventBusURLs) == 0 {
-		t.Fatalf("observability defaults = %+v", cfg.Observability)
+	if !cfg.Observability.Enabled || len(cfg.EventBus.URLs) == 0 {
+		t.Fatalf("observability/eventbus defaults = %+v %+v", cfg.Observability, cfg.EventBus)
 	}
 	if cfg.MarketCanary.ClosedBarMinCoverage != 0.99 {
 		t.Fatalf("closed bar minimum coverage = %v", cfg.MarketCanary.ClosedBarMinCoverage)
@@ -105,12 +105,12 @@ instance:
 }
 
 func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "observability:\n  credential_file: \"\"\n"))
+	cfg, err := Load(writeConfig(t, "eventbus:\n  credential_file: \"\"\n"))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Observability.CredentialFile != "" {
-		t.Fatalf("explicit empty observability credential was replaced: %q", cfg.Observability.CredentialFile)
+	if cfg.EventBus.CredentialFile != "" {
+		t.Fatalf("explicit empty eventbus credential was replaced: %q", cfg.EventBus.CredentialFile)
 	}
 }
 
@@ -263,6 +263,7 @@ func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
 		"observability:\n  stream: MOOX_OBSERVABILITY\n",
 		"observability:\n  consumer: another-consumer\n",
 		"observability:\n  filter_subject: moox.event.observability.>\n",
+		"observability:\n  eventbus_urls:\n    - nats://old:4222\n",
 	} {
 		if _, err := Load(writeConfig(t, content)); err == nil {
 			t.Fatalf("Load() accepted retired config: %s", content)

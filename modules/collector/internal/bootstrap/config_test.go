@@ -71,7 +71,7 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, `kline_resample:
   enabled: true
   fallback_lookback_bars: 5
-event_bus:
+eventbus:
   urls: ["nats://127.0.0.1:4222"]
   credential_file: ./secrets/collector-eventbus.yaml
 `))

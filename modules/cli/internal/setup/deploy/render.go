@@ -33,6 +33,17 @@ const defaultStreamSpace = "crypto"
 // localGatewayAddress 是本机主机网关给同机组件用的入口。
 const localGatewayAddress = "127.0.0.1:11002"
 
+// sqliteDatabaseFiles 是各 SQLite 业务组件在各自 data/<组件>/ 下的数据库文件名，配置键统一为 database.path。
+var sqliteDatabaseFiles = map[string]string{
+	"admin":       "admin.db",
+	"monitor":     "monitor.db",
+	"collector":   "moox_collector.db",
+	"factor-mgr":  "factor.db",
+	"archive-mgr": "archive.db",
+	"strategy":    "strategy.sqlite",
+	"trade":       "moox_trade.db",
+}
+
 // Identity 是从控制机取到并校验过的身份材料，按部署根布局摆放。
 type Identity struct {
 	// SignPublicKey 是这台主机登记的签名公钥；SCFCollectorPublicKey 只在部署了 collector 的主机上有。
@@ -358,6 +369,13 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 		set("storage.eventbus", map[string]string{"credential_file": credential})
 	}
 	if name == "app.yaml" || name == "engine.yaml" {
+		if dbFile, ok := sqliteDatabaseFiles[id]; ok {
+			set("database.path", path.Join(data, dbFile))
+		}
+		if hasPath(document, "eventbus") {
+			set("eventbus.urls", []string{url})
+			set("eventbus.credential_file", credential)
+		}
 		switch id {
 		case "host-agent":
 			set("host_id", r.Host.Name)
@@ -366,8 +384,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			if err == nil {
 				err = r.gatewayClient(component, member(document.Content[0], "gateway_client"))
 			}
-		case "admin":
-			set("database.path", path.Join(data, "admin.db"))
 		case "eventbus":
 			directory := layout.Secret("eventbus")
 			set("broker.host", "0.0.0.0")
@@ -379,14 +395,7 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			// 服务端证书就是这台主机的主机证书，客户端（含 EventBus 自己的内部连接）用 MooX CA 根证书校验。
 			set("broker.tls", map[string]any{"enabled": true, "cert_file": layout.Secret(hostbundle.HostCertificateFile), "key_file": layout.Secret(hostbundle.HostTLSKeyFile), "ca_file": layout.Secret(hostbundle.CAFile)})
 			set("internal_client", map[string]string{"credential_file": credential})
-		case "monitor":
-			set("database.path", path.Join(data, "monitor.db"))
-			set("observability.eventbus_urls", []string{url})
-			set("observability.credential_file", credential)
 		case "collector":
-			set("database.path", path.Join(data, "moox_collector.db"))
-			set("event_bus.urls", []string{url})
-			set("event_bus.credential_file", credential)
 			if r.Identity.SCFCollectorPublicKey == "" {
 				return nil, errors.New("身份材料里没有 scf-collector 的公钥")
 			}
@@ -394,23 +403,9 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("scf_entry.key_file", layout.Secret("scf-collector.key"))
 		case "collector-stream":
 			set("data_dir", data)
-		case "factor-mgr":
-			set("database.path", path.Join(data, "factor.db"))
-		case "archive-mgr":
-			set("database.path", path.Join(data, "archive.db"))
-		case "strategy":
-			set("database", path.Join(data, "strategy.sqlite"))
-			set("eventbus.urls", []string{url})
-			set("eventbus.credential_file", credential)
-		case "trade":
-			set("database.path", path.Join(data, "moox_trade.db"))
-			set("eventbus.urls", []string{url})
-			set("eventbus.credential_file", credential)
 		case "factor-engine":
 			set("engine.id", id+"@"+r.Host.Name)
 			set("catalog_sync.state_file", path.Join(data, "engine/catalog.json"))
-			set("eventbus.urls", []string{url})
-			set("eventbus.credential_file", credential)
 			set("seriesstore.dir", path.Join(data, "seriesstore"))
 			set("gap.ledger_dir", path.Join(data, "gap"))
 			set("watermark.state_file", path.Join(data, "engine/watermarks.json"))

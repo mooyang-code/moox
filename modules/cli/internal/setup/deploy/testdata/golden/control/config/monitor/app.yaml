@@ -24,7 +24,8 @@ deployment:
 observability:
   enabled: true
   deliver_policy: all
-  eventbus_urls:
+eventbus:
+  urls:
     - tls://203.0.113.11:4222
   credential_file: /data/moox/secrets/eventbus/monitor-observability.yaml
 market_canary:

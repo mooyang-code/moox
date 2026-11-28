@@ -115,8 +115,8 @@ func startObservabilityConsumer(
 	runtime.Go(func() {
 		for ctx.Err() == nil {
 			runtime.setObservabilityIngestState(false, errors.New("observability consumer is connecting"))
-			jc := jetstream.ConfigFromEnv(cfg.Observability.EventBusURLs, "moox-monitor-observability")
-			if path := strings.TrimSpace(cfg.Observability.CredentialFile); path != "" {
+			jc := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-monitor-observability")
+			if path := strings.TrimSpace(cfg.EventBus.CredentialFile); path != "" {
 				if err := jc.ApplyCredentialFile(jetstream.ExpandCredentialPath(path)); err != nil {
 					runtime.setObservabilityIngestState(false, fmt.Errorf("observability consumer credential: %w", err))
 					log.WarnContextf(ctx, "observability consumer credential unavailable")

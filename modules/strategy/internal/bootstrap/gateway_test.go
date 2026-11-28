@@ -295,7 +295,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	directorypb.RegisterDirectoryService(svc, wire)
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
-	raw := fmt.Sprintf("database: %q\ngateway_client:\n  caller: strategy\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: "+listener.Addr().String()+"\n  ca_file: "+caPath+"\n", filepath.Join(root, "data", "strategy", "strategy.db"))
+	raw := fmt.Sprintf("database:\n  path: %q\ngateway_client:\n  caller: strategy\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: "+listener.Addr().String()+"\n  ca_file: "+caPath+"\n", filepath.Join(root, "data", "strategy", "strategy.db"))
 	if natsURL != "" {
 		raw += fmt.Sprintf("eventbus:\n  urls: [%q]\n", natsURL)
 	}

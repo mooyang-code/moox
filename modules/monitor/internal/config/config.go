@@ -24,6 +24,7 @@ type Config struct {
 	Scheduler      SchedulerConfig          `yaml:"scheduler"`
 	Deployment     DeploymentConfig         `yaml:"deployment"`
 	Observability  ObservabilityConfig      `yaml:"observability"`
+	EventBus       EventBusConfig           `yaml:"eventbus"`
 	Metrics        MetricsConfig            `yaml:"metrics"`
 	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
 	KlineFreshness KlineFreshnessConfig     `yaml:"kline_freshness"`
@@ -63,9 +64,12 @@ type MetricsConfig struct {
 }
 
 type ObservabilityConfig struct {
-	Enabled        bool     `yaml:"enabled"`
-	DeliverPolicy  string   `yaml:"deliver_policy"`
-	EventBusURLs   []string `yaml:"eventbus_urls"`
+	Enabled       bool   `yaml:"enabled"`
+	DeliverPolicy string `yaml:"deliver_policy"`
+}
+
+type EventBusConfig struct {
+	URLs           []string `yaml:"urls"`
 	CredentialFile string   `yaml:"credential_file"`
 }
 
@@ -146,7 +150,8 @@ func Default() *Config {
 			AlertEventRetentionDays: 14,
 		},
 		Deployment:    DeploymentConfig{Enabled: true},
-		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}},
+		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all"},
+		EventBus:      EventBusConfig{URLs: []string{"nats://127.0.0.1:4222"}},
 		// Canary subjects name concrete collection results, so they come only
 		// from deployment config; without subjects the canary stays disabled.
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
@@ -190,8 +195,8 @@ func (c *Config) applyDefaults() {
 	if c.Observability.DeliverPolicy == "" {
 		c.Observability.DeliverPolicy = observabilityDefaults.DeliverPolicy
 	}
-	if len(c.Observability.EventBusURLs) == 0 {
-		c.Observability.EventBusURLs = observabilityDefaults.EventBusURLs
+	if len(c.EventBus.URLs) == 0 {
+		c.EventBus.URLs = defaults.EventBus.URLs
 	}
 	canaryDefaults := Default().MarketCanary
 	if c.MarketCanary.Freshness == 0 {
@@ -244,10 +249,10 @@ func (c *Config) applyEnv() {
 		c.Instance.InstanceID = v
 	}
 	if v := firstEnv("MOOX_OBSERVABILITY_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
-		c.Observability.EventBusURLs = strings.Split(v, ",")
+		c.EventBus.URLs = strings.Split(v, ",")
 	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_CREDENTIAL_FILE")); v != "" {
-		c.Observability.CredentialFile = v
+		c.EventBus.CredentialFile = v
 	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_DELIVER_POLICY")); v != "" {
 		c.Observability.DeliverPolicy = strings.ToLower(v)
@@ -262,12 +267,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("instance.instance_id must not be empty")
 	}
 	if c.Observability.Enabled {
-		if len(c.Observability.EventBusURLs) == 0 {
-			return fmt.Errorf("observability.eventbus_urls must not be empty")
+		if len(c.EventBus.URLs) == 0 {
+			return fmt.Errorf("eventbus.urls must not be empty")
 		}
-		for _, url := range c.Observability.EventBusURLs {
+		for _, url := range c.EventBus.URLs {
 			if strings.TrimSpace(url) == "" {
-				return fmt.Errorf("observability.eventbus_urls must not contain empty values")
+				return fmt.Errorf("eventbus.urls must not contain empty values")
 			}
 		}
 	}

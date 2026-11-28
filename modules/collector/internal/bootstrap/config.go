@@ -36,7 +36,7 @@ type Config struct {
 	CollectorRetention CollectorRetentionConfig         `yaml:"collector_retention"`
 	KlineResample      KlineResampleConfig              `yaml:"kline_resample"`
 	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
-	EventBus    eventbus.Config   `yaml:"event_bus"`
+	EventBus    eventbus.Config   `yaml:"eventbus"`
 	EgressProxy EgressProxyConfig `yaml:"egress_proxy"`
 	// Delist 是下架检测的开关，安装时按拓扑渲染：没有出口代理（没配海外机）时关掉自动检测。
 	Delist      DelistConfig       `yaml:"delist"`

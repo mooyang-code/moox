@@ -45,7 +45,7 @@ const (
 
 // Initialize 打开数据库、启动投递与事件消费，并在服务监听前注册 StrategyMgr。
 func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Server, func() error, error) {
-	db, err := store.Open(cfg.Database)
+	db, err := store.Open(cfg.Database.Path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,7 +131,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	var consumer *eventconsumer.Consumer
 	var handlerRef atomic.Pointer[trigger.Handler]
 	ready := newModuleCheck(db, eventRuntime.Connected, func() bool { return consumer == nil || consumer.Ready() })
-	life, err := newLifecycle(cfg.Database, lifecycleDeps{db: db, handler: &handlerRef, warm: warm, ready: ready})
+	life, err := newLifecycle(cfg.Database.Path, lifecycleDeps{db: db, handler: &handlerRef, warm: warm, ready: ready})
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开策略生命周期状态：%w", err)
 	}

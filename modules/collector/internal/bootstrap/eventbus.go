@@ -29,7 +29,7 @@ type eventBusRuntime struct {
 // relayInterval 是中继轮询发件箱的间隔；新事件封存后会立即唤醒它。
 const relayInterval = 10 * time.Second
 
-// newEventBusRuntime 在配置了 event_bus 时创建 EventBus 接入，否则返回 nil（不发布任何事件）。
+// newEventBusRuntime 在配置了 eventbus 时创建 EventBus 接入，否则返回 nil（不发布任何事件）。
 // attn 是进程内共用的关注项上报实例（东方财富冷却等其他来源也往里报）。
 func newEventBusRuntime(cfg *Config, dbm *store.Store, attn *attention.Attention) (*eventBusRuntime, error) {
 	if !cfg.EventBus.Enabled() {
@@ -61,7 +61,7 @@ func (b *eventBusRuntime) start(process *Runtime) {
 // delist.auto_detect 为 false（没有出口代理，三个来源都连不上）时只接手工登记，不轮询来源。
 func registerDelistDetection(cfg *Config, dbm *store.Store, process *Runtime, bus *eventBusRuntime, svc *collectsvc.Service) error {
 	if bus == nil {
-		log.Warn("collector 没有配置 event_bus，下架检测不启动")
+		log.Warn("collector 没有配置 eventbus，下架检测不启动")
 		return nil
 	}
 	registry, err := events.DefaultRegistry()
