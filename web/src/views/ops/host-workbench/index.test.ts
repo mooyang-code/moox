@@ -48,7 +48,7 @@ describe("host workbench deep links", () => {
   beforeEach(() => {
     mocks.query = {};
     mocks.listAllDeploymentHosts.mockReset().mockResolvedValue(hosts);
-    mocks.getCurrentMetrics.mockReset().mockResolvedValue({ metrics: [] });
+    mocks.getCurrentMetrics.mockReset().mockResolvedValue({ metrics: [], thresholds: { cpu: 80, memory: 90, disk: 85 } });
   });
 
   it("URL 带 host_id 挂载时不建立 SSH 连接，终端只在点击时打开（刷新也不会自动连上）", async () => {

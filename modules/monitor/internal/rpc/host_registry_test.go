@@ -40,4 +40,7 @@ func TestListHostAgentsReadsPersistedPresenceAfterRestart(t *testing.T) {
 	require.Equal(t, "control", rsp.GetAgents()[0].GetHostId())
 	require.False(t, rsp.GetAgents()[0].GetReachable())
 	require.GreaterOrEqual(t, rsp.GetAgents()[0].GetStaleSeconds(), int64(240))
+	require.Equal(t, hostmetrics.MetricThreshold(hostmetrics.HostMetricCPU).Alert, rsp.GetCpuThreshold())
+	require.Equal(t, hostmetrics.MetricThreshold(hostmetrics.HostMetricMemory).Alert, rsp.GetMemoryThreshold())
+	require.Equal(t, hostmetrics.MetricThreshold(hostmetrics.HostMetricFilesystemUsage).Alert, rsp.GetDiskThreshold())
 }

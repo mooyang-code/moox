@@ -72,6 +72,12 @@ func buildBusinessFreshnessReporterWithInterval(
 		round := checks.Round{Domain: checks.DomainBusiness}
 		facts := make(map[store.CheckKey]checks.Fact)
 		add := func(fact checks.Fact) { facts[fact.Key()] = fact }
+		var obsState observationState
+		obsSuspended := false
+		if observation != nil {
+			obsState = observation(overview.GeneratedAt)
+			obsSuspended = obsState.Suspended
+		}
 		// K 线新鲜度已覆盖的结果数据集：同一条数据链路（Storage 写入水位、View 水位）不再各自生成 dataset 新鲜度检查。
 		coveredKey := func(spaceID, id, freq string) string {
 			return spaceID + "\x00" + id + "\x00" + strings.ToLower(freq)
@@ -80,8 +86,9 @@ func buildBusinessFreshnessReporterWithInterval(
 		if kline == nil {
 			// 没有 K 线评估器（关闭了 K 线新鲜度）：K 线检查不再产出，随之删除。
 			coveredDatasets = nil
-		} else if collectorHalted(overview.Services) || (!lastKlineEvaluation.IsZero() && overview.GeneratedAt.Sub(lastKlineEvaluation) < klineInterval) {
-			// Collector 暂停或恢复追赶时采集是有意停下的；没到评估时间也不评估：K 线检查保持原状态。
+		} else if obsSuspended || collectorHalted(overview.Services) || (!lastKlineEvaluation.IsZero() && overview.GeneratedAt.Sub(lastKlineEvaluation) < klineInterval) {
+			// 观测输入暂停时 storage-view 摘要不会更新；Collector 暂停或恢复追赶时采集是有意停下的；
+			// 没到评估时间也不评估：以上情形 K 线检查保持原状态。
 			round.FrozenPrefixes = append(round.FrozenPrefixes, klineCheckPrefix)
 		} else {
 			lastKlineEvaluation = overview.GeneratedAt
@@ -181,11 +188,11 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			return strings.HasPrefix(key.CheckID, "archive_coverage:") && silent[archiveOwner]
 		}
-		// 观测输入（EventBus 上的服务指标，含主机网关的组件上报）中断，或刚恢复、上报方还没补上样本时：依赖它们的检查全部冻结——
-		// 既不新增告警，也不恢复已有告警——只留"观测输入"这一项说明原因；不依赖观测输入的检查（K 线新鲜度）照常判定。
+		// 观测输入（EventBus 上的服务指标，含主机网关的组件上报与 storage-view 视图摘要）中断，或刚恢复、上报方还没补上样本时：
+		// 依赖它们的检查（含 K 线新鲜度）全部冻结——既不新增告警，也不恢复已有告警——只留"观测输入"这一项说明原因；
+		// 行情探针（直读 Storage）与标签巡检在探针域，照常判定。
 		if observation != nil {
-			state := observation(overview.GeneratedAt)
-			if state.Suspended {
+			if obsSuspended {
 				round.FrozenAll = true
 				for key := range facts {
 					if !observationIndependent(key.CheckID) {
@@ -194,9 +201,9 @@ func buildBusinessFreshnessReporterWithInterval(
 				}
 			}
 			ingest := checks.Fact{SpaceID: events.SystemSpaceID, CheckID: observationIngestCheckID, Name: "观测输入", Status: domain.CheckStatusOK, Reason: "观测输入正常"}
-			if !state.Ready {
+			if !obsState.Ready {
 				ingest.Status, ingest.Reason = domain.CheckStatusDown, "观测输入中断：Monitor 的 EventBus 观测消费者没有连上，依赖服务指标的检查（含主机类检查）已冻结"
-				ingest.RawError = state.Reason
+				ingest.RawError = obsState.Reason
 			}
 			add(ingest)
 		}
@@ -322,10 +329,11 @@ func collectorHalted(services []monitorobservability.ServiceStatus) bool {
 // observationIngestCheckID 是"观测输入"检查：观测消费者连上时通过，没连上时失败，说明其他检查为什么冻结。
 const observationIngestCheckID = "observation:ingest"
 
-// observationIndependent 报告一项业务检查是否不依赖观测输入：K 线新鲜度直接读 Storage 与控制面。
-// 行情探针与标签巡检在探针域，同样不依赖观测输入。
+// observationIndependent 报告一项业务检查是否不依赖观测输入：
+// 业务域中只有“观测输入”本身不依赖观测输入；K 线新鲜度读的是经 EventBus 入库的 storage-view 视图摘要，观测暂停时一并冻结。
+// 行情探针（直读 Storage）与标签巡检在探针域，不受观测输入冻结影响。
 func observationIndependent(checkID string) bool {
-	return strings.HasPrefix(checkID, klineCheckPrefix) || checkID == observationIngestCheckID
+	return checkID == observationIngestCheckID
 }
 
 // datasetCheckPasses 决定数据集新鲜度检查按通过还是失败记录。数据积累中（warming）页面显示降级，但生产者在正常工作、

@@ -23,6 +23,8 @@ type MonitorMgrService interface {
 
 	ListNotificationChannels(ctx context.Context, req *ListNotificationChannelsReq) (*ListNotificationChannelsRsp, error)
 
+	ExportNotificationChannels(ctx context.Context, req *ExportNotificationChannelsReq) (*ExportNotificationChannelsRsp, error)
+
 	AddNotificationChannel(ctx context.Context, req *AddNotificationChannelReq) (*AddNotificationChannelRsp, error)
 
 	DeleteNotificationChannel(ctx context.Context, req *DeleteNotificationChannelReq) (*DeleteNotificationChannelRsp, error)
@@ -72,6 +74,24 @@ func MonitorMgrService_ListNotificationChannels_Handler(svr interface{}, ctx con
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MonitorMgrService).ListNotificationChannels(ctx, reqbody.(*ListNotificationChannelsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_ExportNotificationChannels_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ExportNotificationChannelsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).ExportNotificationChannels(ctx, reqbody.(*ExportNotificationChannelsReq))
 	}
 
 	var rsp interface{}
@@ -294,6 +314,10 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_ListNotificationChannels_Handler,
 		},
 		{
+			Name: "/trpc.moox.monitor.MonitorMgr/ExportNotificationChannels",
+			Func: MonitorMgrService_ExportNotificationChannels_Handler,
+		},
+		{
 			Name: "/trpc.moox.monitor.MonitorMgr/AddNotificationChannel",
 			Func: MonitorMgrService_AddNotificationChannel_Handler,
 		},
@@ -357,6 +381,9 @@ func (s *UnimplementedMonitorMgr) GetHealthOverview(ctx context.Context, req *Ge
 func (s *UnimplementedMonitorMgr) ListNotificationChannels(ctx context.Context, req *ListNotificationChannelsReq) (*ListNotificationChannelsRsp, error) {
 	return nil, errors.New("rpc ListNotificationChannels of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) ExportNotificationChannels(ctx context.Context, req *ExportNotificationChannelsReq) (*ExportNotificationChannelsRsp, error) {
+	return nil, errors.New("rpc ExportNotificationChannels of service MonitorMgr is not implemented")
+}
 func (s *UnimplementedMonitorMgr) AddNotificationChannel(ctx context.Context, req *AddNotificationChannelReq) (*AddNotificationChannelRsp, error) {
 	return nil, errors.New("rpc AddNotificationChannel of service MonitorMgr is not implemented")
 }
@@ -402,6 +429,8 @@ type MonitorMgrClientProxy interface {
 	GetHealthOverview(ctx context.Context, req *GetHealthOverviewReq, opts ...client.Option) (rsp *GetHealthOverviewRsp, err error)
 
 	ListNotificationChannels(ctx context.Context, req *ListNotificationChannelsReq, opts ...client.Option) (rsp *ListNotificationChannelsRsp, err error)
+
+	ExportNotificationChannels(ctx context.Context, req *ExportNotificationChannelsReq, opts ...client.Option) (rsp *ExportNotificationChannelsRsp, err error)
 
 	AddNotificationChannel(ctx context.Context, req *AddNotificationChannelReq, opts ...client.Option) (rsp *AddNotificationChannelRsp, err error)
 
@@ -469,6 +498,26 @@ func (c *MonitorMgrClientProxyImpl) ListNotificationChannels(ctx context.Context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListNotificationChannelsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) ExportNotificationChannels(ctx context.Context, req *ExportNotificationChannelsReq, opts ...client.Option) (*ExportNotificationChannelsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ExportNotificationChannels")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("ExportNotificationChannels")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ExportNotificationChannelsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

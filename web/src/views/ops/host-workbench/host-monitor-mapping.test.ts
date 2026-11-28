@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { HostMetrics } from "@/api/modules/host-monitor";
+import type { HostAlertThresholds, HostMetrics } from "@/api/modules/host-monitor";
 import type { DeploymentHost } from "@/api/admin/types";
 import { buildHostMonitorRows, normalizeMonitorViewMode } from "./host-monitor-mapping";
+
+const defaultThresholds: HostAlertThresholds = { cpu: 80, memory: 90, disk: 85 };
 
 function monitor(overrides: Partial<HostMetrics> = {}): HostMetrics {
   return {
@@ -122,7 +124,8 @@ describe("buildHostMonitorRows", () => {
             }
           ]
         })
-      ]
+      ],
+      defaultThresholds
     );
 
     expect(rows[0]).toMatchObject({
@@ -132,6 +135,70 @@ describe("buildHostMonitorRows", () => {
       networkRate: { rx: 120, tx: 50 },
       attention: true
     });
+  });
+
+  it("evaluates attention against backend thresholds per resource", () => {
+    // 内存 85%、磁盘 84% 均低于各自告警阈值（90%、85%），不应标记为需关注。
+    const normal = buildHostMonitorRows(
+      [host()],
+      [
+        monitor({
+          cpu: { usage: 79.6, usage_available: true, cores: 4 },
+          memory: { total: 100, used: 85, available: 15, percent: 85, percent_available: true },
+          filesystems: [
+            {
+              device: "/dev/vda1",
+              mountpoint: "/",
+              fs_type: "ext4",
+              total: 100,
+              used: 84,
+              available: 16,
+              percent: 84,
+              percent_available: true,
+              read_only: false
+            }
+          ]
+        })
+      ],
+      defaultThresholds
+    );
+    expect(normal[0].attention).toBe(false);
+
+    // 内存达到 90% 阈值时需关注。
+    const memHigh = buildHostMonitorRows(
+      [host()],
+      [monitor({ memory: { total: 100, used: 90, available: 10, percent: 90, percent_available: true } })],
+      defaultThresholds
+    );
+    expect(memHigh[0].attention).toBe(true);
+
+    // 磁盘达到 85% 阈值时需关注。
+    const diskHigh = buildHostMonitorRows(
+      [host()],
+      [
+        monitor({
+          filesystems: [
+            {
+              device: "/dev/vda1",
+              mountpoint: "/",
+              fs_type: "ext4",
+              total: 100,
+              used: 85,
+              available: 15,
+              percent: 85,
+              percent_available: true,
+              read_only: false
+            }
+          ]
+        })
+      ],
+      defaultThresholds
+    );
+    expect(diskHigh[0].attention).toBe(true);
+
+    // 后端未下发阈值（0 或缺省）时不凭前端写死值误判需关注。
+    const noThresholds = buildHostMonitorRows([host()], [monitor({ cpu: { usage: 95, usage_available: true, cores: 4 } })]);
+    expect(noThresholds[0].attention).toBe(false);
   });
 
   it("does not render offline or unavailable values as zero", () => {

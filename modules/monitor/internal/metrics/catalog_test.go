@@ -34,11 +34,12 @@ func TestListServicesForFiltersBeforeApplyingLimit(t *testing.T) {
 		{ServiceName: "selected", InstanceID: "selected@node-a", NodeID: "node-a", BootID: "b2"},
 		{ServiceName: "selected", InstanceID: "selected-2@node-a", NodeID: "node-a", BootID: "b3"},
 	}).Error)
-	rows, err := NewCatalog(messageStore).ListServicesFor(context.Background(), []string{"selected"}, "node-a", 2)
+	now := time.Now().UTC()
+	rows, err := NewCatalog(messageStore).ListServicesForAt(context.Background(), []string{"selected"}, "node-a", 2, now)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	require.Equal(t, "selected", rows[0].ServiceName)
-	_, err = NewCatalog(messageStore).ListServicesFor(context.Background(), []string{"selected"}, "node-a", 1)
+	_, err = NewCatalog(messageStore).ListServicesForAt(context.Background(), []string{"selected"}, "node-a", 1, now)
 	require.Error(t, err)
 }
 
@@ -85,7 +86,7 @@ func TestListServicesCountsLogicalInstancesInsteadOfBootHistory(t *testing.T) {
 	}
 	require.NoError(t, messageStore.db.CreateInBatches(boots, 100).Error)
 
-	rows, total, err := NewCatalog(messageStore).ListServices(context.Background(), events.SystemSpaceID, 0, 10)
+	rows, total, err := NewCatalog(messageStore).ListServicesAt(context.Background(), events.SystemSpaceID, 0, 10, now.Add(1001*time.Second))
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 	require.Len(t, rows, 1)

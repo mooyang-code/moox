@@ -18,8 +18,6 @@ import ArcoVueIcon from "@arco-design/web-vue/es/icon";
 import "virtual:svg-icons-register";
 // 引入字体
 import "@/assets/fonts/fonts.scss";
-// 引入自定义指令
-import directives from "@/directives/index";
 
 // vchart黑暗模式 - 延迟初始化，避免阻塞主线程
 let vchartThemeInitialized = false;
@@ -71,7 +69,6 @@ Notification._context = app._context;
 app.use(pinia);
 app.use(ArcoVueIcon);
 app.use(router);
-app.use(directives);
 
 // 挂载应用
 app.mount("#app");

@@ -27,12 +27,13 @@ import (
 const secretWriteDenied = "密钥的新建、修改、启停与删除由用户在管理台“系统设置 › 密钥管理”操作；明文不经过 Agent，误删也无法恢复"
 
 var gatewayCallDenied = map[string]string{
-	"trpc.moox.ops.SecretMgr/GetSecretValue":                "返回密钥明文；云账户等凭证由专用命令在进程内使用，需要查看请到管理台“系统设置 › 密钥管理”",
-	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels": "返回完整 webhook 地址；告警渠道请到管理台「资源与运维 › 监控告警」的“消息通知设置”查看",
-	"trpc.moox.ops.SecretMgr/CreateSecret":                  secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/UpdateSecret":                  secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":            secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/DeleteSecret":                  secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/GetSecretValue":                  "返回密钥明文；云账户等凭证由专用命令在进程内使用，需要查看请到管理台“系统设置 › 密钥管理”",
+	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels":   "返回完整 webhook 地址；告警渠道请到管理台「资源与运维 › 监控告警」的“消息通知设置”查看",
+	"trpc.moox.monitor.MonitorMgr/ExportNotificationChannels": "返回完整 webhook 地址与签名密钥明文；仅供备份命令在进程内加密落盘，不得经由通用入口输出",
+	"trpc.moox.ops.SecretMgr/CreateSecret":                    secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/UpdateSecret":                    secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":              secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/DeleteSecret":                    secretWriteDenied,
 }
 
 // rpcBusinessError 是服务返回了业务失败（ret_info.code 非成功）。响应已经打印，这里只负责非 0 退出。
