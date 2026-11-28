@@ -53,9 +53,6 @@ func IsMonitoredMetric(name string) bool {
 			return true
 		}
 	}
-	if strings.HasPrefix(name, "moox_doctor_") {
-		return true
-	}
 	if strings.HasPrefix(name, "moox_storage_view_") && (strings.HasSuffix(name, "_errors_total") || strings.HasSuffix(name, "_watermark_timestamp_seconds")) {
 		return true
 	}

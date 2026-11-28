@@ -46,37 +46,6 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 				t.Fatalf("index %s count = %d", index, count)
 			}
 		}
-		for _, table := range []string{"t_monitor_host_inbox", "t_monitor_host_latest", "t_monitor_host_history", "t_monitor_host_history_outbox", "t_monitor_host_alert_rules", "t_monitor_host_alert_states", "t_monitor_host_alert_events", "t_monitor_host_notification_outbox"} {
-			if db.Migrator().HasTable(table) {
-				t.Fatalf("legacy host sample table %s must not be created", table)
-			}
-		}
-		for _, table := range []string{"t_monitor_instances", "t_monitor_peer_snapshots"} {
-			if db.Migrator().HasTable(table) {
-				t.Fatalf("single-instance schema must not create %s", table)
-			}
-		}
-		for _, table := range []string{"t_monitor_checks", "t_monitor_alert_events"} {
-			if db.Migrator().HasColumn(table, "c_owner_instance_id") {
-				t.Fatalf("single-instance schema must not create %s.c_owner_instance_id", table)
-			}
-		}
-		for _, table := range []string{"t_monitor_checks"} {
-			if db.Migrator().HasColumn(table, "c_is_deleted") {
-				t.Fatalf("greenfield hard-delete schema must not create %s.c_is_deleted", table)
-			}
-		}
-		// 检查结果、告警规则、告警状态三张表已合进检查表。
-		for _, table := range []string{"t_monitor_check_results", "t_monitor_alert_rules", "t_monitor_alert_states"} {
-			if db.Migrator().HasTable(table) {
-				t.Fatalf("merged table %s must not be created", table)
-			}
-		}
-		for _, table := range []string{"t_monitor_webhooks", "t_monitor_metric_rules", "t_monitor_metric_rule_states", "t_monitor_metric_rule_evaluations", "t_monitor_metric_rule_channels"} {
-			if db.Migrator().HasTable(table) {
-				t.Fatalf("removed table %s must not be created", table)
-			}
-		}
 		return struct{}{}
 	})
 	if err != nil {

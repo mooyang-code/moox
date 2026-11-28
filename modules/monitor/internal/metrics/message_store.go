@@ -43,14 +43,6 @@ var viewDatasetMetricNames = map[string]struct{}{
 func NewMetricMessageStore(db *gorm.DB) *MetricMessageStore {
 	return &MetricMessageStore{db: db, DedupeRetention: 7 * 24 * time.Hour, diag: newIngestDiagnostics()}
 }
-func (r *MetricMessageStore) IsDuplicate(ctx context.Context, messageID string) (bool, error) {
-	if r == nil || r.db == nil || strings.TrimSpace(messageID) == "" {
-		return false, errors.New("message store is not initialized or message_id is empty")
-	}
-	var count int64
-	err := r.db.WithContext(ctx).Model(&MetricIngestMessage{}).Where("c_message_id = ?", messageID).Count(&count).Error
-	return count > 0, err
-}
 
 // CommitIngest atomically records dedupe, service heartbeat/catalog, and latest metric state in one transaction.
 func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.EventMessage, report *metricspb.MetricReport, samples []Sample) (bool, error) {

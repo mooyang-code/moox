@@ -34,10 +34,6 @@ func (c *MetricCatalog) NoDataAfter() time.Duration {
 	return c.noDataAfter
 }
 
-func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset, limit int) ([]MetricService, int64, error) {
-	return c.ListServicesAt(ctx, spaceID, offset, limit, time.Now().UTC())
-}
-
 func (c *MetricCatalog) ListServicesAt(ctx context.Context, spaceID string, offset, limit int, now time.Time) ([]MetricService, int64, error) {
 	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
 		return nil, 0, ErrMetricsStoreUnavailable
@@ -75,12 +71,8 @@ func (c *MetricCatalog) ListServicesAt(ctx context.Context, spaceID string, offs
 	return rows, total, nil
 }
 
-// ListServicesFor resolves only the finite Doctor selection. It must not page
+// ListServicesForAt resolves only the finite Doctor selection. It must not page
 // through unrelated catalog rows and silently turn truncation into "missing".
-func (c *MetricCatalog) ListServicesFor(ctx context.Context, serviceNames []string, nodeID string, limit int) ([]MetricService, error) {
-	return c.ListServicesForAt(ctx, serviceNames, nodeID, limit, time.Now().UTC())
-}
-
 func (c *MetricCatalog) ListServicesForAt(ctx context.Context, serviceNames []string, nodeID string, limit int, now time.Time) ([]MetricService, error) {
 	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
 		return nil, ErrMetricsStoreUnavailable
