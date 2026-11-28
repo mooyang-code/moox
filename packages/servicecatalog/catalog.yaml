@@ -641,7 +641,6 @@ components:
     replicas: single
     protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
-    tools: [moox-strategy-cli]
     config_files:
       - from: modules/strategy/config/app.yaml
       - from: modules/strategy/config/trpc_go.yaml

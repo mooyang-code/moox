@@ -38,7 +38,7 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY ./scripts/build/build.sh cli
 # 全部组件的 Linux 二进制（纯 Go 交叉编译；Storage 与前端在本机 Docker 里，macOS 先 colima start），产物在 $WT/bin-linux
 cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY bash scripts/build/build-linux-local.sh --out $WT/bin-linux \
   admin host-gateway hostagent eventbus egress-proxy collector collector-stream factor-mgr factor-engine \
-  archive-mgr archive-worker strategy strategy-cli trade monitor storage-cli storage
+  archive-mgr archive-worker strategy trade monitor storage-cli storage
 ```
 
 - 目标清单和 `scripts/release/build-release.sh` 里的 `server_targets` 一致（去掉 `collector-scf`）。
