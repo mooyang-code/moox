@@ -102,4 +102,23 @@ func TestNotificationChannelSecretIsStoredAndNeverListed(t *testing.T) {
 	require.Len(t, policy.GetChannels(), 2)
 	require.Equal(t, "SECabc", policy.GetChannels()[0].GetSecret())
 	require.Empty(t, policy.GetChannels()[1].GetSecret())
+
+	exported, err := service.ExportNotificationChannels(t.Context(), &monitorpb.ExportNotificationChannelsReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, exported.GetRetInfo().GetCode())
+	require.Len(t, exported.GetChannels(), 2)
+	require.Equal(t, listed.GetChannels()[0].GetChannelId(), exported.GetChannels()[0].GetChannelId())
+	require.Equal(t, "dingtalk", exported.GetChannels()[0].GetChannelType())
+	require.Equal(t, dingtalk, exported.GetChannels()[0].GetWebhookUrl())
+	require.Equal(t, "SECabc", exported.GetChannels()[0].GetSecret())
+	require.Equal(t, listed.GetChannels()[0].GetCreatedAt(), exported.GetChannels()[0].GetCreatedAt())
+	require.Equal(t, listed.GetChannels()[1].GetChannelId(), exported.GetChannels()[1].GetChannelId())
+	require.Equal(t, "webhook", exported.GetChannels()[1].GetChannelType())
+	require.Equal(t, hook, exported.GetChannels()[1].GetWebhookUrl())
+	require.Empty(t, exported.GetChannels()[1].GetSecret())
+
+	uninitialized := &Service{}
+	failed, err := uninitialized.ExportNotificationChannels(t.Context(), &monitorpb.ExportNotificationChannelsReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, failed.GetRetInfo().GetCode())
 }
