@@ -1,4 +1,4 @@
-package metrics
+package kline
 
 import (
 	"context"
@@ -8,11 +8,14 @@ import (
 	"testing"
 	"time"
 
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestKlineFreshnessEvaluatorFlagsStaleView(t *testing.T) {
@@ -75,12 +78,11 @@ func TestKlineFreshnessEvaluatorNamesLaggingSubjectsFromLatestSnapshotOnly(t *te
 func TestKlineFreshnessEvaluatorIgnoresRetiredSubjectsAndCountsMissing(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
+	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}, {SubjectId: "OLD", Status: "archived"}}}
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
 		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OLD", DataTime: now.Add(-10 * time.Minute), ObservedAt: now}},
-	}})
-	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}, {SubjectId: "OLD", Status: "archived"}}}
-	query.storage = NewStorageAdapter(metadata)
+	}}, metadata)
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -101,8 +103,7 @@ func TestKlineFreshnessEvaluatorRelaxesSubjectsOnlyWhileDatasetSeeding(t *testin
 		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 			Latest: latest, TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
 			LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OLD", DataTime: now.Add(-90 * 24 * time.Hour), ObservedAt: now}},
-		}})
-		query.storage = NewStorageAdapter(&fakeMetadata{subjects: []*storagepb.DatasetSubject{
+		}}, &fakeMetadata{subjects: []*storagepb.DatasetSubject{
 			{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}, {SubjectId: "OLD", Status: "active"},
 		}})
 		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
@@ -141,9 +142,8 @@ func TestKlineFreshnessEvaluatorWaitsOneBarBeforeCountingMissing(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
 	// Storage View just restarted: it has seen one subject in its first bar.
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Minute), Subjects: 1, ObservedAt: now}})
 	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}}}
-	query.storage = NewStorageAdapter(metadata)
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Minute), Subjects: 1, ObservedAt: now}}, metadata)
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -154,15 +154,14 @@ func TestKlineFreshnessEvaluatorWaitsOneBarBeforeCountingMissing(t *testing.T) {
 func TestKlineFreshnessEvaluatorMatchesMarketSuffixDuringSubjectMigration(t *testing.T) {
 	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
-		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
-		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT-SPOT", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
-	}})
 	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
 		{SubjectId: "OPG-USDT", Status: "active"},
 		{SubjectId: "ETH-USDT", Status: "active"},
 	}}
-	query.storage = NewStorageAdapter(metadata)
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
+		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT-SPOT", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
+	}}, metadata)
 
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
@@ -177,10 +176,6 @@ func TestKlineFreshnessEvaluatorMatchesMarketSuffixDuringSubjectMigration(t *tes
 func TestKlineFreshnessEvaluatorTakesSubjectSuffixFromDatasetMarketType(t *testing.T) {
 	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
-		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
-		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT-SWAP", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
-	}})
 	metadata := &fakeMetadata{
 		dataset: &storagepb.Dataset{DatasetId: "dataset", Attributes: map[string]string{"market_type": "spot"}},
 		subjects: []*storagepb.DatasetSubject{
@@ -188,7 +183,10 @@ func TestKlineFreshnessEvaluatorTakesSubjectSuffixFromDatasetMarketType(t *testi
 			{SubjectId: "ETH-USDT", Status: "active"},
 		},
 	}
-	query.storage = NewStorageAdapter(metadata)
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
+		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT-SWAP", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
+	}}, metadata)
 
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
@@ -200,15 +198,14 @@ func TestKlineFreshnessEvaluatorTakesSubjectSuffixFromDatasetMarketType(t *testi
 func TestKlineFreshnessEvaluatorRejectsAmbiguousMarketSuffix(t *testing.T) {
 	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
-		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 1, Lagging: 1, ObservedAt: now,
-		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
-	}})
 	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
 		{SubjectId: "OPG-USDT-SPOT", Status: "active"},
 		{SubjectId: "OPG-USDT-SWAP", Status: "active"},
 	}}
-	query.storage = NewStorageAdapter(metadata)
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 1, Lagging: 1, ObservedAt: now,
+		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
+	}}, metadata)
 
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
@@ -313,7 +310,7 @@ type viewSummaryTestSample struct {
 	LaggingSubjects                  []viewSummaryLaggingSample
 }
 
-func newViewSummaryQuery(t *testing.T, samples []viewSummaryTestSample) *QueryService {
+func newViewSummaryQuery(t *testing.T, samples []viewSummaryTestSample, metadata ...monmetrics.MetadataClient) *monmetrics.QueryService {
 	t.Helper()
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
@@ -326,7 +323,7 @@ func newViewSummaryQuery(t *testing.T, samples []viewSummaryTestSample) *QuerySe
 		return value
 	}
 	_, err = store.WithDatabase(mgr, func(db *gorm.DB) error {
-		var rows []MetricSeries
+		var rows []monmetrics.MetricSeries
 		for index, sample := range samples {
 			scope := map[string]string{
 				"space_id": or(sample.SpaceID, "crypto"), "dataset_id": or(sample.DatasetID, "dataset"), "freq": or(sample.Freq, "1m"),
@@ -351,14 +348,14 @@ func newViewSummaryQuery(t *testing.T, samples []viewSummaryTestSample) *QuerySe
 				trackedSince = sample.Latest
 			}
 			add := func(name, subject string, value float64, observedAt time.Time) {
-				rows = append(rows, MetricSeries{SeriesID: fmt.Sprintf("%d-%s-%s", index, name, subject), MetricName: name, LabelsJSON: labels(subject), Value: value, ObservedAt: observedAt})
+				rows = append(rows, monmetrics.MetricSeries{SeriesID: fmt.Sprintf("%d-%s-%s", index, name, subject), MetricName: name, LabelsJSON: labels(subject), Value: value, ObservedAt: observedAt})
 			}
-			add(ViewOutputLatestMetric, "", float64(sample.Latest.Unix()), sample.ObservedAt)
-			add(ViewOutputTrackedSinceMetric, "", float64(trackedSince.Unix()), sample.ObservedAt)
-			add(ViewOutputSubjectsMetric, "", float64(sample.Subjects), sample.ObservedAt)
-			add(ViewOutputLaggingMetric, "", float64(sample.Lagging), sample.ObservedAt)
+			add(monmetrics.ViewOutputLatestMetric, "", float64(sample.Latest.Unix()), sample.ObservedAt)
+			add(monmetrics.ViewOutputTrackedSinceMetric, "", float64(trackedSince.Unix()), sample.ObservedAt)
+			add(monmetrics.ViewOutputSubjectsMetric, "", float64(sample.Subjects), sample.ObservedAt)
+			add(monmetrics.ViewOutputLaggingMetric, "", float64(sample.Lagging), sample.ObservedAt)
 			for _, item := range sample.LaggingSubjects {
-				add(ViewOutputLaggingSubjectMetric, item.Subject, float64(item.DataTime.Unix()), item.ObservedAt)
+				add(monmetrics.ViewOutputLaggingSubjectMetric, item.Subject, float64(item.DataTime.Unix()), item.ObservedAt)
 			}
 		}
 		if len(rows) == 0 {
@@ -367,12 +364,16 @@ func newViewSummaryQuery(t *testing.T, samples []viewSummaryTestSample) *QuerySe
 		return db.Create(&rows).Error
 	})
 	require.NoError(t, err)
-	return NewQueryService(metricMessageStoreFromDatabaseForTest(t, mgr), nil)
+	var storage *monmetrics.StorageAdapter
+	if len(metadata) > 0 && metadata[0] != nil {
+		storage = monmetrics.NewStorageAdapter(metadata[0])
+	}
+	return monmetrics.NewQueryService(metricMessageStoreFromDatabaseForTest(t, mgr), storage)
 }
 
-func metricMessageStoreFromDatabaseForTest(t *testing.T, mgr *store.Store) *MetricMessageStore {
+func metricMessageStoreFromDatabaseForTest(t *testing.T, mgr *store.Store) *monmetrics.MetricMessageStore {
 	t.Helper()
-	result, err := store.WithDatabase(mgr, NewMetricMessageStore)
+	result, err := store.WithDatabase(mgr, monmetrics.NewMetricMessageStore)
 	require.NoError(t, err)
 	return result
 }
@@ -469,8 +470,7 @@ func TestKlineFreshnessEvaluatorTruncatedLaggingListDoesNotKeepAlertingForRetire
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 22, Lagging: 21, ObservedAt: now,
 		LaggingSubjects: lagging,
-	}})
-	query.storage = NewStorageAdapter(&fakeMetadata{subjects: subjects})
+	}}, &fakeMetadata{subjects: subjects})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -479,4 +479,22 @@ func TestKlineFreshnessEvaluatorTruncatedLaggingListDoesNotKeepAlertingForRetire
 	require.False(t, reports[0].Success)
 	require.Equal(t, "lagging_subjects_truncated", reports[0].Reason)
 	require.Zero(t, reports[0].StaleCount)
+}
+
+type fakeMetadata struct {
+	subjects []*storagepb.DatasetSubject
+	dataset  *storagepb.Dataset
+}
+
+func (f *fakeMetadata) GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error) {
+	return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Dataset: f.dataset}, nil
+}
+func (f *fakeMetadata) ListDatasets(context.Context, *storagepb.ListDatasetsReq, ...client.Option) (*storagepb.ListDatasetsRsp, error) {
+	return &storagepb.ListDatasetsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+}
+func (f *fakeMetadata) ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
+	return &storagepb.ListDatasetSubjectsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, DatasetSubjects: f.subjects}, nil
+}
+func (f *fakeMetadata) ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error) {
+	return &storagepb.ListTagsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }

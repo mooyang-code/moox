@@ -18,17 +18,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestLoadMonitorDatasetHealthPolicyFallsBackToAppConfigPath(t *testing.T) {
-	t.Setenv("MOOX_DATASET_HEALTH_POLICY", "")
-	t.Setenv("MOOX_DATASET_HEALTH_POLICY_HASH", "")
-	cfg := config.Default()
-	cfg.Metrics.DatasetHealthPolicyPath = filepath.Join("..", "..", "..", "..", "config", "setup", "dataset-health-policy.yaml")
-	policy, err := loadMonitorDatasetHealthPolicy(cfg)
-	require.NoError(t, err)
-	require.Equal(t, 2, policy.Version)
-	require.Greater(t, policy.RealtimeTimeSeries.Defaults.RunMissedIntervals, 0)
-}
-
 func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
@@ -60,19 +49,12 @@ func (f collectorInventoryTestInvoke) Invoke(ctx context.Context, service, metho
 
 func TestBuildTaskResultInventoryBorrowsGateway(t *testing.T) {
 	cfg := config.Default()
-	cfg.KlineFreshness.Enabled = true
 	gateway := collectorInventoryTestInvoke(func(context.Context, string, string, any, any) error { return nil })
 	cache, err := buildTaskResultInventory(cfg, gateway)
 	require.NoError(t, err)
 	require.NotNil(t, cache)
 	_, err = buildTaskResultInventory(cfg, nil)
 	require.ErrorContains(t, err, "gateway client")
-	// 清单还决定数据集新鲜度用哪套交易日历：关掉 K 线新鲜度检查也照常构造。
-	disabled := *cfg
-	disabled.KlineFreshness.Enabled = false
-	cache, err = buildTaskResultInventory(&disabled, gateway)
-	require.NoError(t, err)
-	require.NotNil(t, cache)
 	invalid := *cfg
 	invalid.KlineFreshness.InventoryPageSize = 101
 	_, err = buildTaskResultInventory(&invalid, gateway)
@@ -285,4 +267,32 @@ func TestFailureReasonNamesTheFailingStepWithoutTheRawError(t *testing.T) {
 	ready, reason := rt.observabilityWriteReady(time.Now())
 	assert.False(t, ready)
 	assert.Equal(t, "metrics catalog write failed", reason, "a catalog failure must not be reported as an eventbus problem")
+}
+
+// 观测输入的状态：没连上就冻结；刚连上的宽限期内冻结；宽限结束或没有启用观测输入时不冻结。
+func TestRuntimeObservationStateFollowsIngestAndGrace(t *testing.T) {
+	r := &Runtime{}
+	now := time.Now()
+	require.False(t, r.observationState(false, now).Suspended, "没有启用观测输入时永远不冻结")
+
+	state := r.observationState(true, now)
+	require.True(t, state.Suspended)
+	require.False(t, state.Ready)
+
+	r.setObservabilityIngestState(false, errors.New("dial timeout"))
+	require.NotEmpty(t, r.observationState(true, now).Reason, "未连接时带上失败原因（已脱敏归类）")
+
+	r.setObservabilityIngestState(true, nil)
+	state = r.observationState(true, time.Now())
+	require.True(t, state.Ready)
+	require.True(t, state.Suspended, "刚连上，处在恢复宽限期内")
+	require.False(t, r.observationState(true, time.Now().Add(observationRecoveryGrace+time.Second)).Suspended, "宽限期结束")
+
+	// 重复的就绪回调不能重置宽限起点。
+	since := r.ingestReadySince.Load()
+	r.setObservabilityIngestState(true, nil)
+	require.Equal(t, since, r.ingestReadySince.Load())
+
+	r.setObservabilityIngestState(false, errors.New("lost"))
+	require.True(t, r.observationState(true, time.Now().Add(time.Hour)).Suspended, "断开之后重新进入冻结")
 }

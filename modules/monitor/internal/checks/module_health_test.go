@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -60,7 +60,7 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 		report.ModuleHealthCheck{ID: "test-idle", Module: "collector", MaxLag: 5 * time.Minute, Enabled: true})
 	items, err := moduleHealthItems(context.Background(), query, healthChecks, now)
 	require.NoError(t, err)
-	byID := map[string]checks.Fact{}
+	byID := map[string]Fact{}
 	for _, item := range items {
 		byID[item.CheckID] = item
 	}
@@ -77,10 +77,10 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 }
 
 func TestKlineReasonTextForViewBehindCompletedPeriod(t *testing.T) {
-	require.Contains(t, klineReasonText(monmetrics.KlineFreshnessReport{Reason: "calendar_not_covered"}, time.Now()), "日历未覆盖")
+	require.Contains(t, klineReasonText(kline.KlineFreshnessReport{Reason: "calendar_not_covered"}, time.Now()), "日历未覆盖")
 	completed := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
-	report := monmetrics.KlineFreshnessReport{Reason: "view_behind_latest_completed_period", StaleAge: time.Hour,
-		Rule: monmetrics.KlineFreshnessRule{LatestCompletedPeriod: completed}}
+	report := kline.KlineFreshnessReport{Reason: "view_behind_latest_completed_period", StaleAge: time.Hour,
+		Rule: kline.KlineFreshnessRule{LatestCompletedPeriod: completed}}
 	require.Equal(t, "采集已完成到 10-07 20:00 这一期，但还没有看到该结果的数据（这一根已过收线 1 小时）", klineReasonText(report, completed.Add(time.Hour)))
 	report.OldestDataTime = completed.Add(-time.Hour)
 	require.Equal(t, "采集已完成到 10-07 20:00 这一期，但结果只更新到 10-07 19:00，之后的一根已过收线 1 小时", klineReasonText(report, completed.Add(time.Hour)))

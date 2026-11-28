@@ -47,8 +47,6 @@ type MetricSeries struct {
 	ObservedAt      time.Time `gorm:"column:c_observed_at"`
 	IntervalSeconds int       `gorm:"column:c_interval_seconds"`
 	MessageID       string    `gorm:"column:c_message_id"`
-	ProducerNodeID  string    `gorm:"column:c_producer_node_id"`
-	ProducerVersion string    `gorm:"column:c_producer_version"`
 	CreatedAt       time.Time `gorm:"column:c_ctime"`
 	UpdatedAt       time.Time `gorm:"column:c_mtime"`
 }
@@ -56,13 +54,9 @@ type MetricSeries struct {
 func (MetricSeries) TableName() string { return "t_monitor_metric_series" }
 
 type MetricIngestMessage struct {
-	ID          uint64     `gorm:"column:c_id;primaryKey"`
-	MessageID   string     `gorm:"column:c_message_id"`
-	ServiceName string     `gorm:"column:c_service_name"`
-	InstanceID  string     `gorm:"column:c_instance_id"`
-	OccurredAt  *time.Time `gorm:"column:c_occurred_at"`
-	ProcessedAt time.Time  `gorm:"column:c_processed_at"`
-	ExpiresAt   time.Time  `gorm:"column:c_expires_at"`
+	ID        uint64    `gorm:"column:c_id;primaryKey"`
+	MessageID string    `gorm:"column:c_message_id"`
+	ExpiresAt time.Time `gorm:"column:c_expires_at"`
 }
 
 func (MetricIngestMessage) TableName() string { return "t_monitor_metric_ingest_messages" }

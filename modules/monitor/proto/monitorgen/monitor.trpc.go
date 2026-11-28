@@ -39,7 +39,7 @@ type MonitorMgrService interface {
 
 	QueryLogRecords(ctx context.Context, req *QueryLogRecordsReq) (*QueryLogRecordsRsp, error)
 
-	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error)
+	SyncHostAgent(ctx context.Context, req *SyncHostAgentReq) (*SyncHostAgentRsp, error)
 
 	MuteAlerts(ctx context.Context, req *MuteAlertsReq) (*MuteAlertsRsp, error)
 
@@ -228,14 +228,14 @@ func MonitorMgrService_QueryLogRecords_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
-func MonitorMgrService_GetHostPolicy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetHostPolicyReq{}
+func MonitorMgrService_SyncHostAgent_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncHostAgentReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorMgrService).GetHostPolicy(ctx, reqbody.(*GetHostPolicyReq))
+		return svr.(MonitorMgrService).SyncHostAgent(ctx, reqbody.(*SyncHostAgentReq))
 	}
 
 	var rsp interface{}
@@ -346,8 +346,8 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_QueryLogRecords_Handler,
 		},
 		{
-			Name: "/trpc.moox.monitor.MonitorMgr/GetHostPolicy",
-			Func: MonitorMgrService_GetHostPolicy_Handler,
+			Name: "/trpc.moox.monitor.MonitorMgr/SyncHostAgent",
+			Func: MonitorMgrService_SyncHostAgent_Handler,
 		},
 		{
 			Name: "/trpc.moox.monitor.MonitorMgr/MuteAlerts",
@@ -405,8 +405,8 @@ func (s *UnimplementedMonitorMgr) QueryPipelineArrivalHistory(ctx context.Contex
 func (s *UnimplementedMonitorMgr) QueryLogRecords(ctx context.Context, req *QueryLogRecordsReq) (*QueryLogRecordsRsp, error) {
 	return nil, errors.New("rpc QueryLogRecords of service MonitorMgr is not implemented")
 }
-func (s *UnimplementedMonitorMgr) GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error) {
-	return nil, errors.New("rpc GetHostPolicy of service MonitorMgr is not implemented")
+func (s *UnimplementedMonitorMgr) SyncHostAgent(ctx context.Context, req *SyncHostAgentReq) (*SyncHostAgentRsp, error) {
+	return nil, errors.New("rpc SyncHostAgent of service MonitorMgr is not implemented")
 }
 func (s *UnimplementedMonitorMgr) MuteAlerts(ctx context.Context, req *MuteAlertsReq) (*MuteAlertsRsp, error) {
 	return nil, errors.New("rpc MuteAlerts of service MonitorMgr is not implemented")
@@ -446,7 +446,7 @@ type MonitorMgrClientProxy interface {
 
 	QueryLogRecords(ctx context.Context, req *QueryLogRecordsReq, opts ...client.Option) (rsp *QueryLogRecordsRsp, err error)
 
-	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq, opts ...client.Option) (rsp *GetHostPolicyRsp, err error)
+	SyncHostAgent(ctx context.Context, req *SyncHostAgentReq, opts ...client.Option) (rsp *SyncHostAgentRsp, err error)
 
 	MuteAlerts(ctx context.Context, req *MuteAlertsReq, opts ...client.Option) (rsp *MuteAlertsRsp, err error)
 
@@ -664,20 +664,20 @@ func (c *MonitorMgrClientProxyImpl) QueryLogRecords(ctx context.Context, req *Qu
 	return rsp, nil
 }
 
-func (c *MonitorMgrClientProxyImpl) GetHostPolicy(ctx context.Context, req *GetHostPolicyReq, opts ...client.Option) (*GetHostPolicyRsp, error) {
+func (c *MonitorMgrClientProxyImpl) SyncHostAgent(ctx context.Context, req *SyncHostAgentReq, opts ...client.Option) (*SyncHostAgentRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetHostPolicy")
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/SyncHostAgent")
 	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("monitor")
 	msg.WithCalleeService("MonitorMgr")
-	msg.WithCalleeMethod("GetHostPolicy")
+	msg.WithCalleeMethod("SyncHostAgent")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetHostPolicyRsp{}
+	rsp := &SyncHostAgentRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

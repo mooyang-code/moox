@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"fmt"
@@ -6,9 +6,27 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 )
+
+// PassStatus 把通过与否换成检查状态。
+func PassStatus(passed bool) string {
+	if passed {
+		return domain.CheckStatusOK
+	}
+	return domain.CheckStatusDown
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
 
 // datasetSubject 是数据集检查所看的对象：有名称（生产者上报的或 Storage 登记的）时用名称，否则用数据集 ID 加频率。
 func datasetSubject(name, datasetID, freq string) string {
@@ -50,7 +68,7 @@ func reporterCheckName(service, node string) string {
 	return checkName(alerttext.Service(service)+"（"+alerttext.Node(node)+"）", "运行指标上报")
 }
 
-// reporterReasonText explains a reporter status to people.
+// reporterReasonText 把服务指标上报状态转成人可读的原因说明。
 func reporterReasonText(status string) string {
 	switch status {
 	case "healthy":
@@ -64,9 +82,8 @@ func reporterReasonText(status string) string {
 	}
 }
 
-// klineReasonText explains a K-line freshness report to people; the machine
-// diagnostic stays in the check result's details.
-func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) string {
+// klineReasonText 把 K 线新鲜度评估结果转成人可读的原因说明；机器诊断留在检查结果的详情字段中。
+func klineReasonText(report kline.KlineFreshnessReport, now time.Time) string {
 	switch report.Reason {
 	case "fresh":
 		return "数据按时更新"
@@ -88,14 +105,14 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 		return "周期对齐未确认：这个周期的K线按什么时刻对齐还没有确认，暂不判断"
 	case "calendar_error":
 		return "无法按交易日历识别最新一根K线：" + report.Diagnostic
-	case monmetrics.KlineReasonSeedingViewCatchingUp:
+	case kline.KlineReasonSeedingViewCatchingUp:
 		view := "还没有输出"
 		if !report.OldestDataTime.IsZero() {
 			view = "只更新到 " + alerttext.Time(report.OldestDataTime)
 		}
 		return fmt.Sprintf("首次接入的历史补齐中或刚补齐：结果视图在追补齐写入的历史行，%s；采集已完成到 %s 这一期，按时，不告警",
 			view, alerttext.Time(report.Rule.LatestCompletedPeriod))
-	case monmetrics.KlineReasonSeedingSubjectsCatchingUp:
+	case kline.KlineReasonSeedingSubjectsCatchingUp:
 		var counts []string
 		if lagging := report.StaleCount - report.MissingCount; lagging > 0 {
 			counts = append(counts, fmt.Sprintf("%d 个落后", lagging))
@@ -142,13 +159,11 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 }
 
 // pendingSubjectsText 说明新上线对象还在等首根 K 线：不是故障，宽限期过了仍没有数据才会告警。
-func pendingSubjectsText(report monmetrics.KlineFreshnessReport) string {
+func pendingSubjectsText(report kline.KlineFreshnessReport) string {
 	return fmt.Sprintf("%d 个新上线对象等待首根K线（%s 前到，过了仍没有会告警）", report.PendingCount, alerttext.Time(report.PendingUntil))
 }
 
-// datasetReasonText explains a dataset freshness status to people. The
-// overview's reasons are codes that the health view and web UI translate;
-// alerts need whole sentences with Beijing times.
+// datasetReasonText 把数据集新鲜度状态转成人可读的原因说明（带北京时间）。
 func datasetReasonText(dataset monitorobservability.DatasetFrequencyStatus, now time.Time) string {
 	switch {
 	case dataset.Status == "healthy" && dataset.OutputWatermarkAt.IsZero():

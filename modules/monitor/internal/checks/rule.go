@@ -6,7 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 )
 
 // Rule 是一项检查的告警规则，由检查 ID 推出：连续失败 Failures 次触发，告警中连续通过 Successes 次恢复，
@@ -60,7 +60,7 @@ func RuleFor(checkID string, klineInterval time.Duration) Rule {
 // warning 表示还在工作但有风险：主机资源超过阈值、只有 host-agent 停止上报、采集任务清单过期、指标序列新增过快。
 func Severity(checkID string) string {
 	switch {
-	case strings.HasPrefix(checkID, "metrics_ingest:"), checkID == monmetrics.TaskResultInventoryCheckID:
+	case strings.HasPrefix(checkID, "metrics_ingest:"), checkID == kline.TaskResultInventoryCheckID:
 		return domain.SeverityWarning
 	}
 	if _, kind, ok := hostmetrics.ParseCheckID(checkID); ok && kind != hostmetrics.CheckKindPresence {

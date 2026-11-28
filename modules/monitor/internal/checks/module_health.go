@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
-	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/doctor"
@@ -15,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 )
 
-// moduleHealthNames names each built-in module health check for people.
+// moduleHealthNames 是内置模块健康检查对应的中文展示名。
 var moduleHealthNames = map[string]string{
 	"strategy-targets": "策略目标生成",
 	"trade-rebalance":  "交易调仓",
@@ -23,11 +22,11 @@ var moduleHealthNames = map[string]string{
 }
 
 // moduleHealthItems 在模块上报过运行之后，按与 Doctor 共用的判定口径把每个内置模块健康检查转成一项业务检查。
-func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, healthChecks []report.ModuleHealthCheck, now time.Time) ([]checks.Fact, error) {
+func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, healthChecks []report.ModuleHealthCheck, now time.Time) ([]Fact, error) {
 	if query == nil {
 		return nil, nil
 	}
-	items := make([]checks.Fact, 0, len(healthChecks))
+	items := make([]Fact, 0, len(healthChecks))
 	for _, check := range healthChecks {
 		if !check.Enabled {
 			continue
@@ -52,7 +51,7 @@ func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, heal
 		if name == "" {
 			name = check.ID
 		}
-		item := checks.Fact{
+		item := Fact{
 			SpaceID: events.SystemSpaceID, CheckID: "module:" + check.ID, Name: name,
 			Status: domain.CheckStatusOK, Reason: "最近一次运行成功",
 		}
@@ -73,8 +72,7 @@ func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, heal
 	return items, nil
 }
 
-// latestModuleTime is the newest timestamp a module metric reports for one
-// health check across its reporter instances.
+// latestModuleTime 返回指定模块健康检查在各上报实例中的最新时间戳。
 func latestModuleTime(ctx context.Context, query *monmetrics.QueryService, metricName, healthCheck string) (time.Time, error) {
 	series, _, err := query.Catalog().ListSeries(ctx, "", metricName, "", 0, 100)
 	if err != nil {

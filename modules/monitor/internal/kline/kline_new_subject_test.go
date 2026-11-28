@@ -1,4 +1,4 @@
-package metrics
+package kline
 
 import (
 	"context"
@@ -44,8 +44,7 @@ func hourlyNewSubjectEvaluation(t *testing.T, now time.Time, viewSubjects int, a
 	latest := now.Truncate(time.Hour).Add(-time.Hour)
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 		Freq: "1h", Latest: latest, TrackedSince: now.Add(-6 * time.Hour), Subjects: viewSubjects, ObservedAt: now,
-	}})
-	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects(active...)})
+	}}, &fakeMetadata{subjects: activeSubjects(active...)})
 	evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
 	evaluator.SetSubjectFirstSeenStore(&fakeFirstSeenStore{fresh: firstSeen})
 	reports, err := evaluator.Evaluate(context.Background(), now)
@@ -111,8 +110,7 @@ func TestKlineFreshnessGraceStartsFromTheNextWholeBarForMinuteViews(t *testing.T
 	now := time.Date(2026, 10, 21, 12, 14, 40, 0, time.UTC)
 	seenAt := time.Date(2026, 10, 21, 12, 13, 31, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 10 * time.Second}
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: time.Date(2026, 10, 21, 12, 13, 0, 0, time.UTC), TrackedSince: now.Add(-time.Hour), Subjects: 2, ObservedAt: now}})
-	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("BTC", "ETH", "NEW1")})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: time.Date(2026, 10, 21, 12, 13, 0, 0, time.UTC), TrackedSince: now.Add(-time.Hour), Subjects: 2, ObservedAt: now}}, &fakeMetadata{subjects: activeSubjects("BTC", "ETH", "NEW1")})
 	evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
 	evaluator.SetSubjectFirstSeenStore(&fakeFirstSeenStore{fresh: map[string]time.Time{"NEW1": seenAt}})
 	reports, err := evaluator.Evaluate(context.Background(), now)
@@ -137,8 +135,7 @@ func TestKlineFreshnessGraceAppliesWhenLaggingListIsTruncated(t *testing.T) {
 	build := func(firstSeen map[string]time.Time) KlineFreshnessReport {
 		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 			Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 22, Lagging: 21, ObservedAt: now, LaggingSubjects: lagging,
-		}})
-		query.storage = NewStorageAdapter(&fakeMetadata{subjects: subjects})
+		}}, &fakeMetadata{subjects: subjects})
 		evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
 		evaluator.SetSubjectFirstSeenStore(&fakeFirstSeenStore{fresh: firstSeen})
 		reports, err := evaluator.Evaluate(context.Background(), now)
@@ -160,8 +157,7 @@ func TestKlineFreshnessGraceAppliesWhenLaggingListIsTruncated(t *testing.T) {
 func TestKlineFreshnessFirstSeenFailureGivesNoGrace(t *testing.T) {
 	now := time.Date(2026, 10, 21, 13, 51, 0, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute}
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Freq: "1h", Latest: now.Truncate(time.Hour).Add(-time.Hour), TrackedSince: now.Add(-6 * time.Hour), Subjects: 1, ObservedAt: now}})
-	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("BTC", "NEW1")})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Freq: "1h", Latest: now.Truncate(time.Hour).Add(-time.Hour), TrackedSince: now.Add(-6 * time.Hour), Subjects: 1, ObservedAt: now}}, &fakeMetadata{subjects: activeSubjects("BTC", "NEW1")})
 	evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
 	evaluator.SetSubjectFirstSeenStore(&fakeFirstSeenStore{err: errors.New("database is locked")})
 	reports, err := evaluator.Evaluate(context.Background(), now)
@@ -202,8 +198,7 @@ func TestKlineFreshnessRelistedSubjectWithOldWatermarkGetsGrace(t *testing.T) {
 		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 			Freq: "1h", Latest: now.Truncate(time.Hour).Add(-time.Hour), TrackedSince: now.Add(-48 * time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
 			LaggingSubjects: []viewSummaryLaggingSample{{Subject: "ETH", DataTime: now.Add(-30 * time.Hour), ObservedAt: now}},
-		}})
-		query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("BTC", "ETH")})
+		}}, &fakeMetadata{subjects: activeSubjects("BTC", "ETH")})
 		evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
 		evaluator.SetSubjectFirstSeenStore(&fakeFirstSeenStore{fresh: firstSeen})
 		reports, err := evaluator.Evaluate(context.Background(), now)
@@ -228,8 +223,7 @@ func TestKlineFreshnessRecordsFirstSeenEvenWhenViewIsBehind(t *testing.T) {
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute,
 		LatestCompletedPeriod: now.Truncate(time.Hour).Add(-time.Hour), LatestCompletedStatus: "complete",
 	}
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Freq: "1h", Latest: now.Truncate(time.Hour).Add(-2 * time.Hour), TrackedSince: now.Add(-6 * time.Hour), Subjects: 1, ObservedAt: now}})
-	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("BTC", "NEW1")})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Freq: "1h", Latest: now.Truncate(time.Hour).Add(-2 * time.Hour), TrackedSince: now.Add(-6 * time.Hour), Subjects: 1, ObservedAt: now}}, &fakeMetadata{subjects: activeSubjects("BTC", "NEW1")})
 	observer := &fakeFirstSeenStore{}
 	evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
 	evaluator.SetSubjectFirstSeenStore(observer)
@@ -264,8 +258,7 @@ func TestKlineFreshnessTruncatedLaggingAllWithinGraceDoesNotCountUnlisted(t *tes
 		// 202 个对象有输出，其中 201 个停在午休前（只列出 200 个名字）；NEW1 没有任何输出。
 		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 			SpaceID: "stockcn", Latest: local("13:00:00"), TrackedSince: local("09:30:00"), Subjects: 202, Lagging: 201, ObservedAt: now, LaggingSubjects: lagging,
-		}})
-		query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects(ids...)})
+		}}, &fakeMetadata{subjects: activeSubjects(ids...)})
 		evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
 		evaluator.SetSubjectFirstSeenStore(&fakeFirstSeenStore{fresh: firstSeen})
 		reports, err := evaluator.Evaluate(context.Background(), now)
@@ -290,8 +283,7 @@ func TestKlineFreshnessNewStockDatasetWaitsForTheFirstBar(t *testing.T) {
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", DatasetID: "dataset", Frequency: "5m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, Lateness: 90 * time.Second}
 	created := time.Date(2026, 11, 4, 15, 33, 0, 0, cst)
 	evaluate := func(now time.Time, store *fakeFirstSeenStore) KlineFreshnessReport {
-		query := newViewSummaryQuery(t, nil)
-		query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("600519.XSHG")})
+		query := newViewSummaryQuery(t, nil, &fakeMetadata{subjects: activeSubjects("600519.XSHG")})
 		evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
 		evaluator.SetSubjectFirstSeenStore(store)
 		reports, err := evaluator.Evaluate(context.Background(), now)
@@ -351,8 +343,7 @@ func TestKlineFreshnessPrunesDeletedDatasetsOnFreshInventoryChange(t *testing.T)
 	}
 	cache, err := NewTaskResultInventoryCache(source, time.Minute, 100)
 	require.NoError(t, err)
-	query := newViewSummaryQuery(t, nil)
-	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("BTC-USDT")})
+	query := newViewSummaryQuery(t, nil, &fakeMetadata{subjects: activeSubjects("BTC-USDT")})
 	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{MinuteLateness: time.Minute}}, 20)
 	pruner := &fakePruningFirstSeenStore{}
 	evaluator.SetSubjectFirstSeenStore(pruner)

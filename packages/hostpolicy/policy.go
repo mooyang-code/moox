@@ -1,5 +1,5 @@
 // Package hostpolicy 定义每台主机上的策略缓存文件 <部署根>/data/host-agent/host-policy.json：全部告警渠道。
-// HostAgent 定期从 Monitor 拉取最新值写入；HostAgent 的对端检查与 Admin 的证书巡检只读这个文件，不联网。
+// HostAgent 定期从 Monitor 拉取最新值写入；非控制机在控制机或 Monitor 不可达、Monitor 反复重启时直推告警只读这个文件，不联网。
 package hostpolicy
 
 import (

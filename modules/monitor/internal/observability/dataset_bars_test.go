@@ -7,17 +7,18 @@ import (
 	"testing"
 	"time"
 
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"github.com/stretchr/testify/require"
 )
 
 // staticInventory 是测试用的采集任务清单。
-type staticInventory []monmetrics.TaskResultInventoryEntry
+type staticInventory []kline.TaskResultInventoryEntry
 
-func (s staticInventory) GetAllowStale(context.Context, time.Time) (monmetrics.TaskResultInventorySnapshot, bool, error) {
-	return monmetrics.TaskResultInventorySnapshot{Entries: s}, false, nil
+func (s staticInventory) GetAllowStale(context.Context, time.Time) (kline.TaskResultInventorySnapshot, bool, error) {
+	return kline.TaskResultInventorySnapshot{Entries: s}, false, nil
 }
 
 var cryptoInventory = staticInventory{{SpaceID: "crypto", MarketID: "crypto", Timezone: "UTC"}}
@@ -44,7 +45,7 @@ func (d fakeStockDays) Status(date marketcalendar.CivilDate) (marketcalendar.Cov
 
 func stockSpaceClock(t *testing.T, days fakeStockDays) spaceClock {
 	t.Helper()
-	clock, err := monmetrics.NewExchangeClock(days, shanghaiZone, []string{"09:30-11:30", "13:00-15:00"})
+	clock, err := marketclock.NewExchangeClock(days, shanghaiZone, []string{"09:30-11:30", "13:00-15:00"})
 	require.NoError(t, err)
 	return spaceClock{clock: clock}
 }
@@ -177,7 +178,7 @@ func TestSpaceClocksPreferTheExchangeCalendar(t *testing.T) {
 	// 没有交易日历的空间（mooxsys 系统数据）不判断到达延迟，也不给提示。
 	now := time.Date(2026, 10, 16, 8, 0, 30, 0, time.UTC)
 	system := datasetStatus(now, datasetKey{producer: "storage_view", spaceID: "mooxsys", datasetID: "view_mooxsys_host_resource", freq: "1m"},
-		healthyRun(now, now.Add(-time.Minute), now), testRealtimePolicy(), spaceClock{err: monmetrics.ErrNoTradingCalendar})
+		healthyRun(now, now.Add(-time.Minute), now), testRealtimePolicy(), spaceClock{err: marketclock.ErrNoTradingCalendar})
 	require.Equal(t, "healthy", system.Status)
 	require.Empty(t, system.ClockIssue)
 	require.False(t, system.DelayKnown)
@@ -258,7 +259,7 @@ func TestExpectedBarWithoutOutputAndWithoutCalendar(t *testing.T) {
 	require.True(t, empty.ExpectedBarClose.Equal(time.Date(2026, 10, 16, 18, 0, 0, 0, time.UTC)))
 	require.Zero(t, empty.WaitingBars)
 
-	system := datasetStatus(now, key, healthyRun(now, now.Add(-2*time.Hour), now), testRealtimePolicy(), spaceClock{err: monmetrics.ErrNoTradingCalendar})
+	system := datasetStatus(now, key, healthyRun(now, now.Add(-2*time.Hour), now), testRealtimePolicy(), spaceClock{err: marketclock.ErrNoTradingCalendar})
 	require.True(t, system.ExpectedBarAt.IsZero())
 	require.True(t, system.ExpectedBarClose.IsZero())
 }
@@ -329,7 +330,7 @@ func TestStockSessionBreaksDoNotReportRunStale(t *testing.T) {
 	cryptoKey := datasetKey{producer: "collector", spaceID: "crypto", datasetID: "dataset_crypto_5m", freq: "5m"}
 	now := cst("2026-10-18", "10:00:00")
 	value.inventory = float64(now.Unix())
-	crypto := datasetStatus(now, cryptoKey, value, testRealtimePolicy(), spaceClock{clock: monmetrics.ContinuousClock()})
+	crypto := datasetStatus(now, cryptoKey, value, testRealtimePolicy(), spaceClock{clock: marketclock.ContinuousClock()})
 	require.Equal(t, "stale", crypto.Status)
 }
 

@@ -48,8 +48,8 @@ func TestMonitorTRPCJSONRoundTrip(t *testing.T) {
 		"pipeline.0.datasets.0.expected_bar_at": "2023-11-14T22:12:00Z",
 	})
 	assertTRPCJSONRoundTrip(t, &NotificationChannel{ChannelId: "c", CreatedAt: at}, new(NotificationChannel), map[string]int64{"created_at": at}, nil)
-	assertTRPCJSONRoundTrip(t, &GetHostPolicyReq{Host: &HostReport{ReportId: "r", CollectedAt: at}}, new(GetHostPolicyReq), map[string]int64{"host.collected_at": at}, nil)
-	assertTRPCJSONRoundTrip(t, &GetHostPolicyRsp{MonitorStartedAt: at}, new(GetHostPolicyRsp), map[string]int64{"monitor_started_at": at}, nil)
+	assertTRPCJSONRoundTrip(t, &SyncHostAgentReq{Host: &HostReport{ReportId: "r", CollectedAt: at}}, new(SyncHostAgentReq), map[string]int64{"host.collected_at": at}, nil)
+	assertTRPCJSONRoundTrip(t, &SyncHostAgentRsp{MonitorStartedAt: at}, new(SyncHostAgentRsp), map[string]int64{"monitor_started_at": at}, nil)
 	assertTRPCJSONRoundTrip(t, &ListHostAgentsRsp{Agents: []*HostAgentInfo{{HostId: "h", LastSeenAt: at}}}, new(ListHostAgentsRsp), map[string]int64{"agents.0.last_seen_at": at}, nil)
 	assertTRPCJSONRoundTrip(t, &QueryHostMetricHistoryReq{HostId: "h", StartAt: at, EndAt: at + 1}, new(QueryHostMetricHistoryReq), map[string]int64{"start_at": at, "end_at": at + 1}, nil)
 	assertTRPCJSONRoundTrip(t, &QueryHostMetricHistoryRsp{Points: []*HostMetricHistoryPoint{{HostId: "h", ObservedAt: at}}}, new(QueryHostMetricHistoryRsp), map[string]int64{"points.0.observed_at": at}, nil)

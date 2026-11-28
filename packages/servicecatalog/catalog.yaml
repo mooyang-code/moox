@@ -216,7 +216,6 @@ components:
     config_files:
       - from: modules/monitor/config/app.yaml
       - from: modules/monitor/config/trpc_go.yaml
-      - from: config/setup/dataset-health-policy.yaml
     after: [host-gateway, eventbus]
     credentials: ["eventbus:monitor-observability", cls]
     health:
@@ -249,8 +248,8 @@ components:
             read_only: true
           - name: QueryLogRecords
             read_only: true
-          - name: GetHostPolicy
-            # 带着主机快照写入 Monitor；按上报 ID 去重，重发安全。
+          - name: SyncHostAgent
+            # 带着主机快照写入 Monitor 并拉回告警渠道；按上报 ID 去重，重发安全。
             idempotent: true
             callers: [host-agent]
             operators: []

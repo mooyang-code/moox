@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	"github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	observabilityconsumer "github.com/mooyang-code/moox/modules/monitor/internal/observability/eventconsumer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -80,8 +81,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 			observedAt := time.UnixMilli(message.GetOccurredAt()).UTC()
 			samples, parseErr := metrics.ParseSnapshot(report.GetSnapshot(), metrics.Envelope{
 				ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(),
-				MessageID: message.GetEventId(), ProducerNodeID: report.GetNodeId(),
-				ProducerVersion: report.GetServiceVersion(), ObservedAt: observedAt,
+				MessageID: message.GetEventId(), ObservedAt: observedAt,
 			}, metrics.DefaultLimits())
 			if parseErr != nil {
 				return observabilityconsumer.Permanent(parseErr)
@@ -137,7 +137,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, messageID)
 	}
 	query := metrics.NewQueryService(messageStore, nil)
-	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
+	reports, err := kline.NewKlineFreshnessEvaluator(query, []kline.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
 		Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20).Evaluate(ctx, observed)

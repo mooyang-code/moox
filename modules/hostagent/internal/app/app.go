@@ -152,7 +152,12 @@ func truncate(s string, n int) string {
 func (a *Agent) GetStatus(context.Context, *hostagentpb.GetStatusReq) (*hostagentpb.GetStatusRsp, error) {
 	a.latestMu.RLock()
 	defer a.latestMu.RUnlock()
-	rsp := &hostagentpb.GetStatusRsp{HostId: a.cfg.HostID, Version: a.version, Hostname: a.hostname, BootId: a.bootID, LastError: a.lastErr, Collected: a.collected.Load(), Reported: a.reported.Load(), Dropped: a.dropped.Load(), Skipped: a.skipped.Load()}
+	rsp := &hostagentpb.GetStatusRsp{
+		HostId: a.cfg.HostID, Version: a.version, Hostname: a.hostname, BootId: a.bootID,
+		LastError: a.lastErr, Collected: a.collected.Load(), Reported: a.reported.Load(),
+		Dropped: a.dropped.Load(), Skipped: a.skipped.Load(),
+		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+	}
 	if !a.lastCollect.IsZero() {
 		rsp.LastCollectAt = a.lastCollect.UnixMilli()
 	}

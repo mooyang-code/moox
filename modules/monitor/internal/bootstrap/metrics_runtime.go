@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	observabilityconsumer "github.com/mooyang-code/moox/modules/monitor/internal/observability/eventconsumer"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -87,7 +88,7 @@ func startObservabilityConsumer(
 	cfg *config.Config,
 	runtime *Runtime,
 	hostStore *hostmetrics.Store,
-	klineInventory *monmetrics.TaskResultInventoryCache,
+	klineInventory *kline.TaskResultInventoryCache,
 ) {
 	if cfg == nil || !cfg.Observability.Enabled || runtime == nil || runtime.Store == nil ||
 		runtime.Store.Ping(ctx) != nil || runtime.Repositories == nil || hostStore == nil {
@@ -221,8 +222,7 @@ func metricsObservabilityRoute(
 		observed := time.UnixMilli(message.GetOccurredAt()).UTC()
 		samples, err := monmetrics.ParseSnapshot(metricReport.GetSnapshot(), monmetrics.Envelope{
 			ServiceName: metricReport.GetServiceName(), InstanceID: metricReport.GetInstanceId(),
-			MessageID: message.GetEventId(), ProducerNodeID: metricReport.GetNodeId(),
-			ProducerVersion: metricReport.GetServiceVersion(), ObservedAt: observed,
+			MessageID: message.GetEventId(), ObservedAt: observed,
 		}, monmetrics.DefaultLimits())
 		if err != nil {
 			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectReason(err))

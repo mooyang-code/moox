@@ -97,11 +97,11 @@ func TestNotificationChannelSecretIsStoredAndNeverListed(t *testing.T) {
 	require.False(t, listed.GetChannels()[1].GetHasSecret())
 	require.NotContains(t, listed.String(), "SECabc")
 
-	policy, err := service.GetHostPolicy(t.Context(), &monitorpb.GetHostPolicyReq{})
+	synced, err := service.SyncHostAgent(t.Context(), &monitorpb.SyncHostAgentReq{})
 	require.NoError(t, err)
-	require.Len(t, policy.GetChannels(), 2)
-	require.Equal(t, "SECabc", policy.GetChannels()[0].GetSecret())
-	require.Empty(t, policy.GetChannels()[1].GetSecret())
+	require.Len(t, synced.GetChannels(), 2)
+	require.Equal(t, "SECabc", synced.GetChannels()[0].GetSecret())
+	require.Empty(t, synced.GetChannels()[1].GetSecret())
 
 	exported, err := service.ExportNotificationChannels(t.Context(), &monitorpb.ExportNotificationChannelsReq{})
 	require.NoError(t, err)

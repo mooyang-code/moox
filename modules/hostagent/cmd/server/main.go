@@ -38,8 +38,8 @@ func main() {
 		log.Errorf("host-agent config failed: %v", err)
 		os.Exit(1)
 	}
-	// 主机策略经网关从 Monitor 拉取，同一次调用带上主机快照。打不开网关客户端就退出：常见于首装时本机网关还没监听，
-	// 交给 systemd 拉起重试，否则主机策略永远不同步（证书巡检、控制机不可达推送都发不出），主机快照也报不出去。
+	// 主机快照与告警渠道经网关通过 MonitorMgr.SyncHostAgent 同步。打不开网关客户端就退出：常见于首装时本机网关还没监听，
+	// 交给 systemd 拉起重试，否则告警渠道永远不同步（控制机不可达与 Monitor 反复重启推送发不出），主机快照也报不出去。
 	gateway, syncer, err := openPolicySync(cfg)
 	if err != nil {
 		log.Errorf("host-agent host policy sync failed to start: %v", err)
@@ -79,9 +79,9 @@ func openPolicySync(cfg *config.Config) (*gatewayclient.Client, *policysync.Sync
 	if err != nil {
 		return nil, nil, fmt.Errorf("open gateway client: %w", err)
 	}
-	syncer, err := policysync.New(cfg.HostPolicyPath, func(ctx context.Context, req *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
-		rsp := &monitorpb.GetHostPolicyRsp{}
-		err := gateway.Invoke(ctx, monitorService, "GetHostPolicy", req, rsp)
+	syncer, err := policysync.New(cfg.HostPolicyPath, func(ctx context.Context, req *monitorpb.SyncHostAgentReq) (*monitorpb.SyncHostAgentRsp, error) {
+		rsp := &monitorpb.SyncHostAgentRsp{}
+		err := gateway.Invoke(ctx, monitorService, "SyncHostAgent", req, rsp)
 		return rsp, err
 	})
 	if err != nil {

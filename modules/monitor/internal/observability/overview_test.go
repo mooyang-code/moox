@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -101,7 +102,7 @@ func TestDatasetStatusRejectsStaleInventory(t *testing.T) {
 	}
 }
 
-var cryptoClock = spaceClock{clock: monmetrics.ContinuousClock()}
+var cryptoClock = spaceClock{clock: marketclock.ContinuousClock()}
 
 func testRealtimePolicy() report.RealtimeTimeSeriesPolicy {
 	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
@@ -227,15 +228,13 @@ func TestBuilderIgnoresDatasetEnabledFromSupersededFactorBoot(t *testing.T) {
 		}).Error)
 		seedOverviewMetricForInstance(t, db, "retired-enabled", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_enabled", retired, 1, now)
 		require.NoError(t, db.Model(&monmetrics.MetricSeries{}).Where("c_series_id = ?", "retired-enabled").Updates(map[string]any{
-			"c_message_id":       oldBoot + "-00000000000000009261",
-			"c_producer_version": "sha256:old",
+			"c_message_id": oldBoot + "-00000000000000009261",
 		}).Error)
 		seedOverviewMetricForInstance(t, db, "retired-interval", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_expected_interval_seconds", retired, 60, now)
 		seedOverviewMetricForInstance(t, db, "retired-run", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_last_run_timestamp_seconds", retired, float64(now.Add(-3*24*time.Hour).Unix()), now)
 		seedOverviewMetricForInstance(t, db, "live-enabled", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_enabled", live, 1, now)
 		require.NoError(t, db.Model(&monmetrics.MetricSeries{}).Where("c_series_id = ?", "live-enabled").Updates(map[string]any{
-			"c_message_id":       newBoot + "-00000000000000000007",
-			"c_producer_version": "sha256:new",
+			"c_message_id": newBoot + "-00000000000000000007",
 		}).Error)
 		seedOverviewMetricForInstance(t, db, "live-interval", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_expected_interval_seconds", live, 60, now)
 		seedOverviewMetricForInstance(t, db, "inventory", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)

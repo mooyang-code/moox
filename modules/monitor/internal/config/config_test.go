@@ -214,9 +214,6 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(app.yaml) error = %v", err)
 	}
-	if !cfg.KlineFreshness.Enabled {
-		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
-	}
 	freshness, ok := app["kline_freshness"].(map[string]any)
 	if !ok {
 		t.Fatal("kline freshness configuration is missing")
@@ -242,11 +239,19 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	}
 }
 
-func TestMonitorDefaultDatasetHealthPolicyPathExistsFromModuleWorkingDirectory(t *testing.T) {
-	moduleRoot := filepath.Join("..", "..")
+func TestMonitorConfigDatasetHealthPolicyDefaultsAndRejection(t *testing.T) {
 	cfg := Default()
-	if _, err := os.Stat(filepath.Join(moduleRoot, cfg.Metrics.DatasetHealthPolicyPath)); err != nil {
-		t.Fatalf("dataset_health_policy_path %q is not usable from modules/monitor: %v", cfg.Metrics.DatasetHealthPolicyPath, err)
+	if cfg.Metrics.DatasetHealth.Defaults.RunMissedIntervals != 2 ||
+		cfg.Metrics.DatasetHealth.Defaults.SuccessMissedIntervals != 3 ||
+		cfg.Metrics.DatasetHealth.Defaults.MinuteLateness != 10*time.Second ||
+		cfg.Metrics.DatasetHealth.Defaults.HourLateness != 20*time.Second {
+		t.Fatalf("默认数据集健康策略不符：%+v", cfg.Metrics.DatasetHealth.Defaults)
+	}
+	if _, err := Load(writeConfig(t, "metrics:\n  dataset_health_policy_path: old.yaml\n")); err == nil {
+		t.Fatal("已删除的 dataset_health_policy_path 不应被接受")
+	}
+	if _, err := Load(writeConfig(t, "metrics:\n  dataset_health:\n    defaults:\n      minute_lateness: 0s\n")); err == nil {
+		t.Fatal("非法数据集健康阈值不应被接受")
 	}
 }
 
@@ -314,7 +319,6 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
 	cfg.Deployment.Enabled = false
-	cfg.KlineFreshness.Enabled = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
 	}
@@ -343,9 +347,13 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 }
 
 func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
-	_, err := Load(writeConfig(t, "kline_freshness:\n  enabled: true\n  typo_interval: 30s\n"))
-	if err == nil {
-		t.Fatal("Load() accepted unknown kline freshness field")
+	for _, raw := range []string{
+		"kline_freshness:\n  typo_interval: 30s\n",
+		"kline_freshness:\n  enabled: true\n",
+	} {
+		if _, err := Load(writeConfig(t, raw)); err == nil {
+			t.Fatalf("Load(%q) accepted unknown or removed kline freshness field", raw)
+		}
 	}
 }
 

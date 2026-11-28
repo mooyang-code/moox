@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// ModuleHealthCheck describes one code-owned signal group used to assess a
-// module. Dataset-specific freshness thresholds live in DatasetHealthPolicy.
+// ModuleHealthCheck 描述一类用于评估模块健康的内置信号；数据集级新鲜度阈值由 Monitor 配置中的 RealtimeTimeSeriesPolicy 定义。
 type ModuleHealthCheck struct {
 	ID      string
 	Module  string

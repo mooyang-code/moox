@@ -289,10 +289,10 @@ message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationCha
 message DeleteNotificationChannelReq { string channel_id = 1; }
 message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
 
-// GetHostPolicyReq 由每台主机的 HostAgent 每分钟调用一次：带上这一分钟采到的主机快照，拉回主机策略缓存到
-// <部署根>/data/host-agent/host-policy.json，供 HostAgent 的对端检查与证书巡检直接推送告警。只允许调用方 host-agent。
-message GetHostPolicyReq {
-  // 这次采集的主机快照；采集失败时为空，策略照常返回。
+// SyncHostAgentReq 由每台主机的 HostAgent 每分钟调用一次：带上这一分钟采到的主机快照，拉回全部告警渠道缓存到
+// <部署根>/data/host-agent/host-policy.json，供非控制机在控制机或 Monitor 不可达、Monitor 反复重启时直接推送告警。只允许调用方 host-agent。
+message SyncHostAgentReq {
+  // 这次采集的主机快照；采集失败时为空，告警渠道照常返回。
   HostReport host = 1;
 }
 // HostReport 是一次主机快照上报。
@@ -303,15 +303,15 @@ message HostReport {
   int64 collected_at = 2;
   trpc.moox.hostagent.HostMetric metric = 3;
 }
-// HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。secret 是渠道密钥（没有时为空）。
-message HostPolicyChannel {
+// HostNotificationChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。secret 是渠道密钥（没有时为空）。
+message HostNotificationChannel {
   string channel_type = 1;
   string webhook_url = 2;
   string secret = 3;
 }
-message GetHostPolicyRsp {
+message SyncHostAgentRsp {
   common.RetInfo ret_info = 1;
-  repeated HostPolicyChannel channels = 2;
+  repeated HostNotificationChannel channels = 2;
   // monitor_started_at 是 Monitor 进程的启动时刻（毫秒）：各主机采集器按它的变化发现 Monitor 反复重启。
   int64 monitor_started_at = 3;
 }
@@ -494,7 +494,7 @@ service MonitorMgr {
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
   rpc QueryLogRecords(QueryLogRecordsReq) returns (QueryLogRecordsRsp);
-  rpc GetHostPolicy(GetHostPolicyReq) returns (GetHostPolicyRsp);
+  rpc SyncHostAgent(SyncHostAgentReq) returns (SyncHostAgentRsp);
   rpc MuteAlerts(MuteAlertsReq) returns (MuteAlertsRsp);
   rpc UnmuteAlerts(UnmuteAlertsReq) returns (UnmuteAlertsRsp);
   rpc GetAlertMute(GetAlertMuteReq) returns (GetAlertMuteRsp);

@@ -70,7 +70,6 @@ func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {
 	for _, name := range []string{
 		"metadata.yaml",
 		"collection-tasks.yaml",
-		"dataset-health-policy.yaml",
 	} {
 		_, err := os.Stat(defaultSetupBundlePath(name))
 		require.NoError(t, err, name)

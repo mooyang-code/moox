@@ -140,8 +140,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_series (
     c_observed_at DATETIME NOT NULL,
     c_interval_seconds INTEGER NOT NULL DEFAULT 0,
     c_message_id TEXT NOT NULL DEFAULT '',
-    c_producer_node_id TEXT NOT NULL DEFAULT '',
-    c_producer_version TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -154,10 +152,6 @@ CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_last_seen ON t_monitor_metr
 CREATE TABLE IF NOT EXISTS t_monitor_metric_ingest_messages (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_message_id TEXT NOT NULL,
-    c_service_name TEXT NOT NULL DEFAULT '',
-    c_instance_id TEXT NOT NULL DEFAULT '',
-    c_occurred_at DATETIME,
-    c_processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_expires_at DATETIME NOT NULL
 );
 

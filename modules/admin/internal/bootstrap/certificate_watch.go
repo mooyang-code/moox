@@ -13,8 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
-	"github.com/mooyang-code/moox/packages/hostpolicy"
-	"github.com/mooyang-code/moox/packages/notification"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -24,16 +23,23 @@ const (
 	certificateWatchTimerService = "trpc.moox.admin.certificates.timer"
 	certificateWatchTimeout      = 30 * time.Second
 	certificateExpiryWarning     = 90 * 24 * time.Hour
+
+	attentionCertificateInvalid  = "certificate_invalid"
+	attentionCertificateExpiring = "certificate_expiring"
 )
 
-// Only fixed public certificate paths are read. The watcher never initializes
-// PKI, reads private keys, signs certificates or repairs a missing trust root.
+var adminAttentionKinds = []report.AttentionKind{
+	{Kind: attentionCertificateInvalid, Name: "证书巡检失败", Severity: report.AttentionCritical},
+	{Kind: attentionCertificateExpiring, Name: "证书将在 90 天内到期", Severity: report.AttentionWarning},
+}
+
+// certificateWatch 只读取固定的公开证书路径，不初始化 PKI、不读私钥、不签发或修复缺失的信任根；
+// 巡检结果作为关注项经指标上报给 Monitor，由检查表统一展示与告警。
 type certificateWatch struct {
-	PKIDir string
-	Hosts  func(context.Context) ([]pki.HostIdentity, error)
-	Now    func() time.Time
-	// Senders 每次巡检时取一次告警渠道；为空或返回空时只记录不推送。
-	Senders func() []notification.Sender
+	PKIDir    string
+	Hosts     func(context.Context) ([]pki.HostIdentity, error)
+	Now       func() time.Time
+	Attention *report.Attention
 }
 
 // adminPKIDir 是 MooX CA 所在目录：MOOX_ADMIN_PKI_DIR；没设时用 Admin 主密钥同目录下的 pki/，都没有时是 ../secrets/pki。
@@ -47,45 +53,26 @@ func adminPKIDir() string {
 	return filepath.Join("..", "secrets", "pki")
 }
 
-func newCertificateWatchFromEnvironment(db *gorm.DB) certificateWatch {
-	watch := certificateWatch{PKIDir: adminPKIDir(), Now: time.Now, Hosts: func(ctx context.Context) ([]pki.HostIdentity, error) {
-		if db == nil {
-			return nil, errors.New("host certificate inventory requires the Admin database")
-		}
-		var rows []sysdeploy.HostRecord
-		if err := db.WithContext(ctx).Select("c_host_id", "c_address", "c_private_address").Order("c_host_id").Limit(1025).Find(&rows).Error; err != nil {
-			return nil, errors.New("registered host certificate inventory is unavailable")
-		}
-		hosts := make([]pki.HostIdentity, 0, len(rows))
-		for _, row := range rows {
-			hosts = append(hosts, pki.HostIdentity{HostID: row.HostID, Address: row.Address, PrivateAddress: row.PrivateAddress})
-		}
-		return hosts, nil
-	}}
-	if path := strings.TrimSpace(os.Getenv("MOOX_HOST_POLICY_FILE")); path != "" {
-		watch.Senders = func() []notification.Sender { return hostPolicySenders(path) }
+func newCertificateWatchFromEnvironment(db *gorm.DB, attention *report.Attention) certificateWatch {
+	return certificateWatch{
+		PKIDir:    adminPKIDir(),
+		Now:       time.Now,
+		Attention: attention,
+		Hosts: func(ctx context.Context) ([]pki.HostIdentity, error) {
+			if db == nil {
+				return nil, errors.New("主机证书清单需要可用的 Admin 数据库")
+			}
+			var rows []sysdeploy.HostRecord
+			if err := db.WithContext(ctx).Select("c_host_id", "c_address", "c_private_address").Order("c_host_id").Limit(1025).Find(&rows).Error; err != nil {
+				return nil, errors.New("已登记主机证书清单不可用")
+			}
+			hosts := make([]pki.HostIdentity, 0, len(rows))
+			for _, row := range rows {
+				hosts = append(hosts, pki.HostIdentity{HostID: row.HostID, Address: row.Address, PrivateAddress: row.PrivateAddress})
+			}
+			return hosts, nil
+		},
 	}
-	return watch
-}
-
-// hostPolicySenders 从本机主机策略缓存（HostAgent 从 Monitor 同步）读取全部告警渠道。
-// 每次巡检重新读取，用户在 Monitor 修改渠道后无需重启 Admin；读取失败只记录。
-func hostPolicySenders(path string) []notification.Sender {
-	policy, err := hostpolicy.Read(path)
-	if err != nil {
-		log.Warn("certificate watch cannot read the host policy cache; findings are only logged")
-		return nil
-	}
-	var senders []notification.Sender
-	for _, channel := range policy.NotificationChannels {
-		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.Type), WebhookURL: channel.WebhookURL, Secret: channel.Secret})
-		if err != nil {
-			log.Warn("certificate watch skipped an invalid notification channel")
-			continue
-		}
-		senders = append(senders, sender)
-	}
-	return senders
 }
 
 type certificateFinding struct {
@@ -173,8 +160,7 @@ func (w certificateWatch) Validate(ctx context.Context) error {
 			}
 		}
 	}
-	w.notify(ctx, notification.SeverityCritical, failures)
-	w.notify(ctx, notification.SeverityWarning, warnings)
+	w.reportFindings(ctx, failures, warnings)
 	if len(failures) != 0 {
 		return fmt.Errorf("certificate watch found %d invalid or unavailable public certificates/inventories", len(failures))
 	}
@@ -182,38 +168,17 @@ func (w certificateWatch) Validate(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (w certificateWatch) notify(ctx context.Context, severity notification.Severity, findings []certificateFinding) {
-	if len(findings) == 0 {
-		return
+func (w certificateWatch) reportFindings(ctx context.Context, failures, warnings []certificateFinding) {
+	items := map[string][]string{}
+	for _, finding := range failures {
+		log.WarnContextf(ctx, "certificate_watch severity=critical name=%s detail=%s", finding.name, finding.detail)
+		items[attentionCertificateInvalid] = append(items[attentionCertificateInvalid], finding.name+": "+finding.detail)
 	}
-	var body strings.Builder
-	fmt.Fprintf(&body, "证书巡检发现 %d 项%s：", len(findings), severity)
-	for i, finding := range findings {
-		log.WarnContextf(ctx, "certificate_watch severity=%s name=%s detail=%s", severity, finding.name, finding.detail)
-		if i < 12 {
-			fmt.Fprintf(&body, "\n%s: %s", finding.name, finding.detail)
-		}
+	for _, finding := range warnings {
+		log.WarnContextf(ctx, "certificate_watch severity=warning name=%s detail=%s", finding.name, finding.detail)
+		items[attentionCertificateExpiring] = append(items[attentionCertificateExpiring], finding.name+": "+finding.detail)
 	}
-	if len(findings) > 12 {
-		body.WriteString("\n其余项目见 Admin 巡检日志。")
-	}
-	if w.Senders == nil {
-		return
-	}
-	senders := w.Senders()
-	if len(senders) == 0 {
-		return
-	}
-	title := "MooX 证书将在 90 天内到期"
-	if severity == notification.SeverityCritical {
-		title = "MooX 证书巡检失败"
-	}
-	notifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	message := notification.Message{Key: "admin_certificate_watch_" + string(severity), Severity: severity, Title: title, Body: body.String(), Labels: map[string]string{"source": "admin_certificate_watch"}}
-	for _, sender := range senders {
-		if err := sender.Send(notifyCtx, message); err != nil {
-			log.ErrorContext(ctx, "certificate_watch notification failed")
-		}
+	if w.Attention != nil {
+		w.Attention.Set("certificate_watch", items)
 	}
 }

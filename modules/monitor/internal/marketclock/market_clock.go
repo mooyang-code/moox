@@ -1,4 +1,5 @@
-package metrics
+// Package marketclock 按市场交易日历切分 K 线周期、计算应收最新一根与缺失根数。
+package marketclock
 
 import (
 	"errors"

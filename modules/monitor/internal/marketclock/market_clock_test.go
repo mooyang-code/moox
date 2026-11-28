@@ -1,4 +1,4 @@
-package metrics
+package marketclock
 
 import (
 	"errors"

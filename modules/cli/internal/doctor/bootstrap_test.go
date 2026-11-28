@@ -165,8 +165,8 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 	require.Equal(t, core.StatusWarn, runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.path_permissions:factor-mgr@node-a"}, nil).Status)
 }
 
-// 服务身份检查核对 service/instance_id/node_id/boot_id，不再比对 dataset_health_policy_hash。
-func TestBootstrapServiceIdentityIgnoresDatasetHealthPolicyHash(t *testing.T) {
+// 服务身份检查核对 service/instance_id/node_id/boot_id。
+func TestBootstrapServiceIdentityCheck(t *testing.T) {
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
 	runner := &bootstrapRunner{
@@ -178,7 +178,7 @@ func TestBootstrapServiceIdentityIgnoresDatasetHealthPolicyHash(t *testing.T) {
 				require.Equal(t, "/readyz", path)
 				return ProbeResult{
 					StatusCode: 200,
-					Body:       []byte(`{"service":"monitor","instance_id":"monitor@control","node_id":"control","boot_id":"boot-1","dataset_health_policy_hash":"sha256:stale"}`),
+					Body:       []byte(`{"service":"monitor","instance_id":"monitor@control","node_id":"control","boot_id":"boot-1"}`),
 				}, nil
 			},
 		},
