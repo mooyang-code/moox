@@ -30,7 +30,6 @@ export function toNum(value: number | string | undefined | null): number {
 // ---- 文案 ----
 
 const KIND_LABELS: Record<ArchiveRunKind, string> = {
-  follow: "跟随",
   manual: "整段重读",
   range: "补拉区间",
   import: "导入"
@@ -42,13 +41,13 @@ const RUN_STATUS_LABELS: Record<ArchiveRunStatus, string> = {
   running: "运行中",
   succeeded: "成功",
   failed: "失败",
-  canceled: "已取消"
+  cancelled: "已取消"
 };
 export const RUN_STATUSES = Object.keys(RUN_STATUS_LABELS) as ArchiveRunStatus[];
 export const runStatusLabel = (status?: string) => RUN_STATUS_LABELS[status as ArchiveRunStatus] ?? (status || "—");
 export const runActive = (run?: ArchiveRun) => run?.status === "queued" || run?.status === "running";
 
-const HEALTH_LABELS: Record<ArchiveHealth, string> = { ok: "正常", warning: "需关注", error: "异常", paused: "已停用" };
+const HEALTH_LABELS: Record<ArchiveHealth, string> = { ok: "正常", warning: "需关注", error: "异常", disabled: "已停用" };
 export const healthLabel = (health?: string) => HEALTH_LABELS[health as ArchiveHealth] ?? (health || "—");
 
 /** 状态文字的着色：和交易页 status-mark 一样只给文字上色。 */
@@ -93,7 +92,7 @@ export function partitionUnitText(unit?: string): string {
 
 /** “跟随”列第一行：停用写“已停用”，否则写“每分钟跟随变更日志”。 */
 export function followText(task: ArchiveTask): string {
-  return task.status === "paused" ? "已停用" : "每分钟跟随变更日志";
+  return task.status === "disabled" ? "已停用" : "每分钟跟随变更日志";
 }
 
 /** “跟随”列第二行：最近一次成功的跟随（或整段重读）时刻，到分钟。 */
@@ -101,6 +100,12 @@ export function lastFollowText(task: ArchiveTask, zone: string): string {
   return toInstantMs(task.last_success_at) !== null
     ? `最近成功 ${formatInstant(task.last_success_at, zone, "minute")}`
     : "还没有成功的跟随";
+}
+
+/** 整段重读进度（来自任务的 rescan_from / rescan_until 显式字段），不在重读时为空串。 */
+export function rescanProgressText(task: Pick<ArchiveTask, "rescan_from" | "rescan_until">, zone: string): string {
+  if (!task.rescan_from || !task.rescan_until) return "";
+  return `整段重读：已读到 ${formatInstant(task.rescan_from, zone, "minute")}，截止 ${formatInstant(task.rescan_until, zone, "minute")}`;
 }
 
 /** 时长：45 秒、2 分 13 秒、1 小时 16 分、2 天 3 小时。 */
@@ -269,7 +274,7 @@ export function storageClassText(store: Pick<ArchiveObjectStore, "storage_class"
 
 /** 新建抽屉里的说明：避让的两个窗口写死在 worker 里（见 docs/模块/归档.md 第 3 节）。 */
 export const ARCHIVE_SCHEDULE_NOTE =
-  "创建后每分钟按 Storage 的变更日志跟随；首次运行从回补起点整段读到现在，数据量大时要几个小时，进度见任务的最近运行。执行器每分钟只在第 25～55 秒读取 Storage，每小时 :58～:04 只做导出与定稿。";
+  "创建后由执行器每分钟按 Storage 的变更日志本地跟随；首次运行从回补起点整段读到现在，数据量大时要几个小时，进度见任务行的跟随列。执行器每分钟只在第 25～55 秒读取 Storage，每小时 :58～:04 只做导出与定稿。";
 
 // ---- 目录名 ----
 
@@ -368,9 +373,9 @@ export function pauseSafeDays(retention?: string): number | null {
   return Math.floor(Math.max(hours - 48, hours / 2) / 24);
 }
 
-/** 整段重读的确认文案：会重读线上保留期内的全部数据，之后每分钟的跟随分段读完。 */
+/** 整段重读的确认文案：会重读线上保留期内的全部数据，之后每分钟的本地跟随分段读完。 */
 export function rescanConfirmText(retentionText?: string): string {
-  return `会把线上保留期（${retentionText || "—"}）内的全部数据从 Storage 重读一遍，与归档比对后有变化的分区重新导出；之后每分钟的跟随分段读完，数据量大时要几个小时（crypto 1m 约十几个小时），进度见任务的最近运行。`;
+  return `会把线上保留期（${retentionText || "—"}）内的全部数据从 Storage 重读一遍，与归档比对后有变化的分区重新导出；之后每分钟的本地跟随分段读完，数据量大时要几个小时（crypto 1m 约十几个小时），进度见任务行的跟随列。`;
 }
 
 export function pauseConfirmText(retention?: string, retentionText?: string): string {
@@ -436,8 +441,6 @@ export interface ArchiveQuery {
   tab: DetailTab;
   /** 运行记录的状态筛选，空表示全部 */
   status: ArchiveRunStatus | "";
-  /** 是否列出成功的跟随运行 */
-  follow: boolean;
   rpage: number;
   ppage: number;
   /** 分区起止月 YYYY-MM */
@@ -461,7 +464,6 @@ export function parseArchiveQuery(query: LocationQuery): ArchiveQuery {
     task: first(query.task),
     tab: (DETAIL_TABS as string[]).includes(first(query.tab)) ? (first(query.tab) as DetailTab) : "runs",
     status: (RUN_STATUSES as string[]).includes(status) ? (status as ArchiveRunStatus) : "",
-    follow: first(query.follow) === "1",
     rpage: pageNo(first(query.rpage)),
     ppage: pageNo(first(query.ppage)),
     from: month(first(query.from)),
@@ -489,7 +491,6 @@ export function archiveQueryFor(state: Partial<ArchiveQuery>): LocationQueryRaw 
     if (state.subject) out.subject = state.subject;
   } else {
     if (state.status) out.status = state.status;
-    if (state.follow) out.follow = "1";
     if (state.rpage && state.rpage > 1) out.rpage = String(state.rpage);
   }
   return out;

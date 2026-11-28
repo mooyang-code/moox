@@ -8,11 +8,11 @@ import type { Page, PageResult } from "@/api/storage/types";
 
 export type { Page, PageResult };
 
-/** follow：每分钟按 Storage 变更日志跟随；manual：整段重读线上保留期；range：补拉区间；import：moox-cli import 的归档目标 */
-export type ArchiveRunKind = "follow" | "manual" | "range" | "import";
-export type ArchiveRunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
-export type ArchiveTaskStatus = "enabled" | "paused";
-export type ArchiveHealth = "ok" | "warning" | "error" | "paused";
+/** manual：整段重读线上保留期；range：补拉区间；import：moox-cli import 的归档目标 */
+export type ArchiveRunKind = "manual" | "range" | "import";
+export type ArchiveRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type ArchiveTaskStatus = "enabled" | "disabled";
+export type ArchiveHealth = "ok" | "warning" | "error" | "disabled";
 export type ArchivePartitionStatus = "open" | "exported" | "final";
 /** off：没启用对象存储；none：还没有导出文件；verified：远端是当前版本且已校验 */
 export type ArchiveRemoteState = "off" | "none" | "pending" | "verified" | "failed";
@@ -64,7 +64,6 @@ export interface ArchiveTask {
   /** 最近一次成功的跟随或整段重读的开始时刻：Unix 毫秒的数字字符串，没有时为 "0" */
   last_success_at?: string;
   final_until?: string;
-  creator?: string;
   /** 创建、更新时刻：Unix 毫秒的数字字符串 */
   created_at?: string;
   updated_at?: string;
@@ -85,6 +84,16 @@ export interface ArchiveTask {
   purpose?: string;
   /** 归档目录名，空间内唯一，建好后不改；分区路径 <空间>/<用途>/<目录名>/<年>/<文件> */
   dir_name?: string;
+  /** 最近一次本地跟随结束时刻：Unix 毫秒的数字字符串，没有时为 "0" */
+  last_follow_at?: string;
+  /** 最近一次本地跟随失败原因，成功时清空 */
+  last_follow_error?: string;
+  /** 最近一次本地跟随消息 */
+  last_follow_message?: string;
+  /** 整段重读进度起点（已读到），RFC3339，不在重读时为空 */
+  rescan_from?: string;
+  /** 整段重读进度截止时刻，RFC3339，不在重读时为空 */
+  rescan_until?: string;
 }
 
 export interface ArchivePartition {
@@ -186,7 +195,7 @@ export interface CreateArchiveTaskReq {
   dataset_id: string;
   /** 空串表示取线上保留期起点；保留期为 forever 时必填 */
   backfill_from: string;
-  paused: boolean;
+  disabled: boolean;
   /** 空表示取建议值 */
   dir_name: string;
 }
@@ -194,7 +203,18 @@ export interface CreateArchiveTaskReq {
 export interface UpdateArchiveTaskReq {
   dataset_id: string;
   status?: ArchiveTaskStatus;
-  clear_unrecoverable?: boolean;
+}
+
+export interface ClearArchiveUnrecoverableReq {
+  dataset_id: string;
+  /** 起点（含），RFC3339；与 end 同时留空表示清空全部 */
+  start?: string;
+  /** 终点（不含），RFC3339；与 start 同时留空表示清空全部 */
+  end?: string;
+}
+
+export interface ClearArchiveUnrecoverableRsp {
+  removed?: UnrecoverableRange[];
 }
 
 export interface ArchiveTaskRsp {
@@ -216,8 +236,6 @@ export interface ListArchiveRunsReq {
   dataset_id: string;
   /** 为空表示全部状态 */
   status?: ArchiveRunStatus | "";
-  /** 是否列出成功的跟随运行（每分钟一条），默认不列 */
-  include_follow?: boolean;
   page: Page;
 }
 

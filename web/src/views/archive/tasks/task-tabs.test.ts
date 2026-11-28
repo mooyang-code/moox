@@ -53,7 +53,6 @@ describe("分区下载", () => {
     task: "ds",
     tab: "partitions",
     status: "",
-    follow: false,
     rpage: 1,
     ppage: 1,
     from: "",

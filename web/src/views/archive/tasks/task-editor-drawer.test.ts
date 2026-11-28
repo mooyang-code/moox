@@ -61,13 +61,13 @@ describe("编辑归档任务", () => {
     expect(api.updateArchiveTask).not.toHaveBeenCalled();
   });
 
-  it("关掉启用后保存提交 paused", async () => {
+  it("关掉启用后保存提交 disabled", async () => {
     mountEditor({ task: task() });
     await flushPromises();
     (wrapper.vm as unknown as { form: { enabled: boolean } }).form.enabled = false;
     okButton().click();
     await flushPromises();
-    expect(api.updateArchiveTask).toHaveBeenCalledWith({ dataset_id: "ds_1m", status: "paused" });
+    expect(api.updateArchiveTask).toHaveBeenCalledWith({ dataset_id: "ds_1m", status: "disabled" });
   });
 });
 
@@ -81,15 +81,17 @@ describe("新建时的回补起点", () => {
     dir_name_conflict: false
   };
 
-  it("默认填线上保留期起点，提交带上它；说明写明每分钟跟随与首次整段读", async () => {
+  it("默认填线上保留期起点，提交带上它；说明写明每分钟本地跟随与首次整段读", async () => {
     api.prepareArchiveTask.mockResolvedValue({ ...prepared, retention: "840h", earliest_backfill_from: EARLIEST });
     api.createArchiveTask.mockClear();
     mountEditor({ mode: "create", task: null, presetDatasetId: "ds_1m", datasets, spaceId: "crypto" });
     await flushPromises();
-    expect(document.body.textContent).toContain("创建后每分钟按 Storage 的变更日志跟随");
+    expect(document.body.textContent).toContain("创建后由执行器每分钟按 Storage 的变更日志本地跟随");
     okButton().click();
     await flushPromises();
-    expect(api.createArchiveTask).toHaveBeenCalledWith(expect.objectContaining({ dataset_id: "ds_1m", backfill_from: EARLIEST }));
+    expect(api.createArchiveTask).toHaveBeenCalledWith(
+      expect.objectContaining({ dataset_id: "ds_1m", backfill_from: EARLIEST, disabled: false })
+    );
   });
 
   it("线上永久保留时必须填写回补起点", async () => {

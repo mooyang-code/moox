@@ -340,9 +340,7 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/factor-mgr/ActivateUdf",
       "/api/admin/factor-mgr/GetStatus",
       "/api/admin/factor-mgr/GetLifecycle",
-      "/api/admin/factor-mgr/ControlLifecycle",
-      "/api/admin/archive/GetLifecycle",
-      "/api/admin/archive/ControlLifecycle"
+      "/api/admin/factor-mgr/ControlLifecycle"
     ]) {
       expect(spacePolicyForUrl(url), url).toBe("global");
     }
@@ -364,7 +362,8 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/trade/ListOrders",
       "/api/admin/strategy/ListStrategyInstances",
       "/api/admin/factor-mgr/CreateFactorTask",
-      "/api/admin/archive/ListArchiveTasks"
+      "/api/admin/archive/ListArchiveTasks",
+      "/api/admin/archive/ClearArchiveUnrecoverable"
     ]) {
       expect(spacePolicyForUrl(url), url).toBe("space_required");
     }
@@ -384,8 +383,7 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/trade/UnblockInstrument",
       "/api/admin/strategy/ListStrategies",
       "/api/admin/collector/DeleteCloudAccount",
-      "/api/admin/factor-mgr/ListFactorCategories",
-      "/api/admin/archive/GetLifecycle"
+      "/api/admin/factor-mgr/ListFactorCategories"
     ]) {
       const prepared = await handler({ url, headers: new AxiosHeaders() } as InternalAxiosRequestConfig);
       expect(prepared.headers.get("X-Space-Id"), url).toBeUndefined();

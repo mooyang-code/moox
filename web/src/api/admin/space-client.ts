@@ -100,8 +100,7 @@ const GLOBAL_METHODS: Record<string, ReadonlySet<string>> = {
     "ActivateUdf",
     "GetLifecycle",
     "ControlLifecycle"
-  ]),
-  archive: new Set(["GetLifecycle", "ControlLifecycle"])
+  ])
 };
 
 const SPACE_OPTIONAL_METHODS: Record<string, ReadonlySet<string>> = {

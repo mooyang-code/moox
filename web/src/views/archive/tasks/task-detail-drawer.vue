@@ -16,7 +16,7 @@
           <a-button size="small" :loading="busy[task.dataset_id || '']" @click="emit('run', task)">整段重读</a-button>
           <a-button size="small" @click="emit('edit', task)">编辑</a-button>
           <a-button size="small" @click="emit('backfill', task)">补拉区间</a-button>
-          <a-button size="small" @click="emit('toggle', task)">{{ task.status === "paused" ? "启用" : "停用" }}</a-button>
+          <a-button size="small" @click="emit('toggle', task)">{{ task.status === "disabled" ? "启用" : "停用" }}</a-button>
           <a-button
             size="small"
             status="danger"
@@ -32,17 +32,21 @@
         <a-descriptions-item label="频率 / 分区"
           >{{ task.freq || "—" }} / {{ partitionUnitText(task.partition_unit) }}</a-descriptions-item
         >
-        <a-descriptions-item label="跟随方式">每分钟读 Storage 变更日志</a-descriptions-item>
+        <a-descriptions-item label="跟随方式">执行器每分钟本地跟随 Storage 变更日志</a-descriptions-item>
         <a-descriptions-item label="最近成功的跟随">{{ formatInstant(task.last_success_at, zone) }}</a-descriptions-item>
+        <a-descriptions-item label="最近本地跟随">
+          <div>{{ formatInstant(task.last_follow_at, zone) }}</div>
+          <div v-if="rescanProgressText(task, zone)" class="sub tone-warn">{{ rescanProgressText(task, zone) }}</div>
+          <div v-if="task.last_follow_error" class="sub tone-bad">{{ task.last_follow_error }}</div>
+          <div v-else-if="task.last_follow_message" class="sub">{{ task.last_follow_message }}</div>
+        </a-descriptions-item>
         <a-descriptions-item label="定稿至">{{ formatInstant(task.final_until, zone) }}</a-descriptions-item>
         <a-descriptions-item label="回补起点">{{ formatInstant(task.backfill_from, zone) }}</a-descriptions-item>
         <a-descriptions-item label="线上保留">{{ formatRetention(task.retention) }}</a-descriptions-item>
         <a-descriptions-item label="归档目录">
           <span class="mono">{{ taskDir(task) }}</span>
         </a-descriptions-item>
-        <a-descriptions-item label="创建"
-          >{{ task.creator || "—" }} · {{ formatInstant(task.created_at, zone) }}</a-descriptions-item
-        >
+        <a-descriptions-item label="创建时间">{{ formatInstant(task.created_at, zone) }}</a-descriptions-item>
       </a-descriptions>
 
       <div v-if="task.blocked_reason" class="blocked">
@@ -119,10 +123,17 @@
 <script setup lang="ts">
 import { reportError } from "@/api/http";
 import { Message, Modal } from "@arco-design/web-vue";
-import { updateArchiveTask, type ArchiveTask } from "@/api/archive";
+import { clearArchiveUnrecoverable, type ArchiveTask } from "@/api/archive";
 import { formatInstant } from "@/utils/time-zone";
 import { formatRetention } from "@/utils/retention";
-import { healthLabel, healthTone, partitionUnitText, type ArchiveQuery, type DetailTab } from "../shared/archive-model";
+import {
+  healthLabel,
+  healthTone,
+  partitionUnitText,
+  rescanProgressText,
+  type ArchiveQuery,
+  type DetailTab
+} from "../shared/archive-model";
 import TaskPartitions from "./task-partitions.vue";
 import TaskRecent from "./task-recent.vue";
 import TaskRuns from "./task-runs.vue";
@@ -168,7 +179,7 @@ function confirmClearUnrecoverable() {
     cancelText: "取消",
     onBeforeOk: async () => {
       try {
-        await updateArchiveTask({ dataset_id: id, clear_unrecoverable: true });
+        await clearArchiveUnrecoverable({ dataset_id: id });
       } catch (error) {
         reportError(error);
         return false;

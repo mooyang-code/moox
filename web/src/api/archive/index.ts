@@ -32,6 +32,9 @@ export const updateArchiveTask = (req: T.UpdateArchiveTaskReq) =>
 export const deleteArchiveTask = (datasetId: string) =>
   callArchive<{ dataset_id: string }, Record<string, never>>("DeleteArchiveTask", { dataset_id: datasetId });
 
+export const clearArchiveUnrecoverable = (req: T.ClearArchiveUnrecoverableReq) =>
+  callArchive<T.ClearArchiveUnrecoverableReq, T.ClearArchiveUnrecoverableRsp>("ClearArchiveUnrecoverable", req);
+
 export const runArchiveTaskNow = (datasetId: string) =>
   callArchive<{ dataset_id: string }, T.ArchiveRunRsp>("RunArchiveTaskNow", { dataset_id: datasetId });
 
