@@ -169,22 +169,6 @@ func (logicalAccountTargetRow) TableName() string {
 	return "t_logical_account_targets"
 }
 
-func (s *Store) AcceptLogicalAccountTarget(
-	ctx context.Context,
-	record LogicalAccountTargetRecord,
-) (LogicalAccountTargetRecord, bool, error) {
-	unlock := s.LockLogicalAccount(record.SpaceID, record.LogicalAccountID)
-	defer unlock()
-	var current LogicalAccountTargetRecord
-	var accepted bool
-	err := s.Transaction(ctx, func(tx *Tx) error {
-		var err error
-		current, accepted, err = tx.AcceptLogicalAccountTarget(record)
-		return err
-	})
-	return current, accepted, err
-}
-
 func (tx *Tx) AcceptLogicalAccountTarget(
 	record LogicalAccountTargetRecord,
 ) (LogicalAccountTargetRecord, bool, error) {

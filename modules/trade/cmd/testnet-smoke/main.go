@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
+	"github.com/mooyang-code/moox/modules/trade/internal/wiring"
 )
 
 func main() {
@@ -39,13 +40,9 @@ func run(
 	}
 	defer gateway.Close()
 	secrets := secretclient.New(gateway)
-	value, err := secrets.GetExchangeSecret(ctx, options.SecretID)
+	credential, err := wiring.ExchangeCredential(ctx, secrets, options.Exchange, options.SecretID)
 	if err != nil {
-		return fmt.Errorf("GetSecretValue(%s): %w", options.SecretID, err)
-	}
-	credential, err := credentialFromSecret(value, options.Exchange, options.SecretID)
-	if err != nil {
-		return err
+		return fmt.Errorf("读取交易所密钥 %s：%w", options.SecretID, err)
 	}
 	phaseCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()

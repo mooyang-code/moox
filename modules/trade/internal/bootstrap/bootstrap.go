@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gorm.io/gorm"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,10 +27,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/hkex"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/stockfeed"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -43,6 +39,7 @@ import (
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
+	"github.com/mooyang-code/moox/modules/trade/internal/wiring"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -106,14 +103,14 @@ func initialize(
 			}
 			instruments := make([]exchange.Instrument, 0, len(records))
 			for _, record := range records {
-				instruments = append(instruments, instrumentFromRecord(name, exchange.MarketTypeEquity, record))
+				instruments = append(instruments, wiring.InstrumentFromRecord(name, exchange.MarketTypeEquity, record))
 			}
 			return instruments, nil
 		}
 	}
 	ashareMarket := ashare.NewMarket(nil, stockSeed(exchange.ExchangeAShare))
 	hkexMarket := hkex.NewMarket(nil, stockSeed(exchange.ExchangeHKEX))
-	if err := registerBuiltins(registry, ashareMarket, hkexMarket); err != nil {
+	if err := wiring.RegisterBuiltins(registry, ashareMarket, hkexMarket); err != nil {
 		return nil, err
 	}
 	moduleMetrics, reporter := registerMetricsReporter(serverInstance)
@@ -132,8 +129,8 @@ func initialize(
 		Store: tradeStore, Adapters: manager, SymbolConfig: manager, RequestSync: manager.RequestSync,
 		Validator: orderapp.Validator{
 			Accounts:         accounts,
-			Instruments:      instrumentSource{store: tradeStore},
-			Positions:        positionSource{store: tradeStore},
+			Instruments:      wiring.InstrumentSource{Store: tradeStore},
+			Positions:        wiring.PositionSource{Store: tradeStore},
 			MaxReferenceAge:  10 * time.Second,
 			MaxChildNotional: shared.MustDecimal(maxChildNotional),
 			MaxLeverage:      shared.MustDecimal("20"),
@@ -205,7 +202,8 @@ func initialize(
 	}
 	paperMatcher.DecideContext = (&executionpaper.Decider{Store: tradeStore, Adapters: manager, Exchanges: registry}).Decide
 	paperMatcherWorker := traderuntime.NewPaperMatcherWorker(paperMatcher, time.Second)
-	orderService.Syncer = accountSyncer{service: syncService}
+	syncer := wiring.AccountSyncer{Service: syncService}
+	orderService.Syncer = syncer
 	targetExecutor := &targetapp.Executor{
 		Exchanges: registry,
 		Store:     tradeStore, Orders: orderService,
@@ -239,7 +237,7 @@ func initialize(
 	syncService.Wake = targetWorker.Wake
 	paperMatcher.WakeTarget = targetWorker.WakeTarget
 	logicalAccounts := &logicalapp.Service{
-		Store: tradeStore, Syncer: accountSyncer{service: syncService},
+		Store: tradeStore, Syncer: syncer,
 		Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
 		// 关闭策略会话之后唤醒执行器，由过期路径撤掉这份目标的挂单。
 		WakeTarget: targetWorker.WakeTarget,
@@ -255,7 +253,7 @@ func initialize(
 	operatorService := &operatorapp.Service{
 		Exchanges: registry, Wake: targetWorker.Wake,
 		Store: tradeStore, Orders: orderService,
-		Syncer: accountSyncer{service: syncService},
+		Syncer: syncer,
 		Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
 	}
 	// 保证金率监控：每分钟检查一次实盘账户；它复用资金维护的定时任务外壳（定时、门禁、超时一样）。
@@ -318,7 +316,7 @@ func initialize(
 		credential := exchange.Credential{}
 		if exchange.ExecutionMode(record.ExecutionMode) == exchange.ExecutionModeLive {
 			var credentialErr error
-			credential, credentialErr = exchangeCredential(
+			credential, credentialErr = wiring.ExchangeCredential(
 				context.Background(),
 				secrets,
 				exchange.Exchange(record.Exchange),
@@ -336,7 +334,7 @@ func initialize(
 		accountConfig := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
 			Exchange:         exchange.Exchange(record.Exchange),
-			Markets:          marketTypes(record.Markets),
+			Markets:          wiring.MarketTypes(record.Markets),
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
 			AccountMode:      exchange.AccountMode(record.AccountMode),
 			Environment:      exchange.AccountEnvironment(record.Environment),
@@ -609,113 +607,6 @@ func runSessionClose(ctx context.Context, closer *orderapp.SessionCloser, gate f
 	}
 }
 
-// registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
-func registerBuiltins(registry *execution.Registry, ashareMarket, hkexMarket *stockfeed.Market) error {
-	cryptoExchange := func(name exchange.Exchange, inspect exchange.Inspector) execution.ExchangeDescriptor {
-		return execution.ExchangeDescriptor{
-			Exchange:     name,
-			OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
-			FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
-			Markets:      []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap},
-			Inspect:      inspect,
-		}
-	}
-	binanceDescriptor := cryptoExchange(exchange.ExchangeBinance, binance.Inspect)
-	// 统一账户整个账户一个适配器（一个余额接口、一条私有流）；普通账户按市场各一个，由注册表合成。
-	binanceDescriptor.WholeAccount = func(config exchange.AccountConfig) bool {
-		return config.AccountMode == exchange.AccountModeBinancePortfolioMargin
-	}
-	registry.Register(binanceDescriptor, func(
-		config exchange.AccountConfig,
-		credential exchange.Credential,
-	) (execution.ExecutionAdapter, error) {
-		if err := requireAPIKey(config, credential); err != nil {
-			return nil, err
-		}
-		if err := requireInspectedMode(config); err != nil {
-			return nil, err
-		}
-		if config.AccountMode == exchange.AccountModeBinancePortfolioMargin {
-			if config.Environment == exchange.AccountEnvironmentTestnet {
-				return nil, errors.New("币安测试网没有统一账户")
-			}
-			return binance.NewPortfolioMargin(config, credential), nil
-		}
-		return binance.New(config, credential), nil
-	})
-	okxExchange := cryptoExchange(exchange.ExchangeOKX, okx.Inspect)
-	registry.Register(okxExchange, func(
-		config exchange.AccountConfig,
-		credential exchange.Credential,
-	) (execution.ExecutionAdapter, error) {
-		if err := requireAPIKey(config, credential); err != nil {
-			return nil, err
-		}
-		if config.ExecutionMode == exchange.ExecutionModeLive &&
-			strings.TrimSpace(credential.Passphrase) == "" {
-			return nil, errors.New("OKX live account requires passphrase")
-		}
-		return okx.New(config, credential), nil
-	})
-	// A 股：模拟盘用腾讯快照做行情、由 Trade 撮合；实盘（仿真 TESTNET、实盘 PRODUCTION）走 QMT 执行端，尚未接入。
-	session, err := ashare.NewSession()
-	if err != nil {
-		return fmt.Errorf("A 股交易时段：%w", err)
-	}
-	registry.Register(execution.ExchangeDescriptor{
-		Exchange:         exchange.ExchangeAShare,
-		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
-		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
-		Markets:          []exchange.MarketType{exchange.MarketTypeEquity},
-		SettlementAssets: []string{ashare.SettlementAsset},
-		LiveUnavailable:  errASharePending.Error(),
-		Session:          session,
-		SessionHours:     "A 股 09:30-11:30、13:00-14:57",
-	}, func(config exchange.AccountConfig, _ exchange.Credential) (execution.ExecutionAdapter, error) {
-		if config.ExecutionMode == exchange.ExecutionModeLive {
-			return nil, errASharePending
-		}
-		return stockfeed.NewAdapter(ashareMarket), nil
-	})
-	// 港股：只有模拟盘，用腾讯实时快照做行情、由 Trade 撮合；没有实盘通道，建实盘账户和绑定都直接报错。
-	hkSession, err := hkex.NewSession()
-	if err != nil {
-		return fmt.Errorf("港股交易时段：%w", err)
-	}
-	registry.Register(execution.ExchangeDescriptor{
-		Exchange:         exchange.ExchangeHKEX,
-		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
-		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
-		Markets:          []exchange.MarketType{exchange.MarketTypeEquity},
-		SettlementAssets: []string{hkex.SettlementAsset},
-		LiveUnavailable:  errHKEXPaperOnly.Error(),
-		Session:          hkSession,
-		SessionHours:     hkex.SessionHours,
-		InstrumentScope:  hkex.InstrumentScope,
-	}, func(config exchange.AccountConfig, _ exchange.Credential) (execution.ExecutionAdapter, error) {
-		if config.ExecutionMode == exchange.ExecutionModeLive {
-			return nil, errHKEXPaperOnly
-		}
-		return stockfeed.NewAdapter(hkexMarket), nil
-	})
-	return nil
-}
-
-// errASharePending 是 A 股实盘还不能用的原因：下单要经 QMT 执行端（第 4 批）。
-var errASharePending = errors.New("A 股实盘要通过 QMT 执行端下单，QMT 执行端尚未接入")
-
-// errHKEXPaperOnly 是港股不能建实盘账户的原因：只做了模拟盘，没有接任何券商。
-var errHKEXPaperOnly = errors.New("港股只支持模拟盘，没有实盘下单通道")
-
-// 模拟盘用空凭据绑定公共行情，只有实盘才要求密钥。
-func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential) error {
-	if config.ExecutionMode == exchange.ExecutionModeLive &&
-		(strings.TrimSpace(credential.APIKey) == "" || strings.TrimSpace(credential.APISecret) == "") {
-		return errors.New("live account requires credential")
-	}
-	return nil
-}
-
 // verifyCredentialFingerprint 核对账户检测结果里记录的密钥指纹和现在读到的密钥是否一致：
 // 检测通过的是当时那把密钥；同一个密钥 ID 下改了密钥内容、或账户从来没检测过，都不能直接绑定。
 func verifyCredentialFingerprint(record store.TradingAccountRecord, credential exchange.Credential) error {
@@ -748,182 +639,6 @@ func recheckInspection(worker *traderuntime.InspectionWorker, spaceID, accountID
 			log.Warnf("交易账户 %s 密钥内容变化后重新检测没有完成：%v", accountID, err)
 		}
 	}()
-}
-
-// requireInspectedMode：币安生产环境的实盘账户必须先检测出账户类型（统一账户和普通账户的接口完全不同），不能按默认值猜。
-// 测试网跳过检测，一律按普通账户。
-func requireInspectedMode(config exchange.AccountConfig) error {
-	if config.ExecutionMode == exchange.ExecutionModeLive &&
-		config.Environment == exchange.AccountEnvironmentProduction &&
-		config.AccountMode == exchange.AccountModeUnspecified {
-		return errors.New("账户类型还没有检测出来：请先在管理台对这个账户“重新检测”")
-	}
-	return nil
-}
-
-func exchangeCredential(
-	ctx context.Context,
-	secrets accountapp.SecretSource,
-	exchangeName exchange.Exchange,
-	secretID string,
-) (exchange.Credential, error) {
-	value, err := secrets.GetExchangeSecret(ctx, secretID)
-	if err != nil {
-		return exchange.Credential{}, err
-	}
-	if value.SecretID != secretID ||
-		value.Exchange != exchangeName ||
-		value.Category != "exchange" ||
-		value.Status != "active" {
-		return exchange.Credential{}, fmt.Errorf(
-			"trade bootstrap: Exchange credential %q metadata mismatch",
-			secretID,
-		)
-	}
-	return accountapp.CredentialFromSecret(value)
-}
-
-type accountSyncer struct {
-	service *accountsync.Service
-}
-
-func (s accountSyncer) SyncAccount(ctx context.Context, accountID string) error {
-	_, err := s.service.SyncAccount(ctx, accountID)
-	return err
-}
-
-func (s accountSyncer) SyncAccountLight(ctx context.Context, accountID string) error {
-	_, err := s.service.SyncAccountLight(ctx, accountID)
-	return err
-}
-
-func (s accountSyncer) ConfirmCancel(ctx context.Context, spaceID, orderID string) error {
-	return s.service.ConfirmCancel(ctx, spaceID, orderID)
-}
-
-type instrumentSource struct {
-	store *store.Store
-}
-
-func (s instrumentSource) GetInstrument(
-	ctx context.Context,
-	exchangeName exchange.Exchange,
-	market exchange.MarketType,
-	symbol string,
-) (exchange.Instrument, error) {
-	// Order specs carry the canonical InstrumentID. Resolve that identity and
-	// retain the native symbol only at the adapter boundary.
-	record, err := s.store.GetInstrumentByIDScoped(ctx, symbol, string(exchangeName), string(market))
-	if err != nil {
-		return exchange.Instrument{}, err
-	}
-	if record.MarketType != string(market) {
-		return exchange.Instrument{}, fmt.Errorf("标的 %s 属于市场 %s，不是 %s", symbol, record.MarketType, market)
-	}
-	return instrumentFromRecord(exchangeName, exchange.MarketType(record.MarketType), record), nil
-}
-
-func (s instrumentSource) GetInstrumentForAccount(
-	ctx context.Context,
-	tradingAccountID string,
-	exchangeName exchange.Exchange,
-	market exchange.MarketType,
-	symbol string,
-) (exchange.Instrument, error) {
-	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return exchange.Instrument{}, err
-	}
-	record, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol)
-	if err != nil {
-		return exchange.Instrument{}, err
-	}
-	if record.MarketType != string(market) {
-		return exchange.Instrument{}, fmt.Errorf("标的 %s 属于市场 %s，不是 %s", symbol, record.MarketType, market)
-	}
-	return instrumentFromRecord(exchangeName, exchange.MarketType(record.MarketType), record), nil
-}
-
-func instrumentFromRecord(exchangeName exchange.Exchange, market exchange.MarketType, record store.InstrumentRecord) exchange.Instrument {
-	return exchange.Instrument{
-		Exchange: exchangeName, MarketType: market, ExchangeSymbol: record.ExchangeSymbol,
-		InstrumentID: record.InstrumentID, BaseAsset: record.BaseAsset,
-		QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
-		Linear: record.Linear, ContractValue: decimal(record.ContractValue),
-		ContractValueAsset:   record.ContractValueAsset,
-		ExchangeQuantityStep: decimal(record.ExchangeQuantityStep),
-		MinExchangeQuantity:  decimal(record.MinExchangeQuantity),
-		PriceTick:            decimal(record.PriceTick), MinNotional: decimal(record.MinNotional),
-		MaxBuyPriceRatio: decimal(record.MaxBuyPriceRatio), MinSellPriceRatio: decimal(record.MinSellPriceRatio),
-		Status: record.Status, ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
-	}
-}
-
-type positionSource struct {
-	store *store.Store
-}
-
-// GetPosition 按内部标的 ID 取持仓；标的 ID 自带市场，现货和合约同名的交易所代码不会串。
-func (s positionSource) GetPosition(
-	ctx context.Context,
-	tradingAccountID string,
-	instrumentID string,
-) (exchange.Position, error) {
-	return s.GetPositionForAccount(ctx, tradingAccountID, instrumentID)
-}
-
-func (s positionSource) GetPositionForAccount(
-	ctx context.Context,
-	tradingAccountID string,
-	symbol string,
-) (exchange.Position, error) {
-	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return exchange.Position{}, err
-	}
-	instrument, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, PositionSide: exchange.PositionSideNet}, nil
-		}
-		return exchange.Position{}, err
-	}
-	key := exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)
-	record, found, err := s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, key, string(exchange.PositionSideNet))
-	if err != nil {
-		return exchange.Position{}, err
-	}
-	if !found {
-		return exchange.Position{TradingAccountID: tradingAccountID, Market: key.Market, InstrumentID: symbol, ExchangeSymbol: key.Symbol, PositionSide: exchange.PositionSideNet}, nil
-	}
-	return exchange.Position{
-		TradingAccountID: tradingAccountID, Market: exchange.MarketType(record.MarketType), InstrumentID: record.InstrumentID,
-		ExchangeSymbol: record.ExchangeSymbol,
-		PositionSide:   exchange.PositionSide(record.PositionSide), SignedQuantity: decimal(record.SignedQuantity),
-		EntryPrice: decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice), Leverage: decimal(record.Leverage),
-		MarginMode: exchange.MarginMode(record.MarginMode), UsedMargin: decimal(record.UsedMargin),
-		LiquidationPrice: decimal(record.LiquidationPrice), UnrealizedPnL: decimal(record.UnrealizedPnL),
-		RealizedPnL: decimal(record.RealizedPnL), ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
-	}, nil
-}
-
-func marketTypes(markets []string) []exchange.MarketType {
-	result := make([]exchange.MarketType, len(markets))
-	for i, market := range markets {
-		result[i] = exchange.MarketType(market)
-	}
-	return result
-}
-
-func decimal(value string) shared.Decimal {
-	if strings.TrimSpace(value) == "" {
-		return shared.Zero()
-	}
-	parsed, err := shared.ParseDecimal(value)
-	if err != nil {
-		return shared.Zero()
-	}
-	return parsed
 }
 
 // registerMetricsReporter 注册指标上报；返回的处理器在健康检查注册时接上就绪判断与生命周期（见 registerHealth）。

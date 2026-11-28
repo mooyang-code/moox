@@ -13,18 +13,16 @@ func TestContextLocksShareRegistryAndDoNotAcquireAfterCancel(t *testing.T) {
 	for _, kind := range []string{"account", "execution", "membership"} {
 		t.Run(kind, func(t *testing.T) {
 			var acquire func(context.Context) (func(), error)
-			var unlock func()
 			switch kind {
 			case "account":
-				unlock = s.LockTradingAccount("a")
 				acquire = func(ctx context.Context) (func(), error) { return s.LockTradingAccountContext(ctx, "a") }
 			case "execution":
-				unlock = s.LockLogicalAccountExecution("s", "l")
 				acquire = func(ctx context.Context) (func(), error) { return s.LockLogicalAccountExecutionContext(ctx, "s", "l") }
 			case "membership":
-				unlock = s.LockLogicalAccountMembership()
 				acquire = s.LockLogicalAccountMembershipContext
 			}
+			unlock, err := acquire(context.Background())
+			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
 			release, err := acquire(ctx)

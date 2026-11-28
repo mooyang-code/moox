@@ -52,10 +52,10 @@ func TestManualControlRejectsTargetReplay(t *testing.T) {
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
 	target := validLogicalAccountTarget()
-	_, _, err := s.AcceptLogicalAccountTarget(ctx, target)
+	_, _, err := acceptTargetForTest(ctx, s, target)
 	require.NoError(t, err)
 	require.NoError(t, s.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
-	_, _, err = s.AcceptLogicalAccountTarget(ctx, target)
+	_, _, err = acceptTargetForTest(ctx, s, target)
 	require.Error(t, err)
 	receipt := TargetHistoryRecord{SpaceID: "space-1", TargetID: target.TargetID, LogicalAccountID: "logical-1", InstanceID: target.InstanceID, SessionID: target.SessionID, StrategyID: target.StrategyID, SessionStartedAt: target.SessionStartedAt, BarEndTime: target.BarEndTime, ValidUntil: target.ValidUntil, RequestHash: "hash", SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", RecordedAt: 1}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.InsertTargetHistory(receipt) }))

@@ -2,32 +2,24 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 // runFactsPhase 只读核对交易所接口：标的、报价、账户、持仓、挂单、成交。不写库，不下单。
 func runFactsPhase(ctx context.Context, options smokeOptions, credential exchange.Credential) error {
 	config := exchange.AccountConfig{
 		TradingAccountID: "facts", Exchange: options.Exchange, Markets: []exchange.MarketType{options.MarketType},
-		ExecutionMode: exchange.ExecutionModeLive, Environment: options.Environment, SettlementAsset: "USDT",
+		ExecutionMode: exchange.ExecutionModeLive, AccountMode: exchange.AccountMode(smokeAccountMode(options.Exchange)),
+		Environment: options.Environment, SettlementAsset: "USDT",
 	}
 	if exchange.RuleFor(options.MarketType).Leverage {
 		config.MarginMode = exchange.MarginModeCross
 	}
-	var adapter execution.ExecutionAdapter
-	switch options.Exchange {
-	case exchange.ExchangeBinance:
-		adapter = binance.New(config, credential)
-	case exchange.ExchangeOKX:
-		adapter = okx.New(config, credential)
-	default:
-		return errors.New("unsupported Exchange")
+	adapter, err := newSmokeRegistry().Bind(config, credential)
+	if err != nil {
+		return err
 	}
 	instruments, err := adapter.LoadInstruments(ctx)
 	if err != nil {

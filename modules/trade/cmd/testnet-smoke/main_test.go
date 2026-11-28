@@ -14,7 +14,9 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/wiring"
 )
 
 func TestParseOptionsRequiresExplicitConfirmation(t *testing.T) {
@@ -270,24 +272,38 @@ func TestSeedSmokeStoreRejectsExistingNonTestnetAccount(t *testing.T) {
 	}
 }
 
-func TestCredentialFromSecretValidatesExchangeAndOKXPassphrase(t *testing.T) {
-	_, err := credentialFromSecret(accountapp.ExchangeSecret{
+func TestSmokeWiringValidatesCredentialAndBindsViaRegistry(t *testing.T) {
+	_, err := wiring.CredentialFromSecret(accountapp.ExchangeSecret{
 		SecretID: "s", Category: "exchange", Exchange: exchange.ExchangeOKX,
 		Status: "active", KeyID: "key", SecretValue: "secret",
 	}, exchange.ExchangeBinance, "s")
-	if err == nil || !strings.Contains(err.Error(), "metadata mismatch") {
-		t.Fatalf("credentialFromSecret() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "元数据不匹配") {
+		t.Fatalf("CredentialFromSecret() error = %v", err)
 	}
 
-	_, err = credentialFromSecret(accountapp.ExchangeSecret{
+	registry := newSmokeRegistry()
+	okxConfig := exchange.AccountConfig{
+		TradingAccountID: "testnet-smoke-okx",
+		Exchange:         exchange.ExchangeOKX,
+		Markets:          smokeMarkets(exchange.ExchangeOKX, exchange.MarketTypeSpot),
+		ExecutionMode:    exchange.ExecutionModeLive,
+		AccountMode:      exchange.AccountMode(smokeAccountMode(exchange.ExchangeOKX)),
+		Environment:      exchange.AccountEnvironmentTestnet,
+		SettlementAsset:  "USDT",
+		MarginMode:       exchange.MarginModeCross,
+	}
+	noPass, err := wiring.CredentialFromSecret(accountapp.ExchangeSecret{
 		SecretID: "s", Category: "exchange", Exchange: exchange.ExchangeOKX,
 		Status: "active", KeyID: "key", SecretValue: "secret",
 	}, exchange.ExchangeOKX, "s")
-	if err == nil || !strings.Contains(err.Error(), "passphrase") {
-		t.Fatalf("credentialFromSecret() error = %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Bind(okxConfig, noPass); err == nil || !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("registry.Bind(OKX without passphrase) error = %v", err)
 	}
 
-	credential, err := credentialFromSecret(accountapp.ExchangeSecret{
+	credential, err := wiring.CredentialFromSecret(accountapp.ExchangeSecret{
 		SecretID: "s", Category: "exchange", Exchange: exchange.ExchangeOKX,
 		Status: "active", KeyID: "key", SecretValue: "secret",
 		ExtraConfig: `{"passphrase":"pass"}`,
@@ -298,6 +314,13 @@ func TestCredentialFromSecretValidatesExchangeAndOKXPassphrase(t *testing.T) {
 	if credential.APIKey != "key" || credential.APISecret != "secret" ||
 		credential.Passphrase != "pass" {
 		t.Fatalf("credential = %+v", credential)
+	}
+	adapter, err := registry.Bind(okxConfig, credential)
+	if err != nil {
+		t.Fatalf("registry.Bind(OKX) error = %v", err)
+	}
+	if _, ok := adapter.(*execution.MultiMarket); !ok {
+		t.Fatalf("OKX 冒烟适配器应由注册表合成 MultiMarket，实际 %T", adapter)
 	}
 }
 

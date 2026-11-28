@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/stockfeed"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/wiring"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -67,7 +68,7 @@ func TestExchangeCredentialPropagatesSingleSecretReadError(t *testing.T) {
 	readErr := errors.New("secret service unavailable")
 	secrets := &bootstrapSecretSource{err: readErr}
 
-	_, err := exchangeCredential(
+	_, err := wiring.ExchangeCredential(
 		context.Background(), secrets, exchange.ExchangeBinance, "secret-1",
 	)
 	if !errors.Is(err, readErr) {
@@ -80,7 +81,7 @@ func TestExchangeCredentialPropagatesSingleSecretReadError(t *testing.T) {
 
 func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
+	require.NoError(t, wiring.RegisterBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	for _, name := range []exchange.Exchange{
 		exchange.ExchangeBinance,
 		exchange.ExchangeOKX,
@@ -116,7 +117,7 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 // A 股：模拟盘绑定公共行情适配器；实盘在 QMT 执行端接入前直接报错；建账户时校验场所与市场、结算资产。
 func TestRegisterBuiltinsAShare(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
+	require.NoError(t, wiring.RegisterBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeAShare,
 		Markets:       []exchange.MarketType{exchange.MarketTypeEquity},
@@ -144,7 +145,7 @@ func TestRegisterBuiltinsAShare(t *testing.T) {
 // 港股：只有模拟盘，绑定公共行情适配器；建实盘账户和绑定实盘都直接报错；只开股票、按 HKD 结算；登记了交易时段和标的范围说明。
 func TestRegisterBuiltinsHKEX(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
+	require.NoError(t, wiring.RegisterBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-hk", Exchange: exchange.ExchangeHKEX,
 		Markets:       []exchange.MarketType{exchange.MarketTypeEquity},
@@ -176,7 +177,7 @@ func TestRegisterBuiltinsHKEX(t *testing.T) {
 
 func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
+	require.NoError(t, wiring.RegisterBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance,
 		Markets:       []exchange.MarketType{exchange.MarketTypeSpot},
@@ -200,7 +201,7 @@ func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
 // 统一账户整个账户一个适配器；普通账户按市场拆开再合成。
 func TestBindChoosesAdapterByInspectedAccountMode(t *testing.T) {
 	registry := execution.NewRegistry()
-	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
+	require.NoError(t, wiring.RegisterBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	both := []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance, Markets: both, MarginMode: exchange.MarginModeCross,

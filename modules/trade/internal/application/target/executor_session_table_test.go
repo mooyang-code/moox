@@ -27,8 +27,8 @@ import (
 // T14 之前的搭法：先释放组合原来的归属、改由这个会话认领，再写它的目标行。
 // T14 起：Trade 不再看归属，只写一行开始时刻（session_started_at，按 sessionStartedAt 取）更晚的目标行，不改 owner。
 //
-// 收敛过程中也会调用（模拟报价、准备期间被新会话取代）：那时 Converge 持有组合锁，所以这里只用事务里的写法，
-// 不调会再拿组合锁的 Store.AcceptLogicalAccountTarget。
+// 收敛过程中也会调用（模拟报价、准备期间被新会话取代）：那时 Converge 持有组合锁，所以这里直接走事务内写入，
+// 不再重复获取组合锁。
 func becomeCurrentSession(t *testing.T, f *targetFixture, sessionID, targetID string) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {

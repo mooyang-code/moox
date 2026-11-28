@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 
-	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
@@ -198,43 +195,6 @@ func validateSmokeLogicalAccount(
 		return errors.New("existing smoke LogicalAccount membership mismatch")
 	}
 	return nil
-}
-
-func credentialFromSecret(
-	value accountapp.ExchangeSecret,
-	exchangeName exchange.Exchange,
-	secretID string,
-) (exchange.Credential, error) {
-	if value.SecretID != secretID ||
-		value.Exchange != exchangeName ||
-		value.Category != "exchange" ||
-		value.Status != "active" ||
-		strings.TrimSpace(value.KeyID) == "" ||
-		strings.TrimSpace(value.SecretValue) == "" {
-		return exchange.Credential{}, fmt.Errorf(
-			"testnet smoke: Exchange credential %q metadata mismatch",
-			secretID,
-		)
-	}
-	var extra struct {
-		Passphrase string `json:"passphrase"`
-	}
-	if strings.TrimSpace(value.ExtraConfig) != "" {
-		if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
-			return exchange.Credential{}, fmt.Errorf(
-				"testnet smoke: decode credential extra config: %w",
-				err,
-			)
-		}
-	}
-	if exchangeName == exchange.ExchangeOKX &&
-		strings.TrimSpace(extra.Passphrase) == "" {
-		return exchange.Credential{}, errors.New("testnet smoke: OKX passphrase is required")
-	}
-	return exchange.Credential{
-		APIKey: value.KeyID, APISecret: value.SecretValue,
-		Passphrase: extra.Passphrase,
-	}, nil
 }
 
 func validateQueriedOrder(state smokeState, current exchange.Order) error {

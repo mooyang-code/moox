@@ -20,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -241,7 +242,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 		}
 		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
 	}))
-	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(context.Background(), tradeStore, store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "stress-target",
 		InstanceID: testRunner, SessionID: "session-e2e", SessionStartedAt: 1000, StrategyID: "stress",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),

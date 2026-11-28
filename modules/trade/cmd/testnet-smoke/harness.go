@@ -19,13 +19,11 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
+	"github.com/mooyang-code/moox/modules/trade/internal/wiring"
 	"github.com/rs/xid"
-	"gorm.io/gorm"
 )
 
 type liveHarness struct {
@@ -60,6 +58,16 @@ func openLiveHarness(
 		database.Close()
 		return nil, err
 	}
+	registry := newSmokeRegistry()
+	accountRecord, err := database.GetTradingAccountByID(ctx, identity.AccountID)
+	if err != nil {
+		database.Close()
+		return nil, err
+	}
+	if _, err := registry.Bind(smokeAccountConfig(accountRecord), credential); err != nil {
+		database.Close()
+		return nil, err
+	}
 	manager := &traderuntime.Manager{
 		Accounts: database, PollInterval: 250 * time.Millisecond,
 		RetryMin: 250 * time.Millisecond, RetryMax: 2 * time.Second,
@@ -67,6 +75,7 @@ func openLiveHarness(
 	accounts := &accountapp.Service{
 		Store:              accountapp.Repository{Store: database},
 		SessionState:       manager,
+		Exchanges:          registry,
 		LiveTradingEnabled: false,
 	}
 	// SymbolConfig 与生产一致：合约首次开仓前把全仓和账户配置的杠杆（冒烟固定 1 倍）设置到交易所。
@@ -74,12 +83,14 @@ func openLiveHarness(
 		Store: database, Adapters: manager, SymbolConfig: manager,
 		UnknownLookupWindow: 5 * time.Second,
 		Validator: orderapp.Validator{
-			Accounts: accounts, Instruments: smokeInstrumentSource{store: database},
-			Positions:        smokePositionSource{store: database},
+			Accounts:         accounts,
+			Instruments:      wiring.InstrumentSource{Store: database},
+			Positions:        wiring.PositionSource{Store: database},
 			MaxReferenceAge:  30 * time.Second,
 			MaxChildNotional: options.MaxNotional,
 			MaxLeverage:      shared.MustDecimal("20"),
 			FeeBufferRate:    shared.MustDecimal("0.002"),
+			Quotes:           manager,
 		},
 	}
 	syncService := &accountsync.Service{
@@ -87,39 +98,26 @@ func openLiveHarness(
 		Fills: &consumer.Reducer{Store: database}, Orders: orders,
 	}
 	probe := newPrivateOrderProbe()
-	orders.Syncer = smokeSyncer{service: syncService}
+	syncer := wiring.AccountSyncer{Service: syncService}
+	orders.Syncer = syncer
 	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		if record.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			record.ExecutionMode != string(exchange.ExecutionModeLive) ||
 			!slices.Equal(record.Markets, smokeMarketStrings(options.Exchange, options.MarketType)) ||
 			record.Exchange != string(options.Exchange) {
-			return nil, errors.New("testnet smoke session configuration escaped the expected TESTNET LIVE account")
+			return nil, errors.New("测试网冒烟会话配置偏离预期的 TESTNET LIVE 账户")
 		}
-		config := exchange.AccountConfig{
-			TradingAccountID: record.TradingAccountID,
-			Exchange:         exchange.Exchange(record.Exchange),
-			Markets:          smokeMarkets(options.Exchange, options.MarketType),
-			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
-			AccountMode:      exchange.AccountMode(record.AccountMode),
-			Environment:      exchange.AccountEnvironmentTestnet,
-			SettlementAsset:  record.SettlementAsset,
-			MarginMode:       exchange.MarginMode(record.MarginMode),
-		}
-		adapter, err := newSmokeAdapter(options.Exchange, config, credential)
+		adapter, err := registry.Bind(smokeAccountConfig(record), credential)
 		if err != nil {
 			return nil, err
 		}
 		adapter = newProbingAdapter(adapter, probe)
-		marketData, ok := adapter.(execution.MarketDataSource)
-		if !ok {
-			return nil, errors.New("testnet adapter has no market-data source")
-		}
-		accountEvents, ok := adapter.(execution.AccountEventSource)
-		if !ok {
-			return nil, errors.New("testnet adapter has no account-event source")
+		accountEvents := execution.AccountEventsOf(adapter)
+		if accountEvents == nil {
+			return nil, errors.New("测试网适配器未提供私有账户事件流")
 		}
 		return &traderuntime.ExchangeSession{
-			Account: record, Adapter: adapter, MarketData: marketData, AccountEvents: accountEvents, Sync: syncService,
+			Account: record, Adapter: adapter, MarketData: adapter, AccountEvents: accountEvents, Sync: syncService,
 			SyncInterval: 2 * time.Second,
 		}, nil
 	}
@@ -132,11 +130,13 @@ func openLiveHarness(
 		options: options, identity: identity, store: database,
 		manager: manager, sync: syncService, orders: orders,
 		operator: &operatorapp.Service{
-			Store: database, Orders: orders, Syncer: smokeSyncer{service: syncService},
-			Prices: targetapp.ExchangePriceSource{Adapters: manager},
+			Exchanges: registry,
+			Store:     database, Orders: orders, Syncer: syncer,
+			Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
 		},
 		logical: &logicalapp.Service{
-			Store: database, Syncer: smokeSyncer{service: syncService},
+			Store: database, Syncer: syncer,
+			Prices:         targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
 			MaxSnapshotAge: 2 * time.Minute,
 		},
 		probe:  probe,
@@ -145,28 +145,23 @@ func openLiveHarness(
 	return harness, nil
 }
 
-// newSmokeAdapter 按账户开通的市场建适配器：一个市场直接用单市场适配器，OKX 两个市场用 MultiMarket 合成（与生产一致）。
-func newSmokeAdapter(name exchange.Exchange, config exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
-	adapters := make(map[exchange.MarketType]execution.ExecutionAdapter, len(config.Markets))
-	for _, market := range config.Markets {
-		single := config
-		single.Markets = []exchange.MarketType{market}
-		if !exchange.RuleFor(market).Leverage {
-			single.MarginMode = exchange.MarginModeUnspecified
-		}
-		switch name {
-		case exchange.ExchangeBinance:
-			adapters[market] = binance.New(single, credential)
-		case exchange.ExchangeOKX:
-			adapters[market] = okx.New(single, credential)
-		default:
-			return nil, errors.New("unsupported testnet Exchange")
-		}
+func newSmokeRegistry() *execution.Registry {
+	registry := execution.NewRegistry()
+	wiring.RegisterCryptoExchanges(registry)
+	return registry
+}
+
+func smokeAccountConfig(record store.TradingAccountRecord) exchange.AccountConfig {
+	return exchange.AccountConfig{
+		TradingAccountID: record.TradingAccountID,
+		Exchange:         exchange.Exchange(record.Exchange),
+		Markets:          wiring.MarketTypes(record.Markets),
+		ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
+		AccountMode:      exchange.AccountMode(record.AccountMode),
+		Environment:      exchange.AccountEnvironment(record.Environment),
+		SettlementAsset:  record.SettlementAsset,
+		MarginMode:       exchange.MarginMode(record.MarginMode),
 	}
-	if len(config.Markets) == 1 {
-		return adapters[config.Markets[0]], nil
-	}
-	return execution.NewMultiMarket(name, config.Markets, adapters)
 }
 
 func (h *liveHarness) Close() error {
@@ -267,7 +262,7 @@ func runSubmitPhase(
 	if err != nil {
 		return err
 	}
-	instrument := smokeInstrumentFromRecord(options.Exchange, options.MarketType, instrumentRecord)
+	instrument := wiring.InstrumentFromRecord(options.Exchange, options.MarketType, instrumentRecord)
 	adapter, err := harness.adapter()
 	if err != nil {
 		return err
@@ -755,119 +750,6 @@ func snapshotAssetTotal(
 		}
 	}
 	return shared.Zero(), nil
-}
-
-type smokeSyncer struct {
-	service *accountsync.Service
-}
-
-func (s smokeSyncer) SyncAccount(ctx context.Context, accountID string) error {
-	_, err := s.service.SyncAccount(ctx, accountID)
-	return err
-}
-
-type smokeInstrumentSource struct {
-	store *store.Store
-}
-
-func (s smokeInstrumentSource) GetInstrument(
-	ctx context.Context,
-	exchangeName exchange.Exchange,
-	market exchange.MarketType,
-	symbol string,
-) (exchange.Instrument, error) {
-	record, err := s.store.GetInstrumentByIDScoped(ctx, symbol, string(exchangeName), string(market))
-	if err != nil {
-		return exchange.Instrument{}, err
-	}
-	return smokeInstrumentFromRecord(exchangeName, market, record), nil
-}
-
-func (s smokeInstrumentSource) GetInstrumentForAccount(
-	ctx context.Context,
-	tradingAccountID string,
-	exchangeName exchange.Exchange,
-	market exchange.MarketType,
-	instrumentID string,
-) (exchange.Instrument, error) {
-	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return exchange.Instrument{}, err
-	}
-	record, err := s.store.GetInstrumentByIDForAccount(
-		ctx, account.SpaceID, tradingAccountID, instrumentID,
-	)
-	if err != nil {
-		return exchange.Instrument{}, err
-	}
-	return smokeInstrumentFromRecord(exchangeName, market, record), nil
-}
-
-func smokeInstrumentFromRecord(
-	exchangeName exchange.Exchange,
-	market exchange.MarketType,
-	record store.InstrumentRecord,
-) exchange.Instrument {
-	return exchange.Instrument{
-		Exchange: exchangeName, MarketType: market, ExchangeSymbol: record.ExchangeSymbol,
-		InstrumentID: record.InstrumentID, BaseAsset: record.BaseAsset,
-		QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
-		Linear: record.Linear, ContractValue: mustDecimal(record.ContractValue),
-		ContractValueAsset:   record.ContractValueAsset,
-		ExchangeQuantityStep: mustDecimal(record.ExchangeQuantityStep),
-		MinExchangeQuantity:  mustDecimal(record.MinExchangeQuantity),
-		PriceTick:            mustDecimal(record.PriceTick),
-		MinNotional:          mustDecimal(record.MinNotional),
-		Status:               record.Status, ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
-	}
-}
-
-type smokePositionSource struct {
-	store *store.Store
-}
-
-func (s smokePositionSource) GetPosition(
-	ctx context.Context,
-	tradingAccountID string,
-	instrumentID string,
-) (exchange.Position, error) {
-	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return exchange.Position{}, err
-	}
-	// 订单规格里的标的是内部标的 ID，自带市场；冒烟账户只有一个市场。
-	instrument, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, instrumentID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: instrumentID, PositionSide: exchange.PositionSideNet}, nil
-		}
-		return exchange.Position{}, err
-	}
-	key := exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)
-	record, found, err := s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, key, string(exchange.PositionSideNet))
-	if err != nil {
-		return exchange.Position{}, err
-	}
-	if !found {
-		return exchange.Position{
-			TradingAccountID: tradingAccountID, Market: key.Market, InstrumentID: instrumentID,
-			ExchangeSymbol: key.Symbol, PositionSide: exchange.PositionSideNet,
-		}, nil
-	}
-	return exchange.Position{
-		TradingAccountID: tradingAccountID, Market: key.Market, InstrumentID: instrumentID, ExchangeSymbol: key.Symbol,
-		PositionSide:      exchange.PositionSide(record.PositionSide),
-		SignedQuantity:    mustDecimal(record.SignedQuantity),
-		EntryPrice:        mustDecimal(record.EntryPrice),
-		MarkPrice:         mustDecimal(record.MarkPrice),
-		Leverage:          mustDecimal(record.Leverage),
-		MarginMode:        exchange.MarginMode(record.MarginMode),
-		UsedMargin:        mustDecimal(record.UsedMargin),
-		LiquidationPrice:  mustDecimal(record.LiquidationPrice),
-		UnrealizedPnL:     mustDecimal(record.UnrealizedPnL),
-		RealizedPnL:       mustDecimal(record.RealizedPnL),
-		ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
-	}, nil
 }
 
 func mustDecimal(raw string) shared.Decimal {

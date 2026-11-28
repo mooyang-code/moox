@@ -12,13 +12,30 @@ import (
 	"gorm.io/gorm"
 )
 
+// acceptTargetForTest 仅用于 store 包内测试直接验证 tx.AcceptLogicalAccountTarget 行为。
+func acceptTargetForTest(ctx context.Context, s *Store, record LogicalAccountTargetRecord) (LogicalAccountTargetRecord, bool, error) {
+	unlock, err := s.LockLogicalAccountContext(ctx, record.SpaceID, record.LogicalAccountID)
+	if err != nil {
+		return LogicalAccountTargetRecord{}, false, err
+	}
+	defer unlock()
+	var current LogicalAccountTargetRecord
+	var accepted bool
+	err = s.Transaction(ctx, func(tx *Tx) error {
+		var txErr error
+		current, accepted, txErr = tx.AcceptLogicalAccountTarget(record)
+		return txErr
+	})
+	return current, accepted, err
+}
+
 func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
 
 	first := validLogicalAccountTarget()
-	current, accepted, err := s.AcceptLogicalAccountTarget(ctx, first)
+	current, accepted, err := acceptTargetForTest(ctx, s, first)
 	require.NoError(t, err)
 	require.True(t, accepted)
 	require.Equal(t, "1", current.Targets[0].Quantity)
@@ -27,7 +44,7 @@ func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
 	stale.TargetID = "target-stale"
 	setTargetBar(&stale, int64(1))
 	stale.Targets = []InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "9"}}
-	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, stale)
+	_, accepted, err = acceptTargetForTest(ctx, s, stale)
 	require.ErrorIs(t, err, ErrConflict)
 	require.False(t, accepted)
 
@@ -35,7 +52,7 @@ func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
 	next.TargetID = "target-2"
 	setTargetBar(&next, int64(2))
 	next.Targets = []InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "2.0"}}
-	current, accepted, err = s.AcceptLogicalAccountTarget(ctx, next)
+	current, accepted, err = acceptTargetForTest(ctx, s, next)
 	require.NoError(t, err)
 	require.True(t, accepted)
 	require.Equal(t, targetBarBase+2, current.BarEndTime)
@@ -52,8 +69,9 @@ func TestAcceptLogicalAccountTargetAllowsEmptyFullWhilePaused(t *testing.T) {
 	record := validLogicalAccountTarget()
 	record.Targets = []InstrumentQuantity{}
 
-	current, accepted, err := s.AcceptLogicalAccountTarget(
+	current, accepted, err := acceptTargetForTest(
 		context.Background(),
+		s,
 		record,
 	)
 
@@ -77,20 +95,20 @@ func TestAcceptLogicalAccountTargetOrdersSessionsByStartTime(t *testing.T) {
 		return value
 	}
 
-	_, accepted, err := s.AcceptLogicalAccountTarget(ctx, record("target-1", "runner-1", "session-1", 1_000))
+	_, accepted, err := acceptTargetForTest(ctx, s, record("target-1", "runner-1", "session-1", 1_000))
 	require.NoError(t, err, "没有目标行时不看归属，直接接受")
 	require.True(t, accepted)
 
-	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-early", "runner-0", "session-0", 999))
+	_, accepted, err = acceptTargetForTest(ctx, s, record("target-early", "runner-0", "session-0", 999))
 	require.ErrorIs(t, err, ErrTargetSuperseded)
 	require.False(t, accepted)
 
-	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-same-ms", "runner-2", "session-x", 1_000))
+	_, accepted, err = acceptTargetForTest(ctx, s, record("target-same-ms", "runner-2", "session-x", 1_000))
 	require.ErrorIs(t, err, ErrTargetSessionConflict)
 	require.NotErrorIs(t, err, ErrTargetSuperseded)
 	require.False(t, accepted)
 
-	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-2", "runner-2", "session-2", 2_000))
+	_, accepted, err = acceptTargetForTest(ctx, s, record("target-2", "runner-2", "session-2", 2_000))
 	require.NoError(t, err)
 	require.True(t, accepted)
 
@@ -98,10 +116,10 @@ func TestAcceptLogicalAccountTargetOrdersSessionsByStartTime(t *testing.T) {
 		_, _, err := tx.CloseTargetSession("space-1", "logical-1", 3_000, time.Now().UnixMilli())
 		return err
 	}))
-	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-3", "runner-3", "session-3", 3_000))
+	_, accepted, err = acceptTargetForTest(ctx, s, record("target-3", "runner-3", "session-3", 3_000))
 	require.ErrorIs(t, err, ErrTargetSuperseded, "开始时刻不大于 c_closed_through 的会话已关闭")
 	require.False(t, accepted)
-	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, record("target-4", "runner-3", "session-4", 3_001))
+	_, accepted, err = acceptTargetForTest(ctx, s, record("target-4", "runner-3", "session-4", 3_001))
 	require.NoError(t, err)
 	require.True(t, accepted)
 	current, err := s.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
@@ -115,7 +133,7 @@ func TestAcceptLogicalAccountTargetRejectsNegativeSpotQuantity(t *testing.T) {
 	record := validLogicalAccountTarget()
 	record.Targets[0].Quantity = "-1"
 
-	_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
+	_, accepted, err := acceptTargetForTest(context.Background(), s, record)
 
 	require.ErrorIs(t, err, ErrInvalidRecord)
 	require.False(t, accepted)
@@ -136,12 +154,12 @@ func TestAcceptLogicalAccountTargetIsIdempotentForSamePayload(t *testing.T) {
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "2.00"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1.0"},
 	}
-	_, accepted, err := s.AcceptLogicalAccountTarget(ctx, record)
+	_, accepted, err := acceptTargetForTest(ctx, s, record)
 	require.NoError(t, err)
 	require.True(t, accepted)
 
 	record.Targets[0], record.Targets[1] = record.Targets[1], record.Targets[0]
-	current, accepted, err := s.AcceptLogicalAccountTarget(ctx, record)
+	current, accepted, err := acceptTargetForTest(ctx, s, record)
 
 	require.NoError(t, err)
 	require.False(t, accepted)
@@ -156,14 +174,14 @@ func TestLogicalAccountTargetCASCannotOverwriteNewerBar(t *testing.T) {
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
 	first := validLogicalAccountTarget()
-	_, accepted, err := s.AcceptLogicalAccountTarget(ctx, first)
+	_, accepted, err := acceptTargetForTest(ctx, s, first)
 	require.NoError(t, err)
 	require.True(t, accepted)
 
 	next := first
 	next.TargetID = "target-2"
 	setTargetBar(&next, int64(2))
-	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, next)
+	_, accepted, err = acceptTargetForTest(ctx, s, next)
 	require.NoError(t, err)
 	require.True(t, accepted)
 
@@ -192,7 +210,7 @@ func TestAcceptLogicalAccountTargetConcurrentBarsKeepLatest(t *testing.T) {
 			record.TargetID = "target-" + strconv.FormatUint(sequence, 10)
 			setTargetBar(&record, int64(sequence))
 			record.Targets[0].Quantity = strconv.FormatUint(sequence, 10)
-			_, _, err := s.AcceptLogicalAccountTarget(ctx, record)
+			_, _, err := acceptTargetForTest(ctx, s, record)
 			if errors.Is(err, ErrConflict) {
 				err = nil
 			}
@@ -237,7 +255,7 @@ func TestAcceptLogicalAccountTargetRejectsInvalidInput(t *testing.T) {
 			record := validLogicalAccountTarget()
 			record.Targets = append([]InstrumentQuantity(nil), record.Targets...)
 			tt.mutate(&record)
-			_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
+			_, accepted, err := acceptTargetForTest(context.Background(), s, record)
 			require.Error(t, err)
 			require.False(t, accepted)
 		})
@@ -268,7 +286,7 @@ func TestCloseTargetSessionShortensOnlyLiveClosedTarget(t *testing.T) {
 			ctx := context.Background()
 			record := validLogicalAccountTarget()
 			record.SessionStartedAt, record.BarEndTime, record.ValidUntil = test.startedAt, test.barEnd.UnixMilli(), test.validUntil.UnixMilli()
-			current, accepted, err := s.AcceptLogicalAccountTarget(ctx, record)
+			current, accepted, err := acceptTargetForTest(ctx, s, record)
 			require.NoError(t, err)
 			require.True(t, accepted)
 			if test.status != "" {
@@ -357,7 +375,7 @@ func TestAcceptLogicalAccountTargetKeepsHoldTargetsWithoutQuantity(t *testing.T)
 	record := validLogicalAccountTarget()
 	record.Targets = append(record.Targets, InstrumentQuantity{InstrumentID: "ETH-USDT-SPOT", Hold: true})
 
-	_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
+	_, accepted, err := acceptTargetForTest(context.Background(), s, record)
 
 	require.NoError(t, err)
 	require.True(t, accepted)

@@ -480,7 +480,8 @@ func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
 		Wake: func() {
-			unlock := tradeStore.LockTradingAccount("account-1")
+			unlock, err := tradeStore.LockTradingAccountContext(context.Background(), "account-1")
+			require.NoError(t, err)
 			unlock()
 			woke <- struct{}{}
 		},
@@ -1486,7 +1487,8 @@ func TestAccountLockWaitHonorsCallerDeadline(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &consumer.Reducer{Store: tradeStore}}
-	unlock := tradeStore.LockTradingAccount("account-1")
+	unlock, err := tradeStore.LockTradingAccountContext(context.Background(), "account-1")
+	require.NoError(t, err)
 	defer unlock()
 
 	for name, call := range map[string]func(context.Context) error{
