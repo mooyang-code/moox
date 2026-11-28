@@ -50,7 +50,7 @@ func (e *rpcBusinessError) Error() string {
 	return fmt.Sprintf("请求失败: %s (code %s)", e.Msg, e.Code)
 }
 
-// rpcRetError 读取响应顶层的 ret_info：code 为 0、"0"、"SUCCESS" 或缺省时视为成功；没有 ret_info 的响应（如 HostAgentMgr）也算成功。
+// rpcRetError 读取响应顶层的 ret_info：code 为 0、"0"、"SUCCESS" 或缺省（含未携带 ret_info 字段的响应，如 GetDirectoryRsp 或 protojson 省略零值字段）时视为成功。
 func rpcRetError(raw []byte) error {
 	var head struct {
 		RetInfo *struct {

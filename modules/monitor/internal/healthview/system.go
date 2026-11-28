@@ -35,7 +35,7 @@ func projectLifecycle(l *lifecycleSource) *commonpb.LifecycleSnapshot {
 }
 
 // lifecycleModules 是提供生命周期接口的模块（组件 ID）。
-var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true, "factor-mgr": true, "monitor": true}
+var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true, "monitor": true}
 
 // systemPausable 是系统级暂停（moox-cli system pause）覆盖的模块（组件 ID）。
 var systemPausable = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true}
@@ -101,7 +101,7 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	var pausedModules, resuming, caughtUp int
 	for _, m := range modules {
 		l := m.l
-		// 「全部暂停」按已启用的系统可暂停模块总数判断，不参与系统暂停的模块（因子管理、Monitor 等）不计入。
+		// 「全部暂停」按已启用的系统可暂停模块总数判断，不参与系统暂停的模块（Monitor 等）不计入。
 		pausable := systemPausable[m.id]
 		switch l.Stage {
 		case "paused":

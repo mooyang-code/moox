@@ -42,7 +42,7 @@ python3 -I - "${TMP}/strategy.sqlite" <<'PY'
 import json, sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
 c.execute("INSERT INTO t_strategy_replays (c_replay_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_status) "
-          "VALUES ('rp-1', 'name: demo', 'sha256:a', 'crypto_24x7', 'space', '{}', 1, 2, 'done')")
+          "VALUES ('rp-1', 'name: demo', 'sha256:a', 'crypto_24x7', 'space', '{}', 1, 2, 'succeeded')")
 base = 1793037600000  # 2026-10-26T18:00:00Z
 targets = [{"instrument_id": "BTC-USDT", "market": "spot", "target_weight": "0.6"}, {"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "-0.4"}]
 insert = ("INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_skip_reason, c_targets_json, c_positions_json, c_summary_json) "

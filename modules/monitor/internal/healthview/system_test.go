@@ -86,7 +86,7 @@ func TestProjectSystemRunning(t *testing.T) {
 
 // 有生命周期接口的模块停止上报：不能从系统汇总里消失，健康面标红并列出；它最后一次上报的生命周期不再参与汇总。
 func TestProjectSystemReportsSilentLifecycleModule(t *testing.T) {
-	system := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "strategy", silent: true}, moduleReport{id: "storage-primary", silent: true})
+	system := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "strategy", silent: true}, moduleReport{id: "storage-primary", silent: true}, moduleReport{id: "archive-mgr", silent: true})
 	require.Equal(t, "attention", system.Health)
 	require.Equal(t, "red", system.Color)
 	require.Equal(t, "running", system.Phase)
@@ -94,9 +94,11 @@ func TestProjectSystemReportsSilentLifecycleModule(t *testing.T) {
 	require.Equal(t, int32(1), system.SilentModules)
 	require.Equal(t, int32(2), system.ModuleCount)
 
-	only := reportedSystem(t, moduleReport{id: "strategy", silent: true})
+	only := reportedSystem(t, moduleReport{id: "strategy", silent: true}, moduleReport{id: "factor-mgr", silent: true})
 	require.Equal(t, "attention", only.Health)
 	require.Equal(t, "unknown", only.Phase, "一个模块都读不到时运行阶段未知")
+	require.Equal(t, []string{"策略服务：停止上报"}, only.Issues, "factor-mgr 已无模块级生命周期，停止上报不计入系统汇总")
+	require.Equal(t, int32(1), only.SilentModules)
 }
 
 // 有模块未就绪：Strategy 自检不过但进程仍在上报，首页标红并写明原因；它的运行阶段照常参与汇总。

@@ -130,7 +130,7 @@ func TestGatewayCallBusinessFailurePrintsResponseAndFails(t *testing.T) {
 }
 
 func TestGatewayCallSuccessWithoutRetInfo(t *testing.T) {
-	gateway := &rpcFakeGateway{response: `{"agent_id":"a"}`}
+	gateway := &rpcFakeGateway{response: `{"ret_info":{"code":0},"agent_id":"a"}`}
 	useRPCGateway(t, gateway)
 	cmd := newGatewayCallCommand()
 	var out bytes.Buffer
@@ -138,7 +138,7 @@ func TestGatewayCallSuccessWithoutRetInfo(t *testing.T) {
 	cmd.SetArgs([]string{"trpc.moox.hostagent.HostAgentMgr", "GetStatus"})
 	cmd.SetContext(context.Background())
 	require.NoError(t, cmd.Execute())
-	assert.JSONEq(t, `{"agent_id":"a"}`, out.String())
+	assert.JSONEq(t, `{"ret_info":{"code":0},"agent_id":"a"}`, out.String())
 }
 
 func TestSpecBuildsRequestFromFlagsDataAndPaging(t *testing.T) {

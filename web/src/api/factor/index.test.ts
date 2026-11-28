@@ -202,7 +202,7 @@ describe("FactorMgr factor-set API", () => {
     await recalcFactors(req);
     expect(call).toHaveBeenLastCalledWith("RecalcFactors", req);
 
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, job: { job_id: "job-1", status: "canceled" } });
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, job: { job_id: "job-1", status: "cancelled" } });
     await cancelRecalcJob("job-1");
     expect(call).toHaveBeenLastCalledWith("CancelRecalcJob", { job_id: "job-1" });
 

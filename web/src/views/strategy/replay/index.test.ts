@@ -1159,7 +1159,7 @@ describe("strategy replay page", () => {
 
   it("refreshes the table of a selected replay that ended while its first page was loading", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded"), replay("r2", "running")], page: { total: 2 } });
-    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "done" : "running")));
+    api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, id === "r1" ? "succeeded" : "running")));
     const wrapper = mountPage();
     await flushPromises();
     const manual = deferred<unknown>();

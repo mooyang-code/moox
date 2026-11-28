@@ -87,7 +87,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor mute --for 3h --reason 初始�
 
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill --file ./moox.toml --space-id <空间> --dataset-id <数据集> --force --from <末根+1期> --to <实时起点>
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill-status --file ./moox.toml --space-id <空间> --job-id <作业ID>   # 等到没有 pending/running
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill-status --file ./moox.toml --space-id <空间> --job-id <作业ID>   # 等到没有 queued/running
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill-retry  --file ./moox.toml --space-id <空间> --job-id <作业ID>   # 有失败分块时重试，直到全部成功
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline check --deep --file ./moox.toml --space-id <空间> --dataset-id <数据集> --from <末根+1期> --to <现在>
 ```
