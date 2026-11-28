@@ -18,9 +18,8 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.collector.CollectMgr/CompletePackageUpload": "collector function upload",
 	"trpc.moox.collector.CollectMgr/ListCloudFunctions":    "collector function list",
 
-	"trpc.moox.collector.CollectMgr/CreateTask":    "collector task create",
-	"trpc.moox.collector.CollectMgr/DeleteTask":    "collector task delete",
-	"trpc.moox.collector.CollectMgr/GetIngestMode": "collector ingest-mode get",
+	"trpc.moox.collector.CollectMgr/CreateTask": "collector task create",
+	"trpc.moox.collector.CollectMgr/DeleteTask": "collector task delete",
 
 	"trpc.moox.factor.FactorMgr/PublishUdf":  "udf publish",
 	"trpc.moox.factor.FactorMgr/ListUdfs":    "udf list",

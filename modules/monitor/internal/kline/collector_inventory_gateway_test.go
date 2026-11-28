@@ -17,7 +17,7 @@ func (f inventoryInvoke) Invoke(ctx context.Context, service, method string, req
 }
 
 func TestCollectorInventoryUsesSharedGatewayAndPreservesScope(t *testing.T) {
-	request := &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", SnapshotId: "snapshot-1"}
+	request := &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto"}
 	wantErr := errors.New("gateway unavailable")
 	var calls int
 	gateway := inventoryInvoke(func(_ context.Context, service, method string, req, rsp any) error {
@@ -28,14 +28,14 @@ func TestCollectorInventoryUsesSharedGatewayAndPreservesScope(t *testing.T) {
 		if calls == 2 {
 			return wantErr
 		}
-		*rsp.(*collectorpb.GetTaskResultInventoryRsp) = collectorpb.GetTaskResultInventoryRsp{SnapshotId: "snapshot-1"}
+		*rsp.(*collectorpb.GetTaskResultInventoryRsp) = collectorpb.GetTaskResultInventoryRsp{ObservedAt: 1700000000000}
 		return nil
 	})
 	c, err := NewCollectorInventoryGatewayClient(gateway)
 	require.NoError(t, err)
 	rsp, err := c.GetTaskResultInventory(context.Background(), request)
 	require.NoError(t, err)
-	require.Equal(t, "snapshot-1", rsp.GetSnapshotId())
+	require.EqualValues(t, 1700000000000, rsp.GetObservedAt())
 	_, err = c.GetTaskResultInventory(context.Background(), request)
 	require.ErrorIs(t, err, wantErr)
 	_, err = c.GetTaskResultInventory(context.Background(), request, client.WithTarget("ip://127.0.0.1:1"))

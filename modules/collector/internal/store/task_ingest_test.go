@@ -85,7 +85,7 @@ func TestSetIngestSwitchesByDatasetOrWholeSpace(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, klineTask("crypto", "a", "ds_a", "")))
 	require.NoError(t, db.Tasks().Create(ctx, klineTask("crypto", "b", "ds_b", "")))
-	require.ErrorContains(t, db.Tasks().Create(ctx, klineTask("crypto", "a2", "ds_a", domain.IngestSCF)), "conflicts with task")
+	require.ErrorContains(t, db.Tasks().Create(ctx, klineTask("crypto", "a2", "ds_a", domain.IngestSCF)), "UNIQUE constraint failed")
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "r", TaskName: "r", DataType: "kline_resample", CollectParams: "{}"}))
 
 	changed, err := db.Tasks().SetIngest(ctx, "crypto", "ds_a", domain.IngestSCF)

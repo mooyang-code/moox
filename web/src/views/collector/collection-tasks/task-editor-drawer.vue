@@ -60,9 +60,7 @@
             <a-tag color="arcoblue">{{ dataTypeLabel(editor.data_type) }}</a-tag>
           </div>
           <div class="readonly-summary__row">
-            <span class="readonly-summary__label">{{
-              taskFieldLabel(editor.data_type === "kline_resample" ? "target_frequency" : "frequency", "频率")
-            }}</span>
+            <span class="readonly-summary__label">{{ editor.data_type === "kline_resample" ? "目标频率" : "采集频率" }}</span>
             <span>{{ frequencyValue || "-" }}</span>
           </div>
         </div>
@@ -82,12 +80,7 @@
             <a-col :span="12">
               <a-form-item
                 field="frequency"
-                :label="
-                  taskFieldLabel(
-                    editor.data_type === 'kline_resample' ? 'target_frequency' : 'frequency',
-                    editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'
-                  )
-                "
+                :label="editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'"
                 required
               >
                 <a-select v-if="frequencyOptions.length" v-model="frequencyValue" placeholder="请选择频率" allow-clear>
@@ -269,8 +262,8 @@ import {
   CreateTask,
   UpdateTask,
   previewKlineResampleSource,
-  type DataTypeFieldConfig,
   type ExtraFieldOption,
+  type FrequencyOption,
   type OutputFieldOption,
   type ResampleSourcePreview
 } from "@/api/collector";
@@ -350,7 +343,7 @@ const ingest = ref("");
 const sourceTaskId = ref("");
 const resamplePreview = ref<ResampleSourcePreview | null>(null);
 const resampleError = ref("");
-const taskTypeFields = ref<DataTypeFieldConfig[]>([]);
+const frequencyOptions = ref<FrequencyOption[]>([]);
 const selectedOutputFields = ref<string[]>([]);
 // 编辑已有任务时任务原来的输出字段：输出字段只能减少，不在这里面的不能勾。
 const originalOutputFields = ref<string[]>([]);
@@ -401,19 +394,6 @@ const frequencyHints = computed(() => {
   const source = frequencyMinutes(resamplePreview.value?.source_frequency || "");
   return (resamplePreview.value?.allowed_frequencies || []).filter(item => frequencyMinutes(item) > source);
 });
-const frequencyOptions = computed(() => {
-  const field = taskTypeFields.value.find(item => item.field_key === "frequency");
-  const configuredOptions = field?.field_options?.options;
-  if (!Array.isArray(configuredOptions)) return [];
-  return configuredOptions
-    .map(value => (typeof value === "string" ? { value, label: value } : (value as { value?: unknown; label?: unknown })))
-    .filter(option => option.value !== undefined && option.value !== null)
-    .map(option => ({ value: String(option.value), label: String(option.label || option.value) }));
-});
-
-function taskFieldLabel(key: string, fallback: string): string {
-  return taskTypeFields.value.find(field => field.field_key === key)?.field_name || fallback;
-}
 
 const rules = {
   task_name: [{ required: true, message: "请输入任务名称" }],
@@ -461,7 +441,7 @@ function resetEditor() {
   resampleError.value = "";
   selectedOutputFields.value = [];
   originalOutputFields.value = [];
-  taskTypeFields.value = [];
+  frequencyOptions.value = [];
   resultConfig.description = "";
 }
 
@@ -554,16 +534,16 @@ async function loadTaskTypeFields() {
   typeBaseOutputOptions.value = [];
   extraFieldOptions.value = [];
   extraFieldOptionsLoaded.value = false;
-  taskTypeFields.value = [];
+  frequencyOptions.value = [];
   typeFieldsLoadError.value = false;
   if (!dataType) return;
   loadingTypeFields.value = true;
   try {
-    const detail = await catalog.loadDataTypeDetail(dataType);
+    const config = await catalog.loadDataTypeDetail(dataType);
     if (token !== taskTypeFieldRequestToken || editor.data_type !== dataType) return;
-    taskTypeFields.value = [...(detail?.fields || [])].sort((a, b) => a.sort_order - b.sort_order);
-    typeBaseOutputOptions.value = detail?.base_output_fields || [];
-    extraFieldOptions.value = detail?.extra_fields || [];
+    frequencyOptions.value = config?.frequency_options || [];
+    typeBaseOutputOptions.value = config?.base_output_fields || [];
+    extraFieldOptions.value = config?.extra_fields || [];
     extraFieldOptionsLoaded.value = true;
   } catch (error) {
     if (token === taskTypeFieldRequestToken) {

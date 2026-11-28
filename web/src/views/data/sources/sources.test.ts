@@ -93,37 +93,41 @@ const api = vi.hoisted(() => ({
 vi.mock("@/api/storage/metadata", () => api);
 
 const collector = vi.hoisted(() => ({
-  GetDataTypeConfigWithFields: vi.fn(async () => ({
-    detail: {
-      base_output_fields: [
-        { field_id: "open", display_name: "开盘价", group: "行情价格", value_type: "double" },
-        { field_id: "close", display_name: "收盘价", group: "行情价格", value_type: "double" }
-      ],
-      extra_fields: [
-        {
-          field_id: "funding_rate",
-          display_name: "资金费率",
-          group: "合约指标",
-          market_id: "crypto",
-          instrument_type: "swap",
-          frequencies: ["1h", "1d"],
-          provider_id: "binance",
-          value_type: "double",
-          fill: "zero"
-        },
-        {
-          field_id: "adj_factor",
-          display_name: "后复权因子",
-          group: "复权",
-          market_id: "stockcn",
-          instrument_type: "equity",
-          frequencies: ["1d"],
-          provider_id: "sina_hfq",
-          value_type: "double",
-          fill: "prev"
-        }
-      ]
-    }
+  GetDataTypeConfigs: vi.fn(async () => ({
+    configs: [
+      {
+        data_type: "kline",
+        type_name: "K 线",
+        base_output_fields: [
+          { field_id: "open", display_name: "开盘价", group: "行情价格", value_type: "double" },
+          { field_id: "close", display_name: "收盘价", group: "行情价格", value_type: "double" }
+        ],
+        extra_fields: [
+          {
+            field_id: "funding_rate",
+            display_name: "资金费率",
+            group: "合约指标",
+            market_id: "crypto",
+            instrument_type: "swap",
+            frequencies: ["1h", "1d"],
+            provider_id: "binance",
+            value_type: "double",
+            fill: "zero"
+          },
+          {
+            field_id: "adj_factor",
+            display_name: "后复权因子",
+            group: "复权",
+            market_id: "stockcn",
+            instrument_type: "equity",
+            frequencies: ["1d"],
+            provider_id: "sina_hfq",
+            value_type: "double",
+            fill: "prev"
+          }
+        ]
+      }
+    ]
   }))
 }));
 vi.mock("@/api/collector", () => collector);
@@ -400,7 +404,7 @@ describe("附加字段来源与字段定义页签", () => {
     expect(wrapper.find(".field-total").text()).toContain("共 4 个字段");
     wrapper.unmount();
 
-    collector.GetDataTypeConfigWithFields.mockRejectedValueOnce(new Error("collector down"));
+    collector.GetDataTypeConfigs.mockRejectedValueOnce(new Error("collector down"));
     api.listAllDatasets.mockRejectedValueOnce(new Error("storage down"));
     await mountSourcesPage("crypto", { tab: "fields" });
     expect(wrapper.find(".field-warning-alert").text()).toContain("采集字段规格与当前空间数据集列均加载失败");

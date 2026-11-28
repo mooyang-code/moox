@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -56,9 +55,6 @@ func TestStockHKPlanToFunctionRequests(t *testing.T) {
 		require.Empty(t, request.Provider, "来源按路由分配，请求不指定数据源")
 		require.Empty(t, request.SourceID)
 		sizes = append(sizes, len(request.Items))
-		for _, item := range request.Items {
-			require.Equal(t, strings.TrimSuffix(item.SubjectID, ".XHKG"), item.Symbol, "传给数据源的代码是五位数字")
-		}
 
 		request.FetchLimits = plan.Fetch.Limits()
 		pipeline := stockHKPipeline(t, storage, hkTime("2026-11-12 14:50:05"), request.FetchLimits, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })

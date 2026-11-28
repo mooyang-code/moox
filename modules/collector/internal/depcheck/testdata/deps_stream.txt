@@ -38,6 +38,7 @@ github.com/mooyang-code/moox/packages/report
 github.com/mooyang-code/moox/modules/collector/internal/marketfetch
 github.com/mooyang-code/moox/modules/collector/internal/sources/crypto
 github.com/mooyang-code/moox/modules/collector/internal/markets/crypto
+github.com/mooyang-code/moox/packages/cnstock
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn
 github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn
 github.com/mooyang-code/moox/modules/collector/internal/markets/stockhk
@@ -47,7 +48,6 @@ github.com/mooyang-code/moox/modules/collector/proto/collectorgen
 github.com/mooyang-code/moox/modules/collector/internal/stream
 github.com/mooyang-code/moox/modules/collector/internal/sources/binance
 github.com/mooyang-code/moox/modules/collector/internal/sources/eastmoneykline
-github.com/mooyang-code/moox/packages/cnstock
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoneyselect
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoneyturnover

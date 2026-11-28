@@ -85,7 +85,7 @@ describe("采集结果页签停用后切空间", () => {
     mocks.getTaskList
       .mockReset()
       .mockImplementation(({ space_id }: { space_id: string }) =>
-        Promise.resolve({ tasks: [taskOf(space_id)], page: { page: 1, size: 100, total: 1 } })
+        Promise.resolve({ tasks: [taskOf(space_id)], page_result: { page: 1, size: 100, total: 1 } })
       );
     mocks.getTaskDetail
       .mockReset()

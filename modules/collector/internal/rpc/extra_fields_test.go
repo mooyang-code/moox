@@ -38,7 +38,7 @@ func TestValidateCollectionTaskTagRoutesExtraFields(t *testing.T) {
 	service := &Service{datasetSrc: tagValidationSource{tags: tags}, fieldOffers: testFieldOffers()}
 	validate := func(frequency, fields string, tagIDs ...string) error {
 		return service.validateCollectionTaskTagRoutes(context.Background(), domain.CollectionTask{SpaceID: "crypto", DataType: "kline", TagIDs: tagIDs,
-			CollectParams: `{"target_dataset_id":"bars","frequency":"` + frequency + `","output_fields":[` + fields + `]}`})
+			CollectParams: `{"frequency":"` + frequency + `","output_fields":[` + fields + `]}`})
 	}
 	require.NoError(t, validate("1h", `"close","basis"`, "binance_spot"))
 	require.NoError(t, validate("1h", `"close","basis","funding_rate"`, "binance_swap"))
@@ -52,10 +52,10 @@ func TestValidateCollectionTaskTagRoutesExtraFields(t *testing.T) {
 
 	// 字段只在自己的市场里是附加字段：别的空间选它不走这条规则（建列时按不认识的字段拒绝）。
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), domain.CollectionTask{SpaceID: "stockcn", DataType: "kline_resample",
-		CollectParams: `{"source_dataset_id":"a","target_dataset_id":"b","source_frequency":"1m","target_frequency":"1h","source_series_tag":"default","output_fields":["close","basis"]}`}))
+		CollectParams: `{"source_dataset_id":"a","source_frequency":"1m","target_frequency":"1h","source_series_tag":"default","output_fields":["close","basis"]}`}))
 	// 重采样不合成附加字段。
 	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), domain.CollectionTask{SpaceID: "crypto", DataType: "kline_resample",
-		CollectParams: `{"source_dataset_id":"a","target_dataset_id":"b","source_frequency":"1m","target_frequency":"1h","source_series_tag":"venue:binance","output_fields":["close","basis"]}`}),
+		CollectParams: `{"source_dataset_id":"a","source_frequency":"1m","target_frequency":"1h","source_series_tag":"venue:binance","output_fields":["close","basis"]}`}),
 		"重采样不能合成附加字段 basis")
 }
 
@@ -78,14 +78,14 @@ func TestUpdateTaskRejectsAddedOutputFields(t *testing.T) {
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "swap 1h",
-		DataType: "kline", CollectParams: `{"target_dataset_id":"dataset-1","frequency":"1h","output_fields":["close","volume"]}`,
+		DataType: "kline", CollectParams: `{"frequency":"1h","output_fields":["close","volume"]}`,
 		Enabled: true, PrepareState: domain.PrepareStateReady, ResultDatasetID: "dataset-1",
 	}))
 	service := &Service{taskRepo: db.Tasks(), fieldOffers: testFieldOffers(), datasetSrc: validationDatasetSource{
 		"dataset-1": storagesource.DatasetInfo{DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1h", SubjectTags: []string{"binance_swap"}, Attributes: map[string]string{"market_type": "swap"}},
 	}}
 	update := func(fields ...any) *pb.UpdateTaskRsp {
-		params, structErr := structpb.NewStruct(map[string]any{"provider": "binance", "market_type": "swap", "frequency": "1h", "output_fields": fields})
+		params, structErr := structpb.NewStruct(map[string]any{"frequency": "1h", "output_fields": fields})
 		require.NoError(t, structErr)
 		rsp, callErr := service.UpdateTask(context.Background(), &pb.UpdateTaskReq{SpaceId: "crypto", TaskId: "task-1",
 			Task: &pb.CollectionTask{SpaceId: "crypto", TaskId: "task-1", TaskName: "swap 1h", DataType: "kline", CollectParams: params}})
@@ -106,13 +106,24 @@ func TestUpdateTaskRejectsAddedOutputFields(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, update("volume", "close").GetRetInfo().GetCode())
 }
 
-// 任务表单接口列出 K 线任务可选的基础输出字段与附加字段（字段 ID、适用频率、适用的市场和品种、来源提供方）。
-func TestGetDataTypeConfigWithFieldsListsExtraFields(t *testing.T) {
+// GetDataTypeConfigs 一次返回所有任务类型的频率选项、基础输出字段与附加字段。
+func TestGetDataTypeConfigsListsFrequencyAndFields(t *testing.T) {
+	find := func(configs []*pb.DataTypeConfig, dataType string) *pb.DataTypeConfig {
+		for _, cfg := range configs {
+			if cfg.GetDataType() == dataType {
+				return cfg
+			}
+		}
+		return nil
+	}
 	service := &Service{fieldOffers: testFieldOffers()}
-	rsp, err := service.GetDataTypeConfigWithFields(context.Background(), &pb.GetDataTypeConfigWithFieldsReq{DataType: "kline"})
+	rsp, err := service.GetDataTypeConfigs(context.Background(), &pb.GetDataTypeConfigsReq{})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	options := rsp.GetDetail().GetExtraFields()
+	kline := find(rsp.GetConfigs(), "kline")
+	require.NotNil(t, kline)
+	require.NotEmpty(t, kline.GetFrequencyOptions())
+	options := kline.GetExtraFields()
 	require.Len(t, options, 3)
 	require.Equal(t, "funding_rate", options[0].GetFieldId())
 	require.Equal(t, "crypto", options[0].GetMarketId())
@@ -133,15 +144,15 @@ func TestGetDataTypeConfigWithFieldsListsExtraFields(t *testing.T) {
 			ID: "sw_l1_code", Name: "申万一级代码", Group: marketdata.GroupIndustry, Type: marketdata.FieldTypeInt, Fill: "", Frequencies: []string{"1d"},
 		}},
 	}}
-	intRsp, err := intService.GetDataTypeConfigWithFields(context.Background(), &pb.GetDataTypeConfigWithFieldsReq{DataType: "kline"})
+	intRsp, err := intService.GetDataTypeConfigs(context.Background(), &pb.GetDataTypeConfigsReq{})
 	require.NoError(t, err)
-	intOptions := intRsp.GetDetail().GetExtraFields()
+	intOptions := find(intRsp.GetConfigs(), "kline").GetExtraFields()
 	require.Len(t, intOptions, 1)
 	require.Equal(t, "int", intOptions[0].GetValueType())
 	require.Empty(t, intOptions[0].GetFill())
 
 	// 基础输出字段与建结果数据集列是同一份定义，管理台不另抄。
-	base := rsp.GetDetail().GetBaseOutputFields()
+	base := kline.GetBaseOutputFields()
 	require.Len(t, base, len(taskresult.KlineOutputFields))
 	require.Equal(t, "open", base[0].GetFieldId())
 	require.Equal(t, "开盘价", base[0].GetDisplayName())
@@ -159,10 +170,11 @@ func TestGetDataTypeConfigWithFieldsListsExtraFields(t *testing.T) {
 	require.Contains(t, ids, "amount_quality")
 	require.NotContains(t, ids, "funding_rate", "附加字段不在基础字段里")
 
-	rsp, err = service.GetDataTypeConfigWithFields(context.Background(), &pb.GetDataTypeConfigWithFieldsReq{DataType: "kline_resample"})
-	require.NoError(t, err)
-	require.Empty(t, rsp.GetDetail().GetExtraFields(), "重采样没有附加字段")
-	resampleBase := rsp.GetDetail().GetBaseOutputFields()
+	resample := find(rsp.GetConfigs(), "kline_resample")
+	require.NotNil(t, resample)
+	require.Empty(t, resample.GetFrequencyOptions(), "重采样的目标频率由源数据集预览接口动态决定")
+	require.Empty(t, resample.GetExtraFields(), "重采样没有附加字段")
+	resampleBase := resample.GetBaseOutputFields()
 	require.NotEmpty(t, resampleBase, "重采样必须返回可合成的基础输出字段供管理台选择")
 	resampleIDs := make([]string, 0, len(resampleBase))
 	for _, field := range resampleBase {
@@ -184,8 +196,8 @@ func TestUpdateTaskValidatesResampleParamsAndOutputFields(t *testing.T) {
 
 	cryptoIDs := taskresult.ResultIDs("resample-crypto")
 	stockIDs := taskresult.ResultIDs("resample-stock")
-	cryptoCollectParams := `{"provider":"moox","market_type":"spot","source_dataset_id":"dataset_src_crypto","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"` + cryptoIDs.DatasetID + `","target_frequency":"5m","alignment":"epoch_utc"}`
-	stockCollectParams := `{"provider":"moox","market_type":"equity","source_dataset_id":"dataset_src_stock","source_frequency":"1m","source_series_tag":"default","target_dataset_id":"` + stockIDs.DatasetID + `","target_frequency":"5m","alignment":"session"}`
+	cryptoCollectParams := `{"source_dataset_id":"dataset_src_crypto","source_frequency":"1m","source_series_tag":"venue:binance","target_frequency":"5m"}`
+	stockCollectParams := `{"source_dataset_id":"dataset_src_stock","source_frequency":"1m","source_series_tag":"default","target_frequency":"5m"}`
 
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-crypto", TaskName: "crypto 5m", DataType: "kline_resample",
@@ -229,11 +241,10 @@ func TestUpdateTaskValidatesResampleParamsAndOutputFields(t *testing.T) {
 		},
 	}
 
-	updateResample := func(spaceID, taskID, taskName, marketType, sourceDataset, seriesTag, alignment string, outputFields []any) *pb.UpdateTaskRsp {
+	updateResample := func(spaceID, taskID, taskName, sourceDataset, seriesTag string, outputFields []any) *pb.UpdateTaskRsp {
 		body := map[string]any{
-			"provider": "moox", "market_type": marketType,
 			"source_dataset_id": sourceDataset, "source_frequency": "1m", "source_series_tag": seriesTag,
-			"target_frequency": "5m", "alignment": alignment, "output_fields": outputFields,
+			"target_frequency": "5m", "output_fields": outputFields,
 		}
 		params, err := structpb.NewStruct(body)
 		require.NoError(t, err)
@@ -247,13 +258,13 @@ func TestUpdateTaskValidatesResampleParamsAndOutputFields(t *testing.T) {
 
 	// crypto 合成任务拒绝 close_time、A 股专属字段 amount 与 funding_rate。
 	for _, bad := range []string{"close_time", "amount", "funding_rate"} {
-		rsp := updateResample("crypto", "resample-crypto", "crypto 5m", "spot", "dataset_src_crypto", "venue:binance", "epoch_utc", []any{"close", bad})
+		rsp := updateResample("crypto", "resample-crypto", "crypto 5m", "dataset_src_crypto", "venue:binance", []any{"close", bad})
 		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "crypto 应拒绝 %s", bad)
 		require.Contains(t, rsp.GetRetInfo().GetMsg(), bad)
 	}
 	// stockcn 合成任务拒绝 close_time 与 crypto 专属字段 quote_volume / trade_num。
 	for _, bad := range []string{"close_time", "quote_volume", "trade_num"} {
-		rsp := updateResample("stockcn", "resample-stock", "stockcn 5m", "equity", "dataset_src_stock", "default", "session", []any{"close", bad})
+		rsp := updateResample("stockcn", "resample-stock", "stockcn 5m", "dataset_src_stock", "default", []any{"close", bad})
 		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "stockcn 应拒绝 %s", bad)
 		require.Contains(t, rsp.GetRetInfo().GetMsg(), bad)
 	}
@@ -264,8 +275,8 @@ func TestUpdateTaskValidatesResampleParamsAndOutputFields(t *testing.T) {
 	require.Equal(t, domain.PrepareStateReady, storedCrypto.PrepareState)
 	require.NotContains(t, storedCrypto.CollectParams, "close_time")
 
-	// 合法缩减到当前源数据集可合成字段子集时更新成功，且持久化参数中剥离 provider/market_type/alignment。
-	rsp := updateResample("crypto", "resample-crypto", "crypto 5m", "spot", "dataset_src_crypto", "venue:binance", "epoch_utc", []any{"open", "close", "quote_volume"})
+	// 合法缩减到当前源数据集可合成字段子集时更新成功。
+	rsp := updateResample("crypto", "resample-crypto", "crypto 5m", "dataset_src_crypto", "venue:binance", []any{"open", "close", "quote_volume"})
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	updatedCrypto, err := db.Tasks().GetByTaskID(ctx, "crypto", "resample-crypto")
 	require.NoError(t, err)
@@ -273,7 +284,7 @@ func TestUpdateTaskValidatesResampleParamsAndOutputFields(t *testing.T) {
 	require.NotContains(t, updatedCrypto.CollectParams, `"market_type"`)
 	require.NotContains(t, updatedCrypto.CollectParams, `"alignment"`)
 
-	rsp = updateResample("stockcn", "resample-stock", "stockcn 5m", "equity", "dataset_src_stock", "default", "session", []any{"open", "close", "amount"})
+	rsp = updateResample("stockcn", "resample-stock", "stockcn 5m", "dataset_src_stock", "default", []any{"open", "close", "amount"})
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 }
 

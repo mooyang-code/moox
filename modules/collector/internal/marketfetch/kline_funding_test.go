@@ -31,6 +31,14 @@ func (s *datasetStorage) UpsertFields(_ context.Context, rows []*storagepb.Row) 
 	return nil
 }
 
+func (s *datasetStorage) CommitTimeSeriesBatch(ctx context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow) error {
+	upserts := make([]*storagepb.Row, 0, len(rows))
+	for _, row := range rows {
+		upserts = append(upserts, row.GetRow())
+	}
+	return s.UpsertFields(ctx, upserts)
+}
+
 var fundingBarBase = time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
 
 func swapHourBars(count int) []marketdata.NormalizedKline {
@@ -69,14 +77,29 @@ func fundingPipeline(t *testing.T, bars []marketdata.NormalizedKline, funding *F
 
 // 补采两个目标：选了资金费率的目标写入每根的区间和，另一个目标不出现这一列。
 func fundingBackfillRequest(kind domain.BatchKind) Request {
-	item := domain.CollectionItem{InstanceID: "i1", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "swap_http", MarketType: "swap", DataType: "kline",
+	item := domain.CollectionItem{InstanceID: "i1", SubjectID: "BTC-USDT", Provider: "binance", SourceID: "swap_http", MarketType: "swap", DataType: "kline",
 		DatasetID: "with_funding", Frequency: "1h", StartTime: fundingBarBase.Format(time.RFC3339), EndTime: fundingBarBase.Add(3 * time.Hour).Format(time.RFC3339), BarLimit: 3}
 	return Request{BatchID: "funding-batch", BatchKind: kind, SpaceID: "crypto", DatasetID: "with_funding", Frequency: "1h", Provider: "binance", SourceID: "swap_http", MarketType: "swap", PlanRequest: true,
 		Items: []domain.CollectionItem{item},
 		Targets: []domain.WriteTarget{
-			{ID: "t-funding", InstanceID: "i1", DatasetID: "with_funding", OutputFields: `["close","funding_rate"]`},
-			{ID: "t-plain", InstanceID: "i1", DatasetID: "plain", OutputFields: `["close"]`},
+			{ID: "t-funding", SpaceID: "crypto", InstanceID: "i1", TaskID: "t1", DatasetID: "with_funding", Frequency: "1h", OutputFields: `["close","funding_rate"]`},
+			{ID: "t-plain", SpaceID: "crypto", InstanceID: "i1", TaskID: "t2", DatasetID: "plain", Frequency: "1h", OutputFields: `["close"]`},
 		}}
+}
+
+func fundingRealtimeRequest(target time.Time) Request {
+	req := fundingBackfillRequest(domain.BatchKindRealtime)
+	req.RequirePeriodCommit = true
+	req.Items[0].StartTime = ""
+	req.Items[0].EndTime = ""
+	req.Items[0].BarLimit = 1
+	req.Items[0].TargetDataTime = target.Format(time.RFC3339)
+	for i := range req.Targets {
+		req.Targets[i].TargetDataTime = req.Items[0].TargetDataTime
+		req.Targets[i].SeriesHash = "h"
+		req.Targets[i].ExpectedCount = 1
+	}
+	return req
 }
 
 func fundingValues(rows []*storagepb.Row) []float64 {
@@ -136,9 +159,7 @@ func TestKlinePipelineRealtimeReadsFundingCache(t *testing.T) {
 	storage := &datasetStorage{}
 	bars := swapHourBars(3)[2:]
 	pipeline := fundingPipeline(t, bars, NewFundingCache(source, nil), storage)
-	req := fundingBackfillRequest(domain.BatchKindRealtime)
-	req.Items[0].StartTime = bars[0].BarStart.Format(time.RFC3339)
-	req.Items[0].BarLimit = 1
+	req := fundingRealtimeRequest(bars[0].BarStart)
 	payload, err := pipeline.Execute(context.Background(), req)
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.Status)
@@ -161,9 +182,7 @@ func TestKlinePipelineRealtimeFundingWaitIsBoundedBeforeDeadline(t *testing.T) {
 	storage := &datasetStorage{}
 	bars := swapHourBars(1)
 	pipeline := fundingPipeline(t, bars, NewFundingCache(blockingFundingSource{}, nil), storage)
-	req := fundingBackfillRequest("")
-	req.Items[0].EndTime = bars[0].BarEnd.Format(time.RFC3339)
-	req.Items[0].BarLimit = 1
+	req := fundingRealtimeRequest(bars[0].BarStart)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	started := time.Now()
@@ -175,13 +194,12 @@ func TestKlinePipelineRealtimeFundingWaitIsBoundedBeforeDeadline(t *testing.T) {
 	require.Len(t, storage.rows["plain"], 1)
 }
 
-// 没有写入目标、取数项自己选了资金费率，而行情源没有这项能力：配置错误，不重试。
+// 写入目标选了资金费率，而行情源没有这项能力：配置错误，不重试。
 func TestKlinePipelineFundingWithoutCapabilityIsInvalid(t *testing.T) {
 	storage := &datasetStorage{}
 	pipeline := fundingPipeline(t, swapHourBars(1), nil, storage)
 	req := fundingBackfillRequest(domain.BatchKindBackfill)
-	req.Targets = nil
-	req.Items[0].OutputFields = []string{"close", domain.FieldFundingRate}
+	req.Targets = req.Targets[:1]
 	payload, err := pipeline.Execute(context.Background(), req)
 	require.NoError(t, err)
 	require.Equal(t, string(domain.ItemOutcomeInvalid), payload.Items[0].Outcome)
@@ -224,7 +242,7 @@ func TestPeriodRowsWritesFundingRateAndRejectsMissingValue(t *testing.T) {
 	btc.Extra = map[string]marketdata.FieldValue{domain.FieldFundingRate: marketdata.DoubleField(0.0001)}
 	eth := testSwapBar("ETH-USDT", "", period, 2)
 	eth.Extra = map[string]marketdata.FieldValue{domain.FieldFundingRate: marketdata.DoubleField(0)}
-	batch := KlineBatch{SpaceID: "crypto", BatchID: "b", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Symbols: plan.ExchangeSymbol, Bars: []marketdata.NormalizedKline{btc, eth}}
+	batch := KlineBatch{SpaceID: "crypto", BatchID: "b", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Bars: []marketdata.NormalizedKline{btc, eth}}
 	_, rows, _, err := committer.periodRows(batch)
 	require.NoError(t, err)
 	require.Equal(t, []float64{0.0001, 0}, fundingValues(rows))

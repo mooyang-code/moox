@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
 
@@ -16,8 +15,6 @@ func TestCollectorTimestampsTRPCJSONRoundTrip(t *testing.T) {
 	const a, b = int64(1700000000123), int64(1700000060456)
 	both := map[string]int64{"created_at": a, "updated_at": b}
 	assertTRPCJSONRoundTrip(t, &CollectionTask{TaskId: "task", CreatedAt: a, UpdatedAt: b}, new(CollectionTask), both)
-	assertTRPCJSONRoundTrip(t, &DataTypeConfig{Id: 1, CreatedAt: a, UpdatedAt: b}, new(DataTypeConfig), both)
-	assertTRPCJSONRoundTrip(t, &DataTypeFieldConfig{Id: 1, DefaultValue: structpb.NewStringValue("x"), CreatedAt: a, UpdatedAt: b}, new(DataTypeFieldConfig), both)
 	assertTRPCJSONRoundTrip(t, &ResampleJob{JobId: "j", NotBefore: a, CreatedAt: a, UpdatedAt: b}, new(ResampleJob), map[string]int64{"not_before": a, "created_at": a, "updated_at": b})
 	assertTRPCJSONRoundTrip(t, &KlineBackfillJob{JobId: "j", CreatedAt: a, UpdatedAt: b}, new(KlineBackfillJob), both)
 	assertTRPCJSONRoundTrip(t, &CloudAccount{AccountId: "acc", CreatedAt: a, UpdatedAt: b}, new(CloudAccount), both)
@@ -25,7 +22,7 @@ func TestCollectorTimestampsTRPCJSONRoundTrip(t *testing.T) {
 	assertTRPCJSONRoundTrip(t, &InitPackageUploadRsp{UploadUrl: "u", ExpiresAt: a}, new(InitPackageUploadRsp), map[string]int64{"expires_at": a})
 	assertTRPCJSONRoundTrip(t, &CloudFunction{Name: "f", ReadAt: a}, new(CloudFunction), map[string]int64{"read_at": a})
 	assertTRPCJSONRoundTrip(t, &TagSyncStatus{TagId: "t", LastRunAt: b, LastSuccessAt: a}, new(TagSyncStatus), map[string]int64{"last_run_at": b, "last_success_at": a})
-	assertTRPCJSONRoundTrip(t, &GetTaskResultInventoryRsp{SnapshotId: "s", ObservedAt: a, Entries: []*TaskResultInventoryEntry{{TaskId: "task", ObservedAt: a}}},
+	assertTRPCJSONRoundTrip(t, &GetTaskResultInventoryRsp{ObservedAt: a, Entries: []*TaskResultInventoryEntry{{TaskId: "task", ObservedAt: a}}},
 		new(GetTaskResultInventoryRsp), map[string]int64{"observed_at": a, "entries.0.observed_at": a})
 	assertTRPCJSONRoundTrip(t, &GetCollectorStatusRsp{
 		GeneratedAt: b,

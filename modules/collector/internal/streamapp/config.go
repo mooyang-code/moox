@@ -22,8 +22,6 @@ type Config struct {
 	InstanceID string `yaml:"instance_id"`
 	// DataDir 保存网关目录缓存等本地状态。
 	DataDir string `yaml:"data_dir"`
-	// MarketConfig 为可选的数据源覆盖配置路径；留空或文件不存在时默认使用编进二进制的 crypto/sources/binance.yaml。
-	MarketConfig string `yaml:"market_config"`
 	// StorageTimeoutMS 是本地执行端单次 Storage 写入的超时。
 	StorageTimeoutMS int `yaml:"storage_timeout_ms"`
 	// LocalExecutor 是本地执行端（补采与本地定时拉取）的并发上限。
@@ -74,15 +72,6 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("storage_timeout_ms 必须在 500～30000 之间，local_executor.concurrency 在 1～32 之间")
 	}
 	cfg.DataDir = cfg.resolve(cfg.DataDir)
-	if marketCfg := strings.TrimSpace(cfg.MarketConfig); marketCfg != "" {
-		resolved := cfg.resolve(marketCfg)
-		if _, err := os.Stat(resolved); err == nil {
-			cfg.MarketConfig = resolved
-		} else {
-			// 旧部署配置可能仍指向已内嵌裁撤的外部 binance.yaml，自动回退二进制内置配置。
-			cfg.MarketConfig = ""
-		}
-	}
 	return cfg, nil
 }
 

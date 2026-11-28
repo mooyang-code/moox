@@ -47,7 +47,6 @@ type baselinePipelineView struct {
 }
 
 func TestPipelineBaseline(t *testing.T) {
-	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "4")
 	limits := &marketfetch.FeedLimits{RPS: 20, Burst: 40, FeedConcurrency: 8, RequestTimeoutMS: 2500, StorageTimeoutMS: 2000}
 	cases := []struct {
 		name       string

@@ -1,12 +1,14 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DataTypeConfigDetail } from "@/api/collector";
+import type { DataTypeConfig } from "@/api/collector";
 import { baseOutputFieldIds, buildOutputFieldCatalog } from "./collection-task-params";
 import OutputFieldPicker from "./output-field-picker.vue";
 
-// 模拟 GetDataTypeConfigWithFields 的返回：显示名、分组只来自 Collector 的字段规格。
-const detail: DataTypeConfigDetail = {
+// 模拟 GetDataTypeConfigs 的返回：显示名、分组只来自 Collector 的字段规格。
+const detail: DataTypeConfig = {
+  data_type: "kline",
+  type_name: "K 线",
   base_output_fields: [
     { field_id: "open", display_name: "开盘价", group: "行情价格", value_type: "double" },
     { field_id: "close", display_name: "收盘价", group: "行情价格", value_type: "double" },

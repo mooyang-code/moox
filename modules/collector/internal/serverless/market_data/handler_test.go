@@ -16,8 +16,9 @@ import (
 func testPlanEnv(t *testing.T) string {
 	t.Helper()
 	encoded, err := marketfetch.EncodePlan(&marketfetch.Plan{
-		V:      1,
-		Market: marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
+		V:        1,
+		Executor: marketfetch.PlanExecutorSCF,
+		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Fetch:  marketfetch.PlanFetch{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10},
 		Datasets: []marketfetch.PlanDataset{
 			{DatasetID: "bars_1m", Frequency: "1m", LatenessS: 15, Copies: []marketfetch.PlanCopy{{From: 1000, Hash: "h1", Count: 2, Subjects: []marketfetch.PlanSubject{{ID: "BTC-USDT", Index: 0}, {ID: "ETH-USDT", Index: 1}}}}},
@@ -143,7 +144,8 @@ func TestHandlerManualInvokeWritesRowsOnly(t *testing.T) {
 	req := marketfetch.Request{
 		BatchID: "backfill-1", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m",
 		Provider: "binance", SourceID: "spot_http", MarketType: "spot",
-		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars-a", Frequency: "1m", StartTime: "2026-10-11T00:00:00Z", BarLimit: 100}},
+		Items:   []domain.CollectionItem{{InstanceID: "backfill|1m|BTC-USDT", SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars-a", Frequency: "1m", StartTime: "2026-10-11T00:00:00Z", BarLimit: 100}},
+		Targets: []domain.WriteTarget{{ID: "bars-a|1m|BTC-USDT", SpaceID: "crypto", InstanceID: "backfill|1m|BTC-USDT", TaskID: "bars-a", DatasetID: "bars-a", Frequency: "1m"}},
 	}
 	rawReq, err := json.Marshal(req)
 	require.NoError(t, err)

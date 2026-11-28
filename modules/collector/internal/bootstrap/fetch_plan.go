@@ -26,6 +26,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -51,8 +52,9 @@ func managedSpaces(ctx context.Context, cfg *Config, dbm *store.Store) ([]string
 	return mergeSpaces(enabled, stored, cfg.scfSpaces(), paused), nil
 }
 
-// registerFetchPlanManager 启动采集计划对账：管理集合里的每个空间一个独立协程。对账器始终启动，推送采集不依赖云函数配置。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *fetchplan.ControlMetrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime, attn *attention.Attention) error {
+// registerFetchPlanManager 启动采集计划对账与独立补采循环：管理集合里的每个空间各有一个对账协程与补采协程。
+// 对账器始终启动，推送采集不依赖云函数配置；系统生命周期状态直接从 life 读取，不落库。
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *fetchplan.ControlMetrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, life *lifecycle.Controller, bus *eventBusRuntime, attn *attention.Attention) error {
 	managed := func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, dbm) }
 	// 启动时先逐个云函数空间检查部署参数，配置错误尽早暴露。
 	for _, space := range cfg.scfSpaces() {
@@ -71,7 +73,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	// 腾讯云直接在 Collector 里调：云账号密钥经网关读 Admin 的 GetCloudCredential，创建或更新采集函数时补齐 CLS 上报环境。
 	credentials := &cloud.GatewayCredentials{Gateway: process.gateway}
 	functions := cloud.NewFunctions(dbm, credentials, cloud.NewCLSProvisioner(cfg.Cloud.CLS, nil))
-	packages := cloud.NewPackages(dbm, credentials)
+	packages := cloud.NewPackages(dbm, credentials, cfg.SCFPlan.CloudAccountID)
 	backend := cloudBackend{TencentFunctions: functions, packages: packages}
 	source := storagesource.NewDatasetSource(storageio.NewGatewayClient(process.gateway))
 	operations := make(chan struct{}, cfg.SCFPlan.MaxConcurrentOperations)
@@ -106,15 +108,13 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		// 补采的来源与参数取当前任务（与计划同一套推导），交易所符号取标的时间线。
 		Routes: &fetchplan.BackfillRoutes{Tasks: dbm.Tasks(), Tags: source, ResolveSourceID: marketwiring.DefaultSourceID, Options: planOptions},
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
-			space := strings.ToLower(spaceID)
-			manual, err := dbm.FetchPlans().ManuallyPausedSpaces(ctx)
-			if err != nil || manual[space] {
+			manual, err := dbm.FetchPlans().PausedSpaces(ctx)
+			if err != nil || manual[strings.ToLower(spaceID)] {
 				// 手工暂停的空间不补采，系统恢复追赶时也一样。
 				return true, err
 			}
-			paused, err := dbm.FetchPlans().PausedSpaces(ctx)
-			// 恢复模式：系统暂停仍在（实时采集关闭），但补采要运行，补齐暂停区间。
-			return paused[space] && !control.Recovering(spaceID), err
+			// 模块处于暂停阶段时不补采；恢复追赶（StageResuming）与运行（StageRunning）允许补采。
+			return life != nil && life.Stage() == lifecycle.StagePaused, nil
 		},
 		// 并发上限：云函数补采受补采函数的预留并发硬性限制（5）；空间的 K 线任务都不用云函数（采集方式是 stream 或 local，
 		// 补采走 collector-stream 的本地执行端）时不受这个限制，可以放大，补采（尤其是暂停恢复后补暂停区间）快得多。
@@ -165,7 +165,11 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	manager := &fetchplan.PlanManager{
 		Configured: managed,
 		Spaces: func(ctx context.Context) ([]string, error) {
-			// 运行集合：管理集合 ∩ Storage 中仍启用的空间 − 暂停的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
+			// 模块不在运行阶段（暂停或恢复追赶）时，实时采集计划全部停用。
+			if life != nil && life.Stage() != lifecycle.StageRunning {
+				return nil, nil
+			}
+			// 运行集合：管理集合 ∩ Storage 中仍启用的空间 − 手工暂停的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
 			spaces, err := managed(ctx)
 			if err != nil {
 				return nil, err
@@ -174,7 +178,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			if err != nil {
 				return nil, err
 			}
-			// 暂停的空间不在运行集合里：管理器会先停用它的定时器再退出协程，恢复后重新启用。
+			// 手工暂停的空间不在运行集合里：管理器会先停用它的定时器再退出协程，恢复后重新启用。
 			paused, err := dbm.FetchPlans().PausedSpaces(ctx)
 			if err != nil {
 				return nil, err
@@ -220,7 +224,17 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			reconcilers.Store(spaceID, reconciler)
 			return reconciler, nil
 		},
-		AfterTick: func(ctx context.Context, spaceID string) error {
+	}
+	backfills := newBackfillLoop(backfillLoopConfig{
+		Spaces:       managed,
+		ManualPaused: dbm.FetchPlans().PausedSpaces,
+		Stage: func() lifecycle.Stage {
+			if life == nil {
+				return lifecycle.StageRunning
+			}
+			return life.Stage()
+		},
+		RunRunning: func(ctx context.Context, spaceID string) {
 			// 先提交收市后的整天重取（只在“收市 + 延迟”的那一轮有事可做），紧接着的 Tick 就能认领它的分块；失败不挡住补采推进。
 			if err := backfiller.RefetchAfterClose(ctx, spaceID); err != nil {
 				log.WarnContextf(ctx, "collector close refetch failed space=%s: %v", spaceID, err)
@@ -230,12 +244,12 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				log.WarnContextf(ctx, "collector history seed failed space=%s: %v", spaceID, err)
 			}
 			if err := backfiller.Tick(ctx, spaceID); err != nil {
-				return err
+				log.WarnContextf(ctx, "collector backfill tick failed space=%s: %v", spaceID, err)
+				return
 			}
-			// 自动补采扫描要逐标的读取 Storage，耗时远超一轮对账的预算：放到独立协程里跑，
-			// 每个空间同一时间只跑一个，用进程上下文加较长的超时。
+			// 自动补采扫描要逐标的读取 Storage，耗时远超单轮预算：放到独立协程里跑，每个空间同一时间只跑一个。
 			if _, running := autoScans.LoadOrStore(spaceID, struct{}{}); running {
-				return nil
+				return
 			}
 			if !process.launch(func() {
 				defer autoScans.Delete(spaceID)
@@ -247,13 +261,17 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			}) {
 				autoScans.Delete(spaceID)
 			}
-			return nil
 		},
-	}
+		RunResuming: func(ctx context.Context, spaceID string) {
+			if err := backfiller.Tick(ctx, spaceID); err != nil {
+				log.WarnContextf(ctx, "collector recovery tick failed space=%s: %v", spaceID, err)
+			}
+		},
+	})
 	svc.SetFetchPlanControl(manager)
 	svc.SetSourceIDResolver(marketwiring.DefaultSourceID)
-	control.bind(dbm.FetchPlans(), backfiller, manager, managed)
-	if !process.launch(func() { control.runRecovery(process.ctx) }) {
+	control.bind(dbm.FetchPlans(), backfiller, manager, managed, backfills.Wake)
+	if !process.launch(func() { backfills.Run(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")
 	}
 	heartbeat := collectsvc.NewStreamHeartbeatAttention(dbm, time.Duration(cfg.Stream.HeartbeatTimeoutSeconds)*time.Second, attn)
@@ -319,8 +337,8 @@ type cloudBackend struct {
 	packages *cloud.Packages
 }
 
-func (b cloudBackend) LatestPackage(ctx context.Context, spaceID, packageName string) (*cloud.Package, error) {
-	return b.packages.Latest(ctx, spaceID, packageName)
+func (b cloudBackend) LatestPackage(ctx context.Context, packageName string) (*cloud.Package, error) {
+	return b.packages.Latest(ctx, packageName)
 }
 
 // otherSCFSpaces 返回除 spaceID 以外配置了云函数的空间各自的市场与地域：对账器据此排除别的空间的函数名。
@@ -358,7 +376,7 @@ func (c *Config) cloudAccountInUse(ctx context.Context, functions cloud.Function
 	return nil
 }
 
-// packageCleanupInterval 是代码包清理的间隔：每个（空间、包名）只留最新 3 个可用包，上传超过 6 小时仍没完成的删除。
+// packageCleanupInterval 是代码包清理的间隔：每个包名只留最新 3 个可用包，上传超过 6 小时仍没完成的删除。
 const packageCleanupInterval = 24 * time.Hour
 
 // runPackageCleanup 每天清理一次代码包（启动 10 分钟后第一次）。COS 删除可能较慢，不放进每分钟一轮的维护任务。

@@ -14,7 +14,7 @@
         <a-input v-model="keyword" placeholder="搜索包名或版本" style="width: 220px" allow-clear>
           <template #prefix><icon-search /></template>
         </a-input>
-        <span class="muted">对账器按 scf_plan 配置的包名取本空间最新的可用代码包；每个包名只保留最新 3 个。</span>
+        <span class="muted">对账器按 scf_plan 配置的包名取最新的可用代码包（全局共享）；每个包名只保留最新 3 个。</span>
         <a-button class="package-upload-button" type="primary" @click="onAdd">
           <template #icon><icon-plus /></template>
           上传代码包
@@ -30,7 +30,7 @@
         :pagination="false"
       >
         <template #empty>
-          <div class="empty-text">{{ loading ? "读取中…" : "本空间还没有代码包" }}</div>
+          <div class="empty-text">{{ loading ? "读取中…" : "还没有代码包" }}</div>
         </template>
         <template #columns>
           <a-table-column title="包名" data-index="package_name" :width="180" />
@@ -86,14 +86,6 @@
 
         <a-form-item label="运行时">{{ uploadForm.runtime }}</a-form-item>
 
-        <a-form-item field="cloud_account_id" label="云账号" required>
-          <a-select v-model="uploadForm.cloud_account_id" placeholder="选择存放代码包的云账号（COS）">
-            <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
-              {{ account.account_name || account.account_id }}
-            </a-option>
-          </a-select>
-        </a-form-item>
-
         <a-form-item label="代码包文件">
           <a-upload
             :file-list="fileList"
@@ -137,8 +129,6 @@ import {
   type FunctionPackage
 } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
-import { useSpaceStore } from "@/store/modules/space";
-import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatInstant } from "@/utils/time-zone";
 
@@ -148,10 +138,11 @@ const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
 const MAX_PACKAGE_SIZE = 100 * 1024 * 1024;
 // 云函数一律用 Go1 运行时创建，代码包的运行时只是登记
 const PACKAGE_RUNTIME = "Go1";
+// 各空间默认共享的代码包名称（与 scf_plan 的默认配置一致）
+const DEFAULT_PACKAGE_NAME = "moox-collector-plan";
 
-const spaceStore = useSpaceStore();
 const listGuard = createLatestRequestGuard();
-// 上传提交序号：取消/关闭/重新打开上传弹窗、切换空间都会使进行中的提交失效
+// 上传提交序号：取消/关闭/重新打开上传弹窗都会使进行中的提交失效
 let uploadSubmitToken = 0;
 const visible = ref(Boolean(props.modelValue));
 const loading = ref(false);
@@ -162,7 +153,7 @@ const uploadVisible = ref(false);
 const uploading = ref(false);
 const fileList = ref<FileItem[]>([]);
 
-const defaultUploadForm = { package_name: "", version: "", runtime: PACKAGE_RUNTIME, cloud_account_id: "" };
+const defaultUploadForm = { package_name: "", version: "", runtime: PACKAGE_RUNTIME };
 const uploadForm = reactive({ ...defaultUploadForm });
 
 const filteredPackages = computed(() => {
@@ -181,26 +172,16 @@ watch(
 
 watch(visible, open => {
   emit("update:modelValue", open);
-  if (!open) resetForSpace();
+  if (!open) resetDrawerState();
 });
 
-// 关闭抽屉或切换空间：作废在途请求，清空列表，避免组件常驻时重新打开看到其他空间的数据
-function resetForSpace() {
+function resetDrawerState() {
   uploadSubmitToken += 1;
   uploading.value = false;
   listGuard.invalidate();
   loading.value = false;
   packageList.value = [];
 }
-
-watch(
-  () => spaceStore.selectedSpaceId,
-  (spaceId, oldSpaceId) => {
-    if (spaceId === oldSpaceId) return;
-    resetForSpace();
-    if (visible.value) void loadPackageList();
-  }
-);
 
 const handlePackageManageVisibleChange = (open: boolean) => {
   visible.value = open;
@@ -211,14 +192,11 @@ const handleCancel = () => {
 };
 
 async function loadPackageList() {
-  const spaceId = spaceStore.selectedSpaceId;
-  if (!spaceId) return;
   const request = listGuard.begin();
   loading.value = true;
   try {
-    const packages = await listFunctionPackages(spaceId);
-    // 抽屉关闭、空间切换或有更新的请求后，旧响应丢弃
-    if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
+    const packages = await listFunctionPackages();
+    if (!request.isLatest()) return;
     packageList.value = packages;
   } catch (error) {
     if (request.isLatest()) Message.error(`加载代码包失败：${errorText(error)}`);
@@ -247,9 +225,7 @@ const cosLocation = (record: FunctionPackage) =>
 function onAdd() {
   Object.assign(uploadForm, {
     ...defaultUploadForm,
-    // 与 scf_plan 的默认包名一致；配置里改过包名时手工改成配置里的值
-    package_name: `moox-collector-${spaceStore.selectedSpaceId}-plan`,
-    cloud_account_id: cloudAccountOptions.value.length === 1 ? cloudAccountOptions.value[0].account_id : ""
+    package_name: DEFAULT_PACKAGE_NAME
   });
   fileList.value = [];
   uploadSubmitToken += 1; // 重新打开视为新的提交，旧提交作废
@@ -290,7 +266,6 @@ function uploadProblem(): string {
   const name = uploadForm.package_name.trim();
   if (!name) return "请填写包名";
   if (!fileList.value[0]?.file || !uploadForm.version) return "请选择代码包文件";
-  if (!uploadForm.cloud_account_id) return "请选择云账号";
   if (packageList.value.some(item => item.package_name === name && item.version === uploadForm.version)) {
     return `${name} ${uploadForm.version} 已存在，请换一个版本`;
   }
@@ -303,23 +278,17 @@ async function handleUploadOk() {
     Message.error(problem);
     return;
   }
-  // 点击时固定发起空间与代次：之后 await 返回时若空间已切换（含 A→B→A），整个提交作废，不能改传到新空间
-  const spaceId = spaceStore.selectedSpaceId;
-  const generation = selectedSpaceGeneration();
   const token = ++uploadSubmitToken;
-  const stale = () =>
-    token !== uploadSubmitToken || spaceStore.selectedSpaceId !== spaceId || selectedSpaceGeneration() !== generation;
+  const stale = () => token !== uploadSubmitToken;
   uploading.value = true;
   try {
     await uploadFunctionPackage(
       {
         package_name: uploadForm.package_name.trim(),
         version: uploadForm.version,
-        runtime: uploadForm.runtime,
-        cloud_account_id: uploadForm.cloud_account_id
+        runtime: uploadForm.runtime
       },
-      fileList.value[0].file as File,
-      spaceId
+      fileList.value[0].file as File
     );
     Message.success("上传成功");
     // 已作废的提交不能关闭用户重新打开、正在填写的新弹窗
@@ -335,7 +304,7 @@ async function handleUploadOk() {
 
 async function onDelete(record: FunctionPackage) {
   try {
-    await deleteFunctionPackage(record.space_id || spaceStore.selectedSpaceId, record.package_id);
+    await deleteFunctionPackage(record.package_id);
     Message.success("已删除");
     void loadPackageList();
   } catch (error) {

@@ -146,7 +146,7 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 		routes  int
 		callers []string
 	}{
-		"control":  {161, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
+		"control":  {159, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
 		"storage":  {47, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "scf-collector", "strategy"}},
 		"overseas": {47, []string{"collector", "console", "moox-cli", "strategy"}},
 	}

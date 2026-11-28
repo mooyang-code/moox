@@ -211,7 +211,7 @@ func (r *BackfillRepository) RetryHistorySeed(ctx context.Context, spaceID, data
 			}
 			for _, job := range jobs {
 				switch job.Status {
-				case BackfillPending, BackfillRunning:
+				case BackfillQueued, BackfillRunning:
 					return ErrJobNotRetryable
 				case BackfillFailed:
 					toRetry = append(toRetry, job.JobID)
@@ -221,11 +221,11 @@ func (r *BackfillRepository) RetryHistorySeed(ctx context.Context, spaceID, data
 		now := nowUnixMilli()
 		if len(toRetry) > 0 {
 			if err := tx.Model(&backfillJobRow{}).Where("c_job_id IN ? AND c_status = ?", toRetry, BackfillFailed).
-				Updates(map[string]any{"c_status": BackfillPending, "c_last_error": "", "c_mtime": now}).Error; err != nil {
+				Updates(map[string]any{"c_status": BackfillQueued, "c_last_error": "", "c_mtime": now}).Error; err != nil {
 				return err
 			}
 			if err := tx.Model(&backfillChunkRow{}).Where("c_job_id IN ? AND c_status = ?", toRetry, BackfillFailed).
-				Updates(map[string]any{"c_status": BackfillPending, "c_attempts": 0, "c_missing": "", "c_last_error": "", "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": now}).Error; err != nil {
+				Updates(map[string]any{"c_status": BackfillQueued, "c_attempts": 0, "c_missing": "", "c_last_error": "", "c_started_at": nil, "c_latest_end_at": nil, "c_mtime": now}).Error; err != nil {
 				return err
 			}
 		}

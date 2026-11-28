@@ -151,7 +151,7 @@ func makeTask(t *testing.T, space, source, target string) *Task {
 
 func makeTaskWithSource(t *testing.T, space, source, target string, info storagesource.DatasetInfo) *Task {
 	t.Helper()
-	params := `{"source_dataset_id":"dataset_src","source_frequency":"` + source + `","source_series_tag":"venue:binance","target_dataset_id":"dataset_task","target_frequency":"` + target + `"}`
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"` + source + `","source_series_tag":"venue:binance","target_frequency":"` + target + `"}`
 	task, err := NewTaskForSource(domain.CollectionTask{SpaceID: space, TaskID: "task", DataType: "kline_resample", CollectParams: params, Enabled: true, ResultDatasetID: "dataset_task"}, info)
 	require.NoError(t, err)
 	return task
@@ -423,7 +423,7 @@ func TestEnsureSnapshotSkipsAStockHolidayBeyondStorageLimit(t *testing.T) {
 }
 
 func TestNewTaskRejectsPeriodsThatDoNotDivideTheSession(t *testing.T) {
-	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:x","target_dataset_id":"dataset_task","target_frequency":"45m"}`
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:x","target_frequency":"45m"}`
 	_, err := NewTaskForSource(
 		domain.CollectionTask{SpaceID: "stockcn", TaskID: "task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_task"},
 		storagesource.DatasetInfo{Alignment: "session", Attributes: map[string]string{"calendar": "cn_stock"}, ColumnTypes: stockColumnTypes()},

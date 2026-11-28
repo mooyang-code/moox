@@ -85,9 +85,9 @@ func TestAccountsValidateAndRefuseDeletingAccountWithPackages(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "tencent", account.Provider)
 
-	require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{SpaceID: "crypto", PackageID: "p1", PackageName: "collector", CloudAccountID: "a"}))
+	require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{PackageID: "p1", PackageName: "collector", CloudAccountID: "a"}))
 	require.ErrorIs(t, accounts.Delete(ctx, "a"), ErrAccountInUse)
-	require.NoError(t, db.FunctionPackages().Delete(ctx, "crypto", "p1"))
+	require.NoError(t, db.FunctionPackages().Delete(ctx, "p1"))
 	require.NoError(t, accounts.Delete(ctx, "a"))
 	listed, err := accounts.List(ctx)
 	require.NoError(t, err)
@@ -130,7 +130,7 @@ func newTestPackages(t *testing.T) (*Packages, *store.Store, *fakeObjects) {
 	db := openTestStore(t)
 	require.NoError(t, db.CloudAccounts().Upsert(context.Background(), store.CloudAccount{AccountID: "account-a", Provider: "tencent", CredentialSecretID: "s", COSRegion: "ap-guangzhou", COSBucket: "fake-bucket"}))
 	objects := &fakeObjects{objects: map[string]bool{}}
-	packages := NewPackages(db, fakeCredentials{})
+	packages := NewPackages(db, fakeCredentials{}, "account-a")
 	packages.objects = func(bucket, region string, _ Credential) objectStore {
 		require.Equal(t, "fake-bucket", bucket)
 		require.Equal(t, "ap-guangzhou", region)
@@ -142,53 +142,53 @@ func newTestPackages(t *testing.T) (*Packages, *store.Store, *fakeObjects) {
 // 上传：发起时登记待上传的包并给出预签名地址；核对过 COS 对象才变成可用，成为最新包。
 func TestPackageUploadRegistersPendingThenAvailable(t *testing.T) {
 	ctx := context.Background()
-	packages, _, objects := newTestPackages(t)
-	_, err := packages.InitUpload(ctx, UploadRequest{SpaceID: "crypto", PackageName: "collector", Version: "v1", Runtime: "Go1"})
+	packages, db, objects := newTestPackages(t)
+	noAccount := NewPackages(db, fakeCredentials{}, "")
+	_, err := noAccount.InitUpload(ctx, UploadRequest{PackageName: "collector", Version: "v1", Runtime: "Go1"})
 	require.ErrorContains(t, err, "云账号")
-	upload, err := packages.InitUpload(ctx, UploadRequest{SpaceID: "crypto", PackageName: "collector", Version: "v1", Runtime: "Go1", CloudAccountID: "account-a"})
+	upload, err := packages.InitUpload(ctx, UploadRequest{PackageName: "collector", Version: "v1", Runtime: "Go1"})
 	require.NoError(t, err)
 	require.Equal(t, 1, objects.ensured, "发起上传前保证桶与跨域规则就绪")
 	require.Equal(t, store.FunctionPackagePending, upload.Package.Status)
 	require.True(t, strings.HasPrefix(upload.Package.PackageID, "collector_v1_"))
 	require.Contains(t, upload.UploadURL, upload.Package.COSPath)
-	latest, err := packages.Latest(ctx, "crypto", "collector")
+	latest, err := packages.Latest(ctx, "collector")
 	require.NoError(t, err)
 	require.Nil(t, latest, "还没上传完的包不算")
 
-	_, err = packages.CompleteUpload(ctx, "crypto", upload.Package.PackageID, 10, "abc")
+	_, err = packages.CompleteUpload(ctx, upload.Package.PackageID, 10, "abc")
 	require.ErrorContains(t, err, "没有找到")
 	objects.objects[upload.Package.COSPath] = true
-	done, err := packages.CompleteUpload(ctx, "crypto", upload.Package.PackageID, 10, "ABC")
+	done, err := packages.CompleteUpload(ctx, upload.Package.PackageID, 10, "ABC")
 	require.NoError(t, err)
 	require.Equal(t, store.FunctionPackageAvailable, done.Status)
 	require.Equal(t, "abc", done.FileMD5)
-	latest, err = packages.Latest(ctx, "crypto", "collector")
+	latest, err = packages.Latest(ctx, "collector")
 	require.NoError(t, err)
 	require.Equal(t, upload.Package.PackageID, latest.PackageID)
-	_, err = packages.CompleteUpload(ctx, "crypto", upload.Package.PackageID, 10, "abc")
+	_, err = packages.CompleteUpload(ctx, upload.Package.PackageID, 10, "abc")
 	require.ErrorContains(t, err, "不在等待上传")
 }
 
-// 清理：每个（空间、包名）只留最新 3 个可用包，更早的连同 COS 对象删除；上传超过 6 小时仍没完成的删除；
+// 清理：每个包名只留最新 3 个可用包，更早的连同 COS 对象删除；上传超过 6 小时仍没完成的删除；
 // COS 对象删不掉时记录保留，下次再删。
 func TestPackageCleanupKeepsNewestThreePerNameAndDropsStalePending(t *testing.T) {
 	ctx := context.Background()
 	packages, db, objects := newTestPackages(t)
 	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
 	packages.now = func() time.Time { return now }
-	add := func(space, id, name, status string, created time.Time) {
+	add := func(id, name, status string, created time.Time) {
 		key := "moox/cloud-packages/" + id + ".zip"
 		objects.objects[key] = true
-		require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{SpaceID: space, PackageID: id, PackageName: name, CloudAccountID: "account-a", COSRegion: "ap-guangzhou", COSBucket: "fake-bucket", COSPath: key, Status: status, CreateTime: created}))
+		require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{PackageID: id, PackageName: name, CloudAccountID: "account-a", COSRegion: "ap-guangzhou", COSBucket: "fake-bucket", COSPath: key, Status: status, CreateTime: created}))
 	}
 	recent := now.Add(-time.Hour)
 	for _, id := range []string{"c1", "c2", "c3", "c4", "c5"} {
-		add("crypto", id, "collector", store.FunctionPackageAvailable, recent)
+		add(id, "collector", store.FunctionPackageAvailable, recent)
 	}
-	add("crypto", "other1", "other", store.FunctionPackageAvailable, recent)
-	add("stockcn", "s1", "collector", store.FunctionPackageAvailable, recent)
-	add("crypto", "pending-old", "collector", store.FunctionPackagePending, now.Add(-7*time.Hour))
-	add("crypto", "pending-new", "collector", store.FunctionPackagePending, now.Add(-time.Hour))
+	add("other1", "other", store.FunctionPackageAvailable, recent)
+	add("pending-old", "collector", store.FunctionPackagePending, now.Add(-7*time.Hour))
+	add("pending-new", "collector", store.FunctionPackagePending, now.Add(-time.Hour))
 	objects.failKey = "moox/cloud-packages/c1.zip"
 
 	result, err := packages.Cleanup(ctx)
@@ -197,13 +197,13 @@ func TestPackageCleanupKeepsNewestThreePerNameAndDropsStalePending(t *testing.T)
 	require.Len(t, result.Failed, 1)
 	require.True(t, strings.HasPrefix(result.Failed[0], "c1："))
 	require.ElementsMatch(t, []string{"moox/cloud-packages/c2.zip", "moox/cloud-packages/pending-old.zip"}, objects.deleted)
-	left, err := packages.List(ctx, "")
+	left, err := packages.List(ctx)
 	require.NoError(t, err)
 	var ids []string
 	for _, pkg := range left {
 		ids = append(ids, pkg.PackageID)
 	}
-	require.ElementsMatch(t, []string{"c1", "c3", "c4", "c5", "other1", "s1", "pending-new"}, ids)
+	require.ElementsMatch(t, []string{"c1", "c3", "c4", "c5", "other1", "pending-new"}, ids)
 
 	objects.failKey = ""
 	result, err = packages.Cleanup(ctx)
@@ -211,9 +211,9 @@ func TestPackageCleanupKeepsNewestThreePerNameAndDropsStalePending(t *testing.T)
 	require.Equal(t, []string{"c1"}, result.Deleted)
 	require.Empty(t, result.Failed)
 
-	require.NoError(t, packages.Delete(ctx, "crypto", "c3"))
+	require.NoError(t, packages.Delete(ctx, "c3"))
 	require.Contains(t, objects.deleted, "moox/cloud-packages/c3.zip")
-	require.NoError(t, packages.Delete(ctx, "crypto", "absent"))
+	require.NoError(t, packages.Delete(ctx, "absent"))
 }
 
 type fakeCORS struct {

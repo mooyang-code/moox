@@ -125,7 +125,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { GetDataTypeConfigWithFields } from "@/api/collector";
+import { GetDataTypeConfigs } from "@/api/collector";
 import { reportError } from "@/api/http";
 import { listDataSources, upsertDataSource } from "@/api/storage/metadata";
 import type { DataSource } from "@/api/storage/types";
@@ -192,7 +192,8 @@ async function loadExtraFieldSources() {
   extraFieldSources.value = [];
   if (!currentSpace) return;
   try {
-    const options = (await GetDataTypeConfigWithFields("kline")).detail?.extra_fields || [];
+    const options =
+      (await GetDataTypeConfigs()).configs?.find(item => item.data_type === "kline")?.extra_fields || [];
     if (!request.isLatest() || currentSpace !== props.spaceId) return;
     const mine = options.filter(option => (option.market_id || "").trim().toLowerCase() === currentSpace.trim().toLowerCase());
     if (!mine.length) return;

@@ -7,33 +7,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseCollectParamsUsesSingleDatasetDrivenContract(t *testing.T) {
-	raw := `{
-		"provider":" Binance ",
-		"market_type":" SPOT ",
-		"subject_tags":["binance_spot"],
-		"target_dataset_id":"target-kline",
-		"frequency":"1h"
-	}`
-	params, err := ParseCollectParams(raw, "", "", "kline")
+func TestParseCollectParamsKlineContract(t *testing.T) {
+	params, err := ParseCollectParams(`{"frequency":"60m","output_fields":["close","open","close"],"symbols_per_function":20,"allowed_lateness_seconds":30}`, DataTypeKline)
 	require.NoError(t, err)
-	require.NoError(t, params.Validate())
-	assert.Equal(t, "binance", params.Collector.Exchange)
-	assert.Equal(t, "spot", params.Collector.Market)
-	assert.Equal(t, "kline", params.Collector.DataType)
-	assert.Equal(t, "dataset", params.Source.Kind)
-	assert.Equal(t, []string{"binance_spot"}, params.SubjectTags)
-	assert.Equal(t, "target-kline", params.Target.DatasetID)
-}
-
-func TestParseCollectParamsNormalizesSelectedOutputFields(t *testing.T) {
-	params, err := ParseCollectParams(`{"provider":"binance","market_type":"spot","frequency":"1m","output_fields":["close","open","close"]}`, "", "", "kline")
-	require.NoError(t, err)
+	require.NoError(t, params.ValidateKline())
+	assert.Equal(t, "1h", params.Frequency)
 	assert.Equal(t, []string{"close", "open"}, params.OutputFields)
+	assert.Equal(t, 20, params.SymbolsPerFunction)
+	assert.Equal(t, 30, params.AllowedLatenessSeconds)
 }
 
 func TestParseCollectParamsRejectsRemovedFields(t *testing.T) {
 	for _, raw := range []string{
+		`{"provider":"binance"}`,
+		`{"market_type":"spot"}`,
+		`{"market_id":"crypto"}`,
+		`{"instrument_type":"spot"}`,
+		`{"source_id":"binance"}`,
+		`{"series_tag":"venue:binance"}`,
+		`{"subject_tags":["binance_spot"]}`,
+		`{"target_dataset_id":"target-kline"}`,
+		`{"alignment":"epoch_utc"}`,
 		`{"exchange":"binance"}`,
 		`{"market":"spot"}`,
 		`{"symbol":"BTC-USDT"}`,
@@ -41,41 +35,31 @@ func TestParseCollectParamsRejectsRemovedFields(t *testing.T) {
 		`{"collector":{"exchange":"binance"}}`,
 		`{"target":{"job_type":"collect.binance.kline"}}`,
 		`{"schedule":{"timezone":"Asia/Shanghai"}}`,
-		`{"schedule":{"intervals":["1m"]}}`,
 		`{"objects":["BTCUSDT"]}`,
 	} {
-		_, err := ParseCollectParams(raw, "binance", "spot", "kline")
-		require.Error(t, err)
+		_, err := ParseCollectParams(raw, DataTypeKline)
+		require.Error(t, err, raw)
 		assert.Contains(t, err.Error(), "unknown field")
 	}
 }
 
-func TestSplitSubjectTagsRemovesAndNormalizesTransientInput(t *testing.T) {
-	clean, tags, err := SplitSubjectTags(`{"provider":"binance","subject_tags":[" b ","a","a",""],"frequency":"1m"}`)
+func TestCollectParamsValidateKlineRequiresValidFrequency(t *testing.T) {
+	params, err := ParseCollectParams(`{"frequency":"bad"}`, DataTypeKline)
 	require.NoError(t, err)
-	assert.NotContains(t, clean, "subject_tags")
-	assert.Equal(t, []string{"a", "b"}, tags)
-}
+	require.Error(t, params.ValidateKline())
 
-func TestCollectParamsValidateRequiresExplicitDatasetsAndIntervals(t *testing.T) {
-	params, err := ParseCollectParams(`{
-		"provider":"binance",
-		"market_type":"spot",
-		"subject_tags":["binance_spot"],
-		"target_dataset_id":"dataset_target_kline",
-		"frequency":"bad"
-	}`, "", "", "kline")
+	empty, err := ParseCollectParams(`{}`, DataTypeKline)
 	require.NoError(t, err)
-	require.Error(t, params.Validate())
+	require.ErrorContains(t, empty.ValidateKline(), "frequency")
 }
 
 func TestParseCollectParamsInvalidJSONReturnsError(t *testing.T) {
-	_, err := ParseCollectParams("{", "binance", "spot", "kline")
+	_, err := ParseCollectParams("{", DataTypeKline)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "parse collect params")
 }
 
-func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
+func TestCollectParamsValidateKlineUsesWholeMinuteIntervals(t *testing.T) {
 	tests := []struct {
 		name     string
 		interval string
@@ -93,16 +77,10 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			params, err := ParseCollectParams(`{
-				"provider":"binance",
-				"market_type":"spot",
-				"subject_tags":["binance_spot"],
-				"target_dataset_id":"dataset_target_kline",
-				"frequency":"`+tt.interval+`"
-			}`, "", "", "kline")
+			params, err := ParseCollectParams(`{"frequency":"`+tt.interval+`"}`, DataTypeKline)
 			require.NoError(t, err)
 
-			err = params.Validate()
+			err = params.ValidateKline()
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return
@@ -115,68 +93,47 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 
 func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 	params, err := ParseCollectParams(`{
-		"provider":" MOOX ",
-		"market_type":" SPOT ",
+		"source_task_id":" src-task ",
 		"source_dataset_id":" dataset_binance_kline_1m ",
 		"source_frequency":"60m",
 		"source_series_tag":" venue:binance ",
-		"target_dataset_id":" dataset_spot_kline_derived_4h ",
-		"target_frequency":"240m",
-		"alignment":" EPOCH_UTC "
-	}`, "", "", "kline_resample")
+		"target_frequency":"240m"
+	}`, "kline_resample")
 	require.NoError(t, err)
 
-	assert.Equal(t, "moox", params.Provider)
-	assert.Equal(t, "spot", params.MarketType)
-	assert.Equal(t, "dataset", params.Source.Kind)
-	assert.Equal(t, "dataset_binance_kline_1m", params.Source.DatasetID)
+	assert.Equal(t, "src-task", params.SourceTaskID)
+	assert.Equal(t, "dataset_binance_kline_1m", params.SourceDatasetID)
 	assert.Equal(t, "1h", params.SourceFrequency)
 	assert.Equal(t, "venue:binance", params.SourceSeriesTag)
-	assert.Equal(t, "dataset_spot_kline_derived_4h", params.Target.DatasetID)
 	assert.Equal(t, "4h", params.TargetFrequency)
-	assert.Equal(t, "epoch_utc", params.Alignment)
 }
 
-func TestParseCollectParamsRejectsResampleRepairOverride(t *testing.T) {
-	_, err := ParseCollectParams(`{
-		"provider":"moox",
-		"market_type":"spot",
-		"source_dataset_id":"dataset_binance_kline_1m",
-		"source_frequency":"1m",
-		"source_series_tag":"venue:binance",
-		"target_dataset_id":"dataset_spot_kline_derived_4h",
-		"target_frequency":"4h",
-		"alignment":"epoch_utc",
-		"repair_lookback_buckets":3
-	}`, "", "", "kline_resample")
-	require.ErrorContains(t, err, "unknown field")
+func TestParseCollectParamsRejectsResampleRemovedFields(t *testing.T) {
+	for _, raw := range []string{
+		`{"source_dataset_id":"s","source_frequency":"1m","target_frequency":"4h","alignment":"epoch_utc"}`,
+		`{"source_dataset_id":"s","source_frequency":"1m","target_frequency":"4h","repair_lookback_buckets":3}`,
+		`{"source_dataset_id":"s","source_frequency":"1m","target_frequency":"4h","settle_delay_ms":1000}`,
+		`{"source_dataset_id":"s","source_frequency":"1m","target_frequency":"4h","target_dataset_id":"target"}`,
+	} {
+		_, err := ParseCollectParams(raw, "kline_resample")
+		require.ErrorContains(t, err, "unknown field", raw)
+	}
 }
 
-func TestKlineResampleCanonicalJSONOmitsRuntimeRepairPolicy(t *testing.T) {
-	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"60m","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"240m","alignment":"epoch_utc"}`, "", "", "kline_resample")
+func TestKlineResampleCanonicalJSON(t *testing.T) {
+	params, err := ParseCollectParams(`{"source_dataset_id":"source","source_frequency":"60m","source_series_tag":"venue:binance","target_frequency":"240m"}`, "kline_resample")
 	require.NoError(t, err)
 	raw, err := params.CanonicalJSON()
 	require.NoError(t, err)
 	assert.Contains(t, raw, `"source_frequency":"1h"`)
 	assert.Contains(t, raw, `"target_frequency":"4h"`)
-	assert.NotContains(t, raw, "repair")
-}
-
-func TestKlineResampleValidateIsRejectedInDomain(t *testing.T) {
-	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target","target_frequency":"5m","alignment":"epoch_utc"}`, "", "", "kline_resample")
-	require.NoError(t, err)
-	require.ErrorContains(t, params.Validate(), "resample.ValidateTaskParams")
-}
-
-func TestKlineResampleRejectsRemovedSettleDelay(t *testing.T) {
-	_, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target","target_frequency":"5m","settle_delay_ms":1000}`, "", "", "kline_resample")
-	require.ErrorContains(t, err, "unknown field")
+	assert.NotContains(t, raw, "target_dataset_id")
 }
 
 func TestKlineResampleAcceptsSourceTaskID(t *testing.T) {
-	params, err := ParseCollectParams(`{"source_task_id":"src-task","target_frequency":"45m"}`, "", "", "kline_resample")
+	params, err := ParseCollectParams(`{"source_task_id":"src-task","target_frequency":"45m"}`, "kline_resample")
 	require.NoError(t, err)
 	assert.Equal(t, "src-task", params.SourceTaskID)
-	_, err = ParseCollectParams(`{"source_task_id":"src-task","frequency":"1m"}`, "", "", "kline")
+	_, err = ParseCollectParams(`{"source_task_id":"src-task","frequency":"1m"}`, DataTypeKline)
 	require.Error(t, err, "source_task_id 只用于合成任务")
 }

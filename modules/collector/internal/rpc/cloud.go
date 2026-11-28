@@ -149,14 +149,13 @@ func (s *Service) InitPackageUpload(ctx context.Context, req *pb.InitPackageUplo
 	if s.cloud.Packages == nil {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, errNoCloudPackages)}, nil
 	}
-	for name, value := range map[string]string{"space_id": req.GetSpaceId(), "package_name": req.GetPackageName(), "version": req.GetVersion(), "runtime": req.GetRuntime(), "cloud_account_id": req.GetCloudAccountId()} {
+	for name, value := range map[string]string{"package_name": req.GetPackageName(), "version": req.GetVersion(), "runtime": req.GetRuntime()} {
 		if strings.TrimSpace(value) == "" {
 			return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, name+" 不能为空")}, nil
 		}
 	}
 	upload, err := s.cloud.Packages.InitUpload(ctx, cloud.UploadRequest{
-		SpaceID: req.GetSpaceId(), PackageName: req.GetPackageName(), Version: req.GetVersion(), Runtime: req.GetRuntime(),
-		CloudAccountID: req.GetCloudAccountId(), Filename: req.GetFilename(),
+		PackageName: req.GetPackageName(), Version: req.GetVersion(), Runtime: req.GetRuntime(), Filename: req.GetFilename(),
 	})
 	if err != nil {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -169,22 +168,22 @@ func (s *Service) CompletePackageUpload(ctx context.Context, req *pb.CompletePac
 	if s.cloud.Packages == nil {
 		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, errNoCloudPackages)}, nil
 	}
-	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetPackageId()) == "" || req.GetFileSize() <= 0 || strings.TrimSpace(req.GetFileMd5()) == "" {
-		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id、package_id、file_size、file_md5 都不能为空")}, nil
+	if strings.TrimSpace(req.GetPackageId()) == "" || req.GetFileSize() <= 0 || strings.TrimSpace(req.GetFileMd5()) == "" {
+		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "package_id、file_size、file_md5 都不能为空")}, nil
 	}
-	pkg, err := s.cloud.Packages.CompleteUpload(ctx, strings.TrimSpace(req.GetSpaceId()), strings.TrimSpace(req.GetPackageId()), req.GetFileSize(), req.GetFileMd5())
+	pkg, err := s.cloud.Packages.CompleteUpload(ctx, strings.TrimSpace(req.GetPackageId()), req.GetFileSize(), req.GetFileMd5())
 	if err != nil {
 		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	return &pb.CompletePackageUploadRsp{RetInfo: retOK(), Package: functionPackageToPB(pkg)}, nil
 }
 
-// ListFunctionPackages 返回一个空间（space_id 为空时全部空间）的代码包。
-func (s *Service) ListFunctionPackages(ctx context.Context, req *pb.ListFunctionPackagesReq) (*pb.ListFunctionPackagesRsp, error) {
+// ListFunctionPackages 返回全部代码包。
+func (s *Service) ListFunctionPackages(ctx context.Context, _ *pb.ListFunctionPackagesReq) (*pb.ListFunctionPackagesRsp, error) {
 	if s.cloud.Packages == nil {
 		return &pb.ListFunctionPackagesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, errNoCloudPackages)}, nil
 	}
-	packages, err := s.cloud.Packages.List(ctx, strings.TrimSpace(req.GetSpaceId()))
+	packages, err := s.cloud.Packages.List(ctx)
 	if err != nil {
 		return &pb.ListFunctionPackagesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -200,10 +199,10 @@ func (s *Service) DeleteFunctionPackage(ctx context.Context, req *pb.DeleteFunct
 	if s.cloud.Packages == nil {
 		return &pb.DeleteFunctionPackageRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, errNoCloudPackages)}, nil
 	}
-	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetPackageId()) == "" {
-		return &pb.DeleteFunctionPackageRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id 与 package_id 不能为空")}, nil
+	if strings.TrimSpace(req.GetPackageId()) == "" {
+		return &pb.DeleteFunctionPackageRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "package_id 不能为空")}, nil
 	}
-	if err := s.cloud.Packages.Delete(ctx, strings.TrimSpace(req.GetSpaceId()), strings.TrimSpace(req.GetPackageId())); err != nil {
+	if err := s.cloud.Packages.Delete(ctx, strings.TrimSpace(req.GetPackageId())); err != nil {
 		return &pb.DeleteFunctionPackageRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	return &pb.DeleteFunctionPackageRsp{RetInfo: retOK()}, nil
@@ -211,7 +210,7 @@ func (s *Service) DeleteFunctionPackage(ctx context.Context, req *pb.DeleteFunct
 
 func functionPackageToPB(pkg store.FunctionPackage) *pb.FunctionPackage {
 	return &pb.FunctionPackage{
-		SpaceId: pkg.SpaceID, PackageId: pkg.PackageID, PackageName: pkg.PackageName, Version: pkg.Version, Runtime: pkg.Runtime,
+		PackageId: pkg.PackageID, PackageName: pkg.PackageName, Version: pkg.Version, Runtime: pkg.Runtime,
 		FileSize: pkg.FileSize, FileMd5: pkg.FileMD5, CloudAccountId: pkg.CloudAccountID, CosRegion: pkg.COSRegion, CosBucket: pkg.COSBucket,
 		CosPath: pkg.COSPath, Status: pkg.Status, CreatedAt: unixMillis(pkg.CreateTime), UpdatedAt: unixMillis(pkg.ModifyTime),
 	}

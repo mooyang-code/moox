@@ -1,7 +1,7 @@
 import { computed, inject, provide, ref, type InjectionKey } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
-import { GetDataTypeConfigs, GetDataTypeConfigWithFields, GetTaskList, type DataTypeConfig } from "@/api/collector";
+import { GetDataTypeConfigs, GetTaskList, type DataTypeConfig } from "@/api/collector";
 import { listTags } from "@/api/storage/metadata";
 import type { Tag } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
@@ -36,10 +36,19 @@ function createCollectionCatalog() {
   let tagListRequestToken = 0;
   let sourceListRequestToken = 0;
 
+  function cacheDataTypeConfigs(configs: DataTypeConfig[]) {
+    dataTypeConfigs.value = configs;
+    const catalogs = { ...outputFieldCatalogs.value };
+    for (const config of configs) {
+      catalogs[config.data_type] = buildOutputFieldCatalog(config.base_output_fields, config.extra_fields);
+    }
+    outputFieldCatalogs.value = catalogs;
+  }
+
   async function loadDataTypeConfigs() {
     try {
       const response = await GetDataTypeConfigs();
-      dataTypeConfigs.value = response.configs || [];
+      cacheDataTypeConfigs(response.configs || []);
     } catch (error) {
       Message.error(error instanceof Error ? error.message : "获取数据类型失败");
     }
@@ -90,7 +99,7 @@ function createCollectionCatalog() {
         if (token !== sourceListRequestToken || spaceId !== selectedSpaceId.value) return;
         const batch = (response.tasks || []).map(normalizeCollectionTask);
         tasks.push(...batch.filter(task => task.data_type === "kline" || task.data_type === "kline_resample"));
-        if (!response.page?.has_more || batch.length === 0) break;
+        if (!response.page_result?.has_more || batch.length === 0) break;
       }
       sourceTasks.value = tasks;
     } catch (error) {
@@ -102,15 +111,22 @@ function createCollectionCatalog() {
     }
   }
 
-  /** 读取一个数据类型的参数与字段规格，顺便记下它的输出字段目录。 */
-  async function loadDataTypeDetail(dataType: string) {
-    const response = await GetDataTypeConfigWithFields(dataType);
-    const detail = response.detail;
-    outputFieldCatalogs.value = {
-      ...outputFieldCatalogs.value,
-      [dataType]: buildOutputFieldCatalog(detail?.base_output_fields, detail?.extra_fields)
-    };
-    return detail;
+  /** 读取一个数据类型的频率选项与输出字段规格（统一来自 GetDataTypeConfigs）。 */
+  async function loadDataTypeDetail(dataType: string): Promise<DataTypeConfig | undefined> {
+    const cached = dataTypeConfigs.value.find(config => config.data_type === dataType);
+    if (cached) {
+      if (!outputFieldCatalogs.value[dataType]) {
+        outputFieldCatalogs.value = {
+          ...outputFieldCatalogs.value,
+          [dataType]: buildOutputFieldCatalog(cached.base_output_fields, cached.extra_fields)
+        };
+      }
+      return cached;
+    }
+    const response = await GetDataTypeConfigs();
+    const configs = response.configs || [];
+    cacheDataTypeConfigs(configs);
+    return configs.find(config => config.data_type === dataType);
   }
 
   /** 详情抽屉显示字段中文名用：目录读过就不再读，读不到时显示字段 ID。 */

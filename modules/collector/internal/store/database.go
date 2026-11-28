@@ -72,15 +72,6 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 		if datasetID == "" {
 			return nil
 		}
-		var otherRefs int64
-		if err := tx.Table("t_collector_tasks").
-			Where("c_space_id = ? AND c_result_dataset_id = ? AND c_task_id <> ?", spaceID, datasetID, taskID).
-			Count(&otherRefs).Error; err != nil {
-			return err
-		}
-		if otherRefs > 0 {
-			return nil
-		}
 		for _, stmt := range []string{
 			`DELETE FROM t_collector_history_seeds WHERE c_space_id = ? AND c_dataset_id = ?`,
 			`DELETE FROM t_collector_backfill_watermarks WHERE c_space_id = ? AND c_dataset_id = ?`,
@@ -95,27 +86,6 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 		}
 		return nil
 	})
-}
-
-// HasOtherDatasetWriteTargets reports whether another CollectionTask still
-// references a result Dataset. Task-owned result Datasets are normally
-// isolated, but this guard prevents destructive metadata deletion if corrupted
-// or hand-written runtime state introduced a shared reference.
-func (s *Store) HasOtherDatasetWriteTargets(ctx context.Context, spaceID, datasetID, taskID string) (bool, error) {
-	if s == nil || s.db == nil {
-		return false, fmt.Errorf("collector database is not open")
-	}
-	spaceID, datasetID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(datasetID), strings.TrimSpace(taskID)
-	if spaceID == "" || datasetID == "" || taskID == "" {
-		return false, fmt.Errorf("space_id, dataset_id and task_id are required")
-	}
-	var count int64
-	if err := s.db.WithContext(ctx).Table("t_collector_tasks").
-		Where("c_space_id = ? AND c_result_dataset_id = ? AND c_task_id <> ?", spaceID, datasetID, taskID).
-		Count(&count).Error; err != nil {
-		return false, err
-	}
-	return count > 0, nil
 }
 
 // Options configures the Collector SQLite store.

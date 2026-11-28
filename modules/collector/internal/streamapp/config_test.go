@@ -22,22 +22,12 @@ func TestLoadStreamConfigIsStrictAndResolvesRelativePaths(t *testing.T) {
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	require.Equal(t, "crypto", cfg.SpaceID, "空间可由部署环境给出")
-	require.Empty(t, cfg.MarketConfig, "默认使用二进制内嵌 binance.yaml，不依赖外部文件")
 	require.Equal(t, 4, cfg.LocalExecutor.Concurrency)
 	require.NotEmpty(t, cfg.InstanceID)
 
-	// 兼容旧配置中的 market_config：指向不存在的外部文件时自动回退内嵌配置；文件存在时保留覆盖路径。
-	legacyPath := writeStreamConfig(t, "gateway_client: {caller: collector-stream, key_file: k}\nmarket_config: sources/market/binance.yaml\n")
-	legacyCfg, err := Load(legacyPath)
-	require.NoError(t, err)
-	require.Empty(t, legacyCfg.MarketConfig)
-
-	overridePath := writeStreamConfig(t, "gateway_client: {caller: collector-stream, key_file: k}\nmarket_config: custom.yaml\n")
-	overrideFile := filepath.Join(filepath.Dir(overridePath), "custom.yaml")
-	require.NoError(t, os.WriteFile(overrideFile, []byte("app: {}\n"), 0o600))
-	overrideCfg, err := Load(overridePath)
-	require.NoError(t, err)
-	require.Equal(t, overrideFile, overrideCfg.MarketConfig)
+	// 已删除的旧配置项 market_config 会被严格解码拒绝。
+	_, err = Load(writeStreamConfig(t, "gateway_client: {caller: collector-stream, key_file: k}\nmarket_config: sources/market/binance.yaml\n"))
+	require.Error(t, err, "已废弃的 market_config 应被拒绝")
 
 	_, err = Load(writeStreamConfig(t, "gateway_client: {caller: collector-stream}\nunknown: 1\n"))
 	require.Error(t, err, "未知字段拒绝")

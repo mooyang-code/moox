@@ -15,25 +15,6 @@ import (
 // SetStreamService 注入推送采集服务（运行状态、切换前的在线检查）。
 func (s *Service) SetStreamService(stream *StreamService) { s.stream = stream }
 
-// GetIngestMode 返回 K 线任务的采集方式、正在交接的生效周期与 collector-stream 实例状态。
-func (s *Service) GetIngestMode(ctx context.Context, req *pb.GetIngestModeReq) (*pb.GetIngestModeRsp, error) {
-	spaceID := normalizeSpace(req.GetSpaceId())
-	if spaceID == "" {
-		return &pb.GetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id 必填")}, nil
-	}
-	modes, err := s.ingestModes(ctx, spaceID, strings.TrimSpace(req.GetDatasetId()), false)
-	if err != nil {
-		return &pb.GetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-	}
-	rsp := &pb.GetIngestModeRsp{RetInfo: retOK(), Modes: modes}
-	if s.stream != nil {
-		if rsp.Stream, err = s.stream.WorkerStatus(ctx, spaceID); err != nil {
-			return &pb.GetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-	}
-	return rsp, nil
-}
-
 // ingestModes 列出 K 线任务的采集方式，并标出正在交接的数据集各频率的生效周期 P。enabledOnly 为真时只列启用的任务。
 func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string, enabledOnly bool) ([]*pb.IngestMode, error) {
 	tasks, err := s.taskRepo.ListKline(ctx, spaceID, datasetID)
@@ -77,7 +58,7 @@ func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string, en
 		if enabledOnly && !task.Enabled {
 			continue
 		}
-		result = append(result, &pb.IngestMode{SpaceId: spaceID, DatasetId: task.ResultDatasetID, TaskId: task.TaskID, Ingest: task.Ingest, EffectivePeriods: periods[task.ResultDatasetID]})
+		result = append(result, &pb.IngestMode{SpaceId: spaceID, DatasetId: task.ResultDatasetID, TaskId: task.TaskID, Ingest: task.Ingest, EffectivePeriods: periods[task.ResultDatasetID], Enabled: task.Enabled})
 	}
 	return result, nil
 }
@@ -116,9 +97,5 @@ func (s *Service) SetIngestMode(ctx context.Context, req *pb.SetIngestModeReq) (
 	if err != nil {
 		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	rsp := &pb.SetIngestModeRsp{RetInfo: retOK(), Modes: modes, Stream: worker}
-	if open, err := s.persistence.FetchPlans().Open(ctx, spaceID); err == nil && open != nil {
-		rsp.PlanId = open.ID
-	}
-	return rsp, nil
+	return &pb.SetIngestModeRsp{RetInfo: retOK(), Modes: modes, Stream: worker}, nil
 }

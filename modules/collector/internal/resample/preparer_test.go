@@ -57,16 +57,15 @@ func TestPreparerSkipsReadyTasksAndPreparesNonReadyTasks(t *testing.T) {
 		Limit:   50,
 	}
 
-	makeParams := func(taskID string) string {
-		ids := taskresult.ResultIDs(taskID)
-		return `{"provider":"moox","market_type":"spot","source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"` + ids.DatasetID + `","target_frequency":"5m","alignment":"epoch_utc"}`
+	makeParams := func() string {
+		return `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_frequency":"5m"}`
 	}
 
 	// 1. 仅存在已 Ready 任务：RunOnce 必须零次调用 Source / Metadata / View RPC。
 	readyIDs := taskresult.ResultIDs("task-ready")
 	require.NoError(t, mgr.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-ready", TaskName: "已就绪合成", DataType: "kline_resample",
-		CollectParams: makeParams("task-ready"), Enabled: true,
+		CollectParams: makeParams(), Enabled: true,
 		PrepareState: domain.PrepareStateReady, ResultDatasetID: readyIDs.DatasetID,
 	}))
 	require.NoError(t, preparer.RunOnce(ctx))
@@ -87,7 +86,7 @@ func TestPreparerSkipsReadyTasksAndPreparesNonReadyTasks(t *testing.T) {
 		ids := taskresult.ResultIDs(tc.id)
 		require.NoError(t, mgr.Tasks().Create(ctx, domain.CollectionTask{
 			SpaceID: "crypto", TaskID: tc.id, TaskName: tc.id, DataType: "kline_resample",
-			CollectParams: makeParams(tc.id), Enabled: true,
+			CollectParams: makeParams(), Enabled: true,
 			PrepareState: tc.state, ResultDatasetID: ids.DatasetID,
 		}))
 	}

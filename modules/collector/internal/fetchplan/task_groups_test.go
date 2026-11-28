@@ -36,7 +36,7 @@ func TestCachedGroupsTakeTheCurrentIngest(t *testing.T) {
 	ctx := context.Background()
 	tasks := &planTasksStub{tasks: []domain.CollectionTask{{
 		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", Ingest: ingestSCF, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m"}`,
+		ResultDatasetID: "ds_spot", CollectParams: `{"frequency":"1m"}`,
 	}}}
 	metadata := &flakyMetadata{planSymbolsStub: &planSymbolsStub{subjects: []string{"BTC-USDT", "ETH-USDT"}}}
 	builder := &GroupBuilder{Tasks: tasks, Symbols: metadata}

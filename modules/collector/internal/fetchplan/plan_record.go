@@ -25,7 +25,6 @@ const copyWindowMargin = 5 * time.Second
 // 数据集在一份计划里的动作（决策表见 decideDataset）。
 const (
 	PlanActionKeep    = "keep"    // 内容不变（可能裁掉过期的旧份）
-	PlanActionSymbols = "symbols" // 只有交易所符号变了：份不变，时间线写新符号
 	PlanActionReplace = "replace" // 头份还没开始：原地换成新内容，生效点不变
 	PlanActionAppend  = "append"  // 在新的生效点加一份
 	PlanActionWait    = "wait"    // 已有两份且旧份未过窗口：本轮不动
@@ -40,17 +39,10 @@ type DatasetCopy struct {
 	Count uint32 `json:"count"`
 	// LatenessS 是这一份的周期按哪个截止建立（交接时旧份记旧截止）。
 	LatenessS int `json:"lateness_s"`
-	// Ingest 是这一份的执行端（空按 scf）：两份执行端不同说明正在交接，生效点是后一份的 From。
-	Ingest string `json:"ingest,omitempty"`
+	// Ingest 是这一份的执行端（scf、stream 或 local）：两份执行端不同说明正在交接，生效点是后一份的 From。
+	Ingest string `json:"ingest"`
 	// Stop 表示从 From 起不再采集（没有标的）。
 	Stop bool `json:"stop,omitempty"`
-}
-
-func (c DatasetCopy) ingestOrSCF() string {
-	if c.Ingest == "" {
-		return marketfetch.PlanExecutorSCF
-	}
-	return c.Ingest
 }
 
 // PlanDataset 是一个数据集在本计划之后的完整状态，加上本计划对它做了什么。
@@ -62,7 +54,7 @@ type PlanDataset struct {
 	// TimelineFrom 是这个数据集频率在标的时间线上最后一行的生效点（没有行时为 0）。
 	TimelineFrom int64  `json:"timeline_from,omitempty"`
 	Action       string `json:"action"`
-	// P 是 replace、append、symbols 的生效点。
+	// P 是 replace、append 的生效点。
 	P int64 `json:"p,omitempty"`
 	// Register 表示要向 Storage 登记 Hash@P；Timeline 表示本计划在 P 写一行时间线（登记的在登记成功时写，其余在建计划时写）。
 	Register bool `json:"register,omitempty"`
@@ -84,7 +76,7 @@ func (d *PlanDataset) Head() *DatasetCopy {
 
 // HandoffFrom 返回交接的生效点：两份执行端不同时是后一份的 From，否则为 0。
 func (d *PlanDataset) HandoffFrom() int64 {
-	if d == nil || len(d.Copies) != 2 || d.Copies[0].ingestOrSCF() == d.Copies[1].ingestOrSCF() {
+	if d == nil || len(d.Copies) != 2 || d.Copies[0].Ingest == d.Copies[1].Ingest {
 		return 0
 	}
 	return d.Copies[1].From
@@ -101,8 +93,8 @@ type PlanFunctionChange struct {
 	Name   string `json:"name"`
 	Region string `json:"region"`
 	Market string `json:"market"`
-	// Executor 为空表示 SCF 函数；stream、local 由 collector-stream 心跳确认，没有云端步骤。
-	Executor string            `json:"executor,omitempty"`
+	// Executor 是执行端（scf、stream 或 local）；stream、local 由 collector-stream 心跳确认，没有云端步骤。
+	Executor string            `json:"executor"`
 	Old      *marketfetch.Plan `json:"old,omitempty"`
 	OldCron  string            `json:"old_cron,omitempty"`
 	New      *marketfetch.Plan `json:"new,omitempty"`
@@ -134,7 +126,7 @@ type FetchPlanProgress struct {
 
 // IsSCF 判断该项是 SCF 函数（需要云端创建、下发环境与定时器）。
 func (f *PlanFunctionChange) IsSCF() bool {
-	return f.Executor == "" || f.Executor == marketfetch.PlanExecutorSCF
+	return f.Executor == marketfetch.PlanExecutorSCF
 }
 
 func (p *FetchPlanProgress) mark(set *map[string]bool, key string) {
@@ -427,25 +419,19 @@ func decideDataset(key string, prev *PlanDataset, want *DesiredDataset, previous
 	pNew := nextBoundary(frequency, now.Add(timing.Lead)).Unix()
 	q := max(pNew, out.TimelineFrom)
 	switch {
-	case same && (want == nil || prev == nil || sameSymbols(prev.Symbols, want.Symbols)):
+	case same:
 		// K：只做裁剪。截止、输出字段可能变了（函数 Target 随之变化），沿用期望。
 		if want != nil {
 			stateFromWant()
 		}
 		return out, "", nil
-	case same:
-		// S：只有符号变了。份不变，时间线在 Q 写一行（同一生效点覆盖最后一行）。
-		stateFromWant()
-		out.Action, out.P, out.Timeline, out.TimelineFrom = PlanActionSymbols, q, true, q
-		out.Series = append([]seriesset.Series(nil), want.Series...)
-		return out, "", nil
 	case blocked:
 		return out, fmt.Sprintf("%s 等交接截止改成功后再去掉旧份", key), nil
 	}
-	lastStop, lastHash, lastSymbols := false, "", map[string]string(nil)
+	lastStop, lastHash := false, ""
 	if prev != nil && out.TimelineFrom > 0 {
 		if prevHead := prev.Head(); prevHead != nil {
-			lastStop, lastHash, lastSymbols = prevHead.Stop, prevHead.Hash, prev.Symbols
+			lastStop, lastHash = prevHead.Stop, prevHead.Hash
 		}
 	}
 	rowDiffers := func() bool {
@@ -455,7 +441,7 @@ func decideDataset(key string, prev *PlanDataset, want *DesiredDataset, previous
 		if want == nil {
 			return !lastStop
 		}
-		return lastStop || lastHash != want.Hash || !sameSymbols(lastSymbols, want.Symbols)
+		return lastStop || lastHash != want.Hash
 	}
 	oldSubjects := subjectsAt(previous, key, head)
 	switch {
@@ -467,7 +453,7 @@ func decideDataset(key string, prev *PlanDataset, want *DesiredDataset, previous
 			out.Copies[len(out.Copies)-1] = DatasetCopy{From: replaced.From, Hash: replaced.Hash, Count: replaced.Count, LatenessS: replaced.LatenessS, Ingest: replaced.Ingest, Stop: true}
 			out.Stopped = true
 		} else {
-			out.Copies[len(out.Copies)-1] = DatasetCopy{From: replaced.From, Hash: want.Hash, Count: want.Count, LatenessS: want.LatenessS, Ingest: want.IngestOrSCF()}
+			out.Copies[len(out.Copies)-1] = DatasetCopy{From: replaced.From, Hash: want.Hash, Count: want.Count, LatenessS: want.LatenessS, Ingest: want.Ingest}
 			out.Register = want.Hash != replaced.Hash
 			stateFromWant()
 		}
@@ -482,7 +468,7 @@ func decideDataset(key string, prev *PlanDataset, want *DesiredDataset, previous
 			out.Copies = append(out.Copies, DatasetCopy{From: q, Hash: head.Hash, Count: head.Count, LatenessS: head.LatenessS, Ingest: head.Ingest, Stop: true})
 			out.Stopped = true
 		} else {
-			out.Copies = append(out.Copies, DatasetCopy{From: q, Hash: want.Hash, Count: want.Count, LatenessS: want.LatenessS, Ingest: want.IngestOrSCF()})
+			out.Copies = append(out.Copies, DatasetCopy{From: q, Hash: want.Hash, Count: want.Count, LatenessS: want.LatenessS, Ingest: want.Ingest})
 			out.Register = head == nil || want.Hash != head.Hash
 			stateFromWant()
 		}
@@ -584,33 +570,21 @@ func (c *FetchPlanContent) composeTarget(function *PlanFunctionChange) *marketfe
 		return nil
 	}
 	out := &marketfetch.Plan{V: base.V, Executor: base.Executor, Market: base.Market, Fetch: base.Fetch}
-	// 例外表：新计划的映射优先；新计划里有这个标的却没写例外的，删掉旧例外；旧映射只为仍留在计划里的标的保留（最后 PruneExceptions）。
-	exceptions := map[string]string{}
+	// 交易对：新计划优先；新计划里有这个标的却没写交易对的，删掉旧映射；旧映射只为仍留在计划里的标的保留（最后 PrunePairs）。
+	pairs := map[string]string{}
 	if function.Old != nil {
-		for key, value := range function.Old.SymbolExceptions {
-			exceptions[key] = value
+		for key, value := range function.Old.Pairs {
+			pairs[key] = value
 		}
 	}
 	if function.New != nil {
 		for key := range function.Old.SymbolsOrNil() {
-			if _, kept := function.New.SymbolExceptions[key]; !kept && function.New.HasSubject(key) {
-				delete(exceptions, key)
+			if _, kept := function.New.Pairs[key]; !kept && function.New.HasSubject(key) {
+				delete(pairs, key)
 			}
 		}
-		for key, value := range function.New.SymbolExceptions {
-			exceptions[key] = value
-		}
-	}
-	if len(exceptions) > 0 {
-		out.SymbolExceptions = exceptions
-	}
-	// 交易对：新计划优先，旧计划补上仍留在计划里的标的。
-	pairs := map[string]string{}
-	for _, plan := range []*marketfetch.Plan{function.Old, function.New} {
-		if plan != nil {
-			for key, value := range plan.Pairs {
-				pairs[key] = value
-			}
+		for key, value := range function.New.Pairs {
+			pairs[key] = value
 		}
 	}
 	if len(pairs) > 0 {
@@ -660,7 +634,7 @@ func (c *FetchPlanContent) composeTarget(function *PlanFunctionChange) *marketfe
 	if len(out.Datasets) == 0 {
 		return nil
 	}
-	out.PruneExceptions()
+	out.PrunePairs()
 	return out
 }
 

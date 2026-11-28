@@ -43,7 +43,9 @@ type StreamService struct {
 	tradingStatus TradingStatusRunner
 	// attention 上报推送连续缺失（stream_periods_missing，见 stream_attention.go；可为空）。
 	attention *report.Attention
-	now       func() time.Time
+	// systemPaused 判断系统生命周期是否处于非运行阶段（暂停或恢复追赶）；为真时下发空计划。
+	systemPaused func() bool
+	now          func() time.Time
 
 	mu      sync.Mutex
 	recent  map[string][]*pb.StreamPeriodStat
@@ -72,6 +74,9 @@ type streamWorkerStatus struct {
 
 func normalizeSpace(spaceID string) string { return strings.ToLower(strings.TrimSpace(spaceID)) }
 
+// SetSystemPaused 注入系统生命周期暂停判断；暂停或恢复追赶期间对推送采集下发空计划。
+func (s *StreamService) SetSystemPaused(fn func() bool) { s.systemPaused = fn }
+
 // planState 返回该空间此刻要求 collector-stream 应用的计划版本与各项。
 func (s *StreamService) planState(ctx context.Context, spaceID string) (int64, []fetchplan.StreamPlanItem, error) {
 	plans := s.persistence.FetchPlans()
@@ -87,7 +92,8 @@ func (s *StreamService) planState(ctx context.Context, spaceID string) (int64, [
 	if err != nil {
 		return 0, nil, err
 	}
-	return fetchplan.StreamPlanState(open, applied, paused[spaceID])
+	isPaused := paused[spaceID] || (s.systemPaused != nil && s.systemPaused())
+	return fetchplan.StreamPlanState(open, applied, isPaused)
 }
 
 // StreamHeartbeat 记录心跳与已应用的计划版本，返回最新版本。
@@ -102,8 +108,7 @@ func (s *StreamService) StreamHeartbeat(ctx context.Context, req *pb.StreamHeart
 		offset = time.UnixMilli(req.GetSentAt()).Sub(now)
 	}
 	status := streamWorkerStatus{Version: req.GetVersion(), ClockOffsetMS: offset.Milliseconds(), Conns: req.GetConns()}
-	applied := fetchplan.StreamApplied{ID: req.GetAppliedPlanId()}
-	if err := s.persistence.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: spaceID, InstanceID: req.GetInstanceId(), Applied: mustMarshal(applied), Status: mustMarshal(status), HeartbeatAt: now}); err != nil {
+	if err := s.persistence.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: spaceID, InstanceID: req.GetInstanceId(), AppliedPlanID: req.GetAppliedPlanId(), Status: mustMarshal(status), HeartbeatAt: now}); err != nil {
 		return &pb.StreamHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	reconnects := map[[2]string]int64{}
@@ -234,11 +239,9 @@ func (s *StreamService) WorkerStatus(ctx context.Context, spaceID string) (*pb.S
 		return nil, err
 	}
 	online := s.now().Sub(worker.HeartbeatAt) <= s.settings.HeartbeatTimeout
-	var applied fetchplan.StreamApplied
-	_ = json.Unmarshal([]byte(worker.Applied), &applied)
 	var status streamWorkerStatus
 	_ = json.Unmarshal([]byte(worker.Status), &status)
-	result := &pb.StreamWorkerStatus{InstanceId: worker.InstanceID, Online: online, HeartbeatAt: unixMillis(worker.HeartbeatAt), AppliedPlanId: applied.ID,
+	result := &pb.StreamWorkerStatus{InstanceId: worker.InstanceID, Online: online, HeartbeatAt: unixMillis(worker.HeartbeatAt), AppliedPlanId: worker.AppliedPlanID,
 		Conns: status.Conns, ClockOffsetMs: status.ClockOffsetMS, Version: status.Version}
 	s.mu.Lock()
 	recent := append([]*pb.StreamPeriodStat(nil), s.recent[spaceID]...)

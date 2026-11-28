@@ -3,9 +3,9 @@
   "summary": {
     "components": 16,
     "services": 23,
-    "methods": 291,
-    "read_only_methods": 134,
-    "retryable_methods": 137,
+    "methods": 289,
+    "read_only_methods": 132,
+    "retryable_methods": 135,
     "callers": 19,
     "principals": 1
   },
@@ -276,19 +276,7 @@
           "timeout_ms": 5000
         },
         {
-          "name": "GetDataTypeConfigWithFields",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetDataTypeConfigs",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "GetIngestMode",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
@@ -2003,9 +1991,7 @@
       "trpc.moox.collector.CollectMgr/DeleteTask",
       "trpc.moox.collector.CollectMgr/DisableTask",
       "trpc.moox.collector.CollectMgr/GetCollectorStatus",
-      "trpc.moox.collector.CollectMgr/GetDataTypeConfigWithFields",
       "trpc.moox.collector.CollectMgr/GetDataTypeConfigs",
-      "trpc.moox.collector.CollectMgr/GetIngestMode",
       "trpc.moox.collector.CollectMgr/GetKlineBackfill",
       "trpc.moox.collector.CollectMgr/GetKlineResampleJob",
       "trpc.moox.collector.CollectMgr/GetLifecycle",
@@ -2308,9 +2294,7 @@
       "trpc.moox.collector.CollectMgr/DeleteTask",
       "trpc.moox.collector.CollectMgr/DisableTask",
       "trpc.moox.collector.CollectMgr/GetCollectorStatus",
-      "trpc.moox.collector.CollectMgr/GetDataTypeConfigWithFields",
       "trpc.moox.collector.CollectMgr/GetDataTypeConfigs",
-      "trpc.moox.collector.CollectMgr/GetIngestMode",
       "trpc.moox.collector.CollectMgr/GetKlineBackfill",
       "trpc.moox.collector.CollectMgr/GetKlineResampleJob",
       "trpc.moox.collector.CollectMgr/GetLifecycle",

@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -34,7 +35,7 @@ type tagRouteSource interface {
 	GetTag(context.Context, string, string) (*storagepb.Tag, error)
 }
 
-// GroupBuilder 把启用的 K 线采集任务按标签路由展开成采集组（数据集×频率×路由，含标的与交易所符号）。
+// GroupBuilder 把启用的 K 线采集任务按标签路由展开成采集组（数据集×频率×路由，含标的与非默认交易对）。
 // 采集计划对账据此算出期望状态；它不接触云端。
 type GroupBuilder struct {
 	ResolveSourceID marketfetch.SourceIDResolver
@@ -54,16 +55,17 @@ func (r *GroupBuilder) groups(ctx context.Context, spaceID string) ([]TaskGroup,
 		r.lastGroups = make(map[string][]TaskGroup)
 	}
 	for _, task := range tasks {
-		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		if !strings.EqualFold(strings.TrimSpace(task.DataType), domain.DataTypeKline) {
+			continue
+		}
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.DataType)
 		if parseErr != nil {
 			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: parse task: %v", task.TaskID, parseErr)
 			continue
 		}
-		if params.Collector.DataType != "kline" {
-			continue
-		}
-		if _, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID); datasetErr != nil {
-			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, params.Target.DatasetID, datasetErr)
+		datasetID := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID).DatasetID
+		if _, datasetErr := r.Symbols.GetDataset(ctx, spaceID, datasetID); datasetErr != nil {
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, datasetID, datasetErr)
 			groups = append(groups, r.cachedGroups(task)...)
 			continue
 		}
@@ -152,13 +154,13 @@ func normalizedTaskTagIDs(values []string) []string {
 
 // routeMarket 是任务按一个标签路由（provider、market_type）采集时的市场身份：计划的任务组与补采的路由都用它，
 // 两边推出的来源（以及由它决定的 series_tag）才会一致。
-func routeMarket(task domain.CollectionTask, params *domain.CollectParams, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (marketfetch.PlanMarket, error) {
+func routeMarket(spaceID, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (marketfetch.PlanMarket, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	marketType = strings.ToLower(strings.TrimSpace(marketType))
 	if provider == "" || marketType == "" {
 		return marketfetch.PlanMarket{}, fmt.Errorf("provider and market_type are required")
 	}
-	marketID, instrumentType, err := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, marketType)
+	marketID, instrumentType, err := marketIdentity(spaceID, "", marketType)
 	if err != nil {
 		return marketfetch.PlanMarket{}, err
 	}
@@ -173,13 +175,12 @@ func routeMarket(task domain.CollectionTask, params *domain.CollectParams, provi
 }
 
 func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, provider, marketType string, subjects []domain.Subject) ([]TaskGroup, error) {
-	route, err := routeMarket(task, params, provider, marketType, r.ResolveSourceID)
+	route, err := routeMarket(task.SpaceID, provider, marketType, r.ResolveSourceID)
 	if err != nil {
 		return nil, err
 	}
 	provider, marketType, marketID, instrumentType, sourceID := route.Provider, route.MarketType, route.MarketID, route.InstrumentType, route.SourceID
 	symbolIDs := make([]string, 0, len(subjects))
-	externalSymbols := make(map[string]string, len(subjects))
 	var pairs map[string]string
 	activeSubjectCount := 0
 	invalidSubjects := make([]string, 0)
@@ -195,7 +196,6 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 			continue
 		}
 		symbolIDs = append(symbolIDs, subjectID)
-		externalSymbols[subjectID] = external
 		if pair := strings.ToUpper(strings.TrimSpace(subject.Pair)); pair != "" && pair != external {
 			if pairs == nil {
 				pairs = map[string]string{}
@@ -207,26 +207,26 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 		return nil, fmt.Errorf("all active %s subjects are invalid: %s", marketType, strings.Join(invalidSubjects, ","))
 	}
 	if len(invalidSubjects) > 0 {
-		log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s task=%s skipped=%d subjects=%s", task.SpaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
+		log.WarnContextf(ctx, "skip invalid market subjects space=%s task=%s skipped=%d subjects=%s", task.SpaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 	}
-	result := make([]TaskGroup, 0, len(params.Collector.Intervals))
-	for _, frequency := range params.Collector.Intervals {
-		result = append(result, TaskGroup{
-			Provider: provider, MarketType: marketType, MarketID: marketID, InstrumentType: instrumentType,
-			SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID,
-			Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
-			Subjects: symbolIDs, ExternalSymbols: externalSymbols, Pairs: pairs,
-			SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
-			Ingest: task.Ingest,
-		})
+	if params.Frequency == "" {
+		return nil, nil
 	}
-	return result, nil
+	datasetID := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID).DatasetID
+	return []TaskGroup{{
+		Provider: provider, MarketType: marketType, MarketID: marketID, InstrumentType: instrumentType,
+		SourceID: sourceID, DatasetID: datasetID,
+		Frequency: params.Frequency, OutputFields: append([]string(nil), params.OutputFields...),
+		Subjects: symbolIDs, Pairs: pairs,
+		SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
+		Ingest: task.Ingest,
+	}}, nil
 }
 
 // TaskSeriesTag 返回 kline 采集任务按标签路由（provider、market_type）写入行时用的 series_tag，
 // 与 taskGroupsForRoute 生成的计划使用同一套推导（含 source_id 的解析）。
-func TaskSeriesTag(spaceID string, params *domain.CollectParams, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (string, error) {
-	route, err := routeMarket(domain.CollectionTask{SpaceID: spaceID}, params, provider, marketType, resolveSourceID)
+func TaskSeriesTag(spaceID, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (string, error) {
+	route, err := routeMarket(spaceID, provider, marketType, resolveSourceID)
 	if err != nil {
 		return "", err
 	}
@@ -234,7 +234,7 @@ func TaskSeriesTag(spaceID string, params *domain.CollectParams, provider, marke
 }
 
 // BackfillRoutes 由当前的采集任务推出补采用的来源与参数：市场身份与计划同一套推导（routeMarket），拉取参数按空间的
-// 计划配置（PlanOptions.planFetch），输出字段取任务的。交易所符号不在这里：补采按标的时间线取当时的符号。
+// 计划配置（PlanOptions.planFetch），输出字段取任务的。
 type BackfillRoutes struct {
 	Tasks interface {
 		ListKline(ctx context.Context, spaceID, datasetID string) ([]domain.CollectionTask, error)
@@ -256,7 +256,7 @@ func (r *BackfillRoutes) BackfillRoute(ctx context.Context, spaceID, datasetID, 
 		return nil, false, fmt.Errorf("list collection tasks of dataset %s: %w", datasetID, err)
 	}
 	for _, task := range tasks {
-		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.DataType)
 		if parseErr != nil {
 			return nil, false, fmt.Errorf("parse collection task %s: %w", task.TaskID, parseErr)
 		}
@@ -272,7 +272,7 @@ func (r *BackfillRoutes) BackfillRoute(ctx context.Context, spaceID, datasetID, 
 		if tagErr != nil || tag == nil {
 			return nil, false, fmt.Errorf("load tag %s of collection task %s: %v", tagIDs[0], task.TaskID, tagErr)
 		}
-		market, routeErr := routeMarket(task, params, tagattr.Source(tag), tagattr.MarketType(tag), r.ResolveSourceID)
+		market, routeErr := routeMarket(task.SpaceID, tagattr.Source(tag), tagattr.MarketType(tag), r.ResolveSourceID)
 		if routeErr != nil {
 			return nil, false, fmt.Errorf("route of collection task %s: %w", task.TaskID, routeErr)
 		}
@@ -281,7 +281,11 @@ func (r *BackfillRoutes) BackfillRoute(ctx context.Context, spaceID, datasetID, 
 			return nil, false, optionsErr
 		}
 		sample := TaskGroup{Provider: market.Provider, MarketType: market.MarketType, MarketID: market.MarketID, InstrumentType: market.InstrumentType, SourceID: market.SourceID, DatasetID: datasetID, Frequency: frequency}
-		return &marketfetch.Plan{V: 1, Market: market, Fetch: options.planFetch(sample), Datasets: []marketfetch.PlanDataset{{
+		executor := task.Ingest
+		if executor == "" {
+			executor = marketfetch.PlanExecutorSCF
+		}
+		return &marketfetch.Plan{V: 1, Executor: executor, Market: market, Fetch: options.planFetch(sample), Datasets: []marketfetch.PlanDataset{{
 			DatasetID: datasetID, Frequency: frequency, OutputFields: normalizeOutputFields(params.OutputFields),
 		}}}, true, nil
 	}
@@ -317,20 +321,6 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 		current.AllowedLatenessSeconds = minPositive(current.AllowedLatenessSeconds, group.AllowedLatenessSeconds)
 		if current.Ingest == "" {
 			current.Ingest = group.Ingest
-		}
-		if group.ExternalSymbols != nil {
-			if current.ExternalSymbols == nil {
-				current.ExternalSymbols = make(map[string]string)
-			}
-			for subject, external := range group.ExternalSymbols {
-				if previous, exists := current.ExternalSymbols[subject]; exists {
-					if previous != external {
-						current.ExternalSymbols[subject] = ""
-					}
-					continue
-				}
-				current.ExternalSymbols[subject] = external
-			}
 		}
 		for subject, pair := range group.Pairs {
 			if current.Pairs == nil {

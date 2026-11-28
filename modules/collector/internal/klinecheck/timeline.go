@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
@@ -15,11 +14,9 @@ import (
 // Segment 是一个数据集在 [From, To) 期间（K 线开始时间，Unix 秒；To 为 0 表示至今）应有的标的集合。
 // 一个数据集只放一个市场的序列，每个标的只有一条序列，检查与补采按标的进行，读取不带 series_tag。
 type Segment struct {
-	From     int64
-	To       int64
-	Subjects []string
-	// Symbols 是这一段每个标的的交易所符号（标的 → 符号）；补采按它取改名、换合约之前的旧符号。
-	Symbols      map[string]string
+	From         int64
+	To           int64
+	Subjects     []string
 	LatenessS    int
 	OutputFields []string
 	// TimelineFrom 只在检查把最早一段前移到时间线起点之前时有值（见 extendEarliestSegments），是原来的起点：
@@ -81,7 +78,7 @@ func applyTimelineEntry(timeline Timeline, entry store.SeriesTimelineEntry) {
 	if len(entry.Series) == 0 {
 		return
 	}
-	timeline[key] = append(timeline[key], Segment{From: entry.EffectiveFrom, Subjects: segmentSubjects(entry.Series), Symbols: entry.Symbols, LatenessS: entry.LatenessS, OutputFields: entry.OutputFields})
+	timeline[key] = append(timeline[key], Segment{From: entry.EffectiveFrom, Subjects: segmentSubjects(entry.Series), LatenessS: entry.LatenessS, OutputFields: entry.OutputFields})
 }
 
 // cloneTimeline 复制时间线的 map 和各键的 Segment 切片，确保调用方修改（如 extendEarliestSegments）或增量构建不影响已发布的只读缓存。
@@ -197,23 +194,6 @@ func loadTimeline(ctx context.Context, source TimelineSource, spaceID string) (T
 func (t Timeline) Active(key string) bool {
 	segments := t[key]
 	return len(segments) > 0 && segments[len(segments)-1].To == 0
-}
-
-// SymbolAt 返回标的在 at 时刻（K 线开始时间）的交易所符号：取覆盖 at 的那一段；早于最早一段的时间沿用最早一段的符号
-// （重新登记会清空时间线，此前的符号历史不保留）。这一段没有该标的时返回 false。
-func (t Timeline) SymbolAt(key, subject string, at time.Time) (string, bool) {
-	segments := t[key]
-	if len(segments) == 0 {
-		return "", false
-	}
-	segment := segments[0]
-	for _, candidate := range segments {
-		if candidate.From <= at.Unix() {
-			segment = candidate
-		}
-	}
-	symbol, ok := segment.Symbols[strings.ToUpper(subject)]
-	return symbol, ok && symbol != ""
 }
 
 // closeSegment 把最后一段在 at 处结束。

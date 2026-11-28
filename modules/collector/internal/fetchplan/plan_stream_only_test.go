@@ -15,7 +15,7 @@ type noCloud struct{ *testCloud }
 
 var errNoCloudAccount = errors.New("no cloud account")
 
-func (noCloud) LatestPackage(context.Context, string, string) (*cloud.Package, error) {
+func (noCloud) LatestPackage(context.Context, string) (*cloud.Package, error) {
 	return nil, errNoCloudAccount
 }
 

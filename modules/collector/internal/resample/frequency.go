@@ -50,17 +50,18 @@ func ValidateResamplePair(source, target FixedFrequency) error {
 
 // ValidateTaskParamsBasic 在尚未加载源数据集元数据时校验合成任务的静态结构契约：
 // 源/目标数据集 ID 不同且合法、序列标签非空、目标周期是源周期的整数倍、输出字段属于标准可归约列。
-func ValidateTaskParamsBasic(params *domain.CollectParams) error {
+func ValidateTaskParamsBasic(params *domain.CollectParams, targetDatasetID string) error {
 	if params == nil {
 		return fmt.Errorf("resample collect params are required")
 	}
+	targetDatasetID = strings.TrimSpace(targetDatasetID)
 	if strings.TrimSpace(params.SourceDatasetID) == "" {
 		return fmt.Errorf("source_dataset_id is required")
 	}
-	if strings.TrimSpace(params.TargetDatasetID) == "" {
+	if targetDatasetID == "" {
 		return fmt.Errorf("target_dataset_id is required")
 	}
-	if strings.TrimSpace(params.SourceDatasetID) == strings.TrimSpace(params.TargetDatasetID) {
+	if strings.TrimSpace(params.SourceDatasetID) == targetDatasetID {
 		return fmt.Errorf("source and target Dataset IDs must differ")
 	}
 	if strings.TrimSpace(params.SourceSeriesTag) == "" {
@@ -80,7 +81,7 @@ func ValidateTaskParamsBasic(params *domain.CollectParams) error {
 	if err := ValidateOutputFieldsBasic(params.OutputFields); err != nil {
 		return err
 	}
-	return ValidateTargetDatasetID(params.TargetDatasetID)
+	return ValidateTargetDatasetID(targetDatasetID)
 }
 
 // ValidateTaskParamsForSource 是合成任务参数的完整校验入口，直接依据源数据集的 alignment、calendar 与活跃列校验：
@@ -88,8 +89,8 @@ func ValidateTaskParamsBasic(params *domain.CollectParams) error {
 //   - 源数据集分桶时钟（由 source.Alignment + source.Attributes["calendar"] 派生，与 space_id 解耦）；
 //   - 交易时段数据集的日内源/目标周期必须整除每个交易时段；
 //   - 输出字段必须包含在“标准字段归约规则表 ∩ 源数据集活跃列”中。
-func ValidateTaskParamsForSource(sourceInfo storagesource.DatasetInfo, params *domain.CollectParams) error {
-	if err := ValidateTaskParamsBasic(params); err != nil {
+func ValidateTaskParamsForSource(sourceInfo storagesource.DatasetInfo, params *domain.CollectParams, targetDatasetID string) error {
+	if err := ValidateTaskParamsBasic(params, targetDatasetID); err != nil {
 		return err
 	}
 	source, _ := ParseFixedFrequency(params.SourceFrequency)

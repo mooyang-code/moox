@@ -44,7 +44,7 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 	if err != nil || task == nil {
 		return resampleSource{}, fmt.Errorf("source task %q not found", sourceTaskID)
 	}
-	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, task.DataType)
 	if err != nil {
 		return resampleSource{}, fmt.Errorf("source task %q has invalid params: %w", sourceTaskID, err)
 	}
@@ -132,7 +132,7 @@ func (s *Service) resolveKlineSourceSeriesTag(
 			return "", "", "", fmt.Errorf("load source tag %s: %v", tagID, tagErr)
 		}
 		p, m := tagattr.Source(tag), tagattr.MarketType(tag)
-		candidate, tagErr := fetchplan.TaskSeriesTag(task.SpaceID, params, p, m, s.sourceIDResolver)
+		candidate, tagErr := fetchplan.TaskSeriesTag(task.SpaceID, p, m, s.sourceIDResolver)
 		if tagErr != nil {
 			return "", "", "", fmt.Errorf("源任务 %q 的序列标签：%w", task.TaskID, tagErr)
 		}
@@ -202,8 +202,7 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-// deriveResampleSource 创建合成任务时用 source_task_id 推导并写入 source_dataset_id、source_frequency、source_series_tag 等源参数，
-// 同时剥离外部采集路由字段（provider、market_type、alignment）；没有 source_task_id（配置文件导入）时仅剥离冗余路由字段。
+// deriveResampleSource 创建合成任务时用 source_task_id 推导并写入 source_dataset_id、source_frequency、source_series_tag 等源参数。
 func (s *Service) deriveResampleSource(ctx context.Context, task *domain.CollectionTask) error {
 	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
 		return nil
@@ -213,22 +212,20 @@ func (s *Service) deriveResampleSource(ctx context.Context, task *domain.Collect
 		return nil // 参数格式错误由后面的校验报告
 	}
 	sourceTaskID, _ := values["source_task_id"].(string)
-	if strings.TrimSpace(sourceTaskID) != "" {
-		if strings.TrimSpace(sourceTaskID) == strings.TrimSpace(task.TaskID) {
-			return errors.New("source_task_id must not be the task itself")
-		}
-		source, err := s.resampleSourceOf(ctx, task.SpaceID, sourceTaskID)
-		if err != nil {
-			return err
-		}
-		values["source_task_id"] = source.TaskID
-		values["source_dataset_id"] = source.DatasetID
-		values["source_frequency"] = source.Frequency
-		values["source_series_tag"] = source.SeriesTag
+	if strings.TrimSpace(sourceTaskID) == "" {
+		return nil
 	}
-	delete(values, "provider")
-	delete(values, "market_type")
-	delete(values, "alignment")
+	if strings.TrimSpace(sourceTaskID) == strings.TrimSpace(task.TaskID) {
+		return errors.New("source_task_id must not be the task itself")
+	}
+	source, err := s.resampleSourceOf(ctx, task.SpaceID, sourceTaskID)
+	if err != nil {
+		return err
+	}
+	values["source_task_id"] = source.TaskID
+	values["source_dataset_id"] = source.DatasetID
+	values["source_frequency"] = source.Frequency
+	values["source_series_tag"] = source.SeriesTag
 	encoded, err := json.Marshal(values)
 	if err != nil {
 		return err
@@ -267,12 +264,12 @@ func (s *Service) PreviewKlineResampleSource(ctx context.Context, req *pb.Previe
 	if target := strings.TrimSpace(req.GetTargetFrequency()); target != "" {
 		preview := map[string]any{
 			"source_dataset_id": source.DatasetID, "source_frequency": source.Frequency,
-			"target_dataset_id": "dataset_preview", "target_frequency": target, "source_series_tag": source.SeriesTag,
+			"target_frequency": target, "source_series_tag": source.SeriesTag,
 		}
 		raw, _ := json.Marshal(preview)
-		params, parseErr := domain.ParseCollectParams(string(raw), "", "", "kline_resample")
+		params, parseErr := domain.ParseCollectParams(string(raw), "kline_resample")
 		if parseErr == nil {
-			parseErr = collectorresample.ValidateTaskParamsForSource(source.Dataset, params)
+			parseErr = collectorresample.ValidateTaskParamsForSource(source.Dataset, params, "dataset_preview")
 		}
 		if parseErr != nil {
 			rsp.ValidationError = parseErr.Error()
@@ -361,7 +358,7 @@ func (s *Service) SubmitKlineResampleJob(ctx context.Context, req *pb.SubmitKlin
 	if collection.PrepareState != domain.PrepareStateReady {
 		return fail(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task is not ready (prepare_state=%s)", collection.PrepareState))
 	}
-	params, err := domain.ParseCollectParams(collection.CollectParams, "", "", collection.DataType)
+	params, err := domain.ParseCollectParams(collection.CollectParams, collection.DataType)
 	if err != nil {
 		return fail(pb.ErrorCode_INVALID_PARAM, err.Error())
 	}

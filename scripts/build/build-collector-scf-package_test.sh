@@ -28,7 +28,7 @@ chmod +x "${FAKE_BIN}/go"
 package_path="${TMP_ROOT}/collector-scf.zip"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="crypto" SCF_ENTRYPOINT="market_data" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
+  PATH="${FAKE_BIN}:${PATH}" SCF_ENTRYPOINT="market_data" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
     bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
 )
 listing_path="${TMP_ROOT}/listing.txt"
@@ -39,22 +39,23 @@ unzip -Z1 "${package_path}" >"${listing_path}"
   exit 1
 }
 
-stock_package_path="${TMP_ROOT}/collector-stockcn-scf.zip"
+default_dir="${TMP_ROOT}/default-out"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="stockcn" SCF_ENTRYPOINT="market_data" MOOX_CLS_SECRET_KEY="test-cls-secret" MOOX_EVENTBUS_NATS_PASSWORD="test-eventbus-password" VERSION="contract-test" OUT_PATH="collector-stockcn-scf.zip" \
+  PATH="${FAKE_BIN}:${PATH}" SCF_ENTRYPOINT="market_data" MOOX_CLS_SECRET_KEY="test-cls-secret" MOOX_EVENTBUS_NATS_PASSWORD="test-eventbus-password" VERSION="contract-test" OUT_DIR="${default_dir}" \
     bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
 )
-stock_listing_path="${TMP_ROOT}/stock-listing.txt"
-unzip -Z1 "${stock_package_path}" >"${stock_listing_path}"
-[[ "$(cat "${stock_listing_path}")" == "main" ]] || {
-  echo "expected stockcn SCF package to contain only 'main', got:" >&2
-  cat "${stock_listing_path}" >&2
+default_package_path="${default_dir}/collector-scf-contract-test.zip"
+default_listing_path="${TMP_ROOT}/default-listing.txt"
+unzip -Z1 "${default_package_path}" >"${default_listing_path}"
+[[ "$(cat "${default_listing_path}")" == "main" ]] || {
+  echo "expected default SCF package to contain only 'main', got:" >&2
+  cat "${default_listing_path}" >&2
   exit 1
 }
-! unzip -p "${stock_package_path}" | grep -Eq 'test-cls-secret|test-eventbus-password'
+! unzip -p "${default_package_path}" | grep -Eq 'test-cls-secret|test-eventbus-password'
 
-if PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="crypto" SCF_ENTRYPOINT="invalid" OUT_PATH="${TMP_ROOT}/bad-entry.zip" \
+if PATH="${FAKE_BIN}:${PATH}" SCF_ENTRYPOINT="invalid" OUT_PATH="${TMP_ROOT}/bad-entry.zip" \
   bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
   echo "expected unsupported entrypoint to fail" >&2
   exit 1
@@ -71,7 +72,7 @@ printf 'partial archive\n' >"$2"
 exit 17
 EOF
 chmod +x "${TMP_ROOT}/fail-bin/zip"
-if PATH="${FAKE_BIN}:${TMP_ROOT}/fail-bin:${PATH}" SCF_SPACE_ID="crypto" OUT_PATH="${atomic_package_path}" \
+if PATH="${FAKE_BIN}:${TMP_ROOT}/fail-bin:${PATH}" OUT_PATH="${atomic_package_path}" \
   bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
   echo "expected zip failure to abort packaging" >&2
   exit 1

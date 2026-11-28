@@ -295,9 +295,6 @@ components:
           - name: GetDataTypeConfigs
             space_policy: global
             read_only: true
-          - name: GetDataTypeConfigWithFields
-            space_policy: global
-            read_only: true
           - name: SubmitKlineResampleJob
           - name: GetKlineResampleJob
             read_only: true
@@ -343,8 +340,6 @@ components:
             operators: [moox-cli]
           - name: SetFetchPlanPaused
             operators: [moox-cli]
-          - name: GetIngestMode
-            read_only: true
           - name: SetIngestMode
             operators: [moox-cli]
           # 采集名单干预：控制台、moox-cli。
@@ -371,10 +366,14 @@ components:
             space_policy: global
             read_only: true
           - name: InitPackageUpload
+            space_policy: global
           - name: CompletePackageUpload
+            space_policy: global
           - name: ListFunctionPackages
+            space_policy: global
             read_only: true
           - name: DeleteFunctionPackage
+            space_policy: global
           # 读回、删除、探测云函数要逐个调腾讯云（限频 20 次/秒），几十个函数要几十秒。
           - name: ListCloudFunctions
             read_only: true

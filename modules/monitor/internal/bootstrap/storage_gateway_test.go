@@ -113,10 +113,10 @@ func (w *monitorGatewayWire) GetTaskResultInventory(ctx context.Context, req *co
 	if err := w.verify(ctx, "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", req); err != nil {
 		return nil, err
 	}
-	if req.GetSpaceId() != "crypto" || req.GetSnapshotId() != "generation-1" {
+	if req.GetSpaceId() != "crypto" {
 		return nil, errors.New("inventory scope changed")
 	}
-	return &collectorpb.GetTaskResultInventoryRsp{SnapshotId: "generation-1"}, nil
+	return &collectorpb.GetTaskResultInventoryRsp{ObservedAt: 1700000000000}, nil
 }
 
 func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
@@ -180,9 +180,9 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.Equal(t, storagepb.ErrorCode_SUCCESS, rows.GetRetInfo().GetCode())
 	inventory, err := kline.NewCollectorInventoryGatewayClient(runtime.Gateway)
 	require.NoError(t, err)
-	inventoryResponse, err := inventory.GetTaskResultInventory(t.Context(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", SnapshotId: "generation-1"})
+	inventoryResponse, err := inventory.GetTaskResultInventory(t.Context(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto"})
 	require.NoError(t, err)
-	require.Equal(t, "generation-1", inventoryResponse.GetSnapshotId())
+	require.EqualValues(t, 1700000000000, inventoryResponse.GetObservedAt())
 	source := deployment.NewClientSource(runtime.Gateway)
 	snapshot, err := source.Snapshot(t.Context())
 	require.NoError(t, err)

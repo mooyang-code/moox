@@ -49,9 +49,9 @@ func fieldCatalog() *Catalog {
 // 字段来源用独立的提供方 ID 登记，与同一市场的 K 线来源互不影响；按（市场, 品种）找出全部来源，再按字段 ID 找。
 func TestCatalogFieldSourcesByMarketAndField(t *testing.T) {
 	catalog := fieldCatalog()
-	entry, err := catalog.Lookup("stockcn", InstrumentEquity, "sina", "anything")
+	entry, err := catalog.Lookup("stockcn", InstrumentEquity, "sina", "stockcn_minute_http")
 	require.NoError(t, err)
-	require.True(t, entry.RouteSource, "K 线来源仍按 provider 匹配")
+	require.True(t, entry.RouteSource)
 	entry, err = catalog.Lookup("stockcn", InstrumentEquity, "sina_hfq", "")
 	require.NoError(t, err)
 	require.False(t, entry.RouteSource)

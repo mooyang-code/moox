@@ -247,12 +247,11 @@ func (s *planTasksStub) ListEnabled(context.Context, string) ([]domain.Collectio
 	return append([]domain.CollectionTask(nil), s.tasks...), nil
 }
 
-// ListKline 按结果数据集筛任务（补采路由用）；任务参数里的 target_dataset_id 就是结果数据集。
+// ListKline 按结果数据集筛任务（补采路由用）。
 func (s *planTasksStub) ListKline(_ context.Context, _, datasetID string) ([]domain.CollectionTask, error) {
 	var out []domain.CollectionTask
 	for _, task := range s.tasks {
-		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-		if err == nil && params.Target.DatasetID == datasetID {
+		if task.ResultDatasetID == datasetID {
 			out = append(out, task)
 		}
 	}
@@ -310,7 +309,7 @@ type cloudCall struct {
 
 func testPackage(id string) cloud.Package {
 	return cloud.Package{
-		SpaceID: "crypto", PackageID: id, PackageName: testPackageName, Version: id, Runtime: "Go1", CloudAccountID: testAccount,
+		PackageID: id, PackageName: testPackageName, Version: id, Runtime: "Go1", CloudAccountID: testAccount,
 		COSRegion: "ap-guangzhou", COSBucket: "fake-bucket", COSPath: "/packages/" + id + ".zip", Status: store.FunctionPackageAvailable,
 	}
 }
@@ -351,7 +350,7 @@ func newTestCloud(t *testing.T, scf *cloudtest.SCF, clock func() time.Time) *tes
 	return &testCloud{TencentFunctions: functions, scf: scf, client: client, clock: clock, packages: []cloud.Package{testPackage("pkg")}}
 }
 
-func (c *testCloud) LatestPackage(_ context.Context, _, name string) (*cloud.Package, error) {
+func (c *testCloud) LatestPackage(_ context.Context, name string) (*cloud.Package, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.packageErr != nil {
@@ -465,7 +464,7 @@ func newPlanHarness(t *testing.T, subjectCount int) *planHarness {
 	h.setSubjects(subjectCount)
 	h.tasks = &planTasksStub{tasks: []domain.CollectionTask{{
 		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m"}`,
+		ResultDatasetID: "ds_spot", CollectParams: `{"frequency":"1m"}`,
 	}}}
 	return h
 }

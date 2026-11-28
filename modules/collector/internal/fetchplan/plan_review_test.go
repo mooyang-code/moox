@@ -72,7 +72,7 @@ func TestRestartKeepsTheConfirmedCron(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	h.tasks.tasks = []domain.CollectionTask{{
 		SpaceID: "crypto", TaskID: "spot-5m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_5m","frequency":"5m"}`,
+		ResultDatasetID: "ds_spot_5m", CollectParams: `{"frequency":"5m"}`,
 	}}
 	r := h.reconciler()
 	planBaselineSettle(t, h, r)
@@ -82,7 +82,7 @@ func TestRestartKeepsTheConfirmedCron(t *testing.T) {
 
 	h.tasks.tasks = append(h.tasks.tasks, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_1m","frequency":"1m"}`,
+		ResultDatasetID: "ds_spot_1m", CollectParams: `{"frequency":"1m"}`,
 	})
 	r.lastVerified = h.now
 	// 生效日志写不进去：计划下发完也留在未生效状态。
@@ -222,9 +222,9 @@ func TestDeletedUntouchedFunctionIsRebuiltWhileAPlanIsOpen(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	h.tasks.tasks = []domain.CollectionTask{
 		{SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
-			CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m"}`},
+			ResultDatasetID: "ds_spot", CollectParams: `{"frequency":"1m"}`},
 		{SpaceID: "crypto", TaskID: "swap-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_swap"},
-			CollectParams: `{"provider":"binance","market_type":"swap","subject_tags":["binance_swap"],"target_dataset_id":"ds_swap","frequency":"1m"}`},
+			ResultDatasetID: "ds_swap", CollectParams: `{"frequency":"1m"}`},
 	}
 	r := h.reconciler()
 	r.Groups.Symbols = planBaselineSymbols{h.symbols}

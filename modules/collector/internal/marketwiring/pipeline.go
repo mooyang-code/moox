@@ -64,6 +64,10 @@ func newRoutedKlinePipeline(storage marketfetch.Storage, marketID string, instru
 		if !ok || !runtime.KlineEnabled {
 			return nil, fmt.Errorf("%s K 线来源 %q 在数据源配置里没有启用", marketID, source.Provider)
 		}
+		// 限速（RPS、突发、并发）仍来自数据源配置；请求显式带了单次超时（如实时定时计划）时只覆盖 RequestTimeout。
+		if limits != nil && limits.RequestTimeoutMS > 0 {
+			runtime.RateLimit.RequestTimeout = time.Duration(limits.RequestTimeoutMS) * time.Millisecond
+		}
 		provider, providerErr := newRoutedProvider(marketID, instrumentType, source.Provider, source.SourceID, runtime)
 		if providerErr != nil {
 			return nil, providerErr
@@ -106,7 +110,7 @@ func sourceSettings(runtime marketfetch.SourceRuntime) marketdata.SourceSettings
 
 // newSingleSourceKlinePipeline 装单一来源的流水线：数据源是任务或标签指定的那一个，source_id 取行情源目录里
 // （市场，品种，数据源）登记的；与频率无关，没有结算延迟，HTTP 客户端用进程共享的。limits 非空时按它设置数据源限流与
-// 熔断阈值（随请求给出）；为空时数据源用自己的默认值，熔断阈值按进程环境。
+// 熔断阈值（随请求给出）；为空时数据源用自己的保守默认值。
 func newSingleSourceKlinePipeline(storage marketfetch.Storage, marketID string, instrumentType marketdata.InstrumentType, providerID string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	entry, err := catalog.Default().Lookup(marketdata.MarketID(marketID), instrumentType, providerID, "")
@@ -135,16 +139,16 @@ func newSingleSourceKlinePipeline(storage marketfetch.Storage, marketID string, 
 	}, nil
 }
 
-// singleSourceBreakerThreshold 是只有一个数据源可用时的熔断阈值：每源尝试次数 × 并发。并发取请求带的限速（limits），
-// 没带时按进程环境（计划下发的 MOOX_FETCH_FEED_CONCURRENCY，未设置按 1）。
+// singleSourceBreakerThreshold 是只有一个数据源可用时的熔断阈值：每源尝试次数 × 并发。
+// 并发取请求带的限速（limits），没带时按 1。
 func singleSourceBreakerThreshold(limits *marketfetch.FeedLimits) int {
 	if limits != nil && limits.FeedConcurrency > 0 {
 		return marketfetch.KlineProviderAttemptBudget * limits.FeedConcurrency
 	}
-	return marketfetch.RuntimeKlineBreakerThreshold()
+	return marketfetch.KlineProviderAttemptBudget
 }
 
-// feedRateLimit 把计划的限流与超时转成数据源限流参数；零值字段由数据源按进程环境与默认取值。
+// feedRateLimit 把计划的限流与超时转成数据源限流参数；零值字段由数据源用自己的默认值。
 func feedRateLimit(limits *marketfetch.FeedLimits) marketdata.RateLimitPolicy {
 	if limits == nil {
 		return marketdata.RateLimitPolicy{}

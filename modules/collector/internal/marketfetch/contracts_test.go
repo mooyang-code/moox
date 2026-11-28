@@ -22,9 +22,10 @@ func TestRequestValidateRejectsMalformedOrReversedCoverage(t *testing.T) {
 		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		BatchKind: domain.BatchKindBackfill,
 		Items: []domain.CollectionItem{{
-			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID,
+			InstanceID: "i1", SubjectID: "600000.XSHG", DatasetID: testStockDatasetID,
 			StartTime: "2026-08-30T01:00:00Z", BarLimit: 3,
 		}},
+		Targets: []domain.WriteTarget{{ID: "t1", SpaceID: StockCNSpaceID, InstanceID: "i1", TaskID: "backfill", DatasetID: testStockDatasetID}},
 	}
 
 	tests := []struct {
@@ -52,19 +53,25 @@ func TestRequestValidateAcceptsRFC3339NanoCoverage(t *testing.T) {
 		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		BatchKind: domain.BatchKindBackfill,
 		Items: []domain.CollectionItem{{
-			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID,
+			InstanceID: "i1", SubjectID: "600000.XSHG", DatasetID: testStockDatasetID,
 			StartTime: "2026-08-30T01:00:00.123456789Z", EndTime: "2026-08-30T01:01:00Z", BarLimit: 3,
 		}},
+		Targets: []domain.WriteTarget{{ID: "t1", SpaceID: StockCNSpaceID, InstanceID: "i1", TaskID: "backfill", DatasetID: testStockDatasetID}},
 	}
 	require.NoError(t, req.validate())
 }
 
 func TestRequestValidateAllowsTenRealtimeBarsAndRejectsEleven(t *testing.T) {
 	base := Request{
-		BatchID: "batch-realtime", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
-		BatchKind: domain.BatchKindRealtime,
+		BatchID: "batch-realtime", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
+		BatchKind: domain.BatchKindRealtime, RequirePeriodCommit: true,
 		Items: []domain.CollectionItem{{
-			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID, BarLimit: MaxRealtimeRows,
+			InstanceID: "i1", SubjectID: "600000.XSHG", DatasetID: testStockDatasetID,
+			TargetDataTime: "2026-08-30T01:00:00Z", BarLimit: MaxRealtimeRows,
+		}},
+		Targets: []domain.WriteTarget{{
+			ID: "t1", SpaceID: StockCNSpaceID, InstanceID: "i1", TaskID: "task-1", DatasetID: testStockDatasetID,
+			Frequency: "1m", TargetDataTime: "2026-08-30T01:00:00Z", SeriesHash: "h", ExpectedCount: 1,
 		}},
 	}
 	require.NoError(t, base.validate())
@@ -73,14 +80,40 @@ func TestRequestValidateAllowsTenRealtimeBarsAndRejectsEleven(t *testing.T) {
 	require.ErrorContains(t, base.validate(), "realtime bar_limit")
 }
 
+func TestRequestValidateEnforcesTwoRequestShapes(t *testing.T) {
+	realtime := Request{
+		BatchID: "b1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
+		BatchKind: domain.BatchKindRealtime, RequirePeriodCommit: false,
+		Items:   []domain.CollectionItem{{InstanceID: "i1", SubjectID: "600000.XSHG", DatasetID: testStockDatasetID, TargetDataTime: "2026-08-30T01:00:00Z"}},
+		Targets: []domain.WriteTarget{{ID: "t1", SpaceID: StockCNSpaceID, InstanceID: "i1", TaskID: "task-1", DatasetID: testStockDatasetID, Frequency: "1m", TargetDataTime: "2026-08-30T01:00:00Z", SeriesHash: "h", ExpectedCount: 1}},
+	}
+	require.ErrorContains(t, realtime.validate(), "requires period commit")
+
+	backfill := Request{
+		BatchID: "b2", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
+		BatchKind: domain.BatchKindBackfill, RequirePeriodCommit: true,
+		Items:   []domain.CollectionItem{{InstanceID: "i1", SubjectID: "600000.XSHG", DatasetID: testStockDatasetID, StartTime: "2026-08-30T01:00:00Z", BarLimit: 1}},
+		Targets: []domain.WriteTarget{{ID: "t1", SpaceID: StockCNSpaceID, InstanceID: "i1", TaskID: "backfill", DatasetID: testStockDatasetID}},
+	}
+	require.ErrorContains(t, backfill.validate(), "must not require period commit")
+
+	backfill.RequirePeriodCommit = false
+	backfill.Targets = nil
+	require.ErrorContains(t, backfill.validate(), "targets must not be empty")
+}
+
 func TestRequestValidateRejectsMixedSourceBinding(t *testing.T) {
 	req := Request{
-		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
+		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
 		Provider: "sina", SourceID: "stockcn_minute_http",
-		BatchKind: domain.BatchKindRealtime,
+		BatchKind: domain.BatchKindRealtime, RequirePeriodCommit: true,
 		Items: []domain.CollectionItem{
-			{SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID, Provider: "sina", SourceID: "stockcn_minute_http"},
-			{SubjectID: "000001.XSHE", Symbol: "sz000001", DatasetID: testStockDatasetID, Provider: "tdx", SourceID: "normal_7709"},
+			{InstanceID: "i1", SubjectID: "600000.XSHG", DatasetID: testStockDatasetID, Provider: "sina", SourceID: "stockcn_minute_http", TargetDataTime: "2026-08-30T01:00:00Z"},
+			{InstanceID: "i2", SubjectID: "000001.XSHE", DatasetID: testStockDatasetID, Provider: "tdx", SourceID: "normal_7709", TargetDataTime: "2026-08-30T01:00:00Z"},
+		},
+		Targets: []domain.WriteTarget{
+			{ID: "t1", SpaceID: StockCNSpaceID, InstanceID: "i1", TaskID: "task-1", DatasetID: testStockDatasetID, Frequency: "1m", TargetDataTime: "2026-08-30T01:00:00Z", SeriesIndex: 0, SeriesHash: "h", ExpectedCount: 2},
+			{ID: "t2", SpaceID: StockCNSpaceID, InstanceID: "i2", TaskID: "task-1", DatasetID: testStockDatasetID, Frequency: "1m", TargetDataTime: "2026-08-30T01:00:00Z", SeriesIndex: 1, SeriesHash: "h", ExpectedCount: 2},
 		},
 	}
 	require.ErrorContains(t, req.validate(), "source binding")

@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +31,7 @@ func TestTaskResultMarketCalendarContract(t *testing.T) {
 	require.Equal(t, []string{"09:30-11:30", "13:00-15:00"}, sessions)
 }
 
-func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testing.T) {
+func TestGetTaskResultInventoryReturnsAllOwnedResultsAndRepresentsLifecycle(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
 	now := time.Date(2026, 10, 3, 10, 5, 0, 0, time.UTC)
@@ -40,9 +39,9 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	resampleIDs := taskresult.ResultIDs("task-resample")
 	disabledIDs := taskresult.ResultIDs("task-disabled")
 	tasks := []domain.CollectionTask{
-		{SpaceID: "crypto", TaskID: "task-active", TaskName: "active", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m","output_fields":["open","high"]}`, ResultDatasetID: activeIDs.DatasetID},
-		{SpaceID: "crypto", TaskID: "task-resample", TaskName: "resample", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"derived","target_frequency":"5m","alignment":"epoch_utc"}`, ResultDatasetID: resampleIDs.DatasetID},
-		{SpaceID: "crypto", TaskID: "task-disabled", TaskName: "disabled", DataType: "kline", Enabled: false, PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m","output_fields":["close"]}`, ResultDatasetID: disabledIDs.DatasetID},
+		{SpaceID: "crypto", TaskID: "task-active", TaskName: "active", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"frequency":"1m","output_fields":["open","high"]}`, ResultDatasetID: activeIDs.DatasetID},
+		{SpaceID: "crypto", TaskID: "task-resample", TaskName: "resample", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_frequency":"5m"}`, ResultDatasetID: resampleIDs.DatasetID},
+		{SpaceID: "crypto", TaskID: "task-disabled", TaskName: "disabled", DataType: "kline", Enabled: false, PrepareState: domain.PrepareStatePending, CollectParams: `{"frequency":"1m","output_fields":["close"]}`, ResultDatasetID: disabledIDs.DatasetID},
 		{SpaceID: "crypto", TaskID: "task-factor", TaskName: "factor", DataType: "factor", Enabled: true},
 	}
 	for _, task := range tasks {
@@ -64,116 +63,34 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 		resultManager: taskresult.NewManagerWithAPI(metadata),
 	}
 
-	first, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 2}})
+	rsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto"})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, first.GetRetInfo().GetCode())
-	require.Len(t, first.GetEntries(), 2)
-	require.NotEmpty(t, first.GetSnapshotId())
-	require.Equal(t, uint32(3), first.GetPage().GetTotal())
-	entry := first.GetEntries()[0]
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetEntries(), 3)
+	require.NotZero(t, rsp.GetObservedAt())
+
+	entry := rsp.GetEntries()[0]
 	require.Equal(t, "task-active", entry.GetTaskId())
 	require.Equal(t, activeIDs.DatasetID, entry.GetDatasetId())
 	require.True(t, entry.GetOwnershipVerified())
 	require.Equal(t, "1m", entry.GetFrequency())
-	// 直接行情任务的周期由 Storage 裁决：清单不再带最近终结周期，只带允许迟到时间。
 	require.Empty(t, entry.GetLatestCompletedPeriod())
 	require.Empty(t, entry.GetLatestCompletedStatus())
 	require.EqualValues(t, 15, entry.GetAllowedLatenessSeconds())
 	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339), entry.GetViewLastDataTime())
 	require.NotEmpty(t, entry.GetObservedAt())
-	concurrent, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 2}})
-	require.NoError(t, err)
-	require.NotEqual(t, first.GetSnapshotId(), concurrent.GetSnapshotId())
 
-	// 翻页期间高频跳变的 ViewLastDataTime 向前推进时，第 2 页必须正常返回，不得误报 CONFLICT。
-	metadata.indexedTo[activeIDs.DatasetID] = now.Format(time.RFC3339)
-	second, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 2}, SnapshotId: first.GetSnapshotId(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, second.GetRetInfo().GetCode())
-	require.Len(t, second.GetEntries(), 1)
-	require.Equal(t, "task-disabled", second.GetEntries()[0].GetTaskId())
-	require.False(t, second.GetEntries()[0].GetEnabled())
-	require.False(t, second.GetEntries()[0].GetOwnershipVerified(), "停用任务不检查结果归属")
-	require.Equal(t, "pending", second.GetEntries()[0].GetResultStatus())
-	require.Equal(t, first.GetSnapshotId(), second.GetSnapshotId(), "无状态翻页保持与首页相同的 snapshot_id")
-	require.Equal(t, first.GetObservedAt(), second.GetObservedAt(), "无状态翻页保持与首页相同的 observed_at")
+	disabled := rsp.GetEntries()[2]
+	require.Equal(t, "task-disabled", disabled.GetTaskId())
+	require.False(t, disabled.GetEnabled())
+	require.False(t, disabled.GetOwnershipVerified(), "停用任务不检查结果归属")
+	require.Equal(t, "pending", disabled.GetResultStatus())
 
-	// 篡改 snapshot_id 中的 observedMs（即使仍在 TTL 窗口内）必须因摘要不匹配返回 CONFLICT。
-	parsed, ok := parseTaskResultInventoryToken(first.GetSnapshotId())
-	require.True(t, ok)
-	tamperedObserved := formatTaskResultInventoryToken(parsed.observedMs-1000, parsed.pageSize, parsed.nonce, parsed.digest)
-	tamperedRsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 2}, SnapshotId: tamperedObserved,
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_CONFLICT, tamperedRsp.GetRetInfo().GetCode(), "篡改 observedMs 必须被摘要校验拦截")
-
-	// Deletion is expressed by absence from a new complete snapshot, not by
-	// synthesizing a tombstone that could outlive the authoritative task row.
 	require.NoError(t, db.Tasks().DeleteByTaskID(ctx, "crypto", "task-disabled"))
-	stalePage, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 2}, SnapshotId: first.GetSnapshotId(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_CONFLICT, stalePage.GetRetInfo().GetCode(), "翻页期间任务被删除必须拒绝旧 snapshot_id，防止混拼两代清单")
-
-	updated, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 2}})
+	updated, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, updated.GetRetInfo().GetCode())
-	require.Equal(t, uint32(2), updated.GetPage().GetTotal())
-}
-
-// GetTaskResultInventory 改为无状态返回：无进程内快照容量上限，非法/过期/错误页大小的 snapshot_id 在元数据扇出前即拒绝。
-func TestGetTaskResultInventoryStatelessRejectsInvalidOrExpiredTokenBeforeFanout(t *testing.T) {
-	ctx := context.Background()
-	db := openCollectorTestStore(t)
-	ids := taskresult.ResultIDs("task-owned")
-	task := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned", DataType: "kline", Enabled: true,
-		PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m"}`,
-		ResultDatasetID: ids.DatasetID,
-	}
-	require.NoError(t, db.Tasks().Create(ctx, task))
-	metadata := newTaskResultMetadataFake(ids, task.TaskID)
-	service := &Service{
-		persistence:   db,
-		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata),
-	}
-
-	// 格式非法的 token 在访问 Storage 之前直接返回 CONFLICT。
-	bad, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 10}, SnapshotId: "not-a-valid-token",
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_CONFLICT, bad.GetRetInfo().GetCode())
-	require.Zero(t, metadata.getDatasets)
-
-	// 过期的 token 在访问 Storage 之前直接返回 CONFLICT。
-	expiredMs := time.Now().UTC().Add(-taskResultInventorySnapshotTTL - time.Second).UnixMilli()
-	expiredToken := formatTaskResultInventoryToken(expiredMs, 10, "nonce", "0123456789abcdef0123456789abcdef")
-	expired, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 10}, SnapshotId: expiredToken,
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_CONFLICT, expired.GetRetInfo().GetCode())
-	require.Zero(t, metadata.getDatasets)
-
-	// page size 与 token 中记录的不一致直接返回 INVALID_PARAM。
-	first, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10},
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, first.GetRetInfo().GetCode())
-	beforeCalls := metadata.getDatasets
-	mismatchedSize, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 5}, SnapshotId: first.GetSnapshotId(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_INVALID_PARAM, mismatchedSize.GetRetInfo().GetCode())
-	require.Equal(t, beforeCalls, metadata.getDatasets)
+	require.Len(t, updated.GetEntries(), 2)
 }
 
 // AllowedLatenessSeconds 优先采用 Storage 数据集上真实生效的值；Storage 未设置或任务未就绪时，
@@ -188,19 +105,19 @@ func TestGetTaskResultInventoryUsesEffectiveStorageLateness(t *testing.T) {
 		{
 			SpaceID: "crypto", TaskID: "task-kline", TaskName: "kline", DataType: "kline", Enabled: true,
 			PrepareState:    domain.PrepareStateReady,
-			CollectParams:   `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m","allowed_lateness_seconds":30}`,
+			CollectParams:   `{"frequency":"1m","allowed_lateness_seconds":30}`,
 			ResultDatasetID: klineIDs.DatasetID,
 		},
 		{
 			SpaceID: "crypto", TaskID: "task-resample-ready", TaskName: "resample ready", DataType: "kline_resample", Enabled: true,
 			PrepareState:    domain.PrepareStateReady,
-			CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"` + resampleReadyIDs.DatasetID + `","target_frequency":"5m","alignment":"epoch_utc"}`,
+			CollectParams:   `{"source_dataset_id":"src","source_frequency":"1m","source_series_tag":"venue:binance","target_frequency":"5m"}`,
 			ResultDatasetID: resampleReadyIDs.DatasetID,
 		},
 		{
 			SpaceID: "crypto", TaskID: "task-resample-pending", TaskName: "resample pending", DataType: "kline_resample", Enabled: true,
 			PrepareState:    domain.PrepareStateWaitingView,
-			CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"` + resamplePendingIDs.DatasetID + `","target_frequency":"15m","alignment":"epoch_utc"}`,
+			CollectParams:   `{"source_dataset_id":"src","source_frequency":"1m","source_series_tag":"venue:binance","target_frequency":"15m"}`,
 			ResultDatasetID: resamplePendingIDs.DatasetID,
 		},
 	} {
@@ -217,9 +134,7 @@ func TestGetTaskResultInventoryUsesEffectiveStorageLateness(t *testing.T) {
 	}}
 	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
 
-	rsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10},
-	})
+	rsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	byTask := map[string]*pb.TaskResultInventoryEntry{}
@@ -231,69 +146,51 @@ func TestGetTaskResultInventoryUsesEffectiveStorageLateness(t *testing.T) {
 	require.EqualValues(t, collectorresample.TargetLatenessSeconds, byTask["task-resample-pending"].GetAllowedLatenessSeconds(), "未就绪的重采样任务兜底也应为 TargetLatenessSeconds 而非市场 15s")
 }
 
-func TestGetTaskResultInventoryRejectsUnownedResultsAndMismatchedSnapshot(t *testing.T) {
+func TestGetTaskResultInventoryRejectsUnownedResults(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
 	ids := taskresult.ResultIDs("task-owned")
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned", DataType: "kline", Enabled: true,
-		PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m"}`,
+		PrepareState: domain.PrepareStateReady, CollectParams: `{"frequency":"1m"}`,
 		ResultDatasetID: ids.DatasetID,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
 	metadata := newTaskResultMetadataFake(ids, "another-task")
 	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
 
-	response, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10}})
+	response, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())
 	require.Empty(t, response.GetEntries())
-
-	response, err = service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 10}, SnapshotId: "unknown"})
-	require.NoError(t, err)
-	require.NotEqual(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 }
 
-func TestGetTaskResultInventoryRequiresSpaceAndRejectsCrossSpaceSnapshotToken(t *testing.T) {
+func TestGetTaskResultInventoryRequiresSpaceAndIsolatesSpaces(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
 	for _, task := range []domain.CollectionTask{
-		{SpaceID: "crypto", TaskID: "crypto-a", TaskName: "crypto a", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"binance","frequency":"1m"}`},
-		{SpaceID: "crypto", TaskID: "crypto-b", TaskName: "crypto b", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"binance","frequency":"1m"}`},
-		{SpaceID: "stockcn", TaskID: "stock-a", TaskName: "stock a", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"tdx","frequency":"1d"}`},
+		{SpaceID: "crypto", TaskID: "crypto-a", TaskName: "crypto a", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStatePending, CollectParams: `{"frequency":"1m"}`},
+		{SpaceID: "crypto", TaskID: "crypto-b", TaskName: "crypto b", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStatePending, CollectParams: `{"frequency":"1m"}`},
+		{SpaceID: "stockcn", TaskID: "stock-a", TaskName: "stock a", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStatePending, CollectParams: `{"frequency":"1d"}`},
 	} {
 		require.NoError(t, db.Tasks().Create(ctx, task))
 	}
 	service := &Service{persistence: db, taskRepo: db.Tasks()}
 
-	missingSpace, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{Page: &commonpb.Page{Page: 1, Size: 1}})
+	missingSpace, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, missingSpace.GetRetInfo().GetCode())
 
-	first, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 1}})
+	crypto, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto"})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, first.GetRetInfo().GetCode())
-	require.Equal(t, uint32(2), first.GetPage().GetTotal(), "first-page inventory must contain only the requested Space")
-	require.Equal(t, "crypto", first.GetEntries()[0].GetSpaceId())
+	require.Equal(t, pb.ErrorCode_SUCCESS, crypto.GetRetInfo().GetCode())
+	require.Len(t, crypto.GetEntries(), 2)
+	require.Equal(t, "crypto", crypto.GetEntries()[0].GetSpaceId())
 
-	crossSpacePage, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "stockcn", Page: &commonpb.Page{Page: 2, Size: 1}, SnapshotId: first.GetSnapshotId(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_CONFLICT, crossSpacePage.GetRetInfo().GetCode())
-	require.Empty(t, crossSpacePage.GetEntries())
-
-	second, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 2, Size: 1}, SnapshotId: first.GetSnapshotId(),
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, second.GetRetInfo().GetCode())
-	require.Equal(t, "crypto", second.GetEntries()[0].GetSpaceId())
-
-	stock, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockcn", Page: &commonpb.Page{Page: 1, Size: 10}})
+	stock, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockcn"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, stock.GetRetInfo().GetCode())
-	require.Equal(t, uint32(1), stock.GetPage().GetTotal())
+	require.Len(t, stock.GetEntries(), 1)
 	require.Equal(t, "stockcn", stock.GetEntries()[0].GetSpaceId())
 }
 
@@ -302,7 +199,7 @@ func TestGetTaskResultInventoryMetadataFanoutIsBoundedAndOrdered(t *testing.T) {
 	service, metadata, expectedTaskIDs := newTaskResultInventoryConcurrentService(t, taskCount, 3*time.Millisecond)
 
 	response, err := service.GetTaskResultInventory(context.Background(), &pb.GetTaskResultInventoryReq{
-		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: maxTaskResultInventoryPage},
+		SpaceId: "crypto",
 	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
@@ -324,7 +221,7 @@ func TestGetTaskResultInventoryMetadataFanoutCancelsOnRequestDeadline(t *testing
 	result := make(chan *pb.GetTaskResultInventoryRsp, 1)
 	go func() {
 		response, _ := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{
-			SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10},
+			SpaceId: "crypto",
 		})
 		result <- response
 	}()
@@ -357,7 +254,7 @@ func newTaskResultInventoryConcurrentService(t *testing.T, taskCount int, delay 
 		task := domain.CollectionTask{
 			SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true,
 			PrepareState:    domain.PrepareStateReady,
-			CollectParams:   `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m"}`,
+			CollectParams:   `{"frequency":"1m"}`,
 			ResultDatasetID: ids.DatasetID,
 		}
 		require.NoError(t, db.Tasks().Create(ctx, task))
@@ -474,7 +371,7 @@ func TestGetTaskResultInventoryCarriesHistorySeeds(t *testing.T) {
 		ids[taskID] = taskresult.ResultIDs(taskID)
 		require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 			SpaceID: "stockus", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: false, PrepareState: domain.PrepareStatePending,
-			CollectParams:   `{"provider":"cnbc","market_type":"equity","market_id":"stockus","frequency":"5m"}`,
+			CollectParams:   `{"frequency":"5m"}`,
 			ResultDatasetID: ids[taskID].DatasetID,
 		}))
 	}
@@ -484,7 +381,7 @@ func TestGetTaskResultInventoryCarriesHistorySeeds(t *testing.T) {
 		{HistorySeed: store.HistorySeed{SpaceID: "stockus", DatasetID: ids["task-plain"].DatasetID, Frequency: "1m", Status: store.SeedRunning}},
 	}}
 	service := &Service{persistence: db, taskRepo: db.Tasks(), klineOps: ops}
-	rsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockus", Page: &commonpb.Page{Page: 1, Size: 10}})
+	rsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockus"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, "stockus", ops.skipArgs[0])
@@ -501,7 +398,7 @@ func TestGetTaskResultInventoryCarriesHistorySeeds(t *testing.T) {
 	require.Zero(t, byTask["task-plain"].GetHistorySeedFinishedAt())
 
 	failing := &Service{persistence: db, taskRepo: db.Tasks(), klineOps: &failingSeedOps{}}
-	rsp, err = failing.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockus", Page: &commonpb.Page{Page: 1, Size: 10}})
+	rsp, err = failing.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockus"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Len(t, rsp.GetEntries(), 3)

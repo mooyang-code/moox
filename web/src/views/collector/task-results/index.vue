@@ -213,7 +213,7 @@ async function fetchAllTasks(spaceId: string) {
     const response = await GetTaskList({ space_id: spaceId, page: { page, size: TASK_PAGE_SIZE } });
     const batch = response.tasks || [];
     all.push(...batch);
-    const total = response.page?.total ?? all.length;
+    const total = response.page_result?.total ?? all.length;
     if (!batch.length || all.length >= total) return all;
   }
 }

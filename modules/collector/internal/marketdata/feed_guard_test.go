@@ -72,29 +72,6 @@ func TestFeedGuardTokenBucketUsesBurstThenSleepsDeterministically(t *testing.T) 
 	require.Equal(t, []time.Duration{time.Second}, sleeper.Durations())
 }
 
-func TestRateBudgetRatioScalesProviderRequestPolicy(t *testing.T) {
-	policy := scaleRateLimitPolicy(RateLimitPolicy{
-		RequestsPerSecond: 10,
-		Burst:             4,
-		MaxConcurrent:     6,
-		Cooldown:          time.Second,
-		RequestTimeout:    time.Second,
-	}, 0.25)
-
-	require.Equal(t, 2.5, policy.RequestsPerSecond)
-	require.Equal(t, 1, policy.Burst)
-	require.Equal(t, 1, policy.MaxConcurrent)
-	require.Equal(t, time.Second, policy.Cooldown)
-
-	require.Equal(t, RateLimitPolicy{RequestsPerSecond: 10, Burst: 4, MaxConcurrent: 6, Cooldown: time.Second, RequestTimeout: time.Second}, scaleRateLimitPolicy(RateLimitPolicy{
-		RequestsPerSecond: 10,
-		Burst:             4,
-		MaxConcurrent:     6,
-		Cooldown:          time.Second,
-		RequestTimeout:    time.Second,
-	}, 0))
-}
-
 func TestFeedGuardCooldownAfter429(t *testing.T) {
 	clock := newFakeClock(time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC))
 	sleeper := &fakeSleeper{clock: clock}

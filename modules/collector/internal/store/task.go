@@ -366,9 +366,6 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask)
 	tags := normalizeTaskTagIDs(task.TagIDs)
 	row := newTaskRow(task, now, now)
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := validateTaskResultIdentityConflict(ctx, tx, task, ""); err != nil {
-			return err
-		}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
@@ -566,9 +563,6 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 		"c_mtime":             now,
 	}
 	if err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := validateTaskResultIdentityConflict(ctx, tx, task, taskID); err != nil {
-			return err
-		}
 		q := tx.Model(&taskRow{}).Where("c_task_id = ?", taskID)
 		if strings.TrimSpace(spaceID) != "" {
 			q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
@@ -578,28 +572,6 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 		return nil, err
 	}
 	return r.GetByTaskID(ctx, spaceID, taskID)
-}
-
-// validateTaskResultIdentityConflict enforces that a collection task owns its
-// result exclusively: no other task may write the same Dataset.
-func validateTaskResultIdentityConflict(ctx context.Context, tx *gorm.DB, task domain.CollectionTask, excludeTaskID string) error {
-	datasetID := strings.TrimSpace(task.ResultDatasetID)
-	if datasetID == "" {
-		return nil
-	}
-	query := tx.WithContext(ctx).Where("c_space_id = ?", strings.TrimSpace(task.SpaceID))
-	if strings.TrimSpace(excludeTaskID) != "" {
-		query = query.Where("c_task_id <> ?", strings.TrimSpace(excludeTaskID))
-	}
-	var conflict taskRow
-	err := query.Where("c_result_dataset_id = ?", datasetID).Limit(1).Find(&conflict).Error
-	if err != nil {
-		return fmt.Errorf("check task result identity: %w", err)
-	}
-	if conflict.TaskID != "" {
-		return fmt.Errorf("task result dataset %s conflicts with task %s/%s", datasetID, conflict.SpaceID, conflict.TaskID)
-	}
-	return nil
 }
 
 // UpdateValidatedTaskByTaskID is used after the RPC layer has validated that

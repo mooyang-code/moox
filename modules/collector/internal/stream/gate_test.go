@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -211,7 +212,7 @@ func TestGateUsesTheCopyEffectiveForEachPeriod(t *testing.T) {
 	require.Equal(t, p.Unix(), calls[1].Dataset.Copies[0].From)
 }
 
-// 合约按 pair 订阅、按 symbol 写入：事件里的符号是 pair。
+// 合约按 pair 订阅、按标的回填：事件里的符号是 pair。
 func TestGateMatchesFinalsByPair(t *testing.T) {
 	period := closeAt.Add(-time.Minute)
 	plan, dataset := testStreamPlan("1m", 5, copyOf(period.Add(-time.Hour), "BTC-USDT"))
@@ -221,7 +222,8 @@ func TestGateMatchesFinalsByPair(t *testing.T) {
 	h.final("BTCUSDT", period, 1)
 	h.final("BTCUSDT_PAIR", period, 1)
 	calls := h.waitCalls(1)
-	require.Equal(t, "BTCUSDT", calls[0].Symbols("BTC-USDT"))
+	require.Len(t, calls[0].Bars, 1)
+	require.Equal(t, "BTC-USDT", calls[0].Bars[0].SubjectID)
 }
 
 // 提交失败按 300 毫秒重试，直到截止前 200 毫秒。

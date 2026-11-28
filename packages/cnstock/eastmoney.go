@@ -114,20 +114,20 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 		if err := json.Unmarshal(body, &payload); err != nil {
 			return ClistResult{}, fmt.Errorf("%w: %v", ErrProtocol, err)
 		}
-		data := objectAt(payload, "data")
+		data := ObjectAt(payload, "data")
 		if data == nil {
 			return ClistResult{}, fmt.Errorf("%w: eastmoney instrument payload missing data", ErrProtocol)
 		}
-		if total, ok := intField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 {
+		if total, ok := IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 {
 			if declaredTotal == 0 {
 				declaredTotal = total
 			} else if declaredTotal != total {
 				return ClistResult{}, fmt.Errorf("%w: eastmoney instrument total changed from %d to %d on page %d", ErrProtocol, declaredTotal, total, page)
 			}
 		}
-		items := itemSlice(data, "diff", "clist", "list")
+		items := ItemSlice(data, "diff", "clist", "list")
 		if len(items) == 0 {
-			if diff := objectAt(data, "diff"); len(diff) > 0 {
+			if diff := ObjectAt(data, "diff"); len(diff) > 0 {
 				keys := make([]string, 0, len(diff))
 				for key := range diff {
 					keys = append(keys, key)
@@ -140,8 +140,8 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 				}
 			}
 		}
-		totalPages := pageLimit(data, pageSize)
-		hasMore, hasMoreKnown := boolField(data, "hasnext", "has_next", "hasMore", "has_more")
+		totalPages := PageLimit(data, pageSize)
+		hasMore, hasMoreKnown := BoolField(data, "hasnext", "has_next", "hasMore", "has_more")
 		if declaredTotal == 0 && len(items) > 0 && len(items) < pageSize {
 			sawUnverifiedShortPage = true
 			if (totalPages > 0 && page < totalPages) || (hasMoreKnown && hasMore) {
@@ -168,11 +168,11 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 		}
 		for _, item := range items {
 			if err := visit(ClistItem{
-				Code:   stringField(item, "f12", "code", "symbol"),
-				Symbol: stringField(item, "symbol", "provider_symbol"),
-				Market: stringField(item, "f13", "market", "exchange"),
-				Name:   stringField(item, "f14", "name", "f14_name"),
-				Status: stringField(item, "f107", "status", "state"),
+				Code:   StringField(item, "f12", "code", "symbol"),
+				Symbol: StringField(item, "symbol", "provider_symbol"),
+				Market: StringField(item, "f13", "market", "exchange"),
+				Name:   StringField(item, "f14", "name", "f14_name"),
+				Status: StringField(item, "f107", "status", "state"),
 			}); err != nil {
 				return ClistResult{}, err
 			}
@@ -182,7 +182,7 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 			if page >= totalPages {
 				// 没有显式页数时，最后一页是按 总数 ÷ 请求的每页条数 推出来的；东方财富把每页条数封顶在 100，
 				// 所以非空页仍不足总数时继续读。显式给了页数就以它为准。
-				_, hasExplicitPageCount := intField(data, "pagecount", "page_count", "total_pages", "totalpage", "pages")
+				_, hasExplicitPageCount := IntField(data, "pagecount", "page_count", "total_pages", "totalpage", "pages")
 				if !hasExplicitPageCount && declaredTotal > 0 && itemsSeen < declaredTotal {
 					continue
 				}
@@ -357,12 +357,14 @@ func valueAt(root any, path ...string) any {
 	return current
 }
 
-func objectAt(root map[string]any, path ...string) map[string]any {
+// ObjectAt 按路径从 JSON 对象中取出嵌套子对象。
+func ObjectAt(root map[string]any, path ...string) map[string]any {
 	object, _ := valueAt(root, path...).(map[string]any)
 	return object
 }
 
-func itemSlice(data map[string]any, keys ...string) []map[string]any {
+// ItemSlice 从 JSON 对象中按候选键依次寻找非空对象切片。
+func ItemSlice(data map[string]any, keys ...string) []map[string]any {
 	for _, key := range keys {
 		rawItems, ok := valueAt(data, key).([]any)
 		if !ok {
@@ -381,17 +383,19 @@ func itemSlice(data map[string]any, keys ...string) []map[string]any {
 	return nil
 }
 
-func pageLimit(data map[string]any, pageSize int) int {
-	if limit, ok := intField(data, "pagecount", "page_count", "total_pages", "totalpage", "pages"); ok && limit > 0 {
+// PageLimit 从分页响应对象解析总页数；未显式返回页数时按总数与每页条数计算。
+func PageLimit(data map[string]any, pageSize int) int {
+	if limit, ok := IntField(data, "pagecount", "page_count", "total_pages", "totalpage", "pages"); ok && limit > 0 {
 		return limit
 	}
-	if total, ok := intField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 && pageSize > 0 {
+	if total, ok := IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 && pageSize > 0 {
 		return (total + pageSize - 1) / pageSize
 	}
 	return 0
 }
 
-func stringField(object map[string]any, keys ...string) string {
+// StringField 按候选键顺序取第一个非空字符串值。
+func StringField(object map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if value, ok := object[key]; ok {
 			if text := toString(value); text != "" {
@@ -402,7 +406,8 @@ func stringField(object map[string]any, keys ...string) string {
 	return ""
 }
 
-func intField(object map[string]any, keys ...string) (int, bool) {
+// IntField 按候选键顺序解析第一个整数值。
+func IntField(object map[string]any, keys ...string) (int, bool) {
 	for _, key := range keys {
 		value, ok := object[key]
 		if !ok {
@@ -430,7 +435,8 @@ func intField(object map[string]any, keys ...string) (int, bool) {
 	return 0, false
 }
 
-func boolField(object map[string]any, keys ...string) (bool, bool) {
+// BoolField 按候选键顺序解析第一个布尔值。
+func BoolField(object map[string]any, keys ...string) (bool, bool) {
 	for _, key := range keys {
 		value, ok := object[key]
 		if !ok {

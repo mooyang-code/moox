@@ -88,7 +88,7 @@ func (b brokenSource) GetDataset(ctx context.Context, spaceID, datasetID string)
 func TestTaskIndexSkipsTaskWhoseSourceDatasetIsUnavailable(t *testing.T) {
 	mgr := openState(t)
 	seedTask(t, mgr, newFakeStorage(), nil, time.Time{}, time.Time{})
-	params := `{"source_dataset_id":"dataset_gone","source_frequency":"5m","source_series_tag":"venue:binance","target_dataset_id":"dataset_orphan","target_frequency":"15m"}`
+	params := `{"source_dataset_id":"dataset_gone","source_frequency":"5m","source_series_tag":"venue:binance","target_frequency":"15m"}`
 	require.NoError(t, mgr.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "orphan", DataType: "kline_resample", CollectParams: params, Enabled: true,
 		ResultDatasetID: "dataset_orphan", PrepareState: domain.PrepareStateReady,

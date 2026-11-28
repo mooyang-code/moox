@@ -16,11 +16,13 @@ import (
 )
 
 // Collector 的生命周期（设计 2、2.2、3.8）：只有模块级的暂停、恢复追赶与放行。
+// 模块阶段唯一真相源在 lifecycle.json，不向数据库同步系统暂停列；空间是否暂停等于“手工暂停，或模块阶段不是运行”。
 //
-//	暂停      ：每个采集计划空间都置为系统暂停（SCF 定时器停用、collector-stream 停止订阅、不再认领补采分块），
+//	暂停      ：模块阶段进入 StagePaused（对账器停用全部 SCF 定时器、collector-stream 下发空计划、补采循环停跑），
 //	           并等定时器停用确认、在途补采分块结束才算停下；
-//	恢复追赶  ：空间进入「恢复模式」——补采调度运行（对暂停区间提交补采作业），实时定时器与订阅保持关闭；
-//	放行      ：暂停区间补齐后清除系统暂停开关（手工暂停的空间保持暂停），对账协程重新启用定时器，恢复实时采集。
+//	恢复追赶  ：模块阶段进入 StageResuming——独立补采循环以更短间隔只推进补采作业（手工暂停的空间不补采），
+//	           实时定时器与推送订阅保持关闭；
+//	放行      ：暂停区间补齐后回到 StageRunning，对账器重新启用未手工暂停空间的定时器，恢复实时采集与常规补采。
 //
 // 恢复模式只在进程内存里：重启后回到暂停，再 resume 即可。
 
@@ -30,25 +32,25 @@ const (
 	collectorQuiesceTimeout   = 5 * time.Minute
 )
 
-// collectorControl 把生命周期钩子和 registerFetchPlanManager 里建好的组件连起来：生命周期在健康检查之后才创建，
-// 采集计划管理器先于它存在，所以由后者调用 bind 填入。
+// collectorControl 把生命周期钩子和 registerFetchPlanManager 里建好的组件连起来：生命周期在启动早期先创建，
+// 对账管理器与补采循环就绪后由 registerFetchPlanManager 调用 bind 填入。
 type collectorControl struct {
-	mu         sync.Mutex
-	plans      *store.FetchPlanRepository
-	backfiller *klinecheck.Backfiller
-	manager    *fetchplan.PlanManager
+	mu           sync.Mutex
+	plans        *store.FetchPlanRepository
+	backfiller   *klinecheck.Backfiller
+	manager      *fetchplan.PlanManager
+	wakeBackfill func()
 	// spaces 返回管理集合，每次现取：运行中新增的空间也要能暂停、恢复和收敛。known 是最近一次读到的结果，读库失败时沿用。
-	spaces     func(context.Context) ([]string, error)
-	known      []string
-	recovering bool
+	spaces func(context.Context) ([]string, error)
+	known  []string
 	// recoveryTo 是本次恢复的追赶目标：进入恢复追赶的时刻，固定不变（见 Backfiller.Catchup）。
 	recoveryTo time.Time
 }
 
-func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *fetchplan.PlanManager, spaces func(context.Context) ([]string, error)) {
+func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *fetchplan.PlanManager, spaces func(context.Context) ([]string, error), wakeBackfill func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.plans, c.backfiller, c.manager, c.spaces = plans, backfiller, manager, spaces
+	c.plans, c.backfiller, c.manager, c.spaces, c.wakeBackfill = plans, backfiller, manager, spaces, wakeBackfill
 }
 
 // managed 返回管理集合；读库失败时沿用最近一次的结果。
@@ -80,7 +82,7 @@ func (c *collectorControl) recoverySpaces(ctx context.Context) ([]string, error)
 	if plans == nil {
 		return spaces, nil
 	}
-	manual, err := plans.ManuallyPausedSpaces(ctx)
+	manual, err := plans.PausedSpaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("读取手工暂停的空间：%w", err)
 	}
@@ -93,60 +95,54 @@ func (c *collectorControl) recoverySpaces(ctx context.Context) ([]string, error)
 	return out, nil
 }
 
-// Recovering 报告空间是否处于恢复模式：暂停开关仍在（实时采集关闭），但补采调度要运行。
-func (c *collectorControl) Recovering(string) bool {
+func (c *collectorControl) setRecoveryTo(at time.Time) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.recovering
+	c.recoveryTo = at
+	c.mu.Unlock()
 }
 
-func (c *collectorControl) setRecovering(on bool) {
+func (c *collectorControl) triggerManager(ctx context.Context) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if on {
-		c.recovering, c.recoveryTo = true, time.Now().UTC()
+	manager := c.manager
+	c.mu.Unlock()
+	if manager == nil {
 		return
 	}
-	c.recovering, c.recoveryTo = false, time.Time{}
+	spaces := c.managed(ctx)
+	if len(spaces) == 0 {
+		manager.Trigger("")
+		return
+	}
+	for _, space := range spaces {
+		manager.Trigger(space)
+	}
 }
 
-// setPaused 保存全部采集计划空间的系统暂停开关；手工暂停（collector fetch-plan pause）是另一列，这里不读不写。
-func (c *collectorControl) setPaused(ctx context.Context, paused bool) error {
+func (c *collectorControl) notifyBackfill() {
 	c.mu.Lock()
-	plans := c.plans
+	wake := c.wakeBackfill
 	c.mu.Unlock()
-	if plans == nil {
-		return nil
+	if wake != nil {
+		wake()
 	}
-	for _, space := range c.managed(ctx) {
-		if err := plans.SetSystemPaused(ctx, space, paused); err != nil {
-			return fmt.Errorf("保存空间 %s 的暂停开关：%w", space, err)
-		}
-	}
-	return nil
 }
 
-// onChange 把模块状态的变化落到采集上：进入暂停时关实时、清恢复模式（重启后载入暂停时也落一遍）；进入恢复追赶时开恢复模式；
-// 放行回到运行时清系统暂停开关。
+// onChange 在模块状态变化后通知对账器与补采循环立即同步，不再往数据库写系统暂停列。
 func (c *collectorControl) onChange(ctx context.Context, from, to lifecycle.Stage) {
 	switch to {
 	case lifecycle.StagePaused:
-		c.setRecovering(false)
-		if err := c.setPaused(ctx, true); err != nil {
-			log.ErrorContextf(ctx, "collector_lifecycle_pause_failed error=%v", err)
-		}
+		c.setRecoveryTo(time.Time{})
+		c.triggerManager(ctx)
+		c.notifyBackfill()
 	case lifecycle.StageResuming:
-		c.setRecovering(true)
-		if err := c.setPaused(ctx, true); err != nil {
-			log.ErrorContextf(ctx, "collector_lifecycle_resume_failed error=%v", err)
-		}
+		c.setRecoveryTo(time.Now().UTC())
+		c.triggerManager(ctx)
+		c.notifyBackfill()
 	case lifecycle.StageRunning:
-		// 放行回到运行才放开暂停开关。
 		if from == lifecycle.StageResuming || from == lifecycle.StagePaused {
-			c.setRecovering(false)
-			if err := c.setPaused(ctx, false); err != nil {
-				log.ErrorContextf(ctx, "collector_lifecycle_release_failed error=%v", err)
-			}
+			c.setRecoveryTo(time.Time{})
+			c.triggerManager(ctx)
+			c.notifyBackfill()
 		}
 	}
 }
@@ -213,38 +209,6 @@ func (c *collectorControl) catchup(ctx context.Context, since time.Time) (lifecy
 		out.Message = "补采作业收尾中"
 	}
 	return out, nil
-}
-
-// runRecovery 在恢复模式下推进补采：对账协程在暂停期间已经退出，补采的认领要在这里单独驱动。
-func (c *collectorControl) runRecovery(ctx context.Context) {
-	ticker := time.NewTicker(recoveryTickEvery)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		c.mu.Lock()
-		backfiller := c.backfiller
-		c.mu.Unlock()
-		if backfiller == nil {
-			continue
-		}
-		spaces, err := c.recoverySpaces(ctx)
-		if err != nil {
-			log.WarnContextf(ctx, "collector_recovery_spaces_failed error=%v", err)
-			continue
-		}
-		for _, space := range spaces {
-			if !c.Recovering(space) {
-				continue
-			}
-			if err := backfiller.Tick(ctx, space); err != nil {
-				log.WarnContextf(ctx, "collector_recovery_tick_failed space=%s error=%v", space, err)
-			}
-		}
-	}
 }
 
 func newCollectorLifecycle(dbPath string, control *collectorControl) (*lifecycle.Controller, error) {

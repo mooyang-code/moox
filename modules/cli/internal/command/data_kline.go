@@ -236,7 +236,7 @@ func resolveKlineDatasetByTag(ctx context.Context, gw klineGateway, spaceID, tag
 			}
 			matches = append(matches, task)
 		}
-		if len(rsp.GetTasks()) == 0 || !rsp.GetPage().GetHasMore() {
+		if len(rsp.GetTasks()) == 0 || !rsp.GetPageResult().GetHasMore() {
 			break
 		}
 		if page == maxKlineTaskPages {

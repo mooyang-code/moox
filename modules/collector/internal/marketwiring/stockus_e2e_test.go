@@ -48,23 +48,15 @@ func usTime(value string) time.Time {
 }
 
 // usGroup 按 Collector 由任务和标签成员拼分组的做法造一个美股分组：provider 是标签的 sync.source（东方财富，标的同步用它对照交易所），
-// source_id 先查行情源目录的登记——目录里东方财富已经不是美股的 K 线来源，查不到，按分组的做法退回 provider；
-// 传给数据源的代码由美股的标的规则换出（BRK.B.XNYS → BRK.B）。K 线来源由路由分配，与分组的 provider、source_id 无关。
+// source_id 先查行情源目录的登记——目录里东方财富已经不是美股的 K 线来源，查不到，按分组的做法退回 provider。
+// K 线来源由路由分配，与分组的 provider、source_id 无关。
 func usGroup(subjects ...string) fetchplan.TaskGroup {
-	symbols := make(map[string]string, len(subjects))
-	for _, subject := range subjects {
-		symbol, err := ResolveSymbol("eastmoney", "stockus", "equity", subject)
-		if err != nil {
-			panic(err)
-		}
-		symbols[subject] = symbol
-	}
 	sourceID := DefaultSourceID("stockus", "eastmoney", "equity")
 	if sourceID == "" {
 		sourceID = "eastmoney"
 	}
 	return fetchplan.TaskGroup{Provider: "eastmoney", SourceID: sourceID, MarketType: "equity", MarketID: "stockus", InstrumentType: "equity",
-		DatasetID: usDataset, Frequency: "5m", Subjects: subjects, ExternalSymbols: symbols}
+		DatasetID: usDataset, Frequency: "5m", Subjects: subjects}
 }
 
 // 从采集计划到云函数入参再到写入：标普 500 的 503 只标的（含带点的 BRK.B、ETF 的 XASE）、每函数 50 只，得到 11 个函数（10 个 50 只、1 个 3 只），都在南京，收盘后等 5 秒。
@@ -77,7 +69,6 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	}
 	group := usGroup(subjects...)
 	require.Equal(t, "eastmoney", group.SourceID, "目录里没有美股东方财富 K 线的登记，source_id 退回 provider")
-	require.Equal(t, "BRK.B", group.ExternalSymbols["BRK.B.XNYS"])
 	desired, err := fetchplan.BuildDesiredState(usPlanOptions(), []fetchplan.TaskGroup{group}, nil)
 	require.NoError(t, err)
 	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: usTime("2026-11-10 22:30:00")})
@@ -109,9 +100,6 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 		require.Empty(t, request.Provider, "来源按路由分配，请求不指定数据源")
 		require.Empty(t, request.SourceID)
 		sizes = append(sizes, len(request.Items))
-		for _, item := range request.Items {
-			require.Equal(t, group.ExternalSymbols[item.SubjectID], item.Symbol)
-		}
 
 		request.FetchLimits = plan.Fetch.Limits()
 		pipeline := stockUSPipeline(t, storage, usTime("2026-11-12 22:50:05"), request.FetchLimits, server)

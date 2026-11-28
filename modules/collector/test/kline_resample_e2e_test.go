@@ -124,7 +124,7 @@ func e2eHarness(t *testing.T, space, dataset, sourceFreq, targetFreq string) (*s
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	params := fmt.Sprintf(`{"provider":"binance","market_type":"spot","source_dataset_id":%q,"source_frequency":%q,"source_series_tag":"venue:binance","target_dataset_id":"dataset_e2e","target_frequency":%q}`, dataset, sourceFreq, targetFreq)
+	params := fmt.Sprintf(`{"source_dataset_id":%q,"source_frequency":%q,"source_series_tag":"venue:binance","target_frequency":%q}`, dataset, sourceFreq, targetFreq)
 	task := domain.CollectionTask{SpaceID: space, TaskID: "e2e-resample", DataType: "kline_resample", PrepareState: domain.PrepareStateReady, Enabled: true, CollectParams: params, ResultDatasetID: "dataset_e2e"}
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	primary := newE2EPrimary()
@@ -230,7 +230,7 @@ func TestKlineResampleAStockHourlyE2E(t *testing.T) {
 	}
 	require.Len(t, primary.rows, 240+4, "240 根 1m 源 K 线 + 每个交易日 4 根 1h，午休与盘后没有桶")
 
-	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_e2e","target_frequency":"45m"}`
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_frequency":"45m"}`
 	bad := task
 	bad.CollectParams = params
 	_, err = resample.NewTaskForSource(bad, sourceInfo)

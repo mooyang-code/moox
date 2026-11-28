@@ -506,7 +506,7 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 			}
 			total := sumCounts(counts)
 			b.recordSample(key, now, total[store.BackfillSucceeded])
-			if total[store.BackfillPending] > 0 || total[store.BackfillRunning] > 0 {
+			if total[store.BackfillQueued] > 0 || total[store.BackfillRunning] > 0 {
 				continue
 			}
 			if total[store.BackfillFailed] > 0 && !seed.Retried {

@@ -5,11 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/stretchr/testify/require"
 )
 
 func TestResolveBinanceConfigsLoadFromEmbeddedYAML(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_MARKET_CONFIG", "")
+	t.Setenv(markets.ConfigDirEnv, "")
 	// 切到无关临时目录，确认完全不依赖外部文件系统中的 binance.yaml。
 	origWD, err := os.Getwd()
 	require.NoError(t, err)
@@ -27,16 +28,18 @@ func TestResolveBinanceConfigsLoadFromEmbeddedYAML(t *testing.T) {
 	require.Equal(t, []string{"wss://fstream.binance.com/market/stream"}, streamCfg.SwapEndpoints)
 	require.Equal(t, 1000, streamCfg.StreamsPerConn)
 
-	// 指向不存在路径时自动回退到内嵌配置。
-	t.Setenv("MOOX_STORAGE_MARKET_CONFIG", filepath.Join(t.TempDir(), "missing.yaml"))
+	// 覆盖目录里没有该文件时自动回退到内嵌配置。
+	t.Setenv(markets.ConfigDirEnv, t.TempDir())
 	apiCfg, err = ResolveAPIConfig()
 	require.NoError(t, err)
 	require.NotEmpty(t, apiCfg.SpotBaseURLs)
 
-	// 指向存在的覆盖文件时优先使用覆盖文件。
-	override := filepath.Join(t.TempDir(), "override.yaml")
-	require.NoError(t, os.WriteFile(override, []byte("api:\n  spot_base_urls:\n    - https://override.example.com\n"), 0o600))
-	t.Setenv("MOOX_STORAGE_MARKET_CONFIG", override)
+	// MOOX_MARKET_CONFIG_DIR 里存在 crypto/sources/binance.yaml 时优先使用覆盖文件。
+	overrideDir := t.TempDir()
+	overrideFile := filepath.Join(overrideDir, "crypto", "sources", "binance.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(overrideFile), 0o755))
+	require.NoError(t, os.WriteFile(overrideFile, []byte("api:\n  spot_base_urls:\n    - https://override.example.com\n"), 0o600))
+	t.Setenv(markets.ConfigDirEnv, overrideDir)
 	apiCfg, err = ResolveAPIConfig()
 	require.NoError(t, err)
 	require.Equal(t, []string{"https://override.example.com"}, apiCfg.SpotBaseURLs)

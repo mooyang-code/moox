@@ -35,11 +35,11 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 		},
 		Now: func() time.Time { return now },
 	}
-	req := Request{
+	req := testPeriodRequest(Request{
 		BatchID: "handler-metrics-batch", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "handler-metrics",
-		Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1}},
-	}
+		Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1}},
+	}, bar.BarStart)
 	response, err := handler.handleRequest(context.Background(), req)
 	require.NoError(t, err)
 	require.True(t, response.Success)
@@ -74,12 +74,12 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 		},
 		Now: func() time.Time { return now },
 	}
-	req := Request{
+	req := testPeriodRequest(Request{
 		BatchID: "swap-pipeline", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", MarketID: "crypto",
 		DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Provider: "binance", SourceID: "swap_http",
 		MarketType: "swap", InstrumentType: "swap", RequestID: "swap-pipeline", FetchLimits: &FeedLimits{RPS: 40, Burst: 40, FeedConcurrency: 16, RequestTimeoutMS: 3000},
-		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "swap_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
-	}
+		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Provider: "binance", SourceID: "swap_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
+	}, bar.BarStart)
 	response, err := handler.handleRequest(context.Background(), req)
 	require.NoError(t, err)
 	require.True(t, response.Success)
@@ -111,12 +111,12 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 		},
 		Now: func() time.Time { return now },
 	}
-	req := Request{
+	req := testPeriodRequest(Request{
 		BatchID: "stale-source", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", MarketID: "crypto",
 		DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Provider: "binance", SourceID: "spot_http",
 		MarketType: "swap", InstrumentType: "swap", RequestID: "stale-source",
-		Items: []domain.CollectionItem{{SubjectID: "ETH-USDT", Symbol: "ETHUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
-	}
+		Items: []domain.CollectionItem{{SubjectID: "ETH-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
+	}, bar.BarStart)
 	response, err := handler.handleRequest(context.Background(), req)
 	require.NoError(t, err)
 	require.True(t, response.Success, "%+v", response)

@@ -54,6 +54,34 @@ func ProvidersFrom(catalog *marketdata.Catalog, deps marketdata.Deps) (map[strin
 	return out, nil
 }
 
+// EndpointsFrom 从行情源目录里全部支持 WS 推送的数据源收集连接端点，供 DNS 缓存预热使用。
+func EndpointsFrom(catalog *marketdata.Catalog, deps marketdata.Deps) ([]string, error) {
+	var endpoints []string
+	seen := map[string]struct{}{}
+	for _, entry := range catalog.Entries() {
+		built, err := entry.Build(deps)
+		if err != nil {
+			return nil, err
+		}
+		provider, ok := built.(Provider)
+		if !ok {
+			continue
+		}
+		source, err := provider.StreamSource(string(entry.Instrument))
+		if err != nil {
+			return nil, err
+		}
+		for _, endpoint := range source.Endpoints() {
+			if _, exists := seen[endpoint]; exists {
+				continue
+			}
+			seen[endpoint] = struct{}{}
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	return endpoints, nil
+}
+
 // Limits 是一个来源的连接与订阅限额。
 type Limits struct {
 	StreamsPerConn    int           // 每条连接的流数上限（币安 1024，按 1000 用）

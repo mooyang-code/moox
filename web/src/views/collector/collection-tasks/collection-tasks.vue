@@ -381,7 +381,7 @@ async function getTaskList() {
     });
     if (generation !== taskListGeneration) return;
     taskList.value = (response.tasks || []).map(normalizeCollectionTask);
-    pagination.total = Number(response.page?.total ?? taskList.value.length);
+    pagination.total = Number(response.page_result?.total ?? taskList.value.length);
     if (pageActive && onTasksTab()) syncDetailFromQuery();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "获取任务列表失败");

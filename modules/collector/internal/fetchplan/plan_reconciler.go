@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -45,11 +46,6 @@ type SubjectExclusionSource interface {
 // StreamWorkerSource 读取 collector-stream 的心跳（store.StreamWorkerRepository）。
 type StreamWorkerSource interface {
 	Get(context.Context, string) (*store.StreamWorker, error)
-}
-
-// StreamApplied 是 collector-stream 已应用的计划版本（t_collector_stream_workers.c_applied）。
-type StreamApplied struct {
-	ID int64 `json:"id"`
 }
 
 type planStore interface {
@@ -356,11 +352,13 @@ func (r *PlanReconciler) managedTasks(ctx context.Context) (map[string]struct{},
 	}
 	datasets := map[string]struct{}{}
 	for _, task := range tasks {
-		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-		if parseErr != nil || params.Collector.DataType != "kline" {
+		if !strings.EqualFold(strings.TrimSpace(task.DataType), domain.DataTypeKline) {
 			continue
 		}
-		datasets[params.Target.DatasetID] = struct{}{}
+		if _, parseErr := domain.ParseCollectParams(task.CollectParams, task.DataType); parseErr != nil {
+			continue
+		}
+		datasets[taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID).DatasetID] = struct{}{}
 	}
 	return datasets, nil
 }

@@ -16,7 +16,7 @@ vi.mock("@/store/modules/space", () => ({
 }));
 vi.mock("@/store/modules/user-info", () => ({ useUserInfoStore: () => ({ account: { user: { userName: "admin123" } } }) }));
 vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn(async () => ({ overview: ctx.overview })) } }));
-vi.mock("@/api/http", () => ({ call: vi.fn(async () => ({ page: { total: 4 } })) }));
+vi.mock("@/api/http", () => ({ call: vi.fn(async () => ({ page_result: { total: 4 } })) }));
 vi.mock("@/api/admin/activity", () => ({
   listActivityLogs: vi.fn(async () => ({
     items: [

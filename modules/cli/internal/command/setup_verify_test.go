@@ -191,6 +191,7 @@ type fakeVerifyGateway struct {
 	factors       *factorpb.ListFactorTasksRsp
 	tasksDisabled bool
 	seeds         []*collectorpb.HistorySeed
+	ingestModes   []*collectorpb.IngestMode
 }
 
 func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp any) error {
@@ -204,6 +205,7 @@ func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp 
 		out.Datasets = []*collectorpb.CollectorDatasetStatus{{DatasetId: "dataset_task_a", Frequency: "1m"}}
 		out.Applied = &collectorpb.FetchPlanSummary{}
 		out.HistorySeeds = g.seeds
+		out.IngestModes = g.ingestModes
 	case *collectorpb.CheckKlineRsp:
 		out.Expected, out.Missing = 3, 0
 	case *factorpb.ListFactorTasksRsp:
@@ -268,4 +270,32 @@ func TestSetupVerifyReaderMarksSeedingFactors(t *testing.T) {
 	}
 	require.Equal(t, verify.Pass, check.Status)
 	require.Contains(t, check.Detail, "ftask_spot_1m 补历史中，下游待生效")
+}
+
+// 停用的 stream/local 任务不得让验收要求 collector-stream 在线。
+func TestSetupVerifyReaderNeedsStreamOnlyForEnabledTasks(t *testing.T) {
+	factors := &factorpb.ListFactorTasksRsp{}
+	disabledOnly := setupVerifyReader{
+		gateway: fakeVerifyGateway{
+			strategy:    `{"instances":[]}`,
+			factors:     factors,
+			ingestModes: []*collectorpb.IngestMode{{DatasetId: "ds_1m", Ingest: "stream", Enabled: false}},
+		},
+		spaceID: "crypto",
+	}
+	input, err := disabledOnly.read(context.Background(), map[string]int64{})
+	require.NoError(t, err)
+	require.False(t, input.NeedsStream)
+
+	withEnabled := setupVerifyReader{
+		gateway: fakeVerifyGateway{
+			strategy:    `{"instances":[]}`,
+			factors:     factors,
+			ingestModes: []*collectorpb.IngestMode{{DatasetId: "ds_1m", Ingest: "stream", Enabled: true}},
+		},
+		spaceID: "crypto",
+	}
+	input, err = withEnabled.read(context.Background(), map[string]int64{})
+	require.NoError(t, err)
+	require.True(t, input.NeedsStream)
 }

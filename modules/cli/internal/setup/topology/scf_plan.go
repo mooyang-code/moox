@@ -19,6 +19,8 @@ type SCFPlan struct {
 	Enabled bool `toml:"enabled"`
 	// CloudAccount 是 SCF 与 COS 使用的云账号。
 	CloudAccount SCFCloudAccountConfig `toml:"cloud_account"`
+	// PackageName 是全局默认代码包名称，默认 moox-collector-plan；各空间共享同一个二进制，必要时可在 spaces 中按空间覆盖。
+	PackageName string `toml:"package_name"`
 	// MemoryMB 是每个函数的内存，默认 128。
 	MemoryMB int `toml:"memory_mb"`
 	// SymbolsPerFunction 是每个函数负责的标的数，默认 50；按空间可覆盖。
@@ -66,7 +68,7 @@ type SCFPlanSpace struct {
 	SpaceID string `toml:"space_id"`
 	// Markets 是市场（spot、swap、equity……）到运行地域的映射。
 	Markets map[string][]string `toml:"markets"`
-	// PackageName 是空间的代码包名称，默认 moox-collector-<space>-plan；Collector 总是使用该名称的最新可用版本。
+	// PackageName 是空间的代码包名称覆盖，默认沿用全局 scf_plan.package_name（moox-collector-plan）；Collector 总是使用该名称的最新可用版本。
 	PackageName string `toml:"package_name"`
 	// Namespace 是函数所在命名空间，默认 moox-<space>-plan。
 	Namespace          string `toml:"namespace"`
@@ -76,6 +78,8 @@ type SCFPlanSpace struct {
 }
 
 const (
+	// DefaultSCFPackageName 是各空间共享的默认 SCF 代码包名称。
+	DefaultSCFPackageName            = "moox-collector-plan"
 	defaultSCFPlanMemoryMB           = 128
 	defaultSCFPlanSymbolsPerFunction = 50
 )
@@ -96,6 +100,10 @@ func (p *SCFPlan) Normalize() {
 	p.CloudAccount.AppID = strings.TrimSpace(p.CloudAccount.AppID)
 	p.CloudAccount.COSRegion = strings.TrimSpace(p.CloudAccount.COSRegion)
 	p.CloudAccount.COSBucket = strings.TrimSpace(p.CloudAccount.COSBucket)
+	p.PackageName = strings.TrimSpace(p.PackageName)
+	if p.PackageName == "" {
+		p.PackageName = DefaultSCFPackageName
+	}
 	regions := make(map[string]SCFPlanRegion, len(p.Regions))
 	for name, region := range p.Regions {
 		region.VPCID, region.SubnetID = strings.TrimSpace(region.VPCID), strings.TrimSpace(region.SubnetID)
@@ -123,7 +131,7 @@ func (p *SCFPlan) Normalize() {
 		space.Namespace = strings.TrimSpace(space.Namespace)
 		space.BackfillRegion = strings.ToLower(strings.TrimSpace(space.BackfillRegion))
 		if space.PackageName == "" && space.SpaceID != "" {
-			space.PackageName = "moox-collector-" + space.SpaceID + "-plan"
+			space.PackageName = p.PackageName
 		}
 		if space.Namespace == "" && space.SpaceID != "" {
 			space.Namespace = "moox-" + space.SpaceID + "-plan"
@@ -167,7 +175,6 @@ func (c *Config) CheckSCFPlan() error {
 		return fmt.Errorf("config_invalid: scf_plan.spaces must not be empty when scf_plan is enabled")
 	}
 	seen := map[string]struct{}{}
-	packages := map[string]string{}
 	used := map[string]struct{}{}
 	for i := range plan.Spaces {
 		space := &plan.Spaces[i]
@@ -179,10 +186,6 @@ func (c *Config) CheckSCFPlan() error {
 			return fmt.Errorf("config_invalid: %s.space_id %q is duplicated", path, space.SpaceID)
 		}
 		seen[space.SpaceID] = struct{}{}
-		if other, dup := packages[space.PackageName]; dup {
-			return fmt.Errorf("config_invalid: scf_plan spaces %s and %s share package_name %q; every space needs its own code package", other, space.SpaceID, space.PackageName)
-		}
-		packages[space.PackageName] = space.SpaceID
 		if space.SymbolsPerFunction < 0 || space.SymbolsPerFunction > 200 {
 			return fmt.Errorf("config_invalid: %s.symbols_per_function must be between 0 and 200", path)
 		}

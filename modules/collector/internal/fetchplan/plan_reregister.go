@@ -78,9 +78,11 @@ func ClearRegisteredSnapshots(ctx context.Context, plans PlanReregisterStore, sp
 		function.Target.Datasets = kept
 		if len(kept) == 0 {
 			function.Target, function.Cron = nil, ""
-		} else if function.IsSCF() {
-			function.Target.PruneExceptions()
-			function.Cron = planCron(function.Target)
+		} else {
+			function.Target.PrunePairs()
+			if function.IsSCF() {
+				function.Cron = planCron(function.Target)
+			}
 		}
 	}
 	keys := content.ClearedDatasets()

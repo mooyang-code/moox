@@ -62,7 +62,6 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		sessionAttrs["calendar"] = market.CalendarID
 	}
 	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
-	params.TargetDatasetID = ids.DatasetID
 	targetDatasetID := ids.DatasetID
 	// 逐级合成时源本身是合成结果、没有数据来源：沿用它记下的原始 K 线来源，因子任务据此绑定数据来源。
 	sourceDataSourceID := source.DataSourceID

@@ -1,13 +1,11 @@
-import { readSelectedSpaceId } from "./admin/space-header";
 import { call } from "@/api/http";
 import { computeFileMd5 } from "@/utils/md5";
 
 /** 代码包状态：pending 已发上传地址，available COS 对象已核对、可以部署。 */
 export type PackageStatus = "pending" | "available";
 
-/** 云函数代码包（属于空间）。Collector 每个包名只保留最新 3 个。 */
+/** 云函数代码包（全局共享，不分空间）。Collector 每个包名只保留最新 3 个。 */
 export interface FunctionPackage {
-  space_id: string;
   package_id: string;
   package_name: string;
   version: string;
@@ -28,7 +26,6 @@ export interface UploadPackageRequest {
   package_name: string;
   version: string;
   runtime: string;
-  cloud_account_id: string;
 }
 
 interface InitPackageUploadResponse {
@@ -50,15 +47,11 @@ export function formatFileSize(value: number | string) {
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)}GB`;
 }
 
-// 上传流程的各个请求显式带上发起时的空间（请求头与请求体是同一个值）：用户在上传期间切换空间时，完成请求仍要落在包所属的空间。
-const spaceHeaders = (spaceId: string) => ({ spaceId });
-
-export const uploadFunctionPackage = async (data: UploadPackageRequest, file: File, spaceId = readSelectedSpaceId()) => {
-  const initRsp = await call<UploadPackageRequest & { space_id: string; filename: string }, InitPackageUploadResponse>(
+export const uploadFunctionPackage = async (data: UploadPackageRequest, file: File) => {
+  const initRsp = await call<UploadPackageRequest & { filename: string }, InitPackageUploadResponse>(
     "collector",
     "InitPackageUpload",
-    { ...data, space_id: spaceId, filename: file.name },
-    spaceHeaders(spaceId)
+    { ...data, filename: file.name }
   );
   const packageId = initRsp.package?.package_id || "";
   if (!packageId || !initRsp.upload_url) throw new Error("Collector 没有返回上传地址");
@@ -67,34 +60,22 @@ export const uploadFunctionPackage = async (data: UploadPackageRequest, file: Fi
     throw new Error(`上传到 COS 失败：HTTP ${putResp.status}`);
   }
   const md5Hex = await computeFileMd5(file);
-  const rsp = await call<
-    { space_id: string; package_id: string; file_size: number; file_md5: string },
-    { package?: FunctionPackage }
-  >(
+  const rsp = await call<{ package_id: string; file_size: number; file_md5: string }, { package?: FunctionPackage }>(
     "collector",
     "CompletePackageUpload",
-    { space_id: spaceId, package_id: packageId, file_size: file.size, file_md5: md5Hex },
-    spaceHeaders(spaceId)
+    { package_id: packageId, file_size: file.size, file_md5: md5Hex }
   );
   return rsp.package ?? null;
 };
 
-/** 按上传先后倒序，不分页。 */
-export const listFunctionPackages = async (spaceId: string): Promise<FunctionPackage[]> => {
-  const rsp = await call<{ space_id: string }, { packages?: FunctionPackage[] }>(
-    "collector",
-    "ListFunctionPackages",
-    { space_id: spaceId },
-    spaceHeaders(spaceId)
-  );
+/** 全局代码包列表，按上传先后倒序，不分页。 */
+export const listFunctionPackages = async (): Promise<FunctionPackage[]> => {
+  const rsp = await call<Record<string, never>, { packages?: FunctionPackage[] }>("collector", "ListFunctionPackages", {});
   return rsp.packages ?? [];
 };
 
-export const deleteFunctionPackage = async (spaceId: string, packageId: string): Promise<void> => {
-  await call<{ space_id: string; package_id: string }, Record<string, never>>(
-    "collector",
-    "DeleteFunctionPackage",
-    { space_id: spaceId, package_id: packageId },
-    spaceHeaders(spaceId)
-  );
+export const deleteFunctionPackage = async (packageId: string): Promise<void> => {
+  await call<{ package_id: string }, Record<string, never>>("collector", "DeleteFunctionPackage", {
+    package_id: packageId
+  });
 };

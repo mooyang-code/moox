@@ -38,8 +38,7 @@
 | `collector account delete` | 删除云账号登记（默认只预览，--yes 才执行；还被 scf_plan 引用、还有代码包或名下还有函数时拒绝。旧账号下建的函数 collector function delete 删不到，要用 collector function inspect 查出来再到腾讯云控制台手工删） |
 | `collector account list` | 列出云账号（不含密钥明文） |
 | `collector account regions` | 列出腾讯云函数可用的地域 |
-| `collector data-type list` | 列出采集数据类型 |
-| `collector data-type show` | 查看数据类型及其字段 |
+| `collector data-type list` | 列出采集数据类型及其频率与输出字段 |
 | `collector delist register` | 手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，Trade 随即禁止买入，到 T−24h 自动卖出策略持有的仓位；默认只预览，--yes 前向用户确认标的和下架时间；演练用 --paper-only） |
 | `collector fetch-plan pause` | 暂停空间的采集：停用全部 SCF 定时器，并停止采集计划对账与补采（默认只预览，--yes 才执行） |
 | `collector fetch-plan reregister` | Storage 数据被清空后，让采集计划重新登记序列快照并重置补采状态（默认只预览，--yes 才执行） |
@@ -65,7 +64,7 @@
 | `collector kline backfill-status` | 查看单个 K 线补采作业的进度与失败分块 |
 | `collector kline check` | 按采集计划检查时间范围内的 K 线是否齐全，输出缺口 |
 | `collector package delete` | 删除代码包（先删 COS 对象再删记录；默认只预览，--yes 才执行） |
-| `collector package list` | 列出空间的云函数代码包（按上传先后倒序，每个包名保留最新 3 个） |
+| `collector package list` | 列出云函数代码包（按上传先后倒序，每个包名保留最新 3 个） |
 | `collector resample backfill` | 提交历史合成作业：把时间范围内的目标 K 线按源数据重新合成 |
 | `collector resample cancel` | 取消排队或运行中的历史合成作业（已写入的保留） |
 | `collector resample jobs` | 列出空间的历史合成作业 |

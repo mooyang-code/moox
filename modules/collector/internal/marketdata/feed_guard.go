@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -408,7 +407,7 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			lastErr = err
 			continue
 		}
-		guard, err := s.router.feedGuard(providerID, spec.RateLimit, req.RateBudgetRatio, req.Adaptive)
+		guard, err := s.router.feedGuard(providerID, spec.RateLimit, req.Adaptive)
 		if err != nil {
 			s.breaker.Observe(providerID, err)
 			return nil, err
@@ -453,66 +452,22 @@ func (s *RouterSession) KlineSpec(providerID string) (KlineSpec, error) {
 	return fetcher.KlineSpec(), nil
 }
 
-func (r *Router) feedGuard(providerID string, policy RateLimitPolicy, rateBudgetRatio float64, adaptive bool) (*FeedGuard, error) {
+func (r *Router) feedGuard(providerID string, policy RateLimitPolicy, adaptive bool) (*FeedGuard, error) {
 	r.guardsMu.Lock()
 	defer r.guardsMu.Unlock()
 
-	rateBudgetRatio = normalizedRateBudgetRatio(rateBudgetRatio)
-	policy = applyRuntimeRequestTimeout(policy)
-	guardKey := providerID + "\x00" + strconv.FormatFloat(rateBudgetRatio, 'g', -1, 64) + "\x00" + strconv.FormatBool(adaptive)
+	guardKey := providerID + "\x00" + strconv.FormatBool(adaptive)
 	guard, ok := r.feedGuardsByID[guardKey]
 	if ok {
 		return guard, nil
 	}
-	scaled := scaleRateLimitPolicy(policy, rateBudgetRatio)
-	created, err := NewFeedGuard(scaled, r.clock, r.sleep)
+	created, err := NewFeedGuard(policy, r.clock, r.sleep)
 	if err != nil {
 		return nil, err
 	}
 	if adaptive {
-		created.adaptive = sharedAdaptiveRate(providerID, scaled.RequestsPerSecond, r.clock)
+		created.adaptive = sharedAdaptiveRate(providerID, policy.RequestsPerSecond, r.clock)
 	}
 	r.feedGuardsByID[guardKey] = created
 	return created, nil
-}
-
-func applyRuntimeRequestTimeout(policy RateLimitPolicy) RateLimitPolicy {
-	raw := strings.TrimSpace(os.Getenv("MOOX_FETCH_REQUEST_TIMEOUT_MS"))
-	if raw == "" {
-		return policy
-	}
-	milliseconds, err := strconv.Atoi(raw)
-	if err != nil || milliseconds <= 0 {
-		return policy
-	}
-	policy.RequestTimeout = time.Duration(milliseconds) * time.Millisecond
-	return policy
-}
-
-func normalizedRateBudgetRatio(value float64) float64 {
-	if value <= 0 {
-		return 1
-	}
-	return value
-}
-
-func scaleRateLimitPolicy(policy RateLimitPolicy, ratio float64) RateLimitPolicy {
-	ratio = normalizedRateBudgetRatio(ratio)
-	if ratio >= 1 {
-		return policy
-	}
-	policy.RequestsPerSecond *= ratio
-	if policy.RequestsPerSecond <= 0 {
-		policy.RequestsPerSecond = 0.001
-	}
-	policy.Burst = maxInt(1, int(math.Floor(float64(policy.Burst)*ratio)))
-	policy.MaxConcurrent = maxInt(1, int(math.Floor(float64(policy.MaxConcurrent)*ratio)))
-	return policy
-}
-
-func maxInt(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
 }

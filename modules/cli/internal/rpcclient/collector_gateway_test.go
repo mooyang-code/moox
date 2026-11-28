@@ -49,13 +49,13 @@ func (w *collectorWire) GetTaskDetail(_ context.Context, req *pb.GetTaskDetailRe
 		return nil, fmt.Errorf("invalid detail scope")
 	}
 	w.calls <- "GetTaskDetail"
-	params, _ := structpb.NewStruct(map[string]any{"frequency": "1m", "target_dataset_id": "owned-result"})
+	params, _ := structpb.NewStruct(map[string]any{"frequency": "1m", "allowed_lateness_seconds": 30})
 	return &pb.GetTaskDetailRsp{Task: &pb.CollectionTask{SpaceId: "stockcn", TaskId: "task-1", TaskName: "task", CollectParams: params}}, nil
 }
 
 func (w *collectorWire) UpdateTask(_ context.Context, req *pb.UpdateTaskReq) (*pb.UpdateTaskRsp, error) {
-	if req.GetSpaceId() != "stockcn" || req.GetTaskId() != "task-1" || !req.GetTask().GetEnabled() || req.GetTask().GetCollectParams().GetFields()["target_dataset_id"].GetStringValue() != "owned-result" {
-		return nil, fmt.Errorf("task ownership changed during enable")
+	if req.GetSpaceId() != "stockcn" || req.GetTaskId() != "task-1" || !req.GetTask().GetEnabled() || req.GetTask().GetCollectParams().GetFields()["allowed_lateness_seconds"].GetNumberValue() != 30 {
+		return nil, fmt.Errorf("task fields changed during enable")
 	}
 	w.calls <- "UpdateTask"
 	return &pb.UpdateTaskRsp{}, nil
@@ -86,11 +86,11 @@ func (w *collectorWire) DeleteTask(_ context.Context, req *pb.DeleteTaskReq) (*p
 }
 
 func (w *collectorWire) GetTaskResultInventory(_ context.Context, req *pb.GetTaskResultInventoryReq) (*pb.GetTaskResultInventoryRsp, error) {
-	if req.GetSpaceId() != "stockcn" || req.GetSnapshotId() != "snapshot-1" {
-		return nil, fmt.Errorf("inventory scope or generation changed")
+	if req.GetSpaceId() != "stockcn" {
+		return nil, fmt.Errorf("inventory scope changed")
 	}
 	w.calls <- "GetTaskResultInventory"
-	return &pb.GetTaskResultInventoryRsp{SnapshotId: "snapshot-1"}, nil
+	return &pb.GetTaskResultInventoryRsp{Entries: []*pb.TaskResultInventoryEntry{{SpaceId: "stockcn", TaskId: "task-1", DatasetId: "dataset_task_1"}}}, nil
 }
 
 func TestCollectorTaskWorkflowUsesNativeGatewayJSONAndInventoryPB(t *testing.T) {
@@ -127,8 +127,9 @@ func TestCollectorTaskWorkflowUsesNativeGatewayJSONAndInventoryPB(t *testing.T) 
 	require.NoError(t, c.DisableTask(ctx, "stockcn", id))
 	require.NoError(t, c.DeleteTask(ctx, "stockcn", id, true))
 	var inventory pb.GetTaskResultInventoryRsp
-	require.NoError(t, gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", &pb.GetTaskResultInventoryReq{SpaceId: "stockcn", SnapshotId: "snapshot-1"}, &inventory))
-	require.Equal(t, "snapshot-1", inventory.GetSnapshotId())
+	require.NoError(t, gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", &pb.GetTaskResultInventoryReq{SpaceId: "stockcn"}, &inventory))
+	require.Len(t, inventory.GetEntries(), 1)
+	require.Equal(t, "dataset_task_1", inventory.GetEntries()[0].GetDatasetId())
 	for _, method := range []string{"CreateTask", "GetTaskDetail", "UpdateTask", "GetTaskList", "DisableTask", "DeleteTask", "GetTaskResultInventory"} {
 		select {
 		case got := <-wire.calls:

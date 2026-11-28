@@ -332,7 +332,7 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 
 	shared := valid()
 	shared.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
-	require.ErrorContains(t, shared.validateSCFPlan(), "share code package")
+	require.NoError(t, shared.validateSCFPlan(), "多空间允许共享同一个代码包")
 	own := valid()
 	own.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
 	own.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}
@@ -435,10 +435,12 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []string{"crypto", "stockcn"}, cfg.scfSpaces())
 	})
-	t.Run("two spaces sharing one package are rejected", func(t *testing.T) {
-		_, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
-			"    crypto: {package_name: shared}\n    stockcn: {package_name: shared}\n")))
-		require.ErrorContains(t, err, "share code package")
+	t.Run("two spaces sharing one package are allowed", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
+			"    crypto: {}\n    stockcn: {}\n")))
+		require.NoError(t, err)
+		require.Equal(t, DefaultSCFPackageName, cfg.SCFPlan.packageNameFor("crypto"))
+		require.Equal(t, DefaultSCFPackageName, cfg.SCFPlan.packageNameFor("stockcn"))
 	})
 	t.Run("disabled renders nothing", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, "database: {path: ./c.db}\n"))

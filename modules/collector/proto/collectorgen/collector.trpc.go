@@ -169,8 +169,6 @@ type CollectMgrService interface {
 	// GetDataTypeConfigs ----- 数据类型配置 -----
 	GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq) (*GetDataTypeConfigsRsp, error)
 
-	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq) (*GetDataTypeConfigWithFieldsRsp, error)
-
 	SubmitKlineResampleJob(ctx context.Context, req *SubmitKlineResampleJobReq) (*SubmitKlineResampleJobRsp, error)
 
 	GetKlineResampleJob(ctx context.Context, req *GetKlineResampleJobReq) (*GetKlineResampleJobRsp, error)
@@ -212,8 +210,6 @@ type CollectMgrService interface {
 	TriggerFetchPlan(ctx context.Context, req *TriggerFetchPlanReq) (*TriggerFetchPlanRsp, error)
 
 	SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq) (*SetFetchPlanPausedRsp, error)
-
-	GetIngestMode(ctx context.Context, req *GetIngestModeReq) (*GetIngestModeRsp, error)
 
 	SetIngestMode(ctx context.Context, req *SetIngestModeReq) (*SetIngestModeRsp, error)
 	// SetSubjectExclusions 采集名单干预：排除的标的从下一份采集计划里去掉（交接进行中时等交接完成），到期自动恢复。
@@ -390,24 +386,6 @@ func CollectMgrService_GetDataTypeConfigs_Handler(svr interface{}, ctx context.C
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CollectMgrService).GetDataTypeConfigs(ctx, reqbody.(*GetDataTypeConfigsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CollectMgrService_GetDataTypeConfigWithFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetDataTypeConfigWithFieldsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).GetDataTypeConfigWithFields(ctx, reqbody.(*GetDataTypeConfigWithFieldsReq))
 	}
 
 	var rsp interface{}
@@ -786,24 +764,6 @@ func CollectMgrService_SetFetchPlanPaused_Handler(svr interface{}, ctx context.C
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CollectMgrService).SetFetchPlanPaused(ctx, reqbody.(*SetFetchPlanPausedReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CollectMgrService_GetIngestMode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetIngestModeReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).GetIngestMode(ctx, reqbody.(*GetIngestModeReq))
 	}
 
 	var rsp interface{}
@@ -1194,10 +1154,6 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_GetDataTypeConfigs_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/GetDataTypeConfigWithFields",
-			Func: CollectMgrService_GetDataTypeConfigWithFields_Handler,
-		},
-		{
 			Name: "/trpc.moox.collector.CollectMgr/SubmitKlineResampleJob",
 			Func: CollectMgrService_SubmitKlineResampleJob_Handler,
 		},
@@ -1280,10 +1236,6 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/SetFetchPlanPaused",
 			Func: CollectMgrService_SetFetchPlanPaused_Handler,
-		},
-		{
-			Name: "/trpc.moox.collector.CollectMgr/GetIngestMode",
-			Func: CollectMgrService_GetIngestMode_Handler,
 		},
 		{
 			Name: "/trpc.moox.collector.CollectMgr/SetIngestMode",
@@ -1420,9 +1372,6 @@ func (s *UnimplementedCollectMgr) DeleteTask(ctx context.Context, req *DeleteTas
 func (s *UnimplementedCollectMgr) GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq) (*GetDataTypeConfigsRsp, error) {
 	return nil, errors.New("rpc GetDataTypeConfigs of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq) (*GetDataTypeConfigWithFieldsRsp, error) {
-	return nil, errors.New("rpc GetDataTypeConfigWithFields of service CollectMgr is not implemented")
-}
 func (s *UnimplementedCollectMgr) SubmitKlineResampleJob(ctx context.Context, req *SubmitKlineResampleJobReq) (*SubmitKlineResampleJobRsp, error) {
 	return nil, errors.New("rpc SubmitKlineResampleJob of service CollectMgr is not implemented")
 }
@@ -1493,9 +1442,6 @@ func (s *UnimplementedCollectMgr) TriggerFetchPlan(ctx context.Context, req *Tri
 }
 func (s *UnimplementedCollectMgr) SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq) (*SetFetchPlanPausedRsp, error) {
 	return nil, errors.New("rpc SetFetchPlanPaused of service CollectMgr is not implemented")
-}
-func (s *UnimplementedCollectMgr) GetIngestMode(ctx context.Context, req *GetIngestModeReq) (*GetIngestModeRsp, error) {
-	return nil, errors.New("rpc GetIngestMode of service CollectMgr is not implemented")
 }
 func (s *UnimplementedCollectMgr) SetIngestMode(ctx context.Context, req *SetIngestModeReq) (*SetIngestModeRsp, error) {
 	return nil, errors.New("rpc SetIngestMode of service CollectMgr is not implemented")
@@ -1716,8 +1662,6 @@ type CollectMgrClientProxy interface {
 	// GetDataTypeConfigs ----- 数据类型配置 -----
 	GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq, opts ...client.Option) (rsp *GetDataTypeConfigsRsp, err error)
 
-	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq, opts ...client.Option) (rsp *GetDataTypeConfigWithFieldsRsp, err error)
-
 	SubmitKlineResampleJob(ctx context.Context, req *SubmitKlineResampleJobReq, opts ...client.Option) (rsp *SubmitKlineResampleJobRsp, err error)
 
 	GetKlineResampleJob(ctx context.Context, req *GetKlineResampleJobReq, opts ...client.Option) (rsp *GetKlineResampleJobRsp, err error)
@@ -1759,8 +1703,6 @@ type CollectMgrClientProxy interface {
 	TriggerFetchPlan(ctx context.Context, req *TriggerFetchPlanReq, opts ...client.Option) (rsp *TriggerFetchPlanRsp, err error)
 
 	SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq, opts ...client.Option) (rsp *SetFetchPlanPausedRsp, err error)
-
-	GetIngestMode(ctx context.Context, req *GetIngestModeReq, opts ...client.Option) (rsp *GetIngestModeRsp, err error)
 
 	SetIngestMode(ctx context.Context, req *SetIngestModeReq, opts ...client.Option) (rsp *SetIngestModeRsp, err error)
 	// SetSubjectExclusions 采集名单干预：排除的标的从下一份采集计划里去掉（交接进行中时等交接完成），到期自动恢复。
@@ -1966,26 +1908,6 @@ func (c *CollectMgrClientProxyImpl) GetDataTypeConfigs(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetDataTypeConfigsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CollectMgrClientProxyImpl) GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq, opts ...client.Option) (*GetDataTypeConfigWithFieldsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetDataTypeConfigWithFields")
-	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("collector")
-	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("GetDataTypeConfigWithFields")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetDataTypeConfigWithFieldsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -2406,26 +2328,6 @@ func (c *CollectMgrClientProxyImpl) SetFetchPlanPaused(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SetFetchPlanPausedRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CollectMgrClientProxyImpl) GetIngestMode(ctx context.Context, req *GetIngestModeReq, opts ...client.Option) (*GetIngestModeRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetIngestMode")
-	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("collector")
-	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("GetIngestMode")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetIngestModeRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -41,9 +41,10 @@ func TestLoadTaskSeed(t *testing.T) {
 	assert.True(t, task.Enabled)
 	ids := taskresult.ResultIDs(task.TaskID)
 	assert.Equal(t, ids.DatasetID, task.ResultDatasetID)
-	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, task.DataType)
 	require.NoError(t, err)
-	assert.Equal(t, ids.DatasetID, params.TargetDatasetID)
+	assert.Equal(t, "1m", params.Frequency)
+	assert.NotContains(t, task.CollectParams, "target_dataset_id")
 }
 
 // Every collection task owns exactly one result Dataset derived from its
@@ -56,11 +57,9 @@ func TestSeededTasksEachOwnTheirResultDataset(t *testing.T) {
 	for _, task := range tasks {
 		ids := taskresult.ResultIDs(task.TaskID)
 		assert.Equal(t, ids.DatasetID, task.ResultDatasetID, "task %s", task.TaskID)
-		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		_, err := domain.ParseCollectParams(task.CollectParams, task.DataType)
 		require.NoError(t, err)
-		assert.Equal(t, ids.DatasetID, params.TargetDatasetID)
-		assert.Empty(t, params.Provider, "routing comes from tag_ids")
-		assert.Empty(t, params.MarketType, "routing comes from tag_ids")
+		assert.NotContains(t, task.CollectParams, "target_dataset_id")
 		key := task.SpaceID + "/" + task.ResultDatasetID
 		require.NotContains(t, owners, key, "task %s shares a result Dataset with %s", task.TaskID, owners[key])
 		owners[key] = task.TaskID

@@ -112,8 +112,8 @@ func jobToPB(status klinecheck.JobStatus, names map[string]string) *pb.KlineBack
 		JobId:       job.JobID, SpaceId: job.SpaceID, Source: job.Source, Kind: job.Kind, DatasetId: job.DatasetID, Frequency: job.Frequency, SubjectId: job.SubjectID,
 		From: job.From.UTC().Format(time.RFC3339), To: job.To.UTC().Format(time.RFC3339), Status: job.Status, LastError: job.LastError,
 		CreatedAt: unixMillis(job.CreatedAt), UpdatedAt: unixMillis(job.UpdatedAt),
-		Pending: int32(status.Counts[store.BackfillPending]), Running: int32(status.Counts[store.BackfillRunning]), Succeeded: int32(status.Counts[store.BackfillSucceeded]),
-		Failed: int32(status.Counts[store.BackfillFailed]), Canceled: int32(status.Counts[store.BackfillCanceled]),
+		Queued: int32(status.Counts[store.BackfillQueued]), Running: int32(status.Counts[store.BackfillRunning]), Succeeded: int32(status.Counts[store.BackfillSucceeded]),
+		Failed: int32(status.Counts[store.BackfillFailed]), Cancelled: int32(status.Counts[store.BackfillCancelled]),
 	}
 }
 
@@ -170,7 +170,7 @@ func (s *Service) ListKlineBackfills(ctx context.Context, req *pb.ListKlineBackf
 	if err != nil {
 		return &pb.ListKlineBackfillsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	rsp := &pb.ListKlineBackfillsRsp{RetInfo: retOK(), Page: &pb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: int64(page*size) < total}}
+	rsp := &pb.ListKlineBackfillsRsp{RetInfo: retOK(), PageResult: &pb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: int64(page*size) < total}}
 	for _, item := range items {
 		rsp.Items = append(rsp.Items, jobToPB(item, names))
 	}

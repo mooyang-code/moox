@@ -43,43 +43,43 @@ func TestCloudAccountUpsertGetDelete(t *testing.T) {
 	require.Nil(t, account)
 }
 
-// 最新可用包只看 available，按上传先后取最后一个；只算本空间、本包名。
+// 最新可用包只看 available，按上传先后取最后一个；按包名全局筛选。
 func TestFunctionPackageLatestOnlyCountsAvailablePackagesOfTheSameName(t *testing.T) {
 	ctx := context.Background()
 	packages := openCloudTestStore(t).FunctionPackages()
 	for _, pkg := range []FunctionPackage{
-		{SpaceID: "crypto", PackageID: "p1", PackageName: "collector", CloudAccountID: "account-a", Status: FunctionPackageAvailable},
-		{SpaceID: "crypto", PackageID: "p2", PackageName: "collector", CloudAccountID: "account-a", Status: FunctionPackageAvailable},
-		{SpaceID: "crypto", PackageID: "p3", PackageName: "collector", CloudAccountID: "account-a"},
-		{SpaceID: "crypto", PackageID: "other", PackageName: "other", CloudAccountID: "account-a", Status: FunctionPackageAvailable},
-		{SpaceID: "stockcn", PackageID: "p4", PackageName: "collector", CloudAccountID: "account-b", Status: FunctionPackageAvailable},
+		{PackageID: "p1", PackageName: "collector", CloudAccountID: "account-a", Status: FunctionPackageAvailable},
+		{PackageID: "p2", PackageName: "collector", CloudAccountID: "account-a", Status: FunctionPackageAvailable},
+		{PackageID: "p3", PackageName: "collector", CloudAccountID: "account-a"},
+		{PackageID: "other", PackageName: "other", CloudAccountID: "account-a", Status: FunctionPackageAvailable},
+		{PackageID: "p4", PackageName: "collector-alt", CloudAccountID: "account-b", Status: FunctionPackageAvailable},
 	} {
 		require.NoError(t, packages.Upsert(ctx, pkg))
 	}
-	latest, err := packages.Latest(ctx, "crypto", "collector")
+	latest, err := packages.Latest(ctx, "collector")
 	require.NoError(t, err)
 	require.Equal(t, "p2", latest.PackageID)
-	missing, err := packages.Latest(ctx, "crypto", "absent")
+	missing, err := packages.Latest(ctx, "absent")
 	require.NoError(t, err)
 	require.Nil(t, missing)
 
-	pending, err := packages.Get(ctx, "crypto", "p3")
+	pending, err := packages.Get(ctx, "p3")
 	require.NoError(t, err)
 	require.Equal(t, FunctionPackagePending, pending.Status)
 	pending.Status = FunctionPackageAvailable
 	require.NoError(t, packages.Upsert(ctx, *pending))
-	latest, err = packages.Latest(ctx, "crypto", "collector")
+	latest, err = packages.Latest(ctx, "collector")
 	require.NoError(t, err)
 	require.Equal(t, "p3", latest.PackageID)
 
 	count, err := packages.CountByAccount(ctx, "account-a")
 	require.NoError(t, err)
 	require.EqualValues(t, 4, count)
-	listed, err := packages.List(ctx, "crypto")
+	listed, err := packages.List(ctx)
 	require.NoError(t, err)
-	require.Len(t, listed, 4)
-	require.NoError(t, packages.Delete(ctx, "crypto", "p3"))
-	gone, err := packages.Get(ctx, "crypto", "p3")
+	require.Len(t, listed, 5)
+	require.NoError(t, packages.Delete(ctx, "p3"))
+	gone, err := packages.Get(ctx, "p3")
 	require.NoError(t, err)
 	require.Nil(t, gone)
 }

@@ -45,16 +45,15 @@ func TestManagedSpacesFollowEnabledTasksPlansScfAndPauses(t *testing.T) {
 	require.Equal(t, []string{"crypto", "stockcn", "stockhk"}, spaces)
 }
 
-// 运行中新增的空间也要被暂停。
-func TestPauseCoversSpacesAddedWhileRunning(t *testing.T) {
+// 运行中新增的空间会进入管理集合，恢复追赶时也会包含它。
+func TestManagedSpacesReflectsSpacesAddedWhileRunning(t *testing.T) {
 	db := openManagedDB(t)
 	ctx := context.Background()
 	cfg := &Config{}
 	control := &collectorControl{plans: db.FetchPlans(), spaces: func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, db) }}
 	require.Empty(t, control.managed(ctx))
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "t1", TaskName: "t1", DataType: "kline", Enabled: true}))
-	require.NoError(t, control.setPaused(ctx, true))
-	paused, err := db.FetchPlans().PausedSpaces(ctx)
+	spaces, err := control.recoverySpaces(ctx)
 	require.NoError(t, err)
-	require.True(t, paused["crypto"])
+	require.Equal(t, []string{"crypto"}, spaces)
 }
