@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
@@ -25,7 +26,7 @@ func TestFactorTaskOperationsAreScopedToTheCallerSpace(t *testing.T) {
 		set:  domain.FactorTask{TaskID: "ftask_b", SpaceID: "stockcn"},
 		sets: []domain.FactorTask{{TaskID: "ftask_a", SpaceID: "crypto"}, {TaskID: "ftask_b", SpaceID: "stockcn"}},
 	}
-	recalc := &recalcFake{job: RecalcJob{JobID: "job-1", TaskID: "ftask_b"}}
+	recalc := &recalcFake{job: store.RecalcJob{JobID: "job-1", TaskID: "ftask_b"}}
 	svc := NewService(catalog, recalc)
 
 	denied := commonpb.ErrorCode_INVALID_PARAM

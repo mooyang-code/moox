@@ -87,7 +87,7 @@ func (s *memoryStorage) ReportComputed(_ context.Context, marker storageio.Perio
 	return nil
 }
 
-func (*memoryStorage) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (*memoryStorage) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 
@@ -107,7 +107,7 @@ func e2eLiveInput(target time.Time, subjects []string, factors []domain.FactorDe
 			TaskID: "task_e2e", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m",
 			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.TaskStatusEnabled,
 		},
-		Members: domain.AsMembers(factors...), PeriodTime: target, UniverseSubjects: subjects, CarryColumns: []string{"close"}, TriggerEventID: "evt-1",
+		Members: domain.AsMembers(factors...), PeriodTime: target, UniverseSubjects: subjects, CarryColumns: []string{"close"},
 	}
 }
 

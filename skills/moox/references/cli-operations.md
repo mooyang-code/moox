@@ -29,8 +29,8 @@ Factor 的实时入口是 durable `factor_collector_period_v1`。积压时查看
 ./bin/moox-cli factor recalc cancel --job-id <作业>
 ```
 
-Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行；不给 `--request-id` 时命令自动生成（同一个请求重试要带同一个）。
-因子定义与因子任务解耦：`moox-cli factor create` 只创建定义，`factor member add` 才把它作为 disabled 成员加入因子任务，
+Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行；不给 `--job-id` 时命令自动生成（同一个作业重试要带同一个）。
+因子定义与因子任务解耦：`moox-cli factor create` 只创建定义，`factor member add` 才把它加入因子任务（默认 disabled，传 `--status enabled` 可一步加入并启用），
 `factor member enable` 启用成员（见 [`factor-dsl.md`](factor-dsl.md)）。`moox-cli factor task apply --file <因子任务文件>` 按因子任务文件（格式同 `config/setup/factor-tasks.yaml`，成员内嵌在任务的 `members` 里）新建缺少的定义、任务和成员，
 只建不改：线上已有且内容不同时逐项列出差异、一项都不写，退出码非 0；逐项打印每个成员的成员键与列名；文件里没有的线上成员只报告，不自动移除。成员键与列名的规则见 [`factor-dsl.md`](factor-dsl.md)。
 `moox-cli factor import --dir <目录>` 把因子库目录下全部 `*.yaml` 整批发给 FactorMgr 导入定义（任一因子已存在或编译失败时一个都不写，只建不改）；

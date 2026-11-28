@@ -32,7 +32,7 @@ func (b *axisBackend) ReadDatasetChanges(context.Context, string, string, *Chang
 	return b.changes, nil
 }
 
-func (b *axisBackend) ComputedExists(_ context.Context, _, _, _ string, periodTime int64) (bool, error) {
+func (b *axisBackend) ComputedExists(_ context.Context, _, _ string, periodTime int64) (bool, error) {
 	b.existsAt = periodTime
 	return true, nil
 }
@@ -70,7 +70,7 @@ func TestAxisConvertsStockCNBoundaries(t *testing.T) {
 
 	// 不带频率的接口按数据集频率换算，频率只查一次。
 	for range 2 {
-		exists, err := store.ComputedExists(ctx, "stockcn", "factor", "evt", toAxis("2026-10-08 13:00").Unix())
+		exists, err := store.ComputedExists(ctx, "stockcn", "factor", toAxis("2026-10-08 13:00").Unix())
 		require.NoError(t, err)
 		require.True(t, exists)
 		require.Equal(t, cn("2026-10-08 13:00").Unix(), inner.existsAt)
@@ -83,7 +83,7 @@ func TestAxisPassesCryptoThrough(t *testing.T) {
 	inner := &axisBackend{}
 	store := NewAxis(inner)
 	period := time.Date(2026, 10, 8, 3, 25, 0, 0, time.UTC)
-	_, err := store.ComputedExists(context.Background(), "crypto", "factor", "evt", period.Unix())
+	_, err := store.ComputedExists(context.Background(), "crypto", "factor", period.Unix())
 	require.NoError(t, err)
 	require.Equal(t, period.Unix(), inner.existsAt)
 	require.Zero(t, inner.datasetGets)

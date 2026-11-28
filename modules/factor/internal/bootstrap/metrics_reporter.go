@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
@@ -42,8 +41,8 @@ const observeTimeout = 10 * time.Second
 // then checks factor results for freshness like collected data.
 // 引擎每算完一期就补发心跳：收到心跳时也立刻刷新数据集指标，水位前进就补报一份快照，
 // Monitor 约 1 秒内看到这一期的完成时刻，不用等 30 秒的定时上报。
-// 上报还带上 factor-mgr 自己的就绪判断与模块级生命周期，以及代引擎上报的一行（引擎的就绪与生命周期取自它的心跳）。
-func registerMetricsReporter(s *server.Server, engine engineView, readiness func(context.Context) (bool, string), life *lifecycle.Controller) error {
+// 上报还带上 factor-mgr 自己的就绪判断，以及代引擎上报的一行（引擎的就绪与生命周期取自它的心跳）。
+func registerMetricsReporter(s *server.Server, engine engineView, readiness func(context.Context) (bool, string)) error {
 	service := s.Service(factorMetricsTimerService)
 	if service == nil {
 		return fmt.Errorf("factor metrics timer service %s is not configured", factorMetricsTimerService)
@@ -53,7 +52,6 @@ func registerMetricsReporter(s *server.Server, engine engineView, readiness func
 		return fmt.Errorf("create factor metrics reporter: %w", err)
 	}
 	handler.SetReadiness(readiness)
-	handler.SetLifecycle(life.ReportState)
 	if source, ok := engine.(delegateSource); ok {
 		handler.SetDelegates(func(ctx context.Context) []*metricspb.DelegatedReport {
 			delegated, err := source.DelegatedReport(ctx)

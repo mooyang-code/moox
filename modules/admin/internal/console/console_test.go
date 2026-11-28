@@ -128,7 +128,6 @@ func TestConsoleThreeTierSpacePolicyRouting(t *testing.T) {
 		{"factor ListFactorCategories no space", "/api/admin/factor-mgr/ListFactorCategories", "", `{}`, http.StatusOK, true, ""},
 		{"factor ListFactorFunctions no space", "/api/admin/factor-mgr/ListFactorFunctions", "", `{}`, http.StatusOK, true, ""},
 		{"factor ListUdfs no space", "/api/admin/factor-mgr/ListUdfs", "", `{}`, http.StatusOK, true, ""},
-		{"factor GetLifecycle no space", "/api/admin/factor-mgr/GetLifecycle", "", `{}`, http.StatusOK, true, ""},
 
 		// 2. space_optional：无空间放行；有空间校验一致性并透传
 		{"strategy GetStrategy no space", "/api/admin/strategy/GetStrategy", "", `{"strategy_id":"s1"}`, http.StatusOK, true, ""},

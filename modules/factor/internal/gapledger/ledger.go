@@ -44,7 +44,6 @@ type line struct {
 	Period  time.Time   `json:"period"`
 	Factors []FactorRef `json:"factors"`
 	SkipID  string      `json:"skip_id"`
-	Trigger string      `json:"trigger,omitempty"`
 	Reason  string      `json:"reason,omitempty"`
 }
 
@@ -64,7 +63,6 @@ type Entry struct {
 	Hash      string
 	SkipID    string
 	FirstSeen time.Time
-	Trigger   string
 	// Reason 是跳过的原因：窗口还没载入完成为 pipeline.SkipReasonWarming，本期数据取不到为 pipeline.SkipReasonUpstream。
 	Reason string
 }
@@ -193,15 +191,12 @@ func (l *Ledger) apply(entry line) {
 			if existing := l.pending[k]; existing != nil {
 				// 同键重复：skipID 取最后一条（再次失效必须让它变化），发现时间取最早。
 				existing.SkipID = entry.SkipID
-				if entry.Trigger != "" {
-					existing.Trigger = entry.Trigger
-				}
 				existing.Reason = entry.Reason
 				continue
 			}
 			l.pending[k] = &Entry{
 				Set: entry.Set, Subject: entry.Subject, Period: entry.Period.UTC(), Member: factor.ID, Hash: factor.Hash,
-				SkipID: entry.SkipID, FirstSeen: entry.At.UTC(), Trigger: entry.Trigger,
+				SkipID: entry.SkipID, FirstSeen: entry.At.UTC(),
 				Reason: entry.Reason,
 			}
 		case EventRepaired, EventCancelled, EventGaveUp:
@@ -234,7 +229,7 @@ func (l *Ledger) RecordGaps(_ context.Context, entries []pipeline.GapEntry) erro
 			if err != nil {
 				return err
 			}
-			row = &line{Event: EventSkip, At: now, Set: entry.TaskID, Subject: entry.Subject, Period: entry.Period.UTC(), SkipID: skipID, Trigger: entry.TriggerEventID, Reason: entry.Reason}
+			row = &line{Event: EventSkip, At: now, Set: entry.TaskID, Subject: entry.Subject, Period: entry.Period.UTC(), SkipID: skipID, Reason: entry.Reason}
 			groups[gk] = row
 			order = append(order, gk)
 		}

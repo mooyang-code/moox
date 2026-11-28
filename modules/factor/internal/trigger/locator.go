@@ -28,7 +28,7 @@ type ParamSelector interface {
 }
 
 type PeriodStore interface {
-	ComputedExists(context.Context, string, string, string, int64) (bool, error)
+	ComputedExists(context.Context, string, string, int64) (bool, error)
 	DatasetColumns(context.Context, string, string) ([]string, error)
 }
 

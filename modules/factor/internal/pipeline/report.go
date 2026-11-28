@@ -60,8 +60,8 @@ func (r *Runner) Report(ctx context.Context, plan Plan, outcome Outcome) error {
 		SourceDatasetID: plan.Set.SourceDatasetID, Frequency: plan.Set.Freq,
 		PeriodTime: target.Unix(), Status: outcome.Status,
 		UniverseSubjects: uniqueSorted(plan.Expected), FailedSubjects: uniqueSorted(outcome.FailedSubjects),
-		Factors:        append([]storageio.FactorState(nil), outcome.Factors...),
-		TriggerEventID: plan.TriggerEventID, ComputedAt: time.Now().UTC(),
+		Factors:    append([]storageio.FactorState(nil), outcome.Factors...),
+		ComputedAt: time.Now().UTC(),
 	}
 	if err := r.store.ReportComputed(ctx, marker); err != nil {
 		return fmt.Errorf("report factor period computed: %w", err)
@@ -249,7 +249,7 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 		for i, member := range plan.Members {
 			entries = append(entries, GapEntry{
 				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Key, DefinitionHash: hashes[i],
-				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonWarming,
+				Reason: SkipReasonWarming,
 			})
 		}
 	}
@@ -274,7 +274,7 @@ func (r *Runner) recordUpstream(ctx context.Context, plan Plan) error {
 		for _, member := range plan.Members {
 			entries = append(entries, GapEntry{
 				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Key, DefinitionHash: domain.DefinitionHash(member.Factor),
-				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
+				Reason: SkipReasonUpstream,
 			})
 		}
 	}
@@ -311,7 +311,7 @@ func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadRe
 		for _, member := range plan.Members {
 			entries = append(entries, GapEntry{
 				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Key, DefinitionHash: domain.DefinitionHash(member.Factor),
-				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
+				Reason: SkipReasonUpstream,
 			})
 		}
 	}

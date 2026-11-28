@@ -234,9 +234,6 @@ func (r *Runtime) modulesFailed(set domain.EngineTask) bool {
 	return false
 }
 
-// writeGate 是后台写结果路径（补算作业、缺口恢复、失效重算）的门禁：实时计算或恢复追赶允许时才写。
-func (r *Runtime) writeGate(taskID string) bool { return r.gate(taskID) || r.catchupGate(taskID) }
-
 // beginWrite 是写结果操作的登记式门禁：先登记在途，再检查门禁，不允许就立刻注销并拒绝。live 表示实时门禁放行，
 // catchup 表示恢复追赶的门禁放行。暂停先关门禁、再等登记的在途操作结束，所以暂停收敛之后不会再有结果写出。
 func (r *Runtime) beginWrite(_ context.Context, taskID string, live, catchup bool) (func(), bool) {

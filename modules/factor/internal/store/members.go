@@ -74,9 +74,9 @@ const joinedMemberColumns = `m.c_task_id AS m_task_id, m.c_member_key AS m_membe
 	 m.c_params AS m_params, m.c_ctime AS m_ctime, m.c_mtime AS m_mtime,
 	 d.c_factor_id, d.c_name, d.c_category_id, d.c_spec, d.c_spec_hash, d.c_allow_partial_universe, d.c_ctime, d.c_mtime`
 
-// AddMember attaches a definition to a factor task as a disabled member under member key. params 是成员的固定参数，
-// 或可变成员的默认参数（完整参数，之后不变）。成员键与类型由调用方按公共命名包推导。
-func (s *Store) AddMember(ctx context.Context, taskID, memberKey, factorID, kind string, params map[string]float64) (domain.FactorTaskMember, error) {
+// AddMember attaches a definition to a factor task under member key with the given initial status (defaults to disabled).
+// params 是成员的固定参数，或可变成员的默认参数（完整参数，之后不变）。成员键与类型由调用方按公共命名包推导。
+func (s *Store) AddMember(ctx context.Context, taskID, memberKey, factorID, kind string, params map[string]float64, status string) (domain.FactorTaskMember, error) {
 	if s == nil || s.db == nil {
 		return domain.FactorTaskMember{}, fmt.Errorf("factor database is not open")
 	}
@@ -86,6 +86,13 @@ func (s *Store) AddMember(ctx context.Context, taskID, memberKey, factorID, kind
 	}
 	if kind != domain.MemberKindFixed && kind != domain.MemberKindVar {
 		return domain.FactorTaskMember{}, fmt.Errorf("invalid member kind %q", kind)
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = domain.MemberStatusDisabled
+	}
+	if !validMemberStatus(status) {
+		return domain.FactorTaskMember{}, fmt.Errorf("invalid member status %q", status)
 	}
 	encoded, err := encodeMemberParams(params)
 	if err != nil {
@@ -107,7 +114,7 @@ func (s *Store) AddMember(ctx context.Context, taskID, memberKey, factorID, kind
 		err := tx.Exec(`
 			INSERT INTO t_factor_task_members (c_task_id, c_member_key, c_factor_id, c_kind, c_status, c_params, c_ctime, c_mtime)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, taskID, memberKey, factorID, kind, domain.MemberStatusDisabled, encoded, now, now).Error
+		`, taskID, memberKey, factorID, kind, status, encoded, now, now).Error
 		if err != nil && isUniqueConstraint(err) {
 			if kind == domain.MemberKindVar {
 				return fmt.Errorf("%w: factor %q already has a var member in task %q", ErrConflict, factorID, taskID)

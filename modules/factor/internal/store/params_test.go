@@ -16,7 +16,7 @@ func addVarMember(t *testing.T, s *Store, taskID, factorID string) string {
 		require.NoError(t, s.CreateFactor(ctx, testFactorDef(factorID)))
 	}
 	key := factorID + "__var"
-	_, err := s.AddMember(ctx, taskID, key, factorID, domain.MemberKindVar, map[string]float64{"span": 20})
+	_, err := s.AddMember(ctx, taskID, key, factorID, domain.MemberKindVar, map[string]float64{"span": 20}, "")
 	require.NoError(t, err)
 	return key
 }
@@ -40,13 +40,13 @@ func TestVarMemberLimitedToOnePerFactor(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
 	addVarMember(t, s, "task_prices", "ema")
-	_, err := s.AddMember(ctx, "task_prices", "ema__other", "ema", domain.MemberKindVar, nil)
+	_, err := s.AddMember(ctx, "task_prices", "ema__other", "ema", domain.MemberKindVar, nil, "")
 	require.ErrorIs(t, err, ErrConflict)
-	_, err = s.AddMember(ctx, "task_prices", "ema", "ema", domain.MemberKindFixed, map[string]float64{"span": 20})
+	_, err = s.AddMember(ctx, "task_prices", "ema", "ema", domain.MemberKindFixed, map[string]float64{"span": 20}, "")
 	require.NoError(t, err)
-	_, err = s.AddMember(ctx, "task_prices", "ema__30", "ema", domain.MemberKindFixed, map[string]float64{"span": 30})
+	_, err = s.AddMember(ctx, "task_prices", "ema__30", "ema", domain.MemberKindFixed, map[string]float64{"span": 30}, "")
 	require.NoError(t, err)
-	_, err = s.AddMember(ctx, "task_prices", "ema__x", "ema", "other", nil)
+	_, err = s.AddMember(ctx, "task_prices", "ema__x", "ema", "other", nil, "")
 	require.ErrorContains(t, err, "member kind")
 }
 
@@ -145,7 +145,7 @@ func TestRecalcJobDefaultFilledRoundTrip(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
-	job, err := s.CreateRecalcJob(ctx, RecalcJob{JobID: "job-1", RequestID: "req-1", TaskID: "task_prices", StartTime: 100, EndTime: 1000})
+	job, err := s.CreateRecalcJob(ctx, RecalcJob{JobID: "job-1", TaskID: "task_prices", StartTime: 100, EndTime: 1000})
 	require.NoError(t, err)
 	require.Empty(t, job.DefaultFilled)
 	now := time.Unix(500, 0)

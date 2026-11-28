@@ -88,7 +88,7 @@ func TestBuildSQLiteDSNUsesForeignKeysAndDurablePragmas(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "factor-mgr", rec.Component)
 	require.NotEmpty(t, rec.Parts[dataformat.PartSQLiteSchema])
-	require.NotEmpty(t, rec.Parts[dataformat.PartLifecycle])
+	require.NotContains(t, rec.Parts, dataformat.PartLifecycle)
 }
 
 func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
@@ -96,10 +96,10 @@ func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", "disabled")))
 	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close")))
-	_, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil)
+	_, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil, "")
 	require.NoError(t, err)
 	_, err = s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-1", RequestID: "req-1", TaskID: "task_prices", StartTime: 100, EndTime: 200,
+		JobID: "job-1", TaskID: "task_prices", StartTime: 100, EndTime: 200,
 	})
 	require.NoError(t, err)
 

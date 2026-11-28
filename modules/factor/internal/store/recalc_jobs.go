@@ -3,9 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -14,7 +12,7 @@ import (
 )
 
 const (
-	RecalcStatusAccepted  = "accepted"
+	RecalcStatusQueued    = "queued"
 	RecalcStatusRunning   = "running"
 	RecalcStatusSucceeded = "succeeded"
 	RecalcStatusFailed    = "failed"
@@ -26,21 +24,18 @@ const (
 	DefaultRecalcJobKeepPerTask = 200
 )
 
-// RecalcJob is the durable state needed to accept, resume, inspect, or cancel
+// RecalcJob is the durable state needed to queue, resume, inspect, or cancel
 // one asynchronous factor-task recalculation.
 type RecalcJob struct {
-	JobID           string   `json:"job_id"`
-	RequestID       string   `json:"request_id"`
-	TaskID          string   `json:"task_id"`
-	Members         []string `json:"members"`
-	Subjects        []string `json:"subjects"`
-	MembersOmitted  bool     `json:"-"`
-	SubjectsOmitted bool     `json:"-"`
-	StartTime       int64    `json:"start_time"`
-	EndTime         int64    `json:"end_time"`
-	Status          string   `json:"status"`
-	ProgressTime    int64    `json:"progress_time"`
-	Error           string   `json:"error"`
+	JobID        string   `json:"job_id"`
+	TaskID       string   `json:"task_id"`
+	Members      []string `json:"members"`
+	Subjects     []string `json:"subjects"`
+	StartTime    int64    `json:"start_time"`
+	EndTime      int64    `json:"end_time"`
+	Status       string   `json:"status"`
+	ProgressTime int64    `json:"progress_time"`
+	Error        string   `json:"error"`
 	// DefaultFilled 是按默认参数新补的期次（成员键 → 闭区间 [起始秒, 结束秒] 列表，相邻期次已合并）：
 	// 原行不存在、或原行的 __params 里没有这个成员，只能用默认参数算出来，与当时的实时结果不保证一致。
 	DefaultFilled map[string][]TimeRange `json:"default_filled,omitempty"`
@@ -81,26 +76,23 @@ func decodeDefaultFilled(raw string) (map[string][]TimeRange, error) {
 
 // recalcJobColumns is the column list every recalc job read selects, in the
 // order of recalcJobRow.
-const recalcJobColumns = `c_job_id, c_request_id, c_task_id, c_members_json, c_subjects_json,
-	 c_members_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error,
+const recalcJobColumns = `c_job_id, c_task_id, c_members_json, c_subjects_json,
+	 c_start_time, c_end_time, c_status, c_progress_time, c_error,
 	 c_default_filled_json, c_ctime, c_mtime`
 
 type recalcJobRow struct {
-	JobID           string    `gorm:"column:c_job_id"`
-	RequestID       string    `gorm:"column:c_request_id"`
-	TaskID          string    `gorm:"column:c_task_id"`
-	MembersJSON     string    `gorm:"column:c_members_json"`
-	SubjectsJSON    string    `gorm:"column:c_subjects_json"`
-	MembersOmitted  bool      `gorm:"column:c_members_omitted"`
-	SubjectsOmitted bool      `gorm:"column:c_subjects_omitted"`
-	StartTime       int64     `gorm:"column:c_start_time"`
-	EndTime         int64     `gorm:"column:c_end_time"`
-	Status          string    `gorm:"column:c_status"`
-	ProgressTime    int64     `gorm:"column:c_progress_time"`
-	Error           string    `gorm:"column:c_error"`
-	DefaultFilled   string    `gorm:"column:c_default_filled_json"`
-	CreatedAt       time.Time `gorm:"column:c_ctime"`
-	UpdatedAt       time.Time `gorm:"column:c_mtime"`
+	JobID         string    `gorm:"column:c_job_id"`
+	TaskID        string    `gorm:"column:c_task_id"`
+	MembersJSON   string    `gorm:"column:c_members_json"`
+	SubjectsJSON  string    `gorm:"column:c_subjects_json"`
+	StartTime     int64     `gorm:"column:c_start_time"`
+	EndTime       int64     `gorm:"column:c_end_time"`
+	Status        string    `gorm:"column:c_status"`
+	ProgressTime  int64     `gorm:"column:c_progress_time"`
+	Error         string    `gorm:"column:c_error"`
+	DefaultFilled string    `gorm:"column:c_default_filled_json"`
+	CreatedAt     time.Time `gorm:"column:c_ctime"`
+	UpdatedAt     time.Time `gorm:"column:c_mtime"`
 }
 
 func (r recalcJobRow) job() (RecalcJob, error) {
@@ -117,17 +109,15 @@ func (r recalcJobRow) job() (RecalcJob, error) {
 		return RecalcJob{}, fmt.Errorf("decode recalc default filled: %w", err)
 	}
 	return RecalcJob{
-		JobID: r.JobID, RequestID: r.RequestID, TaskID: r.TaskID,
+		JobID: r.JobID, TaskID: r.TaskID,
 		Members: members, Subjects: subjects,
-		MembersOmitted: r.MembersOmitted, SubjectsOmitted: r.SubjectsOmitted, StartTime: r.StartTime,
-		EndTime: r.EndTime, Status: r.Status, ProgressTime: r.ProgressTime,
-		Error: r.Error, DefaultFilled: filled,
+		StartTime: r.StartTime, EndTime: r.EndTime, Status: r.Status,
+		ProgressTime: r.ProgressTime, Error: r.Error, DefaultFilled: filled,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}, nil
 }
 
-// CreateRecalcJob inserts a job or returns the existing job for the same
-// request id, making request retries idempotent.
+// CreateRecalcJob 按 c_job_id 幂等写入补算作业；同 job_id 已存在时直接返回已有记录。
 func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
@@ -139,11 +129,7 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 	var stored RecalcJob
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
-		var created bool
-		stored, created, err = insertRecalcJob(tx, job, membersJSON, subjectsJSON)
-		if err == nil && !created && !sameRecalcRequest(stored, job) {
-			err = fmt.Errorf("%w: request_id %q belongs to a different recalc request", ErrConflict, job.RequestID)
-		}
+		stored, err = insertRecalcJob(tx, job, membersJSON, subjectsJSON)
 		return err
 	})
 	if err != nil {
@@ -153,16 +139,13 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 }
 
 func normalizeRecalcJob(job RecalcJob) (RecalcJob, string, string, error) {
-	job.RequestID = strings.TrimSpace(job.RequestID)
+	job.JobID = strings.TrimSpace(job.JobID)
 	job.TaskID = strings.TrimSpace(job.TaskID)
-	if job.RequestID == "" || job.TaskID == "" || job.EndTime <= job.StartTime {
+	if job.JobID == "" || job.TaskID == "" || job.EndTime <= job.StartTime {
 		return RecalcJob{}, "", "", fmt.Errorf("recalc job identity or time range is invalid")
 	}
-	if job.JobID == "" {
-		job.JobID = job.RequestID
-	}
 	if job.Status == "" {
-		job.Status = RecalcStatusAccepted
+		job.Status = RecalcStatusQueued
 	}
 	if job.Members == nil {
 		job.Members = []string{}
@@ -181,69 +164,20 @@ func normalizeRecalcJob(job RecalcJob) (RecalcJob, string, string, error) {
 	return job, membersJSON, subjectsJSON, nil
 }
 
-func insertRecalcJob(tx *gorm.DB, job RecalcJob, membersJSON, subjectsJSON string) (RecalcJob, bool, error) {
+func insertRecalcJob(tx *gorm.DB, job RecalcJob, membersJSON, subjectsJSON string) (RecalcJob, error) {
 	now := time.Now().UTC()
 	result := tx.Exec(`
 		INSERT INTO t_factor_recalc_jobs
-		(c_job_id, c_request_id, c_task_id, c_members_json, c_subjects_json,
-		 c_members_omitted, c_subjects_omitted,
+		(c_job_id, c_task_id, c_members_json, c_subjects_json,
 		 c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_request_id) DO NOTHING
-	`, job.JobID, job.RequestID, job.TaskID, membersJSON, subjectsJSON,
-		job.MembersOmitted, job.SubjectsOmitted,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(c_job_id) DO NOTHING
+	`, job.JobID, job.TaskID, membersJSON, subjectsJSON,
 		job.StartTime, job.EndTime, job.Status, job.ProgressTime, job.Error, now, now)
 	if result.Error != nil {
-		return RecalcJob{}, false, result.Error
+		return RecalcJob{}, result.Error
 	}
-	var existing recalcJobRow
-	lookup := tx.Raw(`
-		SELECT `+recalcJobColumns+`
-		FROM t_factor_recalc_jobs WHERE c_request_id = ?
-	`, job.RequestID).Scan(&existing)
-	if lookup.Error != nil {
-		return RecalcJob{}, false, lookup.Error
-	}
-	if lookup.RowsAffected > 0 {
-		stored, err := existing.job()
-		return stored, result.RowsAffected > 0, err
-	}
-	return RecalcJob{}, false, fmt.Errorf("%w: recalc job id already belongs to another request", ErrConflict)
-}
-
-func sameRecalcRequest(left, right RecalcJob) bool {
-	if left.RequestID != right.RequestID || left.TaskID != right.TaskID ||
-		left.StartTime != right.StartTime || left.EndTime != right.EndTime ||
-		left.MembersOmitted != right.MembersOmitted || left.SubjectsOmitted != right.SubjectsOmitted {
-		return false
-	}
-	return (left.MembersOmitted || sameStringValues(left.Members, right.Members)) &&
-		(left.SubjectsOmitted || sameStringValues(left.Subjects, right.Subjects))
-}
-
-func sameStringValues(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	left = append([]string(nil), left...)
-	right = append([]string(nil), right...)
-	sort.Strings(left)
-	sort.Strings(right)
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return readRecalcJob(tx, job.JobID)
 }
 
 // UpdateRecalcJob atomically applies a mutation, retaining monotonic progress
@@ -320,27 +254,7 @@ func (s *Store) GetRecalcJob(ctx context.Context, jobID string) (RecalcJob, erro
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
 	}
-	row, err := s.getRecalcJobRow(ctx, "c_job_id", strings.TrimSpace(jobID))
-	if err != nil {
-		return RecalcJob{}, err
-	}
-	return row.job()
-}
-
-// FindRecalcJobByRequestID returns the accepted job for an idempotency key.
-func (s *Store) FindRecalcJobByRequestID(ctx context.Context, requestID string) (RecalcJob, bool, error) {
-	if s == nil || s.db == nil {
-		return RecalcJob{}, false, fmt.Errorf("factor database is not open")
-	}
-	row, err := s.getRecalcJobRow(ctx, "c_request_id", strings.TrimSpace(requestID))
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return RecalcJob{}, false, nil
-	}
-	if err != nil {
-		return RecalcJob{}, false, err
-	}
-	job, err := row.job()
-	return job, err == nil, err
+	return readRecalcJob(s.db.WithContext(ctx), strings.TrimSpace(jobID))
 }
 
 // RecalcJobFilter narrows ListRecalcJobs; zero fields match everything.
@@ -397,7 +311,7 @@ func (s *Store) ListRecalcJobs(ctx context.Context, filter RecalcJobFilter) ([]R
 //   - retention > 0 时，删除 c_mtime 早于 now - retention 的已完结作业；
 //   - keepPerTask > 0 时，每个任务仅保留最新 keepPerTask 条已完结作业（按 c_ctime DESC, c_job_id DESC）。
 //
-// 排队中或执行中的作业（accepted/running）永不清理。返回本次删除的记录条数。
+// 排队中或执行中的作业（queued/running）永不清理。返回本次删除的记录条数。
 func (s *Store) PruneRecalcJobs(ctx context.Context, now time.Time, retention time.Duration, keepPerTask int) (int64, error) {
 	if s == nil || s.db == nil {
 		return 0, fmt.Errorf("factor database is not open")
@@ -451,22 +365,4 @@ func (s *Store) PruneRecalcJobs(ctx context.Context, now time.Time, retention ti
 		return 0, err
 	}
 	return deleted, nil
-}
-
-func (s *Store) getRecalcJobRow(ctx context.Context, key, value string) (recalcJobRow, error) {
-	if key != "c_job_id" && key != "c_request_id" {
-		return recalcJobRow{}, fmt.Errorf("unsupported recalc job lookup")
-	}
-	var row recalcJobRow
-	result := s.db.WithContext(ctx).Raw(`
-		SELECT `+recalcJobColumns+`
-		FROM t_factor_recalc_jobs WHERE `+key+` = ?
-	`, value).Scan(&row)
-	if result.Error != nil {
-		return recalcJobRow{}, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return recalcJobRow{}, gorm.ErrRecordNotFound
-	}
-	return row, nil
 }

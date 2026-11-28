@@ -22,8 +22,8 @@ var errReportFailed = errors.New("recalc progress report failed")
 const giveBackTimeout = 5 * time.Second
 
 const (
-	// jobStatusAccepted 由引擎上报时表示归还：作业回到待领取，进度保留。
-	jobStatusAccepted  = "accepted"
+	// jobStatusQueued 由引擎上报时表示归还：作业回到待领取，进度保留。
+	jobStatusQueued    = "queued"
 	jobStatusRunning   = "running"
 	jobStatusSucceeded = "succeeded"
 	jobStatusFailed    = "failed"
@@ -190,7 +190,7 @@ func (l *recalcLoop) report(ctx context.Context, axis periodclock.Axis, job Pull
 func (l *recalcLoop) giveBack(ctx context.Context, jobID string, realProgress time.Time) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), giveBackTimeout)
 	defer cancel()
-	if _, err := l.client.ReportRecalcProgress(ctx, jobID, realProgress, jobStatusAccepted, "", nil); err != nil {
+	if _, err := l.client.ReportRecalcProgress(ctx, jobID, realProgress, jobStatusQueued, "", nil); err != nil {
 		log.WarnContextf(ctx, "factor_recalc_give_back_failed job_id=%s error=%v", jobID, err)
 	}
 }

@@ -93,8 +93,6 @@ func TestMethodSpacePolicyThreeTierMatrix(t *testing.T) {
 		{"factor-mgr", "ListUdfs", servicecatalog.SpacePolicyGlobal},
 		{"factor-mgr", "GetUdf", servicecatalog.SpacePolicyGlobal},
 		{"factor-mgr", "ActivateUdf", servicecatalog.SpacePolicyGlobal},
-		{"factor-mgr", "GetLifecycle", servicecatalog.SpacePolicyGlobal},
-		{"factor-mgr", "ControlLifecycle", servicecatalog.SpacePolicyGlobal},
 		{"factor-mgr", "ListFactorTasks", servicecatalog.SpacePolicyOptional},
 		{"factor-mgr", "ListFactors", servicecatalog.SpacePolicyOptional},
 		{"factor-mgr", "GetFactor", servicecatalog.SpacePolicyOptional},

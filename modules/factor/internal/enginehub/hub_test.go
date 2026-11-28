@@ -38,11 +38,8 @@ func seedTask(t *testing.T, db *store.Store, taskID string, members map[string]s
 		if _, err := db.GetFactor(ctx, factorID); err != nil {
 			require.NoError(t, db.CreateFactor(ctx, testFactor(factorID)))
 		}
-		_, err := db.AddMember(ctx, taskID, factorID, factorID, domain.MemberKindFixed, nil)
+		_, err := db.AddMember(ctx, taskID, factorID, factorID, domain.MemberKindFixed, nil, status)
 		require.NoError(t, err)
-		if status == domain.MemberStatusEnabled {
-			require.NoError(t, db.SetMemberStatus(ctx, taskID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
-		}
 	}
 	return set
 }

@@ -34,8 +34,8 @@
           }}</a-tag>
         </div>
 
-        <a-form-item label="请求 ID" extra="同一请求 ID 重复提交是幂等的">
-          <a-input v-model="form.request_id" allow-clear placeholder="留空自动生成" />
+        <a-form-item label="作业 ID" extra="同一作业 ID 重复提交是幂等的">
+          <a-input v-model="form.job_id" allow-clear placeholder="留空自动生成" />
         </a-form-item>
       </a-form>
       <div class="estimate" :class="{ 'is-empty': !estimate.periods }">{{ estimate.text }}</div>
@@ -90,7 +90,7 @@ const form = reactive({
   // 毫秒时刻：按当前空间登记的时区选择，快捷范围仍按后端的周期边界对齐
   start_time: null as number | null,
   end_time: null as number | null,
-  request_id: ""
+  job_id: ""
 });
 
 const freq = computed(() => props.info?.factor_task.freq || "");
@@ -128,7 +128,7 @@ function prepare() {
   form.members = [...candidates.value];
   form.subjectMode = "all";
   form.subjects = [];
-  form.request_id = "";
+  form.job_id = "";
   setRange(defaultRange(freq.value));
 }
 
@@ -164,9 +164,9 @@ async function submit() {
       subjects: form.subjectMode === "include" ? [...form.subjects] : [],
       start_time: new Date(form.start_time).toISOString(),
       end_time: new Date(form.end_time).toISOString(),
-      request_id: form.request_id.trim() || `factor-recalc-${Date.now()}`
+      job_id: form.job_id.trim() || `factor-recalc-${Date.now()}`
     });
-    Message.success("补算作业已受理");
+    Message.success("补算作业已提交");
     // 抽屉已被取消/重新打开或空间已切换：任务已受理，但不能再导航（会重建页面、丢失新表单草稿）
     if (stale()) return true;
     emit("submitted", job);

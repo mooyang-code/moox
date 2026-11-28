@@ -337,9 +337,7 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/factor-mgr/ListUdfs",
       "/api/admin/factor-mgr/GetUdf",
       "/api/admin/factor-mgr/ActivateUdf",
-      "/api/admin/factor-mgr/GetStatus",
-      "/api/admin/factor-mgr/GetLifecycle",
-      "/api/admin/factor-mgr/ControlLifecycle"
+      "/api/admin/factor-mgr/GetStatus"
     ]) {
       expect(spacePolicyForUrl(url), url).toBe("global");
     }

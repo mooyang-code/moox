@@ -13,7 +13,7 @@ import (
 func seedJob(t *testing.T, db *store.Store, jobID, taskID string, factorIDs ...string) {
 	t.Helper()
 	_, err := db.CreateRecalcJob(context.Background(), store.RecalcJob{
-		JobID: jobID, RequestID: jobID, TaskID: taskID, Members: factorIDs, StartTime: 0, EndTime: 600,
+		JobID: jobID, TaskID: taskID, Members: factorIDs, StartTime: 0, EndTime: 600,
 	})
 	require.NoError(t, err)
 }
@@ -118,7 +118,7 @@ func TestPullSkipsTasksNotResultReady(t *testing.T) {
 	require.False(t, found)
 	job, err := db.GetRecalcJob(context.Background(), "job-1")
 	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusAccepted, job.Status, "the job waits until the set is ready")
+	require.Equal(t, store.RecalcStatusQueued, job.Status, "the job waits until the set is ready")
 }
 
 func TestReportRecordsProgress(t *testing.T) {
@@ -175,9 +175,9 @@ func TestReleasedJobIsPullableAgain(t *testing.T) {
 	require.NoError(t, err)
 
 	// 归还时带的进度不作数（这里故意给一个更早的值），以管理端已记下的为准。
-	released, err := hub.Report(context.Background(), engineA, job.JobID, time.Unix(100, 0), store.RecalcStatusAccepted, "", nil)
+	released, err := hub.Report(context.Background(), engineA, job.JobID, time.Unix(100, 0), store.RecalcStatusQueued, "", nil)
 	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusAccepted, released.Status)
+	require.Equal(t, store.RecalcStatusQueued, released.Status)
 	require.Equal(t, int64(300), released.ProgressTime)
 	_, err = hub.Report(context.Background(), engineA, job.JobID, time.Unix(400, 0), store.RecalcStatusRunning, "", nil)
 	require.ErrorIs(t, err, store.ErrConflict, "归还之后、重新领取之前不能再上报")
@@ -209,7 +209,7 @@ func TestReleasedJobGoesBehindOtherPullableJobs(t *testing.T) {
 	require.NoError(t, err)
 
 	clock.Advance(time.Second)
-	released, err := hub.Report(ctx, engineA, first.JobID, time.Unix(300, 0), store.RecalcStatusAccepted, "", nil)
+	released, err := hub.Report(ctx, engineA, first.JobID, time.Unix(300, 0), store.RecalcStatusQueued, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "degraded: failed_subjects=1", released.Error, "归还不清掉降级说明")
 

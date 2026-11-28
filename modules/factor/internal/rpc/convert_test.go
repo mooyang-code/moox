@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/stretchr/testify/require"
 )
@@ -119,16 +120,15 @@ func TestConvertFactorTaskRoundTrip(t *testing.T) {
 
 func TestConvertRecalcJobRoundTrip(t *testing.T) {
 	start := time.Date(2026, time.October, 4, 10, 0, 0, 0, time.UTC)
-	want := RecalcJob{
-		JobID:        "request-1",
-		RequestID:    "request-1",
+	want := store.RecalcJob{
+		JobID:        "job-1",
 		TaskID:       "ftask_binance_kline_1m",
 		Members:      []string{"rolling_mean"},
 		Subjects:     []string{"BTCUSDT"},
-		StartTime:    start,
-		EndTime:      start.Add(time.Hour),
-		Status:       "accepted",
-		ProgressTime: start.Add(time.Minute),
+		StartTime:    start.Unix(),
+		EndTime:      start.Add(time.Hour).Unix(),
+		Status:       store.RecalcStatusQueued,
+		ProgressTime: start.Add(time.Minute).Unix(),
 		CreatedAt:    start,
 		UpdatedAt:    start.Add(time.Minute),
 	}
@@ -148,13 +148,12 @@ func TestFactorDefPBDoesNotExposeSourcePath(t *testing.T) {
 	require.Equal(t, "rolling_mean", got.GetFactorId())
 }
 
-func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
+func recalcJobFromPB(pb *factorpb.RecalcJob) (store.RecalcJob, error) {
 	if pb == nil {
-		return RecalcJob{}, fmt.Errorf("recalc job is required")
+		return store.RecalcJob{}, fmt.Errorf("recalc job is required")
 	}
-	var job RecalcJob
+	var job store.RecalcJob
 	job.JobID = pb.GetJobId()
-	job.RequestID = pb.GetRequestId()
 	job.TaskID = pb.GetTaskId()
 	job.Members = factorwire.CloneStrings(pb.GetMembers())
 	job.Subjects = factorwire.CloneStrings(pb.GetSubjects())
@@ -163,7 +162,7 @@ func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
 	timeFields := []struct {
 		name   string
 		value  string
-		target *time.Time
+		target *int64
 	}{
 		{name: "start_time", value: pb.GetStartTime(), target: &job.StartTime},
 		{name: "end_time", value: pb.GetEndTime(), target: &job.EndTime},
@@ -172,9 +171,11 @@ func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
 	for _, field := range timeFields {
 		parsed, err := factorwire.ParseTime(field.value)
 		if err != nil {
-			return RecalcJob{}, fmt.Errorf("%s: %w", field.name, err)
+			return store.RecalcJob{}, fmt.Errorf("%s: %w", field.name, err)
 		}
-		*field.target = parsed
+		if !parsed.IsZero() {
+			*field.target = parsed.Unix()
+		}
 	}
 	job.CreatedAt, job.UpdatedAt = factorwire.FromMillis(pb.GetCreatedAt()), factorwire.FromMillis(pb.GetUpdatedAt())
 	return job, nil

@@ -27,7 +27,7 @@ func TestFactorSchemaContainsExpectedTables(t *testing.T) {
 		"idx_t_factor_task_members_factor",
 		"trg_t_factor_task_members_mtime",
 		"FOREIGN KEY (c_task_id) REFERENCES t_factor_tasks (c_task_id),",
-		"UNIQUE (c_request_id)",
+		"CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled'))",
 		"trg_t_factor_tasks_mtime",
 		"trg_t_factor_defs_mtime",
 		"trg_t_factor_recalc_jobs_mtime",

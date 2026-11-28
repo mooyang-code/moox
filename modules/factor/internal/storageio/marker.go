@@ -16,14 +16,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// PeriodCauseID 返回实时周期完成标记的确定性幂等键（由结果数据集与真实周期唯一确定）：
+// 每个因子任务独占一个结果数据集，重算、崩溃重试与空洞回填读冻结全集都现算同一个键。
+func PeriodCauseID(datasetID string, periodTime int64) string {
+	return fmt.Sprintf("factor:%s:%d", strings.TrimSpace(datasetID), periodTime)
+}
+
 func (c *Client) ReportComputed(ctx context.Context, marker PeriodMarker) error {
 	if err := c.primaryReady("report factor period computed"); err != nil {
 		return err
 	}
 	if strings.TrimSpace(marker.SpaceID) == "" || strings.TrimSpace(marker.ResultDatasetID) == "" ||
 		strings.TrimSpace(marker.SourceDatasetID) == "" || strings.TrimSpace(marker.Frequency) == "" ||
-		strings.TrimSpace(marker.TriggerEventID) == "" || marker.PeriodTime <= 0 {
-		return errors.New("space, result/source dataset, frequency, positive period_time and trigger_event_id are required")
+		marker.PeriodTime <= 0 {
+		return errors.New("space, result/source dataset, frequency and positive period_time are required")
 	}
 	protoMarker, err := markerToProto(marker)
 	if err != nil {
@@ -53,8 +59,8 @@ func (c *Client) ReportComputed(ctx context.Context, marker PeriodMarker) error 
 	return nil
 }
 
-func (c *Client) ComputedExists(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (bool, error) {
-	rsp, err := c.getComputed(ctx, spaceID, datasetID, triggerEventID, periodTime)
+func (c *Client) ComputedExists(ctx context.Context, spaceID, datasetID string, periodTime int64) (bool, error) {
+	rsp, err := c.getComputed(ctx, spaceID, datasetID, periodTime)
 	if err != nil {
 		return false, err
 	}
@@ -68,8 +74,8 @@ type Universe struct {
 
 // ComputedUniverse 返回周期 marker 里冻结的全集（universe_subject_ids）；marker 不存在时 found 为 false。
 // 截面因子的恢复用它：按目标周期冻结的全集重算，不用当前标的池，也不把单个标的当作完整截面。
-func (c *Client) ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (Universe, bool, error) {
-	rsp, err := c.getComputed(ctx, spaceID, datasetID, triggerEventID, periodTime)
+func (c *Client) ComputedUniverse(ctx context.Context, spaceID, datasetID string, periodTime int64) (Universe, bool, error) {
+	rsp, err := c.getComputed(ctx, spaceID, datasetID, periodTime)
 	if err != nil || rsp == nil || !rsp.GetFound() {
 		return Universe{}, false, err
 	}
@@ -78,15 +84,15 @@ func (c *Client) ComputedUniverse(ctx context.Context, spaceID, datasetID, trigg
 }
 
 // getComputed 读取周期 marker；NOT_FOUND 返回 (nil, nil)。
-func (c *Client) getComputed(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (*storagepb.GetDatasetPeriodCompletedRsp, error) {
+func (c *Client) getComputed(ctx context.Context, spaceID, datasetID string, periodTime int64) (*storagepb.GetDatasetPeriodCompletedRsp, error) {
 	if err := c.primaryReady("get factor period computed"); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" || strings.TrimSpace(triggerEventID) == "" || periodTime <= 0 {
-		return nil, errors.New("space_id, dataset_id, trigger_event_id and positive period_time are required")
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" || periodTime <= 0 {
+		return nil, errors.New("space_id, dataset_id and positive period_time are required")
 	}
 	rsp, err := c.primary.GetDatasetPeriodCompleted(ctx, &storagepb.GetDatasetPeriodCompletedReq{
-		SpaceId: spaceID, DatasetId: datasetID, CauseEventId: triggerEventID, PeriodTime: periodTime,
+		SpaceId: spaceID, DatasetId: datasetID, CauseEventId: PeriodCauseID(datasetID, periodTime), PeriodTime: periodTime,
 	})
 	if err != nil {
 		return nil, rpcError("get factor period computed", err)
@@ -143,7 +149,7 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 	out := &storagepb.DatasetPeriodCompletedMarker{
 		DatasetId: marker.ResultDatasetID, Frequency: marker.Frequency, PeriodTime: marker.PeriodTime, Status: marker.Status,
 		UniverseSubjectIds: universe, FailedSubjects: failed,
-		CauseEventId: marker.TriggerEventID, CompletedAt: marker.ComputedAt.UTC().UnixMilli(),
+		CauseEventId: PeriodCauseID(marker.ResultDatasetID, marker.PeriodTime), CompletedAt: marker.ComputedAt.UTC().UnixMilli(),
 		DetailType: PeriodDetailType, Detail: raw,
 	}
 	if size := proto.Size(out); size > MaxMarkerBytes {

@@ -537,13 +537,6 @@ components:
             read_only: true
           - name: ActivateUdf
             space_policy: global
-          # 模块生命周期：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module factor-mgr）。
-          - name: GetLifecycle
-            space_policy: global
-            read_only: true
-          - name: ControlLifecycle
-            space_policy: global
-            operators: [moox-cli]
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000

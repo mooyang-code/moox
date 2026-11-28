@@ -244,7 +244,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks),
 		recalcexec.WithWatermark(committedThrough{r.continuity}.CommittedThrough),
-		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
+		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)), recalcexec.WithHistory(r.data))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
@@ -486,7 +486,7 @@ func (r *Runtime) reconcileConsumer() {
 		consumer, err := eventconsumer.NewConsumer(context.Background(), eventconsumer.ConsumerConfig{
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
-			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
+			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity,
 			OnBackfilled: r.onBackfilled,
 			// 模块在运行、任务还没就绪（窗口载入中、检查未通过）时到达的周期只记追赶目标（算过的任务）；暂停期间不记。
 			NoteWhenClosed: func(string) bool { return r.moduleRunning() },

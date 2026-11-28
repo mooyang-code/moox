@@ -175,14 +175,14 @@ func TestTransientErrorsWrapErrInfra(t *testing.T) {
 func TestReportComputedBuildsDeterministicEventID(t *testing.T) {
 	marker := PeriodMarker{
 		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m",
-		PeriodTime: 1791115200, Status: "complete", TriggerEventID: "collector-event",
+		PeriodTime: 1791115200, Status: "complete",
 		ComputedAt: time.Date(2026, 10, 4, 12, 0, 1, 0, time.UTC),
 	}
 	primary := &primaryFake{}
 	store := NewClient(primary, nil)
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
-	require.Equal(t, "storage-marker-"+shortHash("producer-period", "crypto", "factor_result", "collector-event", "1791115200"), primary.reportIDs[0])
+	require.Equal(t, "storage-marker-"+shortHash("producer-period", "crypto", "factor_result", PeriodCauseID("factor_result", 1791115200), "1791115200"), primary.reportIDs[0])
 	require.Equal(t, primary.reportIDs[0], primary.reportIDs[1])
 }
 
@@ -190,7 +190,7 @@ func TestReportComputedBuildsDeterministicEventID(t *testing.T) {
 func TestReportComputedInvalidRequestIsNotRetried(t *testing.T) {
 	marker := PeriodMarker{
 		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m",
-		PeriodTime: 1791115200, Status: "complete", TriggerEventID: "collector-event",
+		PeriodTime: 1791115200, Status: "complete",
 	}
 	primary := &primaryFake{reportRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "完成标记无法通过事件校验"}}
 	err := NewClient(primary, nil).ReportComputed(context.Background(), marker)
@@ -209,10 +209,11 @@ func TestComputedExistsNotFoundIsFalse(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			primary := &primaryFake{computedRsp: rsp}
-			found, err := NewClient(primary, nil).ComputedExists(context.Background(), "crypto", "factor_result", "collector-event", 123)
+			found, err := NewClient(primary, nil).ComputedExists(context.Background(), "crypto", "factor_result", 123)
 			require.NoError(t, err)
 			require.False(t, found)
 			require.Equal(t, "factor_result", primary.computedReq.GetDatasetId())
+			require.Equal(t, PeriodCauseID("factor_result", 123), primary.computedReq.GetCauseEventId())
 			require.Equal(t, int64(123), primary.computedReq.GetPeriodTime())
 		})
 	}

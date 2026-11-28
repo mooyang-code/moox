@@ -111,7 +111,7 @@ export function recalcQueryTasks(sets: FactorTaskInfo[]) {
 /** 读到的补算作业分成进行中的与近 24 小时失败的（按更新时间，读不出时间的不算）。 */
 export function splitRecalcJobs(jobs: RecalcJob[], now = Date.now()) {
   return {
-    running: jobs.filter(job => job.status === "accepted" || job.status === "running"),
+    running: jobs.filter(job => job.status === "queued" || job.status === "running"),
     recentFailed: jobs.filter(job => {
       if (job.status !== "failed") return false;
       const updated = toInstantMs(job.updated_at) ?? toInstantMs(job.created_at);

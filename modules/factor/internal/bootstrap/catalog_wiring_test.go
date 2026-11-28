@@ -92,9 +92,7 @@ func TestBootstrapCatalogServiceValidatesParamSubjects(t *testing.T) {
 		TaskID: "ftask_wire", SpaceID: "crypto", Name: "测试任务", SourceDatasetID: "dataset_prices", Freq: "1m",
 	})
 	require.NoError(t, err)
-	member, err := svc.AddTaskMember(ctx, task.TaskID, "ma", domain.MemberKindVar, nil)
-	require.NoError(t, err)
-	_, err = svc.SetTaskMemberStatus(ctx, task.TaskID, member.MemberKey, domain.MemberStatusEnabled)
+	member, err := svc.AddTaskMember(ctx, task.TaskID, "ma", domain.MemberKindVar, nil, domain.MemberStatusEnabled)
 	require.NoError(t, err)
 	_, err = svc.BindTask(ctx, task.TaskID, "inst-1")
 	require.NoError(t, err)

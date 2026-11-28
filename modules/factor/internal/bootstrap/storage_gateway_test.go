@@ -172,7 +172,7 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	rsp, err := storage.GetDataset(t.Context(), "crypto", "bars")
 	require.NoError(t, err)
 	require.Equal(t, "bars", rsp.DatasetID)
-	err = storage.ReportComputed(t.Context(), storageio.PeriodMarker{SpaceID: "crypto", ResultDatasetID: "factor-result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 60, TriggerEventID: "fixture-period"})
+	err = storage.ReportComputed(t.Context(), storageio.PeriodMarker{SpaceID: "crypto", ResultDatasetID: "factor-result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 60})
 	require.ErrorContains(t, err, "writes must not retry")
 	err = storage.UpsertColumns(t.Context(), "crypto", "bars", []storageio.ColumnInfo{{ColumnName: "close", DisplayName: "收盘价", ValueType: storageio.ColumnTypeDouble}})
 	require.ErrorContains(t, err, "column upsert must not retry")

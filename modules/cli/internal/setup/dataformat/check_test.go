@@ -220,7 +220,7 @@ func TestAcceptanceEventPayloadAndLifecycleVersionSensitivity(t *testing.T) {
 	require.Equal(t, "eventbus", topoReport.Incompatible[0].Component)
 	require.Equal(t, []string{pkgdataformat.PartEventBusTopology}, topoReport.Incompatible[0].ChangedParts)
 
-	// 3b：升级 LifecycleStateVersion，所有用到 lifecycle 的 7 个组件全部被列出，其余 5 个组件不受影响。
+	// 3b：升级 LifecycleStateVersion，所有用到 lifecycle 的 5 个组件全部被列出，其余 7 个组件不受影响。
 	lifeInputs, err := DefaultInputs()
 	require.NoError(t, err)
 	lifeInputs.LifecycleStateVersion++
@@ -239,7 +239,6 @@ func TestAcceptanceEventPayloadAndLifecycleVersionSensitivity(t *testing.T) {
 	require.Equal(t, []string{
 		"collector",
 		"factor-engine",
-		"factor-mgr",
 		"monitor",
 		"strategy",
 		"trade",
