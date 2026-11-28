@@ -10,6 +10,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/glebarez/go-sqlite"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 var t0 = time.Date(2026, 10, 17, 0, 34, 43, 0, time.UTC)
@@ -50,7 +54,13 @@ func mustTask(t *testing.T, s *Store, space, dataset string, immediate bool) (Ta
 }
 
 func TestOpenCreatesIncrementalVacuumDatabase(t *testing.T) {
-	s := openTest(t)
+	dir := filepath.Join(t.TempDir(), "data")
+	path := filepath.Join(dir, "archive.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
 	var mode int
 	if err := s.db.QueryRow("PRAGMA auto_vacuum").Scan(&mode); err != nil || mode != 2 {
 		t.Fatalf("auto_vacuum = %d err=%v, want 2 (INCREMENTAL)", mode, err)
@@ -60,6 +70,27 @@ func TestOpenCreatesIncrementalVacuumDatabase(t *testing.T) {
 	}
 	if err := s.Ping(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	rec, err := dataformat.ReadFile(filepath.Join(dir, dataformat.FileName))
+	if err != nil {
+		t.Fatalf("应写入 archive-mgr 数据格式文件：%v", err)
+	}
+	if rec.Component != "archive-mgr" || rec.Parts[dataformat.PartSQLiteSchema] == "" || rec.Parts[dataformat.PartLifecycle] == "" {
+		t.Fatalf("格式记录异常：%+v", rec)
+	}
+
+	// 旧表结构应在 Open 时被拒绝。
+	badPath := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", badPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE t_archive_tasks (c_id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	if _, err := Open(badPath); !errors.Is(err, sqlitedb.ErrIncompatibleSchema) {
+		t.Fatalf("旧表结构应被拒绝：%v", err)
 	}
 }
 

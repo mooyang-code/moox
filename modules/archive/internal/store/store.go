@@ -8,13 +8,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	_ "github.com/glebarez/go-sqlite"
 	archiveschema "github.com/mooyang-code/moox/modules/archive/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 var (
@@ -61,52 +60,20 @@ type Store struct {
 	db *sql.DB
 }
 
-// Open 打开（必要时创建）SQLite 库。新库以 auto_vacuum = INCREMENTAL 创建。
+// Open 打开（必要时创建）SQLite 库。新库以 auto_vacuum = INCREMENTAL 创建，校验 schema 通过后写入数据格式文件。
 func Open(path string) (*Store, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, errors.New("archive database path is required")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create archive database directory: %w", err)
-	}
-	db, err := sql.Open("sqlite", buildDSN(path))
+	db, err := sqlitedb.OpenSQL(sqlitedb.Options{
+		Path:       path,
+		AutoVacuum: "INCREMENTAL",
+	})
 	if err != nil {
-		return nil, fmt.Errorf("open archive database: %w", err)
+		return nil, fmt.Errorf("打开归档管理数据库失败：%w", err)
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	s := &Store{db: db}
-	if err := db.Ping(); err != nil {
-		_ = s.Close()
-		return nil, fmt.Errorf("open archive database: %w", err)
+	if err := sqlitedb.EnsureSchemaSQL(context.Background(), db, path, "archive-mgr", archiveschema.AllSQL(), dataformat.LifecycleParts()); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
-	// auto_vacuum 只对尚未建表的新库生效，必须在建表之前设置。
-	if _, err := db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
-		_ = s.Close()
-		return nil, fmt.Errorf("set auto_vacuum: %w", err)
-	}
-	if _, err := db.Exec(archiveschema.AllSQL()); err != nil {
-		_ = s.Close()
-		return nil, fmt.Errorf("initialize archive schema: %w", err)
-	}
-	return s, nil
-}
-
-func buildDSN(path string) string {
-	// auto_vacuum 只对尚未建表的新库生效，必须排在 journal_mode(WAL) 之前。
-	pragmas := []string{
-		"_pragma=auto_vacuum(2)",
-		"_pragma=foreign_keys(ON)",
-		"_pragma=journal_mode(WAL)",
-		"_pragma=synchronous(NORMAL)",
-		"_pragma=busy_timeout(5000)",
-		"_pragma=temp_store(MEMORY)",
-	}
-	sep := "?"
-	if strings.Contains(path, "?") {
-		sep = "&"
-	}
-	return path + sep + strings.Join(pragmas, "&")
+	return &Store{db: db}, nil
 }
 
 // Ping 检查数据库可用。

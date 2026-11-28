@@ -6,17 +6,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
 	sqlitedriver "github.com/glebarez/go-sqlite"
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 )
 
@@ -100,7 +97,8 @@ func IsPermanentWriteError(err error) bool {
 
 // Store 持有单写连接的 SQLite 数据库。
 type Store struct {
-	db *gorm.DB
+	db   *gorm.DB
+	path string
 	// onCancel 在待投递结果被取消、事务提交之后调用，用于按原因计数。
 	onCancel func(reason string, count int64)
 	// onSentAfterCancel 在已取消的结果确认已经发出、改记 sent 之后调用：取消计数只增不减，这类结果另行计数。
@@ -133,40 +131,31 @@ func (s *Store) cancelled(reason string, count int64) {
 // New 用已打开的连接构造 Store（测试使用）。
 func New(db *gorm.DB) *Store { return &Store{db: db} }
 
+// DBForTest 返回底层连接（仅测试使用，例如切换 PRAGMA query_only 模拟只读故障）。
+func (s *Store) DBForTest() *gorm.DB { return s.db }
+
 // Open 打开策略数据库并配置单写连接池；已存在的表必须与当前 schema 一致。
 func Open(path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("策略数据库路径不能为空")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("创建策略数据库目录失败：%w", err)
-	}
-	db, err := gorm.Open(sqlite.Open(path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)"), &gorm.Config{})
+	db, err := sqlitedb.OpenGORM(sqlitedb.Options{Path: path})
 	if err != nil {
 		return nil, fmt.Errorf("打开策略数据库失败：%w", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("获取策略数据库连接失败：%w", err)
-	}
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
-	store := New(db)
-	if err := store.validateExistingSchema(); err != nil {
-		_ = sqlDB.Close()
+	if err := sqlitedb.ValidateGORM(db, "strategy", schema.AllSQL(), true); err != nil {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
 		return nil, err
 	}
-	return store, nil
+	return &Store{db: db, path: path}, nil
 }
 
-// 连接检查与 schema 比对用的 SQL：整条写成常量，不在调用处拼接。建表 SQL 来自 schema 包，不在这里。
+// 连接检查用的 SQL：整条写成常量，不在调用处拼接。建表 SQL 来自 schema 包，不在这里。
 const (
 	// sqlPing 检查连接可用。
 	sqlPing = "SELECT 1"
-	// sqlSelectSchemaObjects 读出策略表及其显式索引的定义。
-	sqlSelectSchemaObjects = `
-		SELECT type, name, tbl_name, sql FROM sqlite_master
-		WHERE type IN ('table', 'index') AND sql IS NOT NULL AND (tbl_name = 't_strategies' OR tbl_name LIKE 't_strategy_%')`
 )
 
 // Ping 检查数据库是否可用。
@@ -177,19 +166,22 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.db.WithContext(ctx).Exec(sqlPing).Error
 }
 
-// ApplySchema 执行建表 SQL 并校验结果。
-func (s *Store) ApplySchema(sql string) error {
+// ApplySchema 执行建表 SQL、校验结果与当前 schema 一致，并在校验通过后写入数据格式文件。
+func (s *Store) ApplySchema(sqlText string) error {
 	if s == nil || s.db == nil {
 		return errors.New("策略数据库未打开")
 	}
-	if strings.TrimSpace(sql) == "" {
+	if strings.TrimSpace(sqlText) == "" {
 		return errors.New("策略 schema 为空")
 	}
 	// 多条建表语句放在一个事务里：首次启动中途崩溃不会留下残缺的 schema（残缺的库下次启动会被拒绝）。
-	if err := s.db.Transaction(func(tx *gorm.DB) error { return tx.Exec(sql).Error }); err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error { return tx.Exec(sqlText).Error }); err != nil {
 		return err
 	}
-	return s.validateCurrentSchema()
+	if err := sqlitedb.ValidateGORM(s.db, "strategy", schema.AllSQL(), false); err != nil {
+		return err
+	}
+	return sqlitedb.RecordFormat(s.path, "strategy", schema.AllSQL(), dataformat.LifecycleParts())
 }
 
 // Close 释放数据库连接。
@@ -207,144 +199,6 @@ func (s *Store) Close() error {
 // Transaction 在一个事务内执行 fn（供需要跨表原子性的调用方使用）。
 func (s *Store) transaction(ctx context.Context, fn func(tx *gorm.DB) error) error {
 	return s.db.WithContext(ctx).Transaction(fn)
-}
-
-// schemaObject 是 sqlite_master 里的一个表或索引；SQL 已规范化。
-type schemaObject struct {
-	Type  string `gorm:"column:type"`
-	Name  string `gorm:"column:name"`
-	Table string `gorm:"column:tbl_name"`
-	SQL   string `gorm:"column:sql"`
-}
-
-var expectedSchema struct {
-	once    sync.Once
-	objects map[string]schemaObject
-	err     error
-}
-
-// expectedSchemaObjects 把当前 schema 载入一个内存库，读出它在 sqlite_master 里的表与索引，作为比对基准。
-func expectedSchemaObjects() (map[string]schemaObject, error) {
-	expectedSchema.once.Do(func() {
-		db, err := gorm.Open(sqlite.Open("file:strategy-schema?mode=memory"), &gorm.Config{})
-		if err != nil {
-			expectedSchema.err = err
-			return
-		}
-		sqlDB, err := db.DB()
-		if err != nil {
-			expectedSchema.err = err
-			return
-		}
-		// 私有内存库只在建立它的连接上可见：固定单连接，建表与读取用的是同一个库。
-		sqlDB.SetMaxOpenConns(1)
-		defer func() { _ = sqlDB.Close() }()
-		if err := db.Exec(schema.AllSQL()).Error; err != nil {
-			expectedSchema.err = fmt.Errorf("载入策略 schema 失败：%w", err)
-			return
-		}
-		expectedSchema.objects, expectedSchema.err = readSchemaObjects(db)
-	})
-	return expectedSchema.objects, expectedSchema.err
-}
-
-// readSchemaObjects 读出策略表及其显式索引（自动索引没有 SQL，随表定义一起比较）。
-func readSchemaObjects(db *gorm.DB) (map[string]schemaObject, error) {
-	var objects []schemaObject
-	if err := db.Raw(sqlSelectSchemaObjects).Scan(&objects).Error; err != nil {
-		return nil, fmt.Errorf("读取策略数据库表失败：%w", err)
-	}
-	byKey := make(map[string]schemaObject, len(objects))
-	for _, object := range objects {
-		object.SQL = normalizeSchemaSQL(object.SQL)
-		byKey[object.Type+"\x00"+object.Name] = object
-	}
-	return byKey, nil
-}
-
-// normalizeSchemaSQL 规范化建表语句以便比较：去掉 -- 注释，引号外的空白全部去掉、字母统一小写，
-// 只按 AGENTS.md 调整排版（换行、缩进、括号与逗号两侧的空格、关键字大小写、注释）不影响结果。
-func normalizeSchemaSQL(text string) string {
-	var out strings.Builder
-	quote := byte(0)
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if quote != 0 {
-			out.WriteByte(c)
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		switch {
-		case c == '\'' || c == '"':
-			quote = c
-			out.WriteByte(c)
-		case c == '-' && i+1 < len(text) && text[i+1] == '-':
-			for i < len(text) && text[i] != '\n' {
-				i++
-			}
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
-		case c >= 'A' && c <= 'Z':
-			out.WriteByte(c + ('a' - 'A'))
-		default:
-			out.WriteByte(c)
-		}
-	}
-	return out.String()
-}
-
-// validateSchema 校验策略表与当前 schema 一致：表的集合相同，每个表与索引的定义（列、约束、索引列与条件）逐字等价。
-// 没有任何策略表的新库在 allowEmpty 时直接通过（随后由 ApplySchema 建表）；allowEmpty 时已有库缺少的表与索引也放行（由 ApplySchema 补建），
-// 但已存在的对象必须与当前定义一致。额外的触发器与索引不影响判断。
-func (s *Store) validateSchema(allowEmpty bool) error {
-	expected, err := expectedSchemaObjects()
-	if err != nil {
-		return err
-	}
-	actual, err := readSchemaObjects(s.db)
-	if err != nil {
-		return err
-	}
-	tables := 0
-	for _, object := range actual {
-		if object.Type != "table" {
-			continue
-		}
-		tables++
-		if _, ok := expected["table\x00"+object.Name]; !ok {
-			return obsoleteSchemaError(object.Name)
-		}
-	}
-	if tables == 0 && allowEmpty {
-		return nil
-	}
-	keys := make([]string, 0, len(expected))
-	for key := range expected {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		want := expected[key]
-		got, ok := actual[key]
-		if !ok && allowEmpty {
-			// 打开已有数据库时，当前 schema 新增的表与索引还没建：由随后的 ApplySchema 补建（IF NOT EXISTS），
-			// 补建之后 validateCurrentSchema 再要求全部齐备。
-			continue
-		}
-		if !ok || got.SQL != want.SQL {
-			return obsoleteSchemaError(want.Table)
-		}
-	}
-	return nil
-}
-
-func (s *Store) validateExistingSchema() error { return s.validateSchema(true) }
-
-func (s *Store) validateCurrentSchema() error { return s.validateSchema(false) }
-
-func obsoleteSchemaError(table string) error {
-	return fmt.Errorf("Strategy 数据库表 %s 使用旧 schema；请先停止消费者并备份数据库，再人工选择归档旧库或重建当前 schema", table)
 }
 
 func nullableString(value sql.NullString) *string {

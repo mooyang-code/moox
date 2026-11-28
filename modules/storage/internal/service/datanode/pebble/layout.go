@@ -6,17 +6,43 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/mooyang-code/moox/packages/dataformat"
 )
 
 const (
 	layoutMarkerName       = "storage_layout_version"
 	layoutMarkerTempPrefix = "." + layoutMarkerName + ".tmp-"
-	// 版本 5：在版本 4（字段、属性、按时间与按标的排序的两种历史行索引）之上，周期账本改为每期一条记录（__period/），
-	// 完成标记按“数据集/频率/周期/来源/触发事件”存放（__marker/）。
-	// 其他版本的数据都要显式重置后再用，不做原地升级。
-	layoutVersion = "5\n"
 )
+
+// 版本号与 packages/dataformat.StoragePebbleLayoutVersion 保持单一来源：
+// 版本 5 在版本 4（字段、属性、按时间与按标的排序的两种历史行索引）之上，周期账本改为每期一条记录（__period/），
+// 完成标记按“数据集/频率/周期/来源/触发事件”存放（__marker/）。其他版本的数据都要显式重置后再用，不做原地升级。
+var layoutVersion = strconv.Itoa(dataformat.StoragePebbleLayoutVersion) + "\n"
+
+// IsCompatibleOrEmpty 报告 Pebble 目录尚不存在/为空，或已存在且布局版本与当前版本一致。
+func IsCompatibleOrEmpty(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if len(entries) == 0 {
+		return true, nil
+	}
+	data, err := os.ReadFile(filepath.Join(path, layoutMarkerName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return string(data) == layoutVersion, nil
+}
 
 func ensureLayout(path string) error {
 	if err := os.MkdirAll(path, 0o755); err != nil {

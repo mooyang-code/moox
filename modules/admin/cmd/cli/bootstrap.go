@@ -22,6 +22,7 @@ import (
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 )
 
@@ -128,7 +129,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		return err
 	}
 	defer closeAdminCLIDB(db)
-	if err := db.Transaction(func(tx *gorm.DB) error { return tx.Exec(adminschema.AdminSQL()).Error }); err != nil {
+	if err := sqlitedb.EnsureSchemaGORM(db, opts.dbPath, "admin", adminschema.AdminSQL(), nil); err != nil {
 		return fmt.Errorf("apply Admin schema: %w", err)
 	}
 	var caInfo hostbundle.CAInfo

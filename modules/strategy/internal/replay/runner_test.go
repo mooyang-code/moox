@@ -691,14 +691,14 @@ func TestReplayRunsWithUnknownCoverageAtExecution(t *testing.T) {
 func TestReplayFinishRetriesTransientWriteErrors(t *testing.T) {
 	repo := openStore(t)
 	job := startReplay(t, repo, "p1", replayDSL, 4)
-	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+	if err := repo.DBForTest().Exec(`PRAGMA query_only = ON;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	restored := make(chan struct{})
 	go func() {
 		defer close(restored)
 		time.Sleep(60 * time.Millisecond)
-		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+		if err := repo.DBForTest().Exec(`PRAGMA query_only = OFF;`).Error; err != nil {
 			t.Error(err)
 		}
 	}()
@@ -748,14 +748,14 @@ func TestReplayAgeProbeSharesRevisionWithMainRead(t *testing.T) {
 func TestReplayFinishKeepsRetryingUntilDatabaseRecovers(t *testing.T) {
 	repo := openStore(t)
 	job := startReplay(t, repo, "p1", replayDSL, 4)
-	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+	if err := repo.DBForTest().Exec(`PRAGMA query_only = ON;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	restored := make(chan struct{})
 	go func() {
 		defer close(restored)
 		time.Sleep(600 * time.Millisecond)
-		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+		if err := repo.DBForTest().Exec(`PRAGMA query_only = OFF;`).Error; err != nil {
 			t.Error(err)
 		}
 	}()
@@ -772,10 +772,10 @@ func TestReplayFinishKeepsRetryingUntilDatabaseRecovers(t *testing.T) {
 func TestReplayFinishStopsRetryingWhenContextEnds(t *testing.T) {
 	repo := openStore(t)
 	job := startReplay(t, repo, "p1", replayDSL, 4)
-	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+	if err := repo.DBForTest().Exec(`PRAGMA query_only = ON;`).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = repo.ApplySchema(`PRAGMA query_only = OFF;`) })
+	t.Cleanup(func() { _ = repo.DBForTest().Exec(`PRAGMA query_only = OFF;`).Error })
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	runner := &Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, FinishRetryDelay: 5 * time.Millisecond}
@@ -897,14 +897,14 @@ func TestReplayCancelledMetricsRetryUntilDatabaseRecovers(t *testing.T) {
 	if err := repo.CancelReplay(context.Background(), "p1", origin); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+	if err := repo.DBForTest().Exec(`PRAGMA query_only = ON;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	restored := make(chan struct{})
 	go func() {
 		defer close(restored)
 		time.Sleep(300 * time.Millisecond)
-		if err := repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+		if err := repo.DBForTest().Exec(`PRAGMA query_only = OFF;`).Error; err != nil {
 			t.Error(err)
 		}
 	}()

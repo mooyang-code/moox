@@ -9,6 +9,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/trade/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -253,6 +254,11 @@ func TestOpenAcceptsCurrentSchemaOnReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "current.db")
 	first, err := Open(path)
 	require.NoError(t, err)
+	rec, err := dataformat.ReadFile(filepath.Join(filepath.Dir(path), dataformat.FileName))
+	require.NoError(t, err)
+	require.Equal(t, "trade", rec.Component)
+	require.NotEmpty(t, rec.Parts[dataformat.PartSQLiteSchema])
+	require.NotEmpty(t, rec.Parts[dataformat.PartLifecycle])
 	require.NoError(t, first.Close())
 
 	second, err := Open(path)

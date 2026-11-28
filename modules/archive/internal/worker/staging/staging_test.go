@@ -4,7 +4,9 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +14,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	archiveschema "github.com/mooyang-code/moox/modules/archive/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 var (
@@ -440,6 +446,34 @@ func TestOpenValidatesLimitsAndReopensExistingState(t *testing.T) {
 	parts, _ := again.Partitions(context.Background(), "crypto", "ds_1m")
 	if len(parts) != 1 {
 		t.Fatalf("重新打开后分区状态应保留: %v", parts)
+	}
+	rec, err := dataformat.ReadFile(filepath.Join(dir, dataformat.FileName))
+	if err != nil {
+		t.Fatalf("暂存库打开后应写入数据格式文件：%v", err)
+	}
+	wantHash, err := sqlitedb.SchemaHash(archiveschema.StagingSQL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Component != "archive-worker" || rec.Parts[dataformat.PartStagingSchema] != wantHash {
+		t.Fatalf("archive-worker 数据格式记录异常：%+v", rec)
+	}
+
+	// 固定表结构不符时应拒绝打开。
+	badPath := filepath.Join(t.TempDir(), ".state", "bad.db")
+	if err := os.MkdirAll(filepath.Dir(badPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", badPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE task_state (space_id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	if _, err := Open(badPath, Options{}); !errors.Is(err, sqlitedb.ErrIncompatibleSchema) {
+		t.Fatalf("固定状态表不符应被拒绝：%v", err)
 	}
 }
 

@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +29,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/dataformat"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -210,6 +213,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if r.life, err = r.newLifecycle(); err != nil {
 		return nil, fmt.Errorf("open factor lifecycle: %w", err)
 	}
+	if err := recordFactorEngineFormat(cfg.SeriesStore.Dir); err != nil {
+		return nil, fmt.Errorf("写入因子引擎数据格式文件失败：%w", err)
+	}
 
 	r.syncer = &catalogSyncer{
 		client: r.manager, cache: r.catalog, interval: cfg.CatalogSync.Interval, offset: cfg.CatalogSync.Offset,
@@ -296,6 +302,20 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 // active reports whether this engine may compute: it has a catalog and no
 // other engine holds the lease.
 func (r *Runtime) active() bool { return r.catalog.Loaded() && !r.lease.Conflict() }
+
+func recordFactorEngineFormat(seriesStoreDir string) error {
+	if strings.TrimSpace(seriesStoreDir) == "" {
+		return nil
+	}
+	rec, err := dataformat.Build("factor-engine", map[string]string{
+		dataformat.PartFactorEngineState: strconv.Itoa(dataformat.FactorEngineStateVersion),
+		dataformat.PartLifecycle:         strconv.Itoa(dataformat.LifecycleStateVersion),
+	})
+	if err != nil {
+		return err
+	}
+	return dataformat.WriteDir(filepath.Dir(seriesStoreDir), rec)
+}
 
 // onCatalogApplied 在每次目录同步成功（含 NotModified）后执行：先清理已删除任务的本地状态，再回收不再引用的自定义算子模块。
 func (r *Runtime) onCatalogApplied() {

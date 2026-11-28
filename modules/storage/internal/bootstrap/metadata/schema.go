@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 )
 
@@ -32,5 +33,19 @@ func InitSchema(ctx context.Context, opts SchemaOptions) error {
 		return err
 	}
 	defer store.Close()
-	return store.InitSchema(ctx)
+	if err := store.InitSchema(ctx); err != nil {
+		return err
+	}
+	// Pebble 尚无数据或布局版本已匹配时一并写出 storage-primary 的格式文件；
+	// 若已有旧版 Pebble 数据则不覆盖格式文件，交由主服务启动时拒绝。
+	pebbleBase := opts.Storage.Devices.PebblePath
+	if pebbleBase == "" {
+		pebbleBase = filepath.Join(root, "pebble")
+	}
+	if ok, err := pebble.IsCompatibleOrEmpty(filepath.Join(pebbleBase, "storage-primary")); err == nil && ok {
+		if err := metasqlite.RecordPrimaryFormat(root); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -8,14 +8,13 @@ import (
 	"fmt"
 	stdlog "log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"gorm.io/driver/sqlite"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
-	_ "modernc.org/sqlite"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -143,12 +142,19 @@ func Open(opts *Options) (*Store, error) {
 	if opts != nil && opts.Path != "" {
 		dbPath = opts.Path
 	}
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create database directory: %w", err)
-	}
 	// 查不到记录是调用方用 ErrRecordNotFound 判断的正常结果，不能每次都当成错误打日志。
 	quiet := gormlogger.New(stdlog.New(os.Stderr, "\r\n", stdlog.LstdFlags), gormlogger.Config{SlowThreshold: 200 * time.Millisecond, LogLevel: gormlogger.Warn, IgnoreRecordNotFoundError: true})
-	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: buildSQLiteDSN(dbPath)}, &gorm.Config{Logger: quiet})
+	dbOpts := sqlitedb.Options{
+		Path:         dbPath,
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+		Logger:       quiet,
+	}
+	if opts != nil {
+		dbOpts.ConnMaxLifetime = opts.ConnMaxLifetime
+		dbOpts.ConnMaxIdleTime = opts.ConnMaxIdleTime
+	}
+	db, err := sqlitedb.OpenGORM(dbOpts)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -164,7 +170,6 @@ func Open(opts *Options) (*Store, error) {
 	s.delist = NewDelistNoticeRepository(db)
 	s.accounts = NewCloudAccountRepository(db)
 	s.packages = NewFunctionPackageRepository(db)
-	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
 }
@@ -257,7 +262,7 @@ func (s *Store) Backfill() *BackfillRepository {
 	return s.backfill
 }
 
-// ApplySchema applies schema SQL during service startup.
+// ApplySchema 应用并严格校验 Collector schema，通过后把格式记录写入数据目录。
 func (s *Store) ApplySchema(sql string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("collector database is not open")
@@ -265,12 +270,7 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("collector schema sql is empty")
 	}
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		return tx.Exec(sql).Error
-	}); err != nil {
-		return err
-	}
-	return nil
+	return sqlitedb.EnsureSchemaGORM(s.db, s.path, "collector", sql, dataformat.LifecycleParts())
 }
 
 // Ping verifies that the database is available.
@@ -291,49 +291,4 @@ func (s *Store) Close() error {
 		return err
 	}
 	return sqlDB.Close()
-}
-
-func buildSQLiteDSN(dbPath string) string {
-	pragmas := []string{
-		"_pragma=journal_mode(WAL)",
-		// Collector persists assignment and readiness state that drives the
-		// market timers.  Synchronous=OFF can leave b-tree pages torn after a
-		// process or host crash, which surfaces later as "database disk image is
-		// malformed" and stops completion events from advancing readiness.
-		// NORMAL keeps WAL throughput while preserving the WAL durability
-		// guarantee needed by this control-plane database.
-		"_pragma=synchronous(NORMAL)",
-		"_pragma=foreign_keys(ON)",
-		"_pragma=busy_timeout(5000)",
-		"_pragma=temp_store(MEMORY)",
-		"_pragma=cache_size(-64000)",
-		"_pragma=wal_autocheckpoint(1000)",
-	}
-	sep := "?"
-	if strings.Contains(dbPath, "?") {
-		sep = "&"
-	}
-	return dbPath + sep + strings.Join(pragmas, "&")
-}
-
-func applySQLitePoolConfig(db *gorm.DB, cfg *Options) {
-	sqlDB, err := db.DB()
-	if err != nil {
-		return
-	}
-	// Collector has one local SQLite database. Keeping one connection avoids
-	// scheduler writes contending with completion-consumer writes; WAL helps
-	// readers but still permits only one writer.
-	maxOpen := 1
-	maxIdle := 1
-	if cfg != nil {
-		if cfg.ConnMaxLifetime > 0 {
-			sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-		}
-		if cfg.ConnMaxIdleTime > 0 {
-			sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
-		}
-	}
-	sqlDB.SetMaxOpenConns(maxOpen)
-	sqlDB.SetMaxIdleConns(maxIdle)
 }

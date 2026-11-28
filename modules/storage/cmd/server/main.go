@@ -24,6 +24,7 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
+	"github.com/mooyang-code/moox/packages/dataformat"
 	"github.com/mooyang-code/moox/packages/events"
 	// 注册与 catalog.yaml max_body_bytes(32 MiB) 对齐的 tRPC 帧上限（64 MiB）及有界 zstd 字典压缩。
 	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
@@ -86,7 +87,7 @@ func runPrimaryRole() error {
 		return err
 	}
 	defer meta.Close()
-	if err := meta.ValidateSchemaVersion(trpc.BackgroundContext()); err != nil {
+	if err := meta.ValidateSchema(trpc.BackgroundContext()); err != nil {
 		return fmt.Errorf("metadata schema validation failed: %w", err)
 	}
 	cached, err := metacache.NewDatasetCache(trpc.BackgroundContext(), meta)
@@ -104,6 +105,9 @@ func runPrimaryRole() error {
 		return err
 	}
 	defer store.Close()
+	if err := metasqlite.RecordPrimaryFormat(loadedCfg.Storage.Root); err != nil {
+		return fmt.Errorf("write storage-primary data format: %w", err)
+	}
 	if err := observability.RegisterPebbleDiskUsage(prometheus.DefaultRegisterer, store.DiskSpaceUsage); err != nil {
 		return err
 	}
@@ -276,6 +280,9 @@ func runViewRole() error {
 	observability.DefaultViewMetrics.SetAttention(viewAttention)
 	if !svc.HasEngine("duckdb") {
 		return errors.New("storage-view requires a CGO-enabled DuckDB engine")
+	}
+	if err := recordStorageViewFormat(loadedCfg.Storage.Root, loadedCfg.Storage.Devices.ViewIndexRoot); err != nil {
+		return fmt.Errorf("write storage-view data format: %w", err)
 	}
 	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
 	if rawURL == "" {
@@ -487,6 +494,24 @@ func storageEventBusConfig(loadedCfg storageconfig.LoadedConfig, urls []string, 
 	// without editing shared credentials.
 	cfg.URLs = append([]string(nil), urls...)
 	return cfg, nil
+}
+
+// recordStorageViewFormat 在 storage-view 启动校验通过后把格式记录写入数据目录。
+func recordStorageViewFormat(storageRoot, viewIndexRoot string) error {
+	dir := strings.TrimSpace(storageRoot)
+	if dir == "" {
+		dir = filepath.Dir(strings.TrimSpace(viewIndexRoot))
+	}
+	if dir == "" || dir == "." {
+		return nil
+	}
+	rec, err := dataformat.Build("storage-view", map[string]string{
+		dataformat.PartStorageViewIndex: strconv.Itoa(dataformat.StorageViewIndexVersion),
+	})
+	if err != nil {
+		return err
+	}
+	return dataformat.WriteDir(dir, rec)
 }
 
 // registerRoleHealth 注册健康检查；返回的状态再交给指标上报，上报里的就绪与 /readyz 是同一个判断。

@@ -8,6 +8,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,13 +62,16 @@ func TestApplySchemaRejectsNonCurrentTables(t *testing.T) {
 	s, err := Open(&Options{Path: path})
 	require.NoError(t, err)
 	require.NoError(t, s.db.Exec("CREATE TABLE t_factor_old_ledger (c_id TEXT)").Error)
-	require.ErrorContains(t, s.ApplySchema("CREATE TABLE IF NOT EXISTS t_factor_tasks(c_id TEXT)"), "unexpected table t_factor_old_ledger")
+	err = s.ApplySchema(factorschema.AllSQL())
+	require.ErrorIs(t, err, sqlitedb.ErrIncompatibleSchema)
+	require.ErrorContains(t, err, "t_factor_old_ledger")
 	require.NoError(t, s.Close())
 }
 
 func TestBuildSQLiteDSNUsesForeignKeysAndDurablePragmas(t *testing.T) {
-	dsn := buildSQLiteDSN("./data/factor/factor.db")
+	dsn := sqlitedb.DSN(sqlitedb.Options{Path: "./data/factor/factor.db"})
 	for _, want := range []string{
+		"_txlock=immediate",
 		"_pragma=journal_mode(WAL)", "_pragma=foreign_keys(ON)",
 		"_pragma=synchronous(NORMAL)", "_pragma=busy_timeout(5000)",
 		"_pragma=wal_autocheckpoint(1000)",
@@ -74,6 +79,16 @@ func TestBuildSQLiteDSNUsesForeignKeysAndDurablePragmas(t *testing.T) {
 		require.True(t, strings.Contains(dsn, want), "dsn %q missing %q", dsn, want)
 	}
 	require.NotContains(t, dsn, "synchronous(OFF)")
+
+	dir := t.TempDir()
+	s, err := Open(&Options{Path: filepath.Join(dir, "factor.db")})
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	rec, err := dataformat.ReadFile(filepath.Join(dir, dataformat.FileName))
+	require.NoError(t, err)
+	require.Equal(t, "factor-mgr", rec.Component)
+	require.NotEmpty(t, rec.Parts[dataformat.PartSQLiteSchema])
+	require.NotEmpty(t, rec.Parts[dataformat.PartLifecycle])
 }
 
 func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
@@ -123,5 +138,7 @@ func TestApplySchemaRejectsObsoleteDefsColumns(t *testing.T) {
 		c_input_columns_json TEXT NOT NULL, c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL,
 		c_lookback_periods INTEGER NOT NULL, c_allow_partial_universe INTEGER NOT NULL,
 		c_status TEXT NOT NULL, c_ctime DATETIME, c_mtime DATETIME)`).Error)
-	require.ErrorContains(t, s.ApplySchema(factorschema.AllSQL()), "fresh database")
+	err = s.ApplySchema(factorschema.AllSQL())
+	require.ErrorIs(t, err, sqlitedb.ErrIncompatibleSchema)
+	require.ErrorContains(t, err, "全新部署")
 }

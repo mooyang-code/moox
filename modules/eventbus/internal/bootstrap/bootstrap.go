@@ -15,6 +15,8 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/rpc"
 	eventbusgen "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
 	nats "github.com/nats-io/nats.go"
 	yaml "gopkg.in/yaml.v3"
@@ -83,6 +85,11 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 		_ = b.Shutdown(trpc.BackgroundContext())
 		return nil, err
 	}
+	if err := recordEventBusFormat(cfg.Broker.StoreDir); err != nil {
+		nc.Close()
+		_ = b.Shutdown(trpc.BackgroundContext())
+		return nil, err
+	}
 	// 5. read-only status RPC
 	mgr := rpc.New(js, cfg, rpc.Options{Ready: b.Ready, Connections: b.Connections})
 	if s != nil {
@@ -109,6 +116,23 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	rt := &Runtime{Config: cfg, Broker: b, Conn: nc, Registry: reg, Health: hs}
 	go func() { <-ctx.Done(); _ = rt.Shutdown(trpc.BackgroundContext()) }()
 	return rt, nil
+}
+
+func recordEventBusFormat(storeDir string) error {
+	if strings.TrimSpace(storeDir) == "" {
+		return nil
+	}
+	digest, err := events.FormatDigest()
+	if err != nil {
+		return fmt.Errorf("计算事件格式摘要失败：%w", err)
+	}
+	rec, err := dataformat.Build("eventbus", map[string]string{
+		dataformat.PartEvents: digest,
+	})
+	if err != nil {
+		return err
+	}
+	return dataformat.WriteDir(filepath.Dir(storeDir), rec)
 }
 
 func registerMetricsReporter(s *server.Server, readiness func(context.Context) (bool, string)) {

@@ -3,26 +3,20 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
-)
 
-func TestMetadataSchemaVersionIsExact(t *testing.T) {
-	for _, version := range []string{"", "1", "2", "3", "4", "5", "6", "7", "13"} {
-		if version == metadataSchemaVersion {
-			t.Fatalf("test case %q unexpectedly equals current schema version", version)
-		}
-	}
-	if metadataSchemaVersion != "21" {
-		t.Fatalf("metadata schema version = %q, want 21", metadataSchemaVersion)
-	}
-}
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
+)
 
 func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 	ctx := context.Background()
+	dir := t.TempDir()
 	store, err := Open(ctx, Options{
-		Path:       filepath.Join(t.TempDir(), "metadata.db"),
+		Path:       filepath.Join(dir, "metadata.db"),
 		SchemaPath: metadataSchemaPath(),
 	})
 	if err != nil {
@@ -33,19 +27,27 @@ func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 	if err := store.InitSchema(ctx); err != nil {
 		t.Fatalf("fresh database InitSchema: %v", err)
 	}
-	if err := store.ValidateSchemaVersion(ctx); err != nil {
-		t.Fatalf("fresh database ValidateSchemaVersion: %v", err)
+	if err := store.ValidateSchema(ctx); err != nil {
+		t.Fatalf("fresh database ValidateSchema: %v", err)
 	}
-	var version string
-	if err := store.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
-		t.Fatal(err)
+	if err := RecordPrimaryFormat(dir); err != nil {
+		t.Fatalf("RecordPrimaryFormat: %v", err)
 	}
-	if version != "21" {
-		t.Fatalf("fresh database schema version = %q, want 21", version)
+	rec, err := dataformat.ReadFile(filepath.Join(dir, dataformat.FileName))
+	if err != nil {
+		t.Fatalf("ReadFile data-format: %v", err)
+	}
+	if rec.Component != "storage-primary" {
+		t.Fatalf("component = %q, want storage-primary", rec.Component)
+	}
+	for _, key := range []string{dataformat.PartSQLiteSchema, dataformat.PartStoragePebbleLayout, dataformat.PartEvents} {
+		if rec.Parts[key] == "" {
+			t.Fatalf("missing part %q in storage-primary data-format", key)
+		}
 	}
 }
 
-func TestInitSchemaRejectsV13WithRebuildInstructions(t *testing.T) {
+func TestInitSchemaRejectsObsoleteSchemaWithRebuildInstructions(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "metadata.db")
 	db, err := sql.Open("sqlite", path)
@@ -69,13 +71,15 @@ func TestInitSchemaRejectsV13WithRebuildInstructions(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	err = store.InitSchema(ctx)
-	if err == nil {
-		t.Fatal("InitSchema accepted metadata schema v13")
+	if !errors.Is(err, sqlitedb.ErrIncompatibleSchema) {
+		t.Fatalf("InitSchema error = %v, want ErrIncompatibleSchema", err)
 	}
-	for _, want := range []string{"schema v13", "remove", "init and metadata apply"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("InitSchema error %q missing %q", err, want)
-		}
+	if !strings.Contains(err.Error(), "全新部署") {
+		t.Fatalf("InitSchema error %q missing 全新部署 hint", err)
+	}
+	err = store.ValidateSchema(ctx)
+	if !errors.Is(err, sqlitedb.ErrIncompatibleSchema) {
+		t.Fatalf("ValidateSchema error = %v, want ErrIncompatibleSchema", err)
 	}
 }
 

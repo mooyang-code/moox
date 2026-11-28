@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 func TestStartOrdersBrokerRegistryAndHealth(t *testing.T) {
@@ -38,6 +41,17 @@ func TestStartOrdersBrokerRegistryAndHealth(t *testing.T) {
 	}
 	if !rt.Broker.Ready() || !rt.Health.Ready() {
 		t.Fatal("runtime did not become ready")
+	}
+	rec, err := dataformat.ReadFile(filepath.Join(filepath.Dir(storeDir), dataformat.FileName))
+	if err != nil {
+		t.Fatalf("启动后应写入 eventbus 数据格式文件：%v", err)
+	}
+	wantDigest, err := events.FormatDigest()
+	if err != nil {
+		t.Fatalf("计算期望事件摘要失败：%v", err)
+	}
+	if rec.Component != "eventbus" || rec.Parts[dataformat.PartEvents] != wantDigest {
+		t.Fatalf("eventbus 数据格式记录异常：%+v", rec)
 	}
 	if err := rt.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
