@@ -123,5 +123,8 @@ func TestWriteLocalClearsPulledRecords(t *testing.T) {
 	old.AppendRow(at(10), plainTag, false, values...)
 	_, err = fx.data.WriteLocal(context.Background(), startupSrc, []seriesstore.SubjectWrite{{Subject: "A", From: at(10), To: at(11), Rows: old}}, seriesstore.WriteOptions{})
 	require.NoError(t, err)
-	require.False(t, fx.data.syncer.HasPulled(startupSrc, "A"), "WriteLocal 之后拉取记录应已清除")
+	res, err := fx.data.syncer.Follow(context.Background(), st.spec)
+	require.NoError(t, err)
+	require.Equal(t, 0, res.Stats.Skipped, "WriteLocal 清除拉取记录后，不能再跳过该变更")
+	require.Equal(t, 1, res.Stats.Refetched, "变更日志应触发重拉以恢复最新数据")
 }

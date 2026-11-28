@@ -96,9 +96,6 @@ func WithChunkPeriods(n int) Option { return func(cfg *config) { cfg.chunkPeriod
 // WithMemoryBudget 让分块在读取之前按估算峰值内存收窄（设计 7.5）：取配置的分块周期数与“估算不超过 budget 的最大周期数”
 // 中较小的一个；1 个周期也超限时该补算以资源错误失败，不尝试执行。budget ≤ 0 表示不限制。
 func WithMemoryBudget(budget int64) Option { return func(cfg *config) { cfg.memoryBudget = budget } }
-func WithChunkRetry(attempts int, backoff time.Duration) Option {
-	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
-}
 
 // WithParamReader 设置已有行 __params 的读取方；没有设置时所有期次都按成员自己的参数计算，也不记录按默认参数新补的期次。
 func WithParamReader(reader ParamReader) Option { return func(cfg *config) { cfg.params = reader } }

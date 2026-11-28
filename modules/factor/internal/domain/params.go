@@ -120,11 +120,6 @@ func ValidateSnapshot(member MemberDef, snapshot ParamSnapshot, inScope func(sub
 			subjects[subject] = struct{}{}
 		}
 	}
-	for _, name := range crossSectionParams(member) {
-		if len(snapshot[name].Overrides) > 0 {
-			return fmt.Errorf("参数 %s 流入截面算子，只能取统一值，不能按标的覆盖", name)
-		}
-	}
 	if err := compiled.CheckParams(defaults); err != nil {
 		return fmt.Errorf("成员 %s 的默认取值：%w", member.Key, err)
 	}
@@ -159,10 +154,6 @@ func ValidateReferenceSubjects(member MemberDef, inScope func(subject string) bo
 	}
 	return nil
 }
-
-// crossSectionParams 返回流入截面算子参数位置的参数。截面算子的编译期常量只收字面量（cs_quantile 的 q，编译时拒绝参数），
-// 所以总是为空；以后增加收参数的截面算子时在这里识别。
-func crossSectionParams(MemberDef) []string { return nil }
 
 // finite 报告取值是否为有限数。
 func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }

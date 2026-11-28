@@ -23,7 +23,7 @@ func TestAssembleKeepsOnlyTargetRange(t *testing.T) {
 	computation := successfulComputation(factor, []string{"data_time", "series_tag", factor.Outputs[0]}, [][]any{
 		{target.Add(-time.Minute), "venue:binance", 11.0}, {target, "venue:binance", 12.0},
 	})
-	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
+	rows, _, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, target, rows[0].DataTime)
@@ -38,7 +38,7 @@ func TestAssembleCarriesSourceColumnsOnSourceTagRows(t *testing.T) {
 	loaded.Frames["BTC"].Columns = append(loaded.Frames["BTC"].Columns, "volume")
 	loaded.Frames["BTC"].Rows[0] = append(loaded.Frames["BTC"].Rows[0], int64(42))
 	computation := successfulComputation(factor, []string{"data_time", "series_tag", factor.Outputs[0]}, [][]any{{target, "venue:binance", 12.0}})
-	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
+	rows, _, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{"close": 10.0, "volume": int64(42), factor.Outputs[0]: 12.0}, rows[0].Fields, "只有固定成员时不写 __params")
 }
@@ -53,7 +53,7 @@ func TestAssembleDerivedTagWritesFactorColumnsOnly(t *testing.T) {
 		Results:      map[string]map[string]ItemResult{factor.FactorID: {"": {Member: factor.FactorID, Columns: []string{"data_time", "series_tag", "subject_id", "spread"}, Rows: [][]any{{target, "binance-okx", "BTC", 1.5}}}}},
 		FactorStates: map[string]storageio.FactorState{factor.FactorID: {FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SpecHash}},
 	}
-	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
+	rows, _, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	var derived storageio.ResultRow
@@ -71,7 +71,7 @@ func TestAssembleFailedFactorWritesNull(t *testing.T) {
 	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
 	loaded := framesFor([]string{"BTC"}, target)
 	computation := Computation{Results: map[string]map[string]ItemResult{factor.FactorID: {"BTC": {Member: factor.FactorID, Err: errors.New("compute failed")}}}, FactorStates: map[string]storageio.FactorState{factor.FactorID: {FactorID: factor.FactorID, Status: "degraded"}}}
-	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
+	rows, _, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	require.Contains(t, rows[0].Fields, factor.Outputs[0])
 	require.Nil(t, rows[0].Fields[factor.Outputs[0]])
@@ -83,7 +83,7 @@ func TestAssembleNaNAndInfBecomeNull(t *testing.T) {
 	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
 	loaded := framesFor([]string{"BTC"}, target)
 	computation := successfulComputation(factor, []string{"data_time", "series_tag", factor.Outputs[0]}, [][]any{{target, "venue:binance", math.NaN()}})
-	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
+	rows, _, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	require.Nil(t, rows[0].Fields[factor.Outputs[0]])
 }
@@ -97,7 +97,7 @@ func TestAssembleRecalcWritesOnlySelectedFactors(t *testing.T) {
 	loaded := framesFor([]string{"BTC"}, target)
 	computation := successfulComputation(selected, []string{"data_time", "series_tag", selected.Outputs[0]}, [][]any{{target, "venue:binance", 1.0}})
 	computation.FactorStates[unselected.FactorID] = storageio.FactorState{MemberKey: unselected.FactorID, FactorID: unselected.FactorID, Status: "complete"}
-	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
+	rows, _, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	require.NotContains(t, rows[0].Fields, unselected.Outputs[0])
 }

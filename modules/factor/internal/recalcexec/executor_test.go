@@ -124,7 +124,8 @@ func TestExecutorRetriesChunkThenFails(t *testing.T) {
 		attempts++
 		return pipeline.Outcome{}, fmt.Errorf("%w: storage unavailable", storageio.ErrInfra)
 	}}
-	executor := NewExecutor(runner, WithChunkRetry(3, time.Millisecond))
+	executor := NewExecutor(runner)
+	executor.retryBackoff = time.Millisecond
 	var records []progressRecord
 
 	err := executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC")), recordProgress(&records, 0))
@@ -140,7 +141,8 @@ func TestExecutorPermanentFailureIsNotRetried(t *testing.T) {
 		attempts++
 		return pipeline.Outcome{}, errors.New("bad factor output")
 	}}
-	executor := NewExecutor(runner, WithChunkRetry(3, time.Millisecond))
+	executor := NewExecutor(runner)
+	executor.retryBackoff = time.Millisecond
 	var records []progressRecord
 
 	require.Error(t, executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC")), recordProgress(&records, 0)))

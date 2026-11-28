@@ -63,7 +63,7 @@ func TestComputeAndAssembleUsePerSubjectParams(t *testing.T) {
 	require.Equal(t, "pmean", state.FactorID)
 	require.Equal(t, domain.MemberKindFixed, computation.FactorStates["pmean__5"].MemberKind)
 
-	rows, err := runner.Assemble(plan, loaded, computation)
+	rows, _, err := runner.AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	fields := rowFields(rows, target)
 	require.Equal(t, 202.5, fields["ETH"]["pmean__var"])
@@ -101,7 +101,7 @@ func TestAssembleMergesBaseParams(t *testing.T) {
 	runner := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{ComputeWorkers: 1})
 	computation, err := runner.Compute(context.Background(), plan, loaded)
 	require.NoError(t, err)
-	rows, err := runner.Assemble(plan, loaded, computation)
+	rows, _, err := runner.AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	got := string(rowFields(rows, target)["BTC"][factorname.ParamsColumn].(storageio.JSONText))
 	require.Equal(t, `{"other__var":{"span":9},"pmean__var":{"window":3}}`, got)
@@ -124,7 +124,7 @@ func TestAssembleDropsFailedMemberParams(t *testing.T) {
 	item := computation.Results["pmean__var"]["BTC"]
 	item.Err = errors.New("boom")
 	computation.Results["pmean__var"]["BTC"] = item
-	rows, err := runner.Assemble(plan, loaded, computation)
+	rows, _, err := runner.AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	fields := rowFields(rows, target)["BTC"]
 	require.Nil(t, fields["pmean__var"])
@@ -148,7 +148,7 @@ func TestAssembleWritesEmptyParamsWhenOnlyMemberFailed(t *testing.T) {
 	item := computation.Results["pmean__var"]["BTC"]
 	item.Err = errors.New("boom")
 	computation.Results["pmean__var"]["BTC"] = item
-	rows, err := runner.Assemble(plan, loaded, computation)
+	rows, _, err := runner.AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	require.Equal(t, `{}`, string(rowFields(rows, target)["BTC"][factorname.ParamsColumn].(storageio.JSONText)))
 }
@@ -163,7 +163,7 @@ func TestAssembleFixedOnlyDoesNotWriteParams(t *testing.T) {
 	runner := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{ComputeWorkers: 1})
 	computation, err := runner.Compute(context.Background(), plan, loaded)
 	require.NoError(t, err)
-	rows, err := runner.Assemble(plan, loaded, computation)
+	rows, _, err := runner.AssembleWithReport(plan, loaded, computation)
 	require.NoError(t, err)
 	fields := rowFields(rows, target)["BTC"]
 	require.Equal(t, 103.0, fields[fixed.Key])
