@@ -223,7 +223,7 @@ func TestReportFollowUpdatesTaskStateVerifiesTaskIDAndBlocksRegression(t *testin
 		t.Fatal(err)
 	}
 	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	if !got.LastSuccessAt.Equal(t0) || !got.LastFollowAt.Equal(t0.Add(10*time.Second)) || got.LastFollowError != "" ||
+	if !got.LastSuccessAt.Equal(t0.Add(10*time.Second)) || !got.LastFollowAt.Equal(t0.Add(10*time.Second)) || got.LastFollowError != "" ||
 		got.LastFollowMessage != "导出 1 个分区" || !got.FinalUntil.Equal(final) ||
 		!got.RescanFrom.Equal(rescanFrom) || !got.RescanUntil.Equal(rescanUntil) || !got.IsRescanning() || len(got.Unrecoverable) != 1 {
 		t.Fatalf("task = %+v", got)
@@ -239,7 +239,7 @@ func TestReportFollowUpdatesTaskStateVerifiesTaskIDAndBlocksRegression(t *testin
 		t.Fatal(err)
 	}
 	got, _ = s.GetTask(ctx, "crypto", "ds1")
-	if !got.LastSuccessAt.Equal(t0) || got.LastFollowError != "storage timeout" || !got.IsRescanning() {
+	if !got.LastSuccessAt.Equal(t0.Add(10*time.Second)) || got.LastFollowError != "storage timeout" || !got.IsRescanning() {
 		t.Fatalf("失败后 task = %+v", got)
 	}
 
@@ -252,7 +252,7 @@ func TestReportFollowUpdatesTaskStateVerifiesTaskIDAndBlocksRegression(t *testin
 		t.Fatal(err)
 	}
 	got, _ = s.GetTask(ctx, "crypto", "ds1")
-	if !got.LastSuccessAt.Equal(t0.Add(2*time.Minute)) || got.LastFollowError != "" || got.IsRescanning() {
+	if !got.LastSuccessAt.Equal(t0.Add(2*time.Minute+5*time.Second)) || got.LastFollowError != "" || got.IsRescanning() {
 		t.Fatalf("成功后 task = %+v", got)
 	}
 
@@ -403,8 +403,8 @@ func TestCompleteRunRegistersPartitionsAndAdvancesTaskState(t *testing.T) {
 		t.Fatalf("run = %+v", run)
 	}
 	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	// 归档起点成功后不再清空：暂存库丢失后整段重读仍以它为下界。
-	if !got.LastSuccessAt.Equal(c.Run.StartedAt) || !got.FinalUntil.Equal(final) || !got.BackfillFrom.Equal(task("crypto", "ds1").BackfillFrom) {
+	// 归档起点成功后不再清空：暂存库丢失后整段重读仍以它为下界；最近成功时间记录完成时刻。
+	if !got.LastSuccessAt.Equal(t0.Add(time.Minute)) || !got.FinalUntil.Equal(final) || !got.BackfillFrom.Equal(task("crypto", "ds1").BackfillFrom) {
 		t.Fatalf("task = %+v", got)
 	}
 	// 定稿边界只前进不回退。
@@ -495,7 +495,7 @@ func TestReopenKeepsTheFileAndTheRemoteCopy(t *testing.T) {
 	c2 := mustClaim(t, s, t0)
 	reopened := finishedPartition("2026-10-14", PartitionOpen)
 	reopened.RowCount = 101
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c2.Run.RunID, LeaseToken: c2.Run.LeaseToken, Status: RunSucceeded, Now: t0, Partitions: []Partition{reopened}}); err != nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c2.Run.RunID, LeaseToken: c2.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(time.Hour), Partitions: []Partition{reopened}}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.GetPartition(ctx, "crypto", "ds1", "2026-10-14")
@@ -505,7 +505,7 @@ func TestReopenKeepsTheFileAndTheRemoteCopy(t *testing.T) {
 	if got.Remote.Key != final.Remote.Key || got.Remote.SHA256 != "abc" || !got.Remote.VerifiedAt.Equal(t0) || !got.Replicated() {
 		t.Fatalf("open 不带文件时远端副本应沿用: %+v", got.Remote)
 	}
-	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.Equal(c.Run.StartedAt) {
+	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.Equal(t0) {
 		t.Fatalf("补拉区间不推进最近成功时间: %s", got.LastSuccessAt)
 	}
 }
@@ -889,16 +889,16 @@ func TestLastSuccessOnlyMovesForward(t *testing.T) {
 	if err := s.CompleteRun(ctx, CompleteRequest{RunID: first.Run.RunID, LeaseToken: first.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(11 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	// 一个开始更早的运行迟到完成（例如租约过期后被重新派发的旧令牌）不能让最近成功时间回退。
+	// 一个完成时刻更早的乱序上报不能让最近成功时间回退。
 	older, _ := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0)
 	claimed := mustClaim(t, s, t0.Add(5*time.Minute))
 	if claimed.Run.RunID != older.RunID {
 		t.Fatal("unexpected run")
 	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: older.RunID, LeaseToken: claimed.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(12 * time.Minute)}); err != nil {
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: older.RunID, LeaseToken: claimed.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(8 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.Equal(t0.Add(10 * time.Minute)) {
+	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.Equal(t0.Add(11 * time.Minute)) {
 		t.Fatalf("last_success_at 回退了: %s", got.LastSuccessAt)
 	}
 }

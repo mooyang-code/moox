@@ -933,6 +933,64 @@ func TestLocalFollowCountsAgainstBusyStorageRunsAndSerializesWithManualRun(t *te
 	}
 }
 
+// 并发触发 pullOnce（例如 pullLoop 与 followOnce 同时调用）必须串行领取且按本次预占槽位记账，
+// 不能在领取窗口内超过 max_concurrent_runs。
+func TestConcurrentPullOnceSerializesAndRespectsMaxConcurrentRuns(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 2, 2
+	h.app.heartbeatOnce(ctx, false)
+	h.src.block = true
+
+	gate := make(chan struct{})
+	entered := make(chan struct{})
+	h.mgr.pullGate, h.mgr.pullEntered = gate, entered
+	h.mgr.assignments = []*archivepb.RunAssignment{
+		assignment("run_1", func(a *archivepb.RunAssignment) { a.DatasetId, a.DirName = "ds_1", "kline-1" }),
+		assignment("run_2", func(a *archivepb.RunAssignment) { a.DatasetId, a.DirName = "ds_2", "kline-2" }),
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); h.app.pullOnce(ctx) }()
+	<-entered
+	// 第一次领取正在途中并预占 2 个槽位：此时并发发起第二次领取，以及检查可用槽位，都不应超发。
+	h.app.mu.Lock()
+	reserved := h.app.pulling
+	h.app.mu.Unlock()
+	if reserved != 2 {
+		t.Fatalf("在途领取应预占全部 2 个空槽: pulling=%d", reserved)
+	}
+	go func() { defer wg.Done(); h.app.pullOnce(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+
+	h.app.mu.Lock()
+	reservedAfterSecond := h.app.pulling
+	h.app.mu.Unlock()
+	if reservedAfterSecond != 2 {
+		t.Fatalf("第二次 pullOnce 应被 pullMu 串行阻塞，不能再次预占槽位: pulling=%d", reservedAfterSecond)
+	}
+
+	close(gate)
+	wg.Wait()
+
+	h.mgr.mu.Lock()
+	totalPulls := len(h.mgr.pulls)
+	firstFreeSlots := uint32(0)
+	if totalPulls > 0 {
+		firstFreeSlots = h.mgr.pulls[0].GetFreeSlots()
+	}
+	h.mgr.mu.Unlock()
+	if totalPulls != 1 || firstFreeSlots != 2 {
+		t.Fatalf("首次领取占满 2 个槽位后，串行排队的第二次 pullOnce 不应再发 Pull: pulls=%d firstFreeSlots=%d", totalPulls, firstFreeSlots)
+	}
+	if len(h.app.runningIDs()) != 2 {
+		t.Fatalf("running = %v, want 2 runs", h.app.runningIDs())
+	}
+	h.app.cancelAll()
+	h.idle()
+}
+
 func (f *fakeSource) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {
 	return source.Changes{Next: source.ChangeCursor{StoreID: "store"}}, nil
 }

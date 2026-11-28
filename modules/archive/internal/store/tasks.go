@@ -24,7 +24,7 @@ type Task struct {
 	Status       string
 	// SourceMissing 为真表示源数据集在 Storage 中不存在：不改 Status，停止下发给 worker 跟随，数据集重现时由维护刷新自动清除。
 	SourceMissing bool
-	// LastFollowAt 是最近一次跟随（或整段重读）尝试的开始时间；LastSuccessAt 是最近一次成功的跟随或整段重读的开始时间。
+	// LastFollowAt 是最近一次跟随（或整段重读）尝试的完成时刻；LastSuccessAt 是最近一次成功的跟随或整段重读的完成时刻。
 	LastFollowAt      time.Time
 	LastSuccessAt     time.Time
 	LastFollowError   string

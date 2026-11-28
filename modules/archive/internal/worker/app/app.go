@@ -79,7 +79,9 @@ var _ dataapi.ImportSink = (*App)(nil)
 type App struct {
 	opts Options
 
-	mu              sync.Mutex
+	mu sync.Mutex
+	// pullMu 串行化 pullLoop 与 followOnce 的领取调用，避免并发领取在同一空位窗口内超过 max_concurrent_runs。
+	pullMu          sync.Mutex
 	lastHeartbeatOK time.Time
 	lastError       string
 	maintaining     bool
@@ -94,7 +96,8 @@ type App struct {
 	following map[string]*activeFollow
 	// lastFollowStart 记录每个任务最近一次本地跟随的开始时刻，用于在多任务争抢读 Storage 名额时按最久未跟随优先轮转。
 	lastFollowStart map[string]time.Time
-	// pulling、followListing 是正在进行中的领取与拉取跟随清单调用数：维护要等它们登记完之后再开始，否则对账时会漏掉在途任务。
+	// pulling 是正在进行中的领取调用所预占的并发槽数，followListing 是正在拉取跟随清单的调用数：
+	// 维护要等它们登记完之后再开始，followOnce 也按 pulling 避开已预占的槽位。
 	pulling       int
 	followListing int
 	// datasetSlots 让同一个数据集的执行（本地跟随与手动、补拉、导入运行）在本地串行：
@@ -592,14 +595,20 @@ func (a *App) reportFollow(ctx context.Context, req *archivepb.ReportFollowResul
 // ---- 领取与执行（manual、range、import） ----
 
 func (a *App) pullOnce(ctx context.Context) {
+	a.pullMu.Lock()
+	defer a.pullMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
 	cfg := a.opts.Config
 	a.mu.Lock()
 	free := cfg.Pacing.MaxConcurrentRuns - len(a.running) - len(a.following) - a.pulling
 	blocked := a.maintaining || a.diskInsufficient
 	busy := uint32(a.busyStorageRunsLocked())
 	if free > 0 && !blocked && !a.lastHeartbeatOK.IsZero() {
-		// 与维护的「开始」在同一把锁里决定：登记了 pulling 之后，维护会等这次领取登记完运行才继续。
-		a.pulling++
+		// 与维护的「开始」以及 followOnce 的空位检查在同一把锁里决定：按本次申请的空位数预占槽位，
+		// 避免领取途中 followOnce 抢占剩余槽位、或维护漏掉在途任务。
+		a.pulling += free
 	} else {
 		a.mu.Unlock()
 		return
@@ -609,8 +618,9 @@ func (a *App) pullOnce(ctx context.Context) {
 	defer func() {
 		if !registered {
 			a.mu.Lock()
-			a.pulling--
+			a.pulling -= free
 			a.mu.Unlock()
+			a.notifySlot()
 		}
 	}()
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
@@ -637,9 +647,13 @@ func (a *App) pullOnce(ctx context.Context) {
 		a.running[assignment.GetRunId()] = run
 		runs = append(runs, run)
 	}
-	a.pulling--
+	a.pulling -= free
 	registered = true
 	a.mu.Unlock()
+	if len(runs) < free {
+		// 归还未用完的预占槽位，唤醒等待空位的 followOnce。
+		a.notifySlot()
+	}
 	for _, run := range runs {
 		a.launch(run)
 	}

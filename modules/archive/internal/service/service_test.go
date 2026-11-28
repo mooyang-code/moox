@@ -715,7 +715,7 @@ func TestListFollowTasksAndReportFollowResult(t *testing.T) {
 		t.Fatalf("本地跟随不应写运行表: %v", h.allRuns())
 	}
 	task := h.task("crypto", "ds_1m")
-	if !task.LastSuccessAt.Equal(startedAt) || !task.LastFollowAt.Equal(finishedAt) || task.LastFollowMessage != "整段重读中" ||
+	if !task.LastSuccessAt.Equal(finishedAt) || !task.LastFollowAt.Equal(finishedAt) || task.LastFollowMessage != "整段重读中" ||
 		!task.IsRescanning() || fmtRFC(task.RescanFrom) != "2026-10-16T00:00:00Z" || fmtRFC(task.RescanUntil) != "2026-10-17T02:00:00Z" {
 		t.Fatalf("follow 上报后的任务 = %+v", task)
 	}
@@ -1698,5 +1698,50 @@ func TestAssignmentLocalCloseComesFromBarclock(t *testing.T) {
 		if got := a.GetLocalClose(); got != tc.want {
 			t.Errorf("space %s local_close = %q，期望 %q", tc.space, got, tc.want)
 		}
+	}
+}
+
+// 长时间手动运行（耗时超过 30 分钟）成功完成后，c_last_success_at 记录完成时刻，不应误报“最近一次成功的跟随距今超过 30 分钟”。
+func TestLongManualRunCompletionDoesNotTriggerStaleFollowWarning(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	requireOK(t, h.createOnly("ds_1m", nil).GetRetInfo())
+	h.heartbeat("w1")
+
+	runRsp, err := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, runRsp.GetRetInfo())
+	pullRsp, err := h.worker.PullArchiveRun(ctx, &archivepb.PullArchiveRunReq{FreeSlots: 1, MaxStorageRuns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, pullRsp.GetRetInfo())
+	if len(pullRsp.GetRuns()) != 1 {
+		t.Fatalf("runs = %d", len(pullRsp.GetRuns()))
+	}
+	assignment := pullRsp.GetRuns()[0]
+
+	// 模拟手动运行耗时 45 分钟后成功完成（期间 worker 保持在线）。
+	h.now = h.now.Add(45 * time.Minute)
+	h.heartbeat("w1")
+	compRsp, err := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{
+		RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken(), Status: "succeeded",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, compRsp.GetRetInfo())
+
+	task := h.task("crypto", "ds_1m")
+	if !task.LastSuccessAt.Equal(h.now) {
+		t.Fatalf("manual 成功后 LastSuccessAt 应为完成时刻 %s，实际 %s", h.now, task.LastSuccessAt)
+	}
+	health, reason := evaluateHealth(healthInput{
+		Task: task, Retention: "168h", SpaceTZ: "UTC", Now: h.now.Add(time.Minute), WorkerLastSeen: h.now,
+	})
+	if health != HealthOK {
+		t.Fatalf("长时间 manual 刚完成后不应误报健康告警: health=%s reason=%q", health, reason)
 	}
 }

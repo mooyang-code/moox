@@ -249,6 +249,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 			}
 		}
 		// 被取消的运行即使 worker 上报成功也不推进任务状态；manual 成功时同步推进最近跟随与重读进度。
+		// c_last_success_at 记录成功完成时刻（与 c_last_follow_at 一致），避免长时间手动运行结束后触发“距今超过 30 分钟”的健康误报。
 		if status == RunSucceeded && run.Kind == KindManual {
 			started := millisOf(run.StartedAt)
 			finished := millisOf(req.Now)
@@ -263,7 +264,7 @@ SET c_last_follow_at = CASE WHEN c_last_follow_at < ? THEN ? ELSE c_last_follow_
     c_rescan_from = ?,
     c_rescan_until = ?
 WHERE c_space_id = ? AND c_dataset_id = ?`,
-				finished, finished, started, started, message, millisOf(req.RescanFrom), millisOf(req.RescanUntil), run.SpaceID, run.DatasetID); err != nil {
+				finished, finished, finished, finished, message, millisOf(req.RescanFrom), millisOf(req.RescanUntil), run.SpaceID, run.DatasetID); err != nil {
 				return err
 			}
 		}
@@ -364,7 +365,7 @@ SET c_last_follow_at = CASE WHEN c_last_follow_at < ? THEN ? ELSE c_last_follow_
     c_rescan_from = ?,
     c_rescan_until = ?
 WHERE c_id = ?`,
-				finished, finished, started, started, req.Message, millisOf(req.RescanFrom), millisOf(req.RescanUntil), task.ID); err != nil {
+				finished, finished, finished, finished, req.Message, millisOf(req.RescanFrom), millisOf(req.RescanUntil), task.ID); err != nil {
 				return err
 			}
 		case RunFailed:
