@@ -71,8 +71,12 @@ type probingAdapter struct {
 
 func newProbingAdapter(adapter execution.ExecutionAdapter, probe *privateOrderProbe) probingAdapter {
 	marketData, _ := adapter.(execution.MarketDataSource)
-	accountEvents, _ := adapter.(execution.AccountEventSource)
+	accountEvents := execution.AccountEventsOf(adapter)
 	return probingAdapter{ExecutionAdapter: adapter, marketData: marketData, accountEvents: accountEvents, probe: probe}
+}
+
+func (a probingAdapter) SupportsAccountEvents() bool {
+	return a.accountEvents != nil
 }
 
 func (a probingAdapter) Subscribe(
