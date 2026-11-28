@@ -778,11 +778,93 @@ func TestBusinessFreshnessReporterFreezesObservationChecksWhileIngestIsDown(t *t
 	require.Equal(t, reporterReasonText("stale"), row.Reason)
 }
 
+// V3 复现：K 线新鲜度的视图摘要依赖经 EventBus 入库的 storage-view 指标，快照超过 1 分钟后判逾期会退回当前时间；
+// 观测输入断开或处于恢复宽限期时，K 线新鲜度必须一并冻结，不能把未收到新快照误报成“整体停止更新”。
+func TestBusinessFreshnessReporterFreezesKlineChecksWhileIngestIsDown(t *testing.T) {
+	manager, repositories := openBusinessStore(t)
+	now := time.Date(2026, 9, 8, 10, 0, 30, 0, time.UTC)
+	labels := `{"space_id":"crypto","dataset_id":"dataset","freq":"1m"}`
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, row := range []monmetrics.MetricSeries{
+			// 10:00:30 时已收盘的最新一根是 09:59:00，快照刚刚上报，处于正常状态。
+			{SeriesID: "kline-latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-90 * time.Second).Unix()), ObservedAt: now},
+			{SeriesID: "kline-subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
+		} {
+			require.NoError(t, db.Create(&row).Error)
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	require.NoError(t, err)
+
+	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute,
+	}}, 20)
+	currentNow := now
+	state := observationState{Ready: true}
+	run := buildBusinessFreshnessReporterWithInterval(
+		&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return currentNow }},
+		repositories,
+		testApplier(repositories),
+		func(time.Time) observationState { return state },
+		30*time.Second,
+		evaluator,
+	)
+	const klineCheckID = "kline_freshness:crypto:dataset:1m"
+
+	// 初始观测正常：K 线检查通过。
+	require.NoError(t, run(t.Context()))
+	row := checkRow(t, repositories, "crypto", klineCheckID)
+	require.NotNil(t, row)
+	require.Equal(t, domain.CheckStatusOK, row.Status)
+	require.Zero(t, row.FailureCount)
+
+	// 5 分钟后观测输入断开：库里的 storage-view 摘要仍停在 t0（距今超过 1 分钟快照宽限，按当前时间已超过 2 分钟允许迟到），
+	// 但此时观测输入中断，K 线检查必须保持冻结，不得误报为“整体停止更新”。
+	currentNow = now.Add(5 * time.Minute)
+	state = observationState{Suspended: true, Reason: "eventbus unreachable"}
+	require.NoError(t, run(t.Context()))
+	row = checkRow(t, repositories, "crypto", klineCheckID)
+	require.NotNil(t, row, "观测输入中断时冻结 K 线检查，不得删除")
+	require.Equal(t, domain.CheckStatusOK, row.Status, "观测输入中断时 K 线检查不得误报停止更新")
+	require.Zero(t, row.FailureCount)
+	ingest := checkRow(t, repositories, events.SystemSpaceID, observationIngestCheckID)
+	require.NotNil(t, ingest)
+	require.Equal(t, domain.CheckStatusDown, ingest.Status)
+
+	// 观测刚重连，仍在恢复宽限期内：继续冻结。
+	currentNow = now.Add(6 * time.Minute)
+	state = observationState{Suspended: true, Ready: true}
+	require.NoError(t, run(t.Context()))
+	row = checkRow(t, repositories, "crypto", klineCheckID)
+	require.NotNil(t, row)
+	require.Equal(t, domain.CheckStatusOK, row.Status, "恢复宽限期内 K 线检查继续冻结")
+	require.Zero(t, row.FailureCount)
+	require.Equal(t, domain.CheckStatusOK, checkRow(t, repositories, events.SystemSpaceID, observationIngestCheckID).Status)
+
+	// 宽限期结束后快照依然落后：此时恢复判定并报出停止更新。
+	currentNow = now.Add(7 * time.Minute)
+	state = observationState{Ready: true}
+	require.NoError(t, run(t.Context()))
+	row = checkRow(t, repositories, "crypto", klineCheckID)
+	require.NotNil(t, row)
+	require.Equal(t, domain.CheckStatusDown, row.Status)
+	require.True(t, strings.HasPrefix(row.Reason, "整体停止更新"), row.Reason)
+	require.Equal(t, 1, row.FailureCount)
+}
+
 func TestObservationIndependentChecksKeepRunning(t *testing.T) {
-	for _, id := range []string{"kline_freshness:crypto:1m", observationIngestCheckID} {
-		require.True(t, observationIndependent(id), id)
-	}
-	for _, id := range []string{"reporter:node-a:collector", "ready:node-a:collector", "restart:node-a:collector", "dataset:storage:ds:1m", "balance:trade", "data_delivery:storage", "attention:trade:auto_paused"} {
+	require.True(t, observationIndependent(observationIngestCheckID), observationIngestCheckID)
+	for _, id := range []string{
+		"kline_freshness:crypto:1m",
+		"kline_freshness:task_result_inventory",
+		"reporter:node-a:collector",
+		"ready:node-a:collector",
+		"restart:node-a:collector",
+		"dataset:storage:ds:1m",
+		"balance:trade",
+		"data_delivery:storage",
+		"attention:trade:auto_paused",
+	} {
 		require.False(t, observationIndependent(id), id)
 	}
 }
