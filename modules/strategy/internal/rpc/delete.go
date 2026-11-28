@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,47 +27,28 @@ type FactorTaskAdmin interface {
 	DeleteBoundTask(ctx context.Context, taskID, instanceID string) error
 }
 
-// ArchiveTasks 查询空间内有归档任务的数据集（archive-mgr 只读接口）。
-type ArchiveTasks interface {
-	ArchivedDatasets(ctx context.Context, spaceID string) (map[string]bool, error)
-}
-
 // errTaskMissing 是实例引用的因子任务已不存在时的提示（删除实例做到一半，或任务被另外删掉）。
 const errTaskMissing = "引用的因子任务已不存在，删除实例即可清理"
 
-// deleteCallReserve 是删除实例给最后那个事务留的时间：调用 Factor、archive-mgr 的截止时间比请求的截止时间提前这么多。
+// deleteCallReserve 是删除实例给最后那个事务留的时间：调用 Factor 与 Trade 的截止时间比请求的截止时间提前这么多。
 // 请求没有截止时间时，依赖调用最多用 deleteCallBudget。
 const (
 	deleteCallReserve = 5 * time.Second
 	deleteCallBudget  = 25 * time.Second
 )
 
-// pendingTask 是删除实例时要删的一个因子任务。
-type pendingTask struct {
-	TaskID          string
-	ResultDatasetID string
-}
-
 // taskPlan 是实例登记的因子任务分组：Delete 是关联到本实例（声明了 factor_params 的实例启用时关联）、要一起删除的；
 // Keep 是没关联或关联到别的实例的（不调参的实例引用的任务都在这里），保留不动，只去掉本实例的引用；
 // Gone 是 Factor 里已经没有的（上次删除时已删掉，或被另外删掉）。
 type taskPlan struct {
-	Delete []pendingTask
+	Delete []string
 	Keep   []string
 	Gone   []string
 }
 
-func (p taskPlan) deleteIDs() []string {
-	ids := make([]string, 0, len(p.Delete))
-	for _, task := range p.Delete {
-		ids = append(ids, task.TaskID)
-	}
-	return ids
-}
-
 // DeleteStrategyInstance 删除已停用的实例，连同关联到它的因子任务与结果数据集，最后在一个事务里删掉实例在策略库里的全部记录。
 // 没关联或关联到别的实例的任务保留不动，只去掉本实例的引用；只有固定成员的任务从不关联，不随任何实例删除。全程持有实例锁，并发的启用会被挡住。
-// 所有拒绝（任务不在本空间、要删的任务还被别的实例引用、有回放在进行、Factor 的删除前检查不过、结果数据集有归档任务、Trade 没确认关闭会话）
+// 所有拒绝（任务不在本空间、要删的任务还被别的实例引用、有回放在进行、Factor 的删除前检查不过、Trade 没确认关闭会话）
 // 都在删第一个任务之前做完；已经删掉的部分算成功，中途失败（例如超时）后再删一次即可接着做完。Trade 里的影子目标、目标回执与订单不删。
 func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.DeleteStrategyInstanceReq) (*strategypb.DeleteStrategyInstanceRsp, error) {
 	refuse := func(info *commonpb.RetInfo) (*strategypb.DeleteStrategyInstanceRsp, error) {
@@ -84,8 +65,8 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	if instanceID == "" {
 		return refuse(invalid(errors.New("instance_id 不能为空")))
 	}
-	if s.Tasks == nil || s.Archives == nil {
-		return refuse(invalid(errors.New("未接线 Factor 或归档服务，不能删除实例")))
+	if s.Tasks == nil {
+		return refuse(invalid(errors.New("未接线 Factor 服务，不能删除实例")))
 	}
 	instance, unlock, err := s.lockInstance(ctx, instanceID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -110,13 +91,10 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	if err := s.checkNoActiveReplays(ctx, instance, plan); err != nil {
 		return refuse(deleteError(err))
 	}
-	for _, task := range plan.Delete {
-		if err := s.Tasks.CheckBoundTask(callCtx, task.TaskID, instance.InstanceID); err != nil {
-			return refuse(deleteError(fmt.Errorf("因子任务 %s 暂不能删除：%w", task.TaskID, err)))
+	for _, taskID := range plan.Delete {
+		if err := s.Tasks.CheckBoundTask(callCtx, taskID, instance.InstanceID); err != nil {
+			return refuse(deleteError(fmt.Errorf("因子任务 %s 暂不能删除：%w", taskID, err)))
 		}
-	}
-	if err := s.checkNotArchived(callCtx, instance.SpaceID, plan.Delete); err != nil {
-		return refuse(deleteError(err))
 	}
 	if err := s.closeBeforeDelete(callCtx, instance); err != nil {
 		return refuse(deleteError(err))
@@ -125,13 +103,13 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	incomplete := func(info *commonpb.RetInfo) (*strategypb.DeleteStrategyInstanceRsp, error) {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: info, Incomplete: true}, nil
 	}
-	for i, task := range plan.Delete {
-		if err := s.Tasks.DeleteBoundTask(callCtx, task.TaskID, instance.InstanceID); err != nil {
-			wrapped := fmt.Errorf("删除因子任务 %s 未完成（实例还在，可以重新执行删除）：%w", task.TaskID, err)
+	for i, taskID := range plan.Delete {
+		if err := s.Tasks.DeleteBoundTask(callCtx, taskID, instance.InstanceID); err != nil {
+			wrapped := fmt.Errorf("删除因子任务 %s 未完成（实例还在，可以重新执行删除）：%w", taskID, err)
 			var rejected *input.RejectedError
 			if errors.As(err, &rejected) && i == 0 {
 				// 检查之后才出现的拒绝（例如刚有人发起了补算），第一个任务被拒绝时还什么都没删。
-				return refuse(invalid(fmt.Errorf("因子任务 %s 暂不能删除：%w", task.TaskID, err)))
+				return refuse(invalid(fmt.Errorf("因子任务 %s 暂不能删除：%w", taskID, err)))
 			}
 			if errors.As(err, &rejected) {
 				return incomplete(invalid(wrapped))
@@ -140,7 +118,7 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 		}
 	}
 	// 年龄探针按 View 存：删掉的任务与已经不在的任务清掉它们的 View；保留的任务的 View 还在用，不动。
-	cleared := append(plan.deleteIDs(), plan.Gone...)
+	cleared := append(slices.Clone(plan.Delete), plan.Gone...)
 	datasetIDs := make([]string, 0, len(cleared))
 	for _, taskID := range cleared {
 		if datasetID, err := input.DatasetIDOfTask(taskID); err == nil {
@@ -153,7 +131,7 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	return &strategypb.DeleteStrategyInstanceRsp{RetInfo: success()}, nil
 }
 
-// deleteCallContext 是调用 Factor、archive-mgr 用的 ctx：截止时间比请求提前 deleteCallReserve，给最后那个事务留出时间。
+// deleteCallContext 是调用 Factor 与 Trade 用的 ctx：截止时间比请求提前 deleteCallReserve，给最后那个事务留出时间。
 func deleteCallContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	deadline := time.Now().Add(deleteCallBudget)
 	if requested, ok := ctx.Deadline(); ok && requested.Add(-deleteCallReserve).Before(deadline) {
@@ -177,7 +155,7 @@ func deleteError(err error) *commonpb.RetInfo {
 
 // checkNoActiveReplays 拒绝删除还有回放在读它数据的实例：从实例发起的回放，以及本空间里读取要删的任务的回放（按定义或 DSL 发起的）。
 func (s *Service) checkNoActiveReplays(ctx context.Context, instance store.Instance, plan taskPlan) error {
-	replays, err := s.Store.ActiveReplaysOfInstance(ctx, instance.InstanceID, instance.SpaceID, plan.deleteIDs())
+	replays, err := s.Store.ActiveReplaysOfInstance(ctx, instance.InstanceID, instance.SpaceID, plan.Delete)
 	if err != nil {
 		return fmt.Errorf("读取进行中的回放失败，暂不能删除：%w", err)
 	}
@@ -221,7 +199,7 @@ func (s *Service) planTasks(ctx context.Context, instance store.Instance) (taskP
 		if len(others) > 0 {
 			return taskPlan{}, rejection{fmt.Errorf("因子任务 %s 关联在本实例上、会随本实例删除：先删除引用它的实例 %s，再删除本实例", taskID, strings.Join(others, "、"))}
 		}
-		plan.Delete = append(plan.Delete, pendingTask{TaskID: taskID, ResultDatasetID: task.ResultDatasetID})
+		plan.Delete = append(plan.Delete, taskID)
 	}
 	return plan, nil
 }
@@ -238,29 +216,6 @@ func (s *Service) closeBeforeDelete(ctx context.Context, instance store.Instance
 	}
 	if err := s.closeTradeSession(ctx, instance.SpaceID, session); err != nil {
 		return fmt.Errorf("Trade 未确认关闭实例在组合账户 %s 上的会话，暂不能删除，请稍后重试：%w", *session.LogicalAccountID, err)
-	}
-	return nil
-}
-
-// checkNotArchived 拒绝删除有归档任务的结果数据集：archive-mgr 不能按数据集过滤，分页拉回空间内全部归档任务后在本地筛选。
-// 归档任务按（空间, 数据集）标识，列出时写成 空间/数据集。
-func (s *Service) checkNotArchived(ctx context.Context, spaceID string, pending []pendingTask) error {
-	if len(pending) == 0 {
-		return nil
-	}
-	archived, err := s.Archives.ArchivedDatasets(ctx, spaceID)
-	if err != nil {
-		return fmt.Errorf("读不到归档任务，暂不能删除（删除前要确认结果数据集没有归档任务）：%w", err)
-	}
-	var blocked []string
-	for _, task := range pending {
-		if archived[task.ResultDatasetID] {
-			blocked = append(blocked, spaceID+"/"+task.ResultDatasetID)
-		}
-	}
-	if len(blocked) > 0 {
-		sort.Strings(blocked)
-		return rejection{fmt.Errorf("结果数据集有归档任务 %s，请先到归档页删除这些归档任务，再删除实例", strings.Join(blocked, "、"))}
 	}
 	return nil
 }

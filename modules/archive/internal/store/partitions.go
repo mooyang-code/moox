@@ -223,10 +223,12 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 			_, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = ? WHERE c_space_id = ? AND c_dataset_id = ?`, reason, run.SpaceID, run.DatasetID)
 			return err
 		}
-		// 只有带分区的上报才清掉被拒原因：被拒的分区一直待上报，任务绑定后的每次上报都会带上它；
+		// 只有带分区的上报才清掉分区登记被拒的原因：被拒的分区一直待上报，任务绑定后的每次上报都会带上它；
 		// 不带分区的上报（绑定前失败、排队时被取消）说明不了问题已解决。
+		// 源数据集不存在的标记由维护刷新管理，不能被在途运行的完成上报误清。
 		if len(req.Partitions) > 0 {
-			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = '' WHERE c_space_id = ? AND c_dataset_id = ? AND c_blocked_reason != ''`, run.SpaceID, run.DatasetID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = '' WHERE c_space_id = ? AND c_dataset_id = ? AND c_blocked_reason != '' AND c_blocked_reason != ?`,
+				run.SpaceID, run.DatasetID, BlockedReasonSourceDatasetMissing); err != nil {
 				return err
 			}
 		}

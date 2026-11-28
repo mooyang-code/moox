@@ -107,12 +107,12 @@ func TestStrategyInstanceDeleteTimeoutAsksToRetry(t *testing.T) {
 	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":4,"msg":"删除因子任务 ftask_spot 未完成：请求超时"},"incomplete":true}`}, "--yes")
 	require.ErrorContains(t, err, strategyInstanceDeleteIncomplete)
 
-	// 还没动手就失败（例如读不到归档任务）：原样报错，不加“删除未完成”。
-	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":4,"msg":"读不到归档任务，暂不能删除"}}`}, "--yes")
-	require.ErrorContains(t, err, "读不到归档任务")
+	// 还没动手就失败（例如读取因子任务失败或有回放在进行）：原样报错，不加“删除未完成”。
+	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":4,"msg":"读取因子任务 ftask_spot 失败，暂不能删除"}}`}, "--yes")
+	require.ErrorContains(t, err, "读取因子任务")
 	assert.NotContains(t, err.Error(), strategyInstanceDeleteIncomplete)
 
-	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":1,"msg":"结果数据集 x 有归档任务"}}`}, "--yes")
-	require.ErrorContains(t, err, "归档任务")
+	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":1,"msg":"有回放正在读取这个实例的数据（rep-1），请先取消回放，再删除实例"}}`}, "--yes")
+	require.ErrorContains(t, err, "请先取消回放")
 	assert.NotContains(t, err.Error(), strategyInstanceDeleteIncomplete)
 }

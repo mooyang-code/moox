@@ -590,10 +590,8 @@ components:
         methods:
           - name: GetArchiveOverview
             read_only: true
-          # strategy 删除策略实例前确认结果数据集没有归档任务。
           - name: ListArchiveTasks
             read_only: true
-            callers: [strategy]
           - name: PrepareArchiveTask
             read_only: true
           - name: CreateArchiveTask

@@ -1182,3 +1182,71 @@ func TestMergeUnrecoverableCapsAfterMergingAndAccumulatesAcrossRuns(t *testing.T
 		t.Fatalf("跨运行累积应归并相邻区间: %+v", got.Unrecoverable)
 	}
 }
+
+func TestSourceDatasetMissingLifecycleAndIsolationFromPartitionRegression(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", false)
+	mustTask(t, s, "crypto", "ds2", false)
+
+	// ds1 排入一条 follow；ds2 已有分区登记倒退原因。
+	if n, err := s.CreateFollowRuns(ctx, t0); err != nil || n != 2 {
+		t.Fatalf("created=%d err=%v", n, err)
+	}
+	c2 := mustClaim(t, s, t0) // ds1
+	if c2.Task.DatasetID != "ds1" {
+		t.Fatalf("claimed = %+v", c2.Task)
+	}
+	// 再给 ds1 补一条排队中的 follow（等 ds1 跑完前先测在途 CompleteRun 不清源缺失）。
+	// 标记 ds1 源数据集不存在：ds1 状态仍是 enabled，不再生成 follow；在途运行的带分区完成上报不误清该标记。
+	if err := s.MarkTaskSourceMissing(ctx, "crypto", "ds1", t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	task1, _ := s.GetTask(ctx, "crypto", "ds1")
+	if task1.Status != StatusEnabled || task1.BlockedReason != BlockedReasonSourceDatasetMissing {
+		t.Fatalf("ds1 = %+v", task1)
+	}
+	if err := s.CompleteRun(ctx, CompleteRequest{
+		RunID: c2.Run.RunID, LeaseToken: c2.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Minute),
+		Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	task1, _ = s.GetTask(ctx, "crypto", "ds1")
+	if task1.BlockedReason != BlockedReasonSourceDatasetMissing {
+		t.Fatalf("在途运行的带分区完成上报不能清掉源数据集不存在标记: %+v", task1)
+	}
+	// 此时再给 ds1 触发 CreateFollowRuns：ds1 被跳过，ds2 已有 queued 的 follow 也不重复生成。
+	if n, err := s.CreateFollowRuns(ctx, t0.Add(3*time.Minute)); err != nil || n != 0 {
+		t.Fatalf("ds1 源缺失不应生成 follow: n=%d err=%v", n, err)
+	}
+	// ds2 原本的排队 follow 在 MarkTaskSourceMissing 时被取消。
+	if err := s.MarkTaskSourceMissing(ctx, "crypto", "ds2", t0.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := s.ListActiveRuns(ctx, "crypto"); err != nil || len(active) != 0 {
+		t.Fatalf("排队中的 follow 应已取消: active=%+v err=%v", active, err)
+	}
+	// UpdateTaskDataset 清掉源数据集不存在标记（即使保留期和元数据未变），随后恢复生成 follow。
+	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", task1.Retention, task1.MetaJSON); err != nil {
+		t.Fatal(err)
+	}
+	task1, _ = s.GetTask(ctx, "crypto", "ds1")
+	if task1.BlockedReason != "" {
+		t.Fatalf("数据集重现后应清空源缺失标记: %+v", task1)
+	}
+	if n, err := s.CreateFollowRuns(ctx, t0.Add(4*time.Minute)); err != nil || n != 1 {
+		t.Fatalf("ds1 恢复后应生成 1 条 follow: n=%d err=%v", n, err)
+	}
+	// 分区登记被拒原因不能被 UpdateTaskDataset 误清。
+	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = '分区倒退测试' WHERE c_space_id = 'crypto' AND c_dataset_id = 'ds1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "336h", `{"name":"updated"}`); err != nil {
+		t.Fatal(err)
+	}
+	task1, _ = s.GetTask(ctx, "crypto", "ds1")
+	if task1.BlockedReason != "分区倒退测试" || task1.Retention != "336h" {
+		t.Fatalf("UpdateTaskDataset 不能误清分区倒退原因: %+v", task1)
+	}
+}
