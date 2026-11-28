@@ -112,7 +112,7 @@ request = json.loads(sys.argv[1])
 root, sizes = request.get("root"), bool(request.get("sizes"))
 if not valid_root(root):
     fail("deploy root must be a clean absolute path other than /")
-report = {"root": root, "root_exists": os.path.isdir(root), "entries": [], "installed": False, "version_text": "",
+report = {"root": root, "root_exists": os.path.isdir(root), "entries": [], "installed": False, "install_complete": False, "version_text": "",
           "units": [], "active": [], "disabled": [], "processes": 0, "archive_kb": -1, "disk_free_kb": -1,
           "linger": False, "journald": os.path.isdir("/var/log/journal"), "data_formats": {}}
 if report["root_exists"]:
@@ -123,6 +123,7 @@ if report["root_exists"]:
         with open(version, "rb") as handle:
             raw = handle.read(64 << 10)
         report["version_text"] = raw.decode("utf-8", "replace")
+    report["install_complete"] = exists_regular(os.path.join(root, "install-complete.json"))
     if sizes:
         report["archive_kb"] = size_kb(os.path.join(root, "archive"))
     report["data_formats"] = inspect_data_formats(root)

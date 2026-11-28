@@ -179,5 +179,5 @@ func IncompatibleError(report Report) error {
 		}
 		items = append(items, fmt.Sprintf("%s（%s）", target, item.Reason))
 	}
-	return fmt.Errorf("data_format_incompatible: 以下组件数据格式不兼容，不能保留数据部署：%s。请先备份密钥与告警渠道，再走全部覆盖（全新部署）", strings.Join(items, "；"))
+	return fmt.Errorf("data_format_incompatible: 以下组件数据格式不兼容，不能保留数据部署：%s。请改走全部覆盖（moox-cli setup install --space-id <空间> --wipe <预检摘要> --yes，清空前会自动备份密钥与告警渠道）", strings.Join(items, "；"))
 }

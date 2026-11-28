@@ -74,7 +74,15 @@ type setupDeps struct {
 	openStart func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error)
 	// verifySpace 是 setup install 的最后一步，测试里替换。
 	verifySpace func(context.Context, string, *setupSnapshot, string) error
-	regionCloud func(*setupSnapshot, string) (setupFunctionCloud, error)
+	// markInstallComplete 在安装验收全部通过后，在控制机部署根下单独写完成标记文件。
+	markInstallComplete func(context.Context, *setupSnapshot, string) error
+	// previewBackup 只读统计清空前将备份的密钥与告警渠道条数（不落盘、不解密）。
+	previewBackup func(context.Context, string, *setupSnapshot) (int, int, error)
+	// backupBeforeWipe 在清空前自动导出密钥与告警渠道并写入带待导入标记的 moox.backup。
+	backupBeforeWipe func(context.Context, string, *setupSnapshot, string) (setupBackupOutput, error)
+	// restoreBackup 在安装全部组件就绪之后、完整初始化之前按覆盖自动导入待导入的备份。
+	restoreBackup func(context.Context, string, *setupSnapshot) (*setupRestoreBackupSummary, error)
+	regionCloud   func(*setupSnapshot, string) (setupFunctionCloud, error)
 }
 
 func init() {
@@ -90,7 +98,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.AddCommand(
 		newSetupInstallCommand(deps),
-		newSetupUpdateCommand(deps),
 		newSetupBackupCommand(),
 		newSetupOperatorCommand(deps),
 		newSetupDeployCommand(deps),
@@ -524,6 +531,10 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.readLogs, defaults.readLogs)
 	fillSetupDep(&deps.openStart, defaults.openStart)
 	fillSetupDep(&deps.verifySpace, defaults.verifySpace)
+	fillSetupDep(&deps.markInstallComplete, defaults.markInstallComplete)
+	fillSetupDep(&deps.previewBackup, defaults.previewBackup)
+	fillSetupDep(&deps.backupBeforeWipe, defaults.backupBeforeWipe)
+	fillSetupDep(&deps.restoreBackup, defaults.restoreBackup)
 	fillSetupDep(&deps.regionCloud, defaults.regionCloud)
 	if deps.initStorage == nil {
 		deps.initStorage = func(ctx context.Context, snapshot *setupSnapshot, storageHost, sourceRoot string, bundle setupInitBundle) (setupInitSummary, error) {
@@ -568,6 +579,10 @@ func defaultSetupDeps() setupDeps {
 			_, err := runSetupVerifySpace(ctx, file, snapshot, spaceID, setupVerifyTimeout)
 			return err
 		},
+		markInstallComplete:   defaultSetupMarkInstallComplete,
+		previewBackup:         defaultSetupPreviewBackup,
+		backupBeforeWipe:      defaultSetupBackupBeforeWipe,
+		restoreBackup:         defaultSetupRestoreBackup,
 		regionCloud:           defaultSetupRegionCloud,
 		loadInitBundle:        loadSetupInitBundle,
 		scanDeployment:        defaultSetupScanDeployment,

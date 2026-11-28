@@ -15,6 +15,10 @@ import (
 // VersionFile 是部署根下的部署记录：有它就表示这台主机装过。
 const VersionFile = "version.json"
 
+// InstallCompleteFile 是控制机部署根下的安装完成标记：setup install 全部步骤与验收通过后单独写出，
+// 不放进 version.json（每次部署都会重写 version.json），卸载清空部署根时自然消失。
+const InstallCompleteFile = "install-complete.json"
+
 // StagingDirectory 是目标机下载组件包的目录（部署根下）。
 const StagingDirectory = ".staging"
 
@@ -30,8 +34,9 @@ func (l Layout) Secret(name string) string      { return path.Join(l.Root, "secr
 func (l Layout) Env(component string) string {
 	return path.Join(l.Root, "secrets", "env", component+".env")
 }
-func (l Layout) Version() string { return path.Join(l.Root, VersionFile) }
-func (l Layout) Staging() string { return path.Join(l.Root, StagingDirectory) }
+func (l Layout) Version() string         { return path.Join(l.Root, VersionFile) }
+func (l Layout) InstallComplete() string { return path.Join(l.Root, InstallCompleteFile) }
+func (l Layout) Staging() string         { return path.Join(l.Root, StagingDirectory) }
 
 // HostPolicy 是主机策略缓存：HostAgent 从 Monitor 同步后写在自己的数据目录里，Admin 的证书巡检读它取告警渠道。
 func (l Layout) HostPolicy() string { return path.Join(l.Data("host-agent"), "host-policy.json") }

@@ -40,11 +40,18 @@ type Channel struct {
 	CreatedAt   int64  `json:"created_at,omitempty"`
 }
 
+// ErrPendingImport 表示备份文件带有“卸载后待导入”标记，任何自动或手动备份都不得覆盖。
+var ErrPendingImport = errors.New("backup_pending_import")
+
 // File 是落盘的备份文件外层结构：不含任何明文密钥、口令或 Webhook。
 type File struct {
-	Format               string              `json:"format"`
-	ExportedAt           string              `json:"exported_at"`
-	KeyFingerprint       string              `json:"key_fingerprint"`
+	Format         string `json:"format"`
+	ExportedAt     string `json:"exported_at"`
+	KeyFingerprint string `json:"key_fingerprint"`
+	// PendingImport 表示该备份处于“卸载后待导入”状态：卸载开始清空前写上，安装自动导入成功后清掉。
+	// 标记为 true 时，任何备份（自动或手动）都不得覆盖这份文件，防止中途失败再卸载时用半成品覆盖完好备份。
+	PendingImport        bool                `json:"pending_import,omitempty"`
+	ImportedAt           string              `json:"imported_at,omitempty"`
 	Secrets              SecretsSection      `json:"secrets"`
 	NotificationChannels NotificationSection `json:"notification_channels"`
 }
@@ -106,8 +113,17 @@ func (c *Credentials) Clear() {
 	c.key = nil
 }
 
-// Seal 把加密的密钥迁移包与告警渠道清单合成为加密备份文件内容。
+// Seal 把加密的密钥迁移包与告警渠道清单合成为加密备份文件内容（手动备份，不设待导入标记）。
 func Seal(secretsBundle string, secretCount int, channels []Channel, creds *Credentials, now time.Time) ([]byte, error) {
+	return seal(secretsBundle, secretCount, channels, creds, now, false)
+}
+
+// SealPending 与 Seal 相同，但同时写入“卸载后待导入”标记（pending_import=true），用于卸载前自动备份。
+func SealPending(secretsBundle string, secretCount int, channels []Channel, creds *Credentials, now time.Time) ([]byte, error) {
+	return seal(secretsBundle, secretCount, channels, creds, now, true)
+}
+
+func seal(secretsBundle string, secretCount int, channels []Channel, creds *Credentials, now time.Time, pendingImport bool) ([]byte, error) {
 	if creds == nil || len(creds.key) == 0 {
 		return nil, errors.New("缺少备份派生密钥")
 	}
@@ -138,6 +154,7 @@ func Seal(secretsBundle string, secretCount int, channels []Channel, creds *Cred
 		Format:         Format,
 		ExportedAt:     now.UTC().Format(time.RFC3339),
 		KeyFingerprint: creds.Fingerprint,
+		PendingImport:  pendingImport,
 		Secrets:        SecretsSection{Count: secretCount, Bundle: secretsBundle},
 		NotificationChannels: NotificationSection{
 			Count:  len(channels),
@@ -155,18 +172,95 @@ func Seal(secretsBundle string, secretCount int, channels []Channel, creds *Cred
 	return append(encoded, '\n'), nil
 }
 
+// ReadMetadata 只读解析备份文件外层元数据（不解密告警渠道，也不访问钥匙串）。
+// 文件不存在时返回 (nil, false, nil)。
+func ReadMetadata(path string) (*File, bool, error) {
+	raw, err := ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	file, err := parseFileHeader(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	return &file, true, nil
+}
+
+func parseFileHeader(raw []byte) (File, error) {
+	var file File
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return File{}, errors.New("备份文件不是合法的 JSON 格式")
+	}
+	if file.Format != Format || strings.TrimSpace(file.Secrets.Bundle) == "" ||
+		file.NotificationChannels.Cipher != channelCipher || file.Secrets.Count < 0 || file.NotificationChannels.Count < 0 {
+		return File{}, errors.New("备份文件格式无效或已损坏")
+	}
+	return file, nil
+}
+
+// WriteGuarded 在写入前检查目标备份是否带有“卸载后待导入”标记：有则拒绝覆盖并返回 ErrPendingImport。
+func WriteGuarded(path string, data []byte) error {
+	meta, exists, err := ReadMetadata(path)
+	if err != nil {
+		return err
+	}
+	if exists && meta.PendingImport {
+		return fmt.Errorf("%w: 本机备份 %s 带有“卸载后待导入”标记（含 %d 把密钥、%d 个告警渠道），拒绝覆盖；请先完成安装导入该备份",
+			ErrPendingImport, path, meta.Secrets.Count, meta.NotificationChannels.Count)
+	}
+	return WriteAtomic(path, data)
+}
+
+// MarkPendingImport 给本机已有备份打上“卸载后待导入”标记（用于带 --no-backup 卸载时保护并复用已有备份）。
+// 备份文件不存在时返回 (nil, false, nil)。
+func MarkPendingImport(path string) (*File, bool, error) {
+	meta, exists, err := ReadMetadata(path)
+	if err != nil || !exists {
+		return nil, false, err
+	}
+	if meta.PendingImport {
+		return meta, true, nil
+	}
+	meta.PendingImport = true
+	encoded, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return nil, true, fmt.Errorf("序列化备份文件失败：%w", err)
+	}
+	if err := WriteAtomic(path, append(encoded, '\n')); err != nil {
+		return nil, true, err
+	}
+	return meta, true, nil
+}
+
+// MarkImported 在安装自动导入成功后清掉“卸载后待导入”标记并记录导入时刻。
+func MarkImported(path string, now time.Time) error {
+	meta, exists, err := ReadMetadata(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("读不到备份文件 %s：%w", path, os.ErrNotExist)
+	}
+	meta.PendingImport = false
+	meta.ImportedAt = now.UTC().Format(time.RFC3339)
+	encoded, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化备份文件失败：%w", err)
+	}
+	return WriteAtomic(path, append(encoded, '\n'))
+}
+
 // Open 解析并解密备份文件的告警渠道部分，同时核对格式、主密钥指纹与条数一致性。
 func Open(raw []byte, creds *Credentials) (*Opened, error) {
 	if creds == nil || len(creds.key) == 0 {
 		return nil, errors.New("缺少备份派生密钥")
 	}
-	var file File
-	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, errors.New("备份文件不是合法的 JSON 格式")
-	}
-	if file.Format != Format || strings.TrimSpace(file.Secrets.Bundle) == "" ||
-		file.NotificationChannels.Cipher != channelCipher || file.Secrets.Count < 0 || file.NotificationChannels.Count < 0 {
-		return nil, errors.New("备份文件格式无效或已损坏")
+	file, err := parseFileHeader(raw)
+	if err != nil {
+		return nil, err
 	}
 	if file.KeyFingerprint != creds.Fingerprint {
 		return nil, configcrypt.ErrKeyMissing

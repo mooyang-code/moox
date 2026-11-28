@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupbackup "github.com/mooyang-code/moox/modules/cli/internal/setup/backup"
@@ -27,18 +28,34 @@ type fakeBackupGateway struct {
 	importOverwrite  bool
 	importCalled     bool
 
-	bundle      string
-	secretCount int32
-	channels    []*monitorpb.ExportedNotificationChannel
-	importRsp   *adminpb.ImportSecretsRsp
-	exportErr   error
-	channelErr  error
-	importErr   error
-	closed      bool
+	importChannelsCalled bool
+	importedChannels     []*monitorpb.ImportNotificationChannel
+	importChannelsRsp    *monitorpb.ImportNotificationChannelsRsp
+	importChannelsErr    error
+
+	listSecrets  []*adminpb.Secret
+	listChannels []*monitorpb.NotificationChannel
+	bundle       string
+	secretCount  int32
+	channels     []*monitorpb.ExportedNotificationChannel
+	importRsp    *adminpb.ImportSecretsRsp
+	exportErr    error
+	channelErr   error
+	importErr    error
+	closed       bool
 }
 
 func (g *fakeBackupGateway) Invoke(_ context.Context, service, method string, req, rsp any) error {
 	switch service + "/" + method {
+	case secretMgrSvc + "/ListSecrets":
+		request := req.(*adminpb.ListSecretsReq)
+		response := rsp.(*adminpb.ListSecretsRsp)
+		response.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+		if request.GetPage().GetPage() <= 1 {
+			response.Secrets = g.listSecrets
+		}
+		response.PageResult = &commonpb.PageResult{Page: request.GetPage().GetPage(), Size: request.GetPage().GetSize(), Total: uint32(len(g.listSecrets)), HasMore: false}
+		return nil
 	case secretMgrSvc + "/ExportSecrets":
 		if g.exportErr != nil {
 			return g.exportErr
@@ -50,6 +67,14 @@ func (g *fakeBackupGateway) Invoke(_ context.Context, service, method string, re
 		response.Bundle = g.bundle
 		response.Count = g.secretCount
 		return nil
+	case monitorService + "/ListNotificationChannels":
+		if g.channelErr != nil {
+			return g.channelErr
+		}
+		response := rsp.(*monitorpb.ListNotificationChannelsRsp)
+		response.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+		response.Channels = g.listChannels
+		return nil
 	case monitorService + "/ExportNotificationChannels":
 		if g.channelErr != nil {
 			return g.channelErr
@@ -57,6 +82,22 @@ func (g *fakeBackupGateway) Invoke(_ context.Context, service, method string, re
 		response := rsp.(*monitorpb.ExportNotificationChannelsRsp)
 		response.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
 		response.Channels = g.channels
+		return nil
+	case monitorService + "/ImportNotificationChannels":
+		if g.importChannelsErr != nil {
+			return g.importChannelsErr
+		}
+		request := req.(*monitorpb.ImportNotificationChannelsReq)
+		g.importChannelsCalled = true
+		g.importedChannels = request.GetChannels()
+		response := rsp.(*monitorpb.ImportNotificationChannelsRsp)
+		if g.importChannelsRsp != nil {
+			response.RetInfo = g.importChannelsRsp.GetRetInfo()
+			response.Created = g.importChannelsRsp.GetCreated()
+			response.Updated = g.importChannelsRsp.GetUpdated()
+		} else {
+			response.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+		}
 		return nil
 	case secretMgrSvc + "/ImportSecrets":
 		if g.importErr != nil {
@@ -231,4 +272,121 @@ func TestSetupBackupVerifyReadsBackAndCallsImportSecretsWithoutOverwrite(t *test
 	require.ErrorContains(t, err, "1 条失败")
 	assert.NotContains(t, stdout, "秘密密钥名称")
 	assert.NotContains(t, err.Error(), "秘密密钥名称")
+}
+
+func TestSetupBackupRefusesOverwriteWhenPendingImport(t *testing.T) {
+	restoreKeys := configcrypt.SetDefaultForTest(&configcrypt.MemoryStore{})
+	t.Cleanup(restoreKeys)
+
+	manifest := writeTestSetupManifest(t)
+	backupPath := topology.BackupPathFor(manifest)
+	creds, err := setupbackup.DeriveCredentials(configcrypt.Default(), true)
+	require.NoError(t, err)
+	defer creds.Clear()
+
+	pendingRaw, err := setupbackup.SealPending(`{"format":"moox.secrets/v1","ciphertext":"GOOD"}`, 3, []setupbackup.Channel{
+		{ChannelType: "feishu", WebhookURL: "https://open.feishu.cn/hook/good", Secret: "s"},
+	}, creds, time.Date(2026, 11, 28, 1, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.NoError(t, setupbackup.WriteAtomic(backupPath, pendingRaw))
+
+	called := false
+	previous := openCommandGateway
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) {
+		called = true
+		return &fakeBackupGateway{}, nil
+	}
+	t.Cleanup(func() { openCommandGateway = previous })
+
+	_, err = runSetupBackupCommand(t, "--file", manifest)
+	require.ErrorIs(t, err, setupbackup.ErrPendingImport)
+	assert.False(t, called, "已有待导入备份时手动 backup 应直接拒绝、不连接网关")
+
+	after, err := os.ReadFile(backupPath)
+	require.NoError(t, err)
+	assert.Equal(t, pendingRaw, after, "原待导入备份必须毫发无损")
+}
+
+func TestCountBackupItemsExcludesEnvironmentBoundSecrets(t *testing.T) {
+	gateway := &fakeBackupGateway{
+		listSecrets: []*adminpb.Secret{
+			{SecretId: "tencent-default", Category: "cloud", Provider: "tencent"},
+			{SecretId: "exchange-binance-production-main", Category: "exchange", Provider: "binance"},
+			{SecretId: "moox:ssh-host:control", Category: "ssh", Provider: "host"},
+			{SecretId: "eb-token-1", Category: "eventbus", Provider: "moox_eventbus"},
+		},
+		listChannels: []*monitorpb.NotificationChannel{
+			{ChannelId: "c1", ChannelType: "wecom", WebhookUrl: "https://example.com/1"},
+		},
+	}
+	secrets, channels, err := countBackupItems(context.Background(), gateway)
+	require.NoError(t, err)
+	assert.Equal(t, 2, secrets)
+	assert.Equal(t, 1, channels)
+}
+
+func TestImportBackupFileOverwritesSecretsAndImportsChannelsThenClearsPendingFlag(t *testing.T) {
+	restoreKeys := configcrypt.SetDefaultForTest(&configcrypt.MemoryStore{})
+	t.Cleanup(restoreKeys)
+
+	manifest := writeTestSetupManifest(t)
+	backupPath := topology.BackupPathFor(manifest)
+	creds, err := setupbackup.DeriveCredentials(configcrypt.Default(), true)
+	require.NoError(t, err)
+	defer creds.Clear()
+
+	pendingRaw, err := setupbackup.SealPending(`{"format":"moox.secrets/v1","ciphertext":"RESTORE-ME"}`, 2, []setupbackup.Channel{
+		{ChannelID: "old-id", ChannelType: "feishu", WebhookURL: "https://open.feishu.cn/hook/abc", Secret: "sec-abc"},
+		{ChannelID: "old-id-2", ChannelType: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/hook/def"},
+	}, creds, time.Date(2026, 11, 28, 2, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.NoError(t, setupbackup.WriteAtomic(backupPath, pendingRaw))
+
+	// 先模拟渠道导入失败：此时不能清掉 pending_import，以便重跑继续恢复。
+	failingGateway := &fakeBackupGateway{
+		importRsp:         &adminpb.ImportSecretsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Created: 1, Updated: 1},
+		importChannelsErr: errors.New("monitor unreachable"),
+	}
+	_, err = importBackupFile(context.Background(), failingGateway, backupPath)
+	require.ErrorContains(t, err, "导入告警渠道备份失败")
+	meta, exists, err := setupbackup.ReadMetadata(backupPath)
+	require.NoError(t, err)
+	require.True(t, exists)
+	assert.True(t, meta.PendingImport, "导入未完全成功时必须保留 pending_import 标记")
+
+	// 重试成功：密钥按 overwrite=true 导入，渠道按 ImportNotificationChannels 导入，完成后清掉 pending_import。
+	gateway := &fakeBackupGateway{
+		importRsp: &adminpb.ImportSecretsRsp{
+			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+			Created: 1,
+			Updated: 1,
+		},
+		importChannelsRsp: &monitorpb.ImportNotificationChannelsRsp{
+			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+			Created: 1,
+			Updated: 1,
+		},
+	}
+	summary, err := importBackupFile(context.Background(), gateway, backupPath)
+	require.NoError(t, err)
+	assert.True(t, gateway.importCalled)
+	assert.True(t, gateway.importOverwrite, "重装自动导入必须覆盖已有初始密钥（以管理台为准）")
+	assert.Equal(t, creds.Passphrase(), gateway.importPassphrase)
+	assert.True(t, gateway.importChannelsCalled)
+	require.Len(t, gateway.importedChannels, 2)
+	assert.Equal(t, "feishu", gateway.importedChannels[0].GetChannelType())
+	assert.Equal(t, "https://open.feishu.cn/hook/abc", gateway.importedChannels[0].GetWebhookUrl())
+	assert.Equal(t, "sec-abc", gateway.importedChannels[0].GetSecret())
+	assert.Equal(t, "imported", summary.Status)
+	assert.EqualValues(t, 1, summary.SecretsCreated)
+	assert.EqualValues(t, 1, summary.SecretsUpdated)
+	assert.EqualValues(t, 1, summary.ChannelsCreated)
+	assert.EqualValues(t, 1, summary.ChannelsUpdated)
+	assert.NotEmpty(t, summary.ImportedAt)
+
+	meta, exists, err = setupbackup.ReadMetadata(backupPath)
+	require.NoError(t, err)
+	require.True(t, exists)
+	assert.False(t, meta.PendingImport, "导入成功后应清除 pending_import 标记")
+	assert.NotEmpty(t, meta.ImportedAt)
 }

@@ -78,17 +78,17 @@ func fakeDial(stdout map[string]string, err error) (Dial, map[string][]string) {
 
 func TestScanSendsRootAsJSONAndKeepsHostOrderAndVersionBytes(t *testing.T) {
 	version := `{"version":"v0.0.2",  "catalog_sha256":"sha256:abc"}`
-	encode := func(installed bool, text string, units ...string) string {
+	encode := func(installed, complete bool, text string, units ...string) string {
 		raw, _ := json.Marshal(map[string]any{
 			"root": "/data/moox", "root_exists": true, "entries": []string{"bin", "version.json"}, "installed": installed,
-			"version_text": text, "units": units, "active": units, "processes": 2, "archive_kb": -1,
+			"install_complete": complete, "version_text": text, "units": units, "active": units, "processes": 2, "archive_kb": -1,
 			"disk_free_kb": 1024, "linger": true, "journald": false,
 		})
 		return string(raw)
 	}
 	dial, argv := fakeDial(map[string]string{
-		"control": encode(true, version, "moox-admin.service"),
-		"storage": encode(true, "{broken", "moox-eventbus.service"),
+		"control": encode(true, false, version, "moox-admin.service"),
+		"storage": encode(true, false, "{broken", "moox-eventbus.service"),
 	}, nil)
 	reports, err := Scan(context.Background(), testConfig(t), dial, Options{Sizes: true})
 	require.NoError(t, err)
@@ -97,9 +97,18 @@ func TestScanSendsRootAsJSONAndKeepsHostOrderAndVersionBytes(t *testing.T) {
 	require.Equal(t, version, string(reports[0].Version), "version.json 原文逐字节保留")
 	require.Nil(t, reports[1].Version, "不是合法 JSON 的 version.json 不带回")
 	require.True(t, reports[1].Installed)
+	require.False(t, reports[0].InstallComplete)
 	require.Equal(t, []string{"moox-admin.service"}, reports[0].Units)
 	require.True(t, reports[0].Linger)
+	require.Equal(t, RouteIncomplete, Route(reports))
+	require.Equal(t, RouteIncomplete, RouteForControl(reports, "control"))
+
+	// 控制机有完成标记时判定为 installed；非控制机误放完成标记不算。
+	reports[1].InstallComplete = true
+	require.Equal(t, RouteIncomplete, RouteForControl(reports, "control"))
+	reports[0].InstallComplete = true
 	require.Equal(t, RouteInstalled, Route(reports))
+	require.Equal(t, RouteInstalled, RouteForControl(reports, "control"))
 
 	call := argv["control"]
 	require.Equal(t, []string{"python3", "-c"}, call[:2])
@@ -109,7 +118,7 @@ func TestScanSendsRootAsJSONAndKeepsHostOrderAndVersionBytes(t *testing.T) {
 	require.Equal(t, map[string]any{"root": "/data/moox", "sizes": true}, request)
 
 	// 只查一台。
-	dial, argv = fakeDial(map[string]string{"storage": encode(false, "")}, nil)
+	dial, argv = fakeDial(map[string]string{"storage": encode(false, false, "")}, nil)
 	reports, err = Scan(context.Background(), testConfig(t), dial, Options{Host: "storage"})
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -136,7 +145,8 @@ func TestBuildPlanListsOnlyHostsWithContentAndHasStableDigest(t *testing.T) {
 	}
 	plan := BuildPlan(reports)
 	require.Equal(t, Notice, plan.Notice)
-	require.Equal(t, "管理台里改过的密钥只在线上有，清空前先在管理台导出", plan.Notice)
+	require.Contains(t, plan.Notice, "归档文件")
+	require.Contains(t, plan.Notice, "自动备份")
 	require.Len(t, plan.Hosts, 2)
 	require.Equal(t, []string{"control", "factor"}, []string{plan.Hosts[0].Host, plan.Hosts[1].Host})
 	require.Equal(t, int64(4096), plan.Hosts[1].ArchiveKB)
@@ -269,6 +279,7 @@ func TestInspectScriptIsReadOnlyAndReportsLayout(t *testing.T) {
 		require.True(t, result.RootExists)
 		require.Equal(t, []string{"archive", "bin", "config", "data", "import", "secrets", "version.json"}, result.Entries)
 		require.True(t, result.Installed)
+		require.False(t, result.InstallComplete)
 		require.Equal(t, `{"version":"dev"}`, result.VersionText)
 		require.Equal(t, []string{"moox-admin.service", "moox-monitor.service"}, result.Units)
 		require.GreaterOrEqual(t, result.ArchiveKB, int64(8))
@@ -281,6 +292,15 @@ func TestInspectScriptIsReadOnlyAndReportsLayout(t *testing.T) {
 			require.Empty(t, result.Active)
 			require.False(t, result.Linger)
 		}
+		// 写入完成标记后 install_complete 为 true；卸载清空部署根后自然消失。
+		marker := filepath.Join(env.root, "install-complete.json")
+		require.NoError(t, os.WriteFile(marker, []byte(`{"completed_at":"2026-11-28T00:00:00Z"}`), 0o600))
+		out, err = env.run(t, inspectScript, map[string]any{"root": env.root, "sizes": false})
+		require.NoError(t, err)
+		require.NoError(t, decode(out, &result))
+		require.True(t, result.InstallComplete)
+		require.NoError(t, os.Remove(marker))
+
 		// 不统计大小时是 -1；部署根不存在时没有条目、没装过，可用空间取上级目录。
 		out, err = env.run(t, inspectScript, map[string]any{"root": env.root + "-missing"})
 		require.NoError(t, err)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
+	setupdataformat "github.com/mooyang-code/moox/modules/cli/internal/setup/dataformat"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
@@ -139,6 +140,7 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 		Use:   "deploy",
 		Short: "把一台主机部署成 moox.toml 描述的样子：放二进制、渲染配置、按顺序重启有变化的组件，等它们就绪",
 		Long: `部署一台主机上的全部组件，或用 --component 只部署其中几个。每个组件是一个 systemd 用户服务 moox-<组件>。
+始终按保留数据的方式部署：预检会比对目标机上各组件的数据格式，格式变化或未知时会拒绝并提示走全部覆盖（moox-cli setup install --wipe）。
 重跑同一条命令就是再做一遍：没有变化的组件不重启；组件按 moox.toml 的声明启停：[deployments_disabled] 里的组件只更新文件、单元停掉，
 其余组件确保在运行（setup stop 临时停掉的也会被重新拉起）。停用的主机（enabled = false）只留 host-gateway 在跑，连不上也照常写登记。
 主机与部署的登记每次都按 moox.toml 整份覆盖 Admin（多出的主机与部署删除，签名公钥与 SSH 指纹保留）：控制机由 moox-admin-cli bootstrap 写
@@ -183,7 +185,7 @@ type setupStatusOutput struct {
 	Hosts []deploy.HostStatus `json:"hosts"`
 }
 
-// setupHostStatuses 把只读检测的结果整理成每台主机上各组件是否部署过、是否在运行；setup status 与 setup validate、setup update 共用。
+// setupHostStatuses 把只读检测的结果整理成每台主机上各组件是否部署过、是否在运行；setup status 与 setup validate、setup install 共用。
 func setupHostStatuses(manifest *topology.Config, reports []deployscan.HostReport) ([]deploy.HostStatus, error) {
 	hosts := []deploy.HostStatus{}
 	for _, report := range reports {
@@ -220,7 +222,11 @@ func newSetupStatusCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return writeSetupJSON(cmd, setupStatusOutput{Route: deployscan.Route(reports), Hosts: hosts})
+			route := deployscan.RouteForControl(reports, snapshot.Manifest.ControlHost().Name)
+			if host != "" {
+				route = deployscan.Route(reports)
+			}
+			return writeSetupJSON(cmd, setupStatusOutput{Route: route, Hosts: hosts})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径")
@@ -389,17 +395,19 @@ type setupValidateOutput struct {
 	Deployment *setupDeployment `json:"deployment,omitempty"`
 }
 
-// 部署方式：没装过只能新安装；装过时由用户在覆盖更新与卸载之间选一个（对整套部署统一选择，不逐台选）。
+// 部署方式：没装过只能新安装；装过（没装完或已装好）由用户在保留数据（keep）与全部覆盖（wipe）之间选一个，或单独卸载（uninstall）。
 const (
 	setupModeInstall   = "install"
-	setupModeUpdate    = "update"
+	setupModeKeep      = "keep"
+	setupModeWipe      = "wipe"
 	setupModeUninstall = "uninstall"
 )
 
-// setupDeployment 是目标机器的部署情况。Route：fresh（都没装过）或 installed（至少一台装过）；Modes 是可选的部署方式。
+// setupDeployment 是目标机器的部署情况。Route：fresh（没装过）、incomplete（没装完）或 installed（已装好）；Modes 是可选的部署方式。
 type setupDeployment struct {
-	Route string   `json:"route"`
-	Modes []string `json:"modes"`
+	Route      string                  `json:"route"`
+	Modes      []string                `json:"modes"`
+	DataFormat *setupdataformat.Report `json:"data_format,omitempty"`
 	// Components 是每台主机上 moox.toml 要求的组件（以及多出来的组件）是否已部署、是否在运行。
 	Components []deploy.HostStatus `json:"components"`
 	// NextSteps 是接下来要运行的命令；ManualSteps 是要用户在目标机上自己做的事（需要 sudo），做完再继续。
@@ -414,7 +422,7 @@ type setupDeployment struct {
 // minDeployDiskKB 是部署前每台主机至少要有的可用空间：放得下全部二进制的新旧两份和下载的组件包。
 const minDeployDiskKB = 2 << 20
 
-// setupDeploymentStatus 只读检测各主机，给出路线、要用户先做的事与提醒。
+// setupDeploymentStatus 只读检测各主机，给出三态路线、数据格式比对、要用户先做的事与提醒。
 func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupSnapshot) (*setupDeployment, error) {
 	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{})
 	if err != nil {
@@ -424,7 +432,18 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 	if err != nil {
 		return nil, err
 	}
-	status := &setupDeployment{Route: deployscan.Route(reports), Components: components, Hosts: reports, NextSteps: []string{}}
+	formatReport, err := setupdataformat.CheckTopologyReports(snapshot.Manifest, reports)
+	if err != nil {
+		return nil, err
+	}
+	route := deployscan.RouteForControl(reports, snapshot.Manifest.ControlHost().Name)
+	status := &setupDeployment{
+		Route:      route,
+		DataFormat: &formatReport,
+		Components: components,
+		Hosts:      reports,
+		NextSteps:  []string{},
+	}
 	var empty []string
 	for i, report := range reports {
 		switch {
@@ -436,7 +455,7 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 				}
 			}
 			if len(lacking) != 0 {
-				status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 装过，但缺这些组件：%s。如果是上次 setup install 没做完，重跑同一条 setup install；如果是 moox.toml 里新加的组件，覆盖更新会装上", report.Host, strings.Join(lacking, "、")))
+				status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 装过，但缺这些组件：%s。如果是上次 setup install 没做完，选择 --keep 接着装完；如果是 moox.toml 里新加的组件，已装好系统选 --keep 会装上", report.Host, strings.Join(lacking, "、")))
 			}
 		case len(report.Entries) != 0 || len(report.Units) != 0 || report.Processes != 0:
 			status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 没有 version.json，但部署根或用户服务里已有东西（失败的部署尝试或别的文件）：部署会直接装在上面、覆盖同名文件；不清楚这些是什么时先让用户确认（setup wipe 会清空 moox.toml 里的全部主机，不能只清这一台）", report.Host))
@@ -460,13 +479,24 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 		status.NextSteps = append(status.NextSteps, "新安装：moox-cli setup install --space-id <空间>（先不带 --yes 看预检）")
 		return status, nil
 	}
-	status.Modes = []string{setupModeUpdate, setupModeUninstall}
-	if len(empty) != 0 {
-		status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 还没装过：如果是上次 setup install 没做完，重跑同一条 setup install；如果是新加的主机，覆盖更新会把它装上", strings.Join(empty, "、")))
+	if formatReport.CanKeep {
+		status.Modes = []string{setupModeKeep, setupModeWipe, setupModeUninstall}
+	} else {
+		status.Modes = []string{setupModeWipe, setupModeUninstall}
+		status.Notes = append(status.Notes, setupdataformat.IncompatibleError(formatReport).Error())
 	}
-	status.NextSteps = append(status.NextSteps,
-		"覆盖更新（数据保留）：moox-cli setup update（先不带 --yes 看预览）",
-		"卸载（删除全部数据，不可恢复）：moox-cli setup wipe（先不带 --yes 看清空范围）")
+	if len(empty) != 0 {
+		status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 还没装过：没装完时用 setup install --keep 接着装完；已装好且为新加主机时用 setup install --keep 会把它装上", strings.Join(empty, "、")))
+	}
+	if status.Route == deployscan.RouteIncomplete {
+		status.NextSteps = append(status.NextSteps,
+			"查看预检并选择保留续装（--keep）或全部覆盖（--wipe）：moox-cli setup install --space-id <空间>",
+			"单独卸载（删除全部数据，不可恢复）：moox-cli setup wipe（先不带 --yes 看预览）")
+	} else {
+		status.NextSteps = append(status.NextSteps,
+			"查看预检并选择保留更新（--keep）或全部覆盖（--wipe）：moox-cli setup install",
+			"单独卸载（删除全部数据，不可恢复）：moox-cli setup wipe（先不带 --yes 看预览）")
+	}
 	return status, nil
 }
 
