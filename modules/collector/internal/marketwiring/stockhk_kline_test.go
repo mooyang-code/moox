@@ -117,8 +117,8 @@ func TestStockHKScheduledRequestWritesTheTargetBar(t *testing.T) {
 		`"2026-11-12 14:50,20.460,20.420,20.460,20.420,24000,490280.000"]}}`)
 	request := func() marketfetch.Request {
 		item := domain.CollectionItem{
-			InstanceID: "instance-1", SubjectID: "00836.XHKG", Symbol: "00836", Provider: "eastmoney", MarketType: "equity", DataType: "kline",
-			DatasetID: dataset, Frequency: "5m", TargetDataTime: target.Format(time.RFC3339Nano), SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true,
+			InstanceID: "instance-1", SubjectID: "00836.XHKG", Provider: "eastmoney", MarketType: "equity", DataType: "kline",
+			DatasetID: dataset, Frequency: "5m", TargetDataTime: target.Format(time.RFC3339Nano),
 		}
 		return marketfetch.Request{
 			BatchID: "scheduled", BatchKind: domain.BatchKindRealtime, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
@@ -126,7 +126,7 @@ func TestStockHKScheduledRequestWritesTheTargetBar(t *testing.T) {
 			Items: []domain.CollectionItem{item},
 			Targets: []domain.WriteTarget{{
 				ID: "target-1", SpaceID: "stockhk", InstanceID: item.InstanceID, TaskID: "task-1", DatasetID: dataset,
-				SeriesHash: item.SeriesHash, ExpectedCount: 1, Frequency: "5m", TargetDataTime: item.TargetDataTime,
+				SeriesHash: "series-hash", ExpectedCount: 1, Frequency: "5m", TargetDataTime: item.TargetDataTime,
 			}},
 		}
 	}
@@ -185,9 +185,10 @@ func TestStockHKBackfillRequestWritesEveryBarInTheRange(t *testing.T) {
 			BatchID: "backfill", BatchKind: domain.BatchKindBackfill, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
 			DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "backfill",
 			Items: []domain.CollectionItem{{
-				SubjectID: "00700.XHKG", Symbol: "00700", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
+				InstanceID: "i1", SubjectID: "00700.XHKG", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
 				StartTime: hkTime(start).Format(time.RFC3339Nano), EndTime: hkTime(end).Format(time.RFC3339Nano), BarLimit: 100,
 			}},
+			Targets: []domain.WriteTarget{{ID: "t1", SpaceID: "stockhk", InstanceID: "i1", TaskID: "backfill", DatasetID: dataset, Frequency: "5m"}},
 		})
 		require.NoError(t, err)
 		require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
@@ -217,7 +218,6 @@ func TestStockHKBackfillRequestWritesEveryBarInTheRange(t *testing.T) {
 // max_concurrent（4）限制。有多个主源的（A 股 1m、5m）仍是候选链长度 × 每源尝试次数，不随并发变；A 股 1d 只有通达信一个主源，
 // 与港股同一口径。
 func TestSinglePrimaryRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
-	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
 	threshold := func(marketID, frequency string, limits *marketfetch.FeedLimits) int {
 		pipeline, err := NewKlinePipeline(timerHandlerStorage{}, marketID, marketdata.InstrumentEquity, frequency, "", limits)
 		require.NoError(t, err)
@@ -228,7 +228,7 @@ func TestSinglePrimaryRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
 	require.Equal(t, 4, planned.Concurrency, "一个函数内同时处理的标的数")
 	limits := &marketfetch.FeedLimits{FeedConcurrency: planned.FeedConcurrency}
 	require.Equal(t, 12, threshold("stockhk", "5m", limits))
-	require.Equal(t, 6, threshold("stockhk", "5m", nil), "请求没带限速、进程环境也没设并发时按 1，不低于候选链长度 × 尝试次数")
+	require.Equal(t, 6, threshold("stockhk", "5m", nil), "请求没带限速时按默认并发 1，不低于候选链长度 × 尝试次数")
 	// A 股 1m、5m 有两个主源，阈值与请求带不带限速无关；1d 只有一个主源。
 	for frequency, want := range map[string]int{"1m": 12, "5m": 12} {
 		require.Equal(t, want, threshold("stockcn", frequency, limits), frequency)
@@ -236,10 +236,9 @@ func TestSinglePrimaryRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
 	}
 	require.Equal(t, 12, threshold("stockcn", "1d", limits))
 	require.Equal(t, 6, threshold("stockcn", "1d", nil))
-	// 云函数里并发来自计划下发的环境变量。
-	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "16")
-	require.Equal(t, 48, threshold("stockhk", "5m", nil))
-	require.Equal(t, 12, threshold("stockcn", "5m", nil))
+	high := &marketfetch.FeedLimits{FeedConcurrency: 16}
+	require.Equal(t, 48, threshold("stockhk", "5m", high))
+	require.Equal(t, 12, threshold("stockcn", "5m", high))
 }
 
 // 一期 25 只、开头 3 次请求被对端断开：断连的 3 只在本次调用内重试后取到，其余标的不受影响，25 只全部写入。
@@ -265,17 +264,24 @@ func TestStockHKDisconnectsAtTheStartDoNotFailTheWholeBatch(t *testing.T) {
 	})
 	require.Equal(t, 48, pipeline.Router.BreakerThreshold())
 	target := hkTime("2026-11-12 14:45:00")
+	targetTime := target.Format(time.RFC3339Nano)
 	items := make([]domain.CollectionItem, 0, 25)
+	targets := make([]domain.WriteTarget, 0, 25)
 	for index := 0; index < 25; index++ {
 		code := fmt.Sprintf("%05d", 800+index)
+		instanceID := "i-" + code
 		items = append(items, domain.CollectionItem{
-			SubjectID: code + ".XHKG", Symbol: code, Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
-			StartTime: target.Format(time.RFC3339Nano), EndTime: target.Add(5 * time.Minute).Format(time.RFC3339Nano), BarLimit: 1,
+			InstanceID: instanceID, SubjectID: code + ".XHKG", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
+			TargetDataTime: targetTime, BarLimit: 1,
+		})
+		targets = append(targets, domain.WriteTarget{
+			ID: "t-" + code, SpaceID: "stockhk", InstanceID: instanceID, TaskID: "task-1", DatasetID: dataset,
+			Frequency: "5m", TargetDataTime: targetTime, SeriesIndex: uint32(index), SeriesHash: "h", ExpectedCount: 25,
 		})
 	}
 	payload, err := pipeline.Execute(context.Background(), marketfetch.Request{
-		BatchID: "disconnect", BatchKind: domain.BatchKindRealtime, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
-		DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "disconnect", Concurrency: 16, FetchLimits: limits, Items: items,
+		BatchID: "disconnect", BatchKind: domain.BatchKindRealtime, RequirePeriodCommit: true, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
+		DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "disconnect", Concurrency: 16, FetchLimits: limits, Items: items, Targets: targets,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
@@ -311,16 +317,24 @@ func TestStockHKFallsBackToTencentWhenEastMoneyDisconnects(t *testing.T) {
 	})
 	require.Equal(t, 12, pipeline.Router.BreakerThreshold())
 	target := hkTime("2026-11-23 10:00:00")
-	items := make([]domain.CollectionItem, 0, 3)
-	for _, code := range []string{"00700", "00005", "09988"} {
+	targetTime := target.Format(time.RFC3339Nano)
+	codes := []string{"00700", "00005", "09988"}
+	items := make([]domain.CollectionItem, 0, len(codes))
+	targets := make([]domain.WriteTarget, 0, len(codes))
+	for idx, code := range codes {
+		instanceID := "i-" + code
 		items = append(items, domain.CollectionItem{
-			SubjectID: code + ".XHKG", Symbol: code, Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
-			StartTime: target.Format(time.RFC3339Nano), EndTime: target.Add(5 * time.Minute).Format(time.RFC3339Nano), BarLimit: 1,
+			InstanceID: instanceID, SubjectID: code + ".XHKG", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
+			TargetDataTime: targetTime, BarLimit: 1,
+		})
+		targets = append(targets, domain.WriteTarget{
+			ID: "t-" + code, SpaceID: "stockhk", InstanceID: instanceID, TaskID: "task-1", DatasetID: dataset,
+			Frequency: "5m", TargetDataTime: targetTime, SeriesIndex: uint32(idx), SeriesHash: "h", ExpectedCount: uint32(len(codes)),
 		})
 	}
 	payload, err := pipeline.Execute(context.Background(), marketfetch.Request{
-		BatchID: "fallback", BatchKind: domain.BatchKindRealtime, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
-		DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "fallback", Concurrency: 4, FetchLimits: limits, Items: items,
+		BatchID: "fallback", BatchKind: domain.BatchKindRealtime, RequirePeriodCommit: true, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
+		DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "fallback", Concurrency: 4, FetchLimits: limits, Items: items, Targets: targets,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
@@ -368,9 +382,10 @@ func TestStockHKForcedBackfillSkipsTheApproximateFallback(t *testing.T) {
 			DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "force", Concurrency: 1, FetchLimits: limits, PlanRequest: true,
 			CompleteOnly: completeOnly,
 			Items: []domain.CollectionItem{{
-				SubjectID: "00700.XHKG", Symbol: "00700", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
+				InstanceID: "i1", SubjectID: "00700.XHKG", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
 				StartTime: from.Format(time.RFC3339Nano), EndTime: from.Add(10 * time.Minute).Format(time.RFC3339Nano), BarLimit: 2,
 			}},
+			Targets: []domain.WriteTarget{{ID: "t1", SpaceID: "stockhk", InstanceID: "i1", TaskID: "backfill", DatasetID: dataset, Frequency: "5m"}},
 		})
 		require.NoError(t, err)
 		require.EqualValues(t, 3, eastmoney.Load())

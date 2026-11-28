@@ -431,21 +431,21 @@ func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsEntryDrift(t *testing.
 	}
 }
 
-func TestComposeTargetDropsRemovedSymbolExceptions(t *testing.T) {
-	old := &marketfetch.Plan{V: 1, Market: marketfetch.PlanMarket{MarketID: "crypto", Provider: "binance", SourceID: "s", MarketType: "spot"}, Fetch: marketfetch.PlanFetch{Concurrency: 5},
-		SymbolExceptions: map[string]string{"1000SHIB-USDT": "1000SHIBUSDT"},
-		Datasets:         []marketfetch.PlanDataset{{DatasetID: "d", Frequency: "1m", LatenessS: 15, Copies: []marketfetch.PlanCopy{{From: 100, Hash: "h", Count: 2, Subjects: []marketfetch.PlanSubject{{ID: "1000SHIB-USDT", Index: 0}, {ID: "BTC-USDT", Index: 1}}}}}}}
-	next := &marketfetch.Plan{V: 1, Market: old.Market, Fetch: old.Fetch,
+func TestComposeTargetDropsRemovedPairs(t *testing.T) {
+	old := &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStreaming, Market: marketfetch.PlanMarket{MarketID: "crypto", Provider: "binance", SourceID: "s", MarketType: "swap"}, Fetch: marketfetch.PlanFetch{Concurrency: 5},
+		Pairs:    map[string]string{"1000SHIB-USDT": "1000SHIBUSDT_PAIR"},
+		Datasets: []marketfetch.PlanDataset{{DatasetID: "d", Frequency: "1m", LatenessS: 15, Copies: []marketfetch.PlanCopy{{From: 100, Hash: "h", Count: 2, Subjects: []marketfetch.PlanSubject{{ID: "1000SHIB-USDT", Index: 0}, {ID: "BTC-USDT", Index: 1}}}}}}}
+	next := &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStreaming, Market: old.Market, Fetch: old.Fetch,
 		Datasets: []marketfetch.PlanDataset{{DatasetID: "d", Frequency: "1m", LatenessS: 15, Copies: []marketfetch.PlanCopy{{Hash: "h2", Count: 2, Subjects: []marketfetch.PlanSubject{{ID: "1000SHIB-USDT", Index: 0}, {ID: "BTC-USDT", Index: 1}}}}}}}
 	content := &FetchPlanContent{Datasets: map[string]*PlanDataset{"d|1m": {Action: PlanActionAppend, P: 200, PlanDatasetState: PlanDatasetState{DatasetID: "d", Frequency: "1m", Hash: "h2", Count: 2},
 		Copies: []DatasetCopy{{From: 100, Hash: "h", Count: 2}, {From: 200, Hash: "h2", Count: 2}}}}}
 	function := &PlanFunctionChange{Name: "f", Old: old, New: next}
 	target := content.composeTarget(function)
 	require.Len(t, findPlanDataset(target, "d|1m").Copies, 2)
-	require.Empty(t, target.SymbolExceptions, "an exception that was removed from the new plan must not survive")
+	require.Empty(t, target.Pairs, "新计划里不再需要的 pair 映射不能保留")
 
-	next.SymbolExceptions = map[string]string{"1000SHIB-USDT": "1000SHIBUSDT"}
-	require.Equal(t, "1000SHIBUSDT", content.composeTarget(function).SymbolExceptions["1000SHIB-USDT"])
+	next.Pairs = map[string]string{"1000SHIB-USDT": "1000SHIBUSDT_PAIR"}
+	require.Equal(t, "1000SHIBUSDT_PAIR", content.composeTarget(function).Pairs["1000SHIB-USDT"])
 }
 
 func TestBuildDesiredStateRejectsMarketTypeClash(t *testing.T) {

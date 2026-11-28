@@ -138,11 +138,19 @@ func TestPlanBuildRequestsUsesOldCopyBeforeEffectiveStart(t *testing.T) {
 	}
 }
 
-func TestPlanExchangeSymbol(t *testing.T) {
+func TestProviderSymbolUsesMarketRule(t *testing.T) {
 	plan := testPlan()
-	plan.SymbolExceptions = map[string]string{"1000PEPE-USDT": "1000PEPEUSDT"}
-	require.Equal(t, "BTCUSDT", plan.ExchangeSymbol("BTC-USDT"))
-	require.Equal(t, "1000PEPEUSDT", plan.ExchangeSymbol("1000PEPE-USDT"))
+	symbol, err := ProviderSymbol(plan.Market, "BTC-USDT")
+	require.NoError(t, err)
+	require.Equal(t, "BTCUSDT", symbol)
+
+	symbol, err = ProviderSymbol(PlanMarket{MarketID: "stockcn", InstrumentType: "equity", MarketType: "equity"}, "600000.XSHG")
+	require.NoError(t, err)
+	require.Equal(t, "sh600000", symbol)
+
+	plan.Pairs = map[string]string{"BTC-USDT": "BTCUSDT_P", "GONE-USDT": "GONEUSDT"}
+	plan.PrunePairs()
+	require.Equal(t, map[string]string{"BTC-USDT": "BTCUSDT_P"}, plan.Pairs)
 }
 
 func TestFrequencyDueWeeklyUsesMonday(t *testing.T) {

@@ -407,7 +407,7 @@ func TestStreamPlanCarriesPairsOnly(t *testing.T) {
 	for name, function := range state.Functions {
 		raw, _ := json.Marshal(function.Plan)
 		if function.Executor == marketfetch.PlanExecutorStreaming {
-			require.Equal(t, "ABCUSDT_X", function.Plan.Pair("ABC-USDT"), name)
+			require.Equal(t, "ABCUSDT_X", function.Plan.Pairs["ABC-USDT"], name)
 		} else {
 			require.NotContains(t, string(raw), "pairs", name)
 			require.Equal(t, marketfetch.PlanExecutorSCF, function.Plan.Executor, name)

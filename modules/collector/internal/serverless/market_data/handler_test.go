@@ -144,7 +144,8 @@ func TestHandlerManualInvokeWritesRowsOnly(t *testing.T) {
 	req := marketfetch.Request{
 		BatchID: "backfill-1", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m",
 		Provider: "binance", SourceID: "spot_http", MarketType: "spot",
-		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars-a", Frequency: "1m", StartTime: "2026-10-11T00:00:00Z", BarLimit: 100}},
+		Items:   []domain.CollectionItem{{InstanceID: "backfill|1m|BTC-USDT", SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars-a", Frequency: "1m", StartTime: "2026-10-11T00:00:00Z", BarLimit: 100}},
+		Targets: []domain.WriteTarget{{ID: "bars-a|1m|BTC-USDT", SpaceID: "crypto", InstanceID: "backfill|1m|BTC-USDT", TaskID: "bars-a", DatasetID: "bars-a", Frequency: "1m"}},
 	}
 	rawReq, err := json.Marshal(req)
 	require.NoError(t, err)

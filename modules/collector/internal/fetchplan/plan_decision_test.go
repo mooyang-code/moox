@@ -131,7 +131,7 @@ func simGroups(count int, frequencies ...string) []TaskGroup {
 	return testGroups(count, frequencies...)
 }
 
-// 决策表逐行：K、S、R（登记与不登记）、A（新增、只改分配、停止）、W。
+// 决策表逐行：K、R（登记与不登记）、A（新增、只改分配、停止）、W。
 func TestDecisionTableRows(t *testing.T) {
 	sim := newPlanSim(t, at(10, 1, 0, 0), simGroups(60, "5m"))
 	const key = "ds_spot_5m|5m"
@@ -159,7 +159,7 @@ func TestDecisionTableRows(t *testing.T) {
 	require.Equal(t, PlanActionReplace, replaced.Action)
 	require.Equal(t, first.P, replaced.P, "原地替换不重选 P")
 	require.False(t, replaced.Register)
-	require.False(t, replaced.Timeline, "序列与符号没变，不写行")
+	require.False(t, replaced.Timeline, "序列没变，不写行")
 	require.Len(t, replaced.Copies, 1)
 
 	// R（登记）：头份仍在未来，标的变了，同一生效点覆盖登记。
@@ -173,19 +173,6 @@ func TestDecisionTableRows(t *testing.T) {
 	require.Len(t, sim.rows(key), 1, "同一生效点覆盖那一行")
 	hash, _ := sim.storage.effectiveHash(key, first.P)
 	require.Equal(t, replaced.Hash, hash, "Storage 在原生效点被覆盖")
-
-	// S：只改符号。份不变，时间线在 Q = max(P_new, TimelineFrom) 写一行（头份在未来时并进那一行）。
-	sim.groups[0].ExternalSymbols = map[string]string{"S001-USDT": "S001NEW"}
-	content, changed, _ = sim.step(planLeadTime)
-	require.True(t, changed)
-	symbols := content.Datasets[key]
-	require.Equal(t, PlanActionSymbols, symbols.Action)
-	require.Equal(t, first.P, symbols.P, "头份在未来：并进头份那一行")
-	require.False(t, symbols.Register)
-	require.Len(t, symbols.Copies, 1)
-	rows := sim.rows(key)
-	require.Len(t, rows, 1)
-	require.Equal(t, "S001NEW", rows[0].Symbols["S001-USDT"])
 
 	// A（只改分配）：头份已过，hash 不变，加一份不登记、不写行。
 	sim.now = at(10, 2, 0, 0)
@@ -203,7 +190,6 @@ func TestDecisionTableRows(t *testing.T) {
 	// W：两份都在、旧份还在窗口里时又变：本轮不动，给出等待原因。
 	sim.now = at(10, 2, 4, 0) // P_new = 02:10，晚于头份 02:05：不能原地替换
 	sim.groups = simGroups(62, "5m")
-	sim.groups[0].ExternalSymbols = map[string]string{"S001-USDT": "S001NEW"} // 符号不变：例外表按标的记，符号变了函数也会随之下发
 	_, changed, waiting := sim.step(planLeadTime)
 	require.False(t, changed)
 	require.Len(t, waiting, 1)
@@ -428,7 +414,7 @@ func TestCronFollowsTheUnionOfDatasetsWithOldCopies(t *testing.T) {
 	require.Equal(t, "0 0 * * * * *", cron(), "5m 旧份过窗口后变成日线的")
 }
 
-// 单调性与登记不变式的性质测试：随机的成员变化、改符号、删除与加回，每轮随机取提前量（30 秒、2、3、6 分钟）、随机推进时间。
+// 单调性与登记不变式的性质测试：随机的成员变化、删除与加回，每轮随机取提前量（30 秒、2、3、6 分钟）、随机推进时间。
 // 每一轮都检查：每一份的 hash 等于 Storage 在它生效点上的有效 hash、登记从不被拒、时间线行生效点不倒退、重放没有结束早于开始的段、
 // 下发的函数计划都通过 Validate。
 func TestPlanSequencesKeepTimelineMonotonicAndStorageConsistent(t *testing.T) {
@@ -441,14 +427,11 @@ func TestPlanSequencesKeepTimelineMonotonicAndStorageConsistent(t *testing.T) {
 			sim := newPlanSim(t, at(10, 0, 0, 7), simGroups(5, "5m", "1d"))
 			count := 5
 			present := map[string]bool{"5m": true, "1d": true}
-			symbols := map[string]string{}
 			for round := 0; round < 80; round++ {
-				switch random.Intn(6) {
+				switch random.Intn(5) {
 				case 0, 1:
 					count = 3 + random.Intn(5)
 				case 2:
-					symbols = map[string]string{"S001-USDT": fmt.Sprintf("S001V%d", random.Intn(3))}
-				case 3:
 					frequency := []string{"5m", "1d"}[random.Intn(2)]
 					present[frequency] = !present[frequency]
 				}
@@ -459,9 +442,6 @@ func TestPlanSequencesKeepTimelineMonotonicAndStorageConsistent(t *testing.T) {
 					}
 				}
 				sim.groups = simGroups(count, frequencies...)
-				for i := range sim.groups {
-					sim.groups[i].ExternalSymbols = symbols
-				}
 				content, changed, waiting := sim.step(leads[random.Intn(len(leads))])
 				if len(waiting) > 0 {
 					seen[PlanActionWait]++
@@ -487,7 +467,7 @@ func TestPlanSequencesKeepTimelineMonotonicAndStorageConsistent(t *testing.T) {
 			require.NotEmpty(t, keys)
 		})
 	}
-	for _, kind := range []string{PlanActionAppend, PlanActionReplace, PlanActionSymbols, PlanActionWait, "stop", "trim"} {
+	for _, kind := range []string{PlanActionAppend, PlanActionReplace, PlanActionWait, "stop", "trim"} {
 		require.Positive(t, seen[kind], "随机序列没有覆盖到 %s", kind)
 	}
 }

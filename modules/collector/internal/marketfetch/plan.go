@@ -30,10 +30,9 @@ const (
 type Plan struct {
 	V int `json:"v"`
 	// Executor 是计划的执行端：scf 是云函数，stream 是 WS 推送，local 是本地执行端（见 PlanExecutor*）。
-	Executor         string            `json:"executor"`
-	Market           PlanMarket        `json:"market"`
-	Fetch            PlanFetch         `json:"fetch"`
-	SymbolExceptions map[string]string `json:"symbol_exceptions,omitempty"`
+	Executor string     `json:"executor"`
+	Market   PlanMarket `json:"market"`
+	Fetch    PlanFetch  `json:"fetch"`
 	// Pairs 是交易对与交易所 symbol 不同的标的（币安永续合约的 pair）：WS 按 pair 订阅、按 symbol 写入。只出现在推送执行端的计划里。
 	Pairs    map[string]string `json:"pairs,omitempty"`
 	Datasets []PlanDataset     `json:"datasets"`
@@ -292,22 +291,6 @@ func frequencyDue(frequency marketdata.Frequency, scheduled time.Time) (time.Tim
 	return scheduled.Add(-step), true
 }
 
-// ExchangeSymbol 返回标的的交易所 symbol：例外表优先，否则 crypto 去掉连字符。
-func (p *Plan) ExchangeSymbol(subjectID string) string {
-	if symbol, ok := p.SymbolExceptions[subjectID]; ok {
-		return symbol
-	}
-	return strings.ReplaceAll(strings.TrimSpace(subjectID), "-", "")
-}
-
-// Pair 返回标的的交易所交易对：没有单独登记时与交易所 symbol 相同。
-func (p *Plan) Pair(subjectID string) string {
-	if pair, ok := p.Pairs[subjectID]; ok && pair != "" {
-		return pair
-	}
-	return p.ExchangeSymbol(subjectID)
-}
-
 // PlanSeriesTag 返回写入行使用的 series_tag；Collector 登记快照时必须使用同一个函数。
 func PlanSeriesTag(spaceID string, market PlanMarket) string {
 	return CollectionItemSeriesTag(spaceID, domain.CollectionItem{Provider: market.Provider, SourceID: market.SourceID, MarketType: market.MarketType})
@@ -404,8 +387,8 @@ func (p *Plan) buildFrequencyRequest(spaceID, functionName, requestID, frequency
 	items := make([]domain.CollectionItem, 0, len(ids))
 	for _, id := range ids {
 		items = append(items, domain.CollectionItem{
-			InstanceID: planInstanceID(frequencyName, id), SubjectID: id, Symbol: p.ExchangeSymbol(id), TargetDataTime: periodText, BarLimit: 1,
-			RequirePeriodCommit: true, Provider: provider, SourceID: sourceID, MarketID: p.Market.MarketID,
+			InstanceID: planInstanceID(frequencyName, id), SubjectID: id, TargetDataTime: periodText, BarLimit: 1,
+			Provider: provider, SourceID: sourceID, MarketID: p.Market.MarketID,
 			InstrumentType: p.Market.InstrumentType, MarketType: p.Market.MarketType, DataType: "kline", DatasetID: firstDataset, Frequency: frequencyName,
 		})
 	}
@@ -462,8 +445,11 @@ func (p *Plan) HasSubject(id string) bool {
 	return ok
 }
 
-// PruneExceptions 去掉不再出现在任何份里的标的的例外与交易对。
-func (p *Plan) PruneExceptions() {
+// PrunePairs 去掉不再出现在任何份里的标的的交易对映射。
+func (p *Plan) PrunePairs() {
+	if len(p.Pairs) == 0 {
+		return
+	}
 	subjects := p.SymbolsOrNil()
 	for key := range p.Pairs {
 		if _, ok := subjects[key]; !ok {
@@ -472,16 +458,5 @@ func (p *Plan) PruneExceptions() {
 	}
 	if len(p.Pairs) == 0 {
 		p.Pairs = nil
-	}
-	if len(p.SymbolExceptions) == 0 {
-		return
-	}
-	for key := range p.SymbolExceptions {
-		if _, ok := subjects[key]; !ok {
-			delete(p.SymbolExceptions, key)
-		}
-	}
-	if len(p.SymbolExceptions) == 0 {
-		p.SymbolExceptions = nil
 	}
 }

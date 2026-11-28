@@ -803,8 +803,8 @@ func TestSeedDistributesSlotsFairlyAcrossDatasets(t *testing.T) {
 	}}
 	// 为 ds_a、ds_b 提供有效时间线，保证 chunkPlan 通过。
 	b.Checker.Timeline = staticTimeline{
-		makeTimelineEntry("crypto", "ds_a", base.Unix(), map[string]string{"BTC-USDT": "BTCUSDT"}),
-		makeTimelineEntry("crypto", "ds_b", base.Unix(), map[string]string{"BTC-USDT": "BTCUSDT"}),
+		makeTimelineEntry("crypto", "ds_a", base.Unix(), "BTC-USDT"),
+		makeTimelineEntry("crypto", "ds_b", base.Unix(), "BTC-USDT"),
 	}
 
 	makeChunks := func(jobID, datasetID string, n int) []store.BackfillChunk {

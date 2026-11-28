@@ -69,14 +69,13 @@ const (
 )
 
 type periodSlot struct {
-	period      time.Time
-	close       time.Time
-	deadline    time.Time
-	due         time.Time               // 最晚开始提交时刻 D
-	dataset     marketfetch.PlanDataset // 只带这一期生效的那一份
-	symbols     func(string) string
-	index       map[string]int // 订阅符号 → 该份标的下标
-	bars        []marketdata.NormalizedKline
+	period   time.Time
+	close    time.Time
+	deadline time.Time
+	due      time.Time               // 最晚开始提交时刻 D
+	dataset  marketfetch.PlanDataset // 只带这一期生效的那一份
+	index    map[string]int          // 订阅符号 → 该份标的下标
+	bars     []marketdata.NormalizedKline
 	got         []bool
 	sent        []bool
 	arrived     int
@@ -218,12 +217,14 @@ func (g *Gate) ensureSlot(period time.Time) *periodSlot {
 	dataset.Copies = []marketfetch.PlanCopy{selected}
 	plan := g.plan
 	slot := &periodSlot{
-		period: period, close: period.Add(g.step), dataset: dataset, symbols: plan.ExchangeSymbol,
+		period: period, close: period.Add(g.step), dataset: dataset,
 		index: make(map[string]int, len(selected.Subjects)),
 		bars:  make([]marketdata.NormalizedKline, len(selected.Subjects)), got: make([]bool, len(selected.Subjects)), sent: make([]bool, len(selected.Subjects)),
 	}
 	for position, subject := range selected.Subjects {
-		slot.index[strings.ToUpper(plan.Pair(subject.ID))] = position
+		if symbol := subscribeSymbol(plan, subject.ID); symbol != "" {
+			slot.index[strings.ToUpper(symbol)] = position
+		}
 	}
 	slot.wantsFunding = domain.HasOutputField(dataset.OutputFields, domain.FieldFundingRate)
 	slot.deadline = slot.close.Add(time.Duration(dataset.LatenessS) * time.Second)
@@ -310,7 +311,7 @@ func (g *Gate) commit(slot *periodSlot) {
 		if slot.got[position] && !slot.sent[position] {
 			bar := slot.bars[position]
 			if slot.wantsFunding {
-				value, _ := g.cfg.Funding.Sum(slot.symbols(bar.SubjectID), slot.period, slot.close)
+				value, _ := g.cfg.Funding.Sum(providerSymbol(g.cfg.Market, bar.SubjectID), slot.period, slot.close)
 				bar.Extra = map[string]marketdata.FieldValue{domain.FieldFundingRate: marketdata.DoubleField(value)}
 			}
 			bars = append(bars, bar)
@@ -327,7 +328,7 @@ func (g *Gate) commit(slot *periodSlot) {
 	slot.pendingLate = false
 	batch := marketfetch.KlineBatch{
 		SpaceID: g.cfg.SpaceID, BatchID: fmt.Sprintf("stream|%s|%s|%s|%d", g.cfg.Market.MarketType, slot.dataset.DatasetID, slot.dataset.Frequency, slot.period.Unix()),
-		Market: g.cfg.Market, Dataset: slot.dataset, Period: slot.period, Symbols: slot.symbols, Bars: bars, Origin: marketfetch.KlineOriginStreaming,
+		Market: g.cfg.Market, Dataset: slot.dataset, Period: slot.period, Bars: bars, Origin: marketfetch.KlineOriginStreaming,
 	}
 	g.cfg.Queue.submit(&commitJob{committer: g.cfg.Committer, batch: batch, deadline: slot.deadline, step: g.step, done: func(outcome commitOutcome) {
 		g.post(func() { g.onCommitted(slot, positions, outcome) })

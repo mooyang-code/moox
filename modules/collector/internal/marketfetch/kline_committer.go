@@ -30,8 +30,6 @@ type KlineBatch struct {
 	Market  PlanMarket
 	Dataset PlanDataset
 	Period  time.Time
-	// Symbols 把标的映射到交易所 symbol（provider_symbol 字段），与计划一致。
-	Symbols func(subjectID string) string
 	Bars    []marketdata.NormalizedKline
 	Origin  string
 }
@@ -115,8 +113,12 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 			continue
 		}
 		seen[subject] = struct{}{}
-		if batch.Symbols != nil {
-			bar.ProviderSymbol = batch.Symbols(subject)
+		if strings.TrimSpace(bar.ProviderSymbol) == "" {
+			symbol, symbolErr := ProviderSymbol(batch.Market, subject)
+			if symbolErr != nil {
+				return req, nil, result, fmt.Errorf("subject %s: %w", subject, symbolErr)
+			}
+			bar.ProviderSymbol = symbol
 		}
 		if strings.TrimSpace(bar.RequestID) == "" {
 			bar.RequestID = batch.BatchID
@@ -161,9 +163,6 @@ func sortRows(rows []*storagepb.Row) {
 // 选了其中任何一个的目标，这一项整体失败（failedTargets），其他目标不受影响。
 // 周期提交请求里某个目标一行都没有时，返回该目标的失败结果（missingTargets）。
 func expandTargetRows(req Request, item domain.CollectionItem, itemRows []*storagepb.Row, extra map[string]marketdata.FieldValue, failed map[string]error) (rows []*storagepb.Row, missingTargets, failedTargets []domain.TargetResult) {
-	if len(req.Targets) == 0 {
-		return itemRows, nil, nil
-	}
 	for _, target := range itemTargets(req, item) {
 		fields := targetOutputFields(item, target)
 		if fieldID, cause := failedField(fields, failed); cause != nil {

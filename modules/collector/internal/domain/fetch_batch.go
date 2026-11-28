@@ -26,40 +26,25 @@ type CollectionItem struct {
 	// InstanceID is the stable TaskInstance identity.
 	InstanceID     string `json:"instance_id,omitempty"`
 	SubjectID      string `json:"subject_id"`
-	Symbol         string `json:"symbol"`
 	TargetDataTime string `json:"target_data_time,omitempty"`
 	StartTime      string `json:"start_time,omitempty"`
 	EndTime        string `json:"end_time,omitempty"`
-	SnapshotAt     string `json:"snapshot_at,omitempty"`
 	BarLimit       int    `json:"bar_limit,omitempty"`
-	// RequirePeriodCommit is carried into durable retry records so retries keep
-	// the same Storage commit contract as their source batch.
-	RequirePeriodCommit bool `json:"require_period_commit,omitempty"`
 	// CandidateIndex is advanced when a retry has already exhausted the
 	// current provider window. Keeping it on the item makes retries resume at
 	// the next candidate instead of repeatedly starting at the same bad feed.
-	CandidateIndex  int     `json:"candidate_index,omitempty"`
-	RateBudgetRatio float64 `json:"rate_budget_ratio,omitempty"`
-	SourceEventID   string  `json:"source_event_id,omitempty"`
-	Provider        string  `json:"provider"`
-	SourceID        string  `json:"source_id,omitempty"`
-	MarketID        string  `json:"market_id,omitempty"`
-	InstrumentType  string  `json:"instrument_type,omitempty"`
-	MarketType      string  `json:"market_type"`
-	DataType        string  `json:"data_type"`
-	DatasetID       string  `json:"dataset_id"`
-	Frequency       string  `json:"frequency,omitempty"`
+	CandidateIndex int    `json:"candidate_index,omitempty"`
+	Provider       string `json:"provider"`
+	SourceID       string `json:"source_id,omitempty"`
+	MarketID       string `json:"market_id,omitempty"`
+	InstrumentType string `json:"instrument_type,omitempty"`
+	MarketType     string `json:"market_type"`
+	DataType       string `json:"data_type"`
+	DatasetID      string `json:"dataset_id"`
+	Frequency      string `json:"frequency,omitempty"`
 	// OutputFields limits the fields persisted for each fetched row. An empty
 	// list writes every normalized field.
-	OutputFields       []string `json:"output_fields,omitempty"`
-	SnapshotShardIndex int      `json:"snapshot_shard_index,omitempty"`
-	SnapshotShardCount int      `json:"snapshot_shard_count,omitempty"`
-	// Series identity belongs to the Dataset/WriteTarget side. These fields are
-	// populated while materializing one task's Tag union and are deliberately
-	// excluded from Provider request_key calculation.
-	SeriesIndex   uint32 `json:"series_index,omitempty"`
-	SeriesHash    string `json:"series_hash,omitempty"`
-	ExpectedCount uint32 `json:"expected_count,omitempty"`
+	OutputFields []string `json:"output_fields,omitempty"`
 }
 
 type ItemResult struct {

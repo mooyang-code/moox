@@ -79,7 +79,6 @@ func TestNewKlinePipelineBindsTheSingleSource(t *testing.T) {
 
 // 合并两个构造函数后，币安的限速仍然来自请求带的限速：每秒请求数、突发、并发、超时都交给数据源，熔断阈值按并发算。
 func TestNewKlinePipelineKeepsTheRequestLimitsForTheSingleSource(t *testing.T) {
-	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
 	limits := &marketfetch.FeedLimits{RPS: 40, Burst: 60, FeedConcurrency: 16, RequestTimeoutMS: 3000}
 	for _, instrument := range []marketdata.InstrumentType{marketdata.InstrumentSpot, marketdata.InstrumentSwap} {
 		pipeline, err := NewKlinePipeline(timerHandlerStorage{}, "crypto", instrument, "1m", "binance", limits)
@@ -92,7 +91,7 @@ func TestNewKlinePipelineKeepsTheRequestLimitsForTheSingleSource(t *testing.T) {
 		require.Equal(t, 3*time.Second, spec.RateLimit.RequestTimeout)
 		require.Equal(t, marketfetch.KlineProviderAttemptBudget*16, pipeline.Router.BreakerThreshold())
 
-		// 不带限速时数据源用自己的默认值，熔断阈值按进程环境（没设并发按 1）。
+		// 不带限速时数据源用自己的默认值，熔断阈值按默认并发 1。
 		plain, err := NewKlinePipeline(timerHandlerStorage{}, "crypto", instrument, "1m", "binance", nil)
 		require.NoError(t, err)
 		spec, err = plain.Router.NewSession().KlineSpec("binance")

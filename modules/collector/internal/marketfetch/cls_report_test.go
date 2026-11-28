@@ -39,11 +39,11 @@ func TestReportItemFailureAndBatchCarryTheFieldsNeededForAnalysis(t *testing.T) 
 	reporter := &recordingReporter{}
 	pipeline := &KlinePipeline{Reporter: reporter, SpaceID: "crypto", FunctionName: "moox-fetch-plan-crypto-swap-hongkong-000"}
 	req := Request{RequestID: "req-1", DatasetID: "ds", Frequency: "1m", BatchKind: domain.BatchKindRealtime}
-	item := domain.CollectionItem{SubjectID: "BTC-USDT", Symbol: "BTCUSDT"}
+	item := domain.CollectionItem{SubjectID: "BTC-USDT"}
 	cause := errors.New("timeout: context deadline exceeded")
 	result := failureResult(item, domain.ItemOutcomeNetworkError, "network_error", cause)
 	start := time.Date(2026, 10, 12, 3, 14, 0, 0, time.UTC)
-	pipeline.reportItemFailure(req, result, "binance", 3, 4200*time.Millisecond, start, start.Add(time.Minute), cause)
+	pipeline.reportItemFailure(req, result, "BTCUSDT", "binance", 3, 4200*time.Millisecond, start, start.Add(time.Minute), cause)
 	pipeline.reportBatch(req, 48, 1, 5*time.Second, 40*time.Second)
 
 	require.Len(t, reporter.entries, 2)
@@ -124,7 +124,7 @@ func TestReportedFieldsAreAllInTheCLSIndex(t *testing.T) {
 	pipeline := &KlinePipeline{Reporter: reporter, SpaceID: "crypto", FunctionName: "fn"}
 	req := Request{RequestID: "r", DatasetID: "ds", Frequency: "1m", BatchKind: domain.BatchKindRealtime}
 	cause := errors.New("boom")
-	pipeline.reportItemFailure(req, failureResult(domain.CollectionItem{SubjectID: "S", Symbol: "SYM"}, domain.ItemOutcomeNetworkError, "network_error", cause), "binance", 3, time.Second, time.Now(), time.Now(), cause)
+	pipeline.reportItemFailure(req, failureResult(domain.CollectionItem{SubjectID: "S"}, domain.ItemOutcomeNetworkError, "network_error", cause), "SYM", "binance", 3, time.Second, time.Now(), time.Now(), cause)
 	closeAt := time.Date(2026, 10, 20, 6, 0, 0, 0, time.UTC)
 	timings := []itemTiming{{
 		Recorded: true, Subject: "S", Symbol: "SYM", Provider: "binance", Outcome: domain.ItemOutcomeSuccess,

@@ -12,7 +12,7 @@
     "auto_bind_source": false,
     "series_tag": "",
     "settle_delay_ms": 0,
-    "breaker_threshold": 12,
+    "breaker_threshold": 3,
     "field_sources": 0,
     "extra_field_ids": [
       "funding_rate"
@@ -23,7 +23,7 @@
         "rate_limit": {
           "RequestsPerSecond": 5,
           "Burst": 5,
-          "MaxConcurrent": 4,
+          "MaxConcurrent": 1,
           "Cooldown": 1000000000,
           "RequestTimeout": 5000000000
         },
@@ -76,7 +76,7 @@
     "auto_bind_source": false,
     "series_tag": "",
     "settle_delay_ms": 0,
-    "breaker_threshold": 12,
+    "breaker_threshold": 3,
     "field_sources": 1,
     "extra_field_ids": [
       "funding_rate"
@@ -87,7 +87,7 @@
         "rate_limit": {
           "RequestsPerSecond": 5,
           "Burst": 5,
-          "MaxConcurrent": 4,
+          "MaxConcurrent": 1,
           "Cooldown": 1000000000,
           "RequestTimeout": 5000000000
         },
@@ -158,7 +158,7 @@
     "auto_bind_source": true,
     "series_tag": "",
     "settle_delay_ms": 800,
-    "breaker_threshold": 12,
+    "breaker_threshold": 6,
     "field_sources": 5,
     "extra_field_ids": [
       "adj_factor",
@@ -269,7 +269,7 @@
           "Burst": 20,
           "MaxConcurrent": 16,
           "Cooldown": 1000000000,
-          "RequestTimeout": 5000000000
+          "RequestTimeout": 2500000000
         },
         "max_bars_per_request": 1205
       },
@@ -280,7 +280,7 @@
           "Burst": 20,
           "MaxConcurrent": 16,
           "Cooldown": 1000000000,
-          "RequestTimeout": 5000000000
+          "RequestTimeout": 2500000000
         },
         "max_bars_per_request": 1023
       },
@@ -291,7 +291,7 @@
           "Burst": 16,
           "MaxConcurrent": 16,
           "Cooldown": 1000000000,
-          "RequestTimeout": 5000000000
+          "RequestTimeout": 2500000000
         },
         "max_bars_per_request": 800
       },
@@ -302,7 +302,7 @@
           "Burst": 2,
           "MaxConcurrent": 1,
           "Cooldown": 1000000000,
-          "RequestTimeout": 5000000000
+          "RequestTimeout": 2500000000
         },
         "max_bars_per_request": 320
       }
@@ -363,7 +363,7 @@
           "Burst": 20,
           "MaxConcurrent": 16,
           "Cooldown": 1000000000,
-          "RequestTimeout": 5000000000
+          "RequestTimeout": 2500000000
         },
         "max_bars_per_request": 1205
       },
@@ -374,7 +374,7 @@
           "Burst": 20,
           "MaxConcurrent": 16,
           "Cooldown": 1000000000,
-          "RequestTimeout": 5000000000
+          "RequestTimeout": 2500000000
         },
         "max_bars_per_request": 1023
       },
@@ -385,7 +385,7 @@
           "Burst": 16,
           "MaxConcurrent": 16,
           "Cooldown": 1000000000,
-          "RequestTimeout": 5000000000
+          "RequestTimeout": 2500000000
         },
         "max_bars_per_request": 800
       },
@@ -396,7 +396,7 @@
           "Burst": 2,
           "MaxConcurrent": 1,
           "Cooldown": 1000000000,
-          "RequestTimeout": 5000000000
+          "RequestTimeout": 2500000000
         },
         "max_bars_per_request": 320
       }

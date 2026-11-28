@@ -161,7 +161,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 	if err != nil {
 		return nil, err
 	}
-	storageTimeout := time.Duration(envInt("MOOX_FETCH_STORAGE_TIMEOUT_MS", int(defaultStorageTimeout/time.Millisecond))) * time.Millisecond
+	storageTimeout := defaultStorageTimeout
 	if req.FetchLimits != nil && req.FetchLimits.StorageTimeoutMS > 0 {
 		storageTimeout = time.Duration(req.FetchLimits.StorageTimeoutMS) * time.Millisecond
 	}

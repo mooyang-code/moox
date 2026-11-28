@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -30,7 +28,7 @@ type AdapterConfig struct {
 	KlineCollector  *KlineCollector
 	SymbolCollector *SymbolCollector
 	Now             func() time.Time
-	// RateLimit 覆盖从进程环境读取的限流与超时（常驻的本地执行端按计划随请求给出），零值字段仍按环境与默认。
+	// RateLimit 是随请求下发的限流与超时，零值字段用适配器保守默认值。
 	RateLimit marketdata.RateLimitPolicy
 }
 
@@ -108,14 +106,14 @@ func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 	}
 }
 
-// klineRateLimit 是 K 线请求的限流与超时：适配器配置给出的值优先，其余读进程环境（SCF 按计划设置）与默认。
+// klineRateLimit 是 K 线请求的限流与超时：适配器配置（随请求下发）给出的值优先，零值用保守默认值。
 func (a *MarketDataAdapter) klineRateLimit() marketdata.RateLimitPolicy {
 	policy := marketdata.RateLimitPolicy{
-		RequestsPerSecond: configuredFeedLimit("MOOX_FETCH_RPS", 5),
-		Burst:             int(configuredFeedLimit("MOOX_FETCH_BURST", 5)),
-		MaxConcurrent:     int(configuredFeedLimit("MOOX_FETCH_FEED_CONCURRENCY", 1)),
+		RequestsPerSecond: 5,
+		Burst:             5,
+		MaxConcurrent:     1,
 		Cooldown:          time.Second,
-		RequestTimeout:    configuredKlineRequestTimeout(),
+		RequestTimeout:    5 * time.Second,
 	}
 	if a == nil {
 		return policy
@@ -133,33 +131,6 @@ func (a *MarketDataAdapter) klineRateLimit() marketdata.RateLimitPolicy {
 		policy.RequestTimeout = a.rateLimit.RequestTimeout
 	}
 	return policy
-}
-
-// configuredFeedLimit 读取限流参数（速率、突发、并发）。默认值保持保守；SCF 的计划按数据源下发更大的值，
-// 每个函数有自己的出口，币安限流按出口每分钟计权重，单函数每分钟几十个请求远低于上限。
-func configuredFeedLimit(name string, fallback float64) float64 {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil || value <= 0 || value > 1000 {
-		return fallback
-	}
-	return value
-}
-
-func configuredKlineRequestTimeout() time.Duration {
-	const defaultTimeout = 5 * time.Second
-	raw := strings.TrimSpace(os.Getenv("MOOX_FETCH_REQUEST_TIMEOUT_MS"))
-	if raw == "" {
-		return defaultTimeout
-	}
-	milliseconds, err := strconv.Atoi(raw)
-	if err != nil || milliseconds <= 0 {
-		return defaultTimeout
-	}
-	return time.Duration(milliseconds) * time.Millisecond
 }
 
 func (*MarketDataAdapter) InstrumentSpec() marketdata.InstrumentSpec {

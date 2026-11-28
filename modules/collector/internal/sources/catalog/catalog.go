@@ -121,8 +121,7 @@ func build() *marketdata.Catalog {
 		}),
 		// 港股：恒生指数成分来源（腾讯），只取指数成分，不取 K 线、不取全部标的。
 		entry(stockhk, marketdata.InstrumentEquity, "tencent", hktencent.DefaultSourceID, fixed(func() marketdata.MarketProvider { return hktencent.New(hktencent.Config{}) })),
-		// 港股 5m K 线的备源（腾讯分时合成）。必须登记在指数成分来源之后：按路由分配的登记项查找时不比 source_id，
-		// 登记在前会把按 index_constituent_http 查找的指数成分来源也接走。
+		// 港股 5m K 线的备源（腾讯分时合成）。
 		routedEntry(stockhk, marketdata.InstrumentEquity, "tencent", hktencent.KlineSourceID, func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			return hktencent.NewKline(hktencent.KlineConfig{BaseURL: s.BaseURL, SourceID: deps.SourceID, RateLimit: s.RateLimit}), nil

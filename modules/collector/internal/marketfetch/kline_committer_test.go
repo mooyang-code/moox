@@ -35,7 +35,6 @@ func swapTestPlan(period time.Time) *Plan {
 		Fetch:  PlanFetch{Concurrency: 4},
 		Datasets: []PlanDataset{{DatasetID: "bars_swap_1m", Frequency: "1m", LatenessS: 5, OutputFields: []string{"open", "close", "volume", "quote_volume", "trade_num", "provider_symbol"},
 			Copies: []PlanCopy{{From: period.Add(-time.Hour).Unix(), Hash: "h", Count: 3, Subjects: []PlanSubject{{ID: "BTC-USDT", Index: 0}, {ID: "ETH-USDT", Index: 1}, {ID: "XRP-USDT", Index: 2}}}}}},
-		SymbolExceptions: map[string]string{"XRP-USDT": "XRPUSDT"},
 	}
 }
 
@@ -73,9 +72,9 @@ func TestKlineCommitterWritesTheSameRowsAsTheSCFPipeline(t *testing.T) {
 	committer := NewKlineCommitter(stream, plan.Market)
 	streamBars := []marketdata.NormalizedKline{bars["XRP-USDT"], bars["BTC-USDT"], bars["ETH-USDT"]}
 	for i := range streamBars {
-		streamBars[i].ProviderSymbol = "" // 推送侧按计划的映射填 provider_symbol
+		streamBars[i].ProviderSymbol = "" // 推送侧按市场规则现算 provider_symbol
 	}
-	result, err := committer.CommitPeriod(context.Background(), KlineBatch{SpaceID: "crypto", BatchID: "stream|swap|1m", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Symbols: plan.ExchangeSymbol, Bars: streamBars, Origin: KlineOriginStreaming})
+	result, err := committer.CommitPeriod(context.Background(), KlineBatch{SpaceID: "crypto", BatchID: "stream|swap|1m", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Bars: streamBars, Origin: KlineOriginStreaming})
 	require.NoError(t, err)
 	require.Equal(t, 3, result.Rows)
 	require.Empty(t, result.Missing)
@@ -97,7 +96,7 @@ func TestKlineCommitterReportsMissingAndUnplanned(t *testing.T) {
 	plan := swapTestPlan(period)
 	storage := &capturingPeriodStorage{}
 	committer := NewKlineCommitter(storage, plan.Market)
-	batch := KlineBatch{SpaceID: "crypto", BatchID: "b", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Symbols: plan.ExchangeSymbol,
+	batch := KlineBatch{SpaceID: "crypto", BatchID: "b", Market: plan.Market, Dataset: plan.Datasets[0], Period: period,
 		Bars: []marketdata.NormalizedKline{testSwapBar("BTC-USDT", "", period, 1), testSwapBar("DOGE-USDT", "", period, 1), testSwapBar("ETH-USDT", "", period.Add(time.Minute), 1)}}
 	result, err := committer.CommitPeriod(context.Background(), batch)
 	require.NoError(t, err)

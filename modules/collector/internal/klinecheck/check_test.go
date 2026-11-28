@@ -71,15 +71,7 @@ func timelineRows(records []*store.FetchPlanRecord) []store.SeriesTimelineEntry 
 				entries = append(entries, entry)
 				continue
 			}
-			symbols := dataset.Symbols
-			if symbols == nil {
-				// 手写的计划夹具没有符号：按函数计划的默认规则（去掉连字符）补上。
-				symbols = map[string]string{}
-				for _, series := range dataset.Series {
-					symbols[series.SubjectID] = strings.ReplaceAll(series.SubjectID, "-", "")
-				}
-			}
-			entry.SeriesHash, entry.Series, entry.Symbols, entry.LatenessS, entry.OutputFields = dataset.Hash, dataset.Series, symbols, dataset.LatenessS, dataset.OutputFields
+			entry.SeriesHash, entry.Series, entry.LatenessS, entry.OutputFields = dataset.Hash, dataset.Series, dataset.LatenessS, dataset.OutputFields
 			entries = append(entries, entry)
 		}
 	}

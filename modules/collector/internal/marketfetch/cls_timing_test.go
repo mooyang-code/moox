@@ -131,15 +131,15 @@ func TestKlinePipelineReportsStageTimingsAndCommit(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err = pipeline.Execute(ctx, Request{
+	_, err = pipeline.Execute(ctx, testPeriodRequest(Request{
 		BatchID: "timing", BatchKind: domain.BatchKindRealtime,
 		SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
 		Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequestID: "timing",
 		Items: []domain.CollectionItem{{
-			SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", SourceID: "stockcn_minute_http",
+			SubjectID: bar.SubjectID, Provider: "sina", SourceID: "stockcn_minute_http",
 			MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1,
 		}},
-	})
+	}, bar.BarStart))
 	require.NoError(t, err)
 
 	byType := map[string]map[string]string{}

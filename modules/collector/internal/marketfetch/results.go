@@ -38,12 +38,10 @@ type BatchCompleted struct {
 // ItemResult 是批次内单个采集项的结果。
 type ItemResult struct {
 	SubjectID      string         `json:"subject_id,omitempty"`
-	Symbol         string         `json:"symbol,omitempty"`
 	TargetDataTime string         `json:"target_data_time,omitempty"`
 	Outcome        string         `json:"outcome,omitempty"`
 	ErrorType      string         `json:"error_type,omitempty"`
 	ErrorSummary   string         `json:"error_summary,omitempty"`
-	SourceEventID  string         `json:"source_event_id,omitempty"`
 	InstanceID     string         `json:"instance_id,omitempty"`
 	Targets        []TargetResult `json:"targets,omitempty"`
 }
@@ -90,9 +88,9 @@ func buildCompletion(req Request, results []domain.ItemResult, completed time.Ti
 			}
 		}
 		item := ItemResult{
-			SubjectID: result.SubjectID, Symbol: result.Symbol, TargetDataTime: result.TargetDataTime,
+			SubjectID: result.SubjectID, TargetDataTime: result.TargetDataTime,
 			Outcome: string(result.Outcome), ErrorType: result.ErrorType, ErrorSummary: result.ErrorSummary,
-			SourceEventID: result.SourceEventID, InstanceID: result.InstanceID,
+			InstanceID: result.InstanceID,
 		}
 		for _, target := range result.TargetResults {
 			item.Targets = append(item.Targets, TargetResult{WriteTargetID: target.WriteTargetID, DatasetID: target.DatasetID, Status: target.Status, ErrorSummary: target.ErrorSummary})

@@ -134,7 +134,7 @@ func (r *PlanReconciler) planChange(ctx context.Context, latenessOK map[string]b
 		}
 	}
 	progress := &FetchPlanProgress{}
-	// 不用登记的时间线行（停止行、只改符号的行等）和计划记录一起落库。
+	// 不用登记的时间线行（停止行等）和计划记录一起落库。
 	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress), content.planCreatedTimeline(r.SpaceID)...)
 	if errors.Is(err, store.ErrFetchPlanOpen) {
 		return nil
@@ -384,7 +384,6 @@ func excludeSubjects(groups []TaskGroup, exclusions []store.SubjectExclusion) []
 			continue
 		}
 		group.Subjects = subjects
-		group.ExternalSymbols = keepKeys(group.ExternalSymbols, subjects)
 		group.Pairs = keepKeys(group.Pairs, subjects)
 		result = append(result, group)
 	}

@@ -35,7 +35,7 @@ type tagRouteSource interface {
 	GetTag(context.Context, string, string) (*storagepb.Tag, error)
 }
 
-// GroupBuilder 把启用的 K 线采集任务按标签路由展开成采集组（数据集×频率×路由，含标的与交易所符号）。
+// GroupBuilder 把启用的 K 线采集任务按标签路由展开成采集组（数据集×频率×路由，含标的与非默认交易对）。
 // 采集计划对账据此算出期望状态；它不接触云端。
 type GroupBuilder struct {
 	ResolveSourceID marketfetch.SourceIDResolver
@@ -181,7 +181,6 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 	}
 	provider, marketType, marketID, instrumentType, sourceID := route.Provider, route.MarketType, route.MarketID, route.InstrumentType, route.SourceID
 	symbolIDs := make([]string, 0, len(subjects))
-	externalSymbols := make(map[string]string, len(subjects))
 	var pairs map[string]string
 	activeSubjectCount := 0
 	invalidSubjects := make([]string, 0)
@@ -197,7 +196,6 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 			continue
 		}
 		symbolIDs = append(symbolIDs, subjectID)
-		externalSymbols[subjectID] = external
 		if pair := strings.ToUpper(strings.TrimSpace(subject.Pair)); pair != "" && pair != external {
 			if pairs == nil {
 				pairs = map[string]string{}
@@ -209,7 +207,7 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 		return nil, fmt.Errorf("all active %s subjects are invalid: %s", marketType, strings.Join(invalidSubjects, ","))
 	}
 	if len(invalidSubjects) > 0 {
-		log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s task=%s skipped=%d subjects=%s", task.SpaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
+		log.WarnContextf(ctx, "skip invalid market subjects space=%s task=%s skipped=%d subjects=%s", task.SpaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 	}
 	if params.Frequency == "" {
 		return nil, nil
@@ -219,7 +217,7 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 		Provider: provider, MarketType: marketType, MarketID: marketID, InstrumentType: instrumentType,
 		SourceID: sourceID, DatasetID: datasetID,
 		Frequency: params.Frequency, OutputFields: append([]string(nil), params.OutputFields...),
-		Subjects: symbolIDs, ExternalSymbols: externalSymbols, Pairs: pairs,
+		Subjects: symbolIDs, Pairs: pairs,
 		SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
 		Ingest: task.Ingest,
 	}}, nil
@@ -236,7 +234,7 @@ func TaskSeriesTag(spaceID, provider, marketType string, resolveSourceID marketf
 }
 
 // BackfillRoutes 由当前的采集任务推出补采用的来源与参数：市场身份与计划同一套推导（routeMarket），拉取参数按空间的
-// 计划配置（PlanOptions.planFetch），输出字段取任务的。交易所符号不在这里：补采按标的时间线取当时的符号。
+// 计划配置（PlanOptions.planFetch），输出字段取任务的。
 type BackfillRoutes struct {
 	Tasks interface {
 		ListKline(ctx context.Context, spaceID, datasetID string) ([]domain.CollectionTask, error)
@@ -323,20 +321,6 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 		current.AllowedLatenessSeconds = minPositive(current.AllowedLatenessSeconds, group.AllowedLatenessSeconds)
 		if current.Ingest == "" {
 			current.Ingest = group.Ingest
-		}
-		if group.ExternalSymbols != nil {
-			if current.ExternalSymbols == nil {
-				current.ExternalSymbols = make(map[string]string)
-			}
-			for subject, external := range group.ExternalSymbols {
-				if previous, exists := current.ExternalSymbols[subject]; exists {
-					if previous != external {
-						current.ExternalSymbols[subject] = ""
-					}
-					continue
-				}
-				current.ExternalSymbols[subject] = external
-			}
 		}
 		for subject, pair := range group.Pairs {
 			if current.Pairs == nil {

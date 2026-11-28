@@ -252,13 +252,33 @@ func subjectOfSymbol(plan *marketfetch.Plan, symbol string) string {
 	for _, dataset := range plan.Datasets {
 		for _, copy := range dataset.Copies {
 			for _, subject := range copy.Subjects {
-				if strings.EqualFold(plan.Pair(subject.ID), symbol) {
+				if strings.EqualFold(subscribeSymbol(plan, subject.ID), symbol) {
 					return subject.ID
 				}
 			}
 		}
 	}
 	return ""
+}
+
+// providerSymbol 按计划所属市场的标的规则，把标的 ID 现算成交易所 symbol。
+func providerSymbol(market marketfetch.PlanMarket, subjectID string) string {
+	symbol, err := marketfetch.ProviderSymbol(market, subjectID)
+	if err != nil {
+		return ""
+	}
+	return symbol
+}
+
+// subscribeSymbol 返回推送侧订阅与事件匹配用的符号：计划里登记了独立交易对（Pair）时优先用它，否则按市场规则现算。
+func subscribeSymbol(plan *marketfetch.Plan, subjectID string) string {
+	if plan == nil {
+		return ""
+	}
+	if pair, ok := plan.Pairs[subjectID]; ok && pair != "" {
+		return pair
+	}
+	return providerSymbol(plan.Market, subjectID)
 }
 
 // setPlan 更新各闸门：新数据集建闸门，已有的换计划，计划里没有的数据集让闸门只处理完已建立的周期。
@@ -377,7 +397,7 @@ func (m *marketRuntime) desiredStreams(now time.Time) map[string][]string {
 				continue
 			}
 			for _, subject := range copy.Subjects {
-				name, ok := m.source.Stream(plan.Pair(subject.ID), frequency)
+				name, ok := m.source.Stream(subscribeSymbol(plan, subject.ID), frequency)
 				if !ok {
 					continue
 				}

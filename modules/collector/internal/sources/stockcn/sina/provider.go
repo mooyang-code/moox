@@ -14,6 +14,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	commonsrc "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
+	"github.com/mooyang-code/moox/packages/cnstock"
 )
 
 type Config struct {
@@ -285,16 +286,16 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			if err := json.Unmarshal(trimmedBody, &payload); err != nil {
 				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 			}
-			data := commonsrc.ObjectAt(payload, "data")
+			data := cnstock.ObjectAt(payload, "data")
 			if data == nil {
 				data = payload
 			}
 			if _, ok := firstPresent(data, "list", "items", "diff"); !ok {
 				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: sina instrument page %d has no recognized item list", marketdata.ErrProtocol, page)
 			}
-			items = commonsrc.ItemSlice(data, "list", "items", "diff")
-			totalPages = commonsrc.PageLimit(data, spec.PageSize)
-			if total, ok := commonsrc.IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 {
+			items = cnstock.ItemSlice(data, "list", "items", "diff")
+			totalPages = cnstock.PageLimit(data, spec.PageSize)
+			if total, ok := cnstock.IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 {
 				if declaredTotal == 0 {
 					declaredTotal = total
 				} else if declaredTotal != total {
@@ -335,11 +336,11 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		}
 		for _, item := range items {
 			instrument, err := commonsrc.InstrumentFromFields(
-				commonsrc.StringField(item, "code", "f12", "symbol"),
-				commonsrc.StringField(item, "symbol", "provider_symbol"),
-				commonsrc.StringField(item, "market", "f13", "exchange"),
-				commonsrc.StringField(item, "name", "f14", "sname"),
-				commonsrc.StringField(item, "status", "state", "trade_status"),
+				cnstock.StringField(item, "code", "f12", "symbol"),
+				cnstock.StringField(item, "symbol", "provider_symbol"),
+				cnstock.StringField(item, "market", "f13", "exchange"),
+				cnstock.StringField(item, "name", "f14", "sname"),
+				cnstock.StringField(item, "status", "state", "trade_status"),
 			)
 			if err != nil {
 				return marketdata.InstrumentSnapshot{}, err

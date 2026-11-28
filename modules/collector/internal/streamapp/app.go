@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 	"github.com/mooyang-code/moox/modules/collector/internal/stream"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -34,23 +32,17 @@ type App struct {
 
 // New 打开网关客户端并装配运行时、同步代理与本地执行端（不启动）。
 func New(cfg *Config, version string, registerer prometheus.Registerer) (*App, error) {
-	// 若显式提供了存在的外部覆盖文件则通过环境变量透传；否则默认读取二进制内嵌的 crypto/sources/binance.yaml。
-	if cfg.MarketConfig != "" {
-		if err := os.Setenv("MOOX_STORAGE_MARKET_CONFIG", cfg.MarketConfig); err != nil {
-			return nil, err
-		}
-	}
 	gateway, err := cfg.GatewayClient.OpenInternal(cfg.SourcePath(), cfg.DataDir, func(err error) { log.Warnf("collector-stream directory refresh failed: %v", err) })
 	if err != nil {
 		return nil, fmt.Errorf("open gateway client: %w", err)
 	}
-	streamConfig, err := binance.ResolveStreamConfig()
+	endpoints, err := stream.EndpointsFrom(catalog.Default(), marketdata.Deps{})
 	if err != nil {
 		_ = gateway.Close()
-		return nil, fmt.Errorf("binance stream config: %w", err)
+		return nil, fmt.Errorf("stream source endpoints: %w", err)
 	}
 	app := &App{Config: cfg, Gateway: gateway}
-	app.dns = dnscache.New(dnscache.Config{Domains: endpointHosts(append(append([]string(nil), streamConfig.SpotEndpoints...), streamConfig.SwapEndpoints...))})
+	app.dns = dnscache.New(dnscache.Config{Domains: endpointHosts(endpoints)})
 	storageTimeout := time.Duration(cfg.StorageTimeoutMS) * time.Millisecond
 	newStorage := func() (marketfetch.Storage, error) {
 		return marketfetch.NewMarketStorage(gateway)
