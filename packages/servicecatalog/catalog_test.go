@@ -67,11 +67,8 @@ func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 		if component.Health.Port != want[component.ID] {
 			t.Fatalf("incorrect health for %s", component.ID)
 		}
-		if component.Protected != slices.Contains([]string{"host-gateway", "admin"}, component.ID) {
+		if component.IsProtected() != slices.Contains([]string{"host-gateway", "admin"}, component.ID) {
 			t.Fatalf("incorrect protection for %s", component.ID)
-		}
-		if component.Replicas != Single {
-			t.Fatalf("incorrect replicas for %s", component.ID)
 		}
 	}
 	// 浏览器入口 9527 由 Admin 自己监听。
@@ -98,8 +95,18 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"duplicate component", func(c *Catalog) { c.Components = append(c.Components, c.Components[0]) }},
 		{"binary alias", func(c *Catalog) { componentPtr(c, "admin").Binary = "caddy" }},
 		{"invalid scope", func(c *Catalog) { c.Components[0].Scope = "arbitrary" }},
-		{"invalid replicas", func(c *Catalog) { c.Components[0].Replicas = "unlimited" }},
-		{"multi replicas", func(c *Catalog) { c.Components[0].Replicas = "multi" }},
+		{"invalid service space policy", func(c *Catalog) { servicePtr(c, "trpc.moox.infra.Auth").SpacePolicy = "unknown" }},
+		{"service space policy without console name", func(c *Catalog) { servicePtr(c, GatewayControlPath).SpacePolicy = SpacePolicyGlobal }},
+		{"invalid method space policy", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").SpacePolicy = "unknown" }},
+		{"method space policy without console name", func(c *Catalog) {
+			methodPtr(c, GatewayControlPath, "PullSnapshot").SpacePolicy = SpacePolicyGlobal
+		}},
+		{"method space policy overrides service level", func(c *Catalog) {
+			methodPtr(c, "trpc.moox.infra.Auth", "Login").SpacePolicy = SpacePolicyRequired
+		}},
+		{"inconsistent console service space policy", func(c *Catalog) {
+			servicePtr(c, "trpc.moox.storage.DataView").SpacePolicy = SpacePolicyGlobal
+		}},
 		{"missing health port", func(c *Catalog) { c.Components[0].Health.Port = 0 }},
 		{"duplicate port", func(c *Catalog) { c.Components[0].Ports = append(c.Components[0].Ports, 11012) }},
 		{"unknown caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"typo"} }},
@@ -222,7 +229,11 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"console", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", false},
 		{"moox-cli", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", true},
 		{"console", "trpc.moox.ops.SecretMgr", "GetSecretValue", false},
-		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", true},
+		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", false},
+		{"trade", "trpc.moox.ops.SecretMgr", "GetExchangeCredential", true},
+		{"console", "trpc.moox.ops.SecretMgr", "GetExchangeCredential", false},
+		{"moox-cli", "trpc.moox.ops.SecretMgr", "GetExchangeCredential", false},
+		{"collector", "trpc.moox.ops.SecretMgr", "GetExchangeCredential", false},
 		{"trade", "trpc.moox.ops.SecretMgr", "ListSecrets", false},
 		{"console", "trpc.moox.ops.SecretMgr", "EnsureInitialSecret", false},
 		{"moox-cli", "trpc.moox.ops.SecretMgr", "EnsureInitialSecret", true},

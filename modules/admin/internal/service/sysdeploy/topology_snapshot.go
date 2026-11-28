@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"database/sql"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -12,7 +13,7 @@ import (
 // SnapshotSchemaVersion 是网关快照的格式版本：主机、部署与公钥，不含路由。
 const SnapshotSchemaVersion = 2
 
-// Snapshot 在一个 SQLite 快照里读登记的主机、部署与公钥，原样拼成网关快照；全部主机拿到的是同一份。
+// Snapshot 在一个只读 SQLite 事务里读登记的主机、部署与公钥，原样拼成网关快照；全部主机拿到的是同一份。
 // 快照里没有秘密，也没有路由：各网关按内嵌的服务目录自己算。还没签发过身份包的主机没有公钥，它的请求在各网关上验不过。
 func (d *TopologyDAO) Snapshot(ctx context.Context) (*pb.HostGatewaySnapshot, error) {
 	var snapshot *pb.HostGatewaySnapshot
@@ -20,7 +21,7 @@ func (d *TopologyDAO) Snapshot(ctx context.Context) (*pb.HostGatewaySnapshot, er
 		var snapErr error
 		snapshot, snapErr = d.SnapshotTx(ctx, tx)
 		return snapErr
-	})
+	}, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -276,7 +277,9 @@ func seedEventBusDeployment(t *testing.T, dbPath string) {
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
-	_, err = dao.ReplaceTopology(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Enabled: true, Address: "203.0.113.10", Components: []string{"admin", "eventbus"}}})
+	_, err = dao.ReplaceTopology(t.Context(), &pb.SyncTopologyReq{Hosts: []*pb.SyncTopologyHost{
+		{HostId: "gateway-node-1", Enabled: true, Address: "203.0.113.10", ComponentIds: []string{"admin", "eventbus"}},
+	}})
 	require.NoError(t, err)
 }
 
@@ -540,17 +543,17 @@ func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) 
 	require.NoError(t, db.Exec(adminschema.AdminSQL()).Error)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	specs := []sysdeploy.HostSpec{
-		{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin"}},
-		{HostID: "bus", Enabled: true, Address: "bus.example.test", Components: []string{"eventbus"}},
+	specs := []*pb.SyncTopologyHost{
+		{HostId: "control", Enabled: true, Address: "control.example.test", ComponentIds: []string{"admin"}},
+		{HostId: "bus", Enabled: true, Address: "bus.example.test", ComponentIds: []string{"eventbus"}},
 	}
-	_, err = dao.ReplaceTopology(t.Context(), specs)
+	_, err = dao.ReplaceTopology(t.Context(), &pb.SyncTopologyReq{Hosts: specs})
 	require.NoError(t, err)
 	address, err := eventBusNATSURL(db, "control")
 	require.NoError(t, err)
 	require.Equal(t, "tls://bus.example.test:4222", address)
 	specs[1].Enabled = false
-	_, err = dao.ReplaceTopology(t.Context(), specs)
+	_, err = dao.ReplaceTopology(t.Context(), &pb.SyncTopologyReq{Hosts: specs})
 	require.NoError(t, err)
 	_, err = eventBusNATSURL(db, "control")
 	require.ErrorContains(t, err, "active EventBus deployment not found")
@@ -584,10 +587,10 @@ func TestEventBusExportFollowsEventBusMoveWithoutRotation(t *testing.T) {
 	require.NoError(t, err)
 	topology, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
-	_, err = topology.ReplaceTopology(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "gateway-node-1", Enabled: true, Address: "203.0.113.10", Components: []string{"admin"}},
-		{HostID: "storage-1", Enabled: true, Address: "203.0.113.20", Components: []string{"eventbus"}},
-	})
+	_, err = topology.ReplaceTopology(t.Context(), &pb.SyncTopologyReq{Hosts: []*pb.SyncTopologyHost{
+		{HostId: "gateway-node-1", Enabled: true, Address: "203.0.113.10", ComponentIds: []string{"admin"}},
+		{HostId: "storage-1", Enabled: true, Address: "203.0.113.20", ComponentIds: []string{"eventbus"}},
+	}})
 	require.NoError(t, err)
 	closeAdminCLIDB(db)
 

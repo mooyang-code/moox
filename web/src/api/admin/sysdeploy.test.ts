@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { call as callAdmin } from "@/api/http";
-import { decodeCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "./sysdeploy";
+import { getCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "./sysdeploy";
 vi.mock("@/api/http", () => ({ call: vi.fn() }));
 const call = vi.mocked(callAdmin);
 beforeEach(() => {
@@ -51,24 +49,21 @@ describe("SysDeploy v2", () => {
     expect(api).not.toHaveProperty("setHostStatus");
     expect(api).not.toHaveProperty("setDeploymentStatus");
   });
-  it("decodes the actual shared catalog used by Admin", () => {
-    const catalog_yaml = readFileSync(path.resolve(__dirname, "../../../../packages/servicecatalog/catalog.yaml"), "utf8");
-    const result = decodeCatalog({ catalog_yaml, control_host_id: "control", sha256: "a".repeat(64) });
-    expect(result.components.find(item => item.id === "host-gateway")?.protected).toBe(true);
-    expect(result.components.find(item => item.id === "storage-primary")?.services?.length).toBeGreaterThan(0);
-  });
-  it("requires explicit protection metadata and rejects YAML aliases and duplicate keys", () => {
-    const response = {
-      control_host_id: "arbitrary-control-id",
+  it("reads the structured catalog directly from GetCatalog without client-side YAML decoding", async () => {
+    const structured = {
+      control_host_id: "control",
       sha256: "a".repeat(64),
-      catalog_yaml: "version: 2\nidentities: []\ncomponents: []\n"
+      catalog: {
+        version: 2,
+        identities: [{ id: "scf-collector", external: true }],
+        components: [{ id: "host-gateway", name: "主机网关", binary: "moox-host-gateway", scope: "host", health_port: 11012 }]
+      }
     };
-    expect(decodeCatalog(response).version).toBe(2);
-    expect(() => decodeCatalog({ ...response, catalog_yaml: "version: 1\ncomponents: []\nprincipals: []\n" })).toThrow("结构");
-    expect(() => decodeCatalog({ ...response, control_host_id: "" })).toThrow("控制主机");
-    expect(() => decodeCatalog({ ...response, catalog_yaml: "version: 2\nversion: 2\nidentities: []\ncomponents: []" })).toThrow(
-      "YAML"
-    );
-    expect(() => decodeCatalog({ ...response, catalog_yaml: "version: 2\nidentities: &x []\ncomponents: *x" })).toThrow();
+    call.mockResolvedValue(structured);
+    const result = await getCatalog();
+    expect(call).toHaveBeenCalledWith("sysdeploy", "GetCatalog", {});
+    expect(result.catalog?.components?.[0]?.id).toBe("host-gateway");
+    const api = await import("./sysdeploy");
+    expect(api).not.toHaveProperty("decodeCatalog");
   });
 });

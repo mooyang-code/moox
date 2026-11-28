@@ -28,7 +28,7 @@ export interface ListActivityLogsRequest {
 
 export interface ListActivityLogsResponse {
   items?: ActivityLogItem[];
-  page?: { page?: number; size?: number; total?: number; has_more?: boolean };
+  page_result?: { page?: number; size?: number; total?: number; has_more?: boolean };
 }
 
 export function listActivityLogs(request: ListActivityLogsRequest) {

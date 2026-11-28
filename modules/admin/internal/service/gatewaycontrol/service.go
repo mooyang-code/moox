@@ -1,11 +1,11 @@
-// Package gatewaycontrol 给各主机的网关提供快照；每次拉取兼作心跳，记下期望快照、已应用快照与时间。服务只听本机回环端口：别的主机的请求由控制机网关
-// 验签后转进来，并在 x-moox-verified-host 头里带上验过的签名主机；控制机网关自己直连时也带这个头。这里不再验第二遍。
+// Package gatewaycontrol 给各主机的网关提供快照；每次拉取兼作心跳，在进程内存里记下已应用快照、时间与反向连接会话（不落库）。
+// 服务只听本机回环端口：别的主机的请求由控制机网关验签后转进来，并在 x-moox-verified-host 头里带上验过的签名主机；
+// 控制机网关自己直连时也带这个头。这里不再验第二遍。
 package gatewaycontrol
 
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -16,12 +16,11 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type Service struct {
-	db            *gorm.DB
 	topology      *sysdeploy.TopologyDAO
+	statuses      *sysdeploy.GatewayStatusStore
 	controlHostID string
 	now           func() time.Time
 }
@@ -29,7 +28,10 @@ type Service struct {
 func (*Service) String() string     { return "GatewayControl{snapshots}" }
 func (s *Service) GoString() string { return s.String() }
 
-func NewService(db *gorm.DB, controlHostID string) (*Service, error) {
+// Statuses 返回写入网关运行态的进程内存储（与 SysDeploy 共用）。
+func (s *Service) Statuses() *sysdeploy.GatewayStatusStore { return s.statuses }
+
+func NewService(db *gorm.DB, controlHostID string, statuses *sysdeploy.GatewayStatusStore) (*Service, error) {
 	if db == nil || !servicecatalog.ValidHostID(controlHostID) {
 		return nil, errors.New("gateway control requires the Admin database and a canonical control host")
 	}
@@ -37,7 +39,10 @@ func NewService(db *gorm.DB, controlHostID string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{db: db, topology: topology, controlHostID: controlHostID, now: time.Now}, nil
+	if statuses == nil {
+		statuses = sysdeploy.NewGatewayStatusStore()
+	}
+	return &Service{topology: topology, statuses: statuses, controlHostID: controlHostID, now: time.Now}, nil
 }
 
 type verifiedHost struct{}
@@ -62,11 +67,11 @@ func result(err error) *pb.RetInfo {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return &pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND, Msg: "主机不存在"}
 	}
-	return &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "网关控制状态读写失败"}
+	return &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "网关控制状态读取失败"}
 }
 
-// PullSnapshot 返回快照，并在同一事务里记下这台网关的状态：期望哈希与快照读自同一时刻。
-// 每次拉取都写（哈希没变也写），因为它兼作心跳；没登记的主机拿不到快照，也不写状态（表上有外键）。
+// PullSnapshot 以只读事务读取快照，并在进程内存里记下这台网关的运行态：
+// 每次拉取都更新（哈希没变也更新），因为它兼作心跳；没登记的主机拿不到快照，也不记入运行态。
 func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*pb.PullSnapshotRsp, error) {
 	if !sameHost(ctx, req.GetHostId()) {
 		return nil, errors.New("gateway control caller must match request host")
@@ -77,35 +82,15 @@ func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*p
 	if !validRelaySessions(req.GetRelaySessions()) || len(req.GetRelaySessions()) != 0 && req.GetHostId() != s.controlHostID {
 		return &pb.PullSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "无效的反向连接会话"}}, nil
 	}
-	relaySessions := ""
-	if sessions := req.GetRelaySessions(); len(sessions) != 0 {
-		raw, err := json.Marshal(sessions)
-		if err != nil {
-			return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
-		}
-		relaySessions = string(raw)
-	}
-	var snapshot *pb.HostGatewaySnapshot
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 先取写锁，与拓扑、密钥的写入串行：快照与状态描述的是同一份库内状态。
-		if err := tx.Exec("UPDATE t_host_gateway_status SET c_host_id = c_host_id WHERE 0").Error; err != nil {
-			return err
-		}
-		var err error
-		if snapshot, err = s.topology.SnapshotTx(ctx, tx); err != nil {
-			return err
-		}
-		// 快照对全部主机相同；没登记的主机拿不到。
-		if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
-			return gorm.ErrRecordNotFound
-		}
-		now := s.now().UTC()
-		status := sysdeploy.HostGatewayStatus{HostID: req.GetHostId(), AppliedHash: req.GetCurrentHash(), LastSeenAt: &now, RelaySessions: relaySessions}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, UpdateAll: true}).Create(&status).Error
-	})
+	snapshot, err := s.topology.Snapshot(ctx)
 	if err != nil {
 		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
 	}
+	// 快照对全部主机相同；没登记的主机拿不到，也不记运行态。
+	if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
+		return &pb.PullSnapshotRsp{RetInfo: result(gorm.ErrRecordNotFound)}, nil
+	}
+	s.statuses.Record(req.GetHostId(), req.GetCurrentHash(), s.now(), req.GetRelaySessions())
 	if snapshot.Hash == req.GetCurrentHash() {
 		return &pb.PullSnapshotRsp{RetInfo: success()}, nil
 	}

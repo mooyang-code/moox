@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -46,11 +45,7 @@ func (p *Proxy) serveExternal(ctx context.Context, req request, out *outcome) ([
 		return denied("", "not_entry", "host gateway external entry is not enabled for this host", http.StatusServiceUnavailable)
 	}
 	spec, _ := p.catalog.Service(req.service)
-	limit := spec.MaxBodyBytes
-	if limit == 0 {
-		limit = servicecatalog.DefaultMaxBodyBytes
-	}
-	if int64(len(req.body)) > limit {
+	if int64(len(req.body)) > spec.BodyLimit() {
 		return denied("", "request_limit", "host gateway request exceeds service body limit", http.StatusRequestEntityTooLarge)
 	}
 	// 以下三步不过都返回拒签专用错误码：请求没有往后转，调用方可以重新签名重发一次。

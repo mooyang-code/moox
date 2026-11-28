@@ -7,7 +7,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-go/codec"
 )
 
 func cloudRecord() *model.Secret {
@@ -58,31 +57,48 @@ func TestGetCloudCredentialRejectsAnythingButActiveTencentCloudKeys(t *testing.T
 	require.Equal(t, []string{"missing"}, fake.asked, "空的秘钥 ID 不走到存储")
 }
 
-// 经主机网关以组件身份（trade）调用 GetSecretValue 只拿得到交易所密钥：别的主机上的进程拿着主机密钥以 trade 的身份签名，
-// 取不走云账号等其他类别的密钥。控制台、moox-cli（没有调用方头，或经别的主机网关转来）不受限制。
-func TestGetSecretValueLimitsComponentCallersToExchangeSecrets(t *testing.T) {
-	exchange := &model.Secret{SecretID: "exchange-binance", Name: "币安", Category: "exchange", Provider: "binance", KeyID: "k", SecretValue: "exchange-secret-value", Status: "active"}
-	fake := &readonlyKeyFake{records: map[string]*model.Secret{"cloud-tencent-main": cloudRecord(), "exchange-binance": exchange}}
-	from := func(caller string) context.Context {
-		ctx, message := codec.WithNewMessage(context.Background())
-		if caller != "" {
-			// 传输层给的头名大小写不保证：用小写验证按规范化的头名匹配。
-			message.WithServerMetaData(codec.MetaData{"x-moox-verified-caller": []byte(caller)})
+// Trade 专用方法 GetExchangeCredential 只返回类别 exchange 且已启用的秘钥，拒绝云账号等其他类别与未启用秘钥。
+func TestGetExchangeCredentialOnlyReturnsActiveExchangeSecrets(t *testing.T) {
+	exchangeRecord := func() *model.Secret {
+		return &model.Secret{
+			SecretID: "exchange-binance", Name: "币安", Category: "exchange", Provider: "binance",
+			SecretType: "api_key", KeyID: "k", SecretValue: "exchange-secret-value", ExtraConfig: `{"environment":"production"}`, Status: "active",
 		}
-		return ctx
-	}
-	get := func(caller, id string) *pb.GetSecretValueRsp {
-		rsp, err := NewService(fake).GetSecretValue(from(caller), &pb.GetSecretValueReq{SecretId: id})
-		require.NoError(t, err)
-		return rsp
 	}
 
-	rejected := get("trade", "cloud-tencent-main")
-	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rejected.GetRetInfo().GetCode())
-	require.Nil(t, rejected.GetSecret())
-	require.NotContains(t, rejected.String(), "cloud-secret-value")
-	require.Equal(t, "exchange-secret-value", get("trade", "exchange-binance").GetSecret().GetSecretValue())
+	fake := &readonlyKeyFake{records: map[string]*model.Secret{"exchange-binance": exchangeRecord(), "cloud-tencent-main": cloudRecord()}}
+	svc := NewService(fake)
 
-	// 没有头（控制台、moox-cli、同机直连）不受限制；网关只对主机密钥签名的调用方写头。
-	require.Equal(t, "cloud-secret-value", get("", "cloud-tencent-main").GetSecret().GetSecretValue())
+	rsp, err := svc.GetExchangeCredential(context.Background(), &pb.GetExchangeCredentialReq{SecretId: "exchange-binance"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, "exchange-secret-value", rsp.GetSecret().GetSecretValue())
+	require.Equal(t, "binance", rsp.GetSecret().GetProvider())
+
+	for name, mutate := range map[string]func(*model.Secret){
+		"云账号密钥": func(r *model.Secret) { r.Category, r.Provider = "cloud", "tencent" },
+		"已停用":   func(r *model.Secret) { r.Status = "inactive" },
+		"空状态":   func(r *model.Secret) { r.Status = "" },
+	} {
+		rec := exchangeRecord()
+		mutate(rec)
+		caseSvc := NewService(&readonlyKeyFake{records: map[string]*model.Secret{"exchange-binance": rec}})
+		rejected, err := caseSvc.GetExchangeCredential(context.Background(), &pb.GetExchangeCredentialReq{SecretId: "exchange-binance"})
+		require.NoError(t, err, name)
+		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rejected.GetRetInfo().GetCode(), name)
+		require.Nil(t, rejected.GetSecret(), name)
+		require.NotContains(t, rejected.String(), "exchange-secret-value", name)
+	}
+
+	missing, err := svc.GetExchangeCredential(context.Background(), &pb.GetExchangeCredentialReq{SecretId: "missing"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, missing.GetRetInfo().GetCode())
+	empty, err := svc.GetExchangeCredential(context.Background(), &pb.GetExchangeCredentialReq{})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, empty.GetRetInfo().GetCode())
+
+	// GetSecretValue 只留给 moox-cli，不按组件类别限制，仍可读取云账号等秘钥。
+	cliRsp, err := svc.GetSecretValue(context.Background(), &pb.GetSecretValueReq{SecretId: "cloud-tencent-main"})
+	require.NoError(t, err)
+	require.Equal(t, "cloud-secret-value", cliRsp.GetSecret().GetSecretValue())
 }

@@ -17,7 +17,7 @@ describe("操作记录", () => {
     const wrapper = mount(ActivityLog, { props: { spaceId: "crypto" }, global: { plugins: [ArcoVue] } });
     await flushPromises();
     expect(wrapper.text()).toContain("操作记录读取失败：Admin 不可用");
-    api.listActivityLogs.mockResolvedValueOnce({ items: [], page: { total: 0 } });
+    api.listActivityLogs.mockResolvedValueOnce({ items: [], page_result: { total: 0 } });
     await wrapper
       .findAll("button")
       .find(item => item.text() === "重试")!
@@ -29,7 +29,7 @@ describe("操作记录", () => {
 
 describe("操作记录的筛选", () => {
   it("选类别、来源回车、选时间范围各只发一次请求，回到第 1 页", async () => {
-    api.listActivityLogs.mockReset().mockResolvedValue({ items: [], page: { total: 0 } });
+    api.listActivityLogs.mockReset().mockResolvedValue({ items: [], page_result: { total: 0 } });
     const wrapper = mount(ActivityLog, { props: { spaceId: "crypto", showFilters: true }, global: { plugins: [ArcoVue] } });
     await flushPromises();
     const base = api.listActivityLogs.mock.calls.length;

@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -116,14 +117,6 @@ func (d *TopologyDAO) Compile(ctx context.Context, hostID string) (servicecatalo
 	return d.catalog.Compile(topology, hostID)
 }
 
-func (d *TopologyDAO) GetGatewayStatus(ctx context.Context, hostID string) (*HostGatewayStatus, error) {
-	status := &HostGatewayStatus{}
-	if err := d.db.WithContext(ctx).Where("c_host_id = ?", hostID).First(status).Error; err != nil {
-		return nil, err
-	}
-	return status, nil
-}
-
 func (d *TopologyDAO) mutate(ctx context.Context, fn func(*gorm.DB) error) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// SQLite starts deferred transactions. Reserve the writer before reading
@@ -136,10 +129,11 @@ func (d *TopologyDAO) mutate(ctx context.Context, fn func(*gorm.DB) error) error
 	})
 }
 
-// ReplaceTopology 用 moox.toml 的整份声明覆盖登记：主机与部署的启停状态都取自声明；声明里没有的部署与主机删除
-// （主机连同它的网关状态、部署与控制台 SSH 凭据）；签名公钥与 SSH 指纹不是声明的内容，保留库里的值。
-// 返回连接信息变了或被删除的主机，调用方据此关掉它们的控制台会话。
-func (d *TopologyDAO) ReplaceTopology(ctx context.Context, specs []HostSpec) ([]string, error) {
+// ReplaceTopology 用 moox.toml 的整份 SyncTopologyReq 覆盖登记（在线 SyncTopology RPC 与离线 bootstrap 共用）：
+// 主机与部署的启停状态都取自声明；声明里没有的部署与主机删除（连同部署与控制台 SSH 凭据）；
+// 签名公钥与 SSH 指纹不是声明的内容，保留库里的值。返回连接信息变了或被删除的主机，调用方据此关掉它们的控制台会话。
+func (d *TopologyDAO) ReplaceTopology(ctx context.Context, req *pb.SyncTopologyReq) ([]string, error) {
+	specs := req.GetHosts()
 	if len(specs) == 0 || len(specs) > 1024 {
 		return nil, fmt.Errorf("%w: topology requires 1..1024 hosts", ErrInvalidTopology)
 	}
@@ -158,10 +152,14 @@ func (d *TopologyDAO) ReplaceTopology(ctx context.Context, specs []HostSpec) ([]
 		var nextDeployments []DeploymentRecord
 		seen := map[string]bool{}
 		for _, spec := range specs {
-			if seen[spec.HostID] {
-				return fmt.Errorf("%w: duplicate host %q", ErrInvalidTopology, spec.HostID)
+			if spec == nil {
+				return fmt.Errorf("%w: host entry is required", ErrInvalidTopology)
 			}
-			seen[spec.HostID] = true
+			hostID := spec.GetHostId()
+			if seen[hostID] {
+				return fmt.Errorf("%w: duplicate host %q", ErrInvalidTopology, hostID)
+			}
+			seen[hostID] = true
 			host, hostDeployments, err := d.declare(spec, previous, deployments)
 			if err != nil {
 				return err
@@ -177,7 +175,7 @@ func (d *TopologyDAO) ReplaceTopology(ctx context.Context, specs []HostSpec) ([]
 				continue
 			}
 			for _, deployment := range deployments {
-				if component, ok := d.catalog.Component(deployment.ComponentID); deployment.HostID == host.HostID && ok && component.Protected && component.Scope != servicecatalog.ScopeHost {
+				if component, ok := d.catalog.Component(deployment.ComponentID); deployment.HostID == host.HostID && ok && component.IsProtected() && component.Scope != servicecatalog.ScopeHost {
 					return fmt.Errorf("%w: protected component %q cannot be removed", ErrInvalidTopology, component.ID)
 				}
 			}
@@ -186,9 +184,9 @@ func (d *TopologyDAO) ReplaceTopology(ctx context.Context, specs []HostSpec) ([]
 			}
 			touched = append(touched, host.HostID)
 		}
-		specByHost := map[string]HostSpec{}
+		specByHost := map[string]*pb.SyncTopologyHost{}
 		for _, spec := range specs {
-			specByHost[spec.HostID] = spec
+			specByHost[spec.GetHostId()] = spec
 		}
 		now := time.Now().UTC()
 		for _, host := range nextHosts {
@@ -201,7 +199,7 @@ func (d *TopologyDAO) ReplaceTopology(ctx context.Context, specs []HostSpec) ([]
 			})}).Create(&host).Error; err != nil {
 				return err
 			}
-			if err := d.writeSSHCredential(tx, host.HostID, specByHost[host.HostID].SSH); err != nil {
+			if err := d.writeSSHCredential(tx, specByHost[host.HostID]); err != nil {
 				return err
 			}
 			var componentIDs []string
@@ -230,15 +228,15 @@ func connectionChanged(old, next HostRecord) bool {
 }
 
 // declare 把一台主机的声明换成登记行：主机级组件自动补上并保持启用，受保护组件不能被移除。
-func (d *TopologyDAO) declare(spec HostSpec, previous map[string]HostRecord, deployments []DeploymentRecord) (HostRecord, []DeploymentRecord, error) {
-	if len(spec.Description) > 4096 || len(spec.Components) > len(d.catalog.Components) {
+func (d *TopologyDAO) declare(spec *pb.SyncTopologyHost, previous map[string]HostRecord, deployments []DeploymentRecord) (HostRecord, []DeploymentRecord, error) {
+	if len(spec.GetDescription()) > 4096 || len(spec.GetComponentIds()) > len(d.catalog.Components) {
 		return HostRecord{}, nil, fmt.Errorf("%w: host description or component list exceeds limit", ErrInvalidTopology)
 	}
-	reachability, ok := servicecatalog.ParseReachability(spec.Reachability)
+	reachability, ok := servicecatalog.ParseReachability(spec.GetReachability())
 	if !ok {
-		return HostRecord{}, nil, fmt.Errorf("%w: unknown host reachability %q", ErrInvalidTopology, spec.Reachability)
+		return HostRecord{}, nil, fmt.Errorf("%w: unknown host reachability %q", ErrInvalidTopology, spec.GetReachability())
 	}
-	if len([]rune(spec.Label)) > 64 {
+	if len([]rune(spec.GetLabel())) > 64 {
 		return HostRecord{}, nil, fmt.Errorf("%w: host label exceeds 64 characters", ErrInvalidTopology)
 	}
 	sshPort, sshUser, err := d.validateSSH(spec, reachability)
@@ -246,7 +244,7 @@ func (d *TopologyDAO) declare(spec HostSpec, previous map[string]HostRecord, dep
 		return HostRecord{}, nil, err
 	}
 	wanted := map[string]bool{}
-	for _, id := range spec.Components {
+	for _, id := range spec.GetComponentIds() {
 		component, ok := d.catalog.Component(id)
 		if !ok || wanted[id] || component.Scope == servicecatalog.ScopeHost {
 			return HostRecord{}, nil, fmt.Errorf("%w: unknown, duplicate or automatic component %q", ErrInvalidTopology, id)
@@ -254,18 +252,19 @@ func (d *TopologyDAO) declare(spec HostSpec, previous map[string]HostRecord, dep
 		wanted[id] = true
 	}
 	disabled := map[string]bool{}
-	for _, id := range spec.DisabledComponents {
+	for _, id := range spec.GetDisabledComponentIds() {
 		if !wanted[id] || disabled[id] {
-			return HostRecord{}, nil, fmt.Errorf("%w: disabled component %q is not deployed on %q or duplicated", ErrInvalidTopology, id, spec.HostID)
+			return HostRecord{}, nil, fmt.Errorf("%w: disabled component %q is not deployed on %q or duplicated", ErrInvalidTopology, id, spec.GetHostId())
 		}
 		disabled[id] = true
 	}
+	hostID := spec.GetHostId()
 	for _, deployment := range deployments {
-		if deployment.HostID != spec.HostID || wanted[deployment.ComponentID] {
+		if deployment.HostID != hostID || wanted[deployment.ComponentID] {
 			continue
 		}
 		// 主机级组件下面会自动补上，不算移除。
-		if component, ok := d.catalog.Component(deployment.ComponentID); ok && component.Protected && component.Scope != servicecatalog.ScopeHost {
+		if component, ok := d.catalog.Component(deployment.ComponentID); ok && component.IsProtected() && component.Scope != servicecatalog.ScopeHost {
 			return HostRecord{}, nil, fmt.Errorf("%w: protected component %q cannot be removed", ErrInvalidTopology, component.ID)
 		}
 	}
@@ -275,28 +274,29 @@ func (d *TopologyDAO) declare(spec HostSpec, previous map[string]HostRecord, dep
 		}
 		return servicecatalog.Disabled
 	}
-	host := HostRecord{HostID: spec.HostID, Label: spec.Label, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Reachability: servicecatalog.ReachabilityName(reachability), ExternalEntry: spec.ExternalEntry, Description: spec.Description, SSHPort: sshPort, SSHUser: sshUser, Status: status(spec.Enabled)}
-	if old, ok := previous[spec.HostID]; ok {
+	host := HostRecord{
+		HostID: hostID, Label: spec.GetLabel(), Address: spec.GetAddress(), PrivateAddress: spec.GetPrivateAddress(),
+		Region: spec.GetRegion(), Reachability: servicecatalog.ReachabilityName(reachability), ExternalEntry: spec.GetExternalEntry(),
+		Description: spec.GetDescription(), SSHPort: sshPort, SSHUser: sshUser, Status: status(spec.GetEnabled()),
+	}
+	if old, ok := previous[hostID]; ok {
 		host.CreatedAt, host.SSHFingerprint, host.SignPublicKey = old.CreatedAt, old.SSHFingerprint, old.SignPublicKey
 	}
 	var out []DeploymentRecord
 	for _, component := range d.catalog.Components {
 		if component.Scope == servicecatalog.ScopeHost {
-			out = append(out, DeploymentRecord{HostID: spec.HostID, ComponentID: component.ID, Status: servicecatalog.Enabled})
+			out = append(out, DeploymentRecord{HostID: hostID, ComponentID: component.ID, Status: servicecatalog.Enabled})
 		}
 	}
 	ids := slices.Sorted(maps.Keys(wanted))
 	for _, id := range ids {
-		out = append(out, DeploymentRecord{HostID: spec.HostID, ComponentID: id, Status: status(!disabled[id])})
+		out = append(out, DeploymentRecord{HostID: hostID, ComponentID: id, Status: status(!disabled[id])})
 	}
 	return host, out, nil
 }
 
-// deleteHostRows 删一台主机的全部登记：网关状态、部署、控制台 SSH 凭据与主机行。
+// deleteHostRows 删一台主机的全部登记：部署、控制台 SSH 凭据与主机行。
 func deleteHostRows(tx *gorm.DB, hostID string) error {
-	if err := tx.Where("c_host_id = ?", hostID).Delete(&HostGatewayStatus{}).Error; err != nil {
-		return err
-	}
 	if err := tx.Where("c_host_id = ?", hostID).Delete(&DeploymentRecord{}).Error; err != nil {
 		return err
 	}
@@ -306,32 +306,53 @@ func deleteHostRows(tx *gorm.DB, hostID string) error {
 	return tx.Where("c_host_id = ?", hostID).Delete(&HostRecord{}).Error
 }
 
+func sshCredentialFromHost(spec *pb.SyncTopologyHost) (secretmodel.SSHCredential, error) {
+	switch spec.GetSshAuthType() {
+	case "password":
+		return secretmodel.SSHCredential{Password: spec.GetSshSecret(), Passphrase: spec.GetSshPassphrase()}, nil
+	case "private_key":
+		return secretmodel.SSHCredential{PrivateKey: spec.GetSshSecret(), Passphrase: spec.GetSshPassphrase()}, nil
+	default:
+		return secretmodel.SSHCredential{}, fmt.Errorf("%w: SSH auth type must be password or private_key", ErrInvalidTopology)
+	}
+}
+
 // validateSSH 校验 SSH 信息并返回要写入 t_hosts 的端口与用户；没有 SSH 信息时端口为 0。
 // 只能出站的主机不能被控制台直连，不接受 SSH 信息。
-func (d *TopologyDAO) validateSSH(spec HostSpec, reachability string) (int, string, error) {
-	if spec.SSH == nil {
+func (d *TopologyDAO) validateSSH(spec *pb.SyncTopologyHost, reachability string) (int, string, error) {
+	hasSSH := spec.GetSshPort() != 0 || spec.GetSshUser() != "" || spec.GetSshAuthType() != "" || spec.GetSshSecret() != "" || spec.GetSshPassphrase() != ""
+	if !hasSSH {
 		return 0, "", nil
 	}
 	if reachability == servicecatalog.ReachabilityOutbound {
-		return 0, "", fmt.Errorf("%w: outbound host %q cannot carry SSH credentials", ErrInvalidTopology, spec.HostID)
+		return 0, "", fmt.Errorf("%w: outbound host %q cannot carry SSH credentials", ErrInvalidTopology, spec.GetHostId())
 	}
-	ssh := spec.SSH
-	if ssh.Port < 1 || ssh.Port > 65535 || strings.TrimSpace(ssh.User) == "" || len(ssh.User) > 128 {
+	port := int(spec.GetSshPort())
+	user := strings.TrimSpace(spec.GetSshUser())
+	if port < 1 || port > 65535 || user == "" || len(spec.GetSshUser()) > 128 {
 		return 0, "", fmt.Errorf("%w: SSH requires a port in 1..65535 and a user name", ErrInvalidTopology)
 	}
-	if err := (secretmodel.SSHCredential{Password: ssh.Password, PrivateKey: ssh.PrivateKey, Passphrase: ssh.Passphrase}).Validate(); err != nil {
+	credential, err := sshCredentialFromHost(spec)
+	if err != nil {
+		return 0, "", err
+	}
+	if err := credential.Validate(); err != nil {
 		return 0, "", fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 	}
-	return ssh.Port, strings.TrimSpace(ssh.User), nil
+	return port, user, nil
 }
 
 // writeSSHCredential 在同一事务里写入或清除主机的 SSH 凭据；凭据不进日志和错误信息。
-func (d *TopologyDAO) writeSSHCredential(tx *gorm.DB, hostID string, ssh *SSHSpec) error {
+func (d *TopologyDAO) writeSSHCredential(tx *gorm.DB, spec *pb.SyncTopologyHost) error {
+	hostID := spec.GetHostId()
 	secretID := secretmodel.SSHHostSecretID(hostID)
-	if ssh == nil {
+	if spec.GetSshPort() == 0 {
 		return secretdao.DeleteSystemSecret(tx, secretID)
 	}
-	credential := secretmodel.SSHCredential{Password: ssh.Password, PrivateKey: ssh.PrivateKey, Passphrase: ssh.Passphrase}
+	credential, err := sshCredentialFromHost(spec)
+	if err != nil {
+		return err
+	}
 	plain, err := credential.Encode()
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
@@ -345,7 +366,7 @@ func (d *TopologyDAO) writeSSHCredential(tx *gorm.DB, hostID string, ssh *SSHSpe
 	}
 	return secretdao.PutSystemSecret(tx, key, &secretmodel.Secret{
 		SecretID: secretID, Name: "SSH " + hostID, Category: secretmodel.SSHCategory,
-		SecretType: credential.Type(), KeyID: strings.TrimSpace(ssh.User), SecretValue: plain,
+		SecretType: credential.Type(), KeyID: strings.TrimSpace(spec.GetSshUser()), SecretValue: plain,
 		ExtraConfig: "{}", Status: "active", Creator: "moox-cli",
 	})
 }

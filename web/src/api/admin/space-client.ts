@@ -1,4 +1,5 @@
 import { AxiosHeaders, type AxiosInstance, type AxiosRequestConfig, type InternalAxiosRequestConfig } from "axios";
+import { GLOBAL_METHODS, GLOBAL_SERVICES, SPACE_OPTIONAL_METHODS } from "virtual:space-policy";
 import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "./space-header";
 import { AuthSessionExpiredError } from "./auth-errors";
 import { StaleSpaceRequestError } from "./stale-space";
@@ -45,7 +46,7 @@ export function setSpaceInitializer(initializer: SpaceInitializer | null): void 
 const SPACE_INIT_TIMEOUT_MS = 10_000;
 
 /**
- * 空间契约三档策略（与 Admin Console policy.go 1:1 对齐，决策 D7）：
+ * 空间契约三档策略（构建时由 packages/servicecatalog/catalog.yaml 生成，与 Admin Console 同源）：
  * - global：纯全局接口，永不等空间初始化、不注入 X-Space-Id、不参与“切换空间即取消”；
  * - space_optional：空间可选接口，无选中空间时不阻塞；有选中空间且未显式指定空间、请求体未传 global: true 时透传 X-Space-Id，
  *   并在带了 injectedSpaceId 时随切空间取消旧读取；
@@ -54,62 +55,6 @@ const SPACE_INIT_TIMEOUT_MS = 10_000;
 export type SpacePolicy = "global" | "space_optional" | "space_required";
 
 const ADMIN_API_PATH = /\/api\/admin\/([^/?#]+)\/([^/?#]+)/;
-
-const GLOBAL_SERVICES = new Set(["auth", "ssh", "secret", "sysdeploy", "monitor", "eventbus"]);
-
-const GLOBAL_METHODS: Record<string, ReadonlySet<string>> = {
-  storage: new Set(["ListSpaces", "CreateSpace", "UpdateSpace", "DeleteSpace"]),
-  collector: new Set([
-    "ListCloudAccounts",
-    "CreateCloudAccount",
-    "UpdateCloudAccount",
-    "DeleteCloudAccount",
-    "ListCloudRegions",
-    "GetDataTypeConfigs",
-    "GetDataTypeConfigWithFields",
-    "ListSubjectListers",
-    "RegisterDelistNotice",
-    "GetLifecycle",
-    "ControlLifecycle"
-  ]),
-  trade: new Set([
-    "InspectExchangeCredential",
-    "ListBlockedInstruments",
-    "UnblockInstrument",
-    "ListInstrumentHolders",
-    "ListDelists",
-    "GetLifecycle",
-    "ControlLifecycle"
-  ]),
-  strategy: new Set(["ListStrategies", "CreateStrategy", "UpdateStrategy", "DeleteStrategy", "GetLifecycle", "ControlLifecycle"]),
-  "factor-mgr": new Set([
-    "CreateFactor",
-    "UpdateFactor",
-    "DeleteFactor",
-    "ImportFactorCatalog",
-    "ValidateFactorSpec",
-    "ListFactorFunctions",
-    "ListFactorCategories",
-    "UpsertFactorCategory",
-    "DeleteFactorCategory",
-    "SetFactorCategory",
-    "GetStatus",
-    "PublishUdf",
-    "ListUdfs",
-    "GetUdf",
-    "ActivateUdf",
-    "GetLifecycle",
-    "ControlLifecycle"
-  ]),
-  archive: new Set(["GetLifecycle", "ControlLifecycle"])
-};
-
-const SPACE_OPTIONAL_METHODS: Record<string, ReadonlySet<string>> = {
-  strategy: new Set(["GetStrategy", "ValidateStrategy"]),
-  activity: new Set(["ListActivityLogs"]),
-  // GetFactor / ListFactors 无空间时可正常读取全局定义，有空间时服务端按 X-Space-Id 区分本空间与其他空间引用计数。
-  "factor-mgr": new Set(["ListFactorTasks", "GetFactor", "ListFactors"])
-};
 
 export function spacePolicyForUrl(url: string | undefined): SpacePolicy {
   const match = ADMIN_API_PATH.exec(url || "");

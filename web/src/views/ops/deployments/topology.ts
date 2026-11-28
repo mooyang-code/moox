@@ -262,7 +262,7 @@ export function buildTopology(input: TopologyInput): Topology {
   for (const component of components) {
     for (const service of component.services || []) {
       const targets = placed.get(component.id) || [];
-      const callers = [...new Set(service.methods.flatMap(methodCallerIds))];
+      const callers = [...new Set((service.methods || []).flatMap(methodCallerIds))];
       for (const caller of callers) {
         const sources = sourcesOf(caller, placed, nodeById);
         const category = categoryOf(caller, componentIds.has(caller));
@@ -300,7 +300,7 @@ function collectExternals(catalog?: ComponentCatalog) {
   const ids = new Set<string>(["market", "console"]);
   for (const component of catalog?.components || [])
     for (const service of component.services || [])
-      for (const method of service.methods)
+      for (const method of service.methods || [])
         for (const caller of methodCallerIds(method)) if (!componentIds.has(caller)) ids.add(caller);
   const order = Object.keys(EXTERNAL_LABELS);
   return [...ids]

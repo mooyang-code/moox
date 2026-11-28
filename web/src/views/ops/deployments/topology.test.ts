@@ -16,9 +16,59 @@ import {
   type TopologyEdge
 } from "./topology";
 
-const catalog = parse(
+interface RawCatalogYAML {
+  version: number;
+  identities?: { id: string; external?: boolean }[];
+  components?: Array<{
+    id: string;
+    name: string;
+    binary: string;
+    scope: "host" | "control" | "any";
+    external_program?: boolean;
+    ports?: number[];
+    health?: { port?: number };
+    services?: Array<{
+      path: string;
+      port: number;
+      console_name?: string;
+      methods?: Array<{
+        name: string;
+        read_only?: boolean;
+        idempotent?: boolean;
+        callers?: string[];
+        operators?: string[];
+      }>;
+    }>;
+  }>;
+}
+
+const rawCatalog = parse(
   readFileSync(path.resolve(__dirname, "../../../../../packages/servicecatalog/catalog.yaml"), "utf8")
-) as ComponentCatalog;
+) as RawCatalogYAML;
+const catalog: ComponentCatalog = {
+  version: rawCatalog.version,
+  identities: rawCatalog.identities || [],
+  components: (rawCatalog.components || []).map(item => ({
+    id: item.id,
+    name: item.name,
+    binary: item.binary,
+    scope: item.scope,
+    external_program: item.external_program,
+    ports: item.ports,
+    health_port: item.health?.port,
+    services: (item.services || []).map(svc => ({
+      path: svc.path,
+      port: svc.port,
+      console_name: svc.console_name,
+      methods: (svc.methods || []).map(m => ({
+        name: m.name,
+        read_only: m.read_only,
+        idempotent: m.idempotent,
+        callers: [...new Set([...(m.operators ?? ["console", "moox-cli"]), ...(m.callers || [])])].sort()
+      }))
+    }))
+  }))
+};
 const hosts: DeploymentHost[] = [
   { host_id: "storage", address: "203.0.113.11", region: "ap-nanjing", status: "enabled" },
   { host_id: "control", address: "203.0.113.10", region: "ap-guangzhou", status: "enabled" },
@@ -39,7 +89,7 @@ const deployments: ComponentDeployment[] = hosts.flatMap(host =>
   }))
 );
 function build(items = deployments, showDisabled = false) {
-  const groups = hosts.map(host => ({ host, rows: deploymentRows(host, items, catalog.components) }));
+  const groups = hosts.map(host => ({ host, rows: deploymentRows(host, items, catalog.components || []) }));
   return buildTopology({ catalog, groups, controlHostId: "control", showDisabled });
 }
 const key = deploymentKey;
@@ -146,7 +196,7 @@ describe("service topology", () => {
         .nodes.filter(node => node.kind === "external")
         .map(node => node.id)
     );
-    const components = new Set(catalog.components.map(item => item.id));
+    const components = new Set((catalog.components || []).map(item => item.id));
     for (const step of DATA_FLOW)
       for (const ref of [step.from, step.to, step.near].filter(Boolean) as string[])
         expect(ref.startsWith("ext:") ? externals.has(ref) : components.has(ref), ref).toBe(true);

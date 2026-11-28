@@ -16,11 +16,13 @@ export interface DeploymentRow {
   health?: HealthComponent;
   status: HealthStatus;
 }
-/** 人操作的两个身份：方法的 operators 省略时两者都能调。 */
-export const DEFAULT_OPERATORS = ["console", "moox-cli"];
-/** 方法的全部调用方：人操作身份加 callers 里的机器身份（host-gateway 指每台主机的网关）。 */
+/** 受保护组件由组件身份确定（不可停用或移除）：控制机的 admin 与每台主机的 host-gateway。 */
+export function isProtectedComponent(componentId: string): boolean {
+  return componentId === "admin" || componentId === "host-gateway";
+}
+/** 方法的全部调用方（后端 GetCatalog 已按目录规则展开 operators 与 callers）。 */
 export function methodCallerIds(method: CatalogMethod): string[] {
-  return [...(method.operators ?? DEFAULT_OPERATORS), ...(method.callers || [])];
+  return method.callers || [];
 }
 export function deploymentKey(hostId: string, componentId: string) {
   return `${hostId}\0${componentId}`;
@@ -57,7 +59,7 @@ export function componentPorts(component?: CatalogComponent) {
     ...new Set([
       ...(component?.ports || []).filter(port => port > 0),
       ...(component?.services || []).map(item => item.port).filter(port => port > 0),
-      ...(component?.health.port ? [component.health.port] : [])
+      ...(component?.health_port ? [component.health_port] : [])
     ])
   ].sort((a, b) => a - b);
 }

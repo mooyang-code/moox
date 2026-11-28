@@ -26,9 +26,9 @@ func TestInitializeAppliesSchemaWritesFormatAndRejectsObsolete(t *testing.T) {
 SELECT count(*)
 FROM sqlite_master
 WHERE type = 'table'
-  AND name IN ('t_users', 't_secrets', 't_hosts', 't_deployments', 't_host_gateway_status')
+  AND name IN ('t_users', 't_secrets', 't_hosts', 't_deployments')
 `).Scan(&count).Error)
-	require.Equal(t, int64(5), count)
+	require.Equal(t, int64(4), count)
 
 	rec, err := dataformat.ReadFile(filepath.Join(dir, dataformat.FileName))
 	require.NoError(t, err)

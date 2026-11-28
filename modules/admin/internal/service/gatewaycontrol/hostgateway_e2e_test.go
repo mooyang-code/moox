@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
@@ -71,9 +70,9 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	ctx := context.Background()
 	// 控制机登记成外部入口：它的网关多开 11004，接外部身份的请求。外部身份能调的方法都在存储机上，
 	// 入口放在控制机，外部请求都要由控制机网关带来源头转到存储机，跨主机转发因此有真实进程覆盖。
-	controlSpec := sysdeploy.HostSpec{HostID: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, Components: []string{"admin", "collector"}}
-	storageSpec := sysdeploy.HostSpec{HostID: "storage", Enabled: true, Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view", "monitor"}}
-	f.specs = []sysdeploy.HostSpec{controlSpec, storageSpec}
+	controlSpec := &pb.SyncTopologyHost{HostId: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, ComponentIds: []string{"admin", "collector"}}
+	storageSpec := &pb.SyncTopologyHost{HostId: "storage", Enabled: true, Address: "127.0.0.2", ComponentIds: []string{"storage-primary", "storage-view", "monitor"}}
+	f.specs = []*pb.SyncTopologyHost{controlSpec, storageSpec}
 	require.NoError(t, f.declare())
 	for _, identity := range []string{"scf-collector"} {
 		require.NoError(t, f.keys.SetIdentity(ctx, identity, publicKey("identity/"+identity)))
@@ -113,8 +112,8 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	storageProcess := startGatewayExecutable(t, binary, framework, configs["storage"])
 	waitForE2E(t, 15*time.Second, "both actual gateway heartbeats", func() bool {
 		for _, host := range []string{"control", "storage"} {
-			status, err := f.topology.GetGatewayStatus(ctx, host)
-			if err != nil || status.LastSeenAt == nil || status.AppliedHash == "" {
+			status, ok := f.statuses.Get(host)
+			if !ok || status.LastSeenAt == nil || status.AppliedHash == "" {
 				return false
 			}
 		}
@@ -283,7 +282,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	// A newly registered host is also a new caller. Its signature must become
 	// accepted through the already running control gateway after the next pull.
-	require.NoError(t, f.declareHost(sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
+	require.NoError(t, f.declareHost(&pb.SyncTopologyHost{HostId: "joining", Address: "127.0.0.3"}))
 	require.NoError(t, f.keys.SetHostPublicKey(ctx, "joining", publicKey("host/joining")))
 	joining := authtest.Component("host-gateway", "joining")
 	joiningBody, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "joining"})
@@ -298,14 +297,14 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	})
 	t.Log("SCENARIO PASS new-caller-next-snapshot-without-restart")
 
-	f.specs[1].DisabledComponents = []string{"storage-primary"}
+	f.specs[1].DisabledComponentIds = []string{"storage-primary"}
 	require.NoError(t, f.declare())
 	waitForE2E(t, 15*time.Second, "disabled deployment explicitly rejected", func() bool {
 		_, err := clients["control"].Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
 		return err != nil && (strings.Contains(err.Error(), "no enabled deployment") || strings.Contains(err.Error(), "not deployed"))
 	})
-	f.specs[0] = sysdeploy.HostSpec{HostID: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, Components: append(slices.Clone(controlSpec.Components), "storage-primary")}
-	f.specs[1] = sysdeploy.HostSpec{HostID: "storage", Enabled: true, Address: "127.0.0.2", Components: []string{"storage-view", "monitor"}}
+	f.specs[0] = &pb.SyncTopologyHost{HostId: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, ComponentIds: append(slices.Clone(controlSpec.GetComponentIds()), "storage-primary")}
+	f.specs[1] = &pb.SyncTopologyHost{HostId: "storage", Enabled: true, Address: "127.0.0.2", ComponentIds: []string{"storage-view", "monitor"}}
 	require.NoError(t, f.declare())
 	// PrimaryStore 换到 control：control 的客户端改成直连本机服务端口，storage 的客户端改成跨主机经 control 网关的 11003。
 	waitForE2E(t, 15*time.Second, "existing clients automatically switch deployment target", func() bool {

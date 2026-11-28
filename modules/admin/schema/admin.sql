@@ -26,7 +26,7 @@ BEGIN
 END;
 
 -- 主机登记表：唯一的主机来源，只能通过 moox-cli 维护
--- 部署配置与网关运行状态分表；SSH 的端口、用户和指纹是本表的列，密码或私钥存在 t_secrets（moox:ssh-host:<主机ID>）
+-- 部署配置存 t_deployments，网关运行态保存在 Admin 进程内存中；SSH 的端口、用户和指纹是本表的列，密码或私钥存在 t_secrets（moox:ssh-host:<主机ID>）
 CREATE TABLE IF NOT EXISTS t_hosts (
     c_host_id TEXT NOT NULL PRIMARY KEY,
     -- 控制台展示用的中文名，如“控制机”
@@ -92,15 +92,6 @@ BEGIN
     UPDATE t_deployments SET c_mtime = CURRENT_TIMESTAMP
     WHERE c_host_id = OLD.c_host_id AND c_component_id = OLD.c_component_id;
 END;
-
-CREATE TABLE IF NOT EXISTS t_host_gateway_status (
-    c_host_id TEXT NOT NULL PRIMARY KEY,
-    c_applied_hash TEXT NOT NULL DEFAULT '',
-    c_last_seen_at DATETIME,
-    -- control 网关带来的反向连接会话（JSON 数组），其他主机为空
-    c_relay_sessions TEXT NOT NULL DEFAULT '',
-    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id) ON DELETE CASCADE
-);
 
 -- 秘钥管理表：物理硬删除，c_secret_value 与 c_extra_config 均使用 AES-GCM 加密存储
 CREATE TABLE IF NOT EXISTS t_secrets (

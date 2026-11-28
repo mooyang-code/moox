@@ -25,12 +25,13 @@ import (
 
 type controlFixture struct {
 	// specs 是当前声明的全部主机：改了之后 declare 整份覆盖登记。
-	specs    []sysdeploy.HostSpec
+	specs    []*pb.SyncTopologyHost
 	service  *Service
 	db       *gorm.DB
 	path     string
 	keys     *keys.Store
 	topology *sysdeploy.TopologyDAO
+	statuses *sysdeploy.GatewayStatusStore
 	clock    atomic.Int64
 }
 
@@ -47,16 +48,19 @@ func openControlDB(t *testing.T, path string) *gorm.DB {
 func newControlFixture(t *testing.T) *controlFixture {
 	t.Helper()
 	dir := t.TempDir()
-	f := &controlFixture{path: filepath.Join(dir, "admin.db")}
+	f := &controlFixture{
+		path:     filepath.Join(dir, "admin.db"),
+		statuses: sysdeploy.NewGatewayStatusStore(),
+	}
 	f.db = openControlDB(t, f.path)
 	require.NoError(t, f.db.Exec(schema.AdminSQL()).Error)
 	var err error
 	f.topology, err = sysdeploy.NewTopologyDAO(f.db, "control")
 	require.NoError(t, err)
-	f.specs = []sysdeploy.HostSpec{
-		{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin", "collector"}},
-		{HostID: "storage", Enabled: true, Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
-		{HostID: "overseas", Enabled: true, Address: "compute.example.test", Components: []string{"egress-proxy", "trade"}},
+	f.specs = []*pb.SyncTopologyHost{
+		{HostId: "control", Enabled: true, Address: "control.example.test", ComponentIds: []string{"admin", "collector"}},
+		{HostId: "storage", Enabled: true, Address: "storage.example.test", ComponentIds: []string{"storage-primary", "storage-view"}},
+		{HostId: "overseas", Enabled: true, Address: "compute.example.test", ComponentIds: []string{"egress-proxy", "trade"}},
 	}
 	require.NoError(t, f.declare())
 	f.keys, err = keys.NewStore(f.db)
@@ -73,23 +77,24 @@ func newControlFixture(t *testing.T) *controlFixture {
 }
 
 func (f *controlFixture) declare() error {
-	_, err := f.topology.ReplaceTopology(context.Background(), f.specs)
+	_, err := f.topology.ReplaceTopology(context.Background(), &pb.SyncTopologyReq{Hosts: f.specs})
 	return err
 }
 
 // declareHost 改一台主机的声明（没有就新加，按启用处理），整份覆盖登记。
-func (f *controlFixture) declareHost(spec sysdeploy.HostSpec) error {
-	spec.Enabled = true
-	if i := slices.IndexFunc(f.specs, func(s sysdeploy.HostSpec) bool { return s.HostID == spec.HostID }); i >= 0 {
+func (f *controlFixture) declareHost(spec *pb.SyncTopologyHost) error {
+	cloned := proto.Clone(spec).(*pb.SyncTopologyHost)
+	cloned.Enabled = true
+	if i := slices.IndexFunc(f.specs, func(s *pb.SyncTopologyHost) bool { return s.GetHostId() == cloned.GetHostId() }); i >= 0 {
 		previous := f.specs[i]
-		f.specs[i] = spec
+		f.specs[i] = cloned
 		if err := f.declare(); err != nil {
 			f.specs[i] = previous
 			return err
 		}
 		return nil
 	}
-	f.specs = append(f.specs, spec)
+	f.specs = append(f.specs, cloned)
 	if err := f.declare(); err != nil {
 		f.specs = f.specs[:len(f.specs)-1]
 		return err
@@ -99,7 +104,7 @@ func (f *controlFixture) declareHost(spec sysdeploy.HostSpec) error {
 
 func (f *controlFixture) newService(t *testing.T, db *gorm.DB) *Service {
 	t.Helper()
-	service, err := NewService(db, "control")
+	service, err := NewService(db, "control", f.statuses)
 	require.NoError(t, err)
 	return service
 }
@@ -249,7 +254,7 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	require.NotNil(t, snapshotIdentity(f.snapshot(t, "storage"), "scf-collector"))
 	// 外部入口的登记随快照下发；只能出站的主机不能登记成外部入口。
 	require.False(t, snapshotHost(f.snapshot(t, "storage"), "storage").ExternalEntry)
-	entry := sysdeploy.HostSpec{HostID: "storage", Address: "storage.example.test", ExternalEntry: true, Components: []string{"storage-primary", "storage-view"}}
+	entry := &pb.SyncTopologyHost{HostId: "storage", Address: "storage.example.test", ExternalEntry: true, ComponentIds: []string{"storage-primary", "storage-view"}}
 	require.NoError(t, f.declareHost(entry))
 	require.True(t, snapshotHost(f.snapshot(t, "storage"), "storage").ExternalEntry)
 	require.False(t, snapshotHost(f.snapshot(t, "storage"), "overseas").ExternalEntry)
@@ -286,16 +291,15 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, unknown.GetRetInfo().GetCode())
 	require.Nil(t, unknown.Snapshot)
-	var ghost int64
-	require.NoError(t, f.db.Model(&sysdeploy.HostGatewayStatus{}).Where("c_host_id = ?", "ghost").Count(&ghost).Error)
-	require.Zero(t, ghost, "没登记的主机不写状态")
+	_, ok := f.statuses.Get("ghost")
+	require.False(t, ok, "没登记的主机不记运行态")
 }
 
 func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 	f := newControlFixture(t)
 	before := f.snapshot(t, "storage")
 	writerDB := openControlDB(t, f.path)
-	// 读到一半时另一个连接改主机地址并登记新身份：拉取持有写锁，写入要等它结束，快照不会新旧混在一起。
+	// 读到一半时另一个连接改主机地址并登记新身份：只读快照事务在 WAL 下看到同一个提交点，快照不会新旧混在一起。
 	var changed atomic.Bool
 	written := make(chan error, 1)
 	require.NoError(t, f.db.Callback().Query().After("gorm:query").Register("fixture:rotate-after-topology", func(tx *gorm.DB) {
@@ -314,7 +318,7 @@ func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 				return store.SetIdentity(context.Background(), "scf-collector", publicKey("scf-collector"))
 			})
 		}()
-		// 给写入方一点时间撞上写锁。
+		// 等写入方在只读事务进行期间提交，核对当前快照不被中途提交污染。
 		time.Sleep(50 * time.Millisecond)
 	}))
 	t.Cleanup(func() { _ = f.db.Callback().Query().Remove("fixture:rotate-after-topology") })
@@ -339,12 +343,12 @@ func (f *controlFixture) pull(t *testing.T, host, current string, sessions []*pb
 
 func (f *controlFixture) status(t *testing.T) sysdeploy.HostGatewayStatus {
 	t.Helper()
-	var status sysdeploy.HostGatewayStatus
-	require.NoError(t, f.db.Where("c_host_id='storage'").First(&status).Error)
+	status, ok := f.statuses.Get("storage")
+	require.True(t, ok)
 	return status
 }
 
-// 每次拉取都记下网关带来的已应用快照与时间，哈希没变也写（拉取兼作心跳）。
+// 每次拉取都在内存里记下网关带来的已应用快照与时间，哈希没变也更新（拉取兼作心跳）。
 func TestPullRecordsAppliedAndHeartbeat(t *testing.T) {
 	f := newControlFixture(t)
 	first := f.pull(t, "storage", "", nil)
@@ -375,8 +379,8 @@ func TestInvalidPullsDoNotOverwriteLastGoodStatus(t *testing.T) {
 	require.Equal(t, before, f.status(t))
 }
 
-// 两个 Admin 连接同时写同一台主机的状态：写锁让它们串行，都成功，最后一份完整。
-func TestIndependentStatusWritersSerialize(t *testing.T) {
+// 并发拉取同时写同一台主机的内存运行态：互斥锁保护，全部成功且结果完整。
+func TestConcurrentPullsUpdateInMemoryStatusSafely(t *testing.T) {
 	f := newControlFixture(t)
 	hash := f.pull(t, "storage", "", nil).Snapshot.Hash
 	other := f.newService(t, openControlDB(t, f.path))
@@ -407,7 +411,7 @@ func TestNewHostWithoutKeyDoesNotBlockSnapshots(t *testing.T) {
 	f := newControlFixture(t)
 	ctx := context.Background()
 	before := f.snapshot(t, "control")
-	require.NoError(t, f.declareHost(sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
+	require.NoError(t, f.declareHost(&pb.SyncTopologyHost{HostId: "new-host", Address: "new.example.test"}))
 	pending := f.snapshot(t, "control")
 	require.NotEqual(t, before.Hash, pending.Hash)
 	require.NotNil(t, snapshotHost(pending, "new-host"))
@@ -419,18 +423,27 @@ func TestNewHostWithoutKeyDoesNotBlockSnapshots(t *testing.T) {
 	issued := f.snapshot(t, "control")
 	require.Equal(t, publicKey("host/new-host"), gatewayauth.EncodePublicKey(snapshotHost(issued, "new-host").SignPublicKey))
 	require.Equal(t, []string{"host-agent", "host-gateway"}, signingCallers(t, issued)["new-host"])
-	_, err = NewService(f.db, "old_node")
+	_, err = NewService(f.db, "old_node", f.statuses)
 	require.Error(t, err)
 }
 
-func TestFailedStatusWritePreservesLastStatus(t *testing.T) {
+// PullSnapshot 对 SQLite 全程只读（不写任何表，不抢写锁）。
+func TestPullSnapshotIsStrictlyReadOnlyOnSQLite(t *testing.T) {
 	f := newControlFixture(t)
-	hash := f.pull(t, "storage", "", nil).Snapshot.Hash
-	before := f.status(t)
-	require.NoError(t, f.db.Exec("CREATE TRIGGER reject_status BEFORE INSERT ON t_host_gateway_status BEGIN SELECT RAISE(ABORT, 'fixture rejection'); END").Error)
-	response := f.pull(t, "storage", hash, nil)
-	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())
-	require.Equal(t, before, f.status(t))
+	readOnlyDB, err := gorm.Open(sqlite.Open("file:"+f.path+"?_pragma=query_only(1)&_pragma=busy_timeout(5000)"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := readOnlyDB.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	svc := f.newService(t, readOnlyDB)
+	rsp, err := svc.PullSnapshot(hostContext("storage"), &pb.PullSnapshotReq{HostId: "storage"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.True(t, rsp.Changed)
+	require.NotNil(t, rsp.Snapshot)
+	status, ok := f.statuses.Get("storage")
+	require.True(t, ok)
+	require.NotNil(t, status.LastSeenAt)
 }
 
 // control 网关拉取时带上反向连接会话，经主机状态查询原样返回；非法会话拒绝。
@@ -438,9 +451,12 @@ func TestControlPullCarriesRelaySessions(t *testing.T) {
 	f := newControlFixture(t)
 	sessions := []*pb.RelaySessionStatus{{HostId: "home", Online: true, InstanceId: "abc", ConnectedAt: 1792285200000, Reconnects: 2, Streams: 1}}
 	require.Equal(t, pb.ErrorCode_SUCCESS, f.pull(t, "control", "", sessions).GetRetInfo().GetCode())
-	var status sysdeploy.HostGatewayStatus
-	require.NoError(t, f.db.Where("c_host_id = ?", "control").First(&status).Error)
-	require.Contains(t, status.RelaySessions, `"host_id":"home"`)
+	status, ok := f.statuses.Get("control")
+	require.True(t, ok)
+	require.Len(t, status.RelaySessions, 1)
+	require.Equal(t, "home", status.RelaySessions[0].GetHostId())
+	require.True(t, status.RelaySessions[0].GetOnline())
+	require.Equal(t, "abc", status.RelaySessions[0].GetInstanceId())
 	for _, bad := range [][]*pb.RelaySessionStatus{
 		{{HostId: "home"}, {HostId: "home"}}, {{HostId: "bad/id"}}, {{HostId: "home", ConnectedAt: -1}}, {{HostId: "home", Reconnects: -1}},
 	} {

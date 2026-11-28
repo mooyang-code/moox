@@ -6,19 +6,22 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
-func topologySpecs() []HostSpec {
-	return []HostSpec{
-		{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin", "collector"}},
-		{HostID: "storage", Enabled: true, Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
-		{HostID: "overseas", Enabled: true, Address: "compute.example.test", Components: []string{"trade", "egress-proxy"}},
+func topologySpecs() []*pb.SyncTopologyHost {
+	return []*pb.SyncTopologyHost{
+		{HostId: "control", Enabled: true, Address: "control.example.test", ComponentIds: []string{"admin", "collector"}},
+		{HostId: "storage", Enabled: true, Address: "storage.example.test", ComponentIds: []string{"storage-primary", "storage-view"}},
+		{HostId: "overseas", Enabled: true, Address: "compute.example.test", ComponentIds: []string{"trade", "egress-proxy"}},
 	}
 }
 
@@ -31,14 +34,14 @@ func topologyDAO(t *testing.T) *TopologyDAO {
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	dao, err := NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	_, err = dao.ReplaceTopology(context.Background(), topologySpecs())
+	_, err = dao.ReplaceTopology(context.Background(), &pb.SyncTopologyReq{Hosts: topologySpecs()})
 	require.NoError(t, err)
 	return dao
 }
 
-func replace(t *testing.T, dao *TopologyDAO, specs []HostSpec) []string {
+func replace(t *testing.T, dao *TopologyDAO, specs []*pb.SyncTopologyHost) []string {
 	t.Helper()
-	touched, err := dao.ReplaceTopology(context.Background(), specs)
+	touched, err := dao.ReplaceTopology(context.Background(), &pb.SyncTopologyReq{Hosts: specs})
 	require.NoError(t, err)
 	return touched
 }
@@ -48,10 +51,10 @@ func TestReplaceTopologyTakesStatusFromDeclaration(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
 	specs := topologySpecs()
 	specs[0].Description = "updated metadata"
-	specs[0].Components = append(specs[0].Components, "monitor")
-	specs[0].DisabledComponents = []string{"collector"}
+	specs[0].ComponentIds = append(specs[0].ComponentIds, "monitor")
+	specs[0].DisabledComponentIds = []string{"collector"}
 	specs[2].Enabled = false
-	specs[2].Components = []string{"egress-proxy"}
+	specs[2].ComponentIds = []string{"egress-proxy"}
 	replace(t, dao, specs)
 	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)
@@ -77,7 +80,7 @@ func TestReplaceTopologyTakesStatusFromDeclaration(t *testing.T) {
 	require.NotContains(t, compiled.Directory.Services, "trpc.moox.collector.CollectMgr")
 	before, err := dao.Snapshot(ctx)
 	require.NoError(t, err)
-	specs[0].DisabledComponents = nil
+	specs[0].DisabledComponentIds = nil
 	replace(t, dao, specs)
 	recovered, err := dao.Compile(ctx, "control")
 	require.NoError(t, err)
@@ -108,21 +111,48 @@ func TestReplaceTopologyKeepsKeysAndFingerprints(t *testing.T) {
 func TestTopologyRejectsInvalidSynchronizationWithoutChangingDatabase(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		change func([]HostSpec) []HostSpec
+		change func([]*pb.SyncTopologyHost) []*pb.SyncTopologyHost
 	}{
-		{"unknown component", func(s []HostSpec) []HostSpec { s[0].Components = append(s[0].Components, "unknown"); return s }},
-		{"protected removal", func(s []HostSpec) []HostSpec { s[0].Components = []string{"collector"}; return s }},
-		{"control scope", func(s []HostSpec) []HostSpec { s[1].Components = append(s[1].Components, "admin"); return s }},
-		{"replica limit", func(s []HostSpec) []HostSpec { s[2].Components = append(s[2].Components, "collector"); return s }},
-		{"duplicate component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"egress-proxy", "egress-proxy"}; return s }},
-		{"automatic component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"host-gateway"}; return s }},
-		{"duplicate address", func(s []HostSpec) []HostSpec { s[2].Address = s[0].Address; return s }},
-		{"region too long", func(s []HostSpec) []HostSpec { s[2].Region = strings.Repeat("r", 129); return s }},
-		{"duplicate host", func(s []HostSpec) []HostSpec { return append(s, s[0]) }},
-		{"disabled control", func(s []HostSpec) []HostSpec { s[0].Enabled = false; return s }},
-		{"disabled protected", func(s []HostSpec) []HostSpec { s[0].DisabledComponents = []string{"admin"}; return s }},
-		{"disabled not deployed", func(s []HostSpec) []HostSpec { s[1].DisabledComponents = []string{"collector"}; return s }},
-		{"control removed", func(s []HostSpec) []HostSpec { return s[1:] }},
+		{"unknown component", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[0].ComponentIds = append(s[0].ComponentIds, "unknown")
+			return s
+		}},
+		{"protected removal", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[0].ComponentIds = []string{"collector"}
+			return s
+		}},
+		{"control scope", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[1].ComponentIds = append(s[1].ComponentIds, "admin")
+			return s
+		}},
+		{"replica limit", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[2].ComponentIds = append(s[2].ComponentIds, "collector")
+			return s
+		}},
+		{"duplicate component", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[2].ComponentIds = []string{"egress-proxy", "egress-proxy"}
+			return s
+		}},
+		{"automatic component", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[2].ComponentIds = []string{"host-gateway"}
+			return s
+		}},
+		{"duplicate address", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost { s[2].Address = s[0].Address; return s }},
+		{"region too long", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[2].Region = strings.Repeat("r", 129)
+			return s
+		}},
+		{"duplicate host", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost { return append(s, s[0]) }},
+		{"disabled control", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost { s[0].Enabled = false; return s }},
+		{"disabled protected", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[0].DisabledComponentIds = []string{"admin"}
+			return s
+		}},
+		{"disabled not deployed", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost {
+			s[1].DisabledComponentIds = []string{"collector"}
+			return s
+		}},
+		{"control removed", func(s []*pb.SyncTopologyHost) []*pb.SyncTopologyHost { return s[1:] }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dao, ctx := topologyDAO(t), context.Background()
@@ -130,7 +160,7 @@ func TestTopologyRejectsInvalidSynchronizationWithoutChangingDatabase(t *testing
 			require.NoError(t, err)
 			specs := topologySpecs()
 			specs[0].Description = "must roll back"
-			_, err = dao.ReplaceTopology(ctx, tc.change(specs))
+			_, err = dao.ReplaceTopology(ctx, &pb.SyncTopologyReq{Hosts: tc.change(specs)})
 			require.Error(t, err)
 			afterHosts, afterDeployments, err := dao.Read(ctx)
 			require.NoError(t, err)
@@ -146,9 +176,9 @@ func TestTopologyRollsBackHostWhenDeploymentWriteFails(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, dao.db.Exec(`CREATE TRIGGER fail_new_deployment BEFORE INSERT ON t_deployments
 WHEN NEW.c_host_id = 'new-host' BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END;`).Error)
-	specs := append(topologySpecs(), HostSpec{HostID: "new-host", Enabled: true, Address: "new.example.test"})
+	specs := append(topologySpecs(), &pb.SyncTopologyHost{HostId: "new-host", Enabled: true, Address: "new.example.test"})
 	specs[0].Description = "must also roll back"
-	_, err = dao.ReplaceTopology(ctx, specs)
+	_, err = dao.ReplaceTopology(ctx, &pb.SyncTopologyReq{Hosts: specs})
 	require.Error(t, err)
 	afterHosts, afterDeployments, err := dao.Read(ctx)
 	require.NoError(t, err)
@@ -156,18 +186,20 @@ WHEN NEW.c_host_id = 'new-host' BEGIN SELECT RAISE(ABORT, 'simulated disk failur
 	require.Equal(t, beforePlacements, afterDeployments)
 }
 
-// 声明里没有的主机连同它的网关状态、部署与控制台 SSH 凭据一起删掉。
+// 声明里没有的主机连同它的部署与控制台 SSH 凭据一起删掉；即使内存里还有它的旧网关状态，GetHostRoutes 也不会暴露。
 func TestReplaceTopologyDeletesUndeclaredHosts(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
-	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "overseas", AppliedHash: "previous"}).Error)
+	statuses := NewGatewayStatusStore()
+	statuses.Record("overseas", "previous", time.Now(), nil)
+	svc := &ServiceImpl{topology: dao, statuses: statuses, adminNodeID: "control"}
 	require.Equal(t, []string{"overseas"}, replace(t, dao, topologySpecs()[:2]))
 	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)
 	require.False(t, slices.ContainsFunc(hosts, func(h HostRecord) bool { return h.HostID == "overseas" }))
 	require.False(t, slices.ContainsFunc(deployments, func(p DeploymentRecord) bool { return p.HostID == "overseas" }))
-	var count int64
-	require.NoError(t, dao.db.Model(&HostGatewayStatus{}).Where("c_host_id = ?", "overseas").Count(&count).Error)
-	require.Zero(t, count)
+	routes, err := svc.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "overseas"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, routes.GetRetInfo().GetCode())
 }
 
 func TestConcurrentTopologyWritersSerialize(t *testing.T) {
@@ -183,9 +215,9 @@ func TestConcurrentTopologyWritersSerialize(t *testing.T) {
 	require.NoError(t, err)
 	second, err := NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	specs := topologySpecs()
-	specs[0].Components = []string{"admin"}
-	_, err = first.ReplaceTopology(context.Background(), specs)
+	initial := topologySpecs()
+	initial[0].ComponentIds = []string{"admin"}
+	_, err = first.ReplaceTopology(context.Background(), &pb.SyncTopologyReq{Hosts: initial})
 	require.NoError(t, err)
 	start, results := make(chan struct{}), make(chan error, 2)
 	for _, item := range []struct {
@@ -194,9 +226,10 @@ func TestConcurrentTopologyWritersSerialize(t *testing.T) {
 	}{{first, 1}, {second, 2}} {
 		go func() {
 			<-start
-			declared := slices.Clone(specs)
-			declared[item.host].Components = append(slices.Clone(declared[item.host].Components), "collector")
-			_, err := item.dao.ReplaceTopology(context.Background(), declared)
+			declared := topologySpecs()
+			declared[0].ComponentIds = []string{"admin"}
+			declared[item.host].ComponentIds = append(declared[item.host].ComponentIds, "collector")
+			_, err := item.dao.ReplaceTopology(context.Background(), &pb.SyncTopologyReq{Hosts: declared})
 			results <- err
 		}()
 	}
@@ -216,7 +249,7 @@ func TestConcurrentTopologyWritersSerialize(t *testing.T) {
 // 出站主机登记后进入拓扑与目录；未知取值与出站 control 都拒绝。
 func TestTopologyOutboundHostReachability(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
-	home := HostSpec{HostID: "home", Enabled: true, Address: "192.168.0.103", Reachability: "outbound"}
+	home := &pb.SyncTopologyHost{HostId: "home", Enabled: true, Address: "192.168.0.103", Reachability: "outbound"}
 	replace(t, dao, append(topologySpecs(), home))
 	hosts, _, err := dao.Read(ctx)
 	require.NoError(t, err)
@@ -233,23 +266,24 @@ func TestTopologyOutboundHostReachability(t *testing.T) {
 	require.Len(t, compiled.Relays, 1)
 
 	home.Reachability = "inbound"
-	_, err = dao.ReplaceTopology(ctx, append(topologySpecs(), home))
+	_, err = dao.ReplaceTopology(ctx, &pb.SyncTopologyReq{Hosts: append(topologySpecs(), home)})
 	require.ErrorIs(t, err, ErrInvalidTopology)
 	specs := topologySpecs()
 	specs[0].Reachability = "outbound"
-	_, err = dao.ReplaceTopology(ctx, specs)
+	_, err = dao.ReplaceTopology(ctx, &pb.SyncTopologyReq{Hosts: specs})
 	require.ErrorIs(t, err, ErrInvalidTopology)
 }
 
 // syncHost 只改一台主机的声明（按启用处理），其余主机沿用 topologySpecs()，整份覆盖。
-func syncHost(dao *TopologyDAO, spec HostSpec) error {
-	spec.Enabled = true
+func syncHost(dao *TopologyDAO, spec *pb.SyncTopologyHost) error {
+	cloned := proto.Clone(spec).(*pb.SyncTopologyHost)
+	cloned.Enabled = true
 	specs := topologySpecs()
-	if i := slices.IndexFunc(specs, func(s HostSpec) bool { return s.HostID == spec.HostID }); i >= 0 {
-		specs[i] = spec
+	if i := slices.IndexFunc(specs, func(s *pb.SyncTopologyHost) bool { return s.GetHostId() == cloned.GetHostId() }); i >= 0 {
+		specs[i] = cloned
 	} else {
-		specs = append(specs, spec)
+		specs = append(specs, cloned)
 	}
-	_, err := dao.ReplaceTopology(context.Background(), specs)
+	_, err := dao.ReplaceTopology(context.Background(), &pb.SyncTopologyReq{Hosts: specs})
 	return err
 }

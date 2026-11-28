@@ -29,10 +29,6 @@ const RetRejected = 11403
 // 网关在入口剥掉外面带进来的全部 x-moox- 头，所以这个头只可能来自本机网关。
 const HeaderVerifiedHost = "X-Moox-Verified-Host"
 
-// HeaderVerifiedCaller 由网关在验签通过后写给本机的 SecretMgr：由主机密钥签名的调用方名字（组件名）；moox-cli 等没有签名主机的身份不写这个头。
-// 和 HeaderVerifiedHost 一样只可能来自本机网关。SecretMgr 据此把组件调用方能取的密钥限定在它该用的类别内。
-const HeaderVerifiedCaller = "X-Moox-Verified-Caller"
-
 // HeaderOriginCaller 由入口主机的网关在把外部身份的请求转给别的主机时带上：值是验过签的外部身份。
 // 它不在签名材料里；目标网关只在签名的是入口主机的 host-gateway、值是外部身份且该身份在方法名单上时才认。
 const HeaderOriginCaller = "X-Moox-Origin-Caller"

@@ -17,27 +17,11 @@ import (
 )
 
 // ============================================================================
-// 控制台处理器
-// ============================================================================
-
-// ConsoleHandle 控制台处理器，承载 HTTPRequestHandler。
-type ConsoleHandle struct {
-	requestHandler *HTTPRequestHandler
-}
-
-var NewConsoleHandle = func() *ConsoleHandle {
-	return &ConsoleHandle{
-		requestHandler: NewHTTPRequestHandler(),
-	}
-}
-
-// ============================================================================
 // HTTP路由注册
 // ============================================================================
 
 // HTTPRouter HTTP路由管理器
 type HTTPRouter struct {
-	console        *ConsoleHandle
 	catalog        servicecatalog.Catalog
 	local          *LocalDispatcher
 	gateway        RPCForwarder
@@ -47,13 +31,13 @@ type HTTPRouter struct {
 }
 
 // NewHTTPRouter 创建控制台路由；sessions 是与认证服务共用的会话表，限额与开发来源取 SetConfig 设置的配置。
-func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, sessions *auth.SessionStore) (*HTTPRouter, error) {
+func NewHTTPRouter(local *LocalDispatcher, gateway RPCForwarder, sessions *auth.SessionStore) (*HTTPRouter, error) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return nil, err
 	}
-	if console == nil || sessions == nil {
-		return nil, errors.New("console handle and session store are required")
+	if sessions == nil {
+		return nil, errors.New("会话表不能为空")
 	}
 	cfg := GetConfig()
 	var allowedOrigins []string
@@ -61,7 +45,7 @@ func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCFo
 		allowedOrigins = cfg.Console.AllowedOrigins
 	}
 	return &HTTPRouter{
-		console: console, catalog: catalog, local: local, gateway: gateway, sessions: sessions,
+		catalog: catalog, local: local, gateway: gateway, sessions: sessions,
 		limiters: newMethodLimiters(cfg), allowedOrigins: allowedOrigins,
 	}, nil
 }
@@ -75,7 +59,7 @@ func NewHandler(local *LocalDispatcher, gateway RPCForwarder, sessions *auth.Ses
 	if local == nil || gateway == nil || sessions == nil {
 		return nil, errors.New("控制台需要本地分派器、网关客户端及会话表")
 	}
-	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, sessions)
+	router, err := NewHTTPRouter(local, gateway, sessions)
 	if err != nil {
 		return nil, err
 	}
@@ -94,10 +78,9 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	ctx, message := codec.WithCloneMessage(r.Context())
 	defer codec.PutBackMessage(message)
 	r = r.WithContext(ctx)
-	handler := hr.console.requestHandler
 
 	// 解析请求参数
-	serviceID, method, err := handler.parseRequestParams(r)
+	serviceID, method, err := parseRequestParams(r)
 	if err != nil {
 		log.ErrorContextf(ctx, "解析请求参数失败: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -145,7 +128,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		trpc.SetMetaData(ctx, auth.CtxUsername, []byte(current.Username))
 		trpc.SetMetaData(ctx, auth.CtxSessionID, []byte(current.ID))
 	}
-	headers := handler.extractGatewayHeaders(r)
+	headers := extractGatewayHeaders(r)
 	if current.UserID != "" {
 		// 透传给下游 trade 等需要按用户隔离的服务。
 		headers["user_id"] = current.UserID
@@ -162,7 +145,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 读取请求体
-	_, body, err := handler.readRequestBodyWithRaw(r)
+	body, err := readRequestBody(r)
 	if err != nil {
 		log.ErrorContextf(ctx, "读取请求体失败: %v", err)
 		writeRequestBodyError(w, err)
@@ -233,8 +216,8 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 // authorizeRequest 在转发前按方法级三档空间策略（global / space_optional / space_required）定下请求作用的空间（可能来自请求体），
 // 仅核对请求头与请求体里的空间一致；系统只有一个超级用户，空间是否存在、是否停用不在这里判断（见管理后台.md 已知差别）。
 func (hr *HTTPRouter) authorizeRequest(r *http.Request, serviceID, method string, body []byte) (string, bool, int, error) {
-	policy := methodSpacePolicy(serviceID, method)
-	if policy == spacePolicyGlobal {
+	policy := methodSpacePolicy(hr.catalog, serviceID, method)
+	if policy == servicecatalog.SpacePolicyGlobal {
 		return "", false, 0, nil
 	}
 	var spaceID string
@@ -250,7 +233,7 @@ func (hr *HTTPRouter) authorizeRequest(r *http.Request, serviceID, method string
 		return "", false, http.StatusBadRequest, err
 	}
 	if spaceID == "" {
-		if policy == spacePolicyRequired {
+		if policy == servicecatalog.SpacePolicyRequired {
 			return "", false, http.StatusForbidden, errors.New("space_id is required")
 		}
 		return "", false, 0, nil
@@ -258,20 +241,8 @@ func (hr *HTTPRouter) authorizeRequest(r *http.Request, serviceID, method string
 	return spaceID, inject, 0, nil
 }
 
-// ============================================================================
-// HTTP请求处理器
-// ============================================================================
-
-// HTTPRequestHandler HTTP请求处理器
-type HTTPRequestHandler struct{}
-
-// NewHTTPRequestHandler 创建HTTP请求处理器
-func NewHTTPRequestHandler() *HTTPRequestHandler {
-	return &HTTPRequestHandler{}
-}
-
-// parseRequestParams 解析请求参数
-func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, method string, err error) {
+// parseRequestParams 解析控制台路径中的服务名和方法名。
+func parseRequestParams(r *http.Request) (serviceID, method string, err error) {
 	vars := mux.Vars(r)
 
 	serviceID, ok := vars["service"]
@@ -287,19 +258,20 @@ func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, met
 	return serviceID, method, nil
 }
 
-// readRequestBodyWithRaw 原样读取 RPC 请求体；query 参数不会变成 RPC 字段。
-func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []byte, error) {
+// readRequestBody 原样读取 RPC 请求体；query 参数不会变成 RPC 字段。
+func readRequestBody(r *http.Request) ([]byte, error) {
+	if r.Body != nil {
+		defer r.Body.Close()
+	}
 	body, err := readBoundedBody(r.Body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("读取请求体失败: %w", err)
+		return nil, fmt.Errorf("读取请求体失败: %w", err)
 	}
-	defer r.Body.Close()
-	rawBody := append([]byte(nil), body...)
-	return rawBody, body, nil
+	return body, nil
 }
 
 // extractGatewayHeaders 取透传给下游与写响应要用的请求头。用户与会话只来自 Cookie，请求头里的一概不认。
-func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]string {
+func extractGatewayHeaders(r *http.Request) map[string]string {
 	headers := make(map[string]string)
 	if traceID := r.Header.Get("X-Trace-Id"); traceID != "" {
 		headers["trace_id"] = traceID

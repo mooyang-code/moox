@@ -19,6 +19,9 @@ func TestAdminSchemaUsesHardDeleteWithoutInitialSecretTombstone(t *testing.T) {
 	if strings.Contains(raw, "t_deleted_initial_secrets") {
 		t.Fatalf("admin schema must not keep retired table t_deleted_initial_secrets")
 	}
+	if strings.Contains(raw, "t_host_gateway_status") {
+		t.Fatalf("admin schema must not keep retired table t_host_gateway_status")
+	}
 	for _, required := range []string{
 		"UNIQUE (c_secret_id)",
 		"c_ctime INTEGER NOT NULL",
@@ -48,8 +51,6 @@ func TestHostTopologySchemaEnforcesReferencesAndCascades(t *testing.T) {
 		`INSERT INTO t_hosts (c_host_id, c_address) VALUES ('duplicate', 'control.example.test')`,
 		`INSERT INTO t_deployments (c_host_id, c_component_id) VALUES ('missing', 'admin')`,
 		`INSERT INTO t_deployments (c_host_id, c_component_id, c_status) VALUES ('control', 'admin', 'active')`,
-		`INSERT INTO t_host_gateway_status (c_host_id) VALUES ('missing')`,
-		`INSERT INTO t_host_gateway_status (c_host_id, c_expected_hash) VALUES ('control', 'deadbeef')`,
 	} {
 		if _, err := db.Exec(statement); err == nil {
 			t.Fatalf("schema accepted invalid input: %s", statement)
@@ -58,13 +59,10 @@ func TestHostTopologySchemaEnforcesReferencesAndCascades(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO t_deployments (c_host_id, c_component_id) VALUES ('control', 'admin')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO t_host_gateway_status (c_host_id, c_applied_hash) VALUES ('control', 'abc')`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := db.Exec(`DELETE FROM t_hosts WHERE c_host_id = 'control'`); err != nil {
 		t.Fatalf("deleting host should cascade to dependent tables: %v", err)
 	}
-	for _, table := range []string{"t_deployments", "t_host_gateway_status"} {
+	for _, table := range []string{"t_deployments"} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			t.Fatal(err)

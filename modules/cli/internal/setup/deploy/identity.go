@@ -23,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // adminPaths 是控制机上 moox-admin-cli 要用的几个位置。
@@ -94,7 +95,7 @@ func bootstrapControl(ctx context.Context, control setupssh.Client, cfg *topolog
 	if err != nil {
 		return metadata, err
 	}
-	raw, err := json.Marshal(plan)
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(plan)
 	if err != nil {
 		return metadata, err
 	}

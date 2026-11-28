@@ -41,6 +41,8 @@ type SecretMgrService interface {
 
 	GetCloudCredential(ctx context.Context, req *GetCloudCredentialReq) (*GetCloudCredentialRsp, error)
 
+	GetExchangeCredential(ctx context.Context, req *GetExchangeCredentialReq) (*GetExchangeCredentialRsp, error)
+
 	EnsureInitialSecret(ctx context.Context, req *EnsureInitialSecretReq) (*EnsureInitialSecretRsp, error)
 }
 
@@ -242,6 +244,24 @@ func SecretMgrService_GetCloudCredential_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
+func SecretMgrService_GetExchangeCredential_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetExchangeCredentialReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SecretMgrService).GetExchangeCredential(ctx, reqbody.(*GetExchangeCredentialReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func SecretMgrService_EnsureInitialSecret_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &EnsureInitialSecretReq{}
 	filters, err := f(req)
@@ -310,6 +330,10 @@ var SecretMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: SecretMgrService_GetCloudCredential_Handler,
 		},
 		{
+			Name: "/trpc.moox.ops.SecretMgr/GetExchangeCredential",
+			Func: SecretMgrService_GetExchangeCredential_Handler,
+		},
+		{
 			Name: "/trpc.moox.ops.SecretMgr/EnsureInitialSecret",
 			Func: SecretMgrService_EnsureInitialSecret_Handler,
 		},
@@ -360,6 +384,9 @@ func (s *UnimplementedSecretMgr) GetReadonlyExchangeKey(ctx context.Context, req
 func (s *UnimplementedSecretMgr) GetCloudCredential(ctx context.Context, req *GetCloudCredentialReq) (*GetCloudCredentialRsp, error) {
 	return nil, errors.New("rpc GetCloudCredential of service SecretMgr is not implemented")
 }
+func (s *UnimplementedSecretMgr) GetExchangeCredential(ctx context.Context, req *GetExchangeCredentialReq) (*GetExchangeCredentialRsp, error) {
+	return nil, errors.New("rpc GetExchangeCredential of service SecretMgr is not implemented")
+}
 func (s *UnimplementedSecretMgr) EnsureInitialSecret(ctx context.Context, req *EnsureInitialSecretReq) (*EnsureInitialSecretRsp, error) {
 	return nil, errors.New("rpc EnsureInitialSecret of service SecretMgr is not implemented")
 }
@@ -393,6 +420,8 @@ type SecretMgrClientProxy interface {
 	GetReadonlyExchangeKey(ctx context.Context, req *GetReadonlyExchangeKeyReq, opts ...client.Option) (rsp *GetReadonlyExchangeKeyRsp, err error)
 
 	GetCloudCredential(ctx context.Context, req *GetCloudCredentialReq, opts ...client.Option) (rsp *GetCloudCredentialRsp, err error)
+
+	GetExchangeCredential(ctx context.Context, req *GetExchangeCredentialReq, opts ...client.Option) (rsp *GetExchangeCredentialRsp, err error)
 
 	EnsureInitialSecret(ctx context.Context, req *EnsureInitialSecretReq, opts ...client.Option) (rsp *EnsureInitialSecretRsp, err error)
 }
@@ -620,6 +649,26 @@ func (c *SecretMgrClientProxyImpl) GetCloudCredential(ctx context.Context, req *
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetCloudCredentialRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SecretMgrClientProxyImpl) GetExchangeCredential(ctx context.Context, req *GetExchangeCredentialReq, opts ...client.Option) (*GetExchangeCredentialRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SecretMgr/GetExchangeCredential")
+	msg.WithCalleeServiceName(SecretMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SecretMgr")
+	msg.WithCalleeMethod("GetExchangeCredential")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetExchangeCredentialRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -61,8 +61,8 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 
-	// 2. 网关控制面（独立回环端口 + 专用 SerializationTypeNoop / 验签隔离）与健康端口。
-	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID)
+	// 2. 网关控制面（独立回环端口 + 专用 SerializationTypeNoop / 验签隔离，与 SysDeploy 共用进程内网关运行态存储）与健康端口。
+	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID, services.SysDeploy.GatewayStatuses())
 	if err != nil {
 		return err
 	}
