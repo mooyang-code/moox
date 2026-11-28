@@ -136,16 +136,11 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 
 // taskToPB 把任务转成接口消息。
 func (s *Service) taskToPB(t store.Task) *archivepb.ArchiveTask {
-	// 接口字段 blocked_reason 专用于“分区登记被拒”说明；“源数据集不存在”复用底层列，对外经 health / health_reason 呈现。
-	blockedReason := t.BlockedReason
-	if blockedReason == store.BlockedReasonSourceDatasetMissing {
-		blockedReason = ""
-	}
 	out := &archivepb.ArchiveTask{
 		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Freq: t.Freq, PartitionUnit: t.PartitionUnit, Retention: t.Retention,
 		BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status,
 		LastSuccessAt: millisOf(t.LastSuccessAt), FinalUntil: fmtRFC(t.FinalUntil), Creator: t.Creator, CreatedAt: millisOf(t.CreatedAt), UpdatedAt: millisOf(t.UpdatedAt),
-		BlockedReason: blockedReason,
+		BlockedReason: t.BlockedReason,
 	}
 	for _, item := range t.Unrecoverable {
 		out.Unrecoverable = append(out.Unrecoverable, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})

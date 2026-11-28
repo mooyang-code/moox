@@ -1203,7 +1203,7 @@ func TestSourceDatasetMissingLifecycleAndIsolationFromPartitionRegression(t *tes
 		t.Fatal(err)
 	}
 	task1, _ := s.GetTask(ctx, "crypto", "ds1")
-	if task1.Status != StatusEnabled || task1.BlockedReason != BlockedReasonSourceDatasetMissing {
+	if task1.Status != StatusEnabled || !task1.SourceMissing || task1.BlockedReason != "" {
 		t.Fatalf("ds1 = %+v", task1)
 	}
 	if err := s.CompleteRun(ctx, CompleteRequest{
@@ -1213,7 +1213,7 @@ func TestSourceDatasetMissingLifecycleAndIsolationFromPartitionRegression(t *tes
 		t.Fatal(err)
 	}
 	task1, _ = s.GetTask(ctx, "crypto", "ds1")
-	if task1.BlockedReason != BlockedReasonSourceDatasetMissing {
+	if !task1.SourceMissing {
 		t.Fatalf("在途运行的带分区完成上报不能清掉源数据集不存在标记: %+v", task1)
 	}
 	// 此时再给 ds1 触发 CreateFollowRuns：ds1 被跳过，ds2 已有 queued 的 follow 也不重复生成。
@@ -1227,26 +1227,52 @@ func TestSourceDatasetMissingLifecycleAndIsolationFromPartitionRegression(t *tes
 	if active, err := s.ListActiveRuns(ctx, "crypto"); err != nil || len(active) != 0 {
 		t.Fatalf("排队中的 follow 应已取消: active=%+v err=%v", active, err)
 	}
-	// UpdateTaskDataset 清掉源数据集不存在标记（即使保留期和元数据未变），随后恢复生成 follow。
+	// 分区登记被拒与源数据集不存在互相独立：ds1 同时出现分区倒退时，c_blocked_reason 写入且不盖掉 c_source_missing。
+	regRun, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimedReg := mustClaim(t, s, t0.Add(3*time.Minute))
+	if claimedReg.Run.RunID != regRun.RunID {
+		t.Fatalf("claimed = %+v, want %s", claimedReg.Run, regRun.RunID)
+	}
+	shrunk := finishedPartition("2026-10-16", PartitionExported)
+	shrunk.RowCount = 1
+	if err := s.CompleteRun(ctx, CompleteRequest{
+		RunID: claimedReg.Run.RunID, LeaseToken: claimedReg.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(3*time.Minute + time.Second),
+		Partitions: []Partition{shrunk},
+	}); !errors.Is(err, ErrPartitionRegression) {
+		t.Fatalf("期望分区倒退错误，实际 %v", err)
+	}
+	task1, _ = s.GetTask(ctx, "crypto", "ds1")
+	if !task1.SourceMissing || task1.BlockedReason == "" {
+		t.Fatalf("分区登记被拒不能盖掉源缺失标记: %+v", task1)
+	}
+	// 再次 MarkTaskSourceMissing 也不能盖掉既有的分区登记被拒原因。
+	if err := s.MarkTaskSourceMissing(ctx, "crypto", "ds1", t0.Add(3*time.Minute+2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	task1, _ = s.GetTask(ctx, "crypto", "ds1")
+	if !task1.SourceMissing || task1.BlockedReason == "" {
+		t.Fatalf("MarkTaskSourceMissing 不能盖掉既有的分区登记被拒原因: %+v", task1)
+	}
+	// UpdateTaskDataset 清掉源数据集不存在标记（即使保留期和元数据未变），但不误清分区登记被拒原因，随后恢复生成 follow。
 	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", task1.Retention, task1.MetaJSON); err != nil {
 		t.Fatal(err)
 	}
 	task1, _ = s.GetTask(ctx, "crypto", "ds1")
-	if task1.BlockedReason != "" {
-		t.Fatalf("数据集重现后应清空源缺失标记: %+v", task1)
+	if task1.SourceMissing || task1.BlockedReason == "" {
+		t.Fatalf("数据集重现后应只清空源缺失标记、保留分区被拒原因: %+v", task1)
 	}
 	if n, err := s.CreateFollowRuns(ctx, t0.Add(4*time.Minute)); err != nil || n != 1 {
 		t.Fatalf("ds1 恢复后应生成 1 条 follow: n=%d err=%v", n, err)
 	}
-	// 分区登记被拒原因不能被 UpdateTaskDataset 误清。
-	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = '分区倒退测试' WHERE c_space_id = 'crypto' AND c_dataset_id = 'ds1'`); err != nil {
-		t.Fatal(err)
-	}
+	// UpdateTaskDataset 刷新保留期与元数据时同样保留分区被拒原因。
 	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "336h", `{"name":"updated"}`); err != nil {
 		t.Fatal(err)
 	}
 	task1, _ = s.GetTask(ctx, "crypto", "ds1")
-	if task1.BlockedReason != "分区倒退测试" || task1.Retention != "336h" {
+	if task1.BlockedReason == "" || task1.Retention != "336h" {
 		t.Fatalf("UpdateTaskDataset 不能误清分区倒退原因: %+v", task1)
 	}
 }

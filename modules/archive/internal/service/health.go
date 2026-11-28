@@ -55,10 +55,10 @@ func evaluateHealth(in healthInput) (string, string) {
 	if in.Task.Status == store.StatusPaused {
 		return HealthPaused, "任务已停用"
 	}
-	sourceMissing := in.Task.BlockedReason == store.BlockedReasonSourceDatasetMissing
+	sourceMissing := in.Task.SourceMissing
 	var errs, warns []string
 	if sourceMissing {
-		errs = append(errs, store.BlockedReasonSourceDatasetMissing)
+		errs = append(errs, "源数据集不存在")
 	} else {
 		// 异常：最近一次成功运行距今超过「线上保留期 − 2 天」。
 		limit, forever, retentionErr := parseRetention(in.Task.Retention)
@@ -78,9 +78,9 @@ func evaluateHealth(in healthInput) (string, string) {
 				errs = append(errs, fmt.Sprintf("%s距今 %s，已接近线上保留期 %s", label, in.Now.Sub(reference).Truncate(time.Minute), limit))
 			}
 		}
-		if in.Task.BlockedReason != "" {
-			errs = append(errs, "分区登记被拒："+in.Task.BlockedReason)
-		}
+	}
+	if in.Task.BlockedReason != "" {
+		errs = append(errs, "分区登记被拒："+in.Task.BlockedReason)
 	}
 	if len(in.Task.Unrecoverable) > 0 {
 		errs = append(errs, fmt.Sprintf("有 %d 段数据已超出线上保留期、无法补齐", len(in.Task.Unrecoverable)))

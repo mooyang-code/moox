@@ -54,10 +54,6 @@ const (
 	PartitionOpen     = "open"
 	PartitionExported = "exported"
 	PartitionFinal    = "final"
-
-	// BlockedReasonSourceDatasetMissing 复用 t_archive_tasks.c_blocked_reason 标记源数据集在 Storage 中不存在：
-	// 不修改任务启停状态 c_status，只暂停生成 follow 运行；数据集重新出现时由维护刷新自动清除。
-	BlockedReasonSourceDatasetMissing = "源数据集不存在"
 )
 
 // Store 持有 mgr 的 SQLite 连接。

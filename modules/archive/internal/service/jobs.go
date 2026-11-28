@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -103,7 +102,7 @@ func (s *Service) refreshDatasets(ctx context.Context) error {
 				if markErr := s.store.MarkTaskSourceMissing(ctx, task.SpaceID, task.DatasetID, now); markErr != nil {
 					return markErr
 				}
-				if task.BlockedReason != store.BlockedReasonSourceDatasetMissing {
+				if !task.SourceMissing {
 					log.WarnContextf(ctx, "归档维护：数据集 %s/%s 在 Storage 中不存在，已标记并暂停生成跟随运行", task.SpaceID, task.DatasetID)
 				}
 				continue
@@ -115,7 +114,7 @@ func (s *Service) refreshDatasets(ctx context.Context) error {
 		if err := s.store.UpdateTaskDataset(ctx, task.SpaceID, task.DatasetID, ds.Retention, metaJSON(ds)); err != nil {
 			return err
 		}
-		if task.BlockedReason == store.BlockedReasonSourceDatasetMissing {
+		if task.SourceMissing {
 			log.InfoContextf(ctx, "归档维护：数据集 %s/%s 已重新出现，恢复生成跟随运行", task.SpaceID, task.DatasetID)
 		}
 	}

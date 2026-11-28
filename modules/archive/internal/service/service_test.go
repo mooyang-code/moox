@@ -738,7 +738,7 @@ func TestMaintainRefreshesDatasetInfoOncePerHour(t *testing.T) {
 		t.Fatal("存储临时错误要返回错误，下一轮重试")
 	}
 	task, _ = h.store.GetTask(ctx, "crypto", "ds_1m")
-	if task.BlockedReason != "" {
+	if task.SourceMissing || task.BlockedReason != "" {
 		t.Fatalf("存储临时错误不能把任务标成源数据集不存在: %+v", task)
 	}
 }
@@ -771,7 +771,7 @@ func TestMaintainMarksSourceDatasetMissingAndRecoversWhenDatasetReappears(t *tes
 	if err := h.svc.Maintain(ctx); err == nil {
 		t.Fatal("网络错误应返回失败并等待重试")
 	}
-	if task, _ := h.store.GetTask(ctx, "crypto", "ds_1m"); task.BlockedReason != "" {
+	if task, _ := h.store.GetTask(ctx, "crypto", "ds_1m"); task.SourceMissing || task.BlockedReason != "" {
 		t.Fatalf("网络错误不能标源数据集不存在: %+v", task)
 	}
 	if active, _ := h.store.ListActiveRuns(ctx, "crypto"); len(active) != 1 {
@@ -807,13 +807,13 @@ func TestMaintainMarksSourceDatasetMissingAndRecoversWhenDatasetReappears(t *tes
 	if active, _ := h.store.ListActiveRuns(ctx, "crypto"); len(active) != 0 {
 		t.Fatalf("源数据集不存在时不应生成 follow: %+v", active)
 	}
-	// 任务启停状态不变，健康等级为 error（“源数据集不存在”），人工停用的任务保持 paused；接口 blocked_reason 不误传成“分区登记被拒”。
+	// 任务启停状态不变，健康等级为 error（“源数据集不存在”），人工停用的任务保持 paused；接口 blocked_reason 为空。
 	task1m, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
 	task1h, _ := h.store.GetTask(ctx, "crypto", "ds_1h")
-	if task1m.Status != store.StatusEnabled || task1m.BlockedReason != store.BlockedReasonSourceDatasetMissing {
+	if task1m.Status != store.StatusEnabled || !task1m.SourceMissing || task1m.BlockedReason != "" {
 		t.Fatalf("ds_1m 应保持 enabled 并标记源数据集不存在: %+v", task1m)
 	}
-	if task1h.Status != store.StatusPaused || task1h.BlockedReason != store.BlockedReasonSourceDatasetMissing {
+	if task1h.Status != store.StatusPaused || !task1h.SourceMissing || task1h.BlockedReason != "" {
 		t.Fatalf("ds_1h 应保持 paused 并标记源数据集不存在: %+v", task1h)
 	}
 	list, _ := h.mgr.ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
@@ -822,7 +822,7 @@ func TestMaintainMarksSourceDatasetMissingAndRecoversWhenDatasetReappears(t *tes
 		byID[item.GetDatasetId()] = item
 	}
 	if got := byID["ds_1m"]; got.GetStatus() != store.StatusEnabled || got.GetHealth() != HealthError ||
-		got.GetHealthReason() != store.BlockedReasonSourceDatasetMissing || got.GetBlockedReason() != "" {
+		got.GetHealthReason() != "源数据集不存在" || got.GetBlockedReason() != "" {
 		t.Fatalf("ds_1m 视图 = %v", got)
 	}
 	if got := byID["ds_1h"]; got.GetStatus() != store.StatusPaused || got.GetHealth() != HealthPaused {
@@ -844,10 +844,10 @@ func TestMaintainMarksSourceDatasetMissingAndRecoversWhenDatasetReappears(t *tes
 	}
 	task1m, _ = h.store.GetTask(ctx, "crypto", "ds_1m")
 	task1h, _ = h.store.GetTask(ctx, "crypto", "ds_1h")
-	if task1m.Status != store.StatusEnabled || task1m.BlockedReason != "" || task1m.Retention != "336h" {
+	if task1m.Status != store.StatusEnabled || task1m.SourceMissing || task1m.Retention != "336h" {
 		t.Fatalf("ds_1m 重现后应清掉标记并刷新保留期: %+v", task1m)
 	}
-	if task1h.Status != store.StatusPaused || task1h.BlockedReason != "" {
+	if task1h.Status != store.StatusPaused || task1h.SourceMissing {
 		t.Fatalf("ds_1h 重现后应清掉标记但保持人工停用: %+v", task1h)
 	}
 	h.trigger(h.now.Add(time.Minute))
@@ -876,10 +876,17 @@ func TestHealthLevelsFollowTheDesignTable(t *testing.T) {
 	}
 	// 源数据集不存在：直接报异常“源数据集不存在”，不叠加因停 follow 产生的保留期与跟随超时噪音，不带“分区登记被拒”前缀。
 	if level, reason := eval(func(in *healthInput) {
-		in.Task.BlockedReason = store.BlockedReasonSourceDatasetMissing
+		in.Task.SourceMissing = true
 		in.Task.LastSuccessAt = now.Add(-200 * time.Hour)
-	}); level != HealthError || reason != store.BlockedReasonSourceDatasetMissing {
+	}); level != HealthError || reason != "源数据集不存在" {
 		t.Fatalf("source missing = %s %q", level, reason)
+	}
+	// 同时存在源数据集不存在与分区登记被拒时，两条独立异常原因都应呈现。
+	if level, reason := eval(func(in *healthInput) {
+		in.Task.SourceMissing = true
+		in.Task.BlockedReason = "行数倒退"
+	}); level != HealthError || !strings.Contains(reason, "源数据集不存在") || !strings.Contains(reason, "分区登记被拒：行数倒退") {
+		t.Fatalf("source missing + blocked = %s %q", level, reason)
 	}
 	// 168h 保留期：最近成功超过 120h（保留期 − 2 天）→ 异常。
 	if level, reason := eval(func(in *healthInput) { in.Task.LastSuccessAt = now.Add(-121 * time.Hour) }); level != HealthError || !strings.Contains(reason, "保留期") {
