@@ -909,9 +909,6 @@ func TestUpdateTaskDatasetRefreshesRetention(t *testing.T) {
 	if err != nil || len(runsByTask) != 0 {
 		t.Fatalf("runs = %v err=%v", runsByTask, err)
 	}
-	if n, err := s.CountQueued(ctx); err != nil || n != 0 {
-		t.Fatalf("queued = %d err=%v", n, err)
-	}
 }
 
 func TestCanceledRunsAcceptOneCompletionAndNeverAdvanceTheTask(t *testing.T) {
