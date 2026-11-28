@@ -52,7 +52,7 @@ type setupWipeBackupSummary struct {
 	Note         string `json:"note,omitempty"`
 }
 
-// setupRestoreBackupSummary 是安装全部组件就绪后、完整初始化之前自动导入备份的结果。
+// setupRestoreBackupSummary 是安装过程中自动导入密钥（Admin 就绪后）与告警渠道（Monitor 就绪后）的结果汇总。
 type setupRestoreBackupSummary struct {
 	Status          string `json:"status"`
 	Path            string `json:"path"`
@@ -293,18 +293,18 @@ func defaultSetupBackupBeforeWipe(ctx context.Context, file string, snapshot *se
 	return exportBackupToFile(ctx, gateway, backupPath, overwritePending)
 }
 
-// defaultSetupRestoreBackup 在全部组件就绪后、完整初始化之前，按覆盖自动导入带有待导入标记的备份。
-func defaultSetupRestoreBackup(ctx context.Context, file string, snapshot *setupSnapshot) (*setupRestoreBackupSummary, error) {
+// checkPendingBackup 检查本机备份是否存在且带有“卸载后待导入”标记；不需要导入时返回跳过的摘要。
+func checkPendingBackup(file string, snapshot *setupSnapshot) (backupPath string, skipped *setupRestoreBackupSummary, err error) {
 	if snapshot == nil || snapshot.Manifest == nil {
-		return nil, fmt.Errorf("缺少拓扑配置")
+		return "", nil, fmt.Errorf("缺少拓扑配置")
 	}
-	backupPath := setupBackupPath(file, snapshot.Manifest)
+	backupPath = setupBackupPath(file, snapshot.Manifest)
 	meta, exists, err := setupbackup.ReadMetadata(backupPath)
 	if err != nil {
-		return nil, fmt.Errorf("读取本机备份文件 %s 失败：%w", backupPath, err)
+		return "", nil, fmt.Errorf("读取本机备份文件 %s 失败：%w", backupPath, err)
 	}
 	if !exists {
-		return &setupRestoreBackupSummary{
+		return backupPath, &setupRestoreBackupSummary{
 			Status: "no_backup",
 			Path:   backupPath,
 			Note:   fmt.Sprintf("本机没有密钥与告警渠道备份文件（%s），安装完成后请到管理台录入交易所密钥和告警渠道", backupPath),
@@ -312,44 +312,77 @@ func defaultSetupRestoreBackup(ctx context.Context, file string, snapshot *setup
 	}
 	if !meta.PendingImport {
 		if meta.ImportedAt != "" {
-			return &setupRestoreBackupSummary{
+			return backupPath, &setupRestoreBackupSummary{
 				Status:     "already_imported",
 				Path:       backupPath,
 				ImportedAt: meta.ImportedAt,
 				Note:       fmt.Sprintf("本机备份已于 %s 导入过，本次跳过", meta.ImportedAt),
 			}, nil
 		}
-		return &setupRestoreBackupSummary{
+		return backupPath, &setupRestoreBackupSummary{
 			Status: "not_pending",
 			Path:   backupPath,
 			Note:   fmt.Sprintf("本机备份 %s 未标记为卸载后待导入，本次跳过；如需新增密钥或告警渠道请在管理台录入", backupPath),
 		}, nil
 	}
+	return backupPath, nil, nil
+}
 
+// defaultSetupRestoreBackupSecrets 在控制机 Admin 就绪后、部署其余主机之前，按覆盖自动导入待恢复密钥备份；
+// 不清除“待导入”标记（等后续告警渠道也导入完成后再清），中途失败重跑幂等。
+func defaultSetupRestoreBackupSecrets(ctx context.Context, file string, snapshot *setupSnapshot) (*setupRestoreBackupSummary, error) {
+	backupPath, skipped, err := checkPendingBackup(file, snapshot)
+	if err != nil || skipped != nil {
+		return skipped, err
+	}
 	gateway, err := openCommandGateway(ctx, file, snapshot.Manifest)
 	if err != nil {
 		return nil, err
 	}
 	defer gateway.Close()
-	return importBackupFile(ctx, gateway, backupPath)
+	return importBackupSecrets(ctx, gateway, backupPath)
 }
 
-// importBackupFile 解开待导入的备份文件，按覆盖导入全部密钥与告警渠道，并在成功后清除待导入标记。
-func importBackupFile(ctx context.Context, gateway gatewayclient.Invoker, backupPath string) (*setupRestoreBackupSummary, error) {
-	raw, err := setupbackup.ReadFile(backupPath)
+// defaultSetupRestoreBackupChannels 在全部组件就绪后、完整初始化之前，按地址幂等覆盖导入待恢复告警渠道备份，
+// 成功后清除“待导入”标记。
+func defaultSetupRestoreBackupChannels(ctx context.Context, file string, snapshot *setupSnapshot) (*setupRestoreBackupSummary, error) {
+	backupPath, skipped, err := checkPendingBackup(file, snapshot)
+	if err != nil || skipped != nil {
+		return skipped, err
+	}
+	gateway, err := openCommandGateway(ctx, file, snapshot.Manifest)
 	if err != nil {
 		return nil, err
+	}
+	defer gateway.Close()
+	return importBackupChannels(ctx, gateway, backupPath)
+}
+
+// openBackupForImport 读取、校验并用本机钥匙串密钥解开待导入的备份文件；调用方负责在用完后调用 creds.Clear()。
+func openBackupForImport(backupPath string) (*setupbackup.Opened, *setupbackup.Credentials, error) {
+	raw, err := setupbackup.ReadFile(backupPath)
+	if err != nil {
+		return nil, nil, err
 	}
 	creds, err := setupbackup.DeriveCredentials(configcrypt.Default(), false)
 	if err != nil {
-		return nil, fmt.Errorf("读取本机备份密钥失败：%w", err)
+		return nil, nil, fmt.Errorf("读取本机备份密钥失败：%w", err)
 	}
-	defer creds.Clear()
-
 	opened, err := setupbackup.Open(raw, creds)
+	if err != nil {
+		creds.Clear()
+		return nil, nil, err
+	}
+	return opened, creds, nil
+}
+
+// importBackupSecrets 解开待导入的备份文件，仅按覆盖导入全部非系统密钥（保留原密钥 ID），不清除待导入标记。
+func importBackupSecrets(ctx context.Context, gateway gatewayclient.Invoker, backupPath string) (*setupRestoreBackupSummary, error) {
+	opened, creds, err := openBackupForImport(backupPath)
 	if err != nil {
 		return nil, err
 	}
+	defer creds.Clear()
 
 	secretRsp := &adminpb.ImportSecretsRsp{}
 	secretReq := &adminpb.ImportSecretsReq{
@@ -363,6 +396,24 @@ func importBackupFile(ctx context.Context, gateway gatewayclient.Invoker, backup
 	if len(secretRsp.GetFailed()) > 0 {
 		return nil, fmt.Errorf("导入密钥备份有 %d 条失败（为避免泄露明文不输出具体名称，请查看 Admin 日志）", len(secretRsp.GetFailed()))
 	}
+	return &setupRestoreBackupSummary{
+		Status:         "secrets_imported",
+		Path:           backupPath,
+		SecretsCreated: secretRsp.GetCreated(),
+		SecretsUpdated: secretRsp.GetUpdated(),
+		SecretsSkipped: len(secretRsp.GetSkipped()),
+		Note: fmt.Sprintf("已自动从备份恢复密钥（新建 %d、覆盖 %d）；告警渠道将在全部组件就绪后导入",
+			secretRsp.GetCreated(), secretRsp.GetUpdated()),
+	}, nil
+}
+
+// importBackupChannels 解开待导入的备份文件，按地址幂等覆盖导入全部告警渠道，完成后清除待导入标记并记录导入时刻。
+func importBackupChannels(ctx context.Context, gateway gatewayclient.Invoker, backupPath string) (*setupRestoreBackupSummary, error) {
+	opened, creds, err := openBackupForImport(backupPath)
+	if err != nil {
+		return nil, err
+	}
+	defer creds.Clear()
 
 	var channelsCreated, channelsUpdated int32
 	if len(opened.Channels) > 0 {
@@ -384,19 +435,16 @@ func importBackupFile(ctx context.Context, gateway gatewayclient.Invoker, backup
 
 	importedAt := time.Now().UTC()
 	if err := setupbackup.MarkImported(backupPath, importedAt); err != nil {
-		return nil, fmt.Errorf("密钥与告警渠道已导入，但更新备份状态失败：%w", err)
+		return nil, fmt.Errorf("告警渠道已导入，但更新备份状态失败：%w", err)
 	}
 	return &setupRestoreBackupSummary{
 		Status:          "imported",
 		Path:            backupPath,
-		SecretsCreated:  secretRsp.GetCreated(),
-		SecretsUpdated:  secretRsp.GetUpdated(),
-		SecretsSkipped:  len(secretRsp.GetSkipped()),
 		ChannelsCreated: channelsCreated,
 		ChannelsUpdated: channelsUpdated,
 		ImportedAt:      importedAt.Format(time.RFC3339),
-		Note: fmt.Sprintf("已自动从备份恢复密钥（新建 %d、覆盖 %d）与告警渠道（新建 %d、覆盖 %d），并标记备份为已导入",
-			secretRsp.GetCreated(), secretRsp.GetUpdated(), channelsCreated, channelsUpdated),
+		Note: fmt.Sprintf("已自动从备份恢复告警渠道（新建 %d、覆盖 %d），并标记备份为已导入",
+			channelsCreated, channelsUpdated),
 	}, nil
 }
 
@@ -534,7 +582,7 @@ func previewRestoreBackup(file string, snapshot *setupSnapshot) setupBackupPrevi
 			SecretCount:  meta.Secrets.Count,
 			ChannelCount: meta.NotificationChannels.Count,
 			ExportedAt:   meta.ExportedAt,
-			Note:         fmt.Sprintf("安装全部组件就绪后将自动覆盖导入本机待恢复备份（%d 把密钥、%d 个告警渠道）", meta.Secrets.Count, meta.NotificationChannels.Count),
+			Note:         fmt.Sprintf("控制机 Admin 就绪后将先自动覆盖导入密钥（%d 把），全部组件就绪后再导入告警渠道（%d 个）", meta.Secrets.Count, meta.NotificationChannels.Count),
 		}
 	}
 	return setupBackupPreview{

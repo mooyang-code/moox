@@ -134,6 +134,7 @@ case "${TARGET_MODULE}" in
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
     build_go modules/factor ./cmd/engine moox-factor-engine 0
     build_go modules/archive ./cmd/mgr moox-archive-mgr 0
+    build_go modules/archive ./cmd/worker moox-archive-worker 0
     build_go modules/strategy ./cmd/server moox-strategy 0
     build_go modules/trade ./cmd/server moox-trade 0
     build_go modules/monitor ./cmd/server moox-monitor 0

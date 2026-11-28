@@ -39,16 +39,17 @@ type setupInstallOptions struct {
 
 // 安装步骤的种类。
 const (
-	installOperator      = "operator"
-	installFirewall      = "firewall"
-	installDeploy        = "deploy"
-	installInitMetadata  = "init-metadata"
-	installReady         = "ready"
-	installRestoreBackup = "restore-backup"
-	installInit          = "init"
-	installStart         = "start"
-	installDoctor        = "doctor"
-	installVerify        = "verify"
+	installOperator        = "operator"
+	installFirewall        = "firewall"
+	installDeploy          = "deploy"
+	installRestoreSecrets  = "restore-secrets"
+	installInitMetadata    = "init-metadata"
+	installReady           = "ready"
+	installRestoreChannels = "restore-channels"
+	installInit            = "init"
+	installStart           = "start"
+	installDoctor          = "doctor"
+	installVerify          = "verify"
 )
 
 // updateStepKinds 是已装好系统选择 --keep（保留数据更新）时执行的步骤：
@@ -102,8 +103,9 @@ func hostHasAny(manifest *topology.Config, host string, components []string) boo
 }
 
 // setupInstallSteps 排出完整安装顺序：这台电脑的 moox-cli 签名私钥（已有就复用，重跑不换）；防火墙；控制机先装 Admin 与主机级组件（别的主机要向它要身份）；
+// 控制机 Admin 就绪后立即自动按覆盖导入待恢复的密钥备份（使后续部署 archive-worker 等组件时能从 Admin 读到对象存储等密钥，待导入标记留到告警渠道也导入完再清）；
 // 再装带 EventBus、Storage 的主机；导入业务空间与元数据（Collector 启动要它）；控制机其余组件；其余主机（外部程序所在的排最后）；
-// 统一等一次全部就绪；自动按覆盖导入待恢复的密钥与告警渠道备份（无待导入备份则跳过并提示）；完整初始化（默认云密钥、云账号、日志服务、采集计划、告警渠道检查）；启动空间；逐主机自检；按空间验收。
+// 统一等一次全部就绪；自动按地址幂等覆盖导入待恢复的告警渠道备份并清除待导入标记（无待导入备份则跳过并提示）；完整初始化（默认云密钥、云账号、日志服务、采集计划、告警渠道检查）；启动空间；逐主机自检；按空间验收。
 func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstallStep {
 	spaceLabel := strings.TrimSpace(spaceID)
 	if spaceLabel == "" {
@@ -123,7 +125,12 @@ func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstall
 		}
 		return setupInstallStep{Kind: installDeploy, Host: host, Components: components, Command: command}
 	}
-	steps := []setupInstallStep{{Kind: installOperator, Command: "moox-cli setup operator"}, {Kind: installFirewall, Command: "moox-cli setup firewall --yes"}, deployStep(control, first)}
+	steps := []setupInstallStep{
+		{Kind: installOperator, Command: "moox-cli setup operator"},
+		{Kind: installFirewall, Command: "moox-cli setup firewall --yes"},
+		deployStep(control, first),
+		{Kind: installRestoreSecrets, Command: "自动导入待恢复的密钥备份（moox.backup，按覆盖导入；不清除待导入标记）"},
+	}
 	var later, last []string
 	for _, host := range manifest.Hosts() {
 		switch {
@@ -143,12 +150,27 @@ func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstall
 	}
 	return append(steps,
 		setupInstallStep{Kind: installReady, Command: "moox-cli setup status"},
-		setupInstallStep{Kind: installRestoreBackup, Command: "自动导入待恢复的密钥与告警渠道备份（moox.backup，按覆盖导入）"},
+		setupInstallStep{Kind: installRestoreChannels, Command: "自动导入待恢复的告警渠道备份（moox.backup，按地址幂等覆盖并清除待导入标记）"},
 		setupInstallStep{Kind: installInit, Command: "moox-cli setup init --storage-host " + storage},
 		setupInstallStep{Kind: installStart, Command: "moox-cli setup start --space-id " + spaceLabel},
-		setupInstallStep{Kind: installDoctor, Command: "moox-cli doctor bootstrap"},
+		setupInstallStep{Kind: installDoctor, Command: setupDoctorStepCommand(manifest)},
 		setupInstallStep{Kind: installVerify, Command: "moox-cli setup verify --space-id " + spaceLabel},
 	)
+}
+
+// setupDoctorStepCommand 组装可直接执行的逐主机自检命令，确保操作电脑上单独重跑时带上 --node。
+func setupDoctorStepCommand(manifest *topology.Config) string {
+	var commands []string
+	for _, host := range manifest.Hosts() {
+		if !host.Enabled {
+			continue
+		}
+		commands = append(commands, "moox-cli doctor bootstrap --node "+host.Name)
+	}
+	if len(commands) == 0 {
+		return "moox-cli doctor bootstrap --node " + manifest.ControlHost().Name
+	}
+	return strings.Join(commands, " && ")
 }
 
 // setupUpdateSteps 排出已装好系统保留数据更新的顺序：与安装相同的部署顺序，去掉初始化、导入备份、启动空间与验收。
@@ -227,7 +249,7 @@ func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 2. 没装完（incomplete）：预检并排列出 --keep（保留数据接着装完）与 --wipe <摘要>（全部覆盖重装），并附带数据格式比对结果；带 --yes 时必须明确二选一。
 3. 已装好（installed）：预检并排列出 --keep（保留数据更新二进制与配置，不重新初始化、不重新启用手工停掉的任务，不要求 --space-id）与 --wipe <摘要>（全部覆盖重装）；带 --yes 时必须明确二选一。
 数据格式有变化或未知时，--keep 会被拒绝并列出不兼容的组件。
---wipe 会先自动备份全部非系统密钥与告警渠道（moox.backup，交易账户不纳入），再清空全部主机的部署根（含归档文件 archive/，它是唯一可能补不回来的数据），然后全新安装并在全部组件就绪后、完整初始化之前自动覆盖导入备份。备份失败会停下不清，除非明确带 --no-backup。
+--wipe 会先自动备份全部非系统密钥与告警渠道（moox.backup，交易账户不纳入），再清空全部主机的部署根（含归档文件 archive/，它是唯一可能补不回来的数据），然后全新安装：控制机 Admin 就绪后立即自动覆盖导入密钥，全部组件就绪后、完整初始化之前再导入告警渠道并清除待导入标记。备份失败会停下不清，除非明确带 --no-backup。
 配置模板、云函数代码包、元数据种子、默认因子任务和默认策略都从 --source-dir（默认当前目录）取；进度逐行输出到标准错误。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -274,6 +296,11 @@ func (w *lockedWriter) Write(raw []byte) (int, error) {
 }
 
 func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupSnapshot, options setupInstallOptions) error {
+	// 在不动任何主机（含备份、清空）之前，对全部主机与组件做一次纯试渲染（含 [overrides] 应用），
+	// 提前暴露旧配置键路径或缺失模板，避免清空后才报 config_invalid。
+	if err := deps.preflightRender(snapshot, options.source.root); err != nil {
+		return err
+	}
 	ctx := cmd.Context()
 	status, err := setupDeploymentStatus(ctx, deps, snapshot)
 	if err != nil {
@@ -508,7 +535,7 @@ func buildWipeOptionPreview(
 		spaceArg = "<空间>"
 	}
 	note := "全部覆盖会清空全部主机的部署根（含归档文件 archive/，它是唯一可能补不回来的数据；数据全部删除，不分模块）。" +
-		"清空前自动备份全部非系统密钥与告警渠道，全部组件就绪后自动覆盖导入；交易账户与组合账户不纳入备份"
+		"清空前自动备份全部非系统密钥与告警渠道，重装控制机 Admin 就绪后先覆盖导入密钥、全部组件就绪后再导入告警渠道；交易账户与组合账户不纳入备份"
 	if spaceID == "" {
 		note += "。执行 --wipe 时必须带 --space-id <空间>"
 	}
@@ -696,15 +723,27 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 		}
 		_, err = deps.initMetadata(ctx, snapshot, storageHost, bundle)
 		return err
-	case installReady:
-		return waitSetupAllReady(ctx, deps, snapshot)
-	case installRestoreBackup:
-		summary, err := deps.restoreBackup(ctx, options.file, snapshot)
+	case installRestoreSecrets:
+		summary, err := deps.restoreBackupSecrets(ctx, options.file, snapshot)
 		if err != nil {
 			return err
 		}
 		if state != nil {
-			state.restoreBackup = summary
+			state.restoreBackup = mergeRestoreBackupSummary(state.restoreBackup, summary)
+		}
+		if summary != nil && summary.Note != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), summary.Note)
+		}
+		return nil
+	case installReady:
+		return waitSetupAllReady(ctx, deps, snapshot)
+	case installRestoreChannels:
+		summary, err := deps.restoreBackupChannels(ctx, options.file, snapshot)
+		if err != nil {
+			return err
+		}
+		if state != nil {
+			state.restoreBackup = mergeRestoreBackupSummary(state.restoreBackup, summary)
 		}
 		if summary != nil && summary.Note != "" {
 			fmt.Fprintln(cmd.ErrOrStderr(), summary.Note)
@@ -740,6 +779,28 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 		return deps.verifySpace(ctx, options.file, snapshot, options.spaceID)
 	}
 	return fmt.Errorf("unknown install step %s", step.Kind)
+}
+
+// mergeRestoreBackupSummary 把先导密钥（restore-secrets）与后导告警渠道（restore-channels）的结果合并为单份输出摘要。
+func mergeRestoreBackupSummary(prev, next *setupRestoreBackupSummary) *setupRestoreBackupSummary {
+	if prev == nil {
+		return next
+	}
+	if next == nil {
+		return prev
+	}
+	merged := *next
+	if merged.Path == "" {
+		merged.Path = prev.Path
+	}
+	merged.SecretsCreated += prev.SecretsCreated
+	merged.SecretsUpdated += prev.SecretsUpdated
+	merged.SecretsSkipped += prev.SecretsSkipped
+	if prev.Status == "secrets_imported" && next.Status == "imported" {
+		merged.Note = fmt.Sprintf("已自动从备份恢复密钥（新建 %d、覆盖 %d）与告警渠道（新建 %d、覆盖 %d），并标记备份为已导入",
+			merged.SecretsCreated, merged.SecretsUpdated, merged.ChannelsCreated, merged.ChannelsUpdated)
+	}
+	return &merged
 }
 
 // defaultSetupDoctor 对 moox.toml 中全部启用的主机执行安装后自检（第一部分本机事实探测 + 第二部分读取 Monitor 健康概览）。

@@ -406,7 +406,7 @@ func TestCountBackupItemsExcludesEnvironmentBoundSecrets(t *testing.T) {
 	assert.Equal(t, 1, channels)
 }
 
-func TestImportBackupFileOverwritesSecretsAndImportsChannelsThenClearsPendingFlag(t *testing.T) {
+func TestImportBackupSecretsAndChannelsSplitAndClearPendingFlagAtEnd(t *testing.T) {
 	restoreKeys := configcrypt.SetDefaultForTest(&configcrypt.MemoryStore{})
 	t.Cleanup(restoreKeys)
 
@@ -425,51 +425,85 @@ func TestImportBackupFileOverwritesSecretsAndImportsChannelsThenClearsPendingFla
 	_, _, err = setupbackup.MarkPendingImport(backupPath)
 	require.NoError(t, err)
 
-	// 先模拟渠道导入失败：此时不能清掉 pending_import，以便重跑继续恢复。
-	failingGateway := &fakeBackupGateway{
-		importRsp:         &adminpb.ImportSecretsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Created: 1, Updated: 1},
-		importChannelsErr: errors.New("monitor unreachable"),
+	// 1. 控制机 Admin 就绪后先按 overwrite=true 覆盖导入密钥；不清除 pending_import 标记，且重跑幂等。
+	secretsGateway := &fakeBackupGateway{
+		importRsp: &adminpb.ImportSecretsRsp{
+			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+			Created: 2,
+			Updated: 0,
+		},
 	}
-	_, err = importBackupFile(context.Background(), failingGateway, backupPath)
-	require.ErrorContains(t, err, "导入告警渠道备份失败")
+	secretsSummary, err := importBackupSecrets(context.Background(), secretsGateway, backupPath)
+	require.NoError(t, err)
+	assert.True(t, secretsGateway.importCalled)
+	assert.True(t, secretsGateway.importOverwrite, "重装自动导入密钥必须覆盖已有初始密钥")
+	assert.Equal(t, creds.Passphrase(), secretsGateway.importPassphrase)
+	assert.False(t, secretsGateway.importChannelsCalled, "密钥导入阶段不得请求 Monitor 导入告警渠道")
+	assert.Equal(t, "secrets_imported", secretsSummary.Status)
+	assert.EqualValues(t, 2, secretsSummary.SecretsCreated)
+
 	meta, exists, err := setupbackup.ReadMetadata(backupPath)
 	require.NoError(t, err)
 	require.True(t, exists)
-	assert.True(t, meta.PendingImport, "导入未完全成功时必须保留 pending_import 标记")
+	assert.True(t, meta.PendingImport, "仅导入密钥后必须保留 pending_import 标记，直到告警渠道也导入完成")
 
-	// 重试成功：密钥按 overwrite=true 导入，渠道按 ImportNotificationChannels 导入，完成后清掉 pending_import。
-	gateway := &fakeBackupGateway{
+	// 重跑密钥导入（如中途失败后 --keep 续装）照常覆盖成功且仍保留 pending_import。
+	rerunGateway := &fakeBackupGateway{
 		importRsp: &adminpb.ImportSecretsRsp{
 			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-			Created: 1,
-			Updated: 1,
+			Created: 0,
+			Updated: 2,
 		},
+	}
+	rerunSummary, err := importBackupSecrets(context.Background(), rerunGateway, backupPath)
+	require.NoError(t, err)
+	assert.True(t, rerunGateway.importOverwrite)
+	assert.EqualValues(t, 2, rerunSummary.SecretsUpdated)
+	meta, exists, err = setupbackup.ReadMetadata(backupPath)
+	require.NoError(t, err)
+	require.True(t, exists && meta.PendingImport)
+
+	// 2. 告警渠道导入失败时不能清掉 pending_import，以便重跑继续恢复。
+	failingGateway := &fakeBackupGateway{
+		importChannelsErr: errors.New("monitor unreachable"),
+	}
+	_, err = importBackupChannels(context.Background(), failingGateway, backupPath)
+	require.ErrorContains(t, err, "导入告警渠道备份失败")
+	meta, exists, err = setupbackup.ReadMetadata(backupPath)
+	require.NoError(t, err)
+	require.True(t, exists)
+	assert.True(t, meta.PendingImport, "告警渠道导入未成功时必须保留 pending_import 标记")
+
+	// 3. 告警渠道导入成功：按 ImportNotificationChannels 导入，并清除 pending_import 标记、记录 imported_at。
+	channelsGateway := &fakeBackupGateway{
 		importChannelsRsp: &monitorpb.ImportNotificationChannelsRsp{
 			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
 			Created: 1,
 			Updated: 1,
 		},
 	}
-	summary, err := importBackupFile(context.Background(), gateway, backupPath)
+	channelsSummary, err := importBackupChannels(context.Background(), channelsGateway, backupPath)
 	require.NoError(t, err)
-	assert.True(t, gateway.importCalled)
-	assert.True(t, gateway.importOverwrite, "重装自动导入必须覆盖已有初始密钥（以管理台为准）")
-	assert.Equal(t, creds.Passphrase(), gateway.importPassphrase)
-	assert.True(t, gateway.importChannelsCalled)
-	require.Len(t, gateway.importedChannels, 2)
-	assert.Equal(t, "feishu", gateway.importedChannels[0].GetChannelType())
-	assert.Equal(t, "https://open.feishu.cn/hook/abc", gateway.importedChannels[0].GetWebhookUrl())
-	assert.Equal(t, "sec-abc", gateway.importedChannels[0].GetSecret())
-	assert.Equal(t, "imported", summary.Status)
-	assert.EqualValues(t, 1, summary.SecretsCreated)
-	assert.EqualValues(t, 1, summary.SecretsUpdated)
-	assert.EqualValues(t, 1, summary.ChannelsCreated)
-	assert.EqualValues(t, 1, summary.ChannelsUpdated)
-	assert.NotEmpty(t, summary.ImportedAt)
+	assert.False(t, channelsGateway.importCalled)
+	assert.True(t, channelsGateway.importChannelsCalled)
+	require.Len(t, channelsGateway.importedChannels, 2)
+	assert.Equal(t, "feishu", channelsGateway.importedChannels[0].GetChannelType())
+	assert.Equal(t, "https://open.feishu.cn/hook/abc", channelsGateway.importedChannels[0].GetWebhookUrl())
+	assert.Equal(t, "sec-abc", channelsGateway.importedChannels[0].GetSecret())
+	assert.Equal(t, "imported", channelsSummary.Status)
+	assert.EqualValues(t, 1, channelsSummary.ChannelsCreated)
+	assert.EqualValues(t, 1, channelsSummary.ChannelsUpdated)
+	assert.NotEmpty(t, channelsSummary.ImportedAt)
+
+	merged := mergeRestoreBackupSummary(rerunSummary, channelsSummary)
+	assert.Equal(t, "imported", merged.Status)
+	assert.EqualValues(t, 2, merged.SecretsUpdated)
+	assert.EqualValues(t, 1, merged.ChannelsCreated)
+	assert.EqualValues(t, 1, merged.ChannelsUpdated)
 
 	meta, exists, err = setupbackup.ReadMetadata(backupPath)
 	require.NoError(t, err)
 	require.True(t, exists)
-	assert.False(t, meta.PendingImport, "导入成功后应清除 pending_import 标记")
+	assert.False(t, meta.PendingImport, "两部分都导入成功后应清除 pending_import 标记")
 	assert.NotEmpty(t, meta.ImportedAt)
 }

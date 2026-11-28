@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -317,7 +319,6 @@ func (r *renderer) environment(component servicecatalog.Component, values map[st
 		values["MOOX_STORAGE_METADATA_PATH"] = path.Join(layout.Data(id), "metadata/storage_metadata.db")
 		values["MOOX_STORAGE_PRIMARY_TARGET"] = "ip://127.0.0.1:20102"
 		values["MOOX_STORAGE_METADATA_TARGET"] = "ip://127.0.0.1:20100"
-		values["MOOX_STORAGE_VIEW_TARGET"] = "ip://127.0.0.1:20103"
 	}
 }
 
@@ -570,4 +571,69 @@ func encodeEnvironment(values map[string]string) ([]byte, error) {
 		fmt.Fprintf(&output, "%s=\"%s\"\n", key, value)
 	}
 	return output.Bytes(), nil
+}
+
+// PreflightRender 在不动任何主机之前对 moox.toml 里的全部主机、全部组件做一次纯试渲染（含 [overrides] 应用），
+// 提前拦截模板缺失或 [overrides] 里已改名/不存在的键路径，避免清空主机之后才报 config_invalid。
+func PreflightRender(cfg *topology.Config, secrets *topology.Secrets, sourceRoot string) error {
+	if cfg == nil || strings.TrimSpace(sourceRoot) == "" {
+		return errors.New("配置试渲染需要拓扑配置与源码或产物包目录")
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	readSource := func(name string) ([]byte, error) {
+		if !fs.ValidPath(name) {
+			return nil, fmt.Errorf("模板路径 %q 不合法", name)
+		}
+		return os.ReadFile(filepath.Join(sourceRoot, filepath.FromSlash(name)))
+	}
+	for _, host := range cfg.Hosts() {
+		components, err := cfg.HostComponents(host.Name)
+		if err != nil {
+			return err
+		}
+		identity := Identity{
+			SignPublicKey: "preflight-sign-public-key",
+			EventBus:      map[string][]byte{},
+		}
+		if slices.Contains(components, "collector") {
+			identity.SCFCollectorPublicKey = "preflight-scf-collector-public-key"
+		}
+		for _, id := range components {
+			component, ok := catalog.Component(id)
+			if !ok {
+				return fmt.Errorf("组件 %s 不在服务目录里", id)
+			}
+			for _, role := range component.EventBusRoles() {
+				identity.EventBus[role+".yaml"] = []byte("urls: []\nca_file: \"\"\n")
+			}
+		}
+		if slices.Contains(components, "eventbus") {
+			identity.EventBus[hostbundle.UsersFile] = []byte("users: []\n")
+		}
+		request := Request{
+			Config:         cfg,
+			Catalog:        catalog,
+			Host:           host,
+			Components:     components,
+			HostComponents: components,
+			ReadSource:     readSource,
+			Identity:       identity,
+		}
+		if cfg.Logging.CLS.Enabled {
+			if secrets == nil {
+				return errors.New("config_invalid: moox.toml 打开了 logging.cls.enabled，部署要读 moox.secrets.toml 里的写入密钥")
+			}
+			request.CLS = secrets.Logging.CLS
+		}
+		if slices.Contains(components, "archive-worker") && cfg.ArchiveObjectStore != nil {
+			request.ObjectStoreEnv = []byte("PREFLIGHT=1\n")
+		}
+		if _, err := Render(request); err != nil {
+			return fmt.Errorf("主机 %s 配置预检失败：%w", host.Name, err)
+		}
+	}
+	return nil
 }

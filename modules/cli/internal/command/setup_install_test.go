@@ -88,8 +88,9 @@ type installHarness struct {
 	previewBackupErr error
 	// backupBeforeWipeErr 控制清空前自动备份失败。
 	backupBeforeWipeErr error
-	// restoreBackupErr 控制安装自动导入备份失败。
-	restoreBackupErr error
+	// restoreSecretsErr/restoreChannelsErr 控制安装自动导入密钥/告警渠道失败。
+	restoreSecretsErr  error
+	restoreChannelsErr error
 	// seedDirs 是读种子用过的目录，initSources 是完整初始化收到的源目录。
 	seedDirs, initSources []string
 	// stderr 是最近一次 run 的标准错误（进度行在这里）。
@@ -128,7 +129,8 @@ func newInstallHarness(t *testing.T) *installHarness {
 		return nil
 	}
 	h.deps = setupDeps{
-		load: func(string) (*setupSnapshot, error) { return h.snapshot, nil },
+		load:            func(string) (*setupSnapshot, error) { return h.snapshot, nil },
+		preflightRender: func(*setupSnapshot, string) error { return nil },
 		loadInitBundle: func(dir string) (setupInitBundle, error) {
 			h.seedDirs = append(h.seedDirs, dir)
 			return setupInitBundle{}, nil
@@ -239,12 +241,35 @@ func newInstallHarness(t *testing.T) *installHarness {
 			}
 			return setupBackupOutput{Path: backupPath, SecretCount: h.previewSecrets, ChannelCount: h.previewChannels}, nil
 		},
-		restoreBackup: func(_ context.Context, file string, snapshot *setupSnapshot) (*setupRestoreBackupSummary, error) {
-			if err := record("restore-backup"); err != nil {
+		restoreBackupSecrets: func(_ context.Context, file string, snapshot *setupSnapshot) (*setupRestoreBackupSummary, error) {
+			if err := record("restore-secrets"); err != nil {
 				return nil, err
 			}
-			if h.restoreBackupErr != nil {
-				return nil, h.restoreBackupErr
+			if h.restoreSecretsErr != nil {
+				return nil, h.restoreSecretsErr
+			}
+			backupPath := setupBackupPath(file, snapshot.Manifest)
+			meta, exists, err := setupbackup.ReadMetadata(backupPath)
+			if err != nil {
+				return nil, err
+			}
+			if !exists || !meta.PendingImport {
+				return &setupRestoreBackupSummary{Status: "no_backup", Path: backupPath, Note: "无待导入备份，请到管理台录入"}, nil
+			}
+			// 仅导入密钥，不清除 pending_import 标记（留到告警渠道导入完成后再清）。
+			return &setupRestoreBackupSummary{
+				Status:         "secrets_imported",
+				Path:           backupPath,
+				SecretsCreated: int32(meta.Secrets.Count),
+				Note:           fmt.Sprintf("已导入 %d 把密钥", meta.Secrets.Count),
+			}, nil
+		},
+		restoreBackupChannels: func(_ context.Context, file string, snapshot *setupSnapshot) (*setupRestoreBackupSummary, error) {
+			if err := record("restore-channels"); err != nil {
+				return nil, err
+			}
+			if h.restoreChannelsErr != nil {
+				return nil, h.restoreChannelsErr
 			}
 			backupPath := setupBackupPath(file, snapshot.Manifest)
 			meta, exists, err := setupbackup.ReadMetadata(backupPath)
@@ -260,9 +285,8 @@ func newInstallHarness(t *testing.T) *installHarness {
 			return &setupRestoreBackupSummary{
 				Status:          "imported",
 				Path:            backupPath,
-				SecretsCreated:  int32(meta.Secrets.Count),
 				ChannelsCreated: int32(meta.NotificationChannels.Count),
-				Note:            fmt.Sprintf("已导入 %d 把密钥、%d 个告警渠道", meta.Secrets.Count, meta.NotificationChannels.Count),
+				Note:            fmt.Sprintf("已导入 %d 个告警渠道", meta.NotificationChannels.Count),
 			}, nil
 		},
 		openStart: func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error) {
@@ -461,8 +485,9 @@ func TestSetupInstallKeepRejectedOnDataFormatMismatch(t *testing.T) {
 	}
 }
 
-// 顺序：控制机先装 Admin 与主机级组件，再装带 EventBus、Storage 的主机，导入元数据，控制机其余组件，其余主机（因子机最后），
-// 统一等一次全部就绪，自动导入待恢复备份（在完整初始化之前！），然后是完整初始化、启动、验收，最后在控制机写完成标记。
+// 顺序：控制机先装 Admin 与主机级组件，Admin 就绪后立即覆盖导入待恢复密钥备份（确保后续部署 archive-worker 等组件时能读到对象存储密钥），
+// 再装带 EventBus、Storage 的主机，导入元数据，控制机其余组件，其余主机（因子机最后），
+// 统一等一次全部就绪，自动导入待恢复告警渠道备份并清除待导入标记（在完整初始化之前！），然后是完整初始化、启动、自检、验收，最后在控制机写完成标记。
 func TestSetupInstallFreshRunsStepsInDependencyOrderAndMarksComplete(t *testing.T) {
 	h := newInstallHarness(t)
 	out, err := h.run("install", "--space-id", "crypto", "--yes")
@@ -481,19 +506,20 @@ func TestSetupInstallFreshRunsStepsInDependencyOrderAndMarksComplete(t *testing.
 	require.Equal(t, []string{
 		"firewall",
 		"deploy:control:admin,host-gateway,host-agent",
+		"restore-secrets",
 		"deploy:storage",
 		"init-metadata",
 		"deploy:control",
 		"deploy:overseas",
 		"deploy:factor",
-		"restore-backup",
+		"restore-channels",
 		"init",
 		"start",
 		"doctor",
 		"verify",
 		"mark-complete",
 	}, sequence)
-	// 全部部署完之后才等就绪，自动导入备份在等就绪之后、完整初始化之前。
+	// 密钥导入在控制机 Admin 起来之后、其余主机部署之前；告警渠道导入在全部就绪之后、完整初始化之前。
 	last := func(prefix string) int {
 		at := -1
 		for i, call := range h.calls {
@@ -503,20 +529,23 @@ func TestSetupInstallFreshRunsStepsInDependencyOrderAndMarksComplete(t *testing.
 		}
 		return at
 	}
+	require.Less(t, slices.Index(h.calls, "deploy:control:admin,host-gateway,host-agent"), slices.Index(h.calls, "restore-secrets"))
+	require.Less(t, slices.Index(h.calls, "restore-secrets"), slices.Index(h.calls, "deploy:factor"))
 	require.Less(t, last("deploy:"), slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "ready:") }))
-	require.Less(t, last("ready:"), slices.Index(h.calls, "restore-backup"))
-	require.Less(t, slices.Index(h.calls, "restore-backup"), slices.Index(h.calls, "init"))
+	require.Less(t, last("ready:"), slices.Index(h.calls, "restore-channels"))
+	require.Less(t, slices.Index(h.calls, "restore-channels"), slices.Index(h.calls, "init"))
 	require.True(t, h.report("control").InstallComplete, "验收通过后应在控制机写出完成标记")
 }
 
-// 单机拓扑：控制机第一次就要带上 EventBus 与 Storage，否则导入元数据时 Storage 还不在。
+// 单机拓扑：控制机第一次就要带上 EventBus 与 Storage，否则导入元数据时 Storage 还不在；密钥备份导入紧接其后、在导入元数据与部署其余组件之前。
 func TestSetupInstallStepsKeepDependenciesOnControlInFirstPass(t *testing.T) {
 	snapshot := testSetupSnapshot(t)
 	steps := setupInstallSteps(snapshot.Manifest, "stockcn")
 	require.Equal(t, installOperator, steps[0].Kind, "第一步准备这台电脑的 moox-cli 签名私钥，控制机 bootstrap 时登记它的公钥")
 	require.Equal(t, installDeploy, steps[2].Kind)
 	require.Equal(t, []string{"admin", "host-gateway", "host-agent", "eventbus", "storage-primary"}, steps[2].Components)
-	require.Equal(t, installInitMetadata, steps[3].Kind)
+	require.Equal(t, installRestoreSecrets, steps[3].Kind)
+	require.Equal(t, installInitMetadata, steps[4].Kind)
 }
 
 // 没装完（incomplete）时选 --keep：接着跑完安装流程并写出完成标记，数据保留不清空，复用操作员密钥。
@@ -552,7 +581,8 @@ func TestSetupInstallIncompleteKeepResumesAndMarksComplete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, firstKey, again, "续装不换 moox-cli 的密钥")
 	require.Contains(t, h.calls, "deploy:control:admin,host-gateway,host-agent")
-	require.Contains(t, h.calls, "restore-backup")
+	require.Contains(t, h.calls, "restore-secrets")
+	require.Contains(t, h.calls, "restore-channels")
 	require.Contains(t, h.calls, "verify")
 	require.Contains(t, h.calls, "mark-complete")
 	for _, call := range h.calls {
@@ -586,7 +616,8 @@ func TestSetupInstallInstalledKeepUpdatesWithoutSpaceIDOrInit(t *testing.T) {
 		"deploy:factor",
 	}, sequence)
 	require.NotContains(t, h.calls, "init-metadata")
-	require.NotContains(t, h.calls, "restore-backup")
+	require.NotContains(t, h.calls, "restore-secrets")
+	require.NotContains(t, h.calls, "restore-channels")
 	require.NotContains(t, h.calls, "init")
 	require.NotContains(t, h.calls, "start")
 	require.NotContains(t, h.calls, "doctor")
@@ -642,7 +673,8 @@ func TestSetupInstallWipesBacksUpAndAutoRestores(t *testing.T) {
 	require.Len(t, wiped, 4)
 	require.Less(t, slices.Index(h.calls, "backup-before-wipe"), slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "wipe:") }))
 	require.Less(t, slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "wipe:") }), slices.Index(h.calls, "firewall"))
-	require.Less(t, slices.Index(h.calls, "restore-backup"), slices.Index(h.calls, "init"))
+	require.Less(t, slices.Index(h.calls, "restore-secrets"), slices.Index(h.calls, "deploy:factor"))
+	require.Less(t, slices.Index(h.calls, "restore-channels"), slices.Index(h.calls, "init"))
 	require.Contains(t, h.calls, "mark-complete")
 
 	// 备份已清掉待导入标记并记下 imported_at。
@@ -951,7 +983,8 @@ func TestSetupInstallFailsWhenComponentsNeverBecomeReady(t *testing.T) {
 	}
 	_, err := h.run("install", "--space-id", "crypto", "--yes")
 	require.ErrorContains(t, err, "overseas/trade（readyz 503）")
-	require.NotContains(t, h.calls, "restore-backup")
+	require.Contains(t, h.calls, "restore-secrets", "密钥导入在控制机 Admin 起来后即执行，早于部署其余主机与等就绪")
+	require.NotContains(t, h.calls, "restore-channels", "组件未就绪时不得导入告警渠道")
 	require.NotContains(t, h.calls, "init")
 }
 
@@ -1208,7 +1241,8 @@ func TestSetupInstallDoctorStepOrderAndPolling(t *testing.T) {
 	h.fail = "doctor"
 	_, err := h.run("install", "--space-id", "crypto", "--yes")
 	require.ErrorContains(t, err, "install_step_failed")
-	require.ErrorContains(t, err, "moox-cli doctor bootstrap")
+	require.ErrorContains(t, err, "moox-cli doctor bootstrap --node control")
+	require.ErrorContains(t, err, "moox-cli doctor bootstrap --node factor")
 	require.Contains(t, h.calls, "doctor")
 	require.NotContains(t, h.calls, "verify", "自检失败后不得继续跑按空间验收")
 	require.NotContains(t, h.calls, "mark-complete", "自检失败后不得写完成标记")
@@ -1250,4 +1284,67 @@ func TestSetupInstallDoctorStepOrderAndPolling(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "service.health:monitor@control")
 	require.Equal(t, 1, localAttempts)
+}
+
+// 预检阶段对全部主机与组件试渲染一次（含 overrides 应用）：配置旧键在清空主机或触碰任何主机之前直接报错。
+func TestSetupInstallPreflightRenderRejectsObsoleteOverridesBeforeWipe(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	h.source = filepath.Join("..", "..", "..", "..")
+	h.deps.preflightRender = defaultSetupPreflightRender
+	h.snapshot.Manifest.Overrides = map[string]map[string]map[string]any{
+		"monitor": {
+			"app.yaml": {
+				"metrics.dataset_health_policy_path": "/tmp/policy.yaml",
+			},
+		},
+	}
+
+	// 1. 预览阶段即拒绝。
+	_, err := h.run("install", "--space-id", "crypto")
+	require.ErrorContains(t, err, "config_invalid")
+	require.ErrorContains(t, err, "metrics.dataset_health_policy_path")
+	require.Empty(t, h.calls)
+
+	// 2. 直接执行 --wipe --yes 也在备份与清空之前拒绝，不触碰任何主机。
+	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", "sha256:dummy")
+	require.ErrorContains(t, err, "config_invalid")
+	require.Empty(t, h.calls)
+}
+
+// 密钥导入成功后、部署因子机失败：待导入标记仍保留；--keep 续装时幂等重导密钥，等全部就绪导入告警渠道后才清除标记。
+func TestSetupInstallSplitRestoreKeepsPendingOnFactorFailureAndResumesIdempotently(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	h.previewSecrets, h.previewChannels = 4, 2
+
+	out, err := h.run("install", "--space-id", "crypto")
+	require.NoError(t, err)
+	digest := parsePreview(t, out)["wipe"].(map[string]any)["digest"].(string)
+
+	h.fail = "deploy:factor"
+	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest)
+	require.ErrorContains(t, err, "install_step_failed")
+	require.Contains(t, h.calls, "restore-secrets", "部署因子机之前已导入密钥")
+	require.NotContains(t, h.calls, "restore-channels")
+
+	meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+	require.NoError(t, err)
+	require.True(t, exists && meta.PendingImport, "仅导入密钥后中途失败，pending_import 必须保留")
+
+	// --keep 续装：幂等再导一次密钥，随后成功部署因子机并导入告警渠道，最终清除 pending_import。
+	h.fail, h.calls = "", nil
+	h.markIncomplete()
+	out, err = h.run("install", "--space-id", "crypto", "--keep", "--yes")
+	require.NoError(t, err)
+	require.Contains(t, h.calls, "restore-secrets")
+	require.Contains(t, h.calls, "restore-channels")
+	require.Less(t, slices.Index(h.calls, "restore-secrets"), slices.Index(h.calls, "deploy:factor"))
+	require.Contains(t, out, `"secrets_created":4`)
+	require.Contains(t, out, `"channels_created":2`)
+
+	meta, exists, err = setupbackup.ReadMetadata(h.backupPath())
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.False(t, meta.PendingImport, "密钥与告警渠道全部导入后应清除 pending_import")
 }

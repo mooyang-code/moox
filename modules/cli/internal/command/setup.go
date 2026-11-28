@@ -61,7 +61,9 @@ type setupDeps struct {
 	wipeHost       func(context.Context, topology.Host, string) (deployscan.HostResult, error)
 	// deployHost 部署一台主机；waitReady 等一台主机上的一组组件就绪，返回到时限还没就绪的组件与原因。
 	deployHost func(context.Context, deploy.Options) (deploy.Result, error)
-	waitReady  func(context.Context, topology.Host, []string, time.Duration) (map[string]string, error)
+	// preflightRender 在不动任何主机前对全部主机与组件做一次纯试渲染（含 [overrides] 应用）。
+	preflightRender func(*setupSnapshot, string) error
+	waitReady       func(context.Context, topology.Host, []string, time.Duration) (map[string]string, error)
 	// operate 对一个组件的用户服务执行 restart、stop、start；readLogs 读组件日志。
 	operate   func(context.Context, topology.Host, string, string) (string, error)
 	readLogs  func(context.Context, topology.Host, string, []string, string, int, bool) ([]deploy.LogSection, error)
@@ -76,9 +78,11 @@ type setupDeps struct {
 	previewBackup func(context.Context, string, *setupSnapshot) (int, int, error)
 	// backupBeforeWipe 在清空前自动导出密钥与告警渠道到 moox.backup（写出时不带待导入标记，overwritePending 允许覆盖已过期的待导入备份）。
 	backupBeforeWipe func(context.Context, string, *setupSnapshot, string, bool) (setupBackupOutput, error)
-	// restoreBackup 在安装全部组件就绪之后、完整初始化之前按覆盖自动导入待导入的备份。
-	restoreBackup func(context.Context, string, *setupSnapshot) (*setupRestoreBackupSummary, error)
-	regionCloud   func(*setupSnapshot, string) (setupFunctionCloud, error)
+	// restoreBackupSecrets 在控制机 Admin 就绪后、部署其余主机前按覆盖自动导入待恢复密钥（不清除待导入标记）。
+	restoreBackupSecrets func(context.Context, string, *setupSnapshot) (*setupRestoreBackupSummary, error)
+	// restoreBackupChannels 在全部组件（含 Monitor）就绪之后、完整初始化之前按地址幂等覆盖导入告警渠道，完成后清除待导入标记。
+	restoreBackupChannels func(context.Context, string, *setupSnapshot) (*setupRestoreBackupSummary, error)
+	regionCloud           func(*setupSnapshot, string) (setupFunctionCloud, error)
 }
 
 func init() {
@@ -225,6 +229,7 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.scanDeployment, defaults.scanDeployment)
 	fillSetupDep(&deps.wipeHost, defaults.wipeHost)
 	fillSetupDep(&deps.deployHost, defaults.deployHost)
+	fillSetupDep(&deps.preflightRender, defaults.preflightRender)
 	fillSetupDep(&deps.waitReady, defaults.waitReady)
 	fillSetupDep(&deps.operate, defaults.operate)
 	fillSetupDep(&deps.readLogs, defaults.readLogs)
@@ -234,7 +239,8 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.markInstallComplete, defaults.markInstallComplete)
 	fillSetupDep(&deps.previewBackup, defaults.previewBackup)
 	fillSetupDep(&deps.backupBeforeWipe, defaults.backupBeforeWipe)
-	fillSetupDep(&deps.restoreBackup, defaults.restoreBackup)
+	fillSetupDep(&deps.restoreBackupSecrets, defaults.restoreBackupSecrets)
+	fillSetupDep(&deps.restoreBackupChannels, defaults.restoreBackupChannels)
 	fillSetupDep(&deps.regionCloud, defaults.regionCloud)
 	if deps.initStorage == nil {
 		deps.initStorage = func(ctx context.Context, snapshot *setupSnapshot, storageHost, sourceRoot string, bundle setupInitBundle) (setupInitSummary, error) {
@@ -283,12 +289,14 @@ func defaultSetupDeps() setupDeps {
 		markInstallComplete:   defaultSetupMarkInstallComplete,
 		previewBackup:         defaultSetupPreviewBackup,
 		backupBeforeWipe:      defaultSetupBackupBeforeWipe,
-		restoreBackup:         defaultSetupRestoreBackup,
+		restoreBackupSecrets:  defaultSetupRestoreBackupSecrets,
+		restoreBackupChannels: defaultSetupRestoreBackupChannels,
 		regionCloud:           defaultSetupRegionCloud,
 		loadInitBundle:        loadSetupInitBundle,
 		scanDeployment:        defaultSetupScanDeployment,
 		wipeHost:              defaultSetupWipeHost,
 		deployHost:            deploy.Deploy,
+		preflightRender:       defaultSetupPreflightRender,
 		waitReady:             defaultSetupWaitReady,
 		operate:               defaultSetupOperate,
 		readLogs:              defaultSetupReadLogs,
@@ -317,6 +325,13 @@ func defaultSetupDeps() setupDeps {
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Secrets.Admin.Username, snapshot.Secrets.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
 		},
 	}
+}
+
+func defaultSetupPreflightRender(snapshot *setupSnapshot, sourceRoot string) error {
+	if snapshot == nil || snapshot.Manifest == nil {
+		return fmt.Errorf("缺少拓扑配置")
+	}
+	return deploy.PreflightRender(snapshot.Manifest, snapshot.Secrets, sourceRoot)
 }
 
 func defaultSetupValidate(ctx context.Context, snapshot *setupSnapshot) (setupvalidate.Result, error) {
