@@ -1,6 +1,6 @@
 # Host Agent 运维
 
-Host Agent 是主机服务：程序只能在 Linux `amd64`、`arm64` 上运行，其他平台启动即报错；发布包只提供 linux/amd64，arm64 主机要自己编译后用 `setup deploy --binary-dir` 部署（见 [install.md](install.md)）。它只采集 CPU、内存、文件系统、磁盘和网络，每分钟随拉取主机策略那次调用（经本机网关调 Monitor 的 `GetHostPolicy`）把 `HostMetric` 报给 Monitor；不连 EventBus，不保存 SQLite、outbox 或重放队列。
+Host Agent 是主机服务：程序只能在 Linux `amd64`、`arm64` 上运行，其他平台启动即报错；发布包只提供 linux/amd64，arm64 主机要自己编译后用 `setup deploy --binary-dir` 部署（见 [install.md](install.md)）。它只采集 CPU、内存、文件系统、磁盘和网络，每分钟经本机网关调 Monitor 的 `SyncHostAgent` 把 `HostMetric` 报给 Monitor 并同步告警渠道；不连 EventBus，不保存 SQLite、outbox 或重放队列。
 
 ## 安装
 
