@@ -394,19 +394,27 @@ type metadataFake struct {
 	getDatasetRsps []*storagepb.GetDatasetRsp
 	columnPages    []*storagepb.ListDatasetColumnsRsp
 	columnRequests []*storagepb.ListDatasetColumnsReq
-	createRequests []*storagepb.CreateDatasetReq
-	createRsp      *storagepb.CreateDatasetRsp
+	createRequests []*storagepb.UpsertDatasetReq
+	createRsp      *storagepb.UpsertDatasetRsp
 	upsertRequests []*storagepb.UpsertDatasetColumnReq
 	deleteRequests []*storagepb.DeleteDatasetReq
 	deleteRsp      *storagepb.DeleteDatasetRsp
 	deleteRsps     []*storagepb.DeleteDatasetRsp
 	subjectPages   []*storagepb.ListDatasetSubjectsRsp
-	updateRequests []*storagepb.UpdateDatasetReq
+	updateRequests []*storagepb.UpsertDatasetReq
 }
 
-func (f *metadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
-	f.updateRequests = append(f.updateRequests, req)
-	return &storagepb.UpdateDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
+func (f *metadataFake) UpsertDataset(_ context.Context, req *storagepb.UpsertDatasetReq, _ ...client.Option) (*storagepb.UpsertDatasetRsp, error) {
+	cloned := proto.Clone(req).(*storagepb.UpsertDatasetReq)
+	if req.GetCreateOnly() {
+		f.createRequests = append(f.createRequests, cloned)
+		if f.createRsp != nil {
+			return f.createRsp, nil
+		}
+		return &storagepb.UpsertDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
+	}
+	f.updateRequests = append(f.updateRequests, cloned)
+	return &storagepb.UpsertDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
 }
 
 func (f *metadataFake) ListDatasetSubjects(_ context.Context, req *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
@@ -443,14 +451,6 @@ func (f *metadataFake) ListDatasetColumns(_ context.Context, req *storagepb.List
 		return rsp, nil
 	}
 	return &storagepb.ListDatasetColumnsRsp{RetInfo: successRet()}, nil
-}
-
-func (f *metadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq, _ ...client.Option) (*storagepb.CreateDatasetRsp, error) {
-	f.createRequests = append(f.createRequests, proto.Clone(req).(*storagepb.CreateDatasetReq))
-	if f.createRsp != nil {
-		return f.createRsp, nil
-	}
-	return &storagepb.CreateDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
 }
 
 func (f *metadataFake) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq, _ ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {

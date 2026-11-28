@@ -43,7 +43,14 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	primary, err := primarystore.New(primarystore.Options{Snapshot: activeRequestSnapshot, Store: store})
+	datasets := newTestDatasetCache(t,
+		[]*pb.Dataset{{SpaceId: "quant", DatasetId: "prices", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"}},
+		[]*pb.DatasetColumn{
+			{SpaceId: "quant", DatasetId: "prices", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
+			{SpaceId: "quant", DatasetId: "prices", ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
+		},
+	)
+	primary, err := primarystore.New(primarystore.Options{Datasets: datasets, Store: store})
 	if err != nil {
 		t.Fatal(err)
 	}

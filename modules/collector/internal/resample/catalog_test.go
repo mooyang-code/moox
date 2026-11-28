@@ -70,7 +70,16 @@ func (f *catalogMetadataFake) GetDataset(_ context.Context, req *storagepb.GetDa
 	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
 
-func (f *catalogMetadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq, _ ...client.Option) (*storagepb.CreateDatasetRsp, error) {
+func (f *catalogMetadataFake) UpsertDataset(_ context.Context, req *storagepb.UpsertDatasetReq, _ ...client.Option) (*storagepb.UpsertDatasetRsp, error) {
+	if _, existed := f.datasets[req.GetDataset().GetDatasetId()]; existed {
+		f.updateDatasets++
+		if err := f.fail("update_dataset"); err != nil {
+			return nil, err
+		}
+		dataset := proto.Clone(req.GetDataset()).(*storagepb.Dataset)
+		f.datasets[dataset.GetDatasetId()] = dataset
+		return &storagepb.UpsertDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
+	}
 	if err := f.fail("create_dataset"); err != nil {
 		return nil, err
 	}
@@ -82,17 +91,7 @@ func (f *catalogMetadataFake) CreateDataset(_ context.Context, req *storagepb.Cr
 	}
 	f.datasetColumns[dataset.GetDatasetId()] = append([]*storagepb.DatasetColumn(nil), req.GetColumns()...)
 	f.datasets[dataset.GetDatasetId()] = dataset
-	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
-}
-
-func (f *catalogMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
-	f.updateDatasets++
-	if err := f.fail("update_dataset"); err != nil {
-		return nil, err
-	}
-	dataset := proto.Clone(req.GetDataset()).(*storagepb.Dataset)
-	f.datasets[dataset.GetDatasetId()] = dataset
-	return &storagepb.UpdateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
+	return &storagepb.UpsertDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
 
 func (f *catalogMetadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq, _ ...client.Option) (*storagepb.DeleteDatasetRsp, error) {

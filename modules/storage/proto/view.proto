@@ -18,10 +18,6 @@ message ResultColumn {
   string display_name = 3;
 }
 
-// QueryTimeSeriesRowsReq 表示查询时序 View 数据。
-// 该接口查询 DuckDB 中当前 active View 索引。
-// View 索引是可重建的近期派生结果，不是完整事实存储。
-// 完整历史以 PrimaryStore KV/Pebble 为准。
 // CountTimeSeriesViewRowsReq 按标的统计 active View 索引里时间范围内的行数（同一时间点多个 series_tag 只计一次）。
 message CountTimeSeriesViewRowsReq {
   string space_id = 2;
@@ -31,6 +27,10 @@ message CountTimeSeriesViewRowsReq {
   TimeRange time_range = 5;
 }
 
+// QueryTimeSeriesRowsReq 表示查询时序 View 数据。
+// 该接口查询 DuckDB 中当前 active View 索引。
+// View 索引是可重建的近期派生结果，不是完整事实存储。
+// 完整历史以 PrimaryStore KV/Pebble 为准。
 message QueryTimeSeriesRowsReq {
   // space_id 是数据集所属空间 ID。
   string space_id = 2;

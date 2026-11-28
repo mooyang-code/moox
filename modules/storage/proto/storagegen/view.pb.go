@@ -89,10 +89,6 @@ func (x *ResultColumn) GetDisplayName() string {
 	return ""
 }
 
-// QueryTimeSeriesRowsReq 表示查询时序 View 数据。
-// 该接口查询 DuckDB 中当前 active View 索引。
-// View 索引是可重建的近期派生结果，不是完整事实存储。
-// 完整历史以 PrimaryStore KV/Pebble 为准。
 // CountTimeSeriesViewRowsReq 按标的统计 active View 索引里时间范围内的行数（同一时间点多个 series_tag 只计一次）。
 type CountTimeSeriesViewRowsReq struct {
 	state         protoimpl.MessageState
@@ -166,6 +162,10 @@ func (x *CountTimeSeriesViewRowsReq) GetTimeRange() *TimeRange {
 	return nil
 }
 
+// QueryTimeSeriesRowsReq 表示查询时序 View 数据。
+// 该接口查询 DuckDB 中当前 active View 索引。
+// View 索引是可重建的近期派生结果，不是完整事实存储。
+// 完整历史以 PrimaryStore KV/Pebble 为准。
 type QueryTimeSeriesRowsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

@@ -438,7 +438,7 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	c := mustCatalog(t)
 	for service, methods := range map[string][]string{
 		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"},
-		"Metadata":     {"GetDataset", "ListDatasetColumns", "CreateDataset", "UpsertDatasetColumn", "DeleteDataset", "UpdateDataset", "ListDatasetSubjects"},
+		"Metadata":     {"GetDataset", "ListDatasetColumns", "UpsertDataset", "UpsertDatasetColumn", "DeleteDataset", "ListDatasetSubjects"},
 	} {
 		for _, method := range methods {
 			if !c.Allowed("factor-mgr", "trpc.moox.storage."+service, method) {

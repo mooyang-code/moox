@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -34,17 +33,14 @@ func newRangeStore(t *testing.T) *rangeStore {
 	return s
 }
 
-type freqSnapshot struct{ activeSnapshot }
-
-func (freqSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Freq: "1m", Status: "active"}, true
-}
-
 func newRangeService(t *testing.T, store *rangeStore) *Service {
 	t.Helper()
+	datasets := newTestDatasetCache(t, []*pb.Dataset{{
+		SpaceId: "space", DatasetId: "market", Freq: "1m", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+	}}, nil)
 	svc, err := New(Options{
 		Store:    store,
-		Snapshot: func() metadata.RequestSnapshot { return freqSnapshot{} },
+		Datasets: datasets,
 	})
 	require.NoError(t, err)
 	return svc
@@ -140,7 +136,10 @@ func TestReadRowsOmitsMissingRowsAndKeepsRequestOrder(t *testing.T) {
 		// 存储层只返回存在的行（第二个键不存在）。
 		return []*pb.Row{{Key: keys[0]}, {Key: keys[2]}}, nil
 	}
-	svc, err := New(Options{Store: store, Snapshot: activeRequestSnapshot})
+	datasets := newTestDatasetCache(t, []*pb.Dataset{{
+		SpaceId: "space", DatasetId: "dataset", Freq: "1m", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+	}}, nil)
+	svc, err := New(Options{Store: store, Datasets: datasets})
 	require.NoError(t, err)
 	key := func(subject string) *pb.RowKey {
 		return timeSeriesRowKey("space", "dataset", subject, "1m", "2026-07-29T15:00:00Z", "")

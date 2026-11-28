@@ -83,20 +83,15 @@ func (f *taskResultMetadataFake) GetDataset(_ context.Context, req *storagepb.Ge
 	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
 
-func (f *taskResultMetadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
+func (f *taskResultMetadataFake) UpsertDataset(_ context.Context, req *storagepb.UpsertDatasetReq) (*storagepb.UpsertDatasetRsp, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	dataset := req.GetDataset()
-	dataset.Status = "active"
+	if _, existed := f.datasets[dataset.GetDatasetId()]; !existed {
+		dataset.Status = "active"
+	}
 	f.datasets[dataset.GetDatasetId()] = dataset
-	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
-}
-
-func (f *taskResultMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
-	return &storagepb.UpdateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: req.GetDataset()}, nil
+	return &storagepb.UpsertDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
 
 func (f *taskResultMetadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {

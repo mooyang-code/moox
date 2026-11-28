@@ -12,7 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/seriesset"
@@ -26,16 +26,14 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
-	ctx = s.requestContext(ctx)
+	snapshot := s.datasets.Snapshot()
 	scope := &pb.DatasetPeriodExpectation{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Frequency: req.GetFrequency()}
-	if err := validatePeriodDataset(ctx, scope); err != nil {
+	dataset, err := validatePeriodDataset(snapshot, scope)
+	if err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	if err := validateSnapshotAlignment(ctx, req); err != nil {
+	if err := validateSnapshotAlignment(dataset, req); err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	series := make([]seriesset.Series, len(req.GetSeries()))
 	for i, entry := range req.GetSeries() {
@@ -56,8 +54,9 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	if strings.TrimSpace(exp.GetSpaceId()) == "" || strings.TrimSpace(exp.GetDatasetId()) == "" {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
-	ctx = s.requestContext(ctx)
-	if err := validatePeriodDataset(ctx, exp); err != nil {
+	snapshot := s.datasets.Snapshot()
+	dataset, err := validatePeriodDataset(snapshot, exp)
+	if err != nil {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	rows := make([]*pb.Row, 0, len(req.GetItems()))
@@ -65,26 +64,17 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		if item == nil || item.GetRow() == nil {
 			return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("batch item row is required"))}, nil
 		}
-		rows = append(rows, item.GetRow())
-	}
-	if batchValidator, ok := s.validate.(interface {
-		ValidateRows(context.Context, []*pb.Row) error
-	}); ok {
-		if err := batchValidator.ValidateRows(ctx, rows); err != nil {
-			return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-		}
-	}
-	for _, row := range rows {
+		row := item.GetRow()
 		if row.GetKey() == nil || row.GetKey().GetSpaceId() != exp.GetSpaceId() || row.GetKey().GetDatasetId() != exp.GetDatasetId() {
 			return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row dataset identity does not match period expectation"))}, nil
 		}
+		rows = append(rows, row)
+	}
+	if err := validateRowsSchema(snapshot, dataset, rows); err != nil {
+		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	// 周期提交是 Collector 每个周期写入行情的主路径：数据集的最近运行、最近成功与输出水位都要在这里记录，
 	// 否则 Monitor 只能看到旧的 UpsertFields（补采、导入）留下的指标，把数据误判成“入库落后”。
-	if err := requireActiveDataset(ctx, exp.GetSpaceId(), exp.GetDatasetId()); err != nil {
-		s.observeTimeSeriesRows(ctx, rows, "error", false)
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
 	items := make([]pebble.TimeSeriesBatchItem, 0, len(rows))
 	keys := make([]*pb.RowKey, 0, len(rows))
 	for i, row := range rows {
@@ -92,7 +82,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		keys = append(keys, row.GetKey())
 	}
 	commitExp := periodExpectation(exp)
-	commitExp.AllowedLatenessSeconds = datasetAllowedLateness(ctx, exp)
+	commitExp.AllowedLatenessSeconds = datasetAllowedLateness(ctx, dataset)
 	// 周期的真实结束时刻由写入方声明（重采样结果填桶的收盘时刻）；不填时存储层按 period_time 加一个周期长度算。
 	// 直采日线在下一交易日早上才采集，不能套用收盘时刻，所以这里不按数据集的日历自行推断。
 	commitExp.PeriodEndAt = exp.GetPeriodEndAt()
@@ -117,23 +107,10 @@ func periodExpectation(in *pb.DatasetPeriodExpectation) pebble.DatasetPeriodExpe
 	}
 }
 
-// datasetAlignment 是数据集声明的分桶方式：session 表示按交易时段从开盘起切分，其余（含未声明）按 epoch UTC。
-func datasetAlignment(ctx context.Context, spaceID, datasetID string) string {
-	snapshot := metadata.RequestSnapshotFromContext(ctx)
-	if snapshot == nil {
-		return ""
-	}
-	dataset, ok := snapshot.GetDataset(spaceID, datasetID)
-	if !ok || dataset == nil {
-		return ""
-	}
-	return strings.TrimSpace(dataset.GetAlignment())
-}
-
 // validateSnapshotAlignment 检查快照生效点与频率边界对齐：epoch 数据集的日内周期按 epoch 对齐；
 // session 数据集（A 股等）的桶从各交易时段开盘起切分，不在 epoch 边界上，存储层只要求整分钟。
-func validateSnapshotAlignment(ctx context.Context, req *pb.PrimaryRegisterSeriesSnapshotReq) error {
-	if datasetAlignment(ctx, req.GetSpaceId(), req.GetDatasetId()) == "session" {
+func validateSnapshotAlignment(dataset *pb.Dataset, req *pb.PrimaryRegisterSeriesSnapshotReq) error {
+	if strings.TrimSpace(dataset.GetAlignment()) == "session" {
 		return nil
 	}
 	parsed, err := frequencypkg.Parse(req.GetFrequency())
@@ -150,48 +127,36 @@ func validateSnapshotAlignment(ctx context.Context, req *pb.PrimaryRegisterSerie
 	return nil
 }
 
-// validatePeriodDataset 检查周期提交与快照登记的目标：数据集存在于请求快照、是时序数据且频率与声明一致。
+// validatePeriodDataset 检查周期提交与快照登记的目标：数据集在快照中存在且启用、是时序数据且频率与声明一致。
 // 返回带 storeerr 类别的错误，由 retinfo.FromError 映射为准确的 INVALID_PARAM / NOT_FOUND / INNER_ERR。
-func validatePeriodDataset(ctx context.Context, expectation *pb.DatasetPeriodExpectation) error {
+func validatePeriodDataset(snapshot *metacache.DatasetSnapshot, expectation *pb.DatasetPeriodExpectation) (*pb.Dataset, error) {
 	if expectation == nil || strings.TrimSpace(expectation.GetSpaceId()) == "" || strings.TrimSpace(expectation.GetDatasetId()) == "" {
-		return storeerr.Invalidf("period expectation requires space_id and dataset_id")
+		return nil, storeerr.Invalidf("period expectation requires space_id and dataset_id")
 	}
-	snapshot := metadata.RequestSnapshotFromContext(ctx)
-	if snapshot == nil {
-		return errors.New("metadata cache snapshot is unavailable")
-	}
-	dataset, ok := snapshot.GetDataset(expectation.GetSpaceId(), expectation.GetDatasetId())
-	if !ok || dataset == nil {
-		return storeerr.NotFoundf("period Dataset is not present in the request metadata snapshot")
-	}
-	if dataset.GetSpaceId() != expectation.GetSpaceId() || dataset.GetDatasetId() != expectation.GetDatasetId() {
-		return errors.New("period Dataset identity does not match the request metadata snapshot")
+	dataset, err := activeDataset(snapshot, expectation.GetSpaceId(), expectation.GetDatasetId())
+	if err != nil {
+		return nil, err
 	}
 	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
-		return storeerr.Invalidf("period Dataset must be time_series")
+		return nil, storeerr.Invalidf("period Dataset must be time_series")
 	}
 	frequency := expectation.GetFrequency()
 	if !frequencypkg.IsCanonical(frequency) {
-		return storeerr.Invalidf("period frequency is invalid")
+		return nil, storeerr.Invalidf("period frequency is invalid")
 	}
 	if dataset.GetFreq() != frequency {
-		return storeerr.Invalidf("period frequency does not match the Dataset declaration")
+		return nil, storeerr.Invalidf("period frequency does not match the Dataset declaration")
 	}
-	return nil
+	return dataset, nil
 }
 
 // datasetAllowedLateness 读取数据集的 allowed_lateness_seconds；没有设置时返回 0，由存储层采用默认值。
-func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectation) int64 {
-	snapshot := metadata.RequestSnapshotFromContext(ctx)
-	if snapshot == nil {
-		return 0
-	}
-	dataset, ok := snapshot.GetDataset(exp.GetSpaceId(), exp.GetDatasetId())
-	if !ok || dataset == nil {
+func datasetAllowedLateness(ctx context.Context, dataset *pb.Dataset) int64 {
+	if dataset == nil {
 		return 0
 	}
 	if dataset.GetAllowedLatenessSeconds() == 0 {
-		log.WarnContextf(ctx, "dataset %s/%s has no allowed_lateness_seconds; the store falls back to its default", exp.GetSpaceId(), exp.GetDatasetId())
+		log.WarnContextf(ctx, "dataset %s/%s has no allowed_lateness_seconds; the store falls back to its default", dataset.GetSpaceId(), dataset.GetDatasetId())
 	}
 	return int64(dataset.GetAllowedLatenessSeconds())
 }

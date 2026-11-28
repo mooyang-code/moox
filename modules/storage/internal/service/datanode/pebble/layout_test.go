@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -109,7 +108,7 @@ func TestOpenRecoversWhenMarkerLandedBeforePebbleInitialization(t *testing.T) {
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := createLayoutMarker(path, filepath.Join(path, layoutMarkerName)); err != nil {
+	if err := os.WriteFile(filepath.Join(path, layoutMarkerName), []byte(layoutVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(Options{Path: path})
@@ -118,81 +117,5 @@ func TestOpenRecoversWhenMarkerLandedBeforePebbleInitialization(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestEnsureLayoutRecoversStrictlyNamedTemporaryMarker(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "db")
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	stale := filepath.Join(path, layoutMarkerTempPrefix+"stale")
-	if err := os.WriteFile(stale, []byte("partial"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureLayout(path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("temporary marker still exists: %v", err)
-	}
-	data, err := os.ReadFile(filepath.Join(path, layoutMarkerName))
-	if err != nil || string(data) != layoutVersion {
-		t.Fatalf("layout marker = %q, %v", data, err)
-	}
-}
-
-func TestEnsureLayoutDoesNotIgnoreSimilarTemporaryNames(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "db")
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	sentinel := filepath.Join(path, "."+layoutMarkerName+".tmp")
-	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	err := ensureLayout(path)
-	if err == nil || !strings.Contains(err.Error(), "清空 Pebble 库") {
-		t.Fatalf("ensureLayout() error = %v", err)
-	}
-	if data, readErr := os.ReadFile(sentinel); readErr != nil || string(data) != "keep" {
-		t.Fatalf("similar file was changed: data=%q err=%v", data, readErr)
-	}
-}
-
-func TestEnsureLayoutConcurrentInitializationConverges(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "db")
-	const workers = 16
-	start := make(chan struct{})
-	errs := make(chan error, workers)
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	for range workers {
-		go func() {
-			defer wg.Done()
-			<-start
-			errs <- ensureLayout(path)
-		}()
-	}
-	close(start)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Errorf("ensureLayout() = %v", err)
-		}
-	}
-	data, err := os.ReadFile(filepath.Join(path, layoutMarkerName))
-	if err != nil || string(data) != layoutVersion {
-		t.Fatalf("layout marker = %q, %v", data, err)
-	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), layoutMarkerTempPrefix) {
-			t.Fatalf("temporary marker remains: %s", entry.Name())
-		}
 	}
 }

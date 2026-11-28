@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
@@ -16,7 +15,8 @@ import (
 func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	service, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return factorResultSnapshot{} }})
+	datasets := newTestDatasetCache(t, []*pb.Dataset{{SpaceId: "quant", DatasetId: "result", Status: "active"}}, nil)
+	service, err := New(Options{Store: store, Datasets: datasets})
 	require.NoError(t, err)
 	marker := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,
@@ -72,7 +72,8 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	service, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return factorResultSnapshot{} }})
+	datasets := newTestDatasetCache(t, []*pb.Dataset{{SpaceId: "quant", DatasetId: "result", Status: "active"}}, nil)
+	service, err := New(Options{Store: store, Datasets: datasets})
 	require.NoError(t, err)
 	base := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,

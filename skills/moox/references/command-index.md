@@ -209,13 +209,13 @@
 | `metadata apply` | 导入元数据种子：缺的建上，已有的核对一致（空间、标签以管理台为准不比对），可重复运行 |
 | `metadata dataset add-column` | 给数据集加列（或修改列） |
 | `metadata dataset columns` | 列出数据集的列 |
-| `metadata dataset create` | 创建数据集（保留期不在这里设：由 Storage 的保留策略文件按空间与频率决定） |
+| `metadata dataset create` | 创建或覆盖数据集（保留期不在这里设：由 Storage 的保留策略文件按空间与频率决定） |
 | `metadata dataset delete` | 删除数据集（服务端先删元数据再删行，查询索引由 storage-view 下一轮维护删掉；默认只预览，--yes 才执行；删除采集结果用 collector task delete-result） |
 | `metadata dataset list` | 列出数据集 |
 | `metadata dataset show` | 查看数据集 |
 | `metadata dataset subjects` | 列出数据集里有数据的标的 |
 | `metadata dataset update` | 修改数据集的名称、说明、状态与维护先后（数据来源、类型、频率创建后不可变；停用即摘掉它的查询索引，索引文件保留） |
-| `metadata source create` | 创建数据来源 |
+| `metadata source create` | 创建或覆盖数据来源 |
 | `metadata source delete` | 删除数据来源（默认只预览，--yes 才执行） |
 | `metadata source list` | 列出数据来源 |
 | `metadata source show` | 查看数据来源 |

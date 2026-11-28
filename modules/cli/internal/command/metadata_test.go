@@ -215,15 +215,15 @@ func TestApplyProbeResultOtherResources(t *testing.T) {
 			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, DataSource: ds,
 		},
 	}
-	found, actual := applyProbeResult("data_sources", probe, &pb.CreateDataSourceReq{DataSource: ds})
+	found, actual := applyProbeResult("data_sources", probe, &pb.UpsertDataSourceReq{DataSource: ds})
 	assert.True(t, found)
 	assert.Equal(t, ds, actual)
 }
 
 func TestVerifyMetadataResourceMoreTypes(t *testing.T) {
 	ds := &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active"}
-	require.NoError(t, verifyMetadataResource("data_sources", &pb.CreateDataSourceReq{DataSource: ds}, ds))
-	require.NoError(t, verifyMetadataResource("data_sources", &pb.CreateDataSourceReq{DataSource: ds}, &pb.DataSource{
+	require.NoError(t, verifyMetadataResource("data_sources", &pb.UpsertDataSourceReq{DataSource: ds}, ds))
+	require.NoError(t, verifyMetadataResource("data_sources", &pb.UpsertDataSourceReq{DataSource: ds}, &pb.DataSource{
 		SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active", Attributes: map[string]string{},
 	}))
 	col := &pb.DatasetColumn{SpaceId: "crypto", DatasetId: "kline", ColumnName: "close", Status: "active"}
@@ -270,7 +270,7 @@ func TestMetadataNotFoundAcceptsGenericNotFound(t *testing.T) {
 }
 
 func TestProtoMessageSpaceIDFindsNestedMetadataResource(t *testing.T) {
-	req := &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: "stockcn", DatasetId: "dataset_close"}}
+	req := &pb.UpsertDatasetReq{Dataset: &pb.Dataset{SpaceId: "stockcn", DatasetId: "dataset_close"}}
 	assert.Equal(t, "stockcn", protoMessageSpaceID(req.ProtoReflect()))
 	assert.Empty(t, protoMessageSpaceID((&pb.ListSpacesReq{}).ProtoReflect()))
 }

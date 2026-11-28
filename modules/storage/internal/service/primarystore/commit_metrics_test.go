@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -19,12 +18,14 @@ type commitFunc func(context.Context, pebble.DatasetPeriodExpectation, []pebble.
 func commitMetricsService(t *testing.T, commit commitFunc) (*Service, *recordingDatasetMetrics) {
 	t.Helper()
 	metrics := &recordingDatasetMetrics{}
+	datasets := newTestDatasetCache(t,
+		[]*pb.Dataset{{SpaceId: "crypto", DatasetId: "market_kline", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m"}},
+		[]*pb.DatasetColumn{{SpaceId: "crypto", DatasetId: "market_kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}},
+	)
 	svc, err := New(Options{
 		Store:          &hookStore{Store: openTestStore(t), commit: commit},
 		DatasetMetrics: metrics,
-		Snapshot: func() metadata.RequestSnapshot {
-			return collectorPeriodMetadataSnapshot("crypto", "market_kline", "1m")
-		},
+		Datasets:       datasets,
 	})
 	require.NoError(t, err)
 	return svc, metrics

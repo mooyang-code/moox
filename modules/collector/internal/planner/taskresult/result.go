@@ -81,8 +81,7 @@ func PersistedResultIDs(taskID, datasetID string) IDs {
 
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
-	CreateDataset(context.Context, *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error)
-	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
+	UpsertDataset(context.Context, *storagepb.UpsertDatasetReq) (*storagepb.UpsertDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
 	// GetViewState 读 storage-view 里结果数据集查询索引的已建状态，覆盖范围只在这里。
@@ -92,8 +91,7 @@ type metadataAPI interface {
 type MetadataClient interface {
 	GetTag(context.Context, *storagepb.GetTagReq, ...client.Option) (*storagepb.GetTagRsp, error)
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
-	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
-	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
+	UpsertDataset(context.Context, *storagepb.UpsertDatasetReq, ...client.Option) (*storagepb.UpsertDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 }
@@ -115,11 +113,8 @@ func (p metadataProxy) GetTag(ctx context.Context, req *storagepb.GetTagReq) (*s
 func (p metadataProxy) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	return p.client.GetDataset(ctx, req)
 }
-func (p metadataProxy) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
-	return p.client.CreateDataset(ctx, req)
-}
-func (p metadataProxy) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
-	return p.client.UpdateDataset(ctx, req)
+func (p metadataProxy) UpsertDataset(ctx context.Context, req *storagepb.UpsertDatasetReq) (*storagepb.UpsertDatasetRsp, error) {
+	return p.client.UpsertDataset(ctx, req)
 }
 func (p metadataProxy) DeleteDataset(ctx context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
 	return p.client.DeleteDataset(ctx, req)
@@ -462,7 +457,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			return IDs{}, columnsErr
 		}
 		// 数据集连同列在一次调用里建好，建好即可写入。
-		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: &storagepb.Dataset{
+		created, createErr := m.metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID,
 			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: datasetFrequency(cfg.Frequency), Alignment: alignment, Attributes: attrs, SubjectTags: subjectTags,
 		}, Columns: columns})
@@ -503,7 +498,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			for key, value := range missing {
 				updated.Attributes[key] = value
 			}
-			response, updateErr := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
+			response, updateErr := m.metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: updated})
 			if updateErr != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 				return IDs{}, metadataError("update result dataset subject tags or data source", updateErr, func() *storagepb.RetInfo {
 					if response == nil {
@@ -544,7 +539,7 @@ func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID stri
 	if sameSubjectTags(rsp.GetDataset().GetSubjectTags(), updated.GetSubjectTags()) {
 		return nil
 	}
-	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
+	result, err := m.metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: updated})
 	if err != nil {
 		return fmt.Errorf("update result dataset subject tags: %w", err)
 	}
@@ -583,7 +578,7 @@ func (m *Manager) EnsureAllowedLateness(ctx context.Context, spaceID, datasetID 
 	}
 	updated := proto.Clone(rsp.GetDataset()).(*storagepb.Dataset)
 	updated.AllowedLatenessSeconds = uint32(seconds)
-	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
+	result, err := m.metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: updated})
 	if err != nil {
 		return fmt.Errorf("update result dataset allowed lateness: %w", err)
 	}
@@ -958,7 +953,7 @@ func metadataError(action string, callErr error, ret *storagepb.RetInfo) error {
 	return fmt.Errorf("%s: %s", action, ret.GetMsg())
 }
 
-func retInfoDataset(resp *storagepb.CreateDatasetRsp) *storagepb.RetInfo {
+func retInfoDataset(resp *storagepb.UpsertDatasetRsp) *storagepb.RetInfo {
 	if resp == nil {
 		return nil
 	}

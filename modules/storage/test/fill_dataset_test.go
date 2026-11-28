@@ -1,7 +1,11 @@
 package test
 
 import (
+	"context"
+	"testing"
+
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -13,14 +17,26 @@ func fillDataset(req *pb.PrimaryUpsertFieldsReq) *pb.PrimaryUpsertFieldsReq {
 	return req
 }
 
-// activeRequestSnapshot 是任何数据集都存在且启用、但没有列定义的请求快照，只关心读写行的测试用它。
-func activeRequestSnapshot() metadata.RequestSnapshot { return activeSnapshot{} }
-
-type activeSnapshot struct{}
-
-func (activeSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active"}, true
+// testDatasetSource 是测试用的内存元数据来源，供构造真实的 DatasetCache。
+type testDatasetSource struct {
+	datasets []*pb.Dataset
+	columns  []*pb.DatasetColumn
 }
-func (activeSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
+
+func (s *testDatasetSource) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
+	return s.datasets, &pb.PageResult{Total: uint32(len(s.datasets))}, nil
+}
+
+func (s *testDatasetSource) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	return s.columns, &pb.PageResult{Total: uint32(len(s.columns))}, nil
+}
+
+func newTestDatasetCache(t testing.TB, datasets []*pb.Dataset, columns []*pb.DatasetColumn) *metacache.DatasetCache {
+	t.Helper()
+	cache, err := metacache.NewDatasetCache(context.Background(), &testDatasetSource{datasets: datasets, columns: columns})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	return cache
 }

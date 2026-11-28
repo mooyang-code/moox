@@ -16,8 +16,7 @@ func (s *Service) ReportDatasetPeriodCompleted(ctx context.Context, req *pb.Repo
 	if err := validateMarkerScope(req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
 		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
-	ctx = s.requestContext(ctx)
-	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
+	if _, err := activeDataset(s.datasets.Snapshot(), req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
 		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	raw, _, err := pebble.BuildProducerPeriodCompletedMessage(req.GetSpaceId(), req.GetMarker())
@@ -35,8 +34,7 @@ func (s *Service) GetDatasetPeriodCompleted(ctx context.Context, req *pb.GetData
 	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetCauseEventId() == "" || req.GetPeriodTime() <= 0 {
 		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, cause_event_id and period_time are required"))}, nil
 	}
-	ctx = s.requestContext(ctx)
-	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+	if _, err := activeDataset(s.datasets.Snapshot(), req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	message, found, err := s.store.GetDatasetPeriodCompletedMarker(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetCauseEventId(), req.GetPeriodTime())

@@ -1,187 +1,58 @@
 package primarystore
 
 import (
-	"context"
+	"errors"
 	"fmt"
+	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// MetadataValidator enforces the deliberately small write contract at the
-// PrimaryStore boundary: Dataset must be active, RowKey kind and freq must
-// match it, and every field must already be registered. Required-field semantics are
-// intentionally absent; partial field upserts are valid.
-type MetadataValidator struct {
-	reader metadataReader
-}
-
-type metadataReader interface {
-	GetDataset(context.Context, string, string) (*pb.Dataset, error)
-	ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
-}
-
-func NewMetadataValidator(reader metadataReader) *MetadataValidator {
-	return &MetadataValidator{reader: reader}
-}
-
-func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.Row) error {
-	return v.validateRow(ctx, row, v.snapshotReader(ctx))
-}
-
-// ValidateRows 校验一批行。数据集与列定义按 (space, dataset) 只查一次。检查顺序与逐行校验相同（数据集、行键、频率，再到列）。
-func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.Row) error {
-	if v == nil {
-		return fmt.Errorf("metadata validator is not configured")
+// validateRowShape 检查单行的基础形态：键完整、记录写带版本、至少带一个字段或属性、字段与属性键值非空。
+func validateRowShape(row *pb.Row) error {
+	if row == nil || row.GetKey() == nil {
+		return errors.New("row key is required")
 	}
-	batch := v.Batch(ctx)
+	key := row.GetKey()
+	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" {
+		return errors.New("space_id and dataset_id are required")
+	}
+	if key.GetTimeSeries() == nil && key.GetRecord() == nil {
+		return errors.New("row key kind is required")
+	}
+	if record := key.GetRecord(); record != nil && strings.TrimSpace(record.GetVersion()) == "" {
+		return errors.New("record version is required for writes")
+	}
+	if len(row.GetFields()) == 0 && len(row.GetAttributes()) == 0 {
+		return errors.New("at least one field or attribute is required")
+	}
+	for _, field := range row.GetFields() {
+		if field == nil || strings.TrimSpace(field.GetFieldId()) == "" || field.GetValue() == nil {
+			return errors.New("field_id and value are required")
+		}
+	}
+	for name, value := range row.GetAttributes() {
+		if strings.TrimSpace(name) == "" || value == nil {
+			return errors.New("attribute key and value are required")
+		}
+	}
+	return nil
+}
+
+// validateRowsSchema 使用本次请求已取出的启用数据集与快照校验整批行：
+// 键形态与频率匹配数据集定义，且写入的每个字段都是该数据集里已注册并启用的列、类型一致（允许部分字段写入）。
+func validateRowsSchema(snapshot *metacache.DatasetSnapshot, dataset *pb.Dataset, rows []*pb.Row) error {
 	for _, row := range rows {
-		if err := batch.ValidateRow(ctx, row); err != nil {
+		if err := validateRowSchema(snapshot, dataset, row); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Batch 返回一个请求内的逐行校验器：与 ValidateRow 的检查与错误完全相同，只是数据集与列定义按 (space, dataset)
-// 只加载一次。写入路径要逐行穿插自己的检查时（保持原来的检查顺序与错误），用它代替 ValidateRow。
-func (v *MetadataValidator) Batch(ctx context.Context) Validator {
-	if v == nil {
-		return v
-	}
-	return &cachedRowValidator{reader: v.snapshotReader(ctx), schemas: make(map[[2]string]*datasetSchema)}
-}
-
-type cachedRowValidator struct {
-	reader  metadataReader
-	schemas map[[2]string]*datasetSchema
-}
-
-func (c *cachedRowValidator) ValidateRow(ctx context.Context, row *pb.Row) error {
-	if c.reader == nil {
-		return fmt.Errorf("metadata validator is not configured")
-	}
+func validateRowSchema(snapshot *metacache.DatasetSnapshot, dataset *pb.Dataset, row *pb.Row) error {
 	key := row.GetKey()
-	id := [2]string{key.GetSpaceId(), key.GetDatasetId()}
-	schema, ok := c.schemas[id]
-	if !ok {
-		schema = &datasetSchema{reader: c.reader, spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
-		c.schemas[id] = schema
-	}
-	return schema.check(ctx, row)
-}
-
-// snapshotReader prefers the request-scoped snapshot so validation and routing
-// share one immutable metadata view for the whole write.
-func (v *MetadataValidator) snapshotReader(ctx context.Context) metadataReader {
-	if snapshot := metadata.RequestSnapshotFromContext(ctx); snapshot != nil {
-		return requestSnapshotReader{snapshot: snapshot}
-	}
-	return v.reader
-}
-
-// requestSnapshotReader keeps validation on the same immutable generation as
-// routing. It deliberately has no access to the persistent metadata Store.
-type requestSnapshotReader struct {
-	snapshot metadata.RequestSnapshot
-}
-
-func (r requestSnapshotReader) GetDataset(_ context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
-	if r.snapshot == nil {
-		return nil, fmt.Errorf("metadata snapshot is unavailable")
-	}
-	item, ok := r.snapshot.GetDataset(spaceID, datasetID)
-	if !ok {
-		return nil, fmt.Errorf("dataset %q is not found", datasetID)
-	}
-	return item, nil
-}
-
-func (r requestSnapshotReader) ListDatasetColumns(_ context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	if r.snapshot == nil {
-		return nil, nil, fmt.Errorf("metadata snapshot is unavailable")
-	}
-	return r.snapshot.ListDatasetColumns(spaceID, datasetID, page)
-}
-
-func (v *MetadataValidator) RequestSnapshot() metadata.RequestSnapshot {
-	if provider, ok := v.reader.(interface {
-		RequestSnapshot() metadata.RequestSnapshot
-	}); ok {
-		return provider.RequestSnapshot()
-	}
-	return nil
-}
-
-func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.Row, reader metadataReader) error {
-	if v == nil || reader == nil {
-		return fmt.Errorf("metadata validator is not configured")
-	}
-	key := row.GetKey()
-	schema := &datasetSchema{reader: reader, spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
-	return schema.check(ctx, row)
-}
-
-// datasetSchema 按需加载并缓存校验一个数据集的行所需的元数据：先取数据集，用到时再取列定义。
-type datasetSchema struct {
-	reader             metadataReader
-	spaceID, datasetID string
-	dataset            *pb.Dataset
-	datasetLoaded      bool
-	allowed            map[string]*pb.DatasetColumn
-	columnsLoaded      bool
-}
-
-func (d *datasetSchema) loadDataset(ctx context.Context) (*pb.Dataset, error) {
-	if d.reader == nil {
-		return nil, fmt.Errorf("metadata validator is not configured")
-	}
-	if !d.datasetLoaded {
-		dataset, err := d.reader.GetDataset(ctx, d.spaceID, d.datasetID)
-		if err != nil {
-			return nil, err
-		}
-		d.dataset, d.datasetLoaded = dataset, true
-	}
-	return d.dataset, nil
-}
-
-func (d *datasetSchema) loadColumns(ctx context.Context) (map[string]*pb.DatasetColumn, error) {
-	if d.columnsLoaded {
-		return d.allowed, nil
-	}
-	const pageSize = uint32(1000)
-	var columns []*pb.DatasetColumn
-	for pageNo := uint32(1); ; pageNo++ {
-		items, page, err := d.reader.ListDatasetColumns(ctx, d.spaceID, d.datasetID, &pb.Page{Page: pageNo, Size: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		columns = append(columns, items...)
-		if page == nil || !page.GetHasMore() || len(items) == 0 {
-			break
-		}
-	}
-	allowed := make(map[string]*pb.DatasetColumn, len(columns))
-	for _, column := range columns {
-		if column == nil || (column.GetStatus() != "" && column.GetStatus() != "active") {
-			continue
-		}
-		allowed[column.GetColumnName()] = column
-	}
-	d.allowed, d.columnsLoaded = allowed, true
-	return allowed, nil
-}
-
-func (d *datasetSchema) check(ctx context.Context, row *pb.Row) error {
-	key := row.GetKey()
-	dataset, err := d.loadDataset(ctx)
-	if err != nil {
-		return err
-	}
-	if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") {
-		return fmt.Errorf("dataset %q is not active", key.GetDatasetId())
-	}
 	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && key.GetTimeSeries() == nil {
 		return fmt.Errorf("dataset %q requires time-series row key", key.GetDatasetId())
 	}
@@ -192,14 +63,11 @@ func (d *datasetSchema) check(ctx context.Context, row *pb.Row) error {
 	if series := key.GetTimeSeries(); series != nil && series.GetFreq() != dataset.GetFreq() {
 		return fmt.Errorf("row freq %q does not match dataset %q freq %q", series.GetFreq(), key.GetDatasetId(), dataset.GetFreq())
 	}
-	allowed, err := d.loadColumns(ctx)
-	if err != nil {
-		return err
-	}
+	spaceID, datasetID := dataset.GetSpaceId(), dataset.GetDatasetId()
 	for _, field := range row.GetFields() {
-		column := allowed[field.GetFieldId()]
-		if column == nil {
-			return fmt.Errorf("field %q is not registered in dataset %q", field.GetFieldId(), key.GetDatasetId())
+		column, ok := snapshot.GetDatasetColumn(spaceID, datasetID, field.GetFieldId())
+		if !ok || (column.GetStatus() != "" && column.GetStatus() != "active") {
+			return fmt.Errorf("field %q is not registered in dataset %q", field.GetFieldId(), datasetID)
 		}
 		declared := column.GetValueType()
 		if declared == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {

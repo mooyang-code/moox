@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -81,6 +82,12 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset, columns ...
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetName(), dataKindSQL(item.GetDataKind()), item.GetFreq(), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
 	if err != nil {
+		if code, ok := sqlitedb.ErrorCode(err); ok && code == 2067 {
+			if strings.Contains(strings.ToLower(err.Error()), "c_name") {
+				return nil, storeerr.Conflictf("数据集名称 %q 在空间 %s 中已存在：%w", item.GetName(), item.GetSpaceId(), err)
+			}
+			return nil, storeerr.Conflictf("数据集 %s/%s 已存在：%w", item.GetSpaceId(), item.GetDatasetId(), err)
+		}
 		return nil, err
 	}
 	for _, column := range columns {

@@ -530,7 +530,7 @@ func TestConsoleInjectsHeaderSpaceIntoStorageBodyWhenAbsent(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	// 空间在嵌套消息里的方法（dataset.space_id）不能回填顶层字段，缺省时直接 400。
 	rr = httptest.NewRecorder()
-	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/UpdateDataset", "space-1", []byte(`{"dataset":{"dataset_id":"dataset_v1"}}`)))
+	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/UpsertDataset", "space-1", []byte(`{"dataset":{"dataset_id":"dataset_v1"}}`)))
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
