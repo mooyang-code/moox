@@ -294,10 +294,10 @@ func TestRunBootstrapReadsMonitorHealthOverview(t *testing.T) {
 	// 4. 新装后暂停态组件通过自检；请求只查 mooxsys 空间，业务空间的严重告警（未启动空间标的或首根 K 线未闭合的行情探针）不阻塞安装自检。
 	var requestedSpace string
 	freshOpts := BootstrapOptions{
-		NodeID:        "control",
-		LocalNodeID:   "control",
-		DeployRoot:    root,
-		Client:        deploymentClientStub{rows: append(deployments, Deployment{ComponentID: "strategy", HostID: "control", Status: "enabled"})},
+		NodeID:      "control",
+		LocalNodeID: "control",
+		DeployRoot:  root,
+		Client:      deploymentClientStub{rows: append(deployments, Deployment{ComponentID: "strategy", HostID: "control", Status: "enabled"})},
 		MonitorClient: overviewClientStub{
 			lastSpaceID: &requestedSpace,
 			overview: &monitorpb.HealthOverview{

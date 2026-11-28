@@ -86,19 +86,19 @@ func TestArchiveCommandsValidateRequiredFlagsAndMapMethods(t *testing.T) {
 		path []string
 		args []string
 	}{
-		"create without space":    {[]string{"archive", "tasks", "create"}, []string{"--dataset-id", "ds"}},
-		"create without dataset":  {[]string{"archive", "tasks", "create"}, []string{"--space-id", "crypto"}},
-		"prepare without space":   {[]string{"archive", "tasks", "prepare"}, []string{"--dataset-id", "ds"}},
-		"prepare without dataset": {[]string{"archive", "tasks", "prepare"}, []string{"--space-id", "crypto"}},
-		"update without space":    {[]string{"archive", "tasks", "update"}, []string{"--dataset-id", "ds", "--status", "paused"}},
-		"run without space":       {[]string{"archive", "tasks", "run"}, []string{"--dataset-id", "ds"}},
-		"backfill without space":  {[]string{"archive", "tasks", "backfill"}, []string{"--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}},
-		"backfill without range":  {[]string{"archive", "tasks", "backfill"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
-		"run get without id":      {[]string{"archive", "runs", "get"}, nil},
-		"run cancel without id":   {[]string{"archive", "runs", "cancel"}, nil},
+		"create without space":     {[]string{"archive", "tasks", "create"}, []string{"--dataset-id", "ds"}},
+		"create without dataset":   {[]string{"archive", "tasks", "create"}, []string{"--space-id", "crypto"}},
+		"prepare without space":    {[]string{"archive", "tasks", "prepare"}, []string{"--dataset-id", "ds"}},
+		"prepare without dataset":  {[]string{"archive", "tasks", "prepare"}, []string{"--space-id", "crypto"}},
+		"update without space":     {[]string{"archive", "tasks", "update"}, []string{"--dataset-id", "ds", "--status", "paused"}},
+		"run without space":        {[]string{"archive", "tasks", "run"}, []string{"--dataset-id", "ds"}},
+		"backfill without space":   {[]string{"archive", "tasks", "backfill"}, []string{"--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}},
+		"backfill without range":   {[]string{"archive", "tasks", "backfill"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
+		"run get without id":       {[]string{"archive", "runs", "get"}, nil},
+		"run cancel without id":    {[]string{"archive", "runs", "cancel"}, nil},
 		"partitions without space": {[]string{"archive", "partitions", "list"}, nil},
-		"partition get no space":  {[]string{"archive", "partitions", "get"}, []string{"--dataset-id", "ds", "--partition-key", "2026-10-16"}},
-		"partition get no key":    {[]string{"archive", "partitions", "get"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
+		"partition get no space":   {[]string{"archive", "partitions", "get"}, []string{"--dataset-id", "ds", "--partition-key", "2026-10-16"}},
+		"partition get no key":     {[]string{"archive", "partitions", "get"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
 	} {
 		_, _, err := runSpecCommand(t, specByPath(t, tc.path...), tc.args...)
 		require.Error(t, err, name)
