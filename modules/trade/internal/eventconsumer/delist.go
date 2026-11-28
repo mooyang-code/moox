@@ -74,7 +74,7 @@ func RunDelist(ctx context.Context, opts DelistOptions) error {
 	}
 	for ctx.Err() == nil {
 		consumer, openErr := events.NewConsumer(ctx, opts.Client, registry, events.ConsumerConfig{
-			Name: opts.ConsumerName, Event: events.InstrumentDelistScheduled,
+			Consumer: events.TradeDelistConsumer.WithName(opts.ConsumerName),
 			// Collector 可能先于 Trade 发布（全新部署），从头读起。
 			AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 1,
 			FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,

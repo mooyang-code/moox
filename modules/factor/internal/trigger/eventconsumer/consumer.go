@@ -143,8 +143,8 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 	// by a process that died without releasing it stays stuck.
 	ackWait := ackWaitHeartbeats * cfg.InProgressInterval
 	consumer, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
-		Name: ConsumerName, Event: events.DatasetPeriodCompleted,
-		AckWait: ackWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending,
+		Consumer: events.FactorPeriodConsumer.WithName(ConsumerName),
+		AckWait:  ackWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending,
 		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: nats.DeliverNewPolicy,
 		DeliverDecodeErrors: true,
 	})
@@ -175,8 +175,8 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 	})
 	if cfg.OnBackfilled != nil {
 		c.backfilled, err = events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
-			Name: BackfilledConsumerName, Event: events.CollectorKlineBackfilled,
-			AckWait: time.Minute, MaxDeliver: 5, MaxAckPending: cfg.MaxAckPending,
+			Consumer: events.FactorBackfilledConsumer.WithName(BackfilledConsumerName),
+			AckWait:  time.Minute, MaxDeliver: 5, MaxAckPending: cfg.MaxAckPending,
 			FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: nats.DeliverNewPolicy,
 			DeliverDecodeErrors: true,
 		})

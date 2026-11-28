@@ -90,8 +90,8 @@ func TestGeneratedACLLetsTradeConsumeDelistEvents(t *testing.T) {
 	require.NoError(t, err)
 	defer tradeClient.Close()
 	consumer, err := events.NewConsumer(ctx, tradeClient, registry, events.ConsumerConfig{
-		Name: events.TradeDelistConsumer.Name(), Event: events.InstrumentDelistScheduled,
-		AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true,
+		Consumer: events.TradeDelistConsumer,
+		AckWait:  time.Minute, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true,
 	})
 	require.NoError(t, err)
 	deliveries, err := consumer.Fetch(ctx, 1)
@@ -102,8 +102,8 @@ func TestGeneratedACLLetsTradeConsumeDelistEvents(t *testing.T) {
 
 	// 别人的 durable 建不了（Collector 自己的 K 线合成消费者）；任何事件主题都不能发布。
 	_, err = events.NewConsumer(ctx, tradeClient, registry, events.ConsumerConfig{
-		Name: events.FactorBackfilledConsumer.Name(), Event: events.CollectorKlineBackfilled,
-		AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy,
+		Consumer: events.FactorBackfilledConsumer,
+		AckWait:  time.Minute, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy,
 	})
 	require.Error(t, err)
 	raw, err := nats.Connect(server.ClientURL(), nats.UserInfo("trade-eventbus", tokens["trade-eventbus"]))

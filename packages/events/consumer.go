@@ -38,10 +38,9 @@ type Consumer struct {
 	registry *Registry
 }
 
-// ConsumerConfig 是一个持久消费者的配置：一个 durable 只消费一种事件（Event）的全部主题。
+// ConsumerConfig 是一个持久消费者的配置：直接收拓扑里声明的 DurableConsumer，不再拆开传 Name 与 Event。
 type ConsumerConfig struct {
-	Name                string
-	Event               Event
+	Consumer            DurableConsumer
 	AckWait             time.Duration
 	MaxDeliver          int
 	MaxAckPending       int
@@ -51,42 +50,67 @@ type ConsumerConfig struct {
 }
 
 func NewConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig) (*Consumer, error) {
-	filter, err := consumerEventFilter(registry, cfg)
+	filters, err := consumerEventFilters(registry, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return newConsumer(ctx, client, registry, cfg, filter)
+	return newConsumer(ctx, client, registry, cfg, filters)
 }
 
-// consumerEventFilter 返回一种事件全部主题的过滤模式。
-func consumerEventFilter(registry *Registry, cfg ConsumerConfig) (string, error) {
+// consumerEventFilters 校验 DurableConsumer 并返回其订阅事件全部主题族的过滤模式。
+func consumerEventFilters(registry *Registry, cfg ConsumerConfig) ([]string, error) {
 	if err := registry.Validate(); err != nil {
-		return "", err
+		return nil, err
 	}
-	if cfg.Event.Name() == "" {
-		return "", fmt.Errorf("event consumer Event is required")
+	if cfg.Consumer.Name() == "" {
+		return nil, fmt.Errorf("事件消费者缺少 durable 名称")
 	}
-	return registry.FamilyPattern(cfg.Event)
+	consumerEvents := cfg.Consumer.Events()
+	if len(consumerEvents) == 0 {
+		return nil, fmt.Errorf("事件消费者缺少事件声明")
+	}
+	stream := consumerEvents[0].Stream()
+	if stream == "" {
+		return nil, fmt.Errorf("事件消费者缺少所属 Stream")
+	}
+	filters := make([]string, 0, len(consumerEvents))
+	for _, ev := range consumerEvents {
+		if ev.Stream() != stream {
+			return nil, fmt.Errorf("事件消费者声明的事件不属于同一个 Stream: %s vs %s", stream, ev.Stream())
+		}
+		pattern, err := registry.FamilyPattern(ev)
+		if err != nil {
+			return nil, err
+		}
+		filters = append(filters, pattern)
+	}
+	return filters, nil
 }
 
-func newConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig, filter string) (*Consumer, error) {
+func newConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig, filters []string) (*Consumer, error) {
 	if client == nil {
 		return nil, fmt.Errorf("event consumer client is nil")
 	}
-	consumer, err := client.NewConsumer(ctx, jetstreamConsumerConfig(cfg, filter))
+	consumer, err := client.NewConsumer(ctx, jetstreamConsumerConfig(cfg, filters))
 	if err != nil {
 		return nil, err
 	}
 	return &Consumer{consumer: consumer, registry: registry}, nil
 }
 
-func jetstreamConsumerConfig(cfg ConsumerConfig, filter string) jetstream.ConsumerConfig {
-	return jetstream.ConsumerConfig{
-		Stream: cfg.Event.Stream(), Durable: cfg.Name, FilterSubject: filter,
+func jetstreamConsumerConfig(cfg ConsumerConfig, filters []string) jetstream.ConsumerConfig {
+	transport := jetstream.ConsumerConfig{
+		Stream: cfg.Consumer.Stream(), Durable: cfg.Consumer.Name(),
 		AckWait: cfg.AckWait, MaxDeliver: cfg.MaxDeliver, MaxAckPending: cfg.MaxAckPending,
 		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: cfg.DeliverPolicy,
 		DeliverDecodeErrors: cfg.DeliverDecodeErrors,
 	}
+	if len(filters) == 1 {
+		transport.FilterSubject = filters[0]
+	} else {
+		transport.FilterSubjects = filters
+	}
+	return transport
 }
 
 func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {

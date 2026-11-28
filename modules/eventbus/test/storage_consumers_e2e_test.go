@@ -76,7 +76,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	consumers := make(map[string]*events.Consumer, 3)
 	for _, durable := range []string{"factor_collector_period_v1", "collector_resample_period_crypto_v1", "factor_calc"} {
 		consumer, err := events.NewConsumer(context.Background(), client, registry, events.ConsumerConfig{
-			Name: durable, Event: events.DatasetPeriodCompleted, AckWait: time.Minute,
+			Consumer: events.FactorPeriodConsumer.WithName(durable), AckWait: time.Minute,
 			MaxDeliver: 5, MaxAckPending: 256, FetchMaxWait: 100 * time.Millisecond,
 		})
 		if err != nil {

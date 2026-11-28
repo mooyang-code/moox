@@ -79,6 +79,15 @@ func (c DurableConsumer) Name() string {
 	return c.name
 }
 
+// WithName 返回替换了 durable 名称的副本；name 为空时原样返回。
+func (c DurableConsumer) WithName(name string) DurableConsumer {
+	if name == "" {
+		return c
+	}
+	c.name = name
+	return c
+}
+
 func (c DurableConsumer) Deletable() bool { return c.deletable }
 func (c DurableConsumer) Events() []Event { return append([]Event(nil), c.events...) }
 
