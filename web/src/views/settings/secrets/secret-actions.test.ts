@@ -36,9 +36,7 @@ describe("密钥删除、禁用的确认说明", () => {
     expect(secretToggleText(readonly)).not.toContain("只想暂停请用禁用");
 
     // 缺省环境视同生产环境（兼容旧备份导回的只读密钥）；测试网或非币安不算。
-    expect(
-      isDelistReadonlySecret({ category: "exchange", provider: "binance", extra_config: '{"readonly":"true"}' })
-    ).toBe(true);
+    expect(isDelistReadonlySecret({ category: "exchange", provider: "binance", extra_config: '{"readonly":"true"}' })).toBe(true);
     expect(
       isDelistReadonlySecret({
         category: "exchange",

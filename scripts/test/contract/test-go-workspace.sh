@@ -7,9 +7,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
-# 显式目录清单覆盖根目录 go.mod 下的全部 Go 包（含各模块的 proto/*gen）；
+# 显式目录清单覆盖根目录 go.mod 下的全部 Go 包（含根包 "." 与各模块的 proto/*gen）；
 # 仅对使用 goom 桩拦截的 admin/hostagent/trade 附加 -gcflags=all=-l -ldflags=-s=false。
 MODULES=(
+  .
   modules/admin
   modules/archive
   modules/cli
@@ -52,7 +53,13 @@ for module in "${MODULES[@]}"; do
       test_flags+=(-gcflags=all=-l -ldflags=-s=false)
       ;;
   esac
-  (cd "${ROOT}/${module}" && go test "${test_flags[@]}" ./...)
-  echo "==> go vet ${module}"
-  (cd "${ROOT}/${module}" && go vet ./...)
+  if [[ "${module}" == "." ]]; then
+    (cd "${ROOT}" && go test "${test_flags[@]}" .)
+    echo "==> go vet ."
+    (cd "${ROOT}" && go vet .)
+  else
+    (cd "${ROOT}/${module}" && go test "${test_flags[@]}" ./...)
+    echo "==> go vet ${module}"
+    (cd "${ROOT}/${module}" && go vet ./...)
+  fi
 done

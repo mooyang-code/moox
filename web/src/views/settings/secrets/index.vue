@@ -144,9 +144,7 @@
             </a-radio-group>
           </a-form-item>
           <a-form-item v-if="isExchangeCategory" field="readonly" label="用途">
-            <a-checkbox v-model="exchangeExtra.readonly">
-              只读密钥（仅用于行情与下架检测，不能建交易账户）
-            </a-checkbox>
+            <a-checkbox v-model="exchangeExtra.readonly"> 只读密钥（仅用于行情与下架检测，不能建交易账户） </a-checkbox>
           </a-form-item>
           <a-form-item v-if="!isExchangeCategory" field="secret_type" label="类型">
             <a-select v-model="form.secret_type" placeholder="选择类型">

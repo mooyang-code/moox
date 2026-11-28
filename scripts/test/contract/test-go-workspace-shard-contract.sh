@@ -34,7 +34,13 @@ if [[ -d "${HOME}/.local/go${go_version}/bin" ]]; then
   export PATH="${HOME}/.local/go${go_version}/bin:${PATH}"
 fi
 root_pkgs="$(cd "${ROOT}" && GOTOOLCHAIN=local go list ./... | sort)"
-shard_pkgs_raw="$(while IFS= read -r m; do (cd "${ROOT}/${m}" && GOTOOLCHAIN=local go list ./...); done <<<"${all}")"
+shard_pkgs_raw="$(while IFS= read -r m; do
+  if [[ "${m}" == "." ]]; then
+    (cd "${ROOT}" && GOTOOLCHAIN=local go list .)
+  else
+    (cd "${ROOT}/${m}" && GOTOOLCHAIN=local go list ./...)
+  fi
+done <<<"${all}")"
 dup_pkgs="$(printf '%s\n' "${shard_pkgs_raw}" | sort | uniq -d)"
 [[ -z "${dup_pkgs}" ]] || { echo "有 Go 包被多个模块目录重复覆盖：${dup_pkgs}" >&2; exit 1; }
 shard_pkgs="$(printf '%s\n' "${shard_pkgs_raw}" | sort)"

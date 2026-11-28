@@ -417,13 +417,13 @@ func TestHandleInfraRetryBudgetAndStoreFailure(t *testing.T) {
 		t.Fatalf("应记为 infra_retry_exhausted：%+v", exhausted)
 	}
 	// 瞬时落库失败（数据库只读，等同磁盘或锁问题）：NAK，且不写任何记录。
-	if err := h.repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+	if err := h.repo.DBForTest().Exec(`PRAGMA query_only = ON;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	h.frame(2, map[string]map[string]float64{"A": {"m": 1}})
 	h.now = barStart(2).Add(90 * time.Minute)
 	expectRetry(t, h.deliver(2))
-	if err := h.repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+	if err := h.repo.DBForTest().Exec(`PRAGMA query_only = OFF;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	h.noResultAt(2)
@@ -668,13 +668,13 @@ func TestHandleExhaustedBudgetKeepsRetryingTerminalWrite(t *testing.T) {
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	h.loader.errs = []error{errors.New("storage down"), errors.New("storage down")}
 	expectRetry(t, h.deliver(1))
-	if err := h.repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+	if err := h.repo.DBForTest().Exec(`PRAGMA query_only = ON;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	// 第二次输入失败耗尽预算，终态写入又遇到只读数据库：NAK，不写记录。
 	expectRetry(t, h.deliver(1))
 	h.noResultAt(1)
-	if err := h.repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+	if err := h.repo.DBForTest().Exec(`PRAGMA query_only = OFF;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	// 输入已恢复，但这次重投只能落终态，不能读输入后提交 ok。
@@ -695,13 +695,13 @@ func TestHandleCommitFailureThenExpiryOnRedelivery(t *testing.T) {
 	h := newHarness(t, rankDSL, &account)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	h.now = barStart(1).Add(90 * time.Minute)
-	if err := h.repo.ApplySchema(`PRAGMA query_only = ON;`); err != nil {
+	if err := h.repo.DBForTest().Exec(`PRAGMA query_only = ON;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	// 决策已求出，但提交遇到只读数据库：NAK，不写任何记录。
 	expectRetry(t, h.deliver(1))
 	h.noResultAt(1)
-	if err := h.repo.ApplySchema(`PRAGMA query_only = OFF;`); err != nil {
+	if err := h.repo.DBForTest().Exec(`PRAGMA query_only = OFF;`).Error; err != nil {
 		t.Fatal(err)
 	}
 	// 数据库恢复时，这个周期的有效期已过。
