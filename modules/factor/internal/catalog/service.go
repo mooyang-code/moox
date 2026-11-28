@@ -616,13 +616,20 @@ func (s *Service) ListFactors(ctx context.Context, taskID, status string) ([]dom
 	return infos, nil
 }
 
-// AddTaskMember 把定义作为一个停用的成员加入任务，加入前对照任务的源数据集校验；既不添加结果列，也不提交补算。
+// AddTaskMember 把定义作为成员加入任务，加入前对照任务的源数据集校验；status 为空按 disabled（只入库，不添加结果列），
+// 为 enabled 时在入库前先对齐结果数据集的列，一步加入并启用（同样不自动提交历史补算）。
 // kind 为空按 fixed：固定成员的参数由 params 加上定义的默认值补全成完整参数并校验，之后不变；可变成员的 params 是默认参数
 // （没有策略提交时用它），参数由关联的策略逐期提交。成员键与列名都按公共命名包推导；同一个任务里同一个因子最多一个可变成员。
-func (s *Service) AddTaskMember(ctx context.Context, taskID, factorID, kind string, params map[string]float64) (domain.TaskMember, error) {
-	taskID, factorID, kind = strings.TrimSpace(taskID), strings.TrimSpace(factorID), strings.TrimSpace(kind)
+func (s *Service) AddTaskMember(ctx context.Context, taskID, factorID, kind string, params map[string]float64, status string) (domain.TaskMember, error) {
+	taskID, factorID, kind, status = strings.TrimSpace(taskID), strings.TrimSpace(factorID), strings.TrimSpace(kind), strings.TrimSpace(status)
 	if kind == "" {
 		kind = domain.MemberKindFixed
+	}
+	if status == "" {
+		status = domain.MemberStatusDisabled
+	}
+	if status != domain.MemberStatusDisabled && status != domain.MemberStatusEnabled {
+		return domain.TaskMember{}, fmt.Errorf("成员状态 %q 不合法：只能是 %s 或 %s", status, domain.MemberStatusDisabled, domain.MemberStatusEnabled)
 	}
 	unlock, err := s.lockMemberContext(ctx, taskID, factorID)
 	if err != nil {
@@ -645,15 +652,44 @@ func (s *Service) AddTaskMember(ctx context.Context, taskID, factorID, kind stri
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
-	if _, err := s.validateMembership(ctx, task, member); err != nil {
+	members, err := s.validateMembership(ctx, task, member)
+	if err != nil {
 		return domain.TaskMember{}, err
 	}
 	if err := s.checkReaddConsistent(ctx, task, member); err != nil {
 		return domain.TaskMember{}, err
 	}
-	stored, err := s.db.AddMember(ctx, taskID, member.Key, factorID, member.Kind, member.Params)
+	if status == domain.MemberStatusEnabled {
+		// 先检查成员键与可变成员唯一性，避免冲突请求在 Storage 上提前写出结果列。
+		for _, existing := range members {
+			if existing.MemberKey == member.Key {
+				return domain.TaskMember{}, fmt.Errorf("%w: member %q already exists in task %q", store.ErrConflict, member.Key, taskID)
+			}
+			if member.Kind == domain.MemberKindVar && existing.FactorID == factorID && existing.Kind == domain.MemberKindVar {
+				return domain.TaskMember{}, fmt.Errorf("%w: factor %q already has a var member in task %q", store.ErrConflict, factorID, taskID)
+			}
+		}
+		source, columns, err := s.sourceDataset(ctx, task)
+		if err != nil {
+			return domain.TaskMember{}, err
+		}
+		active := make([]domain.MemberDef, 0, len(members)+1)
+		for _, candidate := range members {
+			if candidate.Status == domain.MemberStatusEnabled {
+				active = append(active, candidate.Def())
+			}
+		}
+		active = replaceMember(active, member)
+		if err := s.ensureResultColumns(ctx, task, source, columns, active...); err != nil {
+			return domain.TaskMember{}, err
+		}
+	}
+	stored, err := s.db.AddMember(ctx, taskID, member.Key, factorID, member.Kind, member.Params, status)
 	if err != nil {
 		return domain.TaskMember{}, err
+	}
+	if status == domain.MemberStatusEnabled {
+		s.markReady(task.TaskID, true)
 	}
 	return domain.TaskMember{FactorTaskMember: stored, Factor: factor}, nil
 }

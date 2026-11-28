@@ -15,17 +15,23 @@ func TestMemberUniqueAndForeignKeys(t *testing.T) {
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
 	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close")))
 
-	member, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil)
+	member, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil, "")
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.NotZero(t, member.CreatedAt)
 
-	_, err = s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil)
+	_, err = s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil, "")
 	require.ErrorIs(t, err, ErrConflict)
-	_, err = s.AddMember(ctx, "task_prices", "missing", "missing", domain.MemberKindFixed, nil)
+	_, err = s.AddMember(ctx, "task_prices", "missing", "missing", domain.MemberKindFixed, nil, "")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	_, err = s.AddMember(ctx, "missing", "factor_close", "factor_close", domain.MemberKindFixed, nil)
+	_, err = s.AddMember(ctx, "missing", "factor_close", "factor_close", domain.MemberKindFixed, nil, "")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = s.AddMember(ctx, "task_prices", "factor_close_bad", "factor_close", domain.MemberKindFixed, nil, "bogus")
+	require.ErrorContains(t, err, "invalid member status")
+
+	enabled, err := s.AddMember(ctx, "task_prices", "factor_close__2", "factor_close", domain.MemberKindFixed, nil, domain.MemberStatusEnabled)
+	require.NoError(t, err)
+	require.Equal(t, domain.MemberStatusEnabled, enabled.Status)
 }
 
 func TestSameDefinitionInTwoTasksHasIndependentStatus(t *testing.T) {

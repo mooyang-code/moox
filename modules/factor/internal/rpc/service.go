@@ -35,7 +35,7 @@ type CatalogAPI interface {
 	DeleteFactor(ctx context.Context, factorID string) error
 	GetFactor(ctx context.Context, factorID string) (domain.FactorInfo, error)
 	ListFactors(ctx context.Context, taskID, status string) ([]domain.FactorInfo, error)
-	AddTaskMember(ctx context.Context, taskID, factorID, kind string, params map[string]float64) (domain.TaskMember, error)
+	AddTaskMember(ctx context.Context, taskID, factorID, kind string, params map[string]float64, status string) (domain.TaskMember, error)
 	RemoveTaskMember(ctx context.Context, taskID, memberKey string) error
 	SetTaskMemberStatus(ctx context.Context, taskID, memberKey, status string) (domain.TaskMember, error)
 	BindTask(ctx context.Context, taskID, instanceID string) (domain.FactorTask, error)
@@ -336,7 +336,11 @@ func (s *Service) AddTaskMember(ctx context.Context, req *factorpb.AddTaskMember
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.AddTaskMemberRsp{RetInfo: invalid(err)}, nil
 	}
-	member, err := s.catalog.AddTaskMember(ctx, req.GetTaskId(), req.GetFactorId(), req.GetKind(), factorwire.CloneParams(req.GetParams()))
+	status := strings.TrimSpace(req.GetStatus())
+	if status != "" && status != domain.MemberStatusDisabled && status != domain.MemberStatusEnabled {
+		return &factorpb.AddTaskMemberRsp{RetInfo: invalid(fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled))}, nil
+	}
+	member, err := s.catalog.AddTaskMember(ctx, req.GetTaskId(), req.GetFactorId(), req.GetKind(), factorwire.CloneParams(req.GetParams()), status)
 	if err != nil {
 		return &factorpb.AddTaskMemberRsp{RetInfo: inner(err)}, nil
 	}

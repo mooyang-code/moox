@@ -29,9 +29,7 @@ func paramFixture(t *testing.T) (*Service, *store.Store) {
 	_, err = svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
 	require.NoError(t, err)
 	for _, kind := range []string{domain.MemberKindVar, domain.MemberKindFixed} {
-		member, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", kind, nil)
-		require.NoError(t, err)
-		_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), member.MemberKey, domain.MemberStatusEnabled)
+		_, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", kind, nil, domain.MemberStatusEnabled)
 		require.NoError(t, err)
 	}
 	_, err = svc.BindTask(ctx, testTaskID(), "inst-1")

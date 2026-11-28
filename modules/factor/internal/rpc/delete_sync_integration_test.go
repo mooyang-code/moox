@@ -106,14 +106,10 @@ func TestDeleteTaskAndDeleteBoundTaskPropagateToSyncEngineCatalog(t *testing.T) 
 	} {
 		_, err := cat.CreateTask(ctx, task)
 		require.NoError(t, err)
-		_, err = cat.AddTaskMember(ctx, task.TaskID, "bias", domain.MemberKindFixed, nil)
-		require.NoError(t, err)
-		_, err = cat.SetTaskMemberStatus(ctx, task.TaskID, "bias", domain.MemberStatusEnabled)
+		_, err = cat.AddTaskMember(ctx, task.TaskID, "bias", domain.MemberKindFixed, nil, domain.MemberStatusEnabled)
 		require.NoError(t, err)
 		if task.TaskID == "ftask_bound" {
-			member, err := cat.AddTaskMember(ctx, task.TaskID, "varbias", domain.MemberKindVar, nil)
-			require.NoError(t, err)
-			_, err = cat.SetTaskMemberStatus(ctx, task.TaskID, member.MemberKey, domain.MemberStatusEnabled)
+			_, err := cat.AddTaskMember(ctx, task.TaskID, "varbias", domain.MemberKindVar, nil, domain.MemberStatusEnabled)
 			require.NoError(t, err)
 		}
 		_, err = cat.SetTaskStatus(ctx, task.TaskID, domain.TaskStatusEnabled)

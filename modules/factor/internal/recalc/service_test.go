@@ -108,12 +108,8 @@ func seedRecalcTask(t *testing.T, db *store.Store, members ...recalcMember) {
 func addRecalcMember(t *testing.T, db *store.Store, taskID string, member recalcMember) {
 	t.Helper()
 	require.NoError(t, db.CreateFactor(context.Background(), member.def))
-	_, err := db.AddMember(context.Background(), taskID, member.def.FactorID, member.def.FactorID, domain.MemberKindFixed, nil)
+	_, err := db.AddMember(context.Background(), taskID, member.def.FactorID, member.def.FactorID, domain.MemberKindFixed, nil, member.status)
 	require.NoError(t, err)
-	if member.status == domain.MemberStatusEnabled {
-		require.NoError(t, db.SetMemberStatus(context.Background(), taskID, member.def.FactorID,
-			domain.MemberStatusDisabled, domain.MemberStatusEnabled))
-	}
 }
 
 func testRecalcFactor(id, status string, lookback int) recalcMember {

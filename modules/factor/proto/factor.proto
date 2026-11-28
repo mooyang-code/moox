@@ -274,6 +274,8 @@ message AddTaskMemberReq {
   string kind = 3;
   // params 是固定成员的固定参数，或可变成员的默认参数；没给的参数取定义的默认值。成员键由服务端推导并在响应里返回。
   map<string, double> params = 4;
+  // status 是初始状态：disabled（默认）或 enabled（一步加入并启用，同时完成校验与结果列对齐）；为空按 disabled。
+  string status = 5;
 }
 message AddTaskMemberRsp {
   common.RetInfo ret_info = 1;

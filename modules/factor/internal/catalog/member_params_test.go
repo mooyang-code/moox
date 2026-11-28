@@ -28,29 +28,29 @@ func TestAddFixedMemberFixesParamsAndDerivesKey(t *testing.T) {
 	_, err := svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
 	require.NoError(t, err)
 
-	plain, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", "", nil)
+	plain, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", "", nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "pmean", plain.MemberKey, "全默认沿用因子 ID")
 	require.Equal(t, domain.MemberKindFixed, plain.Kind, "类型为空按固定成员")
 	require.Equal(t, map[string]float64{"window": 5}, plain.Params, "没给的参数按定义的默认值补全")
 
-	wide, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 10})
+	wide, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 10}, "")
 	require.NoError(t, err)
 	require.Equal(t, "pmean__10", wide.MemberKey)
 	require.Equal(t, map[string]float64{"window": 10}, wide.Params)
 
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", "", map[string]float64{"window": 10})
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", "", map[string]float64{"window": 10}, "")
 	require.ErrorIs(t, err, store.ErrConflict, "同因子同参数不能重复")
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", "", map[string]float64{})
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", "", map[string]float64{}, "")
 	require.ErrorIs(t, err, store.ErrConflict, "不给参数等于全默认，与第一个重复")
 
 	for name, params := range map[string]map[string]float64{
 		"未声明的参数": {"nope": 1}, "越界": {"window": 99}, "整数参数给了小数": {"window": 7.5},
 	} {
-		_, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", "", params)
+		_, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", "", params, "")
 		require.Error(t, err, name)
 	}
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", "other", nil)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", "other", nil, "")
 	require.ErrorContains(t, err, "成员类型")
 
 	listed, err := db.ListMembers(ctx, testTaskID(), "")
@@ -70,20 +70,20 @@ func TestAddVarMember(t *testing.T) {
 	_, err := svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
 	require.NoError(t, err)
 
-	variable, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindVar, map[string]float64{"window": 8})
+	variable, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindVar, map[string]float64{"window": 8}, "")
 	require.NoError(t, err)
 	require.Equal(t, "pmean__var", variable.MemberKey)
 	require.Equal(t, domain.MemberKindVar, variable.Kind)
 	require.Equal(t, map[string]float64{"window": 8}, variable.Params, "可变成员的默认参数")
 
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindVar, nil)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindVar, nil, "")
 	require.ErrorIs(t, err, store.ErrConflict, "同一个因子最多一个可变成员")
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 8})
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 8}, "")
 	require.NoError(t, err, "同一个因子可以同时有固定成员")
 
 	_, err = svc.CreateFactor(ctx, testFactor())
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "momentum", domain.MemberKindVar, nil)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "momentum", domain.MemberKindVar, nil, "")
 	require.ErrorContains(t, err, "没有可调参数")
 }
 
@@ -95,9 +95,9 @@ func TestAddMemberRejectsKeyThatIsTooLong(t *testing.T) {
 	longSpec := "params:\n  a: {type: int, min: 1, max: 99999, default: 1}\n  b: {type: float, min: 1, max: 99999999, default: 1}\n  c: {type: float, min: 1, max: 99999999, default: 1}\noutput: ts_mean(close, a) + b + c\n"
 	_, err := svc.CreateFactor(ctx, factorWithSpec("a_rather_long_factor_id", longSpec))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "a_rather_long_factor_id", "", map[string]float64{"a": 99999, "b": 99999999, "c": 99999999})
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "a_rather_long_factor_id", "", map[string]float64{"a": 99999, "b": 99999999, "c": 99999999}, "")
 	require.ErrorContains(t, err, "超过")
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "a_rather_long_factor_id", domain.MemberKindVar, nil)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "a_rather_long_factor_id", domain.MemberKindVar, nil, "")
 	require.NoError(t, err, "可变成员的键不带参数，不会太长")
 }
 
@@ -108,7 +108,7 @@ func TestUpdateFactorEnforcesDefinitionRestrictions(t *testing.T) {
 	ctx := context.Background()
 	_, err := svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", "", map[string]float64{"window": 10})
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", "", map[string]float64{"window": 10}, "")
 	require.NoError(t, err)
 
 	for name, spec := range map[string]string{
@@ -150,11 +150,10 @@ func TestMemberColumnsCarryContractAttributes(t *testing.T) {
 		params map[string]float64
 		key    string
 	}{{domain.MemberKindFixed, nil, "pmean"}, {domain.MemberKindFixed, map[string]float64{"window": 10}, "pmean__10"}, {domain.MemberKindVar, nil, "pmean__var"}} {
-		member, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", spec.kind, spec.params)
+		member, err := svc.AddTaskMember(ctx, testTaskID(), "pmean", spec.kind, spec.params, domain.MemberStatusEnabled)
 		require.NoError(t, err)
 		require.Equal(t, spec.key, member.MemberKey)
-		_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), member.MemberKey, domain.MemberStatusEnabled)
-		require.NoError(t, err)
+		require.Equal(t, domain.MemberStatusEnabled, member.Status)
 	}
 	columns := resultColumns(meta, testTaskID())
 	require.Equal(t, "fixed", columns["pmean"]["member_kind"])

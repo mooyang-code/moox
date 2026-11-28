@@ -312,6 +312,7 @@ type catalogFake struct {
 	boundTask         string
 	boundInstance     string
 	addKind           string
+	addStatus         string
 	deletedBound      []string
 	checkedBound      []string
 }
@@ -366,17 +367,20 @@ func (f *catalogFake) ListFactors(_ context.Context, taskID, status string) ([]d
 	f.listTaskID, f.listStatus = taskID, status
 	return f.infos, nil
 }
-func (f *catalogFake) AddTaskMember(_ context.Context, taskID, factorID, kind string, _ map[string]float64) (domain.TaskMember, error) {
+func (f *catalogFake) AddTaskMember(_ context.Context, taskID, factorID, kind string, _ map[string]float64, status string) (domain.TaskMember, error) {
 	if f.err != nil {
 		return domain.TaskMember{}, f.err
 	}
-	f.addKind = kind
+	f.addKind, f.addStatus = kind, status
 	key := factorID
 	if kind == domain.MemberKindVar {
 		key = factorID + "__var"
 	}
+	if status == "" {
+		status = domain.MemberStatusDisabled
+	}
 	return domain.TaskMember{
-		FactorTaskMember: domain.FactorTaskMember{TaskID: taskID, MemberKey: key, FactorID: factorID, Kind: kind, Status: domain.MemberStatusDisabled},
+		FactorTaskMember: domain.FactorTaskMember{TaskID: taskID, MemberKey: key, FactorID: factorID, Kind: kind, Status: status},
 		Factor:           domain.FactorDef{FactorID: factorID},
 	}, nil
 }

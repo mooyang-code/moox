@@ -63,9 +63,10 @@ func init() {
 		rpcSpec{Path: []string{"factor", "task", "params"}, Short: "查看计算任务各成员当前的参数", Service: factorMgr, Method: "GetFactorParams",
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},
 
-		rpcSpec{Path: []string{"factor", "member", "add"}, Short: "给计算任务加因子成员（固定参数用 --param 名=数值）", Service: factorMgr, Method: "AddTaskMember",
+		rpcSpec{Path: []string{"factor", "member", "add"}, Short: "给计算任务加因子成员（固定参数用 --param 名=数值；传 --status enabled 可一步加入并启用）", Service: factorMgr, Method: "AddTaskMember",
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID"), reqFlag("factor-id", "factor_id", "因子 ID"), {Name: "kind", Field: "kind", Kind: rpcString, Usage: "成员类型：fixed（固定参数，默认）或 var（可变参数，参数范围由因子定义给出）", Default: "fixed"},
-				{Name: "param", Field: "params", Kind: rpcNumberMap, Usage: "固定参数 名=数值，可重复"}}},
+				{Name: "param", Field: "params", Kind: rpcNumberMap, Usage: "固定参数 名=数值，可重复"},
+				strFlag("status", "status", "初始状态：disabled（默认）或 enabled（一步加入并启用）")}},
 		rpcSpec{Path: []string{"factor", "member", "remove"}, Short: "移除计算任务的因子成员（默认只预览，--yes 才执行）", Service: factorMgr, Method: "RemoveTaskMember", Destructive: true,
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID"), reqFlag("member-key", "member_key", "成员键")}},
 		rpcSpec{Path: []string{"factor", "member", "enable"}, Short: "启用因子成员", Service: factorMgr, Method: "SetTaskMemberStatus", Fixed: map[string]any{"status": "enabled"},

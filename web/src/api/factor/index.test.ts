@@ -146,6 +146,13 @@ describe("FactorMgr factor-set API", () => {
       kind: "var",
       params: { span: 30 }
     });
+    await addFactorToTask("set-1", "bias", "fixed", undefined, "enabled");
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", {
+      task_id: "set-1",
+      factor_id: "bias",
+      kind: "fixed",
+      status: "enabled"
+    });
   });
 
   it("manages categories, factor category and the submitted params", async () => {

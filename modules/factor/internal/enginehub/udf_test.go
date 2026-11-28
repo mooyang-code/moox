@@ -38,9 +38,8 @@ func seedUdfTask(t *testing.T, db *store.Store) {
 	require.NoError(t, db.CreateFactor(ctx, domain.FactorDef{FactorID: "fu", Name: "fu", Spec: spec, SpecHash: domain.SpecHash(spec)}))
 	set := domain.FactorTask{TaskID: "task_u", SpaceID: "crypto", Name: "任务u", SourceDatasetID: "dataset_u", Freq: "1m", ResultDatasetID: "dataset_factor_u", Status: domain.TaskStatusEnabled}
 	require.NoError(t, db.CreateTask(ctx, set))
-	_, err := db.AddMember(ctx, "task_u", "fu", "fu", domain.MemberKindFixed, nil)
+	_, err := db.AddMember(ctx, "task_u", "fu", "fu", domain.MemberKindFixed, nil, domain.MemberStatusEnabled)
 	require.NoError(t, err)
-	require.NoError(t, db.SetMemberStatus(ctx, "task_u", "fu", domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 }
 
 // 目录快照携带定义引用的版本；切换版本（spec 不变）时目录哈希改变，引擎据此重新同步。

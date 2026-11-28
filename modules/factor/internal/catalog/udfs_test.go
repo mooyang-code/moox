@@ -182,9 +182,7 @@ func TestActivationPrerequisites(t *testing.T) {
 	// 引用它的因子加入任务并启用。
 	_, err = svc.CreateFactor(ctx, factorWithSpec("f_mean", "output: udf.ts_mean_udf(close, 3)\n"))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil)
-	require.NoError(t, err)
-	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_mean", domain.MemberStatusEnabled)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil, domain.MemberStatusEnabled)
 	require.NoError(t, err)
 
 	// 第二个版本：同一份 wasm 改写哈希来模拟（元数据完全相同）。
@@ -266,9 +264,7 @@ func TestUpdateFactorRejectsStartedRecalcJob(t *testing.T) {
 	ctx := context.Background()
 	_, err := svc.CreateFactor(ctx, factorWithSpec("f_plain", "output: ts_mean(close, 3)\n"))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_plain", "", nil)
-	require.NoError(t, err)
-	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_plain", domain.MemberStatusEnabled)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_plain", "", nil, domain.MemberStatusEnabled)
 	require.NoError(t, err)
 
 	_, err = svc.UpdateFactor(ctx, factorWithSpec("f_plain", "output: ts_mean(close, 4)\n"))
@@ -302,7 +298,7 @@ func TestActivationRejectsIncompatibleVersion(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.CreateFactor(ctx, factorWithSpec("f_mean", "output: udf.ts_mean_udf(close, 3000)\n"))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil, "")
 	require.NoError(t, err)
 
 	// 第二个版本把参数范围收窄到 1..10：定义里写死的 3000 在新版本下编译失败。

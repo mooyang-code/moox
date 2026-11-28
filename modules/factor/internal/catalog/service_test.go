@@ -251,14 +251,14 @@ func TestAddFactorToTaskValidatesAgainstSourceColumns(t *testing.T) {
 	unknown := factorWithSpec("unknown_input", "output: missing\n")
 	_, err := svc.CreateFactor(context.Background(), unknown)
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "unknown_input", "", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "unknown_input", "", nil, "")
 	require.ErrorContains(t, err, "unknown input column")
 
 	// 单输出因子的输出名就是因子 ID：因子 ID 叫 close，输出列就与源列 close 重名。
 	collide := factorWithSpec("close", "output: close * 2\n")
 	_, err = svc.CreateFactor(context.Background(), collide)
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "close", "", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "close", "", nil, "")
 	require.ErrorContains(t, err, "与源列重名")
 	_, err = db.GetMember(context.Background(), testTaskID(), "close")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
@@ -276,7 +276,7 @@ func TestAddFactorToTaskRejectsPendingTask(t *testing.T) {
 		ResultDatasetID: "dataset_factor_pending", Status: domain.TaskStatusPending,
 	}
 	require.NoError(t, db.CreateTask(context.Background(), pending))
-	_, err = svc.AddTaskMember(context.Background(), pending.TaskID, "momentum", "", nil)
+	_, err = svc.AddTaskMember(context.Background(), pending.TaskID, "momentum", "", nil, "")
 	require.ErrorContains(t, err, "not ready")
 }
 
@@ -292,7 +292,7 @@ func TestAddFactorToTaskRejectsOutputOwnedByOtherMember(t *testing.T) {
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil, "")
 	require.ErrorContains(t, err, "已属于")
 }
 
@@ -304,10 +304,58 @@ func TestAddFactorToTaskDoesNotAddColumnsOrSubmitRecalc(t *testing.T) {
 	require.NoError(t, err)
 	meta.writeOps = nil
 
-	member, err := svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
+	member, err := svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil, "")
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.Equal(t, "momentum", member.Factor.FactorID)
+	require.Empty(t, meta.writeOps)
+}
+
+// 传 status=enabled 时一步加入并启用：对齐结果列、直接入库为 enabled、不自动提交补算；冲突或写列失败时不留半成品。
+func TestAddTaskMemberWithInitialEnabledStatus(t *testing.T) {
+	ctx := context.Background()
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	readyCount := 0
+	svc := NewService(db, meta, WithReadyRecorder(func(taskID string, ready bool) {
+		if taskID == testTaskID() && ready {
+			readyCount++
+		}
+	}))
+	_, err := svc.CreateTask(ctx, newTask())
+	require.NoError(t, err)
+	_, err = svc.CreateFactor(ctx, testFactor())
+	require.NoError(t, err)
+
+	// 非法初始状态直接拒绝。
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "momentum", "", nil, "bogus")
+	require.ErrorContains(t, err, "成员状态")
+
+	// Storage 写列失败时不落库。
+	meta.writeOps = nil
+	meta.upsertColumnErr = errors.New("storage down")
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "momentum", "", nil, domain.MemberStatusEnabled)
+	require.ErrorContains(t, err, "storage down")
+	_, err = db.GetMember(ctx, testTaskID(), "momentum")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "补齐结果列失败不应残留成员行")
+
+	// 恢复后一步加入并启用成功。
+	meta.upsertColumnErr = nil
+	meta.writeOps = nil
+	beforeReady := readyCount
+	member, err := svc.AddTaskMember(ctx, testTaskID(), "momentum", "", nil, domain.MemberStatusEnabled)
+	require.NoError(t, err)
+	require.Equal(t, domain.MemberStatusEnabled, member.Status)
+	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
+	require.Equal(t, beforeReady+1, readyCount)
+	jobs, err := db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: testTaskID()})
+	require.NoError(t, err)
+	require.Empty(t, jobs, "一步加入并启用同样不自动提交补算")
+
+	// 重复加入同一个成员在调用 Storage 之前即返回冲突。
+	meta.writeOps = nil
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "momentum", "", nil, domain.MemberStatusEnabled)
+	require.ErrorIs(t, err, store.ErrConflict)
 	require.Empty(t, meta.writeOps)
 }
 
@@ -319,7 +367,7 @@ func TestReaddRejectsInconsistentRetainedColumnMetadata(t *testing.T) {
 	svc := newReadyService(t, db, meta)
 	_, err := svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 10})
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 10}, "")
 	require.NoError(t, err)
 	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "pmean__10", domain.MemberStatusEnabled)
 	require.NoError(t, err)
@@ -334,7 +382,7 @@ func TestReaddRejectsInconsistentRetainedColumnMetadata(t *testing.T) {
 				"member_key": "pmean__10", "member_kind": "fixed", "output_name": "pmean", "factor_params": `{"window":11}`}
 		}
 	}
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 10})
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 10}, "")
 	require.ErrorContains(t, err, "不一致")
 }
 
@@ -347,7 +395,7 @@ func TestReaddAfterRemoveReusesRetainedColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.RemoveTaskMember(context.Background(), testTaskID(), "momentum"))
 
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil, "")
 	require.NoError(t, err)
 	_, err = svc.SetTaskMemberStatus(context.Background(), testTaskID(), "momentum", domain.MemberStatusEnabled)
 	require.NoError(t, err)
@@ -440,7 +488,7 @@ func TestSameDefinitionEnablesIndependentlyInTwoTasks(t *testing.T) {
 	require.NoError(t, err)
 	hourlyID := hourly.TaskID
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusEnabled)
-	_, err = svc.AddTaskMember(context.Background(), hourlyID, "momentum", "", nil)
+	_, err = svc.AddTaskMember(context.Background(), hourlyID, "momentum", "", nil, "")
 	require.NoError(t, err)
 
 	first, err := db.GetMember(context.Background(), testTaskID(), "momentum")
@@ -538,13 +586,13 @@ func TestAddAndUpdateDoNotInterleave(t *testing.T) {
 	svc := newReadyService(t, db, newMetadataFake())
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil, "")
 	require.NoError(t, err)
 	unlock, err := svc.Locks().LockFactorContext(context.Background(), "momentum")
 	require.NoError(t, err)
 	done := make(chan error, 3)
 	go func() {
-		_, err := svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
+		_, err := svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil, "")
 		done <- err
 	}()
 	go func() { _, err := svc.UpdateFactor(context.Background(), testFactor()); done <- err }()
@@ -701,12 +749,8 @@ func addMember(t *testing.T, svc *Service, taskID, factorID, status string) {
 		_, err = svc.CreateFactor(ctx, factorWithSpec(factorID, "output: ts_mean(close, 3)\n"))
 		require.NoError(t, err)
 	}
-	_, err := svc.AddTaskMember(ctx, taskID, factorID, "", nil)
+	_, err := svc.AddTaskMember(ctx, taskID, factorID, "", nil, status)
 	require.NoError(t, err)
-	if status == domain.MemberStatusEnabled {
-		_, err = svc.SetTaskMemberStatus(ctx, taskID, factorID, domain.MemberStatusEnabled)
-		require.NoError(t, err)
-	}
 }
 
 // addVarMember 给任务加一个可变成员 pmean__var（因子 pmean 带可调参数 window）；只有带可变成员的任务能关联实例。
@@ -717,12 +761,8 @@ func addVarMember(t *testing.T, svc *Service, taskID, status string) {
 		_, err = svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
 		require.NoError(t, err)
 	}
-	member, err := svc.AddTaskMember(ctx, taskID, "pmean", domain.MemberKindVar, nil)
+	_, err := svc.AddTaskMember(ctx, taskID, "pmean", domain.MemberKindVar, nil, status)
 	require.NoError(t, err)
-	if status == domain.MemberStatusEnabled {
-		_, err = svc.SetTaskMemberStatus(ctx, taskID, member.MemberKey, domain.MemberStatusEnabled)
-		require.NoError(t, err)
-	}
 }
 
 func factorIDs(factors []domain.FactorDef) []string {
@@ -760,6 +800,7 @@ type metadataFake struct {
 	createLostReplies int
 	deleteErrs        int
 	getDatasetErr     error
+	upsertColumnErr   error
 	writeOps          []string
 }
 
@@ -858,6 +899,9 @@ func (f *metadataFake) UpsertColumns(_ context.Context, spaceID, datasetID strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writeOps = append(f.writeOps, "upsert_columns")
+	if f.upsertColumnErr != nil {
+		return f.upsertColumnErr
+	}
 	key := resultKey(spaceID, datasetID)
 	current := make(map[string]storageio.ColumnInfo, len(f.columns[key]))
 	for _, col := range f.columns[key] {
