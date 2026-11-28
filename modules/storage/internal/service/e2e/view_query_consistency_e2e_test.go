@@ -43,7 +43,7 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 {
 		t.Fatalf("query: rsp=%v err=%v", rsp, err)
 	}
-	if rsp.GetRows()[0].GetKey().GetSubjectId() != "ETH" || rsp.GetRows()[0].GetFields()[0].GetValue().GetDoubleValue() != 200 {
+	if rsp.GetRows()[0].GetKey().GetTimeSeries().GetSubjectId() != "ETH" || rsp.GetRows()[0].GetFields()[0].GetValue().GetDoubleValue() != 200 {
 		t.Fatalf("unexpected first page: %v", rsp.GetRows()[0])
 	}
 	if rsp.GetPageResult().GetTotal() != 2 || !rsp.GetPageResult().GetHasMore() {

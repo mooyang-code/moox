@@ -554,8 +554,8 @@ async function loadTimeSeriesRows(retainRowsOnError = false, { background = fals
     const rows = rsp.rows || [];
     const tableItems = timeSeriesRowsToTableRows(rows, props.zone).map((row, index) => ({
       ...row,
-      freq: rows[index]?.key?.freq || "-",
-      seriesTag: rows[index]?.key?.series_tag || "",
+      freq: rows[index]?.key?.time_series?.freq || "-",
+      seriesTag: rows[index]?.key?.time_series?.series_tag || "",
       rawKey: rows[index]?.key
     }));
     applyRows(tableItems, rows, !!rsp.page_result?.has_more);

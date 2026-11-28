@@ -16,14 +16,14 @@ import (
 // datasetStorage 按数据集记下写入的行。
 type datasetStorage struct {
 	mu   sync.Mutex
-	rows map[string][]*storagepb.RowFieldUpsert
+	rows map[string][]*storagepb.Row
 }
 
-func (s *datasetStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (s *datasetStorage) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.rows == nil {
-		s.rows = map[string][]*storagepb.RowFieldUpsert{}
+		s.rows = map[string][]*storagepb.Row{}
 	}
 	for _, row := range rows {
 		s.rows[row.GetKey().GetDatasetId()] = append(s.rows[row.GetKey().GetDatasetId()], row)
@@ -79,7 +79,7 @@ func fundingBackfillRequest(kind domain.BatchKind) Request {
 		}}
 }
 
-func fundingValues(rows []*storagepb.RowFieldUpsert) []float64 {
+func fundingValues(rows []*storagepb.Row) []float64 {
 	var values []float64
 	for _, row := range rows {
 		if value := findField(row, domain.FieldFundingRate); value != nil {

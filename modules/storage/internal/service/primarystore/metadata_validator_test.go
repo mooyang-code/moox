@@ -40,7 +40,7 @@ func TestMetadataValidatorReadsAllDatasetColumnPages(t *testing.T) {
 		columns[i] = &pb.DatasetColumn{ColumnName: fmt.Sprintf("field_%04d", i), ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}
 	}
 	validator := NewMetadataValidator(&pagedMetadataReader{columns: columns})
-	err := validator.ValidateRow(context.Background(), &pb.RowFieldUpsert{
+	err := validator.ValidateRow(context.Background(), &pb.Row{
 		Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
 		Fields: []*pb.FieldValue{{
 			FieldId: "field_1000",
@@ -82,8 +82,8 @@ func TestMetadataValidatorRejectsUnspecifiedNull(t *testing.T) {
 	}
 }
 
-func validatorRow(fieldID string, nullValue pb.NullValue) *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func validatorRow(fieldID string, nullValue pb.NullValue) *pb.Row {
+	return &pb.Row{
 		Key: &pb.RowKey{
 			SpaceId: "s", DatasetId: "d",
 			Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}},
@@ -126,11 +126,11 @@ func (validatorSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.Dat
 func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	var writes, reads int
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
+	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.Row) error {
 		writes++
 		return store.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 	}
-	store.readRows = func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error) {
+	store.readRows = func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.Row, error) {
 		reads++
 		return store.Store.ReadRows(ctx, keys, columns, attributeKeys)
 	}
@@ -141,7 +141,7 @@ func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	}
 	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
 	write, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
+		Rows: []*pb.Row{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
 	}))
 	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || writes != 1 {
 		t.Fatalf("write=%v err=%v writes=%d", write, err, writes)
@@ -164,8 +164,8 @@ func (timeSeriesMetadataReader) ListDatasetColumns(context.Context, string, stri
 
 func TestMetadataValidatorRejectsRowFreqOtherThanTheDatasetFreq(t *testing.T) {
 	validator := NewMetadataValidator(timeSeriesMetadataReader{})
-	row := func(freq string) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
+	row := func(freq string) *pb.Row {
+		return &pb.Row{
 			Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "bars", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 				SubjectId: "BTC-USDT", Freq: freq, DataTime: "2026-10-08T10:00:00Z",
 			}}},
@@ -201,8 +201,8 @@ func (r *countingMetadataReader) ListDatasetColumns(context.Context, string, str
 	return []*pb.DatasetColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}, &pb.PageResult{}, nil
 }
 
-func barsRow(freq string) *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func barsRow(freq string) *pb.Row {
+	return &pb.Row{
 		Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "bars", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 			SubjectId: "BTC-USDT", Freq: freq, DataTime: "2026-10-08T10:00:00Z",
 		}}},
@@ -213,7 +213,7 @@ func barsRow(freq string) *pb.RowFieldUpsert {
 // 一个请求里同一数据集的多行只查一次数据集与列定义。
 func TestMetadataValidatorValidateRowsLooksUpEachDatasetOnce(t *testing.T) {
 	reader := &countingMetadataReader{}
-	rows := []*pb.RowFieldUpsert{barsRow("1h"), barsRow("1h"), barsRow("1h")}
+	rows := []*pb.Row{barsRow("1h"), barsRow("1h"), barsRow("1h")}
 	if err := NewMetadataValidator(reader).ValidateRows(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestMetadataValidatorValidateRowsLooksUpEachDatasetOnce(t *testing.T) {
 // 检查顺序与逐行校验一致：首行频率不符时报频率错误，不被列查询失败盖掉。
 func TestMetadataValidatorValidateRowsReportsRowErrorBeforeColumnLookup(t *testing.T) {
 	reader := &countingMetadataReader{columnsErr: fmt.Errorf("columns unavailable")}
-	err := NewMetadataValidator(reader).ValidateRows(context.Background(), []*pb.RowFieldUpsert{barsRow("5m"), barsRow("1h")})
+	err := NewMetadataValidator(reader).ValidateRows(context.Background(), []*pb.Row{barsRow("5m"), barsRow("1h")})
 	if err == nil || !strings.Contains(err.Error(), "does not match dataset") {
 		t.Fatalf("期望频率不符的错误，得到 %v", err)
 	}

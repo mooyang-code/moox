@@ -50,7 +50,7 @@ func newHKRowStore() *hkRowStore {
 
 func hkRowKey(subject, dataTime string) string { return subject + "|" + dataTime }
 
-func (s *hkRowStore) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (s *hkRowStore) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, row := range rows {
@@ -62,7 +62,7 @@ func (s *hkRowStore) UpsertFields(_ context.Context, rows []*storagepb.RowFieldU
 }
 
 func (s *hkRowStore) CommitTimeSeriesBatch(ctx context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow) error {
-	upserts := make([]*storagepb.RowFieldUpsert, 0, len(rows))
+	upserts := make([]*storagepb.Row, 0, len(rows))
 	for _, row := range rows {
 		upserts = append(upserts, row.GetRow())
 	}
@@ -83,7 +83,7 @@ func (s *hkRowStore) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTi
 			if subject != selector.GetSubjectId() || err != nil || at.Before(start) || !at.Before(end) {
 				continue
 			}
-			row := &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SubjectId: subject, DataTime: dataTime}}
+			row := &storagepb.Row{Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, DataTime: dataTime}}}}
 			for _, column := range req.GetColumnNames() {
 				if value, ok := fields[column]; ok {
 					row.Fields = append(row.Fields, &storagepb.FieldValue{FieldId: column, Value: value})

@@ -139,8 +139,6 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			}
 
 			selector := &pb.TimeSeriesSelector{
-				SpaceId:   spaceID,
-				DatasetId: resolvedDatasetID,
 				SubjectId: symbol,
 				Freq:      interval,
 			}

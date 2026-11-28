@@ -71,7 +71,7 @@ func TestCommitTimeSeriesBatchUsesDeclaredPeriodEndAt(t *testing.T) {
 				},
 				Items: []*pb.TimeSeriesBatchRow{{
 					SeriesIndex: 0,
-					Row: &pb.RowFieldUpsert{
+					Row: &pb.Row{
 						Key: &pb.RowKey{
 							SpaceId: "stockcn", DatasetId: "dataset_kline_1d",
 							Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{

@@ -214,40 +214,10 @@ export interface ResultColumn {
   display_name?: string;
 }
 
-export interface TimeSeriesKey {
-  space_id: string;
-  dataset_id: string;
-  subject_id: string;
-  freq: string;
-  series_tag?: string;
-  data_time?: string;
-}
-
 export interface TimeSeriesSelector {
-  space_id: string;
-  dataset_id: string;
   subject_id: string;
   freq: string;
   series_tag?: string;
-}
-
-export interface TimeSeriesRow {
-  key: TimeSeriesKey;
-  fields?: FieldValue[];
-  attributes?: Record<string, string>;
-}
-
-export interface RecordKey {
-  space_id: string;
-  dataset_id: string;
-  record_id: string;
-  version?: string;
-}
-
-export interface RecordRow {
-  key: RecordKey;
-  fields?: FieldValue[];
-  attributes?: Record<string, string>;
 }
 
 export interface TimeSeriesRowKey {
@@ -259,7 +229,8 @@ export interface TimeSeriesRowKey {
 
 export interface RecordRowKey {
   record_id: string;
-  version: string;
+  /** 检索请求（SearchRecordRows）里省略或空值表示匹配任意版本（由 version_range 约束）；写入与响应中非空。 */
+  version?: string;
 }
 
 export interface RowKey {
@@ -267,4 +238,11 @@ export interface RowKey {
   dataset_id: string;
   time_series?: TimeSeriesRowKey;
   record?: RecordRowKey;
+}
+
+/** Storage 读写共用的行消息；DataView 查询响应与 ReadTimeSeriesRows 不返回 attributes。 */
+export interface Row {
+  key: RowKey;
+  fields?: FieldValue[];
+  attributes?: Record<string, TypedValue>;
 }

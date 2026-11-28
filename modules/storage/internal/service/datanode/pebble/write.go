@@ -17,7 +17,7 @@ import (
 const writeLogThreshold = 50 * time.Millisecond
 
 // UpsertFields 写入一个数据集的行：字段、属性、行索引与变更日志在同一个 Pebble 批次里提交。不去重，同一行重复写入时后写覆盖先写。
-func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
+func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.Row) error {
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
 		return invalid("space_id and dataset_id are required")
 	}
@@ -65,7 +65,7 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID string, row
 	return nil
 }
 
-func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
+func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.Row) ([]*pb.Row, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("pebble store is closed")
 	}
@@ -75,7 +75,7 @@ func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpser
 	if len(rows) == 0 {
 		return nil, invalid("rows are required")
 	}
-	normalizedRows := make([]*pb.RowFieldUpsert, 0, len(rows))
+	normalizedRows := make([]*pb.Row, 0, len(rows))
 	for _, row := range rows {
 		if err := validateUpsert(row); err != nil {
 			return nil, err
@@ -84,7 +84,7 @@ func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpser
 		if err != nil {
 			return nil, err
 		}
-		clone := proto.Clone(row).(*pb.RowFieldUpsert)
+		clone := proto.Clone(row).(*pb.Row)
 		clone.Key = key
 		normalizedRows = append(normalizedRows, clone)
 	}
@@ -101,7 +101,7 @@ type preparedRowsWrite struct {
 }
 
 // prepareRowsWrite 只读 Store 的静态配置，不读写变更序号，可以在 changeMu 之外并发执行。
-func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) (*preparedRowsWrite, error) {
+func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string, rows []*pb.Row) (*preparedRowsWrite, error) {
 	// One batch preserves all field changes from a request. The change log is
 	// staged into the same batch.
 	batch := s.db.NewBatch()

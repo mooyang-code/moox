@@ -28,12 +28,12 @@ func (s *dataViewStub) QueryTimeSeriesRows(_ context.Context, req *storagepb.Que
 	return s.pages[index], nil
 }
 
-func page(hasMore bool, revision uint64, indexID string, rows ...*storagepb.TimeSeriesRow) *storagepb.QueryTimeSeriesRowsRsp {
+func page(hasMore bool, revision uint64, indexID string, rows ...*storagepb.Row) *storagepb.QueryTimeSeriesRowsRsp {
 	return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Rows: rows, PageResult: &commonpb.PageResult{HasMore: hasMore}, Index: &storagepb.IndexVersion{IndexId: indexID, Revision: revision}}
 }
 
-func tsRow(subjectID string, at time.Time, value *storagepb.TypedValue) *storagepb.TimeSeriesRow {
-	return &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SubjectId: subjectID, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: value}}}
+func tsRow(subjectID string, at time.Time, value *storagepb.TypedValue) *storagepb.Row {
+	return &storagepb.Row{Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subjectID, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: value}}}
 }
 
 func double(value float64) *storagepb.TypedValue {
@@ -87,7 +87,7 @@ func TestQueryRowsConcatenatesPagesAndConvertsValues(t *testing.T) {
 	if _, ok := rows[2].Values["close"]; ok {
 		t.Fatalf("无法解析的值应视为缺失：%+v", rows[2])
 	}
-	if got := stub.requests[0].GetSelectors(); len(got) != 2 || got[0].GetSeriesTag() != "venue:binance" || got[0].GetDatasetId() != "ds" || got[0].GetFreq() != "1h" {
+	if got := stub.requests[0].GetSelectors(); len(got) != 2 || stub.requests[0].GetDatasetId() != "ds" || got[0].GetSeriesTag() != "venue:binance" || got[0].GetFreq() != "1h" {
 		t.Fatalf("选择器不符：%+v", got)
 	}
 	if len(stub.requests[0].GetColumnNames()) != 1 {

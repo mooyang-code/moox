@@ -69,7 +69,7 @@ func (e *followEnv) CountViewRows(ctx context.Context, datasetID, subject string
 		Page:      &pb.Page{Page: 1, Size: 1}, TotalMode: pb.TotalMode_FORCE_EXACT,
 	}
 	if subject != "" {
-		req.Selectors = []*pb.TimeSeriesSelector{{SpaceId: readyBenchSpace, DatasetId: datasetID, SubjectId: subject, Freq: readyBenchFreq}}
+		req.Selectors = []*pb.TimeSeriesSelector{{SubjectId: subject, Freq: readyBenchFreq}}
 	}
 	rsp, err := e.view.QueryTimeSeriesRows(ctx, req)
 	if err != nil {

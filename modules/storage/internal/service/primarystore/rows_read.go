@@ -140,9 +140,6 @@ func validateSelectors(ctx context.Context, spaceID, datasetID string, selectors
 		if selector == nil || selector.GetSubjectId() == "" || selector.GetFreq() == "" {
 			return errors.New("selector subject_id and freq are required")
 		}
-		if (selector.GetSpaceId() != "" && selector.GetSpaceId() != spaceID) || (selector.GetDatasetId() != "" && selector.GetDatasetId() != datasetID) {
-			return errors.New("one read may reference only the request space/dataset")
-		}
 		if freq != "" && selector.GetFreq() != freq {
 			return fmt.Errorf("selector freq %q does not match the dataset frequency %q", selector.GetFreq(), freq)
 		}

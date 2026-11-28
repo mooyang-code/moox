@@ -80,14 +80,14 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	record := func(id, version, title string) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
+	record := func(id, version, title string) *pb.Row {
+		return &pb.Row{
 			Key:    &pb.RowKey{SpaceId: readyBenchSpace, DatasetId: "notes", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: id, Version: version}}},
 			Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: title}}}},
 		}
 	}
 	rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{SpaceId: readyBenchSpace, DatasetId: "notes",
-		Rows: []*pb.RowFieldUpsert{record("r1", "1", "first note"), record("r2", "1", "second note")}})
+		Rows: []*pb.Row{record("r1", "1", "first note"), record("r2", "1", "second note")}})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("写入记录：rsp=%v err=%v", rsp, err)
 	}

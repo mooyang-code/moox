@@ -36,7 +36,7 @@ message QueryTimeSeriesRowsReq {
   string space_id = 2;
   // dataset_id 是要查询的数据集，读它的查询索引（View）。
   string dataset_id = 3;
-  // selectors 是时序范围查询条件，每个选择器的 dataset_id 必须等于本请求的 dataset_id；series_tag 未设置时匹配该 scope 下的全部序列。
+  // selectors 是时序范围查询条件（空间与数据集取自本请求的 space_id、dataset_id）；series_tag 未设置时匹配该标的与频率下的全部序列。
   repeated TimeSeriesSelector selectors = 4;
   // time_range 是左闭右开时间范围。
   TimeRange time_range = 5;
@@ -69,8 +69,8 @@ message QueryTimeSeriesRowsRsp {
   common.RetInfo ret_info = 1;
   // columns 是返回列定义。
   repeated ResultColumn columns = 2;
-  // rows 是读取到的时序数据行。
-  repeated TimeSeriesRow rows = 3;
+  // rows 是读取到的时序数据行；DataView 的响应不带 attributes（View 索引不保存行属性）。
+  repeated Row rows = 3;
   // page_result 是分页结果。
   common.PageResult page_result = 4;
   // min_data_time、max_data_time 是回答本次查询的索引中最早、最晚一行的 data_time，两端都包含，是真实存在的行键。
@@ -95,8 +95,8 @@ message SearchRecordRowsReq {
   string space_id = 2;
   // dataset_id 是要搜索的记录型数据集，读它的查询索引（View）。
   string dataset_id = 3;
-  // keys 是记录查询 key；范围读时 key.version 可为空，实际版本集合由 version_range 表达。
-  repeated RecordKey keys = 4;
+  // keys 是记录查询键（空间与数据集取自本请求的 space_id、dataset_id）；范围读时 key.version 可为空，实际版本集合由 version_range 表达。
+  repeated RecordRowKey keys = 4;
   // text_query 是可选全文检索文本；为空时只按结构化条件搜索。
   string text_query = 5;
   // version_range 是可选版本范围。
@@ -117,8 +117,8 @@ message SearchRecordRowsRsp {
   common.RetInfo ret_info = 1;
   // columns 是返回列定义。
   repeated ResultColumn columns = 2;
-  // rows 是匹配的记录事实数据行。
-  repeated RecordRow rows = 3;
+  // rows 是匹配的记录事实数据行；DataView 的响应不带 attributes（View 索引不保存行属性）。
+  repeated Row rows = 3;
   // page_result 是分页结果。
   common.PageResult page_result = 4;
   string min_data_time = 5;

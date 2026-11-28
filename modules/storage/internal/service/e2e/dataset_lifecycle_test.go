@@ -105,7 +105,7 @@ func TestDatasetLifecycleInPrimaryProcess(t *testing.T) {
 		t.Fatal("deleted Dataset accepted a write")
 	}
 	// 绕过请求快照直接写存储层（相当于删除前就已通过校验的迟到写入）：拿到读锁后按最新元数据被拒绝。
-	if err := process.store.UpsertFields(ctx, "quant", "dataset_a", []*pb.RowFieldUpsert{row}); !errors.Is(err, pebble.ErrDatasetDeleted) {
+	if err := process.store.UpsertFields(ctx, "quant", "dataset_a", []*pb.Row{row}); !errors.Is(err, pebble.ErrDatasetDeleted) {
 		t.Fatalf("late write after delete err=%v, want ErrDatasetDeleted", err)
 	}
 
@@ -182,16 +182,16 @@ func updateDataset(t *testing.T, ctx context.Context, service *catalog.Service, 
 	return rsp.GetDataset()
 }
 
-func lifecycleRow() *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func lifecycleRow() *pb.Row {
+	return &pb.Row{
 		Key:    &pb.RowKey{SpaceId: "quant", DatasetId: "dataset_a", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row-1", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}},
 	}
 }
 
-func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Service, row *pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsRsp {
+func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Service, row *pb.Row) *pb.PrimaryUpsertFieldsRsp {
 	t.Helper()
-	rsp, err := service.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{row}}))
+	rsp, err := service.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.Row{row}}))
 	if err != nil {
 		t.Fatalf("PrimaryStore write: rsp=%v err=%v", rsp, err)
 	}

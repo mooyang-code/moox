@@ -13,7 +13,7 @@ import (
 
 type storageCanaryFixture struct {
 	request *storagepb.PrimaryReadRowsReq
-	rows    []*storagepb.TimeSeriesRow
+	rows    []*storagepb.Row
 }
 
 func (f *storageCanaryFixture) ReadRows(_ context.Context, request *storagepb.PrimaryReadRowsReq, _ ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
@@ -22,16 +22,10 @@ func (f *storageCanaryFixture) ReadRows(_ context.Context, request *storagepb.Pr
 	for _, key := range request.GetKeys() {
 		wanted[key.GetTimeSeries().GetDataTime()] = struct{}{}
 	}
-	rows := make([]*storagepb.RowFieldValues, 0, len(f.rows))
+	rows := make([]*storagepb.Row, 0, len(f.rows))
 	for _, row := range f.rows {
-		if _, ok := wanted[row.GetKey().GetDataTime()]; ok {
-			key := row.GetKey()
-			rows = append(rows, &storagepb.RowFieldValues{
-				Key: &storagepb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-					SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
-				}}},
-				Fields: row.GetFields(),
-			})
+		if _, ok := wanted[row.GetKey().GetTimeSeries().GetDataTime()]; ok {
+			rows = append(rows, row)
 		}
 	}
 	return &storagepb.PrimaryReadRowsRsp{
@@ -42,7 +36,7 @@ func (f *storageCanaryFixture) ReadRows(_ context.Context, request *storagepb.Pr
 
 func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	fixture := &storageCanaryFixture{rows: []*storagepb.TimeSeriesRow{
+	fixture := &storageCanaryFixture{rows: []*storagepb.Row{
 		canaryRow(now.Add(-2*time.Minute), 100, 10),
 		canaryRow(now.Add(-time.Minute), 101, 12),
 	}}
@@ -74,9 +68,9 @@ func testStringPtr(value string) *string {
 	return &value
 }
 
-func canaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {
-	return &storagepb.TimeSeriesRow{
-		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"},
+func canaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.Row {
+	return &storagepb.Row{
+		Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"}}},
 		Fields: []*storagepb.FieldValue{
 			{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
 			{FieldId: "volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},

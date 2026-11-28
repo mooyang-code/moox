@@ -20,7 +20,7 @@ func (*IndexManager) Prepare(context.Context, string, viewindex.ViewIndexSchema)
 func (*IndexManager) Write(context.Context, string, viewindex.ViewIndexWriteBatch) error {
 	return ErrUnavailable
 }
-func (*IndexManager) Query(context.Context, string, viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (*IndexManager) Query(context.Context, string, viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	return nil, 0, ErrUnavailable
 }
 func (*IndexManager) CountBySubject(context.Context, string, viewindex.QuerySpec) (map[string]int64, error) {

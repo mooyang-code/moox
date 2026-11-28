@@ -24,36 +24,36 @@ import (
 // fakeStorage 是内存里的 Primary 与周期提交：按行键保存行，记录每次写入。
 type fakeStorage struct {
 	mu        sync.Mutex
-	rows      map[string]*storagepb.RowFieldUpsert
-	upserts   [][]*storagepb.RowFieldUpsert
+	rows      map[string]*storagepb.Row
+	upserts   [][]*storagepb.Row
 	commits   []*storagepb.DatasetPeriodExpectation
 	commitErr error
 	readErr   error
 }
 
-func newFakeStorage() *fakeStorage { return &fakeStorage{rows: map[string]*storagepb.RowFieldUpsert{}} }
+func newFakeStorage() *fakeStorage { return &fakeStorage{rows: map[string]*storagepb.Row{}} }
 
 func keyText(key *storagepb.RowKey) string {
 	series := key.GetTimeSeries()
 	return fmt.Sprintf("%s|%s|%s|%s|%s|%s", key.GetSpaceId(), key.GetDatasetId(), series.GetSubjectId(), series.GetFreq(), series.GetDataTime(), series.GetSeriesTag())
 }
 
-func (f *fakeStorage) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, _ []string) ([]*storagepb.RowFieldValues, error) {
+func (f *fakeStorage) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, _ []string) ([]*storagepb.Row, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
-	var out []*storagepb.RowFieldValues
+	var out []*storagepb.Row
 	for _, key := range keys {
 		if row, ok := f.rows[keyText(key)]; ok {
-			out = append(out, &storagepb.RowFieldValues{Key: key, Fields: row.GetFields(), Attributes: row.GetAttributes()})
+			out = append(out, &storagepb.Row{Key: key, Fields: row.GetFields(), Attributes: row.GetAttributes()})
 		}
 	}
 	return out, nil
 }
 
-func (f *fakeStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (f *fakeStorage) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.upserts = append(f.upserts, rows)
@@ -77,18 +77,18 @@ func (f *fakeStorage) CommitTimeSeriesBatch(_ context.Context, expectation *stor
 }
 
 func (f *fakeStorage) putSource(space, dataset, subject, freq, tag string, at time.Time, open, high, low, closeValue, volume, quote float64, trades int64) {
-	row := &storagepb.RowFieldUpsert{
+	row := &storagepb.Row{
 		Key:    rowKey(space, dataset, subject, freq, at, tag),
 		Fields: []*storagepb.FieldValue{doubleField("open", open), doubleField("high", high), doubleField("low", low), doubleField("close", closeValue), doubleField("volume", volume), doubleField("quote_volume", quote), intField("trade_num", trades)},
 	}
 	f.rows[keyText(row.GetKey())] = row
 }
 
-func (f *fakeStorage) target(space, dataset, subject, freq, tag string, at time.Time) *storagepb.RowFieldUpsert {
+func (f *fakeStorage) target(space, dataset, subject, freq, tag string, at time.Time) *storagepb.Row {
 	return f.rows[keyText(rowKey(space, dataset, subject, freq, at, tag))]
 }
 
-func closeOf(row *storagepb.RowFieldUpsert) float64 {
+func closeOf(row *storagepb.Row) float64 {
 	for _, field := range row.GetFields() {
 		if field.GetFieldId() == "close" {
 			return field.GetValue().GetDoubleValue()
@@ -447,7 +447,7 @@ func TestRunBucketResamplesPlainFiveColumnOHLCVInCustomSpace(t *testing.T) {
 	require.NoError(t, err)
 	for i := 0; i < 3; i++ {
 		at := bucket.Start.Add(time.Duration(i) * 5 * time.Minute)
-		row := &storagepb.RowFieldUpsert{
+		row := &storagepb.Row{
 			Key: rowKey("sandbox", "dataset_src", "EXT1", "5m", at, "venue:binance"),
 			Fields: []*storagepb.FieldValue{
 				doubleField("open", 10+float64(i)), doubleField("high", 15+float64(i)),
@@ -491,7 +491,7 @@ func TestSplitForCommitSessionDailyUsesRealCloseDeadline(t *testing.T) {
 		utc("2026-10-21T01:30:00Z"), utc("2026-10-21T02:30:00Z"),
 		utc("2026-10-21T05:00:00Z"), utc("2026-10-21T06:00:00Z"),
 	} {
-		row := &storagepb.RowFieldUpsert{
+		row := &storagepb.Row{
 			Key: rowKey("stockcn", "dataset_src", "600000", "1h", at, "venue:binance"),
 			Fields: []*storagepb.FieldValue{
 				doubleField("open", 10), doubleField("high", 11), doubleField("low", 9),

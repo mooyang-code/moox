@@ -18,7 +18,7 @@ import (
 
 type nopStorage struct{}
 
-func (nopStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }
+func (nopStorage) UpsertFields(context.Context, []*storagepb.Row) error { return nil }
 
 func backfillEvent(t *testing.T) []byte {
 	t.Helper()

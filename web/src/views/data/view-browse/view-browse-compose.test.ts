@@ -115,10 +115,12 @@ describe("ViewBrowse 扩展点", () => {
           key: {
             space_id: "crypto",
             dataset_id: "dataset-factor",
-            subject_id: "BTC",
-            freq: "1m",
-            series_tag: "",
-            data_time: "t1"
+            time_series: {
+              subject_id: "BTC",
+              freq: "1m",
+              series_tag: "",
+              data_time: "t1"
+            }
           }
         }
       ]
@@ -217,10 +219,12 @@ describe("ViewBrowse 扩展点", () => {
     expect(seen).toContainEqual({
       space_id: "crypto",
       dataset_id: "dataset-factor",
-      subject_id: "BTC",
-      freq: "1m",
-      series_tag: "",
-      data_time: "t1"
+      time_series: {
+        subject_id: "BTC",
+        freq: "1m",
+        series_tag: "",
+        data_time: "t1"
+      }
     });
     wrapper.unmount();
   });

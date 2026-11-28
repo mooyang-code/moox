@@ -107,7 +107,7 @@ import { Message } from "@arco-design/web-vue";
 import { listFactorCategories } from "@/api/factor";
 import type { FactorCategory, FactorTaskInfo } from "@/api/factor/types";
 import { listAllDatasetColumns } from "@/api/storage/metadata";
-import type { DatasetColumn, TimeSeriesKey } from "@/api/storage/types";
+import type { DatasetColumn, RowKey } from "@/api/storage/types";
 import { getStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden } from "@/api/strategy-types";
 import { createLatestRequestGuard, type LatestRequest } from "@/utils/latest-request";
@@ -181,7 +181,7 @@ const extraFilters = computed(() =>
 );
 
 const valuesVisible = ref(false);
-const valuesRowKey = ref<TimeSeriesKey>();
+const valuesRowKey = ref<RowKey>();
 
 function stamp() {
   readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
@@ -255,7 +255,7 @@ function updateSettings(next: ColumnSettings) {
   if (taskId) saveColumnSettings(taskId, next);
 }
 
-function openValues(rowKey?: TimeSeriesKey) {
+function openValues(rowKey?: RowKey) {
   if (!rowKey) return;
   valuesRowKey.value = rowKey;
   valuesVisible.value = true;

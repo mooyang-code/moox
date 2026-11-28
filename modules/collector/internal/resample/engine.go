@@ -313,7 +313,7 @@ func (e *Engine) readSource(ctx context.Context, task *Task, expected []time.Tim
 // write 把一个桶的结果写入目标数据集：落在已登记快照内且周期还没截止的标的用周期提交（Storage 跟踪到齐并发出完成事件），
 // 其余（首次生效点之前的桶、截止之后的补写、快照之外的标的、周期提交失败）用普通写入，并记为补写通知。
 func (e *Engine) write(ctx context.Context, task *Task, bucket barclock.Bucket, results []Result, jobID string) (int, error) {
-	rows := make([]*storagepb.RowFieldUpsert, len(results))
+	rows := make([]*storagepb.Row, len(results))
 	for i, result := range results {
 		rows[i] = resultRowWithSpec(result, task.Spec)
 	}
@@ -343,7 +343,7 @@ func (e *Engine) write(ctx context.Context, task *Task, bucket barclock.Bucket, 
 }
 
 // splitForCommit 按快照把结果分成周期提交部分与普通写入部分；不能周期提交时 commitRows 为空。
-func (e *Engine) splitForCommit(ctx context.Context, task *Task, bucket barclock.Bucket, rows []*storagepb.RowFieldUpsert, results []Result) (commit []*storagepb.RowFieldUpsert, commitResults []Result, plain []*storagepb.RowFieldUpsert, plainResults []Result) {
+func (e *Engine) splitForCommit(ctx context.Context, task *Task, bucket barclock.Bucket, rows []*storagepb.Row, results []Result) (commit []*storagepb.Row, commitResults []Result, plain []*storagepb.Row, plainResults []Result) {
 	if e.Period == nil || e.State == nil {
 		return nil, nil, rows, results
 	}
@@ -370,7 +370,7 @@ func (e *Engine) splitForCommit(ctx context.Context, task *Task, bucket barclock
 }
 
 // commit 用周期提交写入落在快照内的标的。
-func (e *Engine) commit(ctx context.Context, task *Task, bucket barclock.Bucket, rows []*storagepb.RowFieldUpsert, results []Result) error {
+func (e *Engine) commit(ctx context.Context, task *Task, bucket barclock.Bucket, rows []*storagepb.Row, results []Result) error {
 	snapshot, ok, err := e.State.SnapshotFor(ctx, task.Spec.SpaceID, task.Spec.TaskID, bucket.Key.Unix())
 	if err != nil || !ok {
 		return fmt.Errorf("resample snapshot is unavailable: %v", err)

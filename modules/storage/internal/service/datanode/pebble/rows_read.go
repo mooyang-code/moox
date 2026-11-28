@@ -46,7 +46,7 @@ func (a seriesID) less(b seriesID) bool {
 	return a.tag < b.tag
 }
 
-func parseSelectors(req []*pb.TimeSeriesSelector, spaceID, datasetID string, limit int) ([]seriesSelector, error) {
+func parseSelectors(req []*pb.TimeSeriesSelector, limit int) ([]seriesSelector, error) {
 	if len(req) > limit {
 		return nil, invalidf("selectors exceed the limit of %d", limit)
 	}
@@ -54,12 +54,6 @@ func parseSelectors(req []*pb.TimeSeriesSelector, spaceID, datasetID string, lim
 	for _, selector := range req {
 		if selector == nil || selector.GetSubjectId() == "" || selector.GetFreq() == "" {
 			return nil, invalid("selector subject_id and freq are required")
-		}
-		if selector.GetSpaceId() != "" && selector.GetSpaceId() != spaceID {
-			return nil, invalid("selector space_id does not match request")
-		}
-		if selector.GetDatasetId() != "" && selector.GetDatasetId() != datasetID {
-			return nil, invalid("selector dataset_id does not match request")
 		}
 		out = append(out, seriesSelector{subject: selector.GetSubjectId(), freq: selector.GetFreq(), tag: selector.GetSeriesTag(), hasTag: selector.SeriesTag != nil})
 	}
@@ -124,7 +118,7 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 	if len(req.GetColumnNames()) == 0 {
 		return nil, invalid("column_names are required")
 	}
-	selectors, err := parseSelectors(req.GetSelectors(), req.GetSpaceId(), req.GetDatasetId(), maxSelectors)
+	selectors, err := parseSelectors(req.GetSelectors(), maxSelectors)
 	if err != nil {
 		return nil, err
 	}
@@ -167,22 +161,28 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 	if err != nil {
 		return nil, err
 	}
-	values := make([]*pb.RowFieldValues, 0, len(keys))
+	rows := make([]*pb.Row, 0, len(keys))
 	for from := 0; from < len(keys); from += maxReadRowsKeys {
 		to := min(from+maxReadRowsKeys, len(keys))
 		part, readErr := s.readRowsAt(ctx, snapshot, keys[from:to], req.GetColumnNames(), nil)
 		if readErr != nil {
 			return nil, readErr
 		}
-		values = append(values, part...)
-	}
-	rows := make([]*pb.TimeSeriesRow, 0, len(values))
-	for _, row := range values {
-		key := row.GetKey().GetTimeSeries()
-		rows = append(rows, &pb.TimeSeriesRow{
-			Key:    &pb.TimeSeriesKey{SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: outputTime(key.GetDataTime()), SeriesTag: key.GetSeriesTag()},
-			Fields: row.GetFields(),
-		})
+		for _, row := range part {
+			if key := row.GetKey(); key != nil {
+				if ts := key.GetTimeSeries(); ts != nil {
+					// keys 与分页游标共享 TimeSeriesRowKey，不能原地修改 DataTime。
+					row.Key = &pb.RowKey{
+						SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+						Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+							SubjectId: ts.GetSubjectId(), Freq: ts.GetFreq(),
+							DataTime: outputTime(ts.GetDataTime()), SeriesTag: ts.GetSeriesTag(),
+						}},
+					}
+				}
+			}
+		}
+		rows = append(rows, part...)
 	}
 	result := &pb.PageResult{Size: pageSize}
 	if nextCursor != nil {
@@ -598,7 +598,7 @@ func (s *Store) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeries
 	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || len(req.GetSelectors()) == 0 {
 		return nil, invalid("space_id, dataset_id and selectors are required")
 	}
-	selectors, err := parseSelectors(req.GetSelectors(), req.GetSpaceId(), req.GetDatasetId(), maxCountSelectors)
+	selectors, err := parseSelectors(req.GetSelectors(), maxCountSelectors)
 	if err != nil {
 		return nil, err
 	}
@@ -691,7 +691,7 @@ func (s *Store) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeries
 
 // ReadRows 按精确键读取，只返回存在的行（有任意字段或属性）：存在但请求的列都没有值时返回只有键的行，不存在的键不返回。
 // 返回顺序与请求一致，记录型键没有版本时解析为最大版本。整个请求使用同一个快照，成组字段由一次提交原子写入，不会读到混合值。
-func (s *Store) ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error) {
+func (s *Store) ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.Row, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("pebble store is closed")
 	}
@@ -716,7 +716,7 @@ type rowRead struct {
 	attrs  []byte // 属性命名空间的行前缀
 }
 
-func (s *Store) readRowsAt(ctx context.Context, snap pebbleReader, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error) {
+func (s *Store) readRowsAt(ctx context.Context, snap pebbleReader, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.Row, error) {
 	reads := make([]rowRead, len(keys))
 	for index, key := range keys {
 		resolved := key
@@ -761,14 +761,14 @@ func (s *Store) readRowsAt(ctx context.Context, snap pebbleReader, keys []*pb.Ro
 			_ = attrIter.Close()
 		}
 	}()
-	result := make([]*pb.RowFieldValues, len(keys))
+	result := make([]*pb.Row, len(keys))
 	for n, item := range order {
 		if n&255 == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
 		}
-		row := &pb.RowFieldValues{Key: item.key}
+		row := &pb.Row{Key: item.key}
 		present := false
 		for valid := fieldIter.SeekGE(item.fields); valid && bytes.HasPrefix(fieldIter.Key(), item.fields); valid = fieldIter.Next() {
 			present = true

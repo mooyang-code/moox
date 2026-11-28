@@ -24,11 +24,11 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 		CauseEventId: "source-ready", CompletedAt: time.Unix(1786032001, 0).UnixMilli(),
 		DetailType: "test.Detail.v1", Detail: []byte{0x0a, 0x00, 0xff, 0x7f},
 	}
-	row := &pb.RowFieldUpsert{
+	row := &pb.Row{
 		Key:    &pb.RowKey{SpaceId: "quant", DatasetId: "result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: 1}}}},
 	}
-	err = store.UpsertFields(ctx, "quant", "result", []*pb.RowFieldUpsert{row})
+	err = store.UpsertFields(ctx, "quant", "result", []*pb.Row{row})
 	require.NoError(t, err)
 	var eventID string
 	for attempt := 0; attempt < 2; attempt++ {

@@ -135,7 +135,7 @@ func TestConcurrentColdOpenDoesNotLeaveIndexLocked(t *testing.T) {
 	}
 }
 
-func hasStringField(row *pb.RowFieldValues, name, want string) bool {
+func hasStringField(row *pb.Row, name, want string) bool {
 	for _, field := range row.GetFields() {
 		if field != nil && field.GetFieldId() == name && field.GetValue().GetStringValue() == want {
 			return true
@@ -144,7 +144,7 @@ func hasStringField(row *pb.RowFieldValues, name, want string) bool {
 	return false
 }
 
-func hasFloatField(row *pb.RowFieldValues, name string, want float64) bool {
+func hasFloatField(row *pb.Row, name string, want float64) bool {
 	for _, field := range row.GetFields() {
 		if field != nil && field.GetFieldId() == name && field.GetValue().GetDoubleValue() == want {
 			return true

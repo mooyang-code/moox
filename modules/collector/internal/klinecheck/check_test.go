@@ -125,7 +125,7 @@ func (f *fakeRows) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTime
 			if !f.has(selector.GetSubjectId(), t) {
 				continue
 			}
-			row := &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SubjectId: selector.GetSubjectId(), DataTime: t.Format(time.RFC3339)}}
+			row := &storagepb.Row{Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: selector.GetSubjectId(), DataTime: t.Format(time.RFC3339)}}}}
 			for _, column := range req.GetColumnNames() {
 				if column == "open" && f.noOpen[selector.GetSubjectId()][t.Unix()] {
 					continue

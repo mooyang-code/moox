@@ -17,7 +17,7 @@ const datasetSubjectPageSize = 1000
 var ErrDatasetPeriodWriteUnconfirmed = errors.New("dataset period write was not confirmed")
 
 type BatchStorage interface {
-	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
+	UpsertFields(context.Context, []*storagepb.Row) error
 	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow) error
 }
 
@@ -29,8 +29,8 @@ type periodStorageAccess interface {
 // derived-kline worker. It lives beside the common market writer so resampling
 // does not need to import a particular exchange package.
 type ResampleStorage interface {
-	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
-	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
+	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.Row, error)
+	UpsertFields(context.Context, []*storagepb.Row) error
 }
 
 type ResampleMetadataClient struct {
@@ -78,7 +78,7 @@ func (w *storageWriter) runRPC(ctx context.Context, operation func() error) erro
 }
 
 // UpsertFields 写入一个数据集的行：Storage 要求一次请求只写一个数据集，数据集取自第一行，其余行必须一致。
-func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.Row) error {
 	if len(rows) == 0 || rows[0].GetKey() == nil {
 		return fmt.Errorf("write time-series rows: rows are required")
 	}
@@ -119,7 +119,7 @@ func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *
 	})
 }
 
-func (w *storageWriter) ReadRows(ctx context.Context, keys []*storagepb.RowKey, fieldIDs, attributeKeys []string) ([]*storagepb.RowFieldValues, error) {
+func (w *storageWriter) ReadRows(ctx context.Context, keys []*storagepb.RowKey, fieldIDs, attributeKeys []string) ([]*storagepb.Row, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("read fields: keys are required")
 	}

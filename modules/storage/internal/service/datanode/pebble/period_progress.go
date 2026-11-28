@@ -59,7 +59,7 @@ type DatasetPeriodExpectation struct {
 
 type TimeSeriesBatchItem struct {
 	SeriesIndex uint32
-	Row         *pb.RowFieldUpsert
+	Row         *pb.Row
 }
 
 type DatasetPeriodResult struct {
@@ -191,7 +191,7 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 	if len(items) == 0 {
 		return DatasetPeriodResult{}, invalid("time-series batch items are required")
 	}
-	rows := make([]*pb.RowFieldUpsert, 0, len(items))
+	rows := make([]*pb.Row, 0, len(items))
 	for _, item := range items {
 		if item.Row == nil {
 			return DatasetPeriodResult{}, invalid("period batch row is required")
@@ -562,7 +562,7 @@ func normalizePeriodExpectation(exp DatasetPeriodExpectation) (DatasetPeriodExpe
 	return exp, nil
 }
 
-func validatePeriodRow(exp DatasetPeriodExpectation, seriesIndex uint32, row *pb.RowFieldUpsert) (bool, error) {
+func validatePeriodRow(exp DatasetPeriodExpectation, seriesIndex uint32, row *pb.Row) (bool, error) {
 	if err := validatePeriodSeriesIndex(exp, seriesIndex); err != nil {
 		return false, err
 	}

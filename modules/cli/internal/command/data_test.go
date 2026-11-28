@@ -28,26 +28,26 @@ func TestDefaultAndRequiredFlagValue(t *testing.T) {
 }
 
 func TestTimeSeriesSelectorSeriesTagPresence(t *testing.T) {
-	oldSpaceID, oldSubjectID, oldFreq, oldSeriesTag := dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag
+	oldSubjectID, oldFreq, oldSeriesTag := dataSubjectID, dataFreq, dataSeriesTag
 	t.Cleanup(func() {
-		dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag = oldSpaceID, oldSubjectID, oldFreq, oldSeriesTag
+		dataSubjectID, dataFreq, dataSeriesTag = oldSubjectID, oldFreq, oldSeriesTag
 	})
-	dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag = "crypto", "BTC-USDT", "1h", ""
-	all := timeSeriesSelectorForExport("dataset_spot_kline_1h", false)
+	dataSubjectID, dataFreq, dataSeriesTag = "BTC-USDT", "1h", ""
+	all := timeSeriesSelectorForExport(false)
 	require.Nil(t, all.SeriesTag)
 
-	defaultSeries := timeSeriesSelectorForExport("dataset_spot_kline_1h", true)
+	defaultSeries := timeSeriesSelectorForExport(true)
 	require.NotNil(t, defaultSeries.SeriesTag)
 	assert.Equal(t, "", defaultSeries.GetSeriesTag())
 
 	dataSeriesTag = "venue:binance"
-	exact := timeSeriesSelectorForExport("dataset_spot_kline_1h", true)
+	exact := timeSeriesSelectorForExport(true)
 	require.NotNil(t, exact.SeriesTag)
 	assert.Equal(t, "venue:binance", exact.GetSeriesTag())
 }
 
 func TestWriteRowsExport(t *testing.T) {
-	rsp := &pb.ReadTimeSeriesRowsRsp{Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{DatasetId: "d1"}}}}
+	rsp := &pb.ReadTimeSeriesRowsRsp{Rows: []*pb.Row{{Key: &pb.RowKey{DatasetId: "d1"}}}}
 	var buf bytes.Buffer
 	old := os.Stdout
 	r, w, _ := os.Pipe()

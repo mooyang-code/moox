@@ -15,7 +15,7 @@ type capturingPeriodStorage struct {
 	noopStorage
 	expectations []*storagepb.DatasetPeriodExpectation
 	rows         [][]*storagepb.TimeSeriesBatchRow
-	upserts      [][]*storagepb.RowFieldUpsert
+	upserts      [][]*storagepb.Row
 }
 
 func (s *capturingPeriodStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow) error {
@@ -24,7 +24,7 @@ func (s *capturingPeriodStorage) CommitTimeSeriesBatch(_ context.Context, expect
 	return nil
 }
 
-func (s *capturingPeriodStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (s *capturingPeriodStorage) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	s.upserts = append(s.upserts, rows)
 	return nil
 }

@@ -44,7 +44,7 @@ func TestQueryPathDoesNotWaitForRuntimeLock(t *testing.T) {
 // 并发 100 个查询的同时有一次很长的索引写入（持有运行时锁与索引写锁）：查询的 p99 不随写入时长增加。
 func TestQueriesDoNotWaitForLongIndexWrite(t *testing.T) {
 	stats := viewindex.ViewIndexStats{Exists: true, EntryCount: 1, IndexedFrom: "2026-07-29T00:00:00Z", IndexedTo: "2026-07-29T00:01:00Z"}
-	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: stats}
+	engine := &queryEngine{rows: []*pb.Row{{Key: timeSeriesTestRowKey("")}}, stats: stats}
 	svc := queryTestService(engine, true)
 	runtime := svc.runtimeOf(marketRef)
 	const writeHold = 2 * time.Second
@@ -72,7 +72,7 @@ func TestQueriesDoNotWaitForLongIndexWrite(t *testing.T) {
 			started := time.Now()
 			rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 				SpaceId: "space", DatasetId: "market",
-				Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m"}},
 				TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 			})
 			elapsed := time.Since(started)

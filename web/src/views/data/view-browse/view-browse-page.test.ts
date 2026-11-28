@@ -93,8 +93,12 @@ describe("View result refresh", () => {
   beforeEach(() => {
     mocks.catalog.mockReset().mockResolvedValue([{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]);
     mocks.columns.mockReset().mockResolvedValue([]);
-    mocks.queryTimeSeries.mockReset().mockResolvedValue({ rows: [{ key: { subject_id: "BTC", freq: "1m" } }] });
-    mocks.queryRecords.mockReset().mockResolvedValue({ rows: [{ key: { record_id: "record-known" } }] });
+    mocks.queryTimeSeries.mockReset().mockResolvedValue({
+      rows: [{ key: { space_id: "crypto", dataset_id: "dataset-known", time_series: { subject_id: "BTC", freq: "1m" } } }]
+    });
+    mocks.queryRecords.mockReset().mockResolvedValue({
+      rows: [{ key: { space_id: "crypto", dataset_id: "dataset-known", record: { record_id: "record-known" } } }]
+    });
     mocks.viewState.mockReset().mockResolvedValue({ index_id: "index-a", columns: [] });
     mocks.messageError.mockReset();
   });
@@ -206,7 +210,13 @@ describe("View result refresh", () => {
     // 查询区筛的是另一个标的：行内 K 线不能用它
     vm.filters.splice(0, vm.filters.length, { fieldName: "subject_id", operator: "eq", value: "BTCUSDT" });
     mocks.queryTimeSeries.mockClear();
-    await vm.openRowKline({ rawKey: { subject_id: "ETHUSDT", series_tag: "market:swap" } });
+    await vm.openRowKline({
+      rawKey: {
+        space_id: "crypto",
+        dataset_id: "dataset-known",
+        time_series: { subject_id: "ETHUSDT", series_tag: "market:swap" }
+      }
+    });
     await flushPromises();
     const filter = JSON.stringify(mocks.queryTimeSeries.mock.calls[0]?.[0]?.filter);
     expect(filter).toContain("ETHUSDT");
@@ -356,7 +366,9 @@ describe("切换空间", () => {
         Promise.resolve(ids.map(dataset_id => ({ space_id: spaceId, dataset_id, data_kind: "DATA_KIND_TIME_SERIES" })))
       );
     mocks.columns.mockReset().mockResolvedValue([]);
-    mocks.queryTimeSeries.mockReset().mockResolvedValue({ rows: [{ key: { subject_id: "BTC", freq: "1m" } }] });
+    mocks.queryTimeSeries.mockReset().mockResolvedValue({
+      rows: [{ key: { space_id: "crypto", dataset_id: "dataset-known", time_series: { subject_id: "BTC", freq: "1m" } } }]
+    });
     mocks.viewState.mockReset().mockResolvedValue({ index_id: "index-a", columns: [] });
     mocks.messageError.mockReset();
   });

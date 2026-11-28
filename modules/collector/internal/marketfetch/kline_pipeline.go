@@ -134,7 +134,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 		instrumentNames = loadInstrumentNames(ctx, p.Storage, spaceID, req.Items)
 	}
 	results := make([]domain.ItemResult, len(req.Items))
-	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
+	rows := make([]*storagepb.Row, 0, len(req.Items)*MaxRealtimeRows)
 	routerSession := p.Router.NewSession()
 	marketdata.TakeUsedWeight() // 丢弃上一批次残留，批次结束时读到的就是本批次内的最大值
 	if deadline, ok := ctx.Deadline(); ok {
@@ -261,7 +261,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 					return
 				}
 			}
-			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
+			itemRows := make([]*storagepb.Row, 0, len(fetched))
 			for _, bar := range fetched {
 				if req.RequirePeriodCommit && !bar.BarStart.UTC().Equal(requiredTarget.UTC()) {
 					continue
@@ -350,7 +350,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 	if len(rows) > 0 {
 		// Write each destination independently. A failed target must not prevent
 		// successful targets of the same shared acquisition from committing.
-		targetRows := make(map[string][]*storagepb.RowFieldUpsert)
+		targetRows := make(map[string][]*storagepb.Row)
 		for _, row := range rows {
 			if row.GetKey() != nil {
 				targetRows[row.GetKey().GetDatasetId()] = append(targetRows[row.GetKey().GetDatasetId()], row)
@@ -404,7 +404,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 	return buildCompletion(req, results, completed, completed.Sub(started)), nil
 }
 
-func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.RowFieldUpsert) (*storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, bool, error) {
+func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row) (*storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, bool, error) {
 	if !req.RequirePeriodCommit {
 		return nil, nil, false, nil
 	}
@@ -664,7 +664,7 @@ func adaptiveBatch(kind domain.BatchKind) bool {
 	return kind == domain.BatchKindBackfill
 }
 
-func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {
+func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.Row, error) {
 	return p.committer().rowFor(bar, req, routeID, routeRank, instrumentName...)
 }
 
@@ -726,7 +726,7 @@ type equityRowKey struct {
 }
 
 // equityKlineRow 构造股票（equity）的 K 线行，各股票市场共用。
-func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
+func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID string, routeRank int, instrumentName string) (*storagepb.Row, error) {
 	if strings.TrimSpace(key.DatasetID) == "" {
 		return nil, fmt.Errorf("股票 K 线行缺少目标数据集")
 	}
@@ -771,7 +771,7 @@ func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID st
 		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
 	}
 	fields = append(fields, extraFieldValues(bar.Extra)...)
-	return &storagepb.RowFieldUpsert{
+	return &storagepb.Row{
 		Key: &storagepb.RowKey{
 			SpaceId: key.SpaceID, DatasetId: strings.TrimSpace(key.DatasetID),
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{

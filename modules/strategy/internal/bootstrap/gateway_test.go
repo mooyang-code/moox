@@ -217,7 +217,7 @@ func (w *strategyGatewayWire) QueryTimeSeriesRows(ctx context.Context, req *stor
 		return nil, errors.New("Storage 的 View 索引或选择器发生了变化")
 	}
 	return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{}, Complete: true, Index: &storagepb.IndexVersion{IndexId: "index-1", Revision: 7},
-		Rows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SubjectId: "BTC", DataTime: req.GetTimeRange().GetStartTime()}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "123.45"}}}}}}}, nil
+		Rows: []*storagepb.Row{{Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC", DataTime: req.GetTimeRange().GetStartTime()}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "123.45"}}}}}}}, nil
 }
 
 // verifyTrade 校验 Trade 调用：不带签名头、在名单里，并带着调用方给出的空间。

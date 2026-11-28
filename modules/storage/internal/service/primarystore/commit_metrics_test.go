@@ -33,7 +33,7 @@ func commitMetricsService(t *testing.T, commit commitFunc) (*Service, *recording
 func commitRequest(times ...time.Time) *pb.PrimaryCommitTimeSeriesBatchReq {
 	items := make([]*pb.TimeSeriesBatchRow, 0, len(times))
 	for i, at := range times {
-		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: uint32(i), Row: &pb.RowFieldUpsert{
+		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: uint32(i), Row: &pb.Row{
 			Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "market_kline", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 				SubjectId: "BTC-USDT", Freq: "1m", DataTime: at.UTC().Format(time.RFC3339Nano),
 			}}},

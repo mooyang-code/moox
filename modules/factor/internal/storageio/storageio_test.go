@@ -23,11 +23,11 @@ import (
 func TestReadWindowPagesUntilExhausted(t *testing.T) {
 	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
-		{Rows: []*storagepb.TimeSeriesRow{
+		{Rows: []*storagepb.Row{
 			readRow("ETH", base, "", map[string]*storagepb.TypedValue{"close": double(3)}),
 			readRow("BTC", base.Add(time.Minute), "venue:b", map[string]*storagepb.TypedValue{"close": double(2)}),
 		}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
-		{Rows: []*storagepb.TimeSeriesRow{
+		{Rows: []*storagepb.Row{
 			readRow("BTC", base, "venue:a", map[string]*storagepb.TypedValue{"close": double(1)}),
 		}, PageResult: &commonpb.PageResult{HasMore: false}},
 	}}
@@ -48,8 +48,8 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 func TestReadWindowBoundsEachPageWithPageTimeout(t *testing.T) {
 	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
-		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
-		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base.Add(time.Minute), "", map[string]*storagepb.TypedValue{"close": double(2)})}, PageResult: &commonpb.PageResult{HasMore: false}},
+		{Rows: []*storagepb.Row{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
+		{Rows: []*storagepb.Row{readRow("BTC", base.Add(time.Minute), "", map[string]*storagepb.TypedValue{"close": double(2)})}, PageResult: &commonpb.PageResult{HasMore: false}},
 	}}
 	_, err := NewClient(primary, nil).ReadWindow(context.Background(), ReadRequest{
 		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: []string{"BTC"},
@@ -67,8 +67,8 @@ func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
 	earlier := time.Date(2025, 2, 3, 4, 5, 0, 0, time.UTC)
 	later := earlier.Add(time.Hour)
 	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
-		{Rows: []*storagepb.TimeSeriesRow{readRow("subject-000", later, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
-		{Rows: []*storagepb.TimeSeriesRow{readRow("subject-128", earlier, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
+		{Rows: []*storagepb.Row{readRow("subject-000", later, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
+		{Rows: []*storagepb.Row{readRow("subject-128", earlier, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
 	}}
 	subjects := make([]string, 129)
 	for i := range subjects {
@@ -538,13 +538,16 @@ func (f *primaryFake) GetDatasetPeriodCompleted(_ context.Context, req *storagep
 	return &storagepb.GetDatasetPeriodCompletedRsp{RetInfo: successRet()}, nil
 }
 
-func readRow(subject string, at time.Time, tag string, fields map[string]*storagepb.TypedValue) *storagepb.TimeSeriesRow {
+func readRow(subject string, at time.Time, tag string, fields map[string]*storagepb.TypedValue) *storagepb.Row {
 	values := make([]*storagepb.FieldValue, 0, len(fields))
 	for name, value := range fields {
 		values = append(values, &storagepb.FieldValue{FieldId: name, Value: value})
 	}
-	return &storagepb.TimeSeriesRow{
-		Key:    &storagepb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "bars", SubjectId: subject, Freq: "1m", DataTime: at.Format(time.RFC3339Nano), SeriesTag: tag},
+	return &storagepb.Row{
+		Key: &storagepb.RowKey{
+			SpaceId: "crypto", DatasetId: "bars",
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: "1m", DataTime: at.Format(time.RFC3339Nano), SeriesTag: tag}},
+		},
 		Fields: values,
 	}
 }

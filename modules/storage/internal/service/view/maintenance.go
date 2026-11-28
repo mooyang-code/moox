@@ -443,13 +443,7 @@ func (s *Service) observeActivatedViewWatermark(runtime *viewRuntime, spec *view
 		log.Warnf("storage view activation metric probe failed space=%s dataset=%s index=%s: %v", spec.SpaceID, spec.DatasetID, runtime.indexID, err)
 		return
 	}
-	keys := make([]*pb.RowFieldUpsert, 0, len(rows))
-	for _, row := range rows {
-		if row != nil && row.GetKey() != nil {
-			keys = append(keys, &pb.RowFieldUpsert{Key: row.GetKey()})
-		}
-	}
-	s.observeViewWatermark(spec, keys)
+	s.observeViewWatermark(spec, rows)
 }
 
 func requireSuccess(ret *pb.RetInfo) error {

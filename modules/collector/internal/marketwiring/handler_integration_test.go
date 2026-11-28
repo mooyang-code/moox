@@ -22,11 +22,11 @@ import (
 )
 
 type capturedStorage struct {
-	rows      []*storagepb.RowFieldUpsert
+	rows      []*storagepb.Row
 	committed []*storagepb.TimeSeriesBatchRow
 }
 
-func (s *capturedStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (s *capturedStorage) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	s.rows = append(s.rows, rows...)
 	return nil
 }

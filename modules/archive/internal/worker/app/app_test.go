@@ -741,7 +741,7 @@ func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 	}
 	h.app.pullOnce(ctx)
 	row := func(subject string, close float64) *storagepb.PrimaryUpsertFieldsReq {
-		return &storagepb.PrimaryUpsertFieldsReq{SpaceId: "crypto", DatasetId: "ds_1m", Rows: []*storagepb.RowFieldUpsert{{
+		return &storagepb.PrimaryUpsertFieldsReq{SpaceId: "crypto", DatasetId: "ds_1m", Rows: []*storagepb.Row{{
 			Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "ds_1m", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 				SubjectId: subject, Freq: "1m", DataTime: "2026-09-01T00:00:00Z"}}},
 			Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: close}}}},

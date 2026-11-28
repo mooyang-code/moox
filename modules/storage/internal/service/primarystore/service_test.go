@@ -23,14 +23,14 @@ func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := newHookStore(t)
-			store.upsert = func(context.Context, string, string, []*pb.RowFieldUpsert) error {
+			store.upsert = func(context.Context, string, string, []*pb.Row) error {
 				t.Fatal("write reached the store")
 				return nil
 			}
 			svc, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return singleDatasetSnapshot{dataset: dataset} }})
 			require.NoError(t, err)
 			key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-			rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "v", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}}}}}))
+			rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.Row{{Key: key, Fields: []*pb.FieldValue{{FieldId: "v", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}}}}}))
 			require.NoError(t, err)
 			require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 			// 读取按错误类别返回：不存在是 NOT_FOUND，已停用是参数错误，都不走框架错误。
@@ -51,12 +51,12 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := &pb.RowFieldUpsert{
+	row := &pb.Row{
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "allowed"}}}},
 	}
 	upsert, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		Rows: []*pb.RowFieldUpsert{row},
+		Rows: []*pb.Row{row},
 	}))
 	if err != nil || upsert.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("upsert rsp=%v err=%v", upsert, err)
@@ -131,7 +131,7 @@ func (periodAuthorizationSnapshot) ListDatasetColumns(string, string, *pb.Page) 
 
 func TestCommitTimeSeriesBatchValidatesPeriodDataset(t *testing.T) {
 	runPeriodValidationCases(t, "commit", func(svc *Service, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
-		row := &pb.RowFieldUpsert{Key: &pb.RowKey{
+		row := &pb.Row{Key: &pb.RowKey{
 			SpaceId: exp.GetSpaceId(), DatasetId: exp.GetDatasetId(),
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: exp.GetFrequency(), DataTime: "2026-09-30T00:00:00Z"}},
 		}}
@@ -233,7 +233,7 @@ func runPeriodValidationCases(t *testing.T, method string, invoke func(*Service,
 func TestPrimaryWritesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	var written []string
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
+	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.Row) error {
 		written = append(written, spaceID+"/"+datasetID)
 		return store.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 	}
@@ -241,8 +241,8 @@ func TestPrimaryWritesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := func(space, record string) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
+	row := func(space, record string) *pb.Row {
+		return &pb.Row{
 			Key:    &pb.RowKey{SpaceId: space, DatasetId: "shared", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: record, Version: "1"}}},
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: record}}}},
 		}
@@ -250,7 +250,7 @@ func TestPrimaryWritesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	// 一次请求只写一个数据集：两个空间里的同名数据集各写一次。
 	for _, item := range [][2]string{{"space-a", "a"}, {"space-b", "b"}} {
 		rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-			Rows: []*pb.RowFieldUpsert{row(item[0], item[1])},
+			Rows: []*pb.Row{row(item[0], item[1])},
 		}))
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("write %s rsp=%v err=%v", item[0], rsp, err)
@@ -276,8 +276,8 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := func(freq string, at time.Time) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
+	row := func(freq string, at time.Time) *pb.Row {
+		return &pb.Row{
 			Key: &pb.RowKey{
 				SpaceId: "crypto", DatasetId: "market_kline",
 				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
@@ -292,7 +292,7 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 	t1003 := time.Date(2026, 7, 28, 10, 3, 0, 0, time.UTC)
 	t1005 := t1003.Add(2 * time.Minute)
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		Rows: []*pb.RowFieldUpsert{row("1m", t1003), row("1m", t1005), row("5m", t1003)},
+		Rows: []*pb.Row{row("1m", t1003), row("1m", t1005), row("5m", t1003)},
 	}))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
@@ -314,7 +314,7 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 
 func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 	store := newHookStore(t)
-	store.upsert = func(context.Context, string, string, []*pb.RowFieldUpsert) error {
+	store.upsert = func(context.Context, string, string, []*pb.Row) error {
 		return errors.New("write failed")
 	}
 	metrics := &recordingDatasetMetrics{}
@@ -324,7 +324,7 @@ func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 	}
 	at := time.Date(2026, 7, 28, 10, 5, 0, 0, time.UTC)
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		Rows: []*pb.RowFieldUpsert{{
+		Rows: []*pb.Row{{
 			Key: &pb.RowKey{
 				SpaceId: "crypto", DatasetId: "market_kline",
 				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
@@ -354,7 +354,7 @@ func TestPrimaryDoesNotObserveRecordDataset(t *testing.T) {
 		t.Fatal(err)
 	}
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		Rows: []*pb.RowFieldUpsert{{
+		Rows: []*pb.Row{{
 			Key: &pb.RowKey{
 				SpaceId: "crypto", DatasetId: "symbols",
 				Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "BTC-USDT", Version: "1"}},
@@ -374,10 +374,10 @@ func TestPrimaryDoesNotObserveRecordDataset(t *testing.T) {
 
 func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 	store := newHookStore(t)
-	store.readRows = func(_ context.Context, keys []*pb.RowKey, _, _ []string) ([]*pb.RowFieldValues, error) {
-		rows := make([]*pb.RowFieldValues, 0, len(keys))
+	store.readRows = func(_ context.Context, keys []*pb.RowKey, _, _ []string) ([]*pb.Row, error) {
+		rows := make([]*pb.Row, 0, len(keys))
 		for _, key := range keys {
-			rows = append(rows, &pb.RowFieldValues{Key: key})
+			rows = append(rows, &pb.Row{Key: key})
 		}
 		return rows, nil
 	}
@@ -407,13 +407,13 @@ func TestPrimaryReadRowsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 	provider := &mutableSnapshotProvider{current: &testRequestSnapshot{generation: "generation-a"}}
 	var generations []string
 	store := newHookStore(t)
-	store.readRows = func(ctx context.Context, keys []*pb.RowKey, _, _ []string) ([]*pb.RowFieldValues, error) {
+	store.readRows = func(ctx context.Context, keys []*pb.RowKey, _, _ []string) ([]*pb.Row, error) {
 		snapshot, ok := metadata.RequestSnapshotFromContext(ctx).(*testRequestSnapshot)
 		if !ok || snapshot == nil {
 			t.Fatalf("request snapshot missing for %s", keys[0].GetDatasetId())
 		}
 		generations = append(generations, snapshot.generation)
-		return []*pb.RowFieldValues{{Key: keys[0]}}, nil
+		return []*pb.Row{{Key: keys[0]}}, nil
 	}
 	svc, err := New(Options{Store: store, Snapshot: provider.RequestSnapshot})
 	if err != nil {
@@ -438,7 +438,7 @@ func TestPrimaryReadRowsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 
 func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 	store := newHookStore(t)
-	store.upsert = func(context.Context, string, string, []*pb.RowFieldUpsert) error {
+	store.upsert = func(context.Context, string, string, []*pb.Row) error {
 		t.Fatal("write should not reach the store")
 		return nil
 	}
@@ -447,7 +447,7 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		Rows: []*pb.RowFieldUpsert{{
+		Rows: []*pb.Row{{
 			Key:    &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}}},
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}},
 		}},
@@ -465,7 +465,7 @@ func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 	for _, version := range []string{"1", "2"} {
 		key := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}
 		rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-			Rows: []*pb.RowFieldUpsert{{
+			Rows: []*pb.Row{{
 				Key: key,
 				Fields: []*pb.FieldValue{{
 					FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: version}},
@@ -493,13 +493,9 @@ func TestPrimaryReadRowsRoundTripsThroughPebble(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := &pb.TimeSeriesKey{
-		SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", SubjectId: "BTC-USDT", Freq: "1h",
-		DataTime: "2026-07-29T15:00:00Z", SeriesTag: "venue:binance",
-	}
-	rowKey := timeSeriesRowKey(key)
+	rowKey := timeSeriesRowKey("crypto", "dataset_spot_kline_1h", "BTC-USDT", "1h", "2026-07-29T15:00:00Z", "venue:binance")
 	writeRsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		Rows: []*pb.RowFieldUpsert{{
+		Rows: []*pb.Row{{
 			Key: rowKey,
 			Fields: []*pb.FieldValue{{
 				FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 101.25}},
@@ -551,11 +547,11 @@ func (attrsSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.Dataset
 	return nil, &pb.PageResult{}, nil
 }
 
-func timeSeriesRowKey(key *pb.TimeSeriesKey) *pb.RowKey {
+func timeSeriesRowKey(spaceID, datasetID, subjectID, freq, dataTime, seriesTag string) *pb.RowKey {
 	return &pb.RowKey{
-		SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+		SpaceId: spaceID, DatasetId: datasetID,
 		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
+			SubjectId: subjectID, Freq: freq, DataTime: dataTime, SeriesTag: seriesTag,
 		}},
 	}
 }

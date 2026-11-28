@@ -17,9 +17,9 @@ import (
 type recoveryFieldReader struct{ primaryPresent bool }
 
 func (r recoveryFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
-	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+	rows := make([]*pb.Row, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
-		row := &pb.RowFieldValues{Key: key}
+		row := &pb.Row{Key: key}
 		if key.GetDatasetId() == "primary" && r.primaryPresent {
 			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "base", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}})
 			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "factor", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}})
@@ -65,13 +65,13 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	tag := "venue:okx"
 	rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "quant", DatasetId: "prices",
-		Selectors:   []*pb.TimeSeriesSelector{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &tag}},
+		Selectors:   []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &tag}},
 		ColumnNames: []string{"close"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 || len(rsp.GetRows()[0].GetFields()) != 1 {
 		t.Fatalf("query: rsp=%v err=%v", rsp, err)
 	}
-	if rsp.GetRows()[0].GetKey().GetSeriesTag() != tag {
+	if rsp.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag() != tag {
 		t.Fatalf("query lost exact series tag: rsp=%v", rsp)
 	}
 }

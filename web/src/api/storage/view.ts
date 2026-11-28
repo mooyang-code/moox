@@ -3,14 +3,13 @@ import type {
   FilterSpec,
   Page,
   PageResult,
-  RecordKey,
-  RecordRow,
+  RecordRowKey,
   ResultColumn,
   RetInfo,
+  Row,
   SortSpec,
   TimeRange,
   TimeSeriesSelector,
-  TimeSeriesRow,
   TotalMode,
   VersionRange
 } from "./types";
@@ -35,7 +34,7 @@ export interface QueryTimeSeriesRowsReq {
 export interface SearchRecordRowsReq {
   space_id: string;
   dataset_id: string;
-  keys?: RecordKey[];
+  keys?: RecordRowKey[];
   text_query?: string;
   version_range?: VersionRange;
   filter?: FilterSpec;
@@ -47,15 +46,16 @@ export interface SearchRecordRowsReq {
 export function queryTimeSeriesRows(req: QueryTimeSeriesRowsReq, options: CallOptions = {}) {
   return callStorage<
     QueryTimeSeriesRowsReq,
-    { ret_info: RetInfo; columns: ResultColumn[]; rows: TimeSeriesRow[]; page_result: PageResult }
+    { ret_info: RetInfo; columns: ResultColumn[]; rows: Row[]; page_result: PageResult }
   >("QueryTimeSeriesRows", req, options);
 }
 
 export function searchRecordRows(req: SearchRecordRowsReq, options: CallOptions = {}) {
-  return callStorage<
-    SearchRecordRowsReq,
-    { ret_info: RetInfo; columns: ResultColumn[]; rows: RecordRow[]; page_result: PageResult }
-  >("SearchRecordRows", req, options);
+  return callStorage<SearchRecordRowsReq, { ret_info: RetInfo; columns: ResultColumn[]; rows: Row[]; page_result: PageResult }>(
+    "SearchRecordRows",
+    req,
+    options
+  );
 }
 
 export interface GetViewStateReq {

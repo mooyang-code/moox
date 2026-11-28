@@ -157,7 +157,7 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 		Page:      &commonpb.Page{Size: uint32(req.PageRows), Cursor: req.Cursor},
 	}
 	for _, subject := range req.Subjects {
-		call.Selectors = append(call.Selectors, &storagepb.TimeSeriesSelector{SpaceId: req.SpaceID, DatasetId: req.DatasetID, SubjectId: subject, Freq: req.Freq})
+		call.Selectors = append(call.Selectors, &storagepb.TimeSeriesSelector{SubjectId: subject, Freq: req.Freq})
 	}
 	if err := c.gateway.Invoke(gatewayclient.WithoutRetry(ctx), "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", call, rsp); err != nil {
 		return Page{}, fmt.Errorf("read rows %s/%s: %w", req.SpaceID, req.DatasetID, err)
@@ -171,9 +171,10 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 	}
 	page := Page{Bytes: int64(proto.Size(rsp))}
 	for _, row := range rsp.GetRows() {
-		at, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+		ts := row.GetKey().GetTimeSeries()
+		at, err := time.Parse(time.RFC3339Nano, ts.GetDataTime())
 		if err != nil {
-			return Page{}, fmt.Errorf("row %s has invalid data_time %q: %w", row.GetKey().GetSubjectId(), row.GetKey().GetDataTime(), err)
+			return Page{}, fmt.Errorf("row %s has invalid data_time %q: %w", ts.GetSubjectId(), ts.GetDataTime(), err)
 		}
 		values := make([]any, len(req.Columns))
 		for _, field := range row.GetFields() {
@@ -183,11 +184,11 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 			}
 			value, err := Convert(req.Columns[i].Type, field.GetValue())
 			if err != nil {
-				return Page{}, fmt.Errorf("row %s@%s column %s: %w", row.GetKey().GetSubjectId(), row.GetKey().GetDataTime(), field.GetFieldId(), err)
+				return Page{}, fmt.Errorf("row %s@%s column %s: %w", ts.GetSubjectId(), ts.GetDataTime(), field.GetFieldId(), err)
 			}
 			values[i] = value
 		}
-		page.Rows = append(page.Rows, staging.Row{SubjectID: row.GetKey().GetSubjectId(), DataTime: at.UTC(), SeriesTag: row.GetKey().GetSeriesTag(), Values: values})
+		page.Rows = append(page.Rows, staging.Row{SubjectID: ts.GetSubjectId(), DataTime: at.UTC(), SeriesTag: ts.GetSeriesTag(), Values: values})
 	}
 	if pr := rsp.GetPageResult(); pr.GetHasMore() || pr.GetNextCursor() != "" {
 		page.NextCursor = pr.GetNextCursor()

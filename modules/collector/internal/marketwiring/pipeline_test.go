@@ -146,7 +146,7 @@ func TestCatalogRoutingMatchesTheRouteFiles(t *testing.T) {
 	}
 }
 
-func rowFields(row *storagepb.RowFieldUpsert) map[string]*storagepb.TypedValue {
+func rowFields(row *storagepb.Row) map[string]*storagepb.TypedValue {
 	fields := map[string]*storagepb.TypedValue{}
 	for _, field := range row.GetFields() {
 		fields[field.GetFieldId()] = field.GetValue()

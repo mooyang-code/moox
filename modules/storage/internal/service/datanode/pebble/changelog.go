@@ -135,7 +135,7 @@ func (s *Store) changeCommitted() <-chan struct{} {
 }
 
 // changeRanges 按 (标的, 频率) 合并一次写入里时间序列行的 data_time 范围。
-func changeRanges(rows []*pb.RowFieldUpsert) []*pb.DatasetChangeRange {
+func changeRanges(rows []*pb.Row) []*pb.DatasetChangeRange {
 	type key struct{ subject, freq string }
 	type span struct{ lo, hi string }
 	spans := map[key]*span{}
@@ -177,7 +177,7 @@ func changeRanges(rows []*pb.RowFieldUpsert) []*pb.DatasetChangeRange {
 }
 
 // changeRecords 收集一次写入里记录型行的记录键，去重后按 (record_id, version) 排序。
-func changeRecords(rows []*pb.RowFieldUpsert) []*pb.RecordRowKey {
+func changeRecords(rows []*pb.Row) []*pb.RecordRowKey {
 	type key struct{ id, version string }
 	seen := map[key]struct{}{}
 	var out []*pb.RecordRowKey

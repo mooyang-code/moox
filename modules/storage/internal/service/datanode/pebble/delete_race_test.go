@@ -34,14 +34,14 @@ func TestDeleteDatasetRowsRemovesRowsOfAWriteAdmittedBeforeIt(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	row := &pb.RowFieldUpsert{
+	row := &pb.Row{
 		Key:    &pb.RowKey{SpaceId: "s", DatasetId: "racing", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}},
 	}
 
 	writeErr := make(chan error, 1)
 	go func() {
-		err := store.UpsertFields(ctx, "s", "racing", []*pb.RowFieldUpsert{row})
+		err := store.UpsertFields(ctx, "s", "racing", []*pb.Row{row})
 		writeErr <- err
 	}()
 	<-entered
@@ -68,7 +68,7 @@ func TestDeleteDatasetRowsRemovesRowsOfAWriteAdmittedBeforeIt(t *testing.T) {
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("rows after delete=%v err=%v, want the admitted write removed", rows, err)
 	}
-	if err := store.UpsertFields(ctx, "s", "racing", []*pb.RowFieldUpsert{row}); !errors.Is(err, ErrDatasetDeleted) {
+	if err := store.UpsertFields(ctx, "s", "racing", []*pb.Row{row}); !errors.Is(err, ErrDatasetDeleted) {
 		t.Fatalf("write after delete err=%v, want ErrDatasetDeleted", err)
 	}
 }

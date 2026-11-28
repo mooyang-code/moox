@@ -25,8 +25,8 @@ func TestCountTimeSeriesRowsCountsTheActiveIndex(t *testing.T) {
 	svc := queryTestService(engine, true)
 	timeRange := &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T01:00:00Z"}
 	selectors := []*pb.TimeSeriesSelector{
-		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"},
-		{SpaceId: "space", DatasetId: "market", SubjectId: "ETH-USDT", Freq: "1m"},
+		{SubjectId: "BTC-USDT", Freq: "1m"},
+		{SubjectId: "ETH-USDT", Freq: "1m"},
 	}
 	rsp, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesViewRowsReq{SpaceId: "space", DatasetId: "market", Selectors: selectors, TimeRange: timeRange})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -40,10 +40,10 @@ func TestCountTimeSeriesRowsCountsTheActiveIndex(t *testing.T) {
 	}
 
 	for name, req := range map[string]*pb.CountTimeSeriesViewRowsReq{
+		"no space":            {DatasetId: "market", TimeRange: timeRange, Selectors: selectors},
 		"no selectors":        {SpaceId: "space", DatasetId: "market", TimeRange: timeRange},
 		"no time range":       {SpaceId: "space", DatasetId: "market", Selectors: selectors},
-		"another dataset":     {SpaceId: "space", DatasetId: "market", TimeRange: timeRange, Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "other", SubjectId: "BTC-USDT", Freq: "1m"}}},
-		"selector incomplete": {SpaceId: "space", DatasetId: "market", TimeRange: timeRange, Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT"}}},
+		"selector incomplete": {SpaceId: "space", DatasetId: "market", TimeRange: timeRange, Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT"}}},
 	} {
 		rejected, err := svc.CountTimeSeriesRows(context.Background(), req)
 		if err != nil || rejected.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {

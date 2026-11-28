@@ -333,7 +333,7 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 	}
 	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(query.Subjects))
 	for _, subject := range query.Subjects {
-		selector := &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: query.DatasetID, SubjectId: subject.SubjectID, Freq: query.Frequency}
+		selector := &storagepb.TimeSeriesSelector{SubjectId: subject.SubjectID, Freq: query.Frequency}
 		if subject.SeriesTag != "" {
 			tag := subject.SeriesTag
 			selector.SeriesTag = &tag
@@ -382,13 +382,14 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 	return rows, revision, nil
 }
 
-func convertRow(row *storagepb.TimeSeriesRow) (Row, error) {
-	if row == nil || row.GetKey() == nil {
+func convertRow(row *storagepb.Row) (Row, error) {
+	ts := row.GetKey().GetTimeSeries()
+	if row == nil || ts == nil {
 		return Row{}, errors.New("Storage 返回了无效的时序行")
 	}
-	at, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+	at, err := time.Parse(time.RFC3339Nano, ts.GetDataTime())
 	if err != nil {
-		return Row{}, fmt.Errorf("Storage 返回的 data_time %q 不是 RFC3339 时间", row.GetKey().GetDataTime())
+		return Row{}, fmt.Errorf("Storage 返回的 data_time %q 不是 RFC3339 时间", ts.GetDataTime())
 	}
 	values := make(map[string]float64, len(row.GetFields()))
 	var params map[string]map[string]float64
@@ -409,7 +410,7 @@ func convertRow(row *storagepb.TimeSeriesRow) (Row, error) {
 			values[field.GetFieldId()] = number
 		}
 	}
-	return Row{SubjectID: row.GetKey().GetSubjectId(), SeriesTag: row.GetKey().GetSeriesTag(), DataTime: at.UTC(), Values: values, Params: params}, nil
+	return Row{SubjectID: ts.GetSubjectId(), SeriesTag: ts.GetSeriesTag(), DataTime: at.UTC(), Values: values, Params: params}, nil
 }
 
 // numericValue 把 Storage 的类型值转为 float64；非数值或非有限值视为缺失。

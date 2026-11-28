@@ -31,6 +31,70 @@ func TestMetadataTimestampsTRPCJSONRoundTrip(t *testing.T) {
 	assertTRPCJSONRoundTrip(t, &DatasetChange{Sequence: 1, SpaceId: "s", DatasetId: "d", CreatedAt: created}, new(DatasetChange), map[string]int64{"created_at": created})
 }
 
+// 统一行消息（Row）、TimeSeriesSelector 与 SearchRecordRowsReq 经 tRPC JSON 往返保持字段名与可选语意一致。
+func TestUnifiedRowAndKeyTRPCJSONRoundTrip(t *testing.T) {
+	serializer := codec.GetSerializer(codec.SerializationTypeJSON)
+	emptyTag := ""
+	queryReq := &QueryTimeSeriesRowsReq{
+		SpaceId: "crypto", DatasetId: "ds_kline",
+		Selectors: []*TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &emptyTag}},
+	}
+	raw, err := serializer.Marshal(queryReq)
+	if err != nil {
+		t.Fatalf("marshal QueryTimeSeriesRowsReq: %v", err)
+	}
+	var decodedQuery QueryTimeSeriesRowsReq
+	if err := serializer.Unmarshal(raw, &decodedQuery); err != nil {
+		t.Fatalf("unmarshal QueryTimeSeriesRowsReq: %v", err)
+	}
+	if !proto.Equal(queryReq, &decodedQuery) || decodedQuery.GetSelectors()[0].SeriesTag == nil {
+		t.Fatalf("QueryTimeSeriesRowsReq round trip mismatch: got %v want %v", &decodedQuery, queryReq)
+	}
+
+	searchReq := &SearchRecordRowsReq{
+		SpaceId: "crypto", DatasetId: "ds_rec",
+		Keys: []*RecordRowKey{{RecordId: "r1", Version: "v1"}, {RecordId: "r2"}},
+	}
+	raw, err = serializer.Marshal(searchReq)
+	if err != nil {
+		t.Fatalf("marshal SearchRecordRowsReq: %v", err)
+	}
+	var decodedSearch SearchRecordRowsReq
+	if err := serializer.Unmarshal(raw, &decodedSearch); err != nil {
+		t.Fatalf("unmarshal SearchRecordRowsReq: %v", err)
+	}
+	if !proto.Equal(searchReq, &decodedSearch) {
+		t.Fatalf("SearchRecordRowsReq round trip mismatch: got %v want %v", &decodedSearch, searchReq)
+	}
+
+	row := &Row{
+		Key: &RowKey{
+			SpaceId: "crypto", DatasetId: "ds_kline",
+			Kind: &RowKey_TimeSeries{TimeSeries: &TimeSeriesRowKey{
+				SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-10-01T00:00:00Z", SeriesTag: "venue:binance",
+			}},
+		},
+		Fields: []*FieldValue{{FieldId: "close", Value: &TypedValue{Value: &TypedValue_DoubleValue{DoubleValue: 100.5}}}},
+		Attributes: map[string]*TypedValue{
+			"source": {Value: &TypedValue_StringValue{StringValue: "spot"}},
+		},
+	}
+	raw, err = serializer.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshal Row: %v", err)
+	}
+	var decodedRow Row
+	if err := serializer.Unmarshal(raw, &decodedRow); err != nil {
+		t.Fatalf("unmarshal Row: %v", err)
+	}
+	if !proto.Equal(row, &decodedRow) {
+		t.Fatalf("Row round trip mismatch: got %v want %v", &decodedRow, row)
+	}
+	if !strings.Contains(string(raw), `"time_series"`) || !strings.Contains(string(raw), `"subject_id"`) {
+		t.Fatalf("Row JSON 应使用 proto 字段名，实际=%s", raw)
+	}
+}
+
 // assertTRPCJSONRoundTrip 用服务端实际使用的 JSON 序列化（trpc-go 注册的 SerializationTypeJSON，即 protojson）编码再解码：
 // 解码后与原消息相同，want 里每个字段路径（点分，数组用下标）在 JSON 里都是十进制数字字符串。
 func assertTRPCJSONRoundTrip(t *testing.T, message, decoded proto.Message, want map[string]int64) {

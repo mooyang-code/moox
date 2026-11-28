@@ -1,7 +1,7 @@
 import { computed, ref, type Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { queryTimeSeriesRows } from "@/api/storage/view";
-import type { FilterSpec, TimeRange, TimeSeriesKey, TimeSeriesRow } from "@/api/storage/types";
+import type { FilterSpec, Row, RowKey, TimeRange } from "@/api/storage/types";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
   buildKlineChartRecords,
@@ -18,7 +18,7 @@ import {
   type ViewFilterState
 } from "../view-browse-utils";
 
-export type ViewBrowseTableRow = BrowseTableRow & { freq?: string; rawKey?: TimeSeriesKey };
+export type ViewBrowseTableRow = BrowseTableRow & { freq?: string; rawKey?: RowKey };
 
 export const KLINE_PAGE_SIZE = 25;
 
@@ -68,10 +68,10 @@ export function useViewKline(options: UseViewKlineOptions) {
   }
 
   /** 行操作“K 线”：直接用这一行的标的和序列标签打开图表。 */
-  async function openRowKline(record: { rawKey?: { subject_id?: string; series_tag?: string } }) {
-    const subjectId = record.rawKey?.subject_id;
+  async function openRowKline(record: { rawKey?: { time_series?: { subject_id?: string; series_tag?: string } } }) {
+    const subjectId = record.rawKey?.time_series?.subject_id;
     if (!subjectId) return;
-    const seriesTag = record.rawKey?.series_tag ?? "";
+    const seriesTag = record.rawKey?.time_series?.series_tag ?? "";
     klineRowFilter.value = { subjectId, seriesTag };
     klineSubjectId.value = subjectId;
     const ok = await loadKlineRecords(subjectId, seriesTag, rowKlineFilter(subjectId, seriesTag));
@@ -163,7 +163,7 @@ export function useViewKline(options: UseViewKlineOptions) {
   ): Promise<ViewBrowseTableRow[]> {
     const space_id = options.spaceId();
     const timeRange = options.previewRange();
-    const rows: TimeSeriesRow[] = [];
+    const rows: Row[] = [];
     const limit = query.limit;
     for (let pageNo = 1; rows.length < limit; pageNo += 1) {
       const rsp = await queryTimeSeriesRows({
@@ -184,8 +184,8 @@ export function useViewKline(options: UseViewKlineOptions) {
     }
     return timeSeriesRowsToTableRows(rows).map((row, index) => ({
       ...row,
-      freq: rows[index]?.key?.freq || "-",
-      seriesTag: rows[index]?.key?.series_tag || "",
+      freq: rows[index]?.key?.time_series?.freq || "-",
+      seriesTag: rows[index]?.key?.time_series?.series_tag || "",
       rawKey: rows[index]?.key
     }));
   }

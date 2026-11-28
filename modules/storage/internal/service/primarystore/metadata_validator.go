@@ -25,12 +25,12 @@ func NewMetadataValidator(reader metadataReader) *MetadataValidator {
 	return &MetadataValidator{reader: reader}
 }
 
-func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUpsert) error {
+func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.Row) error {
 	return v.validateRow(ctx, row, v.snapshotReader(ctx))
 }
 
 // ValidateRows 校验一批行。数据集与列定义按 (space, dataset) 只查一次。检查顺序与逐行校验相同（数据集、行键、频率，再到列）。
-func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFieldUpsert) error {
+func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.Row) error {
 	if v == nil {
 		return fmt.Errorf("metadata validator is not configured")
 	}
@@ -57,7 +57,7 @@ type cachedRowValidator struct {
 	schemas map[[2]string]*datasetSchema
 }
 
-func (c *cachedRowValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUpsert) error {
+func (c *cachedRowValidator) ValidateRow(ctx context.Context, row *pb.Row) error {
 	if c.reader == nil {
 		return fmt.Errorf("metadata validator is not configured")
 	}
@@ -113,7 +113,7 @@ func (v *MetadataValidator) RequestSnapshot() metadata.RequestSnapshot {
 	return nil
 }
 
-func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUpsert, reader metadataReader) error {
+func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.Row, reader metadataReader) error {
 	if v == nil || reader == nil {
 		return fmt.Errorf("metadata validator is not configured")
 	}
@@ -173,7 +173,7 @@ func (d *datasetSchema) loadColumns(ctx context.Context) (map[string]*pb.Dataset
 	return allowed, nil
 }
 
-func (d *datasetSchema) check(ctx context.Context, row *pb.RowFieldUpsert) error {
+func (d *datasetSchema) check(ctx context.Context, row *pb.Row) error {
 	key := row.GetKey()
 	dataset, err := d.loadDataset(ctx)
 	if err != nil {

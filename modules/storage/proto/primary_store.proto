@@ -29,7 +29,7 @@ message SeriesSnapshotEntry {
 
 message TimeSeriesBatchRow {
   uint32 series_index = 1;
-  RowFieldUpsert row = 2;
+  Row row = 2;
 }
 
 // RowsCursor 是 ReadTimeSeriesRows 游标的内容，只在服务端编码与解码，不出现在公开请求中。
@@ -76,7 +76,7 @@ message PrimaryCommitTimeSeriesBatchRsp {
 message PrimaryUpsertFieldsReq {
   string space_id = 2;
   string dataset_id = 3;
-  repeated RowFieldUpsert rows = 4;
+  repeated Row rows = 4;
 }
 
 message PrimaryUpsertFieldsRsp {
@@ -95,7 +95,7 @@ message PrimaryReadRowsReq {
 // 不存在的键不返回；顺序与请求一致，调用方按键匹配。
 message PrimaryReadRowsRsp {
   common.RetInfo ret_info = 1;
-  repeated RowFieldValues rows = 2;
+  repeated Row rows = 2;
 }
 
 message ReportDatasetPeriodCompletedReq {

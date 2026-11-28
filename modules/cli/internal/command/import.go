@@ -443,8 +443,8 @@ func (t *importStorageTarget) Finish(ctx context.Context) error {
 
 // importUpserts 把一批行转成 Storage 的字段更新（归档目标写的也是这一种行）；多标的文件每行的标的取 Batch.Subjects。空值写成显式 NULL（清除该字段，与因子机本地「整段替换」的结果一致，
 // 否则 Storage 保留旧值、本地为 NULL，两边不一致，之后同步还会把本地改回旧值）。
-func importUpserts(c runner.Chunk, types map[string]pb.FieldValueType) ([]*pb.RowFieldUpsert, error) {
-	rows := make([]*pb.RowFieldUpsert, 0, c.Batch.Len())
+func importUpserts(c runner.Chunk, types map[string]pb.FieldValueType) ([]*pb.Row, error) {
+	rows := make([]*pb.Row, 0, c.Batch.Len())
 	for i := 0; i < c.Batch.Len(); i++ {
 		var values []*pb.FieldValue
 		for fi, field := range c.Fields {
@@ -463,7 +463,7 @@ func importUpserts(c runner.Chunk, types map[string]pb.FieldValueType) ([]*pb.Ro
 		if c.Batch.Subjects != nil {
 			subject = c.Batch.Subjects[i]
 		}
-		rows = append(rows, &pb.RowFieldUpsert{
+		rows = append(rows, &pb.Row{
 			Key: &pb.RowKey{SpaceId: c.Space, DatasetId: c.Dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 				SubjectId: subject, Freq: c.Freq, DataTime: c.Batch.Times[i].UTC().Format(time.RFC3339Nano), SeriesTag: c.Batch.Tags[i],
 			}}},

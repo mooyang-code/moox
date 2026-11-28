@@ -96,7 +96,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 		PeriodTime: period.Unix(), SeriesHash: snapshot.SeriesHash, ExpectedCount: snapshot.ExpectedCount,
 		AllowedLatenessSeconds: 15,
 	}
-	row := &storagegen.RowFieldUpsert{
+	row := &storagegen.Row{
 		Key: &storagegen.RowKey{SpaceId: expectation.SpaceID, DatasetId: expectation.DatasetID, Kind: &storagegen.RowKey_TimeSeries{TimeSeries: &storagegen.TimeSeriesRowKey{
 			SubjectId: "BTC-USDT", SeriesTag: "default", Freq: expectation.Frequency, DataTime: period.Format(time.RFC3339Nano),
 		}}},

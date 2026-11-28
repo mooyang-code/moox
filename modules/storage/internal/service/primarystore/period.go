@@ -60,7 +60,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	if err := validatePeriodDataset(ctx, exp); err != nil {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	rows := make([]*pb.RowFieldUpsert, 0, len(req.GetItems()))
+	rows := make([]*pb.Row, 0, len(req.GetItems()))
 	for _, item := range req.GetItems() {
 		if item == nil || item.GetRow() == nil {
 			return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("batch item row is required"))}, nil
@@ -68,7 +68,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		rows = append(rows, item.GetRow())
 	}
 	if batchValidator, ok := s.validate.(interface {
-		ValidateRows(context.Context, []*pb.RowFieldUpsert) error
+		ValidateRows(context.Context, []*pb.Row) error
 	}); ok {
 		if err := batchValidator.ValidateRows(ctx, rows); err != nil {
 			return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil

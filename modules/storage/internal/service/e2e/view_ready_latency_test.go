@@ -239,7 +239,7 @@ func runFactorPeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, 
 	samples := make([]readyBenchSample, 0, params.rounds)
 	for round := 0; round <= params.rounds; round++ {
 		period := readyBenchBase.Add(time.Duration(round) * readyBenchStep)
-		rows := make([]*pb.RowFieldUpsert, len(dataset.subjects))
+		rows := make([]*pb.Row, len(dataset.subjects))
 		for i, subject := range dataset.subjects {
 			rows[i] = readyBenchRow(dataset, subject, period, round)
 		}
@@ -275,7 +275,7 @@ func runImportBench(t *testing.T, ctx context.Context, env readyBenchEnv, kline 
 		subject := fmt.Sprintf("IMPORT%02d-USDT", round)
 		dataset := kline
 		dataset.subjects = []string{subject}
-		rows := make([]*pb.RowFieldUpsert, 0, params.importBars)
+		rows := make([]*pb.Row, 0, params.importBars)
 		for at := from; at.Before(to); at = at.Add(readyBenchStep) {
 			rows = append(rows, readyBenchRow(dataset, subject, at, round))
 		}
@@ -299,7 +299,7 @@ func runImportBench(t *testing.T, ctx context.Context, env readyBenchEnv, kline 
 	return samples
 }
 
-func writeRowsInBatches(t *testing.T, ctx context.Context, env readyBenchEnv, dataset readyBenchDataset, rows []*pb.RowFieldUpsert) {
+func writeRowsInBatches(t *testing.T, ctx context.Context, env readyBenchEnv, dataset readyBenchDataset, rows []*pb.Row) {
 	t.Helper()
 	for from := 0; from < len(rows); from += readyBenchWriteBatchRows {
 		to := min(from+readyBenchWriteBatchRows, len(rows))
@@ -336,8 +336,8 @@ func requireViewRows(t *testing.T, ctx context.Context, env readyBenchEnv, datas
 }
 
 // readyBenchRow 生成一行：每列一个确定的值，round 让不同轮的值不同。
-func readyBenchRow(dataset readyBenchDataset, subject string, at time.Time, round int) *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func readyBenchRow(dataset readyBenchDataset, subject string, at time.Time, round int) *pb.Row {
+	return &pb.Row{
 		Key: &pb.RowKey{SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 			SubjectId: subject, SeriesTag: "default", Freq: readyBenchFreq, DataTime: at.UTC().Format(time.RFC3339Nano),
 		}}},

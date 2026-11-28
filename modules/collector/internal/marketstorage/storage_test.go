@@ -47,8 +47,8 @@ func TestInternalGatewayWriterDoesNotRepeatFailedCalls(t *testing.T) {
 			return w.CommitTimeSeriesBatch(t.Context(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}})
 		}},
 		{"UpsertFields", func(w BatchStorage) error {
-			row := &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset"}}
-			return w.UpsertFields(t.Context(), []*storagepb.RowFieldUpsert{row})
+			row := &storagepb.Row{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset"}}
+			return w.UpsertFields(t.Context(), []*storagepb.Row{row})
 		}},
 	} {
 		t.Run(operation.name, func(t *testing.T) {

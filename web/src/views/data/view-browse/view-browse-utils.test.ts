@@ -158,6 +158,7 @@ describe("rowsToColumnNames", () => {
       rowsToColumnNames(
         [
           {
+            key: { space_id: "", dataset_id: "" },
             fields: [{ field_id: "open" }, { field_id: "bias_20" }, { field_id: "cci" }]
           }
         ],
@@ -170,6 +171,7 @@ describe("rowsToColumnNames", () => {
     expect(
       rowsToColumnNames([
         {
+          key: { space_id: "", dataset_id: "" },
           fields: [{ field_id: "open" }, { field_id: "close" }]
         }
       ])
@@ -222,7 +224,11 @@ describe("时间值的显示", () => {
     const [row] = timeSeriesRowsToTableRows(
       [
         {
-          key: { subject_id: "BTC", freq: "1m", series_tag: "", data_time: "2026-11-07T01:30:00Z" },
+          key: {
+            space_id: "crypto",
+            dataset_id: "d",
+            time_series: { subject_id: "BTC", freq: "1m", series_tag: "", data_time: "2026-11-07T01:30:00Z" }
+          },
           fields: [{ field_id: "close_time", value: { time_value: "2026-11-07T01:31:00Z" } }]
         }
       ] as never,

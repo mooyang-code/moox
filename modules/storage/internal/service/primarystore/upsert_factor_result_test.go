@@ -12,7 +12,7 @@ import (
 // factorRowsCall 是存储层收到的一次写入。
 type factorRowsCall struct {
 	spaceID, datasetID string
-	rows               []*pb.RowFieldUpsert
+	rows               []*pb.Row
 }
 
 type factorRowsSnapshot struct {
@@ -35,8 +35,8 @@ func factorRowsMetadata() metadata.RequestSnapshot {
 	}
 }
 
-func factorRowsRecord(field string) *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func factorRowsRecord(field string) *pb.Row {
+	return &pb.Row{
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row-1", Version: "v1"}}},
 		Fields: []*pb.FieldValue{{FieldId: field, Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}},
 	}
@@ -46,7 +46,7 @@ func factorRowsRecord(field string) *pb.RowFieldUpsert {
 func newFactorResultService(t *testing.T, snapshot func() metadata.RequestSnapshot, calls *[]factorRowsCall) *Service {
 	t.Helper()
 	store := newHookStore(t)
-	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
+	store.upsert = func(ctx context.Context, spaceID, datasetID string, rows []*pb.Row) error {
 		*calls = append(*calls, factorRowsCall{spaceID: spaceID, datasetID: datasetID, rows: rows})
 		return store.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 	}
@@ -57,7 +57,7 @@ func newFactorResultService(t *testing.T, snapshot func() metadata.RequestSnapsh
 	return svc
 }
 
-func factorResultRequest(appID string, rows ...*pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsReq {
+func factorResultRequest(appID string, rows ...*pb.Row) *pb.PrimaryUpsertFieldsReq {
 	return &pb.PrimaryUpsertFieldsReq{SpaceId: "space", DatasetId: "result", Rows: rows}
 }
 
@@ -87,7 +87,7 @@ func TestUpsertFieldsRejectsBeforeWriting(t *testing.T) {
 	cases := []struct {
 		name     string
 		snapshot func() metadata.RequestSnapshot
-		row      *pb.RowFieldUpsert
+		row      *pb.Row
 		code     pb.ErrorCode
 	}{
 		{"未登记的列", factorRowsMetadata, factorRowsRecord("unregistered"), pb.ErrorCode_INVALID_PARAM},
@@ -125,8 +125,8 @@ func TestUpsertFieldsForwardsTheParamsJSONColumn(t *testing.T) {
 			return s
 		}
 	}
-	row := func() *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
+	row := func() *pb.Row {
+		return &pb.Row{
 			Key: &pb.RowKey{SpaceId: "space", DatasetId: "result", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "5m", DataTime: "2026-10-25T16:35:00Z"}}},
 			Fields: []*pb.FieldValue{
 				{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}},

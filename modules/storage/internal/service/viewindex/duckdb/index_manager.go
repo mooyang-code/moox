@@ -622,7 +622,7 @@ func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex
 	return nil, errors.New("invalid JSON value")
 }
 
-func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return nil, 0, err
@@ -686,7 +686,7 @@ type whereClause struct {
 	args []any
 }
 
-func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[string]pb.FieldValueType, spaceID, datasetID string, spec viewindex.QuerySpec, where string, args []any) ([]*pb.RowFieldValues, error) {
+func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[string]pb.FieldValueType, spaceID, datasetID string, spec viewindex.QuerySpec, where string, args []any) ([]*pb.Row, error) {
 	selectColumns := []string{"subject_id", "freq", "data_time", "series_tag"}
 	projected, err := resolveIncludedColumns(columns, spec.Includes)
 	if err != nil {
@@ -719,7 +719,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		return nil, err
 	}
 	defer rows.Close()
-	result := make([]*pb.RowFieldValues, 0)
+	result := make([]*pb.Row, 0)
 	for rows.Next() {
 		values := make([]any, len(selectColumns))
 		dest := make([]any, len(values))
@@ -733,7 +733,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		if err != nil {
 			return nil, err
 		}
-		row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Freq: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
+		row := &pb.Row{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Freq: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
 		for index, name := range selectColumns[4:] {
 			value := values[index+4]
 			if value == nil {

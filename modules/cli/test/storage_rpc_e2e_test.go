@@ -66,7 +66,7 @@ func (*storageOperationsWire) ReadTimeSeriesRows(ctx context.Context, req *pb.Re
 	if err := storageOperationSpace(ctx); err != nil {
 		return nil, err
 	}
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}, Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "prices", SubjectId: "BTC-USDT"}}}}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}, Rows: []*pb.Row{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT"}}}}}}, nil
 }
 
 func (w *storageOperationsWire) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {

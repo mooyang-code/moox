@@ -5,9 +5,8 @@ import type {
   FieldValueType,
   FilterCond,
   FilterSpec,
-  RecordRow,
+  Row,
   SortSpec,
-  TimeSeriesRow,
   TypedValue
 } from "@/api/storage/types";
 import { formatInstant, toInstantMs, wallClockToMs } from "@/utils/time-zone";
@@ -418,7 +417,7 @@ export function typedValueText(value?: TypedValue, zone?: string): string {
   return "-";
 }
 
-export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, preferred: string[] = []) {
+export function rowsToColumnNames(rows: Row[], preferred: string[] = []) {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const name of preferred) {
@@ -439,23 +438,29 @@ export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, prefer
 }
 
 /** version 保留原始的 data_time（排序、K 线要用），显示时再按时区格式化；zone 只用于 TIME 类型的字段值。 */
-export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[], zone?: string): BrowseTableRow[] {
-  return rows.map(row => ({
-    id: `ts-${row.key?.subject_id || ""}-${row.key?.freq || ""}-${row.key?.series_tag || ""}-${row.key?.data_time || ""}`,
-    key: row.key?.subject_id || "-",
-    version: row.key?.data_time || "-",
-    seriesTag: row.key?.series_tag || "",
-    values: fieldsToValueMap(row.fields || [], zone)
-  }));
+export function timeSeriesRowsToTableRows(rows: Row[], zone?: string): BrowseTableRow[] {
+  return rows.map(row => {
+    const ts = row.key?.time_series;
+    return {
+      id: `ts-${ts?.subject_id || ""}-${ts?.freq || ""}-${ts?.series_tag || ""}-${ts?.data_time || ""}`,
+      key: ts?.subject_id || "-",
+      version: ts?.data_time || "-",
+      seriesTag: ts?.series_tag || "",
+      values: fieldsToValueMap(row.fields || [], zone)
+    };
+  });
 }
 
-export function recordRowsToTableRows(rows: RecordRow[], zone?: string): BrowseTableRow[] {
-  return rows.map((row, index) => ({
-    id: `record-${index}-${row.key?.record_id || ""}-${row.key?.version || ""}`,
-    key: row.key?.record_id || "-",
-    version: row.key?.version || "-",
-    values: fieldsToValueMap(row.fields || [], zone)
-  }));
+export function recordRowsToTableRows(rows: Row[], zone?: string): BrowseTableRow[] {
+  return rows.map((row, index) => {
+    const rec = row.key?.record;
+    return {
+      id: `record-${index}-${rec?.record_id || ""}-${rec?.version || ""}`,
+      key: rec?.record_id || "-",
+      version: rec?.version || "-",
+      values: fieldsToValueMap(row.fields || [], zone)
+    };
+  });
 }
 
 function fieldsToValueMap(fields: FieldValue[], zone?: string) {

@@ -183,16 +183,24 @@ describe("目录过滤、分页与取值", () => {
       {
         space_id: "crypto",
         dataset_id: "d",
-        subject_id: "BTC",
-        freq: "1m",
-        series_tag: undefined,
-        data_time: "2026-10-24T10:00:00Z"
+        time_series: {
+          subject_id: "BTC",
+          freq: "1m",
+          series_tag: undefined,
+          data_time: "2026-10-24T10:00:00Z"
+        }
       },
       ["boll__mid"]
     );
-    expect(req.selectors).toEqual([{ space_id: "crypto", dataset_id: "d", subject_id: "BTC", freq: "1m", series_tag: "" }]);
+    expect(req.selectors).toEqual([{ subject_id: "BTC", freq: "1m", series_tag: "" }]);
     expect(req.time_range).toEqual({ start_time: "2026-10-24T10:00:00.000Z", end_time: "2026-10-24T10:00:00.001Z" });
-    expect(req).toMatchObject({ dataset_id: "d", column_names: ["boll__mid"], page: { page: 1, size: 1 }, total_mode: "NONE" });
+    expect(req).toMatchObject({
+      space_id: "crypto",
+      dataset_id: "d",
+      column_names: ["boll__mid"],
+      page: { page: 1, size: 1 },
+      total_mode: "NONE"
+    });
   });
 
   it("成员在这一行实际用的参数取自 __params，数值格式", () => {

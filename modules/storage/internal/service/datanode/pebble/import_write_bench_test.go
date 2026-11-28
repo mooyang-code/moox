@@ -26,15 +26,15 @@ func TestImportUpsertThroughput(t *testing.T) {
 	const rowsPerRequest = 1000
 	columns := []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"}
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	buildRequest := func(n int) []*pb.RowFieldUpsert {
-		rows := make([]*pb.RowFieldUpsert, 0, rowsPerRequest)
+	buildRequest := func(n int) []*pb.Row {
+		rows := make([]*pb.Row, 0, rowsPerRequest)
 		subject := fmt.Sprintf("SYM%04d-USDT", n)
 		for i := 0; i < rowsPerRequest; i++ {
 			fields := make([]*pb.FieldValue, 0, len(columns))
 			for j, name := range columns {
 				fields = append(fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i) + float64(j)/10}}})
 			}
-			rows = append(rows, &pb.RowFieldUpsert{
+			rows = append(rows, &pb.Row{
 				Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "dataset_kline_5m", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 					SubjectId: subject, Freq: "5m", DataTime: start.Add(time.Duration(i) * 5 * time.Minute).Format(time.RFC3339), SeriesTag: "tag"}}},
 				Fields: fields,
@@ -47,7 +47,7 @@ func TestImportUpsertThroughput(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		prepared := make([][]*pb.RowFieldUpsert, requests)
+		prepared := make([][]*pb.Row, requests)
 		for n := range prepared {
 			prepared[n] = buildRequest(n)
 		}

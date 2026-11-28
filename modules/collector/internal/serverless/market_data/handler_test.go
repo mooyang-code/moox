@@ -171,4 +171,4 @@ func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {
 
 type timerStorage struct{}
 
-func (timerStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }
+func (timerStorage) UpsertFields(context.Context, []*storagepb.Row) error { return nil }

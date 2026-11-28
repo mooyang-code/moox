@@ -17,7 +17,7 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 	defer s.Close()
 	old := "2026-07-18T00:00:00Z"
 	newer := "2026-07-19T00:00:00Z"
-	rows := []*pb.RowFieldUpsert{
+	rows := []*pb.Row{
 		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: old}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
 		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: old, SeriesTag: "venue:okx"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
 		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: newer}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
@@ -48,7 +48,7 @@ func TestCleanupExpiredBucketsDoesNotCreateMarker(t *testing.T) {
 	}
 	defer store.Close()
 
-	row := &pb.RowFieldUpsert{
+	row := &pb.Row{
 		Key: &pb.RowKey{
 			SpaceId: "s", DatasetId: "d",
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
@@ -57,7 +57,7 @@ func TestCleanupExpiredBucketsDoesNotCreateMarker(t *testing.T) {
 		},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}
-	if err := upsertTestRows(store, ctx, []*pb.RowFieldUpsert{row}); err != nil {
+	if err := upsertTestRows(store, ctx, []*pb.Row{row}); err != nil {
 		t.Fatal(err)
 	}
 	before := listMarkerChanges(t, store)
@@ -80,13 +80,13 @@ func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	row := func(space string) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
+	row := func(space string) *pb.Row {
+		return &pb.Row{
 			Key:    &pb.RowKey{SpaceId: space, DatasetId: "shared", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: "2026-07-18T00:00:00Z"}}},
 			Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: space}}}},
 		}
 	}
-	if err := upsertTestRows(s, context.Background(), []*pb.RowFieldUpsert{row("a"), row("b")}); err != nil {
+	if err := upsertTestRows(s, context.Background(), []*pb.Row{row("a"), row("b")}); err != nil {
 		t.Fatal(err)
 	}
 	deleted, err := s.CleanupExpiredBuckets(context.Background(), "a", "shared", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
@@ -106,12 +106,12 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 	}
 	defer store.Close()
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1m", DataTime: "2026-07-19T10:00:00Z"}}}
-	row := &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
+	row := &pb.Row{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
+	if err := upsertTestRows(store, context.Background(), []*pb.Row{row}); err != nil {
 		t.Fatal(err)
 	}
-	row = &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "volume", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}}}}
-	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
+	row = &pb.Row{Key: key, Fields: []*pb.FieldValue{{FieldId: "volume", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}}}}
+	if err := upsertTestRows(store, context.Background(), []*pb.Row{row}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close", "volume", "missing"}, nil)
@@ -121,8 +121,8 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 	if len(rows) != 1 || len(rows[0].GetFields()) != 2 {
 		t.Fatalf("rows=%v", rows)
 	}
-	row = &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
-	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
+	row = &pb.Row{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
+	if err := upsertTestRows(store, context.Background(), []*pb.Row{row}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err = store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
@@ -145,7 +145,7 @@ func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
 	}
 	write := func(value *pb.TypedValue) {
 		t.Helper()
-		if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{{
+		if err := upsertTestRows(store, context.Background(), []*pb.Row{{
 			Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: value}},
 		}}); err != nil {
 			t.Fatal(err)
@@ -185,7 +185,7 @@ func TestSeriesTagsKeepSameTimestampRowsDistinct(t *testing.T) {
 			}},
 		}
 	}
-	rows := []*pb.RowFieldUpsert{
+	rows := []*pb.Row{
 		{Key: key(""), Fields: []*pb.FieldValue{{FieldId: "venue", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "default"}}}}},
 		{Key: key("venue:binance"), Fields: []*pb.FieldValue{{FieldId: "venue", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "binance"}}}}, Attributes: map[string]*pb.TypedValue{"source": {Value: &pb.TypedValue_StringValue{StringValue: "stream-binance"}}}},
 		{Key: key("venue:okx"), Fields: []*pb.FieldValue{{FieldId: "venue", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "okx"}}}}},
@@ -217,7 +217,7 @@ func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
 		key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 			SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-26T01:02:00Z", SeriesTag: tag,
 		}}}
-		if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{{
+		if err := upsertTestRows(store, context.Background(), []*pb.Row{{
 			Key: key, Fields: []*pb.FieldValue{{FieldId: "tag", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: tag}}}},
 		}}); err != nil {
 			t.Fatal(err)
@@ -238,7 +238,7 @@ func TestReadRowsReturnsOnlyExistingRowsEvenWithoutRequestedField(t *testing.T) 
 	defer store.Close()
 	present := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "present", Version: "1"}}}
 	missing := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "missing", Version: "1"}}}
-	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{{Key: present, Fields: []*pb.FieldValue{{FieldId: "stored", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}); err != nil {
+	if err := upsertTestRows(store, context.Background(), []*pb.Row{{Key: present, Fields: []*pb.FieldValue{{FieldId: "stored", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{present, missing}, []string{"not_stored"}, nil)
@@ -255,8 +255,8 @@ func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
 	defer store.Close()
 	for _, version := range []string{"1", "2", "10"} {
 		key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}
-		row := &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: version}}}}}
-		if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
+		row := &pb.Row{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: version}}}}}
+		if err := upsertTestRows(store, context.Background(), []*pb.Row{row}); err != nil {
 			t.Fatal(err)
 		}
 	}

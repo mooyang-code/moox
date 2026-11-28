@@ -279,7 +279,7 @@ func parseRequestTime(raw string) (time.Time, error) {
 
 // Storage is the write boundary shared by the market pipelines.
 type Storage interface {
-	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
+	UpsertFields(context.Context, []*storagepb.Row) error
 }
 
 type periodStorage interface {

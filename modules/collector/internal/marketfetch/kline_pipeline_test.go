@@ -36,7 +36,7 @@ type pipelineProvider struct {
 
 func TestPeriodCommitDisabledIgnoresResidualBindings(t *testing.T) {
 	req := Request{Items: []domain.CollectionItem{{DatasetID: "bars", SubjectID: "BTC-USDT", SeriesHash: "old", ExpectedCount: 1}}}
-	_, _, enabled, err := periodCommitForDataset(req, "bars", []*storagepb.RowFieldUpsert{{}})
+	_, _, enabled, err := periodCommitForDataset(req, "bars", []*storagepb.Row{{}})
 	require.NoError(t, err)
 	require.False(t, enabled)
 }
@@ -433,11 +433,11 @@ func (s *recordingTimerPeriodCommitStorage) CommitTimeSeriesBatch(_ context.Cont
 }
 
 type pipelineStorage struct {
-	rows   []*storagepb.RowFieldUpsert
+	rows   []*storagepb.Row
 	writes int
 }
 
-func (s *pipelineStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (s *pipelineStorage) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	s.rows = rows
 	s.writes++
 	return nil
@@ -539,7 +539,7 @@ func TestKlinePipelineUsesInstrumentNameFromStorageMetadata(t *testing.T) {
 	require.Equal(t, "浦发银行", findField(storage.rows[0], "instrument_name").GetStringValue())
 }
 
-func findField(row *storagepb.RowFieldUpsert, fieldID string) *storagepb.TypedValue {
+func findField(row *storagepb.Row, fieldID string) *storagepb.TypedValue {
 	for _, field := range row.GetFields() {
 		if field.GetFieldId() == fieldID {
 			return field.GetValue()

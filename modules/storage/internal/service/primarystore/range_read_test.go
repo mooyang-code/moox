@@ -54,7 +54,7 @@ func validRangeReq() *pb.ReadTimeSeriesRowsReq {
 	empty := ""
 	return &pb.ReadTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market",
-		Selectors:   []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty}},
+		Selectors:   []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty}},
 		ColumnNames: []string{"close"},
 		TimeRange:   &pb.TimeRange{StartTime: "2026-10-04T00:00:00Z", EndTime: "2026-10-04T01:00:00Z"},
 		Page:        &pb.Page{Size: 2000, Cursor: "abc"},
@@ -74,25 +74,24 @@ func TestRangeReadGoesToTheStore(t *testing.T) {
 
 func TestRangeReadRejectsInvalidRequestsBeforeTheStore(t *testing.T) {
 	selector := func(freq string) []*pb.TimeSeriesSelector {
-		return []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "S", Freq: freq}}
+		return []*pb.TimeSeriesSelector{{SubjectId: "S", Freq: freq}}
 	}
 	many := make([]*pb.TimeSeriesSelector, 101)
 	for i := range many {
 		many[i] = selector("1m")[0]
 	}
 	cases := map[string]func(*pb.ReadTimeSeriesRowsReq){
-		"no columns":           func(r *pb.ReadTimeSeriesRowsReq) { r.ColumnNames = nil },
-		"no range":             func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange = nil },
-		"half open range":      func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange.EndTime = "" },
-		"inverted range":       func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange.StartTime = "2026-10-05T00:00:00Z" },
-		"both shapes":          func(r *pb.ReadTimeSeriesRowsReq) { r.LatestPerSeries = 5 },
-		"page number":          func(r *pb.ReadTimeSeriesRowsReq) { r.Page = &pb.Page{Page: 2, Size: 10} },
-		"range page too big":   func(r *pb.ReadTimeSeriesRowsReq) { r.Page.Size = 2001 },
-		"too many selectors":   func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = many },
-		"selector no subject":  func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = []*pb.TimeSeriesSelector{{Freq: "1m"}} },
-		"selector other scope": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors[0].DatasetId = "other" },
-		"selector wrong freq":  func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = selector("5m") },
-		"latest too big":       func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange, r.LatestPerSeries = nil, 10001 },
+		"no columns":          func(r *pb.ReadTimeSeriesRowsReq) { r.ColumnNames = nil },
+		"no range":            func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange = nil },
+		"half open range":     func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange.EndTime = "" },
+		"inverted range":      func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange.StartTime = "2026-10-05T00:00:00Z" },
+		"both shapes":         func(r *pb.ReadTimeSeriesRowsReq) { r.LatestPerSeries = 5 },
+		"page number":         func(r *pb.ReadTimeSeriesRowsReq) { r.Page = &pb.Page{Page: 2, Size: 10} },
+		"range page too big":  func(r *pb.ReadTimeSeriesRowsReq) { r.Page.Size = 2001 },
+		"too many selectors":  func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = many },
+		"selector no subject": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = []*pb.TimeSeriesSelector{{Freq: "1m"}} },
+		"selector wrong freq": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = selector("5m") },
+		"latest too big":      func(r *pb.ReadTimeSeriesRowsReq) { r.TimeRange, r.LatestPerSeries = nil, 10001 },
 		"latest page too big": func(r *pb.ReadTimeSeriesRowsReq) {
 			r.TimeRange, r.LatestPerSeries, r.Page = nil, 5, &pb.Page{Size: 20001}
 		},
@@ -136,15 +135,15 @@ func TestCountTimeSeriesRowsReachesTheStore(t *testing.T) {
 func TestReadRowsOmitsMissingRowsAndKeepsRequestOrder(t *testing.T) {
 	var asked []*pb.RowKey
 	store := newHookStore(t)
-	store.readRows = func(_ context.Context, keys []*pb.RowKey, _, _ []string) ([]*pb.RowFieldValues, error) {
+	store.readRows = func(_ context.Context, keys []*pb.RowKey, _, _ []string) ([]*pb.Row, error) {
 		asked = keys
 		// 存储层只返回存在的行（第二个键不存在）。
-		return []*pb.RowFieldValues{{Key: keys[0]}, {Key: keys[2]}}, nil
+		return []*pb.Row{{Key: keys[0]}, {Key: keys[2]}}, nil
 	}
 	svc, err := New(Options{Store: store, Snapshot: activeRequestSnapshot})
 	require.NoError(t, err)
 	key := func(subject string) *pb.RowKey {
-		return timeSeriesRowKey(&pb.TimeSeriesKey{SpaceId: "space", DatasetId: "dataset", SubjectId: subject, Freq: "1m", DataTime: "2026-07-29T15:00:00Z"})
+		return timeSeriesRowKey("space", "dataset", subject, "1m", "2026-07-29T15:00:00Z", "")
 	}
 	rsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
 		Keys: []*pb.RowKey{key("A"), key("missing"), key("B")}, ColumnNames: []string{"close"},

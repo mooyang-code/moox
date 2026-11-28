@@ -7,9 +7,9 @@ import (
 )
 
 // upsertTestRows 按数据集分组写入测试行。
-func upsertTestRows(store *Store, ctx context.Context, rows []*pb.RowFieldUpsert) error {
+func upsertTestRows(store *Store, ctx context.Context, rows []*pb.Row) error {
 	order := make([][2]string, 0)
-	groups := make(map[[2]string][]*pb.RowFieldUpsert)
+	groups := make(map[[2]string][]*pb.Row)
 	for _, row := range rows {
 		key := [2]string{row.GetKey().GetSpaceId(), row.GetKey().GetDatasetId()}
 		if _, ok := groups[key]; !ok {

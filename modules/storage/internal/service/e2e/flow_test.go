@@ -50,11 +50,11 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	tags := []string{"", "venue:binance", "venue:okx"}
 	closes := []float64{100, 101, 102}
 	keys := make([]*pb.RowKey, 0, len(tags))
-	writes := make([]*pb.RowFieldUpsert, 0, len(tags))
+	writes := make([]*pb.Row, 0, len(tags))
 	for i, tag := range tags {
 		key := seriesTagKey(tag)
 		keys = append(keys, key)
-		writes = append(writes, &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{
+		writes = append(writes, &pb.Row{Key: key, Fields: []*pb.FieldValue{
 			doubleField("close", closes[i]),
 			doubleField("volume", float64(10+i)),
 		}})
@@ -145,8 +145,8 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	defer stopFollowing()
 	waitForSelectorStates(t, ctx, view, closes)
 
-	patch := &pb.RowFieldUpsert{Key: keys[1], Fields: []*pb.FieldValue{doubleField("close", 111)}}
-	if rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{patch}})); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	patch := &pb.Row{Key: keys[1], Fields: []*pb.FieldValue{doubleField("close", 111)}}
+	if rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.Row{patch}})); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("field patch: rsp=%v err=%v", rsp, err)
 	}
 	closes[1] = 111
@@ -160,7 +160,7 @@ func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.
 		rsp, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "quant", DatasetId: "prices",
 			Selectors: []*pb.TimeSeriesSelector{{
-				SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m",
+				SubjectId: "BTC-USDT", Freq: "1m",
 			}},
 			TimeRange: &pb.TimeRange{
 				StartTime: "2026-07-20T00:00:00Z",
@@ -197,7 +197,7 @@ func doubleField(id string, value float64) *pb.FieldValue {
 	return &pb.FieldValue{FieldId: id, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}
 }
 
-func assertSeriesTagRows(t *testing.T, rows []*pb.RowFieldValues, tags []string, closes []float64) {
+func assertSeriesTagRows(t *testing.T, rows []*pb.Row, tags []string, closes []float64) {
 	t.Helper()
 	if len(rows) != len(tags) {
 		t.Fatalf("row count=%d want=%d", len(rows), len(tags))
@@ -214,7 +214,7 @@ func assertSeriesTagRows(t *testing.T, rows []*pb.RowFieldValues, tags []string,
 
 func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.Service, closes []float64) {
 	t.Helper()
-	query := func(selector *pb.TimeSeriesSelector) []*pb.TimeSeriesRow {
+	query := func(selector *pb.TimeSeriesSelector) []*pb.Row {
 		t.Helper()
 		rsp, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "quant", DatasetId: "prices",
@@ -228,13 +228,13 @@ func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.S
 		}
 		return rsp.GetRows()
 	}
-	base := &pb.TimeSeriesSelector{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m"}
+	base := &pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Freq: "1m"}
 	all := query(base)
 	if len(all) != 3 {
 		t.Fatalf("unset selector rows=%v", all)
 	}
 	for i, tag := range []string{"", "venue:binance", "venue:okx"} {
-		if all[i].GetKey().GetSeriesTag() != tag || all[i].GetFields()[0].GetValue().GetDoubleValue() != closes[i] {
+		if all[i].GetKey().GetTimeSeries().GetSeriesTag() != tag || all[i].GetFields()[0].GetValue().GetDoubleValue() != closes[i] {
 			t.Fatalf("stable row %d=%v", i, all[i])
 		}
 	}
@@ -242,13 +242,13 @@ func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.S
 		t.Fatalf("field patch replaced untouched volume: %v", all[1])
 	}
 	empty := ""
-	defaultRows := query(&pb.TimeSeriesSelector{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty})
-	if len(defaultRows) != 1 || defaultRows[0].GetKey().GetSeriesTag() != "" {
+	defaultRows := query(&pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty})
+	if len(defaultRows) != 1 || defaultRows[0].GetKey().GetTimeSeries().GetSeriesTag() != "" {
 		t.Fatalf("explicit empty selector rows=%v", defaultRows)
 	}
 	okx := "venue:okx"
-	okxRows := query(&pb.TimeSeriesSelector{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &okx})
-	if len(okxRows) != 1 || okxRows[0].GetKey().GetSeriesTag() != okx {
+	okxRows := query(&pb.TimeSeriesSelector{SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &okx})
+	if len(okxRows) != 1 || okxRows[0].GetKey().GetTimeSeries().GetSeriesTag() != okx {
 		t.Fatalf("exact selector rows=%v", okxRows)
 	}
 }

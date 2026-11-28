@@ -168,10 +168,12 @@ async function mockGateway(route: Route) {
             key: {
               space_id: "crypto",
               dataset_id: "dataset_binance_kline_1m",
-              subject_id: "BTC-USDT",
-              freq: "1m",
-              data_time: "2026-09-18T06:57:00Z",
-              series_tag: "venue:binance"
+              time_series: {
+                subject_id: "BTC-USDT",
+                freq: "1m",
+                data_time: "2026-09-18T06:57:00Z",
+                series_tag: "venue:binance"
+              }
             },
             fields: [
               { field_id: "open", value: { double_value: 123.4 } },

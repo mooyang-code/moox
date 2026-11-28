@@ -219,12 +219,9 @@ type FilterGroup struct {
 	Logical pb.FilterLogical
 }
 
-// TimeSeriesSelector is a range predicate, not an exact row identity.
-// A nil SeriesTag matches all tags; a non-nil empty value matches only the
-// default series.
+// TimeSeriesSelector 是时序范围查询条件（空间与数据集由索引身份决定）。
+// SeriesTag 为 nil 表示匹配全部序列；非 nil 且为空串表示只匹配默认序列。
 type TimeSeriesSelector struct {
-	SpaceID   string
-	DatasetID string
 	SubjectID string
 	Freq      string
 	SeriesTag *string
@@ -252,7 +249,7 @@ type Engine interface {
 	Engine() string
 	Prepare(context.Context, string, ViewIndexSchema) error
 	Write(context.Context, string, ViewIndexWriteBatch) error
-	Query(context.Context, string, QuerySpec) ([]*pb.RowFieldValues, int64, error)
+	Query(context.Context, string, QuerySpec) ([]*pb.Row, int64, error)
 	Stat(context.Context, string) (ViewIndexStats, error)
 	Remove(context.Context, string) error
 }

@@ -327,9 +327,9 @@ func (s *Service) writeFollowRows(ctx context.Context, runtime *viewRuntime, ind
 		log.Errorf("storage view 索引写入失败 space=%s dataset=%s index=%s: %v", runtime.ref.spaceID, runtime.ref.datasetID, indexID, err)
 		return false, err
 	}
-	written := make([]*pb.RowFieldUpsert, 0, len(kept))
+	written := make([]*pb.Row, 0, len(kept))
 	for _, write := range kept {
-		written = append(written, &pb.RowFieldUpsert{Key: write.Key.Key})
+		written = append(written, &pb.Row{Key: write.Key.Key})
 	}
 	// Monitor 的 K 线新鲜度与到达延迟靠 View 的输出水位。
 	s.observeViewWatermark(runtime.spec, written)
@@ -422,7 +422,7 @@ func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, spec *vi
 	spaceID, datasetID, freq := spec.SpaceID, spec.DatasetID, spec.Freq
 	selectors := make([]*pb.TimeSeriesSelector, 0, len(read.subjects))
 	for _, subject := range read.subjects {
-		selectors = append(selectors, &pb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: freq})
+		selectors = append(selectors, &pb.TimeSeriesSelector{SubjectId: subject, Freq: freq})
 	}
 	cursor := ""
 	for {
@@ -441,15 +441,12 @@ func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, spec *vi
 		}
 		writes := make([]viewindex.RowWrite, 0, len(rsp.GetRows()))
 		for _, row := range rsp.GetRows() {
-			key := row.GetKey()
-			if key == nil || !strings.EqualFold(strings.TrimSpace(key.GetFreq()), freq) {
+			ts := row.GetKey().GetTimeSeries()
+			if ts == nil || !strings.EqualFold(strings.TrimSpace(ts.GetFreq()), freq) {
 				continue
 			}
 			writes = append(writes, viewindex.RowWrite{
-				Key: viewindex.RowKey{Key: &pb.RowKey{
-					SpaceId: spaceID, DatasetId: datasetID,
-					Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}},
-				}},
+				Key:    viewindex.RowKey{Key: row.GetKey()},
 				Fields: row.GetFields(),
 			})
 		}

@@ -38,7 +38,7 @@ func benchData(b *testing.B) *Store {
 		if err != nil {
 			b.Fatal(err)
 		}
-		batch := make([]*pb.RowFieldUpsert, 0, 4000)
+		batch := make([]*pb.Row, 0, 4000)
 		flush := func() {
 			if len(batch) == 0 {
 				return
@@ -55,7 +55,7 @@ func benchData(b *testing.B) *Store {
 				for _, c := range benchColumns {
 					fields = append(fields, &pb.FieldValue{FieldId: c, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i)}}})
 				}
-				batch = append(batch, &pb.RowFieldUpsert{
+				batch = append(batch, &pb.Row{
 					Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 						SubjectId: subject, Freq: "1m", DataTime: benchStart.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
 					}}},
@@ -86,7 +86,7 @@ func TestMain(m *testing.M) {
 func benchSelectors(n int) []*pb.TimeSeriesSelector {
 	out := make([]*pb.TimeSeriesSelector, 0, n)
 	for s := 0; s < n; s++ {
-		out = append(out, &pb.TimeSeriesSelector{SpaceId: "s", DatasetId: "d", SubjectId: fmt.Sprintf("S%04d", s*7%benchSubjects), Freq: "1m"})
+		out = append(out, &pb.TimeSeriesSelector{SubjectId: fmt.Sprintf("S%04d", s*7%benchSubjects), Freq: "1m"})
 	}
 	return out
 }

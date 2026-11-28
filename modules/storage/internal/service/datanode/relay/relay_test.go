@@ -122,8 +122,8 @@ func upsertTestRow(t *testing.T, store *pebble.Store, datasetID string, minute i
 	key := &pb.RowKey{SpaceId: "s", DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 		SubjectId: "BTC-USDT", Freq: "1m", DataTime: fmt.Sprintf("2026-08-16T00:%02d:00Z", minute),
 	}}}
-	row := &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-	if err := store.UpsertFields(context.Background(), "s", datasetID, []*pb.RowFieldUpsert{row}); err != nil {
+	row := &pb.Row{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
+	if err := store.UpsertFields(context.Background(), "s", datasetID, []*pb.Row{row}); err != nil {
 		t.Fatal(err)
 	}
 }

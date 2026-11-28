@@ -49,7 +49,7 @@ func (s *slowDeadlineCommitStorage) CommitTimeSeriesBatch(ctx context.Context, _
 	}
 }
 
-func (s *deadlineRecordingStorage) UpsertFields(ctx context.Context, _ []*storagepb.RowFieldUpsert) error {
+func (s *deadlineRecordingStorage) UpsertFields(ctx context.Context, _ []*storagepb.Row) error {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		s.remaining = time.Until(deadline)
@@ -97,7 +97,7 @@ func TestReservedDeadlineStorageUsesReservedParentBudget(t *testing.T) {
 	underlying := &deadlineRecordingStorage{}
 	storage := &reservedDeadlineStorage{Storage: underlying, parent: parent, timeout: 120 * time.Millisecond}
 
-	require.NoError(t, storage.UpsertFields(expiredWork, []*storagepb.RowFieldUpsert{{}}))
+	require.NoError(t, storage.UpsertFields(expiredWork, []*storagepb.Row{{}}))
 	require.Positive(t, underlying.remaining)
 	require.LessOrEqual(t, underlying.remaining, 130*time.Millisecond)
 }
@@ -114,4 +114,4 @@ func TestReservedDeadlineStorageForwardsInstrumentNames(t *testing.T) {
 // noopStorage 是只接受行写入而不做任何事的 Storage 测试替身。
 type noopStorage struct{}
 
-func (noopStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }
+func (noopStorage) UpsertFields(context.Context, []*storagepb.Row) error { return nil }

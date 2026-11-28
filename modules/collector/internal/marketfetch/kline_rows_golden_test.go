@@ -109,7 +109,7 @@ func goldenStockPipeline(t *testing.T, frequency string, now time.Time, storage 
 	}
 }
 
-func goldenRealtimeRows(t *testing.T, frequency string, now, start time.Time) []*storagepb.RowFieldUpsert {
+func goldenRealtimeRows(t *testing.T, frequency string, now, start time.Time) []*storagepb.Row {
 	t.Helper()
 	storage := &pipelineStorageWithInstrumentNames{names: map[string]string{"600000.XSHG": "浦发银行", "000001.XSHE": "平安银行"}}
 	pipeline := goldenStockPipeline(t, frequency, now, storage)
@@ -129,7 +129,7 @@ func goldenRealtimeRows(t *testing.T, frequency string, now, start time.Time) []
 	return storage.rows
 }
 
-func dumpRows(title string, rows []*storagepb.RowFieldUpsert) string {
+func dumpRows(title string, rows []*storagepb.Row) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "## %s（%d 行）\n", title, len(rows))
 	for _, row := range rows {
@@ -217,7 +217,7 @@ func TestKlineRowsMatchGolden(t *testing.T) {
 	for _, item := range direct {
 		row, rowErr := item.committer.rowFor(item.bar, item.req, item.routeID, item.routeRank, item.instrument)
 		require.NoError(t, rowErr, item.title)
-		out.WriteString(dumpRows(item.title, []*storagepb.RowFieldUpsert{row}))
+		out.WriteString(dumpRows(item.title, []*storagepb.Row{row}))
 	}
 
 	// 周期提交绑定用的序列标签。

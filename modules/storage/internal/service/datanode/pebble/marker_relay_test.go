@@ -28,8 +28,8 @@ func upsertRelayTestRow(t *testing.T, store *Store, minute int) {
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 		SubjectId: "BTC-USDT", Freq: "1m", DataTime: fmt.Sprintf("2026-08-16T00:%02d:00Z", minute),
 	}}}
-	row := &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-	require.NoError(t, store.UpsertFields(context.Background(), "s", "d", []*pb.RowFieldUpsert{row}))
+	row := &pb.Row{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
+	require.NoError(t, store.UpsertFields(context.Background(), "s", "d", []*pb.Row{row}))
 }
 
 // 扫描只返回完成标记条目，行条目只推进已扫描的位置；按条数分页时从上一页的位置接着读。

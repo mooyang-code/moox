@@ -113,7 +113,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	}
 
 	rows, _, err := manager.Query(ctx, "factor-view-a", viewindex.QuerySpec{
-		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: current.DatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
+		Selectors: []viewindex.TimeSeriesSelector{{SubjectID: "BTC-USDT", Freq: "1m"}},
 		Includes:  []string{"bias_20", "volume"},
 	})
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 2 {
@@ -369,7 +369,7 @@ func TestConcurrentColdOpenDoesNotLeaveManagerLocked(t *testing.T) {
 	}
 }
 
-func rowTags(rows []*pb.RowFieldValues) []string {
+func rowTags(rows []*pb.Row) []string {
 	tags := make([]string, 0, len(rows))
 	for _, row := range rows {
 		tags = append(tags, row.GetKey().GetTimeSeries().GetSeriesTag())
@@ -377,7 +377,7 @@ func rowTags(rows []*pb.RowFieldValues) []string {
 	return tags
 }
 
-func fieldDouble(row *pb.RowFieldValues, fieldID string) float64 {
+func fieldDouble(row *pb.Row, fieldID string) float64 {
 	for _, field := range row.GetFields() {
 		if field.GetFieldId() == fieldID {
 			return field.GetValue().GetDoubleValue()
@@ -479,7 +479,7 @@ func TestDuckDBSeriesTagSchemaIdentitySelectorsAndUpsert(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rows, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
 				Selectors: []viewindex.TimeSeriesSelector{{
-					SpaceID: "s", DatasetID: "prices", SubjectID: "BTC-USDT", Freq: "1m", SeriesTag: tc.tag,
+					SubjectID: "BTC-USDT", Freq: "1m", SeriesTag: tc.tag,
 				}},
 				Limit: 10,
 			})
@@ -939,7 +939,7 @@ func TestDuckDBCountBySubjectCountsDistinctBarsInRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	selector := func(subject string) viewindex.TimeSeriesSelector {
-		return viewindex.TimeSeriesSelector{SpaceID: "s", DatasetID: "prices", SubjectID: subject, Freq: "1m"}
+		return viewindex.TimeSeriesSelector{SubjectID: subject, Freq: "1m"}
 	}
 	counts, err := manager.CountBySubject(context.Background(), "idx", viewindex.QuerySpec{
 		Selectors: []viewindex.TimeSeriesSelector{selector("BTC"), selector("ETH"), selector("DOGE")},

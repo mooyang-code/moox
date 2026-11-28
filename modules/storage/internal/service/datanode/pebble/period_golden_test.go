@@ -677,8 +677,8 @@ func TestGoldenDeleteDatasetClearsLedgerAndMarkers(t *testing.T) {
 		require.NoError(t, err)
 		_, err = store.AppendDatasetMarker(ctx, raw)
 		require.NoError(t, err)
-		record := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-		require.NoError(t, store.UpsertFields(ctx, goldenSpace, dataset, []*pb.RowFieldUpsert{record}))
+		record := &pb.Row{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
+		require.NoError(t, store.UpsertFields(ctx, goldenSpace, dataset, []*pb.Row{record}))
 	}
 
 	_, err := store.DeleteDatasetRows(ctx, goldenSpace, "delete-me")
@@ -710,8 +710,8 @@ func TestGoldenDeleteDatasetClearsLedgerAndMarkers(t *testing.T) {
 	require.Len(t, goldenMarkers(t, store, goldenSpace, "delete-me"), 1, "已删数据集不再产生新的完成标记")
 
 	// 重建后照常写入，同一触发事件可以重新上报。
-	record := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
-	require.NoError(t, store.UpsertFields(ctx, goldenSpace, "delete-me", []*pb.RowFieldUpsert{record}))
+	record := &pb.Row{Key: &pb.RowKey{SpaceId: goldenSpace, DatasetId: "delete-me", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: goldenFreq, DataTime: goldenPeriod.Add(-time.Hour).Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}}
+	require.NoError(t, store.UpsertFields(ctx, goldenSpace, "delete-me", []*pb.Row{record}))
 	marker := goldenProducerMarker("source-ready", goldenPeriod.Unix(), "degraded")
 	marker.DatasetId = "delete-me"
 	raw, _, err := BuildProducerPeriodCompletedMessage(goldenSpace, marker)

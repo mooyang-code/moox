@@ -132,10 +132,12 @@ describe("因子值弹窗", () => {
   const rowKey = {
     space_id: "crypto",
     dataset_id: "d",
-    subject_id: "BTC",
-    freq: "1m",
-    series_tag: "",
-    data_time: "2026-10-24T10:00:00Z"
+    time_series: {
+      subject_id: "BTC",
+      freq: "1m",
+      series_tag: "",
+      data_time: "2026-10-24T10:00:00Z"
+    }
   };
 
   beforeEach(() => {
@@ -153,7 +155,9 @@ describe("因子值弹窗", () => {
     await flushPromises();
     expect(hoisted.query).toHaveBeenCalledTimes(1);
     const first = hoisted.query.mock.calls[0][0];
-    expect(first.selectors).toEqual([{ space_id: "crypto", dataset_id: "d", subject_id: "BTC", freq: "1m", series_tag: "" }]);
+    expect(first.space_id).toBe("crypto");
+    expect(first.dataset_id).toBe("d");
+    expect(first.selectors).toEqual([{ subject_id: "BTC", freq: "1m", series_tag: "" }]);
     expect(first.total_mode).toBe("NONE");
     expect(first.page).toEqual({ page: 1, size: 1 });
     expect(first.column_names).toHaveLength(20);

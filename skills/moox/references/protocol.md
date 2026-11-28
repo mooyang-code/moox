@@ -9,8 +9,8 @@ Dataset 不记录所属节点；数据集建好即为 active，可以直接写�
 - 元数据：Space、DataSource、Subject、Tag、TagMember、Dataset、DatasetColumn；每个数据集恰好有一个查询索引（View），按 `(space_id, dataset_id)` 寻址，不单独登记。
 - 因子：全局 Factor 定义；Space 内的 FactorTask、任务成员与结果 Dataset。成员键、结果列名和任务相关 ID 由 `packages/factorname` 推导。
 - 归档：ArchiveTask、ArchiveRun、ArchivePartition，由 `modules/archive/proto` 定义。
-- 事实写入使用 `RowKey`：`space_id`、`dataset_id`，以及时序键（`subject_id`、`freq`、`data_time`、`series_tag`）或记录键（`record_id`、`version`）。时序键仍携带 `freq`，其值必须与 Dataset 的固定频率一致。
-- 时序读取使用 `TimeSeriesSelector`、`TimeSeriesKey` 等实际协议类型；其中 `freq` 必须与 Dataset 一致。`TimeSeriesSelector.series_tag` 是 optional：省略表示全部序列，显式空值表示默认序列；`TimeSeriesKey.series_tag` 不是 optional，空值就是默认序列。
+- 事实读写与 View 查询共用一套 `RowKey` 与 `Row`（`key`、`fields`、`attributes`）：`RowKey` 包含 `space_id`、`dataset_id` 以及时序键 `TimeSeriesRowKey`（`subject_id`、`freq`、`data_time`、`series_tag`）或记录键 `RecordRowKey`（`record_id`、`version`）。时序键的 `freq` 必须与 Dataset 固定频率一致；`TimeSeriesRowKey.series_tag` 不是 optional，空值即默认序列。
+- 时序筛选使用 `TimeSeriesSelector`（`subject_id`、`freq`、optional `series_tag`，归属空间与数据集由顶层请求指定）：`series_tag` 省略表示全部序列，显式空值表示默认序列。记录型检索（`DataView.SearchRecordRows`）使用 `RecordRowKey`，`version` 为空表示按 `version_range` 匹配。`DataView` 查询与 `PrimaryStore.ReadTimeSeriesRows` 返回的 `Row` 不带 `attributes`（行属性只由 `PrimaryStore.ReadRows` 按 `attribute_keys` 返回）。
 
 确切字段、可选性与分页契约以 `modules/storage/proto/*.proto` 为准。
 

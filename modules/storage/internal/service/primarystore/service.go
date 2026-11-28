@@ -20,7 +20,7 @@ import (
 )
 
 type Validator interface {
-	ValidateRow(context.Context, *pb.RowFieldUpsert) error
+	ValidateRow(context.Context, *pb.Row) error
 }
 
 // requestValidator 返回本次请求用的逐行校验器：支持按请求缓存元数据的校验器（MetadataValidator.Batch）用缓存版本，
@@ -36,8 +36,8 @@ func requestValidator(ctx context.Context, v Validator) Validator {
 
 // Store 是 PrimaryStore 读写的事实存储，即同进程的 Pebble 库。
 type Store interface {
-	UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error
-	ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error)
+	UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.Row) error
+	ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.Row, error)
 	ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
 	CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) ([]*pb.SubjectRowCount, error)
 	ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error)
@@ -163,7 +163,7 @@ func requireActiveDataset(ctx context.Context, spaceID, datasetID string) error 
 	return nil
 }
 
-func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed bool) {
+func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.Row, result string, committed bool) {
 	if s == nil || s.metrics == nil {
 		return
 	}
@@ -251,8 +251,8 @@ func (s *Service) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq) (*pb
 		}
 		groups[group] = append(groups[group], key)
 	}
-	rowsByKey := make(map[string][]*pb.RowFieldValues, len(req.GetKeys()))
-	latestRecordRows := make(map[string][]*pb.RowFieldValues)
+	rowsByKey := make(map[string][]*pb.Row, len(req.GetKeys()))
+	latestRecordRows := make(map[string][]*pb.Row)
 	for _, group := range order {
 		keys := groups[group]
 		if err := requireActiveDataset(ctx, group.spaceID, group.datasetID); err != nil {
@@ -271,7 +271,7 @@ func (s *Service) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq) (*pb
 			}
 		}
 	}
-	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+	rows := make([]*pb.Row, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
 		if record := key.GetRecord(); record != nil && record.GetVersion() == "" {
 			id := latestRecordIdentity(key)
@@ -302,7 +302,7 @@ func latestRecordIdentity(key *pb.RowKey) string {
 	return key.GetSpaceId() + "\x00" + key.GetDatasetId() + "\x00" + key.GetRecord().GetRecordId()
 }
 
-func validateRow(ctx context.Context, row *pb.RowFieldUpsert, validator Validator) error {
+func validateRow(ctx context.Context, row *pb.Row, validator Validator) error {
 	if row == nil || row.GetKey() == nil {
 		return errors.New("row key is required")
 	}

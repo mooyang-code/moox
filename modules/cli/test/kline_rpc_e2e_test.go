@@ -56,8 +56,8 @@ func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	var response pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(output, &response))
 	require.Len(t, response.GetRows(), 1)
-	require.Equal(t, "BTC-USDT", response.GetRows()[0].GetKey().GetSubjectId())
-	require.Equal(t, "2026-08-28T12:34:00Z", response.GetRows()[0].GetKey().GetDataTime())
+	require.Equal(t, "BTC-USDT", response.GetRows()[0].GetKey().GetTimeSeries().GetSubjectId())
+	require.Equal(t, "2026-08-28T12:34:00Z", response.GetRows()[0].GetKey().GetTimeSeries().GetDataTime())
 
 	select {
 	case req := <-storage.requests:
@@ -131,9 +131,11 @@ func (stub *klineStorageStub) ReadTimeSeriesRows(_ context.Context, req *pb.Read
 	stub.requests <- req
 	return &pb.ReadTimeSeriesRowsRsp{
 		RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
-		Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
-			SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", SubjectId: "BTC-USDT",
-			Freq: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
+		Rows: []*pb.Row{{Key: &pb.RowKey{
+			SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m",
+			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
+			}},
 		}}},
 	}, nil
 }

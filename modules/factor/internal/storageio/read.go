@@ -45,7 +45,7 @@ func (c *Client) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq st
 		selectors := make([]*storagepb.TimeSeriesSelector, 0, limit-offset)
 		for _, subject := range subjects[offset:limit] {
 			selectors = append(selectors, &storagepb.TimeSeriesSelector{
-				SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: freq,
+				SubjectId: subject, Freq: freq,
 			})
 		}
 		rsp, callErr := c.primary.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
@@ -67,13 +67,14 @@ func (c *Client) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq st
 			continue
 		}
 		row := rsp.GetRows()[0]
-		if row == nil || row.GetKey() == nil || row.GetKey().GetSpaceId() != spaceID ||
-			row.GetKey().GetDatasetId() != datasetID || row.GetKey().GetFreq() != freq {
+		ts := row.GetKey().GetTimeSeries()
+		if row == nil || row.GetKey() == nil || ts == nil || row.GetKey().GetSpaceId() != spaceID ||
+			row.GetKey().GetDatasetId() != datasetID || ts.GetFreq() != freq {
 			return time.Time{}, false, fmt.Errorf("%w: earliest dataset period returned an invalid row identity", ErrInfra)
 		}
-		period, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+		period, parseErr := time.Parse(time.RFC3339Nano, ts.GetDataTime())
 		if parseErr != nil {
-			return time.Time{}, false, fmt.Errorf("parse earliest dataset period %q: %w", row.GetKey().GetDataTime(), parseErr)
+			return time.Time{}, false, fmt.Errorf("parse earliest dataset period %q: %w", ts.GetDataTime(), parseErr)
 		}
 		if earliest.IsZero() || period.Before(earliest) {
 			earliest = period.UTC()
@@ -122,7 +123,7 @@ func (c *Client) ReadWindow(ctx context.Context, req ReadRequest) (map[string]*F
 		selectors := make([]*storagepb.TimeSeriesSelector, 0, len(batch))
 		for _, subject := range batch {
 			selectors = append(selectors, &storagepb.TimeSeriesSelector{
-				SpaceId: req.SpaceID, DatasetId: req.DatasetID, SubjectId: subject, Freq: req.Freq,
+				SubjectId: subject, Freq: req.Freq,
 			})
 		}
 		cursor := ""
@@ -147,22 +148,23 @@ func (c *Client) ReadWindow(ctx context.Context, req ReadRequest) (map[string]*F
 				return nil, retErr
 			}
 			for _, row := range rsp.GetRows() {
-				if row == nil || row.GetKey() == nil {
+				ts := row.GetKey().GetTimeSeries()
+				if row == nil || ts == nil {
 					return nil, fmt.Errorf("read time-series window returned a row without identity")
 				}
-				frame, ok := frames[row.GetKey().GetSubjectId()]
+				frame, ok := frames[ts.GetSubjectId()]
 				if !ok {
-					return nil, fmt.Errorf("read time-series window returned unexpected subject %q", row.GetKey().GetSubjectId())
+					return nil, fmt.Errorf("read time-series window returned unexpected subject %q", ts.GetSubjectId())
 				}
-				dataTime, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+				dataTime, parseErr := time.Parse(time.RFC3339Nano, ts.GetDataTime())
 				if parseErr != nil {
-					return nil, fmt.Errorf("parse row data_time %q: %w", row.GetKey().GetDataTime(), parseErr)
+					return nil, fmt.Errorf("parse row data_time %q: %w", ts.GetDataTime(), parseErr)
 				}
 				values, decodeErr := decodeFields(row.GetFields(), columns)
 				if decodeErr != nil {
 					return nil, decodeErr
 				}
-				frame.Rows = append(frame.Rows, append([]any{dataTime.UTC(), row.GetKey().GetSeriesTag()}, values...))
+				frame.Rows = append(frame.Rows, append([]any{dataTime.UTC(), ts.GetSeriesTag()}, values...))
 			}
 			next := rsp.GetPageResult().GetNextCursor()
 			if next == "" {

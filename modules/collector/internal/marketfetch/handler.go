@@ -299,7 +299,7 @@ type reservedDeadlineStorage struct {
 
 var _ periodStorage = (*reservedDeadlineStorage)(nil)
 
-func (s *reservedDeadlineStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (s *reservedDeadlineStorage) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	ctx, cancel := s.storageContext()
 	defer cancel()
 	return s.Storage.UpsertFields(ctx, rows)
