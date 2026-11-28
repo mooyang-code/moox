@@ -21,15 +21,15 @@
 | `archive partitions list` | 列出分区 |
 | `archive runs cancel` | 取消排队中或运行中的运行 |
 | `archive runs get` | 查看一次运行（含无法补齐的区间） |
-| `archive runs list` | 列出运行记录（默认不列成功的跟随运行，--include-follow 列出全部） |
+| `archive runs list` | 列出归档运行记录（manual、range、import） |
 | `archive tasks backfill` | 补拉指定数据时间区间 |
-| `archive tasks clear-unrecoverable` | 删掉任务累积的、整段落在 [start, end) 里的无法补齐区间（导入补齐历史缺口后由人确认再清；默认只预览，--yes 才执行） |
-| `archive tasks create` | 创建归档任务（之后每分钟按 Storage 的变更日志跟随；首次运行从回补起点整段读到现在） |
+| `archive tasks clear-unrecoverable` | 清除任务累积的无法补齐区间（--start 与 --end 都留空清空全部，都填写则删掉整段落在 [start, end) 里的区间；默认只预览，--yes 才执行） |
+| `archive tasks create` | 创建归档任务（之后由 worker 每分钟按 Storage 变更日志本地跟随；首次运行从回补起点整段读到现在） |
 | `archive tasks delete` | 删除没有分区的任务（默认只预览，--yes 才执行） |
 | `archive tasks list` | 列出归档任务（--space-id 为空表示全部空间） |
 | `archive tasks prepare` | 查看数据集的频率、保留期、最早回补起点与建议的目录名 |
 | `archive tasks run` | 整段重读线上保留期内的全部数据（之后每分钟的跟随分段读完，数据量大时要几个小时） |
-| `archive tasks update` | 启停任务或清除无法补齐区间 |
+| `archive tasks update` | 启停归档任务 |
 
 ## collector：采集：任务、运行状态、补采与合成、标的、采集方式、云函数、云账号与代码包
 
