@@ -460,7 +460,8 @@ dispatch:
 				a.mu.Unlock()
 				continue dispatch
 			}
-			totalBusy := len(a.running) + len(a.following) + a.pulling
+			activeTotal := len(a.running) + len(a.following)
+			totalBusy := activeTotal + a.pulling
 			storageBusy := a.busyStorageRunsLocked()
 			if totalBusy < cfg.Pacing.MaxConcurrentRuns && storageBusy < cfg.Pacing.MaxStorageRuns {
 				followCtx, cancel := context.WithCancel(ctx)
@@ -472,7 +473,15 @@ dispatch:
 				a.launchFollow(key, f, &roundWG)
 				continue dispatch
 			}
+			// 仅被在途 pullOnce 的预占槽位挡住（真实运行和读 Storage 都有余量）：
+			// 等这次领取结束释放 pullMu 后直接重判，既不进 waitSlot 避免永久阻塞，也不重复触发 pullOnce。
+			waitingPull := a.pulling > 0 && activeTotal < cfg.Pacing.MaxConcurrentRuns && storageBusy < cfg.Pacing.MaxStorageRuns
 			a.mu.Unlock()
+			if waitingPull {
+				a.pullMu.Lock()
+				a.pullMu.Unlock()
+				continue
+			}
 			if a.waitSlot(ctx) != nil {
 				break dispatch
 			}
@@ -620,7 +629,6 @@ func (a *App) pullOnce(ctx context.Context) {
 			a.mu.Lock()
 			a.pulling -= free
 			a.mu.Unlock()
-			a.notifySlot()
 		}
 	}()
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
@@ -650,10 +658,6 @@ func (a *App) pullOnce(ctx context.Context) {
 	a.pulling -= free
 	registered = true
 	a.mu.Unlock()
-	if len(runs) < free {
-		// 归还未用完的预占槽位，唤醒等待空位的 followOnce。
-		a.notifySlot()
-	}
 	for _, run := range runs {
 		a.launch(run)
 	}

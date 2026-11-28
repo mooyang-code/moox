@@ -135,13 +135,14 @@ func (f *fakeManager) Complete(_ context.Context, req *archivepb.CompleteArchive
 }
 
 type fakeSource struct {
-	mu     sync.Mutex
-	rows   []staging.Row
-	block  bool          // 读取一直阻塞到运行被取消
-	delay  time.Duration // 每次读取的耗时
-	active int
-	maxAct int
-	calls  int
+	mu       sync.Mutex
+	rows     []staging.Row
+	block    bool          // 读取一直阻塞到运行被取消
+	readGate chan struct{} // 非空时 ReadRange 阻塞到它被关闭（或 ctx 取消）
+	delay    time.Duration // 每次读取的耗时
+	active   int
+	maxAct   int
+	calls    int
 }
 
 func (f *fakeSource) Columns(context.Context, string, string) ([]staging.Column, error) {
@@ -164,6 +165,16 @@ func (f *fakeSource) ReadRange(ctx context.Context, req source.Range) (source.Pa
 	if f.block {
 		<-ctx.Done()
 		return source.Page{}, ctx.Err()
+	}
+	f.mu.Lock()
+	gate := f.readGate
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return source.Page{}, ctx.Err()
+		}
 	}
 	if f.delay > 0 {
 		time.Sleep(f.delay)
@@ -989,6 +1000,115 @@ func TestConcurrentPullOnceSerializesAndRespectsMaxConcurrentRuns(t *testing.T) 
 	}
 	h.app.cancelAll()
 	h.idle()
+}
+
+// 总并发 4、读 Storage 上限 2、三个可跟随任务：第三个任务等待 Storage 名额期间，
+// pullOnce 归还预占空位（返回 0 个运行或 mgr 失败）不能再次唤醒 slotFreed，否则会与 followOnce 形成空转。
+func TestFollowOnceWaitDoesNotSpinPullArchiveRun(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 4, 2
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day, Values: []any{1.0}})
+	readGate := make(chan struct{})
+	h.src.readGate = readGate
+	h.mgr.followTasks = []*archivepb.FollowTask{
+		followTask("ds_1", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) }),
+		followTask("ds_2", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) }),
+		followTask("ds_3", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) }),
+	}
+	h.app.heartbeatOnce(ctx, false)
+
+	followDone := make(chan struct{})
+	go func() {
+		h.app.FollowOnce(ctx)
+		close(followDone)
+	}()
+
+	// 等前两个任务占满 2 个 Storage 名额，第三个任务进入 waitSlot 等待。
+	deadline := time.Now().Add(5 * time.Second)
+	for h.app.Snapshot().Following < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("前两个跟随任务没有启动: following=%d", h.app.Snapshot().Following)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// 等待期间模拟 pullLoop 触发拉取（返回 0 个运行）以及 mgr 暂时不可达，均不应唤醒 followOnce 形成连环拉取。
+	h.app.pullOnce(ctx)
+	h.mgr.mu.Lock()
+	h.mgr.pullErr = errors.New("mgr unreachable")
+	h.mgr.mu.Unlock()
+	h.app.pullOnce(ctx)
+	// 再注入一次唤醒（模拟先前的槽位信号）：followOnce 至多试领一次后继续等待，不会自我循环。
+	h.app.notifySlot()
+	time.Sleep(60 * time.Millisecond)
+
+	h.mgr.mu.Lock()
+	pullsWhileWaiting := len(h.mgr.pulls)
+	h.mgr.pullErr = nil
+	h.mgr.mu.Unlock()
+	if pullsWhileWaiting > 3 {
+		t.Fatalf("等待 Storage 名额期间 PullArchiveRun 调用次数应有界（<=3），实际=%d（疑似空转）", pullsWhileWaiting)
+	}
+
+	close(readGate)
+	select {
+	case <-followDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("释放 Storage 阻塞后 FollowOnce 未完成")
+	}
+
+	h.mgr.mu.Lock()
+	totalPulls := len(h.mgr.pulls)
+	totalReports := len(h.mgr.followReports)
+	h.mgr.mu.Unlock()
+	if totalReports != 3 {
+		t.Fatalf("三个跟随任务都应完成上报: reports=%d", totalReports)
+	}
+	if totalPulls > 5 {
+		t.Fatalf("整轮 FollowOnce 的 PullArchiveRun 调用次数应有界（<=5），实际=%d", totalPulls)
+	}
+}
+
+// 即使 pullOnce 正在途中预占了全部槽位、且随后返回 0 个运行不发 slotFreed，followOnce 也不得永久阻塞。
+func TestFollowOnceDoesNotHangWhenCollidingWithIdlePullOnce(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 4, 2
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day, Values: []any{1.0}})
+	h.mgr.followTasks = []*archivepb.FollowTask{
+		followTask("ds_1", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) }),
+	}
+	h.app.heartbeatOnce(ctx, false)
+
+	pullGate := make(chan struct{})
+	pullEntered := make(chan struct{})
+	h.mgr.pullGate, h.mgr.pullEntered = pullGate, pullEntered
+	pullDone := make(chan struct{})
+	go func() { h.app.pullOnce(ctx); close(pullDone) }()
+	<-pullEntered
+
+	followDone := make(chan struct{})
+	go func() { h.app.FollowOnce(ctx); close(followDone) }()
+	time.Sleep(20 * time.Millisecond)
+
+	// 放行在途拉取（返回 0 个运行）：followOnce 应立即重判并完成跟随，而不是卡死在 waitSlot。
+	close(pullGate)
+	<-pullDone
+	select {
+	case <-followDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("与空拉取冲突后 FollowOnce 不应卡死")
+	}
+	h.mgr.mu.Lock()
+	reports := len(h.mgr.followReports)
+	h.mgr.mu.Unlock()
+	if reports != 1 {
+		t.Fatalf("reports = %d, want 1", reports)
+	}
 }
 
 func (f *fakeSource) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {
