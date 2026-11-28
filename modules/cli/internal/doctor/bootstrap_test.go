@@ -240,7 +240,7 @@ func TestRunBootstrapReadsMonitorHealthOverview(t *testing.T) {
 		}
 	}
 
-	// 1. 全部已上报且就绪，仅有一条其他主机的严重告警和一条归档待办：本节点通过。
+	// 1. 全部已上报且就绪，仅有一条其他主机的严重告警和本节点 warning：本节点通过。
 	healthyOverview := &monitorpb.HealthOverview{
 		TopologyKnown: true,
 		Components: []*monitorpb.HealthComponent{
@@ -249,7 +249,6 @@ func TestRunBootstrapReadsMonitorHealthOverview(t *testing.T) {
 		},
 		Alerts: []*monitorpb.HealthAlert{
 			{Id: "other", Severity: "critical", Title: "海外主机异常", Object: &monitorpb.HealthObject{Type: "host", HostId: "overseas"}},
-			{Id: "archive", Severity: "critical", Title: "未归档的数据集", Object: &monitorpb.HealthObject{Type: "business", Kind: "archive_coverage"}},
 			{Id: "warn", Severity: "warning", Title: "资源偏高", Object: &monitorpb.HealthObject{Type: "host", HostId: "control"}},
 		},
 	}

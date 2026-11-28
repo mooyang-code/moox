@@ -12,7 +12,6 @@ import (
 
 // 监控覆盖契约：Doctor 使用共享的组件目录（packages/servicecatalog/catalog.yaml），Monitor 的数据集健康策略
 // （config/setup/dataset-health-policy.yaml）用版本 2 且只含必需的默认值，Collector 与因子模块都登记了数据集指标清单。
-// 这些原先由 scripts/test/contract/test-monitor-coverage-contract.sh 里的 Python 检查，现在是普通的 Go 测试。
 
 func repoRoot(t *testing.T) string {
 	t.Helper()

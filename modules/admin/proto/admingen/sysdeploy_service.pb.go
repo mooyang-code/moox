@@ -1110,7 +1110,7 @@ func (x *SyncTopologyHost) GetDisabledComponentIds() []string {
 }
 
 // SyncTopologyReq 是 moox.toml 的整份主机与部署声明：Admin 按它覆盖登记，多出的主机与部署删除，
-// 签名公钥与 SSH 指纹保留。setup deploy、setup update 部署每台主机前都发一次。
+// 签名公钥与 SSH 指纹保留。setup deploy、setup install 部署每台主机前都发一次。
 type SyncTopologyReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

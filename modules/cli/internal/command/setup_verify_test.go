@@ -157,22 +157,6 @@ func TestCriticalAlertLinesSkipReadonlyKeyMissing(t *testing.T) {
 	require.Contains(t, lines[0], "下架检测来源连续失败")
 }
 
-// 全新安装没有任何归档任务，Monitor 把“未归档的数据集”报成 critical：它是待办提醒，验收不能因此失败。
-func TestCriticalAlertLinesSkipArchiveCoverage(t *testing.T) {
-	overview := &monitorpb.HealthOverview{
-		Alerts: []*monitorpb.HealthAlert{
-			{Id: "archive_coverage:archive", Severity: "critical", Title: "未归档的数据集", Object: &monitorpb.HealthObject{Type: "business", Kind: "archive_coverage"}},
-		},
-		BusinessChecks: []*monitorpb.HealthBusinessCheck{
-			{CheckId: "archive_coverage:archive", Name: "未归档的数据集", Status: "down", Reason: "7 个有限保留期的时序数据集还没有归档任务"},
-			{CheckId: "archive_object_store:archive", Name: "归档对象存储", Status: "down", Reason: "连不上"},
-		},
-	}
-	lines := criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items)
-	require.Len(t, lines, 1)
-	require.Contains(t, lines[0], "归档对象存储")
-}
-
 func TestSetupVerifyMonitorErrorKeepsOtherChecks(t *testing.T) {
 	checks := verify.Evaluate(verify.Input{Now: time.Now(), MonitorError: "connection refused"})
 	last := checks[len(checks)-1]

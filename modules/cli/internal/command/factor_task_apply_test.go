@@ -418,17 +418,7 @@ func TestFactorTaskApplyCreatesWhatIsMissing(t *testing.T) {
 	}, result.Items)
 	require.Equal(t, "enabled", fake.members["ftask_prices_1m"][0].Status)
 	require.Contains(t, out.String(), "因子成员 ftask_prices_1m/bias：新建，成员键 bias，列 bias")
-	// 新建的任务：结果数据集还没有归档任务，给出建归档任务的命令（不代建）。
-	require.Len(t, result.NextSteps, 1)
-	require.Contains(t, result.NextSteps[0], "moox-cli archive tasks create --space-id "+testSetupPlan().Tasks[0].SpaceID+" --dataset-id dataset_factor_prices_1m")
-	require.Contains(t, out.String(), "下一步：因子任务 ftask_prices_1m 的结果数据集 dataset_factor_prices_1m 还没有归档任务")
-
-	// 再导入一次：任务已存在，不再提示。
-	again, againOut := newApplier(fake)
-	repeated, err := again.Apply(context.Background(), testSetupPlan())
-	require.NoError(t, err)
-	require.Empty(t, repeated.NextSteps)
-	require.NotContains(t, againOut.String(), "下一步")
+	require.NotContains(t, out.String(), "未归档的数据集")
 }
 
 // 已存在相同：再导入一次全部是“已存在”，一个写调用都不发。

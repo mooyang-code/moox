@@ -360,8 +360,7 @@ func (r *bootstrapRunner) checkMonitorComponent(checkID, componentID string) cor
 	return checkResult(checkID, core.StatusPass, "Monitor 确认组件已上报且就绪", nil)
 }
 
-// checkMonitorAlerts 直接读取 Monitor 概览中的严重告警（critical），过滤出属于本节点或全局系统的严重告警；
-// 归档覆盖待办（archive_coverage）在全新安装时必然存在，由 doctor alerts 提示，不阻塞自检。
+// checkMonitorAlerts 直接读取 Monitor 概览中的严重告警（critical），过滤出属于本节点或全局系统的严重告警。
 func (r *bootstrapRunner) checkMonitorAlerts(checkID string) core.CheckResult {
 	var critical []string
 	for _, alert := range r.overview.GetAlerts() {
@@ -397,9 +396,6 @@ func (r *bootstrapRunner) checkMonitorAlerts(checkID string) core.CheckResult {
 func (r *bootstrapRunner) alertAppliesToNode(object *monitorpb.HealthObject) bool {
 	if object == nil {
 		return true
-	}
-	if object.GetKind() == "archive_coverage" {
-		return false
 	}
 	if hostID := strings.TrimSpace(object.GetHostId()); hostID != "" {
 		return hostID == r.options.NodeID

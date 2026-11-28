@@ -92,7 +92,7 @@ func TestRenderCollectorDoesNotAddDelistToOldConfig(t *testing.T) {
 	require.Equal(t, "./collector.db", got["database"].(map[string]any)["path"])
 }
 
-// 出口与 Collector 的契约（scripts/test/contract/test-egress-collector-contract.sh 调用）：用仓库里的示例配置和随发布的模板渲染，
+// 出口与 Collector 的契约：用仓库里的示例配置和随发布的模板渲染，
 // 白名单两边一致，不渲染 DNS 快照与旧的路由字段，输出里没有任何密钥字段。
 func TestRenderedRuntimeConfigFromShippedTemplates(t *testing.T) {
 	example, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "moox.toml.example"))
