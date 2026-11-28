@@ -38,7 +38,7 @@ func (l Layout) Version() string         { return path.Join(l.Root, VersionFile)
 func (l Layout) InstallComplete() string { return path.Join(l.Root, InstallCompleteFile) }
 func (l Layout) Staging() string         { return path.Join(l.Root, StagingDirectory) }
 
-// HostPolicy 是主机策略缓存：HostAgent 从 Monitor 同步后写在自己的数据目录里，Admin 的证书巡检读它取告警渠道。
+// HostPolicy 是主机策略缓存：HostAgent 从 Monitor 同步后写在自己的数据目录里，供控制面不可达或 Monitor 反复重启时直推告警。
 func (l Layout) HostPolicy() string { return path.Join(l.Data("host-agent"), "host-policy.json") }
 
 // Expand 把服务目录部署字段里的占位换成这个组件的绝对路径。

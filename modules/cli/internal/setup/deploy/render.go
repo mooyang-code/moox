@@ -294,8 +294,6 @@ func (r *renderer) environment(component servicecatalog.Component, values map[st
 		values["MOOX_ADMIN_DB_PATH"] = path.Join(layout.Data(id), "admin.db")
 		// 浏览器入口由 Admin 自己监听：证书用 MooX CA 签，Host 必须等于控制机地址。
 		values["MOOX_ADMIN_WEB_LISTEN"], values["MOOX_ADMIN_WEB_ADDRESS"] = "0.0.0.0:9527", r.Host.Address
-		// 证书巡检每次从本机主机策略缓存读取告警渠道（HostAgent 从 Monitor 同步）。
-		values["MOOX_HOST_POLICY_FILE"] = layout.HostPolicy()
 	case "collector":
 		// Collector 建函数时开通采集日志主题，保留天数来自 moox.toml 的 [logging] retention_days（只在创建主题时生效）。
 		values["MOOX_CLS_RETENTION_DAYS"] = strconv.FormatInt(r.Config.Logging.RetentionDays, 10)

@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -52,7 +53,11 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 	if err != nil {
 		return nil, err
 	}
-	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB()), web); err != nil {
+	attention, err := report.NewAttention(prometheus.DefaultRegisterer, adminAttentionKinds)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Admin 关注项指标失败: %w", err)
+	}
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB(), attention), web); err != nil {
 		return nil, err
 	}
 	registerMetricsReporter(s)
