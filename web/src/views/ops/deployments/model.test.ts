@@ -47,12 +47,12 @@ describe("deployment presentation", () => {
       })
     ).toEqual([9527, 11010, 11108]);
   });
-  it("uses server observation time for heartbeat age and keeps never-reported distinct", () => {
+  it("uses server observation time for heartbeat age and shows waiting before first report", () => {
     expect(gatewayLabel(snapshot)).toBe("在线");
     expect(gatewayLabel({ ...snapshot, compiled_at: String(Date.parse("2026-10-09T12:02:01Z")) })).toBe("离线");
-    expect(gatewayLabel({ ...snapshot, gateway_status: {} })).toBe("从未上报");
-    // 没拉取过时 Admin 给 "0"
-    expect(gatewayLabel({ ...snapshot, gateway_status: { last_seen_at: "0" } })).toBe("从未上报");
+    expect(gatewayLabel({ ...snapshot, gateway_status: {} })).toBe("等待上报");
+    // Admin 重启后尚未拉取或没拉取过时给 "0"
+    expect(gatewayLabel({ ...snapshot, gateway_status: { last_seen_at: "0" } })).toBe("等待上报");
     expect(gatewayLabel()).toBe("状态未知");
   });
   it("compares the expected and applied snapshot", () => {

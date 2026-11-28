@@ -1,4 +1,4 @@
-import { GLOBAL_METHODS, GLOBAL_SERVICES, SPACE_OPTIONAL_METHODS } from "virtual:space-policy";
+import { METHOD_SPACE_POLICIES, SERVICE_SPACE_POLICIES } from "virtual:space-policy";
 import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "./space-header";
 import { StaleSpaceRequestError } from "./stale-space";
 
@@ -28,10 +28,8 @@ export function spacePolicyForUrl(url: string | undefined): SpacePolicy {
   const match = ADMIN_API_PATH.exec(url || "");
   if (!match) return "space_required";
   const [, service, method] = match;
-  if (GLOBAL_SERVICES.has(service)) return "global";
-  if (GLOBAL_METHODS[service]?.has(method)) return "global";
-  if (SPACE_OPTIONAL_METHODS[service]?.has(method)) return "space_optional";
-  return "space_required";
+  // 与后端 Catalog.ConsoleSpacePolicy 一致：方法级优先于服务级，未声明默认 space_required。
+  return METHOD_SPACE_POLICIES[service]?.[method] ?? SERVICE_SPACE_POLICIES[service] ?? "space_required";
 }
 
 function isGlobalPayload(data: unknown): boolean {

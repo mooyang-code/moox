@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 declare module "nprogress";
 declare module "virtual:space-policy" {
-  export const GLOBAL_SERVICES: ReadonlySet<string>;
-  export const GLOBAL_METHODS: Record<string, ReadonlySet<string>>;
-  export const SPACE_OPTIONAL_METHODS: Record<string, ReadonlySet<string>>;
+  export type GeneratedSpacePolicy = "global" | "space_optional" | "space_required";
+  export const SERVICE_SPACE_POLICIES: Readonly<Record<string, GeneratedSpacePolicy>>;
+  export const METHOD_SPACE_POLICIES: Readonly<Record<string, Readonly<Record<string, GeneratedSpacePolicy>>>>;
 }

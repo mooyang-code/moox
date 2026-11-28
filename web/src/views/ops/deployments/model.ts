@@ -67,7 +67,7 @@ export function gatewayLabel(snapshot?: HostRoutesResponse) {
   if (!snapshot) return "状态未知";
   const status = snapshot.gateway_status;
   const seen = toInstantMs(status?.last_seen_at);
-  if (seen === null) return "从未上报";
+  if (seen === null) return "等待上报";
   const observed = toInstantMs(snapshot.compiled_at);
   if (observed === null) return "状态未知";
   return observed - seen > 120000 ? "离线" : "在线";
