@@ -18,7 +18,17 @@ func TestStorageSeparatesSpacesAndRejectsEmptyRecordVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	primary, err := primarystore.New(primarystore.Options{Store: store, Snapshot: activeRequestSnapshot})
+	datasets := newTestDatasetCache(t,
+		[]*pb.Dataset{
+			{SpaceId: "space-a", DatasetId: "shared", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+			{SpaceId: "space-b", DatasetId: "shared", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+		},
+		[]*pb.DatasetColumn{
+			{SpaceId: "space-a", DatasetId: "shared", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+			{SpaceId: "space-b", DatasetId: "shared", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+		},
+	)
+	primary, err := primarystore.New(primarystore.Options{Store: store, Datasets: datasets})
 	if err != nil {
 		t.Fatal(err)
 	}

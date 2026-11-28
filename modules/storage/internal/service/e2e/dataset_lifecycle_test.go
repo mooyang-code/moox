@@ -41,7 +41,7 @@ func newPrimaryProcess(t *testing.T, ctx context.Context, meta coremetadata.Stor
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	primary, err := primarystore.New(primarystore.Options{Store: store, Validator: primarystore.NewMetadataValidator(cache), Snapshot: cache.RequestSnapshot})
+	primary, err := primarystore.New(primarystore.Options{Store: store, Datasets: cache})
 	if err != nil {
 		t.Fatal(err)
 	}

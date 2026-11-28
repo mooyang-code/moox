@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -27,12 +26,15 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if req == nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
 	}
-	ctx = s.requestContext(ctx)
-	if err := validateTimeSeriesRead(ctx, req); err != nil {
+	if err := validateTimeSeriesRead(req); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+	dataset, err := activeDataset(s.datasets.Snapshot(), req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.FromError(err)}, nil
+	}
+	if err := validateSelectorFreqs(req.GetSelectors(), dataset.GetFreq()); err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	rsp, err := s.store.ReadTimeSeriesRows(ctx, req)
 	if err != nil {
@@ -47,18 +49,21 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 	if req == nil || len(req.GetSelectors()) == 0 || req.GetTimeRange() == nil {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("selectors and time_range are required"))}, nil
 	}
-	ctx = s.requestContext(ctx)
 	if req.GetSpaceId() == "" || req.GetDatasetId() == "" {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
-	if err := validateSelectors(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSelectors(), maxCountSelectors, false); err != nil {
+	if err := validateSelectors(req.GetSelectors(), maxCountSelectors, false); err != nil {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if _, _, err := parseRequiredRange(req.GetTimeRange()); err != nil {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+	dataset, err := activeDataset(s.datasets.Snapshot(), req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.FromError(err)}, nil
+	}
+	if err := validateSelectorFreqs(req.GetSelectors(), dataset.GetFreq()); err != nil {
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	counts, err := s.store.CountTimeSeriesRows(ctx, req)
 	if err != nil {
@@ -76,8 +81,7 @@ func (s *Service) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetCha
 	if !req.GetFromHead() && req.GetCursor() == nil {
 		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("cursor is required unless from_head is set"))}, nil
 	}
-	ctx = s.requestContext(ctx)
-	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+	if _, err := activeDataset(s.datasets.Snapshot(), req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	rsp, err := s.store.ReadDatasetChanges(ctx, req)
@@ -88,8 +92,8 @@ func (s *Service) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetCha
 	return rsp, nil
 }
 
-// validateTimeSeriesRead 是所有调用方共用的请求校验。
-func validateTimeSeriesRead(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) error {
+// validateTimeSeriesRead 是所有调用方共用的请求校验（不依赖元数据快照）。
+func validateTimeSeriesRead(req *pb.ReadTimeSeriesRowsReq) error {
 	if req.GetSpaceId() == "" || req.GetDatasetId() == "" {
 		return errors.New("space_id and dataset_id are required")
 	}
@@ -99,7 +103,7 @@ func validateTimeSeriesRead(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) 
 	if req.GetPage().GetPage() != 0 {
 		return errors.New("page numbers are not supported; use page.cursor")
 	}
-	if err := validateSelectors(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetSelectors(), maxReadSelectors, false); err != nil {
+	if err := validateSelectors(req.GetSelectors(), maxReadSelectors, false); err != nil {
 		return err
 	}
 	latest := req.GetLatestPerSeries()
@@ -123,24 +127,27 @@ func validateTimeSeriesRead(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) 
 	return err
 }
 
-func validateSelectors(ctx context.Context, spaceID, datasetID string, selectors []*pb.TimeSeriesSelector, limit int, required bool) error {
+func validateSelectors(selectors []*pb.TimeSeriesSelector, limit int, required bool) error {
 	if required && len(selectors) == 0 {
 		return errors.New("selectors are required")
 	}
 	if len(selectors) > limit {
 		return fmt.Errorf("selectors exceed the limit of %d", limit)
 	}
-	freq := ""
-	if snapshot := metadata.RequestSnapshotFromContext(ctx); snapshot != nil {
-		if dataset, ok := snapshot.GetDataset(spaceID, datasetID); ok && dataset != nil {
-			freq = dataset.GetFreq()
-		}
-	}
 	for _, selector := range selectors {
 		if selector == nil || selector.GetSubjectId() == "" || selector.GetFreq() == "" {
 			return errors.New("selector subject_id and freq are required")
 		}
-		if freq != "" && selector.GetFreq() != freq {
+	}
+	return nil
+}
+
+func validateSelectorFreqs(selectors []*pb.TimeSeriesSelector, freq string) error {
+	if freq == "" {
+		return nil
+	}
+	for _, selector := range selectors {
+		if selector.GetFreq() != freq {
 			return fmt.Errorf("selector freq %q does not match the dataset frequency %q", selector.GetFreq(), freq)
 		}
 	}

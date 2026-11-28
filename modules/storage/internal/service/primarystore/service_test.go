@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/seriesset"
@@ -17,9 +17,12 @@ import (
 
 // 元数据里没有或已停用的数据集，读写都在到达存储层之前被拒绝。
 func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {
-	for name, dataset := range map[string]*pb.Dataset{
-		"missing":  nil,
-		"disabled": {SpaceId: "s", DatasetId: "d", Status: "disabled"},
+	for name, tc := range map[string]struct {
+		dataset  *pb.Dataset
+		wantCode pb.ErrorCode
+	}{
+		"missing":  {nil, pb.ErrorCode_NOT_FOUND},
+		"disabled": {&pb.Dataset{SpaceId: "s", DatasetId: "d", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "disabled"}, pb.ErrorCode_INVALID_PARAM},
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := newHookStore(t)
@@ -27,27 +30,36 @@ func TestPrimaryRejectsMissingOrDisabledDataset(t *testing.T) {
 				t.Fatal("write reached the store")
 				return nil
 			}
-			svc, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return singleDatasetSnapshot{dataset: dataset} }})
+			var datasets []*pb.Dataset
+			if tc.dataset != nil {
+				datasets = []*pb.Dataset{tc.dataset}
+			}
+			cache := newTestDatasetCache(t, datasets, []*pb.DatasetColumn{{
+				SpaceId: "s", DatasetId: "d", ColumnName: "v", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active",
+			}})
+			svc, err := New(Options{Store: store, Datasets: cache})
 			require.NoError(t, err)
 			key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
 			rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.Row{{Key: key, Fields: []*pb.FieldValue{{FieldId: "v", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}}}}}))
 			require.NoError(t, err)
-			require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-			// 读取按错误类别返回：不存在是 NOT_FOUND，已停用是参数错误，都不走框架错误。
+			require.Equal(t, tc.wantCode, rsp.GetRetInfo().GetCode())
+			// 读取同样按错误类别返回：不存在是 NOT_FOUND，已停用是参数错误，都不走框架错误。
 			read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{Keys: []*pb.RowKey{key}, ColumnNames: []string{"v"}})
 			require.NoError(t, err)
-			want := pb.ErrorCode_NOT_FOUND
-			if dataset != nil {
-				want = pb.ErrorCode_INVALID_PARAM
-			}
-			require.Equal(t, want, read.GetRetInfo().GetCode())
+			require.Equal(t, tc.wantCode, read.GetRetInfo().GetCode())
 		})
 	}
 }
 
 func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	store := openTestStore(t)
-	svc, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return markerRoutingSnapshot{} }})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+		{SpaceId: "space", DatasetId: "factor-data", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}},
+	}, []*pb.DatasetColumn{
+		{SpaceId: "space", DatasetId: "dataset", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+	})
+	svc, err := New(Options{Store: store, Datasets: cache})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,60 +85,6 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	page, err := store.ReadMarkerChanges(context.Background(), 0, 100)
 	require.NoError(t, err)
 	require.Len(t, page.Markers, 1, "待转发的只有周期完成，行写入不产生事件")
-}
-
-type factorResultSnapshot struct{}
-
-type markerRoutingSnapshot struct{}
-
-func (markerRoutingSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	attrs := map[string]string{}
-	switch datasetID {
-	case "collector-data":
-		attrs = map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}
-	case "resample-data":
-		attrs = map[string]string{"owner_module": "collector", "dataset_role": "kline_resample_result"}
-	case "factor-data":
-		attrs = map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}
-	}
-	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active", Alignment: attrs["alignment"], Attributes: attrs}, true
-}
-
-func (markerRoutingSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
-}
-
-func (factorResultSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	return &pb.Dataset{
-		SpaceId: spaceID, DatasetId: datasetID, Status: "active",
-		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"},
-	}, true
-}
-
-func (factorResultSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
-}
-
-type periodAuthorizationSnapshot struct {
-	datasets map[routeKey]*pb.Dataset
-}
-
-func collectorPeriodMetadataSnapshot(spaceID, datasetID, frequency string) metadata.RequestSnapshot {
-	return periodAuthorizationSnapshot{datasets: map[routeKey]*pb.Dataset{
-		{spaceID: spaceID, datasetID: datasetID}: {
-			SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Status: "active",
-			Freq: frequency, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
-		},
-	}}
-}
-
-func (s periodAuthorizationSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	dataset, ok := s.datasets[routeKey{spaceID: spaceID, datasetID: datasetID}]
-	return dataset, ok
-}
-
-func (periodAuthorizationSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
 }
 
 func TestCommitTimeSeriesBatchValidatesPeriodDataset(t *testing.T) {
@@ -170,6 +128,11 @@ func runPeriodValidationCases(t *testing.T, method string, invoke func(*Service,
 	withAttrs := func(kind pb.DataKind, freq string, attrs map[string]string) *pb.Dataset {
 		return &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: kind, Freq: freq, Status: "active", Attributes: attrs}
 	}
+	disabledDataset := func() *pb.Dataset {
+		ds := validDataset()
+		ds.Status = "disabled"
+		return ds
+	}
 	tests := []struct {
 		name            string
 		dataset         *pb.Dataset
@@ -182,7 +145,7 @@ func runPeriodValidationCases(t *testing.T, method string, invoke func(*Service,
 		{name: "any role: Factor-owned Dataset", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
 		{name: "any role: missing Dataset owner", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"dataset_role": "raw_collection"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
 		{name: "any role: wrong Dataset role", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "1h", map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "snapshot Dataset identity mismatch", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_INNER_ERR},
+		{name: "disabled Dataset", dataset: disabledDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_INVALID_PARAM},
 		{name: "record Dataset kind", dataset: withAttrs(pb.DataKind_DATA_KIND_RECORD, "1h", nil), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_INVALID_PARAM},
 		{name: "invalid declared frequency", dataset: withAttrs(pb.DataKind_DATA_KIND_TIME_SERIES, "forever", nil), includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_INVALID_PARAM},
 		{name: "frequency alias is not canonical", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_INVALID_PARAM},
@@ -192,7 +155,7 @@ func runPeriodValidationCases(t *testing.T, method string, invoke func(*Service,
 	}
 	for _, tc := range tests {
 		t.Run(method+"/"+tc.name, func(t *testing.T) {
-			var writes, snapshotCalls int
+			var writes int
 			store := newHookStore(t)
 			store.commit = func(context.Context, pebble.DatasetPeriodExpectation, []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error) {
 				writes++
@@ -202,25 +165,19 @@ func runPeriodValidationCases(t *testing.T, method string, invoke func(*Service,
 				writes++
 				return pebble.RegisterSnapshotResult{SeriesHash: "hash", ExpectedCount: 1}, nil
 			}
-			svc, err := New(Options{
-				Store: store,
-				Snapshot: func() metadata.RequestSnapshot {
-					snapshotCalls++
-					if !tc.includeSnapshot {
-						return nil
-					}
-					datasets := map[routeKey]*pb.Dataset{}
-					if tc.includeDataset {
-						datasets[routeKey{spaceID: "space", datasetID: "dataset"}] = tc.dataset
-					}
-					return periodAuthorizationSnapshot{datasets: datasets}
-				},
-			})
+			var cache *metacache.DatasetCache
+			if tc.includeSnapshot {
+				var datasets []*pb.Dataset
+				if tc.includeDataset {
+					datasets = []*pb.Dataset{tc.dataset}
+				}
+				cache = newTestDatasetCache(t, datasets, nil)
+			}
+			svc, err := New(Options{Store: store, Datasets: cache})
 			require.NoError(t, err)
 			expectation := &pb.DatasetPeriodExpectation{SpaceId: "space", DatasetId: "dataset", Frequency: tc.frequency, PeriodTime: 123, SeriesHash: "hash", ExpectedCount: 1}
 			rsp := invoke(svc, expectation)
 			require.Equal(t, tc.wantCode, rsp.GetCode(), "ret_info=%v", rsp)
-			require.Equal(t, 1, snapshotCalls, "unexpected request metadata snapshot access")
 			if tc.wantCode == pb.ErrorCode_SUCCESS {
 				require.Equal(t, 1, writes)
 			} else {
@@ -237,7 +194,14 @@ func TestPrimaryWritesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 		written = append(written, spaceID+"/"+datasetID)
 		return store.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 	}
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "space-a", DatasetId: "shared", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+		{SpaceId: "space-b", DatasetId: "shared", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+	}, []*pb.DatasetColumn{
+		{SpaceId: "space-a", DatasetId: "shared", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+		{SpaceId: "space-b", DatasetId: "shared", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+	})
+	svc, err := New(Options{Datasets: cache, Store: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,14 +236,21 @@ func (m *recordingDatasetMetrics) ObserveRun(observation report.DatasetObservati
 
 func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 	metrics := &recordingDatasetMetrics{}
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: openTestStore(t), DatasetMetrics: metrics})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "crypto", DatasetId: "market_kline_1m", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
+		{SpaceId: "crypto", DatasetId: "market_kline_5m", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active"},
+	}, []*pb.DatasetColumn{
+		{SpaceId: "crypto", DatasetId: "market_kline_1m", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
+		{SpaceId: "crypto", DatasetId: "market_kline_5m", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
+	})
+	svc, err := New(Options{Datasets: cache, Store: openTestStore(t), DatasetMetrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := func(freq string, at time.Time) *pb.Row {
+	row := func(datasetID, freq string, at time.Time) *pb.Row {
 		return &pb.Row{
 			Key: &pb.RowKey{
-				SpaceId: "crypto", DatasetId: "market_kline",
+				SpaceId: "crypto", DatasetId: datasetID,
 				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 					SubjectId: "BTC-USDT", Freq: freq, DataTime: at.UTC().Format(time.RFC3339Nano),
 				}},
@@ -292,10 +263,16 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 	t1003 := time.Date(2026, 7, 28, 10, 3, 0, 0, time.UTC)
 	t1005 := t1003.Add(2 * time.Minute)
 	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		Rows: []*pb.Row{row("1m", t1003), row("1m", t1005), row("5m", t1003)},
+		Rows: []*pb.Row{row("market_kline_1m", "1m", t1003), row("market_kline_1m", "1m", t1005)},
 	}))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("write rsp=%v err=%v", rsp, err)
+		t.Fatalf("write 1m rsp=%v err=%v", rsp, err)
+	}
+	rsp, err = svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
+		Rows: []*pb.Row{row("market_kline_5m", "5m", t1003)},
+	}))
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("write 5m rsp=%v err=%v", rsp, err)
 	}
 	if len(metrics.observations) != 2 {
 		t.Fatalf("observations=%v", metrics.observations)
@@ -318,7 +295,12 @@ func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 		return errors.New("write failed")
 	}
 	metrics := &recordingDatasetMetrics{}
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store, DatasetMetrics: metrics})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "crypto", DatasetId: "market_kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
+	}, []*pb.DatasetColumn{
+		{SpaceId: "crypto", DatasetId: "market_kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
+	})
+	svc, err := New(Options{Datasets: cache, Store: store, DatasetMetrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +331,12 @@ func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 
 func TestPrimaryDoesNotObserveRecordDataset(t *testing.T) {
 	metrics := &recordingDatasetMetrics{}
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: openTestStore(t), DatasetMetrics: metrics})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "crypto", DatasetId: "symbols", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+	}, []*pb.DatasetColumn{
+		{SpaceId: "crypto", DatasetId: "symbols", ColumnName: "symbol", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+	})
+	svc, err := New(Options{Datasets: cache, Store: openTestStore(t), DatasetMetrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +368,11 @@ func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 		}
 		return rows, nil
 	}
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "s", DatasetId: "a", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+		{SpaceId: "s", DatasetId: "b", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+	}, nil)
+	svc, err := New(Options{Datasets: cache, Store: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,37 +394,42 @@ func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 	}
 }
 
+// 一次 ReadRows 请求只取一次快照：读完第一组后缓存刷新把第二组数据集停用，本次请求仍沿用同一快照完成，下一次请求才看到停用。
 func TestPrimaryReadRowsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
-	provider := &mutableSnapshotProvider{current: &testRequestSnapshot{generation: "generation-a"}}
-	var generations []string
+	cache, source := newMutableDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "space", DatasetId: "dataset-a", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+		{SpaceId: "space", DatasetId: "dataset-b", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+	}, nil)
+	var readOrder []string
 	store := newHookStore(t)
 	store.readRows = func(ctx context.Context, keys []*pb.RowKey, _, _ []string) ([]*pb.Row, error) {
-		snapshot, ok := metadata.RequestSnapshotFromContext(ctx).(*testRequestSnapshot)
-		if !ok || snapshot == nil {
-			t.Fatalf("request snapshot missing for %s", keys[0].GetDatasetId())
+		readOrder = append(readOrder, keys[0].GetDatasetId())
+		if keys[0].GetDatasetId() == "dataset-a" {
+			source.set([]*pb.Dataset{
+				{SpaceId: "space", DatasetId: "dataset-a", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+				{SpaceId: "space", DatasetId: "dataset-b", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "disabled"},
+			}, nil)
+			require.NoError(t, cache.Refresh(ctx))
 		}
-		generations = append(generations, snapshot.generation)
 		return []*pb.Row{{Key: keys[0]}}, nil
 	}
-	svc, err := New(Options{Store: store, Snapshot: provider.RequestSnapshot})
-	if err != nil {
-		t.Fatal(err)
-	}
+	svc, err := New(Options{Store: store, Datasets: cache})
+	require.NoError(t, err)
 	key := func(dataset, record string) *pb.RowKey {
 		return &pb.RowKey{SpaceId: "space", DatasetId: dataset, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: record, Version: "1"}}}
 	}
 	rsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
 		Keys: []*pb.RowKey{key("dataset-a", "a"), key("dataset-b", "b")}, ColumnNames: []string{"value"},
 	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("read rsp=%v err=%v", rsp, err)
-	}
-	if provider.calls != 1 {
-		t.Fatalf("snapshot provider calls=%d want 1", provider.calls)
-	}
-	if !reflect.DeepEqual(generations, []string{"generation-a", "generation-a"}) {
-		t.Fatalf("generations=%v", generations)
-	}
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, []string{"dataset-a", "dataset-b"}, readOrder)
+
+	next, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
+		Keys: []*pb.RowKey{key("dataset-b", "b")}, ColumnNames: []string{"value"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, next.GetRetInfo().GetCode())
 }
 
 func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
@@ -442,7 +438,12 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 		t.Fatal("write should not reach the store")
 		return nil
 	}
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: store})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "s", DatasetId: "d", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+	}, []*pb.DatasetColumn{
+		{SpaceId: "s", DatasetId: "d", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+	})
+	svc, err := New(Options{Datasets: cache, Store: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +459,12 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 }
 
 func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: openTestStore(t)})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "space", DatasetId: "records", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+	}, []*pb.DatasetColumn{
+		{SpaceId: "space", DatasetId: "records", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+	})
+	svc, err := New(Options{Datasets: cache, Store: openTestStore(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +495,12 @@ func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 }
 
 func TestPrimaryReadRowsRoundTripsThroughPebble(t *testing.T) {
-	svc, err := New(Options{Snapshot: activeRequestSnapshot, Store: openTestStore(t)})
+	cache := newTestDatasetCache(t, []*pb.Dataset{
+		{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"},
+	}, []*pb.DatasetColumn{
+		{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
+	})
+	svc, err := New(Options{Datasets: cache, Store: openTestStore(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,37 +525,6 @@ func TestPrimaryReadRowsRoundTripsThroughPebble(t *testing.T) {
 		readRsp.GetRows()[0].GetFields()[0].GetValue().GetDoubleValue() != 101.25 {
 		t.Fatalf("read rsp=%v err=%v", readRsp, err)
 	}
-}
-
-type mutableSnapshotProvider struct {
-	current metadata.RequestSnapshot
-	calls   int
-}
-
-func (p *mutableSnapshotProvider) RequestSnapshot() metadata.RequestSnapshot {
-	p.calls++
-	snapshot := p.current
-	p.current = &testRequestSnapshot{generation: "generation-b"}
-	return snapshot
-}
-
-type testRequestSnapshot struct {
-	activeSnapshot
-	generation string
-}
-
-type attrsSnapshot map[string]map[string]string
-
-func (s attrsSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	attrs, ok := s[datasetID]
-	if !ok {
-		return nil, false
-	}
-	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active", Alignment: attrs["alignment"], Attributes: attrs}, true
-}
-
-func (attrsSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
 }
 
 func timeSeriesRowKey(spaceID, datasetID, subjectID, freq, dataTime, seriesTag string) *pb.RowKey {

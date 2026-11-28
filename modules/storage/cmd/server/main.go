@@ -122,7 +122,7 @@ func runPrimaryRole() error {
 	deadlineRejections := observability.NewDeadlineRejections(attention)
 	attention.AddSource("outbox", storagerelay.OutboxAttention(observability.DefaultViewMetrics))
 	svc, err := primarystore.New(primarystore.Options{
-		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot,
+		Store: store, Datasets: cached,
 		DatasetMetrics: datasetMetrics, DeadlineRejections: deadlineRejections,
 	})
 	if err != nil {

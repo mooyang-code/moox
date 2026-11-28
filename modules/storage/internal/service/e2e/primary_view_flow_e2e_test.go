@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
-	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -56,9 +55,7 @@ func newPrimaryViewEnv(t *testing.T, datasets []readyBenchDataset) *followEnv {
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 	return newFollowEnv(t, datasets, followEnvOptions{
-		snapshot:      cache.RequestSnapshot,
-		validator:     primarystore.NewMetadataValidator(cache),
-		datasetExists: cache.HasDataset,
+		datasets: cache,
 		setup: func(store *pebble.Store) {
 			metadataService, err := catalog.NewMetadataService(meta, cache, catalog.Options{Rows: store})
 			if err != nil {

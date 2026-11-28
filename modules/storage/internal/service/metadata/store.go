@@ -17,26 +17,6 @@ type DatasetQuery struct {
 	Page         *pb.Page
 }
 
-// RequestSnapshot 是一次请求内校验与读写共用的不可变元数据版本，只含写路径用到的部分：数据集与它的列定义。
-// 返回的消息与切片由各请求共享，调用方只读。
-type RequestSnapshot interface {
-	GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool)
-	ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
-}
-
-type requestSnapshotContextKey struct{}
-
-func WithRequestSnapshot(ctx context.Context, snapshot RequestSnapshot) context.Context {
-	return context.WithValue(ctx, requestSnapshotContextKey{}, snapshot)
-}
-
-func RequestSnapshotFromContext(ctx context.Context) RequestSnapshot {
-	if snapshot, ok := ctx.Value(requestSnapshotContextKey{}).(RequestSnapshot); ok {
-		return snapshot
-	}
-	return nil
-}
-
 // Reader 定义元数据存储的只读查询接口。
 type Reader interface {
 	GetSpace(ctx context.Context, spaceID string) (*pb.Space, error)
