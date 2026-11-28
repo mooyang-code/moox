@@ -58,7 +58,7 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			created += n
 			result.ExchangeKeys = append(result.ExchangeKeys, keyResult)
 		}
-		result.Secrets = secretsPresent(tencentState != recordDeleted, len(keys), result.ExchangeKeys)
+		result.Secrets = secretsPresent(len(keys), result.ExchangeKeys)
 		return nil
 	})
 	if err != nil {
@@ -113,7 +113,7 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 			}
 			status.ExchangeKeys = append(status.ExchangeKeys, ExchangeKeyResult{SecretID: exchangeKeyID(key), State: keyState, ReadOnly: key.ReadOnly})
 		}
-		status.Secrets = secretsPresent(tencentState != recordDeleted, len(keys), status.ExchangeKeys)
+		status.Secrets = secretsPresent(len(keys), status.ExchangeKeys)
 		return nil
 	})
 	if err != nil {
@@ -127,11 +127,8 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 
 // secretsPresent 是应当存在的密钥数：未在管理台删除的腾讯云密钥加每把未删除的交易所密钥
 // （已在管理台删除的初始密钥不会由 setup 重建，计入会让数量永远对不上）。
-func secretsPresent(tencentPresent bool, keyCount int, results []ExchangeKeyResult) int {
-	present := keyCount
-	if tencentPresent {
-		present++
-	}
+func secretsPresent(keyCount int, results []ExchangeKeyResult) int {
+	present := keyCount + 1
 	for _, result := range results {
 		if result.State == ExchangeKeyDeleted {
 			present--
@@ -163,8 +160,6 @@ const (
 	recordMissing
 	// recordKept 是库里已有、但与 moox.toml 不一致：以管理台为准保留，不改写。
 	recordKept
-	// recordDeleted 是已在管理台硬删除并记录在墓碑表的初始密钥：setup 不再静默复活。
-	recordDeleted
 )
 
 // Kept 里的名称：管理员、腾讯云密钥。
@@ -207,7 +202,7 @@ func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (r
 
 func (s *Service) ensureTencentSecret(ctx context.Context, tx *gorm.DB, input TencentCloud) (int, recordState, error) {
 	state, err := s.inspectTencentSecret(ctx, tx, input)
-	if err != nil || state == recordMatch || state == recordKept || state == recordDeleted {
+	if err != nil || state == recordMatch || state == recordKept {
 		return 0, state, err
 	}
 	now := time.Now()
@@ -222,9 +217,6 @@ func (s *Service) ensureTencentSecret(ctx context.Context, tx *gorm.DB, input Te
 	if err := tx.WithContext(ctx).Create(secret).Error; err != nil {
 		return 0, recordKept, ErrStorage
 	}
-	if err := tx.WithContext(ctx).Where("c_secret_id = ?", tencentSecretID).Delete(&secretmodel.DeletedInitialSecret{}).Error; err != nil {
-		return 0, recordKept, ErrStorage
-	}
 	if err := s.afterWrite("secret"); err != nil {
 		return 0, recordKept, err
 	}
@@ -235,13 +227,6 @@ func (s *Service) inspectTencentSecret(ctx context.Context, tx *gorm.DB, input T
 	var secret secretmodel.Secret
 	err := tx.WithContext(ctx).Where("c_secret_id = ?", tencentSecretID).First(&secret).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		deleted, tombstoneErr := secretdao.IsDeletedInitialSecret(ctx, tx, tencentSecretID)
-		if tombstoneErr != nil {
-			return recordKept, ErrStorage
-		}
-		if deleted {
-			return recordDeleted, nil
-		}
 		return recordMissing, nil
 	}
 	if err != nil {

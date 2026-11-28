@@ -84,6 +84,7 @@ func TestValidateTaskParamsRejectsUnknownSessionCalendar(t *testing.T) {
 func TestValidateTaskParamsRejectsUnsupportedOutputFields(t *testing.T) {
 	cryptoSrc := sourceInfoForSpace("crypto")
 	stockSrc := sourceInfoForSpace("stockcn")
+	stockSrc.ColumnTypes = stockSelectedColumnTypes()
 	ohlcvSrc := storagesource.DatasetInfo{Alignment: "epoch_utc", ColumnTypes: ohlcvColumnTypes()}
 
 	require.NoError(t, ValidateTaskParamsForSource(cryptoSrc, parseResampleParams(t, "1m", "5m", `,"output_fields":["open","close","quote_volume","trade_num"]`)))

@@ -14,6 +14,8 @@ import sys
 # 乙类白名单：(文件名后缀或 *, 消息名或 *, 字段名)。这些 int64 是数据坐标的 Unix 秒，新增乙类字段要改这里。
 SECONDS_WHITELIST = [
     ("*", "*", "period_time"),
+    # 周期的真实结束时刻，与 period_time 同一坐标（Unix 秒）。
+    ("primary_store.proto", "DatasetPeriodExpectation", "period_end_at"),
     ("*", "PrimaryRegisterSeriesSnapshotReq", "effective_from"),
     ("*", "*", "last_period_time"),
     ("*", "*", "last_submitted_period"),

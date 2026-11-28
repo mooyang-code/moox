@@ -339,6 +339,7 @@ func TestWriteUsesPeriodCommitInsideSnapshotAndPlainWriteOutside(t *testing.T) {
 	require.Equal(t, set.Hash, storage.commits[0].GetSeriesHash())
 	require.EqualValues(t, 2, storage.commits[0].GetExpectedCount())
 	require.Equal(t, bucket.Key.Unix(), storage.commits[0].GetPeriodTime())
+	require.Equal(t, bucket.End.Unix(), storage.commits[0].GetPeriodEndAt())
 	require.Len(t, storage.upserts, 1)
 	require.Equal(t, "SOL", storage.upserts[0][0].GetKey().GetTimeSeries().GetSubjectId())
 

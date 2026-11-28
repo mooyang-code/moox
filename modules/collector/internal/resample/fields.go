@@ -39,6 +39,8 @@ type FieldValue struct {
 }
 
 // StandardFieldRules 是重采样支持的标准列归约规则表（按稳定顺序输出）。
+// 可选列一律允许源行缺值：数据集有这一列不代表每个市场的行都写它（默认建的 K 线数据集带 quote_volume、trade_num，
+// 但股票行只写 amount），缺值时该列合成为 NULL，不影响其余列。
 // 后续扩充新的可聚合标准列（如 open_interest: Last）只需在此表新增一行并在 taskresult.KlineOutputFields 登记显示元信息。
 var StandardFieldRules = []FieldRule{
 	{Name: fieldOpen, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Op: ReduceFirst, Required: true},
@@ -46,8 +48,8 @@ var StandardFieldRules = []FieldRule{
 	{Name: fieldLow, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Op: ReduceMin, Required: true},
 	{Name: fieldClose, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Op: ReduceLast, Required: true},
 	{Name: fieldVolume, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Op: ReduceSum, Required: true, NonNegative: true},
-	{Name: fieldQuoteVolume, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Op: ReduceSum, NonNegative: true},
-	{Name: fieldTradeNum, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, Op: ReduceSumInt, NonNegative: true},
+	{Name: fieldQuoteVolume, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Op: ReduceSumAllPresent, Nullable: true, NonNegative: true},
+	{Name: fieldTradeNum, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, Op: ReduceSumInt, Nullable: true, NonNegative: true},
 	{Name: fieldAmount, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Op: ReduceSumAllPresent, Nullable: true, NonNegative: true},
 }
 

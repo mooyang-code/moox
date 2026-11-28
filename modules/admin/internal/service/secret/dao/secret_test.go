@@ -88,8 +88,19 @@ func TestSecretDAO_HardDeleteAllowsRepeatedDeleteAndRecreateAndManagesTombstone(
 	require.NoError(t, err)
 	assert.False(t, deleted, "删除普通 UUID 密钥不得写入墓碑表")
 
-	// 初始固定 ID 密钥（tencent-default、exchange-*）可反复硬删除与重建，不再撞唯一约束；删除记墓碑，重建/导入清墓碑。
-	for _, initialID := range []string{model.TencentDefaultSecretID, model.ExchangeSecretID("binance", "production", "main")} {
+	// 默认腾讯云密钥可反复硬删除与重建，且不写墓碑：setup init 要能按 moox.toml 把它建回来。
+	for range 2 {
+		rec := sampleSecret()
+		rec.SecretID = model.TencentDefaultSecretID
+		require.NoError(t, d.Create(ctx, rec))
+		require.NoError(t, d.Delete(ctx, model.TencentDefaultSecretID))
+		deleted, err := IsDeletedInitialSecret(ctx, db, model.TencentDefaultSecretID)
+		require.NoError(t, err)
+		assert.False(t, deleted, "删除默认腾讯云密钥不得写入墓碑表")
+	}
+
+	// 初始交易所密钥（exchange-*）可反复硬删除与重建，不再撞唯一约束；删除记墓碑，重新导入同 ID 清墓碑。
+	for _, initialID := range []string{model.ExchangeSecretID("binance", "production", "main")} {
 		for range 3 {
 			rec := sampleSecret()
 			rec.SecretID = initialID

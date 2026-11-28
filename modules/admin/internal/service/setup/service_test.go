@@ -209,8 +209,8 @@ func TestInspectReportsIncompleteWithoutWriting(t *testing.T) {
 	assert.Zero(t, users)
 }
 
-// 管理台主动硬删除默认腾讯云密钥后写入墓碑，setup init 不会静默复活；手工新建同 ID 后清除墓碑恢复可见。
-func TestApplyDoesNotRecreateTencentSecretDeletedInConsole(t *testing.T) {
+// 默认腾讯云密钥是云函数采集必需的：在管理台删掉后，setup init 按 moox.toml 把它建回来，而不是静默跳过却报完成。
+func TestApplyRecreatesTencentSecretDeletedInConsole(t *testing.T) {
 	db := setupDB(t)
 	service := NewService(db, "  "+testEncryptionKey+"  ")
 	manifest := testManifest()
@@ -223,29 +223,20 @@ func TestApplyDoesNotRecreateTencentSecretDeletedInConsole(t *testing.T) {
 	dao := secretdao.NewSecretDAO(db, testEncryptionKey)
 	require.NoError(t, dao.Delete(context.Background(), tencentSecretID))
 
-	result, err = service.Apply(context.Background(), manifest)
-	require.NoError(t, err)
-	assert.Equal(t, "unchanged", result.Action)
-	assert.Equal(t, 0, result.Secrets)
-	assert.Empty(t, result.Kept)
-	var count int64
-	require.NoError(t, db.Model(&secretmodel.Secret{}).Where("c_secret_id = ?", tencentSecretID).Count(&count).Error)
-	assert.Zero(t, count, "已硬删除的 tencent-default 不得被 setup init 静默复活")
-
 	status, err := service.Inspect(context.Background(), manifest)
 	require.NoError(t, err)
-	assert.Equal(t, "completed", status.State)
-	assert.Zero(t, status.Missing)
-	assert.Equal(t, 0, status.Secrets)
+	assert.Equal(t, "incomplete", status.State)
+	assert.Equal(t, 1, status.Missing)
 
-	// 手工新建同 ID 清除墓碑，后续 inspect 恢复以管理台为准。
-	require.NoError(t, dao.Create(context.Background(), &secretmodel.Secret{
-		SecretID: tencentSecretID, Name: "Tencent Cloud Default", Category: "cloud", Provider: "tencent",
-		SecretType: "api_key", KeyID: "manual-id", SecretValue: "manual-secret", ExtraConfig: "{}", Status: "active",
-	}))
+	result, err = service.Apply(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Secrets)
+	var count int64
+	require.NoError(t, db.Model(&secretmodel.Secret{}).Where("c_secret_id = ?", tencentSecretID).Count(&count).Error)
+	assert.EqualValues(t, 1, count, "删掉的 tencent-default 由 setup init 重建")
+
 	status, err = service.Inspect(context.Background(), manifest)
 	require.NoError(t, err)
 	assert.Equal(t, "completed", status.State)
-	assert.Equal(t, 1, status.Secrets)
-	assert.Equal(t, []string{keptTencentCloud}, status.Kept)
+	assert.Zero(t, status.Missing)
 }

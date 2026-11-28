@@ -144,7 +144,12 @@ func reduceRule(rule FieldRule, ordered []SourceBar) (FieldValue, error) {
 	case ReduceSumInt:
 		var sum int64
 		for i := range ordered {
-			v := ordered[i].Values[rule.Name].Int
+			val, ok := ordered[i].Values[rule.Name]
+			if !ok || val.Null {
+				// 桶内任一根缺值就整列为 NULL，不拿部分和冒充整桶的值。
+				return FieldValue{Null: true}, nil
+			}
+			v := val.Int
 			if v > 0 && sum > math.MaxInt64-v {
 				return FieldValue{}, fmt.Errorf("source row %d: %s sum overflows int64", i, rule.Name)
 			}
