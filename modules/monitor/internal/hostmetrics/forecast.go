@@ -95,6 +95,13 @@ func ForecastDisks(points []HistoryPoint, now time.Time) []DiskForecast {
 		}
 		forecast := DiskForecast{Mountpoint: mount, Status: "UNKNOWN", ValidIntervals: len(rates), Summary: "insufficient disk history"}
 		if len(rates) >= minimumForecastGaps {
+			latest := days[len(days)-1]
+			if latest.total <= minimumDiskReserve {
+				forecast.Status = "SKIPPED"
+				forecast.Summary = "partition size does not exceed minimum reserve; forecast skipped"
+				out = append(out, forecast)
+				continue
+			}
 			sort.Float64s(rates)
 			growth := median(rates)
 			forecast.GrowthBytesPerDay = growth
@@ -102,7 +109,6 @@ func ForecastDisks(points []HistoryPoint, now time.Time) []DiskForecast {
 				forecast.Status = "PASS"
 				forecast.Summary = "disk usage is not currently growing"
 			} else {
-				latest := days[len(days)-1]
 				reserve := latest.total / 10
 				if reserve < minimumDiskReserve {
 					reserve = minimumDiskReserve

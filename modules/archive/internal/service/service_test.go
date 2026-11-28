@@ -973,14 +973,23 @@ func TestMaintainAutoEnsureReportsAttentionOnConflictAndStorageFailure(t *testin
 		t.Fatalf("全部补齐后关注项应清空: %v", issues)
 	}
 
-	// 3. Storage ListDatasets 失败时上报关注项，恢复后清空。
+	// 3. Storage ListDatasets 单次或短时失败不立刻报关注项，连续失败达到阈值（3 次）后上报，恢复后清空并重置计数。
 	h.datasets.listErr = fmt.Errorf("storage dial timeout")
+	for round := 1; round < listDatasetsFailAlertThreshold; round++ {
+		h.now = h.now.Add(time.Minute)
+		if err := h.svc.Maintain(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if issues := h.svc.EnsureIssues(); len(issues) != 0 {
+			t.Fatalf("清单读取第 %d 次瞬时失败不应立刻报关注项: %v", round, issues)
+		}
+	}
 	h.now = h.now.Add(time.Minute)
 	if err := h.svc.Maintain(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if issues := h.svc.EnsureIssues(); len(issues) != 1 || !strings.Contains(issues[0], "读取 Storage 数据集清单失败") {
-		t.Fatalf("清单读取失败应记录关注项: %v", issues)
+		t.Fatalf("清单连续失败达阈值后应记录关注项: %v", issues)
 	}
 	h.datasets.listErr = nil
 	h.now = h.now.Add(time.Minute)
@@ -989,6 +998,15 @@ func TestMaintainAutoEnsureReportsAttentionOnConflictAndStorageFailure(t *testin
 	}
 	if issues := h.svc.EnsureIssues(); len(issues) != 0 {
 		t.Fatalf("Storage 恢复后关注项应清空: %v", issues)
+	}
+	// 恢复后再发生单次失败仍不立刻告警。
+	h.datasets.listErr = fmt.Errorf("transient error")
+	h.now = h.now.Add(time.Minute)
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if issues := h.svc.EnsureIssues(); len(issues) != 0 {
+		t.Fatalf("恢复后再次单次失败不应立刻报关注项: %v", issues)
 	}
 }
 

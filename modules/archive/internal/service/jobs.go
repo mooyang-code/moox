@@ -162,9 +162,59 @@ func (s *Service) setEnsureIssues(issues []string) {
 	s.mu.Unlock()
 }
 
+// listDatasetsFailAlertThreshold 是读取 Storage 数据集清单连续失败多少轮后才上报关注项，
+// 避免 Storage 短暂抖动或重启时的单次失败立刻触发 critical 告警。
+const listDatasetsFailAlertThreshold = 3
+
+var (
+	errInvalidTaskParam = errors.New("invalid archive task param")
+	errResolveDirName   = errors.New("resolve archive dir name")
+)
+
+type createTaskInput struct {
+	Dataset      Dataset
+	BackfillFrom string
+	DirName      string
+	Paused       bool
+	Creator      string
+	Now          time.Time
+}
+
+// createTaskForDataset 统一校验并创建归档任务，供手工 CreateArchiveTask 与定时自动补齐共用。
+func (s *Service) createTaskForDataset(ctx context.Context, in createTaskInput) (store.Task, error) {
+	ds := in.Dataset
+	unit, err := schedule.PartitionUnit(ds.Freq)
+	if err != nil {
+		return store.Task{}, fmt.Errorf("%w: %w", errInvalidTaskParam, err)
+	}
+	backfill, err := createBackfill(in.BackfillFrom, ds.Retention, in.Now)
+	if err != nil {
+		return store.Task{}, fmt.Errorf("%w: %w", errInvalidTaskParam, err)
+	}
+	dirName := strings.TrimSpace(in.DirName)
+	if dirName == "" {
+		if dirName, err = s.suggestedDirName(ctx, ds.SpaceID, ds); err != nil {
+			return store.Task{}, fmt.Errorf("%w: %w", errResolveDirName, err)
+		}
+	}
+	if err := validateDirName(dirName); err != nil {
+		return store.Task{}, fmt.Errorf("%w: %w", errInvalidTaskParam, err)
+	}
+	status := store.StatusEnabled
+	if in.Paused {
+		status = store.StatusPaused
+	}
+	task := store.Task{
+		MetaJSON: metaJSON(ds), Purpose: purposeOf(ds), DirName: dirName,
+		SpaceID: ds.SpaceID, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention,
+		BackfillFrom: backfill, Status: status, Creator: in.Creator,
+	}
+	return s.store.CreateTask(ctx, task)
+}
+
 // ensureTasks 从 Storage 读取全部数据集，为符合条件但还没有归档任务的数据集按默认参数补齐任务。
 // 已有任务（含人工停用的任务）一律跳过，不会重建也不会改回启用；手工删除的任务会被重新建出。
-// Storage 读取失败或个别数据集无法建出任务时记录到 ensureIssues（由指标定时上报关注项），不中断其他数据集的补齐。
+// 读 Storage 数据集清单需连续失败达到阈值才上报关注项，单次瞬时失败不误报；个别数据集无法建出任务时记录到 ensureIssues。
 func (s *Service) ensureTasks(ctx context.Context, now time.Time) error {
 	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
 	if err != nil {
@@ -176,10 +226,20 @@ func (s *Service) ensureTasks(ctx context.Context, now time.Time) error {
 	}
 	datasets, err := s.datasets.ListDatasets(ctx)
 	if err != nil {
-		log.WarnContextf(ctx, "归档维护：自动补齐读取 Storage 数据集清单失败: %v", err)
-		s.setEnsureIssues([]string{"读取 Storage 数据集清单失败（详见 archive-mgr 日志）"})
+		s.mu.Lock()
+		s.listDatasetsFailCount++
+		fails := s.listDatasetsFailCount
+		if fails >= listDatasetsFailAlertThreshold {
+			s.ensureIssues = []string{"读取 Storage 数据集清单失败（详见 archive-mgr 日志）"}
+		}
+		s.mu.Unlock()
+		log.WarnContextf(ctx, "归档维护：自动补齐读取 Storage 数据集清单失败（连续第 %d 次）: %v", fails, err)
 		return nil
 	}
+	s.mu.Lock()
+	s.listDatasetsFailCount = 0
+	s.mu.Unlock()
+
 	candidates := make([]Dataset, 0, len(datasets))
 	seen := make(map[string]struct{}, len(datasets))
 	for _, ds := range datasets {
@@ -214,42 +274,43 @@ func (s *Service) ensureTasks(ctx context.Context, now time.Time) error {
 // ensureDatasetTask 为单个符合条件的数据集按默认参数创建归档任务；成功或并发已创建时返回空串，失败返回稳定的关注项描述。
 func (s *Service) ensureDatasetTask(ctx context.Context, ds Dataset, now time.Time) string {
 	key := ds.SpaceID + "/" + ds.DatasetID
-	unit, err := schedule.PartitionUnit(ds.Freq)
+	created, err := s.createTaskForDataset(ctx, createTaskInput{
+		Dataset: ds,
+		Creator: "archive-mgr",
+		Now:     now,
+	})
 	if err != nil {
-		log.WarnContextf(ctx, "归档维护：自动补齐 %s 失败: %v", key, err)
-		return fmt.Sprintf("%s：%s", key, err.Error())
-	}
-	backfill, err := createBackfill("", ds.Retention, now)
-	if err != nil {
-		log.WarnContextf(ctx, "归档维护：自动补齐 %s 失败: %v", key, err)
-		return fmt.Sprintf("%s：%s", key, err.Error())
-	}
-	dirName, err := s.suggestedDirName(ctx, ds.SpaceID, ds)
-	if err != nil {
-		log.WarnContextf(ctx, "归档维护：自动补齐 %s 解析建议目录名失败: %v", key, err)
-		return fmt.Sprintf("%s：读取源数据集失败（详见 archive-mgr 日志）", key)
-	}
-	if err := validateDirName(dirName); err != nil {
-		log.WarnContextf(ctx, "归档维护：自动补齐 %s 目录名不合规: %v", key, err)
-		return fmt.Sprintf("%s：%s", key, err.Error())
-	}
-	task := store.Task{
-		MetaJSON: metaJSON(ds), Purpose: purposeOf(ds), DirName: dirName,
-		SpaceID: ds.SpaceID, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention,
-		BackfillFrom: backfill, Status: store.StatusEnabled, Creator: "archive-mgr",
-	}
-	if _, err := s.store.CreateTask(ctx, task); err != nil {
 		var taken *store.DirNameTakenError
-		if errors.As(err, &taken) {
+		switch {
+		case errors.As(err, &taken):
 			log.WarnContextf(ctx, "归档维护：自动补齐 %s 失败: %v", key, err)
 			return fmt.Sprintf("%s：目录名 %s 已被 %s 使用", key, taken.DirName, taken.DatasetID)
-		}
-		if errors.Is(err, store.ErrConflict) {
+		case errors.Is(err, store.ErrConflict):
 			return ""
+		case errors.Is(err, errResolveDirName):
+			log.WarnContextf(ctx, "归档维护：自动补齐 %s 解析建议目录名失败: %v", key, err)
+			return fmt.Sprintf("%s：读取源数据集失败（详见 archive-mgr 日志）", key)
+		case errors.Is(err, errInvalidTaskParam):
+			cause := unwrapCause(err)
+			log.WarnContextf(ctx, "归档维护：自动补齐 %s 失败: %v", key, cause)
+			return fmt.Sprintf("%s：%s", key, cause.Error())
+		default:
+			log.WarnContextf(ctx, "归档维护：自动补齐 %s 写库失败: %v", key, err)
+			return fmt.Sprintf("%s：创建归档任务失败（详见 archive-mgr 日志）", key)
 		}
-		log.WarnContextf(ctx, "归档维护：自动补齐 %s 写库失败: %v", key, err)
-		return fmt.Sprintf("%s：创建归档任务失败（详见 archive-mgr 日志）", key)
 	}
-	log.InfoContextf(ctx, "归档维护：已自动补齐归档任务 %s（目录 %s/%s）", key, task.Purpose, task.DirName)
+	log.InfoContextf(ctx, "归档维护：已自动补齐归档任务 %s（目录 %s/%s）", key, created.Purpose, created.DirName)
 	return ""
+}
+
+// unwrapCause 去掉外层分类哨兵前缀，保留面向调用方或关注项的原始中文错误说明。
+func unwrapCause(err error) error {
+	type multiUnwrap interface{ Unwrap() []error }
+	if multi, ok := err.(multiUnwrap); ok {
+		parts := multi.Unwrap()
+		if len(parts) > 1 {
+			return parts[1]
+		}
+	}
+	return err
 }

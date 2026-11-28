@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 
@@ -199,7 +200,7 @@ func (s *Service) backfillInitialIndex(ctx context.Context, runtime *viewRuntime
 	}
 	pageSize := int(opts.BackfillPageSize)
 	if pageSize <= 0 {
-		pageSize = viewBackfillBatchSize
+		pageSize = int(storageconfig.DefaultViewBackfillPageSize)
 	}
 	written, err := s.backfillPrimaryHistory(ctx, runtime, spec, schema, pageSize, opts.PrimaryRange, bars, newBackfillRequestLimiter(opts.BackfillRequestInterval))
 	if err != nil {

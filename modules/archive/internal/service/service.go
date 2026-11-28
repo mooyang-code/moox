@@ -73,12 +73,13 @@ type Service struct {
 	// life 是模块的生命周期控制器：ArchiveMgr 的 GetLifecycle、ControlLifecycle 转给它（见 lifecycle.go）。
 	life *lifecycle.Controller
 
-	mu           sync.Mutex
-	lastRefresh  time.Time
-	lastCleanup  time.Time
-	lastVacuum   time.Time
-	spaceTZ      map[string]spaceTZEntry
-	ensureIssues []string
+	mu                    sync.Mutex
+	lastRefresh           time.Time
+	lastCleanup           time.Time
+	lastVacuum            time.Time
+	spaceTZ               map[string]spaceTZEntry
+	ensureIssues          []string
+	listDatasetsFailCount int
 }
 
 // Option 调整 Service。

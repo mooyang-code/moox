@@ -563,3 +563,34 @@ func TestHostDiskForecastAlertsWithHysteresisAndResolves(t *testing.T) {
 	require.Contains(t, pushed[1].Body, "状态：已恢复")
 	require.Nil(t, h.pageAlert(hostmetrics.CheckKindDiskForecast))
 }
+
+func TestHostDiskForecastIgnoresSmallPartitionsUnderMinimumReserve(t *testing.T) {
+	h := newHostCheckHarness(t)
+	checkID := hostmetrics.CheckID("storage", hostmetrics.CheckKindDiskForecast)
+	const gib = uint64(1 << 30)
+	const mib = uint64(1 << 20)
+
+	// 总量小于 5 GiB 的小分区即使连续 5 天增长，也不应误报“0.0 天后耗尽安全余量”。
+	for day := 0; day < 5; day++ {
+		h.gateway(true)
+		used := 500*mib + uint64(day)*100*mib
+		total := 2 * gib
+		h.sequence++
+		metric := &hostmetricpb.HostMetric{HostId: "storage", Hostname: "VM-0-9", BootId: "boot", Snapshot: &hostmetricpb.HostSnapshot{
+			Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 20},
+			Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 50, AvailableBytes: 50, UsagePercent: 50},
+			Filesystems: []*hostmetricpb.FilesystemMetric{
+				{Device: "/dev/vda2", Mountpoint: "/boot", TotalBytes: total, UsedBytes: used, AvailableBytes: total - used, UsagePercent: float64(used) / float64(total) * 100},
+			},
+		}}
+		require.NoError(t, h.hosts.Persist(h.t.Context(), hostmetrics.Report{ID: fmt.Sprintf("small-disk-%d", h.sequence), CollectedAt: h.clock, Metric: metric}))
+		h.evaluate()
+		require.Empty(t, h.sender.forCheck(checkID))
+		require.Nil(t, h.pageAlert(hostmetrics.CheckKindDiskForecast))
+		h.advance(24 * time.Hour)
+	}
+	row, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, checkID)
+	require.NoError(t, err)
+	require.Equal(t, domain.CheckStatusOK, row.Status)
+	require.Contains(t, row.Reason, "5 GiB")
+}

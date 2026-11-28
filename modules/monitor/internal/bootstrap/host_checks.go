@@ -159,9 +159,14 @@ func hostDiskForecastFact(host monitorobservability.HostStatus, forecasts []host
 	var alerting []hostmetrics.DiskForecast
 	var tightest *hostmetrics.DiskForecast
 	evaluated := 0
+	skippedSmall := 0
 	for i := range forecasts {
 		f := forecasts[i]
 		if f.Status == "UNKNOWN" {
+			continue
+		}
+		if f.Status == "SKIPPED" {
+			skippedSmall++
 			continue
 		}
 		evaluated++
@@ -199,6 +204,10 @@ func hostDiskForecastFact(host monitorobservability.HostStatus, forecasts []host
 		return fact
 	}
 	if evaluated == 0 {
+		if skippedSmall > 0 {
+			fact.Reason = "没有大于 5 GiB 安全余量的分区，不做磁盘写满预测"
+			return fact
+		}
 		fact.Reason = "磁盘历史样本不足（需至少 3 个自然日间隔），暂不预测"
 		return fact
 	}

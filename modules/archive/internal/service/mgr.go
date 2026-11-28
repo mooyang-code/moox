@@ -152,41 +152,29 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	if err != nil {
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: datasetError(err)}, nil
 	}
-	unit, err := schedule.PartitionUnit(ds.Freq)
-	if err != nil {
-		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
-	}
-	backfill, err := createBackfill(req.GetBackfillFrom(), ds.Retention, s.clock())
-	if err != nil {
-		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
-	}
-	dirName := strings.TrimSpace(req.GetDirName())
-	if dirName == "" {
-		if dirName, err = s.suggestedDirName(ctx, space, ds); err != nil {
-			return &archivepb.CreateArchiveTaskRsp{RetInfo: inner(err)}, nil
-		}
-	}
-	if err := validateDirName(dirName); err != nil {
-		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
-	}
-	task := store.Task{
-		MetaJSON: metaJSON(ds), Purpose: purposeOf(ds), DirName: dirName,
-		SpaceID: space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention,
-		BackfillFrom: backfill, Status: store.StatusEnabled, Creator: "console",
-	}
-	if req.GetPaused() {
-		task.Status = store.StatusPaused
-	}
-	created, err := s.store.CreateTask(ctx, task)
+	ds.SpaceID = space
+	created, err := s.createTaskForDataset(ctx, createTaskInput{
+		Dataset:      ds,
+		BackfillFrom: req.GetBackfillFrom(),
+		DirName:      req.GetDirName(),
+		Paused:       req.GetPaused(),
+		Creator:      "console",
+		Now:          s.clock(),
+	})
 	if err != nil {
 		var taken *store.DirNameTakenError
-		if errors.As(err, &taken) {
+		switch {
+		case errors.Is(err, errInvalidTaskParam):
+			return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(unwrapCause(err))}, nil
+		case errors.Is(err, errResolveDirName):
+			return &archivepb.CreateArchiveTaskRsp{RetInfo: inner(unwrapCause(err))}, nil
+		case errors.As(err, &taken):
 			return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(err)}, nil
-		}
-		if errors.Is(err, store.ErrConflict) {
+		case errors.Is(err, store.ErrConflict):
 			return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(fmt.Errorf("数据集 %s 已经有归档任务", ds.DatasetID))}, nil
+		default:
+			return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil
 		}
-		return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
 	return &archivepb.CreateArchiveTaskRsp{RetInfo: success(), Task: s.taskToPB(created)}, nil
 }

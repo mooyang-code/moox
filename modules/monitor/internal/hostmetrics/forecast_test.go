@@ -82,3 +82,29 @@ func TestDailyLatestHistoryMatchesFullHistoryForecast(t *testing.T) {
 	require.Len(t, daily, 6)
 	require.Equal(t, ForecastDisks(full, now), ForecastDisks(daily, now))
 }
+
+func TestForecastDisksSkipsSmallPartitionsAtOrBelowMinimumReserve(t *testing.T) {
+	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	const gib = uint64(1 << 30)
+	const mib = uint64(1 << 20)
+	points := make([]HistoryPoint, 0, 5)
+	for day := 4; day >= 0; day-- {
+		step := uint64(4 - day)
+		points = append(points, HistoryPoint{
+			ObservedAt: now.Add(-time.Duration(day) * 24 * time.Hour),
+			Snapshot: &hostmetricpb.HostSnapshot{Filesystems: []*hostmetricpb.FilesystemMetric{
+				{Mountpoint: "/boot", TotalBytes: 2 * gib, UsedBytes: 200*mib + step*10*mib},
+				{Mountpoint: "/small5g", TotalBytes: 5 * gib, UsedBytes: 1*gib + step*50*mib},
+				{Mountpoint: "/data", TotalBytes: 100 * gib, UsedBytes: 30*gib + step*100*mib},
+			}},
+		})
+	}
+	got := ForecastDisks(points, now)
+	require.Len(t, got, 3)
+	require.Equal(t, "/boot", got[0].Mountpoint)
+	require.Equal(t, "SKIPPED", got[0].Status, "小于 5 GiB 的分区不做预测告警")
+	require.Equal(t, "/data", got[1].Mountpoint)
+	require.Equal(t, "PASS", got[1].Status)
+	require.Equal(t, "/small5g", got[2].Mountpoint)
+	require.Equal(t, "SKIPPED", got[2].Status, "总量等于 5 GiB 安全余量的分区也不做预测告警")
+}
