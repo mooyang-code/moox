@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
@@ -61,8 +62,8 @@ func (s *Service) ObjectStoreState(ctx context.Context) (workerID string, state 
 	return worker.WorkerID, report.EvaluateObjectStore(timeOfMillis(info.GetUnavailableSince()), now), info.GetProbeError(), true, nil
 }
 
-// TaskHealthLevels 返回全部任务的健康等级，供指标上报（Monitor 据此告警）。
-func (s *Service) TaskHealthLevels(ctx context.Context) ([]report.ArchiveTaskLevel, error) {
+// FailingTasks 返回健康等级为异常（HealthError）的归档任务列表（"空间/数据集"，已排序），供关注项上报。
+func (s *Service) FailingTasks(ctx context.Context) ([]string, error) {
 	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
 	if err != nil {
 		return nil, err
@@ -71,18 +72,12 @@ func (s *Service) TaskHealthLevels(ctx context.Context) ([]report.ArchiveTaskLev
 	if err != nil {
 		return nil, err
 	}
-	out := make([]report.ArchiveTaskLevel, 0, len(views))
+	var failing []string
 	for _, v := range views {
-		level := report.ArchiveTaskHealthOK
-		switch v.GetHealth() {
-		case HealthWarning:
-			level = report.ArchiveTaskHealthWarning
-		case HealthError:
-			level = report.ArchiveTaskHealthError
-		case HealthPaused:
-			level = report.ArchiveTaskHealthPaused
+		if v.GetHealth() == HealthError {
+			failing = append(failing, v.GetSpaceId()+"/"+v.GetDatasetId())
 		}
-		out = append(out, report.ArchiveTaskLevel{Space: v.GetSpaceId(), Dataset: v.GetDatasetId(), Level: level})
 	}
-	return out, nil
+	sort.Strings(failing)
+	return failing, nil
 }

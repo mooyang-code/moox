@@ -26,8 +26,7 @@ var healthMetricSuffixes = []string{
 }
 
 var healthMetricNames = map[string]struct{}{
-	AttentionMetric:         {},
-	ArchiveTaskHealthMetric: {},
+	AttentionMetric: {},
 	"moox_storage_view_output_arrival_timestamp_seconds":         {},
 	"moox_storage_view_output_latest_data_time_seconds":          {},
 	"moox_storage_view_output_tracked_since_data_time_seconds":   {},

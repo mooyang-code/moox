@@ -13,9 +13,11 @@ import (
 
 type fakeInvoker struct {
 	rsp       *storagepb.GetDatasetRsp
+	listRsps  map[uint32]*storagepb.ListDatasetsRsp
 	spaceRsp  *storagepb.GetSpaceRsp
 	err       error
 	last      *storagepb.GetDatasetReq
+	listReqs  []*storagepb.ListDatasetsReq
 	lastSpace *storagepb.GetSpaceReq
 	svc       string
 	meth      string
@@ -23,9 +25,13 @@ type fakeInvoker struct {
 
 func (f *fakeInvoker) Invoke(_ context.Context, svc, method string, req, rsp any) error {
 	f.svc, f.meth = svc, method
+	var listPage uint32
 	switch r := req.(type) {
 	case *storagepb.GetDatasetReq:
 		f.last = r
+	case *storagepb.ListDatasetsReq:
+		f.listReqs = append(f.listReqs, r)
+		listPage = r.GetPage().GetPage()
 	case *storagepb.GetSpaceReq:
 		f.lastSpace = r
 	}
@@ -35,6 +41,10 @@ func (f *fakeInvoker) Invoke(_ context.Context, svc, method string, req, rsp any
 	switch out := rsp.(type) {
 	case *storagepb.GetDatasetRsp:
 		proto.Merge(out, f.rsp)
+	case *storagepb.ListDatasetsRsp:
+		if pageRsp := f.listRsps[listPage]; pageRsp != nil {
+			proto.Merge(out, pageRsp)
+		}
 	case *storagepb.GetSpaceRsp:
 		proto.Merge(out, f.spaceRsp)
 	}
@@ -117,6 +127,48 @@ func TestGatewayDatasetsReadsSpaceTimezone(t *testing.T) {
 
 	var unset *gatewayDatasets
 	if _, err := unset.GetSpaceTimezone(context.Background(), "crypto"); err == nil {
+		t.Fatal("没有网关客户端必须报错")
+	}
+}
+
+func TestGatewayDatasetsListsDatasetsAcrossPages(t *testing.T) {
+	inv := &fakeInvoker{listRsps: map[uint32]*storagepb.ListDatasetsRsp{
+		1: {
+			RetInfo:    &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+			Datasets:   []*storagepb.Dataset{{SpaceId: "crypto", DatasetId: "ds_1m", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", Retention: "168h"}},
+			PageResult: &commonpb.PageResult{Page: 1, Size: 200, HasMore: true},
+		},
+		2: {
+			RetInfo:    &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+			Datasets:   []*storagepb.Dataset{{SpaceId: "stockcn", DatasetId: "cn_5m", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Retention: "720h"}},
+			PageResult: &commonpb.PageResult{Page: 2, Size: 200, HasMore: false},
+		},
+	}}
+	got, err := newGatewayDatasets(inv).ListDatasets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].DatasetID != "ds_1m" || got[1].DatasetID != "cn_5m" || len(inv.listReqs) != 2 {
+		t.Fatalf("datasets = %+v reqs=%d", got, len(inv.listReqs))
+	}
+	if inv.svc != "trpc.moox.storage.Metadata" || inv.meth != "ListDatasets" {
+		t.Fatalf("call = %s/%s", inv.svc, inv.meth)
+	}
+
+	denied := &fakeInvoker{listRsps: map[uint32]*storagepb.ListDatasetsRsp{
+		1: {RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NO_PERMISSION, Msg: "denied"}},
+	}}
+	if _, err := newGatewayDatasets(denied).ListDatasets(context.Background()); err == nil {
+		t.Fatal("返回非成功码必须报错")
+	}
+
+	broken := &fakeInvoker{err: errors.New("EOF")}
+	if _, err := newGatewayDatasets(broken).ListDatasets(context.Background()); err == nil {
+		t.Fatal("传输错误必须报错")
+	}
+
+	var unset *gatewayDatasets
+	if _, err := unset.ListDatasets(context.Background()); err == nil {
 		t.Fatal("没有网关客户端必须报错")
 	}
 }

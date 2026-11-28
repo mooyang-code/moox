@@ -255,6 +255,10 @@ components:
           - name: ExportNotificationChannels
             read_only: true
             operators: [moox-cli]
+          # 重装后按 webhook_url 幂等覆盖导入告警渠道（含完整 Webhook URL 与签名密钥），只给 moox-cli。
+          - name: ImportNotificationChannels
+            idempotent: true
+            operators: [moox-cli]
           - name: AddNotificationChannel
           - name: DeleteNotificationChannel
           - name: ListHostAgents
@@ -795,7 +799,7 @@ components:
             callers: [archive-mgr, archive-worker, collector, factor-engine, factor-mgr, monitor, strategy]
           - name: ListDatasets
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [archive-mgr, collector, factor-mgr, monitor, strategy]
           - name: ListDatasetSubjects
             read_only: true
             callers: [collector, factor-engine, factor-mgr, monitor, strategy]

@@ -3,9 +3,9 @@
   "summary": {
     "components": 16,
     "services": 24,
-    "methods": 296,
+    "methods": 297,
     "read_only_methods": 138,
-    "retryable_methods": 140,
+    "retryable_methods": 141,
     "callers": 20,
     "principals": 2
   },
@@ -1018,6 +1018,12 @@
           "timeout_ms": 5000
         },
         {
+          "name": "ImportNotificationChannels",
+          "read_only": false,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
           "name": "ListHostAgents",
           "read_only": true,
           "retryable": true,
@@ -1950,7 +1956,8 @@
     "admin": [],
     "archive-mgr": [
       "trpc.moox.storage.Metadata/GetDataset",
-      "trpc.moox.storage.Metadata/GetSpace"
+      "trpc.moox.storage.Metadata/GetSpace",
+      "trpc.moox.storage.Metadata/ListDatasets"
     ],
     "archive-worker": [
       "trpc.moox.archive.ArchiveWorker/ArchiveWorkerHeartbeat",
@@ -2447,6 +2454,7 @@
       "trpc.moox.monitor.MonitorMgr/GetAlertMute",
       "trpc.moox.monitor.MonitorMgr/GetDoctorContext",
       "trpc.moox.monitor.MonitorMgr/GetHealthOverview",
+      "trpc.moox.monitor.MonitorMgr/ImportNotificationChannels",
       "trpc.moox.monitor.MonitorMgr/ListHostAgents",
       "trpc.moox.monitor.MonitorMgr/ListNotificationChannels",
       "trpc.moox.monitor.MonitorMgr/MuteAlerts",
