@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { EquityPoint, LogicalAccountTarget, OperatorAction, Position, TradingAccount } from "@/api/trade";
+import type { LogicalAccountTarget, OperatorAction, Position, TradingAccount } from "@/api/trade";
 import {
   equityChangeOf,
-  equityDelta,
   flattenPreview,
   isFlattenRunning,
+  logicalDayChange,
+  logicalEquity,
   memberTotals,
   orderStateTone,
   paperInitialBalance,
@@ -24,17 +25,28 @@ describe("详情页模型", () => {
     expect(tabFromQuery(undefined)).toBe("overview");
   });
 
-  it("成员资金合计；没有快照时权益为空", () => {
+  it("组合总权益与近 24 小时变化直接读后端汇总，区分未同步与零值", () => {
+    expect(logicalEquity(null)).toBeNull();
+    expect(logicalEquity({ total_equity: undefined })).toBeNull();
+    expect(logicalEquity({ total_equity: "" })).toBeNull();
+    expect(logicalEquity({ total_equity: "0" })).toBe(0);
+    expect(logicalEquity({ total_equity: "150.5" })).toBe(150.5);
+
+    expect(logicalDayChange(null)).toBeNull();
+    expect(logicalDayChange({ equity_change_24h: undefined })).toBeNull();
+    expect(logicalDayChange({ equity_change_24h: "-10", equity_change_pct_24h: "-0.1" })).toEqual({ amount: -10, ratio: -0.1 });
+    expect(logicalDayChange({ equity_change_24h: "5", equity_change_pct_24h: "" })).toEqual({ amount: 5, ratio: null });
+  });
+
+  it("成员可用资金与保证金合计；没有快照时可用资金为空", () => {
     expect(memberTotals([account("100"), account("50")])).toEqual({
-      equity: 150,
       available: 20,
       margin: 4,
       unrealizedPnl: -2
     });
-    expect(memberTotals([{} as TradingAccount]).equity).toBeNull();
-    // 首次同步前后端也会带一个权益为空串的快照
-    expect(memberTotals([account("")]).equity).toBeNull();
-    expect(memberTotals([account("0")]).equity).toBe(0);
+    expect(memberTotals([{} as TradingAccount]).available).toBeNull();
+    expect(memberTotals([account("", { available_funds: "" })]).available).toBeNull();
+    expect(memberTotals([account("0", { available_funds: "0" })]).available).toBe(0);
     expect(paperInitialBalance([{ paper: { initial_balance: "1000" } } as TradingAccount])).toBe(1000);
     expect(paperInitialBalance([{} as TradingAccount])).toBeNull();
   });
@@ -96,18 +108,5 @@ describe("刷新后接回操作与订单配色", () => {
     expect(orderStateTone("CANCEL_UNKNOWN")).toBe("warn");
     expect(orderStateTone("CANCELED")).toBe("");
     expect(orderStateTone("SUBMITTED")).toBe("run");
-  });
-});
-
-describe("一段时间内的权益变化", () => {
-  const point = (bucket_time: string, equity: string) => ({ bucket_time, equity }) as EquityPoint;
-
-  it("取时间最早和最晚的两个点，不看传入顺序", () => {
-    expect(equityDelta([point("3", "90"), point("1", "100"), point("2", "120")])).toEqual({ amount: -10, ratio: 90 / 100 - 1 });
-  });
-
-  it("不足两个点或起点权益为 0 时为空", () => {
-    expect(equityDelta([point("1", "100")])).toBeNull();
-    expect(equityDelta([point("1", "0"), point("2", "5")])).toBeNull();
   });
 });

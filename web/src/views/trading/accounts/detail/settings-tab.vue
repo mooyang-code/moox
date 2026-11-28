@@ -7,7 +7,8 @@
     <div class="settings-body">
       <SectionBlock id="settings-members" title="成员" flush>
         <template #sub>
-          账户本身的名称、密钥、杠杆在「执行账户」页签里改<template v-if="logical.control_mode === 1 && !membersEditable"
+          账户本身的名称、密钥、杠杆在「执行账户」页签里改<template
+            v-if="logical.control_mode === ControlMode.STRATEGY && !membersEditable"
             >；增删成员、改优先级和启用状态前，要先暂停自动执行</template
           >
         </template>
@@ -92,7 +93,7 @@
         <FundSettingsForm
           :settings="settingsOf.fund_settings"
           :error="settingsOf.fund_settings_error"
-          :paper="logical.execution_mode === 1"
+          :paper="logical.execution_mode === ExecutionMode.PAPER"
           :testnet="env === 'testnet'"
           :has-binance-live="hasBinanceLive"
           :non-binance="nonBinance"
@@ -109,7 +110,7 @@
         <a-form :model="{}" layout="vertical" class="combo-form">
           <a-form-item label="名称"><a-input v-model="comboName" :max-length="64" /></a-form-item>
           <a-form-item label="运行方式" extra="创建后不能改">
-            <a-input :model-value="logical.control_mode === 1 ? '策略驱动' : '自主下单'" disabled />
+            <a-input :model-value="logical.control_mode === ControlMode.STRATEGY ? '策略驱动' : '自主下单'" disabled />
           </a-form-item>
           <a-form-item label="关联策略" extra="在策略管理里绑定或换绑">
             <a-input :model-value="strategy ? `${strategy.name}（实例 ${strategy.instanceId}）` : '无'" disabled />
@@ -167,7 +168,14 @@ import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { exchangeLabel, listLogicalAccounts, removeLogicalAccountMember, updateLogicalAccount } from "@/api/trade";
+import {
+  ControlMode,
+  ExecutionMode,
+  exchangeLabel,
+  listLogicalAccounts,
+  removeLogicalAccountMember,
+  updateLogicalAccount
+} from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import {
   updateLogicalAccountFundSettings,
@@ -234,7 +242,7 @@ const hasBinanceLive = computed(() =>
 const hasStandardAccount = computed(() =>
   rows.value.some(item => item.account.exchange === "binance" && item.account.account_mode === "BINANCE_STANDARD")
 );
-const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
+const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value));
 // 左侧分段导航：关闭模拟账户与停用实盘账户统一在「执行账户」页签（需先移出组合）
 const sections = computed(() => [
   { id: "settings-members", label: "成员" },

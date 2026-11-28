@@ -196,8 +196,8 @@ import { createInstance, getInstance, listInstances, validateStrategy } from "@/
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
 import { listAllFactorTasks } from "@/api/factor";
 import { readAllPages } from "@/api/read-all-pages";
-import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { listLogicalAccounts } from "@/api/trade";
+import type { LogicalAccount } from "@/api/trade/types";
 import {
   declaresFactorParams,
   enabledTasks,
@@ -252,8 +252,6 @@ const form = reactive({
 });
 const tasks = ref<TaskOption[]>([]);
 const accounts = ref<LogicalAccount[]>([]);
-// 成员执行账户：用来在账户选项前写测试网还是生产；读不到时为 null，选项只写“实盘”。
-const tradingAccounts = ref<ReadonlyMap<string, TradingAccount> | null>(null);
 // 组合账户 → 绑着它的启用实例（取自 Strategy 的实例列表，Trade 不存归属）：这些账户显示但不可选；读不到时为 null，不置灰，启用时由 Strategy 拒绝。
 const boundInstances = ref<ReadonlyMap<string, string> | null>(null);
 const check_result = ref<ValidateStrategyResult | null>(null);
@@ -289,9 +287,7 @@ const market = computed(() => {
 const marketNames = computed(() => (activeMarkets.value.length ? activeMarkets.value.map(marketLabel).join("、") : "策略市场"));
 // 已选的账户因为市场收窄被清空：提示一句，用户重新选择后消失。
 const accountCleared = ref(false);
-const accountOptions = computed(() =>
-  logicalAccountOptions(accounts.value, market.value, tradingAccounts.value, boundInstances.value)
-);
+const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value, boundInstances.value));
 // 预检或成员定义读到后账户列表会收窄：已选的账户不在新列表里（或变成不可选）时清掉，不能悄悄提交不符合的账户。
 watch(accountOptions, options => {
   if (!form.logical_account_id) return;
@@ -399,18 +395,14 @@ async function loadAccountsList() {
   accountsLoading.value = true;
   accountsError.value = "";
   try {
-    const [nextAccounts, members, bound] = await Promise.all([
+    const [nextAccounts, bound] = await Promise.all([
       loadAllAccounts(),
-      listTradingAccounts({ page: { page: 1, size: 200 } })
-        .then(rsp => new Map((rsp.accounts || []).map(item => [item.trading_account_id, item])))
-        .catch(() => null),
       listInstances({ page: 1, size: 500, enabled: true })
         .then(rsp => enabledInstanceAccounts(rsp.items))
         .catch(() => null)
     ]);
     if (requestId !== accountsRequest || props.spaceId !== spaceId) return;
     accounts.value = nextAccounts.filter(account => account.space_id === spaceId);
-    tradingAccounts.value = members;
     boundInstances.value = bound;
   } catch (err) {
     if (requestId === accountsRequest) accountsError.value = err instanceof Error ? err.message : "账户读取失败";
@@ -501,7 +493,6 @@ function resetForm() {
   form.mode = "compute";
   tasks.value = [];
   accounts.value = [];
-  tradingAccounts.value = null;
   boundInstances.value = null;
   tasksRequest += 1;
   accountsRequest += 1;

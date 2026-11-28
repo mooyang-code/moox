@@ -1,7 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LogicalAccount, TradingAccount } from "@/api/trade";
+import { AccountEnvironment, ExecutionMode, type LogicalAccount, type TradingAccount } from "@/api/trade";
 
 const api = vi.hoisted(() => ({
   updateTradingAccount: vi.fn(async () => ({})),
@@ -42,7 +42,8 @@ const account = {
 const combo = {
   logical_account_id: "la-9",
   name: "生产组合",
-  execution_mode: 2,
+  execution_mode: ExecutionMode.LIVE,
+  environment: AccountEnvironment.PRODUCTION,
   settlement_asset: "USDT",
   automation_state: "PAUSED",
   members: []
@@ -61,7 +62,7 @@ let wrapper: VueWrapper;
 const row = { key: "ta-9", account, logical: null, priority: null, enabled: null };
 const mountTab = () => {
   wrapper = mount(ExecutionTab, {
-    props: { env: "prod", rows: [row], logicals: [combo], accounts: [account], loading: false },
+    props: { env: "prod", rows: [row], logicals: [combo], loading: false },
     global: { plugins: [ArcoVue] },
     attachTo: document.body
   });
@@ -69,7 +70,7 @@ const mountTab = () => {
 };
 const mountJoin = () => {
   wrapper = mount(JoinDialog, {
-    props: { env: "prod", logicals: [combo], accounts: [account] },
+    props: { env: "prod", logicals: [combo] },
     global: { plugins: [ArcoVue] },
     attachTo: document.body
   });

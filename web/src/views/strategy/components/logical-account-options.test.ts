@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { StrategyInstance } from "@/api/strategy-types";
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { AccountEnvironment, ControlMode, type LogicalAccount } from "@/api/trade/types";
 import { enabledInstanceAccounts, environmentPrefix, logicalAccountOptions, resolvedMarkets } from "./logical-account-options";
 
 const account = (patch: Partial<LogicalAccount>) =>
   ({
     logical_account_id: "a",
     name: "组合",
-    control_mode: 1,
+    control_mode: ControlMode.STRATEGY,
+    environment: AccountEnvironment.PAPER,
     markets: ["swap"],
     ready: true,
     members: [],
@@ -65,14 +66,14 @@ describe("策略绑定组合账户选项", () => {
       ["a", "inst-1"],
       ["b", "inst-2"]
     ]);
-    const [option, free] = logicalAccountOptions([account({}), account({ logical_account_id: "c" })], {}, null, bound);
+    const [option, free] = logicalAccountOptions([account({}), account({ logical_account_id: "c" })], {}, bound);
     expect(option.disabledReason).toContain("inst-1");
     expect(option.label).toContain("inst-1");
     expect(free.disabledReason).toBe("");
   });
 
   it("实例列表读不到时不置灰，由启用时的服务端检查兜底", () => {
-    const [option] = logicalAccountOptions([account({})], {}, null, null);
+    const [option] = logicalAccountOptions([account({})], {}, null);
     expect(option.disabledReason).toBe("");
   });
 
@@ -85,20 +86,14 @@ describe("策略绑定组合账户选项", () => {
 });
 
 describe("组合账户选项前的环境", () => {
-  const testnetMember = new Map([
-    ["ta-t", { trading_account_id: "ta-t", execution_mode: 2, live: { environment: 1 } } as unknown as TradingAccount]
-  ]);
-
-  it("模拟盘、测试网、生产分别写明；执行账户没读到时实盘只写“实盘”", () => {
-    expect(environmentPrefix(account({ execution_mode: 1 }), null)).toBe("模拟盘");
-    const live = account({ execution_mode: 2, members: [{ trading_account_id: "ta-t", enabled: true, priority: 1 }] });
-    expect(environmentPrefix(live, testnetMember)).toBe("测试网");
-    expect(environmentPrefix(live, null)).toBe("实盘");
-    expect(environmentPrefix(account({ execution_mode: 2 }), new Map())).toBe("生产环境");
+  it("模拟盘、测试网、生产直接取后端 environment 字段", () => {
+    expect(environmentPrefix(account({ environment: AccountEnvironment.PAPER }))).toBe("模拟盘");
+    expect(environmentPrefix(account({ environment: AccountEnvironment.TESTNET }))).toBe("测试网");
+    expect(environmentPrefix(account({ environment: AccountEnvironment.PRODUCTION }))).toBe("生产环境");
   });
 
   it("选项文字带环境前缀", () => {
-    const [option] = logicalAccountOptions([account({ execution_mode: 1, name: "模拟组合" })], {}, null);
+    const [option] = logicalAccountOptions([account({ environment: AccountEnvironment.PAPER, name: "模拟组合" })], {}, null);
     expect(option.label.startsWith("模拟盘 · 模拟组合")).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { AccountEnvironment, ExecutionMode, type LogicalAccount, type TradingAccount } from "@/api/trade/types";
 import { flatRoutes } from "@/router/route";
 
 /** 账户所处环境：模拟盘不连交易所，测试网和生产环境连交易所对应环境。 */
@@ -42,48 +42,29 @@ export function environmentLabel(env: Environment): string {
   return environmentTabs.find(item => item.key === env)?.label ?? "";
 }
 
+/** 前端三值环境转后端协议枚举（AccountEnvironment）。 */
+export function toAccountEnvironment(env: Environment): AccountEnvironment {
+  if (env === "paper") return AccountEnvironment.PAPER;
+  if (env === "testnet") return AccountEnvironment.TESTNET;
+  return AccountEnvironment.PRODUCTION;
+}
+
 /** 执行账户的环境。实盘账户没有写明环境时按生产环境处理，和后端的规则一致。 */
 export function accountEnvironment(account: Pick<TradingAccount, "execution_mode" | "live">): Environment {
-  if (account.execution_mode === 1) return "paper";
-  return account.live?.environment === 1 ? "testnet" : "prod";
+  if (account.execution_mode === ExecutionMode.PAPER) return "paper";
+  return account.live?.environment === AccountEnvironment.TESTNET ? "testnet" : "prod";
 }
 
-/**
- * 组合账户的环境：优先读后端返回的三值 environment（1 测试网、2 生产环境、3 模拟盘）；
- * 兼容局部测试桩未填 environment 时，回退到 execution_mode 和成员环境推导。
- */
-export function logicalEnvironment(
-  logical: Pick<LogicalAccount, "execution_mode" | "environment" | "members">,
-  accounts: ReadonlyMap<string, TradingAccount>,
-  entered?: Environment
-): Environment {
-  if (logical.environment === 3) return "paper";
-  if (logical.environment === 1) return "testnet";
-  if (logical.environment === 2) return "prod";
-  if (logical.execution_mode === 1) return "paper";
-  for (const member of logical.members || []) {
-    const account = accounts.get(member.trading_account_id);
-    if (account) return accountEnvironment(account);
-  }
-  return entered === "testnet" ? "testnet" : "prod";
+/** 组合账户的环境：直接读后端返回的三值 environment（3 模拟盘、1 测试网、2 生产环境）。 */
+export function logicalEnvironment(logical: Pick<LogicalAccount, "environment">): Environment {
+  if (logical.environment === AccountEnvironment.PAPER) return "paper";
+  if (logical.environment === AccountEnvironment.TESTNET) return "testnet";
+  return "prod";
 }
 
-/**
- * 组合是否列在这个环境的菜单里：组合自带三值 environment 时直接精确匹配；
- * 局部测试桩未填 environment 时沿用旧回退逻辑。
- */
-export function logicalInEnvironment(
-  logical: Pick<LogicalAccount, "execution_mode" | "environment" | "members">,
-  accounts: ReadonlyMap<string, TradingAccount>,
-  env: Environment
-): boolean {
-  if (logical.environment === 1 || logical.environment === 2 || logical.environment === 3) {
-    return logicalEnvironment(logical, accounts) === env;
-  }
-  if (logical.execution_mode === 1) return env === "paper";
-  const known = (logical.members || []).some(member => accounts.has(member.trading_account_id));
-  if (!known) return env !== "paper";
-  return logicalEnvironment(logical, accounts) === env;
+/** 组合是否列在这个环境的菜单里：按后端返回的三值 environment 精确匹配。 */
+export function logicalInEnvironment(logical: Pick<LogicalAccount, "environment">, env: Environment): boolean {
+  return logicalEnvironment(logical) === env;
 }
 
 export interface ConfirmTier {

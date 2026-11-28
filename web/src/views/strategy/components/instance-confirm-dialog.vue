@@ -71,8 +71,8 @@ import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { confirmInstance } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
-import { getLogicalAccount, listShadowTargets, listTradingAccounts } from "@/api/trade";
-import type { LogicalAccount, ShadowTarget, TradingAccount } from "@/api/trade/types";
+import { getLogicalAccount, listShadowTargets } from "@/api/trade";
+import type { LogicalAccount, ShadowTarget } from "@/api/trade/types";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import {
   confirmTier,
@@ -91,7 +91,6 @@ const instanceId = ref("");
 const sessionId = ref("");
 const logicalId = ref("");
 const logical = ref<LogicalAccount | null>(null);
-const accounts = ref<ReadonlyMap<string, TradingAccount>>(new Map());
 const targets = ref<ShadowTarget[]>([]);
 const loading = ref(false);
 const loadError = ref("");
@@ -101,7 +100,7 @@ const typedName = ref("");
 let hooks: ConfirmHooks = {};
 let loadSeq = 0;
 
-const env = computed<Environment>(() => (logical.value ? logicalEnvironment(logical.value, accounts.value) : "prod"));
+const env = computed<Environment>(() => (logical.value ? logicalEnvironment(logical.value) : "prod"));
 const tier = computed(() => confirmTier(env.value));
 const comboName = computed(() => logical.value?.name || logicalId.value);
 const paused = computed(() => logical.value?.automation_state !== "ACTIVE");
@@ -122,13 +121,11 @@ async function load() {
   logical.value = null;
   targets.value = [];
   try {
-    const [logicalRsp, accountsRsp, shadowRsp] = await Promise.all([
+    const [logicalRsp, shadowRsp] = await Promise.all([
       getLogicalAccount(logicalId.value),
-      listTradingAccounts({ page: { page: 1, size: 200 } }),
       listShadowTargets(instanceId.value, 20)
     ]);
     if (seq !== loadSeq) return;
-    accounts.value = new Map((accountsRsp.accounts || []).map(item => [item.trading_account_id, item]));
     targets.value = currentSessionTargets(shadowRsp.targets || [], sessionId.value);
     logical.value = logicalRsp.logical_account;
   } catch (error) {
@@ -138,7 +135,7 @@ async function load() {
   }
 }
 
-/** 打开确认实盘：先读组合账户、执行账户和本次启用的影子目标，算出环境再让用户确认。 */
+/** 打开确认实盘：先读组合账户和本次启用的影子目标，按后端环境给出对应档位确认。 */
 function open(
   instance: Pick<StrategyInstance, "instance_id" | "session_id" | "logical_account_id">,
   confirmHooks: ConfirmHooks = {}

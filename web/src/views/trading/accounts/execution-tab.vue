@@ -75,7 +75,7 @@
         <template #actions>
           <!-- 在组合里的账户要先移出组合才能停用或关闭；未加入组合的实盘账户可启停，模拟账户仅可不可逆关闭 -->
           <template v-if="!record.logical">
-            <template v-if="record.account.execution_mode === 2">
+            <template v-if="record.account.execution_mode === ExecutionMode.LIVE">
               <a-button v-if="record.account.status !== 'ENABLED'" size="small" @click="setStatus(record.account, 'ENABLED')"
                 >启用</a-button
               >
@@ -95,7 +95,7 @@
     <template #empty> {{ environmentLabel(env) }}还没有执行账户。<a-link @click="emit('create')">新建一个</a-link> </template>
   </a-table>
 
-  <JoinDialog ref="joinDialog" :env="env" :logicals="logicals" :accounts="accounts" @changed="emit('changed')" />
+  <JoinDialog ref="joinDialog" :env="env" :logicals="logicals" @changed="emit('changed')" />
   <ConfirmDialog
     v-model:visible="confirmVisible"
     :title="pending?.title ?? ''"
@@ -118,7 +118,7 @@ import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import TimeText from "@/components/time-text/index.vue";
-import { exchangeLabel, updateTradingAccount } from "@/api/trade";
+import { ExecutionMode, exchangeLabel, updateTradingAccount } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import { environmentLabel, logicalDetailPath, type Environment } from "@/components/trade-confirm/environment";
@@ -135,7 +135,6 @@ const props = defineProps<{
   env: Environment;
   rows: ExecutionRow[];
   logicals: LogicalAccount[];
-  accounts: TradingAccount[];
   loading: boolean;
   /** 打开时展开的执行账户（从组合详情点账户名进来时带 ?account=） */
   focusAccountId?: string;
@@ -176,7 +175,7 @@ async function runPending() {
 
 function setStatus(account: TradingAccount, status: "ENABLED" | "DISABLED") {
   const accountId = account.trading_account_id;
-  const paper = account.execution_mode === 1;
+  const paper = account.execution_mode === ExecutionMode.PAPER;
   pending.value = {
     ...accountStatusConfirm({ accountName: account.name, enable: status === "ENABLED", paper }),
     name: account.name,

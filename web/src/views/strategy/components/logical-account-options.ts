@@ -1,5 +1,5 @@
 import type { StrategyInstance } from "@/api/strategy-types";
-import type { LogicalAccount, MarketType, TradingAccount } from "@/api/trade/types";
+import { ControlMode, type LogicalAccount, type MarketType } from "@/api/trade/types";
 import { environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 
 // 策略市场与交易模块的市场写法相同（spot、swap、equity）：股票（equity）可以挂 A 股、港股模拟账户。
@@ -35,17 +35,9 @@ export function marketsToResolved(markets: string[]): ResolvedMarkets {
   return { types: markets.filter((market): market is MarketType => tradeMarkets.includes(market)) };
 }
 
-/**
- * 选项前面的环境：模拟盘、测试网、生产。组合账户本身只区分模拟和实盘，测试网和生产要看成员执行账户；
- * 执行账户没读到（tradingAccounts 为 null）时实盘只写“实盘”，不猜是测试网还是生产。
- */
-export function environmentPrefix(account: LogicalAccount, tradingAccounts: ReadonlyMap<string, TradingAccount> | null): string {
-  if (account.environment === 3) return environmentLabel("paper");
-  if (account.environment === 1) return environmentLabel("testnet");
-  if (account.environment === 2) return environmentLabel("prod");
-  if (account.execution_mode === 1) return environmentLabel("paper");
-  if (!tradingAccounts) return "实盘";
-  return environmentLabel(logicalEnvironment(account, tradingAccounts));
+/** 选项前面的环境：直接读组合账户的后端 environment 字段（模拟盘、测试网、生产环境）。 */
+export function environmentPrefix(account: Pick<LogicalAccount, "environment">): string {
+  return environmentLabel(logicalEnvironment(account));
 }
 
 /** 组合账户编号 → 绑着它的启用实例编号：取自 Strategy 的实例列表（归属只记在 Strategy，Trade 不存）。 */
@@ -64,11 +56,14 @@ export function enabledInstanceAccounts(instances: readonly StrategyInstance[]):
 export function logicalAccountOptions(
   accounts: LogicalAccount[],
   markets: ResolvedMarkets = {},
-  tradingAccounts: ReadonlyMap<string, TradingAccount> | null = null,
   boundInstances: ReadonlyMap<string, string> | null = null
 ): LogicalAccountOption[] {
   return accounts
-    .filter(account => account.control_mode === 1 && (markets.types ?? []).every(type => (account.markets ?? []).includes(type)))
+    .filter(
+      account =>
+        account.control_mode === ControlMode.STRATEGY &&
+        (markets.types ?? []).every(type => (account.markets ?? []).includes(type))
+    )
     .map(account => {
       const members = (account.members || []).filter(member => member.enabled).length;
       const bound = boundInstances?.get(account.logical_account_id);
@@ -78,7 +73,7 @@ export function logicalAccountOptions(
       return {
         account,
         disabledReason,
-        label: `${environmentPrefix(account, tradingAccounts)} · ${account.name || account.logical_account_id}（${members} 个成员，${state}${suffix}）`
+        label: `${environmentPrefix(account)} · ${account.name || account.logical_account_id}（${members} 个成员，${state}${suffix}）`
       };
     });
 }

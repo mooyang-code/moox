@@ -11,13 +11,67 @@ export interface RetInfo {
 export type Exchange = "binance" | "okx" | "ashare" | "hkex";
 /** 市场：spot 现货、swap 永续、equity 股票（接口里的小写文本） */
 export type MarketType = "spot" | "swap" | "equity";
-export type ExecutionMode = 0 | 1 | 2;
-export type ControlMode = 0 | 1 | 2;
-export type AccountEnvironment = 0 | 1 | 2 | 3;
-export type OrderType = 0 | 1 | 2;
-export type FillPolicy = 0 | 1 | 2 | 3;
-export type PositionSide = 0 | 1;
-export type OrderSide = 0 | 1 | 2;
+
+export const ExecutionMode = {
+  UNSPECIFIED: 0,
+  PAPER: 1,
+  LIVE: 2
+} as const;
+export type ExecutionMode = (typeof ExecutionMode)[keyof typeof ExecutionMode];
+
+export const ControlMode = {
+  UNSPECIFIED: 0,
+  STRATEGY: 1,
+  MANUAL: 2
+} as const;
+export type ControlMode = (typeof ControlMode)[keyof typeof ControlMode];
+
+export const AccountEnvironment = {
+  UNSPECIFIED: 0,
+  TESTNET: 1,
+  PRODUCTION: 2,
+  PAPER: 3
+} as const;
+export type AccountEnvironment = (typeof AccountEnvironment)[keyof typeof AccountEnvironment];
+
+export const OrderType = {
+  UNSPECIFIED: 0,
+  MARKET: 1,
+  LIMIT: 2
+} as const;
+export type OrderType = (typeof OrderType)[keyof typeof OrderType];
+
+export const FillPolicy = {
+  UNSPECIFIED: 0,
+  GTC: 1,
+  IOC: 2,
+  FOK: 3
+} as const;
+export type FillPolicy = (typeof FillPolicy)[keyof typeof FillPolicy];
+
+export const PositionSide = {
+  UNSPECIFIED: 0,
+  NET: 1
+} as const;
+export type PositionSide = (typeof PositionSide)[keyof typeof PositionSide];
+
+export const OrderSide = {
+  UNSPECIFIED: 0,
+  BUY: 1,
+  SELL: 2
+} as const;
+export type OrderSide = (typeof OrderSide)[keyof typeof OrderSide];
+
+export const TargetLaneState = {
+  UNKNOWN: 0,
+  WILL_ORDER: 1,
+  IN_PLACE: 2,
+  BELOW_MIN_NOTIONAL: 3,
+  MARKET_DEFERRED: 4,
+  BELOW_LOT: 5,
+  BLOCKED: 6
+} as const;
+export type TargetLaneState = (typeof TargetLaneState)[keyof typeof TargetLaneState];
 
 export interface AssetBalance {
   asset: string;
@@ -95,7 +149,7 @@ export interface LogicalAccount {
   control_mode: ControlMode;
   execution_mode: ExecutionMode;
   /** 组合所处环境：1 测试网、2 生产环境、3 模拟盘 */
-  environment?: AccountEnvironment;
+  environment: AccountEnvironment;
   /** 可交易的市场：启用成员已开通市场的并集（只读，由 Trade 计算）；策略要输出的市场必须都在里面。 */
   markets: MarketType[];
   settlement_asset: string;
@@ -276,11 +330,8 @@ export interface UnblockInstrumentReq {
 }
 
 /**
- * 执行器对目标里一条标的的结论（后端 TargetLaneState）：0 未知（要用的报价不在缓存里）、1 有差额且执行器会下单、
- * 2 已到位、3 差额低于最小下单额、4 按市场规则暂不可交易（停牌、涨跌停、当日买入）、5 不足一手、6 下不了单要人处理。
+ * 执行器对目标里一条标的的结论（对应 TargetLaneState）。
  */
-export type TargetLaneState = 0 | 1 | 2 | 3 | 4 | 5 | 6;
-
 export interface TargetLane {
   instrument_id: string;
   state?: TargetLaneState;

@@ -43,7 +43,9 @@
         </a-table-column>
         <a-table-column title="方向" :width="70">
           <template #cell="{ record }"
-            ><span :class="record.side === 1 ? 'tx-pos' : 'tx-neg'">{{ record.side === 1 ? "买入" : "卖出" }}</span></template
+            ><span :class="record.side === OrderSide.BUY ? 'tx-pos' : 'tx-neg'">{{
+              record.side === OrderSide.BUY ? "买入" : "卖出"
+            }}</span></template
           >
         </a-table-column>
         <a-table-column title="价格" :width="110" align="right">
@@ -83,7 +85,7 @@
 <script setup lang="ts">
 import { inject, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { getOrder, listFills } from "@/api/trade";
+import { OrderSide, getOrder, listFills } from "@/api/trade";
 import type { Fill, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtMoney, fmtQty, fmtSigned, pnlClass } from "../shared/format";

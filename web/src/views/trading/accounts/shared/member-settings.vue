@@ -91,7 +91,7 @@
 import { reportError } from "@/api/http";
 import { computed, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { setLeverage, updateTradingAccount } from "@/api/trade";
+import { AccountEnvironment, ExecutionMode, setLeverage, updateTradingAccount } from "@/api/trade";
 import type { TradingAccount } from "@/api/trade";
 import AccountInspectionPanel from "@/components/trade-inspection/account-inspection-panel.vue";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
@@ -116,7 +116,7 @@ import {
 const props = defineProps<{ account: TradingAccount }>();
 const emit = defineEmits<{ changed: [] }>();
 
-const paper = computed(() => props.account.execution_mode === 1);
+const paper = computed(() => props.account.execution_mode === ExecutionMode.PAPER);
 const name = ref(props.account.name);
 const secretId = ref(props.account.live?.credential_secret_id ?? "");
 const retention = ref(String(orderRetentionDaysOf(props.account)));
@@ -136,7 +136,7 @@ const dirty = computed(() =>
     ? retention.value.trim() !== String(orderRetentionDaysOf(props.account))
     : name.value.trim() !== "" &&
       (name.value.trim() !== props.account.name ||
-        (props.account.execution_mode === 2 && secretId.value !== (props.account.live?.credential_secret_id ?? "")))
+        (props.account.execution_mode === ExecutionMode.LIVE && secretId.value !== (props.account.live?.credential_secret_id ?? "")))
 );
 const leverageRows = computed(() =>
   Object.entries(props.account.leverage_settings || {}).map(([key, value]) => ({
@@ -167,10 +167,13 @@ watch(
 );
 
 onMounted(async () => {
-  if (props.account.execution_mode !== 2) return;
+  if (props.account.execution_mode !== ExecutionMode.LIVE) return;
   secretsLoading.value = true;
   try {
-    secrets.value = await loadExchangeSecrets(props.account.exchange, props.account.live?.environment === 1 ? 1 : 2);
+    secrets.value = await loadExchangeSecrets(
+      props.account.exchange,
+      props.account.live?.environment === AccountEnvironment.TESTNET ? AccountEnvironment.TESTNET : AccountEnvironment.PRODUCTION
+    );
   } catch {
     secrets.value = [];
   } finally {
@@ -221,7 +224,8 @@ function save() {
   const accountId = props.account.trading_account_id;
   const nextName = name.value.trim() !== props.account.name ? name.value.trim() : undefined;
   const fromSecret = props.account.live?.credential_secret_id ?? "";
-  const nextSecret = props.account.execution_mode === 2 && secretId.value !== fromSecret ? secretId.value : undefined;
+  const nextSecret =
+    props.account.execution_mode === ExecutionMode.LIVE && secretId.value !== fromSecret ? secretId.value : undefined;
   const submit = async () => {
     saving.value = true;
     try {

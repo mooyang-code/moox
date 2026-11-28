@@ -72,8 +72,8 @@ import { exchangeLabel, unblockInstrument } from "@/api/trade";
 import type { BlockedInstrument } from "@/api/trade";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import type { Environment } from "@/components/trade-confirm/environment";
-import { marketLabel } from "./shared/markets";
-import { scopeLabel } from "../blocked/delist-utils";
+import { marketLabel } from "../accounts/shared/markets";
+import { scopeLabel } from "./delist-utils";
 
 const props = defineProps<{ rows: BlockedInstrument[]; loading: boolean }>();
 const emit = defineEmits<{ changed: []; locate: [delistId: string] }>();
@@ -118,7 +118,7 @@ async function runUnblock() {
 defineExpose({ askUnblock, confirmVisible });
 </script>
 
-<style src="./shared/accounts.css"></style>
+<style src="../accounts/shared/accounts.css"></style>
 <style scoped>
 .confirm-line {
   margin: 0 0 var(--moox-space-2);

@@ -2,7 +2,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
-import { type LogicalAccount } from "@/api/trade";
+import { AccountEnvironment, ExecutionMode, type LogicalAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({
   createTradingAccount: vi.fn(),
@@ -37,14 +37,15 @@ let wrapper: VueWrapper;
 const existing = {
   logical_account_id: "la-existing",
   name: "已有组合",
-  execution_mode: 1,
+  execution_mode: ExecutionMode.PAPER,
+  environment: AccountEnvironment.PAPER,
   settlement_asset: "USDT",
   automation_state: "PAUSED",
   members: [{ trading_account_id: "a", enabled: true, priority: 2 }]
 } as LogicalAccount;
 
 async function openDialog(logicals: LogicalAccount[] = [existing]) {
-  wrapper = mount(CreateAccount, { props: { logicals, accounts: [] }, global: { plugins: [ArcoVue] } });
+  wrapper = mount(CreateAccount, { props: { logicals }, global: { plugins: [ArcoVue] } });
   const vm = wrapper.vm as unknown as DialogVM;
   vm.open("paper");
   Object.assign(vm.form, { name: "新账户", markets: ["spot", "swap"], join: "exist", existingLogicalId: "la-existing" });

@@ -51,7 +51,7 @@
       <InspectionPreview
         v-if="form.kind !== 'paper'"
         :exchange="form.exchange"
-        :environment="form.kind === 'testnet' ? 1 : 2"
+        :environment="form.kind === 'testnet' ? AccountEnvironment.TESTNET : AccountEnvironment.PRODUCTION"
         :secret-id="form.secretId"
         @change="onPreviewChange"
       />
@@ -85,7 +85,7 @@
       <InspectionPreview
         v-if="form.kind !== 'paper'"
         :exchange="form.exchange"
-        :environment="form.kind === 'testnet' ? 1 : 2"
+        :environment="form.kind === 'testnet' ? AccountEnvironment.TESTNET : AccountEnvironment.PRODUCTION"
         :secret-id="form.secretId"
         :markets="form.markets"
         @change="onMarketPreviewChange"
@@ -141,11 +141,15 @@
           /></a-form-item>
           <a-form-item
             label="运行方式"
-            :extra="form.controlMode === 1 ? '之后在策略管理里把策略实例绑到这个组合' : '只按你的手工订单交易，没有策略目标'"
+            :extra="
+              form.controlMode === ControlMode.STRATEGY
+                ? '之后在策略管理里把策略实例绑到这个组合'
+                : '只按你的手工订单交易，没有策略目标'
+            "
           >
             <a-radio-group v-model="form.controlMode" type="button" :disabled="Boolean(created.logicalId)">
-              <a-radio :value="1">策略驱动</a-radio>
-              <a-radio :value="2">自主下单</a-radio>
+              <a-radio :value="ControlMode.STRATEGY">策略驱动</a-radio>
+              <a-radio :value="ControlMode.MANUAL">自主下单</a-radio>
             </a-radio-group>
           </a-form-item>
         </template>
@@ -186,19 +190,24 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { addLogicalAccountMember, createLogicalAccount, createTradingAccount, isTradeAdoptionRequired } from "@/api/trade";
+import {
+  AccountEnvironment,
+  ControlMode,
+  addLogicalAccountMember,
+  createLogicalAccount,
+  createTradingAccount,
+  isTradeAdoptionRequired
+} from "@/api/trade";
 import type { LogicalAccount, MarketType } from "@/api/trade";
 import InspectionPreview from "@/components/trade-inspection/inspection-preview.vue";
 import type { InspectionView } from "@/components/trade-inspection/inspection";
 import { createSubmitScope } from "@/utils/submit-scope";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
-import type { Environment } from "@/components/trade-confirm/environment";
+import { toAccountEnvironment, type Environment } from "@/components/trade-confirm/environment";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "../shared/exchange-secrets";
 import { joinableLogicals, nextPriority } from "../shared/membership";
 import { ADOPT_EFFECT_TEXT } from "../shared/risky-actions";
 import { orderRetentionHint } from "../shared/order-retention";
-import { accountMapOf } from "../account-list";
-import type { TradingAccount } from "@/api/trade";
 import {
   applyExchangeDefaults,
   buildLiveRequest,
@@ -217,7 +226,7 @@ import {
 
 defineOptions({ name: "trading-create-account" });
 
-const props = defineProps<{ logicals: LogicalAccount[]; accounts: TradingAccount[] }>();
+const props = defineProps<{ logicals: LogicalAccount[] }>();
 const emit = defineEmits<{ created: [env: Environment] }>();
 
 const visible = ref(false);
@@ -242,7 +251,7 @@ function newCreated() {
 const locked = computed(() => Boolean(created.value.accountId));
 const selectedKind = computed(() => createKinds.find(item => item.key === form.kind));
 const stockExchange = computed(() => stockExchangeOf(form));
-const joinable = computed(() => joinableLogicals(props.logicals, accountMapOf(props.accounts), form.kind, form.settlementAsset));
+const joinable = computed(() => joinableLogicals(props.logicals, form.kind, form.settlementAsset));
 
 const nextDisabled = computed(() => {
   if (form.step === 0) return !selectedKind.value?.open;
@@ -321,7 +330,10 @@ async function loadSecrets() {
   const requestId = ++secretsRequest;
   secretsLoading.value = true;
   try {
-    const list = await loadExchangeSecrets(form.exchange, form.kind === "testnet" ? 1 : 2);
+    const list = await loadExchangeSecrets(
+      form.exchange,
+      form.kind === "testnet" ? AccountEnvironment.TESTNET : AccountEnvironment.PRODUCTION
+    );
     if (requestId === secretsRequest) secrets.value = list;
   } catch {
     if (requestId === secretsRequest) secrets.value = [];
@@ -417,8 +429,8 @@ async function submit() {
           await createLogicalAccount({
             name: form.logicalName.trim() || form.name.trim(),
             control_mode: form.controlMode,
-            // 组合按三值环境创建：1 测试网、2 生产环境、3 模拟盘
-            environment: form.kind === "paper" ? 3 : form.kind === "testnet" ? 1 : 2,
+            // 组合按进入菜单或向导所选的三值环境创建
+            environment: toAccountEnvironment(form.kind),
             settlement_asset: form.settlementAsset.trim().toUpperCase()
           })
         ).logical_account.logical_account_id;

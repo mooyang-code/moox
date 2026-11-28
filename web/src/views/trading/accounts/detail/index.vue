@@ -26,13 +26,17 @@
                 <span class="tx-muted">（实例 {{ strategy.instanceId }}）</span>
               </span>
               <span v-else>{{
-                logical.control_mode === 2 ? "自主下单，没有关联策略" : strategiesFailed ? "策略读取失败" : "尚未绑定策略"
+                logical.control_mode === ControlMode.MANUAL
+                  ? "自主下单，没有关联策略"
+                  : strategiesFailed
+                    ? "策略读取失败"
+                    : "尚未绑定策略"
               }}</span>
               <span class="tx-muted tx-mono">{{ logical.logical_account_id }}</span>
             </div>
           </div>
           <a-space wrap class="detail-actions">
-            <template v-if="logical.control_mode === 1">
+            <template v-if="logical.control_mode === ControlMode.STRATEGY">
               <a-button
                 v-if="logical.automation_state === 'ACTIVE'"
                 status="warning"
@@ -61,7 +65,7 @@
           <div>
             <div class="k">权益</div>
             <div class="v tx-num">
-              {{ fmtMoney(totals.equity) }}<small>{{ logical.settlement_asset }}</small>
+              {{ fmtMoney(totalEquity) }}<small>{{ logical.settlement_asset }}</small>
             </div>
             <div class="d">同步于 <TimeText :value="latestSync" :zone="displayZone" precision="minute" /></div>
             <!-- 还没读到权益（新建账户首次同步前）时显示“—”，不能按 0 算成 −100% -->
@@ -76,7 +80,7 @@
             <div class="v tx-num" :class="pnlClass(dayChange?.amount)">
               {{ dayChange ? fmtSigned(dayChange.amount) : "—" }}
             </div>
-            <div class="d">{{ dayChange ? fmtPercent(dayChange.ratio) : "权益变化，按资金曲线" }}</div>
+            <div class="d">{{ dayChange?.ratio != null ? fmtPercent(dayChange.ratio) : "权益变化，按资金曲线" }}</div>
           </div>
           <div>
             <div class="k">可用资金</div>
@@ -86,7 +90,7 @@
           <div v-if="logical.markets?.includes('swap')">
             <div class="k">保证金占用</div>
             <div class="v tx-num">{{ fmtMoney(totals.margin) }}</div>
-            <div class="d">占权益 {{ totals.equity ? fmtPercent(totals.margin / totals.equity, 1).replace("+", "") : "—" }}</div>
+            <div class="d">占权益 {{ totalEquity ? fmtPercent(totals.margin / totalEquity, 1).replace("+", "") : "—" }}</div>
           </div>
           <div v-if="logical.markets?.includes('swap')">
             <div class="k">未实现盈亏</div>
@@ -94,11 +98,11 @@
             <div class="d">永续按标记价</div>
           </div>
           <div>
-            <div class="k">{{ logical.control_mode === 1 ? "持仓 / 目标" : "持仓" }}</div>
+            <div class="k">{{ logical.control_mode === ControlMode.STRATEGY ? "持仓 / 目标" : "持仓" }}</div>
             <div class="v tx-num">
-              {{ snapshotCount }}<small v-if="logical.control_mode === 1">/ {{ targetCoins }}</small>
+              {{ snapshotCount }}<small v-if="logical.control_mode === ControlMode.STRATEGY">/ {{ targetCoins }}</small>
             </div>
-            <div v-if="logical.control_mode === 1" class="d">{{ offText }}</div>
+            <div v-if="logical.control_mode === ControlMode.STRATEGY" class="d">{{ offText }}</div>
             <div v-else-if="positionTotalText" class="d">{{ positionTotalText }}</div>
           </div>
         </div>
@@ -137,7 +141,7 @@
             </template>
           </a-alert>
           <a-alert
-            v-if="logical.control_mode === 1 && logical.automation_state === 'PAUSED'"
+            v-if="logical.control_mode === ControlMode.STRATEGY && logical.automation_state === 'PAUSED'"
             type="warning"
             class="banner"
             :show-icon="false"
@@ -236,7 +240,7 @@
             <a-descriptions-item label="平掉持仓">
               {{ flattenInfo.positions }} 个，按市价，价值约 {{ fmtMoney(flattenInfo.value) }} {{ logical.settlement_asset }}
             </a-descriptions-item>
-            <a-descriptions-item v-if="logical.control_mode === 1" label="自动执行"
+            <a-descriptions-item v-if="logical.control_mode === ControlMode.STRATEGY" label="自动执行"
               >会暂停，避免策略马上把仓位建回来</a-descriptions-item
             >
           </a-descriptions>
@@ -257,7 +261,7 @@
             <a-descriptions-item label="订单">
               {{ instrumentName(cancelOrderTarget.instrument_id) }}
               {{ marketLabel(cancelOrderTarget.market_type) }}
-              {{ cancelOrderTarget.side === 1 ? "买入" : "卖出" }} {{ fmtQty(cancelOrderTarget.quantity) }}，{{
+              {{ cancelOrderTarget.side === OrderSide.BUY ? "买入" : "卖出" }} {{ fmtQty(cancelOrderTarget.quantity) }}，{{
                 orderStateLabels[cancelOrderTarget.state] || cancelOrderTarget.state
               }}
             </a-descriptions-item>
@@ -265,7 +269,7 @@
               orderOwnerLabels[cancelOrderTarget.owner_type] || cancelOrderTarget.owner_type
             }}</a-descriptions-item>
           </a-descriptions>
-          <a-alert v-if="logical.control_mode === 1" type="warning" class="dialog-block">
+          <a-alert v-if="logical.control_mode === ControlMode.STRATEGY" type="warning" class="dialog-block">
             撤单会暂停这个组合的自动执行，否则策略会马上重新下单。
           </a-alert>
         </ConfirmDialog>
@@ -285,6 +289,8 @@ import { useSpaceStore } from "@/store/modules/space";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
+  ControlMode,
+  OrderSide,
   actionStateLabels,
   cancelOrder,
   exchangeLabel,
@@ -300,7 +306,6 @@ import {
   orderStateLabels,
   parseFlattenResult,
   pauseLogicalAccount,
-  queryEquityCurve,
   resumeLogicalAccount,
   syncTradingAccount
 } from "@/api/trade";
@@ -323,10 +328,10 @@ import { detailContextKey, type OrderPrefill } from "./context";
 import {
   detailTabs,
   equityChangeOf,
-  equityDelta,
-  type EquityDelta,
   flattenPreview,
   isFlattenRunning,
+  logicalDayChange,
+  logicalEquity,
   memberTotals,
   paperInitialBalance,
   runningAction,
@@ -371,11 +376,9 @@ const syncing = ref(false);
 const orderDialog = ref<InstanceType<typeof OrderDialog>>();
 
 const accounts = computed(() => accountMapOf(allAccounts.value));
-// 地址里带着进来时的环境（路由 meta.env）：没有可判断成员的实盘组合按它显示；组合还没读到时也先按它显示
+// 组合读到后直接按后端返回的三值 environment 展示；读到前先按路由 meta.env 占位
 const routeEnv = computed(() => environmentOfRoute(route));
-const env = computed(() =>
-  logical.value ? logicalEnvironment(logical.value, accounts.value, routeEnv.value) : (routeEnv.value ?? "paper")
-);
+const env = computed(() => (logical.value ? logicalEnvironment(logical.value) : (routeEnv.value ?? "paper")));
 // 地址和组合实际的环境不一致（只带组合编号的通用地址、手工改过的地址）：换到所属环境的地址，侧栏高亮对应菜单
 watch([logical, env], () => {
   if (!logical.value || logical.value.logical_account_id !== logicalId.value || routeEnv.value === env.value) return;
@@ -387,9 +390,11 @@ const enabledAccounts = computed(() =>
     .map(member => accounts.value.get(member.trading_account_id))
     .filter((item): item is TradingAccount => Boolean(item))
 );
+const totalEquity = computed(() => logicalEquity(logical.value));
+const dayChange = computed(() => logicalDayChange(logical.value));
 const totals = computed(() => memberTotals(enabledAccounts.value));
 const initialBalance = computed(() => paperInitialBalance(enabledAccounts.value));
-const equityChange = computed(() => equityChangeOf(totals.value.equity, initialBalance.value));
+const equityChange = computed(() => equityChangeOf(totalEquity.value, initialBalance.value));
 const latestSync = computed(() => Math.max(0, ...enabledAccounts.value.map(item => Number(item.last_sync_at) || 0)));
 const exchangesText = computed(() => {
   const names = [...new Set(enabledAccounts.value.map(item => exchangeLabel(item.exchange)))];
@@ -422,20 +427,9 @@ const offText = computed(() => {
   const status = target.value?.status?.toUpperCase();
   return status === "PENDING" || status === "CONVERGING" ? `调仓中，还差 ${offCount.value} 个` : `${offCount.value} 个未到位`;
 });
-// 近 24 小时权益变化：取资金曲线这段时间的第一个点和最后一个点，还没读到时显示“—”
-const dayChange = ref<EquityDelta | null>(null);
-async function loadDayChange() {
-  const id = logicalId.value;
-  const now = Date.now();
-  const rsp = await queryEquityCurve({
-    logical_account_id: id,
-    start_time: String(now - 86_400_000),
-    end_time: String(now)
-  }).catch(() => null);
-  // 读不到时保留上一次的数，下一轮再试
-  if (rsp && id === logicalId.value) dayChange.value = equityDelta(rsp.points || []);
-}
-const membersEditable = computed(() => logical.value?.control_mode === 2 || logical.value?.automation_state === "PAUSED");
+const membersEditable = computed(
+  () => logical.value?.control_mode === ControlMode.MANUAL || logical.value?.automation_state === "PAUSED"
+);
 
 const tracker = useActionTracker({
   logicalAccountId: () => logical.value?.logical_account_id,
@@ -506,7 +500,6 @@ async function loadFirst() {
   try {
     await reload();
     void resumeRunningAction();
-    void loadDayChange();
     const links = await loadStrategyLinks(logical.value ? [logical.value] : []);
     // 关联策略读 Strategy 的实例列表（绑了这个账户的实例，启用中的优先）；读取失败时保留上一次读到的，
     // 没有的话写“策略读取失败”，不当成没有绑定
@@ -522,9 +515,8 @@ async function loadFirst() {
   }
 }
 
-// 每 5 秒后台刷新（页面隐藏时暂停、不叠加）；近 24 小时权益变化每分钟重读一次
+// 每 5 秒后台刷新（页面隐藏时暂停、不叠加）
 usePolling(() => reload(), 5000);
-usePolling(loadDayChange, 60_000);
 
 watch(
   logicalId,
@@ -535,7 +527,6 @@ watch(
     target.value = null;
     targetLanes.value = [];
     strategy.value = null;
-    dayChange.value = null;
     snapshot.value = { swapPositions: [], spotHoldings: [] };
     void loadFirst();
   },

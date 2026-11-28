@@ -92,7 +92,7 @@ import { listDelists, type DelistFlatten, type DelistRecord } from "@/api/trade/
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import BlockedTab from "../accounts/blocked-tab.vue";
+import BlockedTab from "./blocked-tab.vue";
 import { marketLabel } from "../accounts/shared/markets";
 import DelistDialog from "./delist-dialog.vue";
 import { actionStatusText, delistStatusColor, delistStatusText, plannedRoundText, scopeLabel, sortDelists } from "./delist-utils";

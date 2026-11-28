@@ -1,4 +1,12 @@
-import type { BlockedTarget, InstrumentQuantity, MarketType, Position, TargetLane } from "@/api/trade/types";
+import {
+  OrderSide,
+  TargetLaneState,
+  type BlockedTarget,
+  type InstrumentQuantity,
+  type MarketType,
+  type Position,
+  type TargetLane
+} from "@/api/trade/types";
 import { coinOf, marketOfInstrument } from "../shared/markets";
 import { decimalAdd, decimalSub } from "../shared/order-rules";
 
@@ -70,13 +78,6 @@ export interface BuildCoinRowsInput {
   hasTarget: boolean;
 }
 
-/** 后端 TargetLaneState 的取值，0 是未知。 */
-const LANE_WILL_ORDER = 1;
-const LANE_BELOW_MIN_NOTIONAL = 3;
-const LANE_MARKET_DEFERRED = 4;
-const LANE_BELOW_LOT = 5;
-const LANE_BLOCKED = 6;
-
 type LaneVerdict = "ok" | "off" | "unknown";
 
 /**
@@ -85,21 +86,21 @@ type LaneVerdict = "ok" | "off" | "unknown";
  */
 function marketVerdict(lane: TargetLane | undefined, target: TargetCell | undefined): LaneVerdict {
   if (!lane) return target ? "unknown" : "ok";
-  const state = lane.state ?? 0;
-  if (state === LANE_WILL_ORDER || state === LANE_BLOCKED) return "off";
-  return state === 0 ? "unknown" : "ok";
+  const state = lane.state ?? TargetLaneState.UNKNOWN;
+  if (state === TargetLaneState.WILL_ORDER || state === TargetLaneState.BLOCKED) return "off";
+  return state === TargetLaneState.UNKNOWN ? "unknown" : "ok";
 }
 
 /** 有差额但执行器不会下单的原因，显示在偏差旁边。市场规则的顺延已经在 blocked_targets 里的，不重复写。 */
 function settledText(lane: TargetLane | undefined, deferredReason: string): string {
   switch (lane?.state) {
-    case LANE_BELOW_MIN_NOTIONAL:
+    case TargetLaneState.BELOW_MIN_NOTIONAL:
       return "差额低于最小下单额";
-    case LANE_BELOW_LOT:
+    case TargetLaneState.BELOW_LOT:
       return "差额不足一手";
-    case LANE_MARKET_DEFERRED:
+    case TargetLaneState.MARKET_DEFERRED:
       return deferredReason ? "" : lane.reason || "暂不可交易";
-    case LANE_BLOCKED:
+    case TargetLaneState.BLOCKED:
       return lane.reason || "";
     default:
       return "";
@@ -300,8 +301,8 @@ export function largestHolder(row: CoinRow, market: MarketType, candidates: read
 export interface OrderHint {
   market: MarketType;
   instrumentId: string;
-  /** 与目标有差额时预填的方向：差额为正要买入，为负要卖出；没有目标或保持当前持仓时为空 */
-  side?: 1 | 2;
+  /** 与目标有差额时预填的方向：差额为负要买入，为正要卖出；没有目标或保持当前持仓时为空 */
+  side?: typeof OrderSide.BUY | typeof OrderSide.SELL;
   /** 与目标的差额（绝对值） */
   quantity?: string;
 }
@@ -309,7 +310,7 @@ export interface OrderHint {
 /** 差额不为零时预填方向和数量：差额为负要买入，为正要卖出，数量是差额的绝对值（精确小数）。 */
 function setDeviation(hint: OrderHint, deviation: string | null) {
   if (deviation === null || deviation === "0") return;
-  hint.side = deviation.startsWith("-") ? 1 : 2;
+  hint.side = deviation.startsWith("-") ? OrderSide.BUY : OrderSide.SELL;
   hint.quantity = deviation.replace(/^-/, "");
 }
 

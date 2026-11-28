@@ -10,8 +10,7 @@ const api = vi.hoisted(() => ({
   validateStrategy: vi.fn(),
   listInstances: vi.fn(),
   listFactorTasks: vi.fn(),
-  listLogicalAccounts: vi.fn(),
-  listTradingAccounts: vi.fn(async () => ({ accounts: [] }))
+  listLogicalAccounts: vi.fn()
 }));
 vi.mock("@/api/strategy", () => ({
   createInstance: api.createInstance,
@@ -28,7 +27,7 @@ vi.mock("@/api/factor", async () => {
   const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
   return { listFactorTasks: api.listFactorTasks, listAllFactorTasks: allFactorTasksFrom(api.listFactorTasks) };
 });
-vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts, listTradingAccounts: api.listTradingAccounts }));
+vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 const source = readFileSync(resolve(process.cwd(), "src/views/strategy/components/strategy-instance-create.vue"), "utf8");
