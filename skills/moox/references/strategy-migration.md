@@ -256,7 +256,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 
 ## 7. 数据获取与操作安全
 
-- Skill 的 K 线查询（[data-query.md](data-query.md)）只能读取打包目录里已登记的市场与频率；目录按内置采集任务生成（`config/setup/collection-tasks.yaml`：币安现货 1m，A 股沪深 300 的 5m 与 1d），不包含本例的 5m 合约数据。按实际目录检查所需频率与市场，不能把 1m 数据当成 5m。目录不能满足时，参考数据用两部分拼起来：
+- 用 `moox-cli data kline get`（[data-query.md](data-query.md)）可以直接查系统里任一已有采集任务的结果数据集（按 `--dataset-id` 或 `--space-id` + `--tag-id` + `--interval`）。线上没有所需频率或市场（例如本例的 5m 合约数据，不能把 1m 数据当成 5m）时，参考数据用两部分拼起来：
   - 用户的历史导入包（[initial-import.md](initial-import.md) 用的那份 CSV）；
   - 交易所公开行情接口拉到的近期 K 线（不需要凭据）。
 - **不要在生产采集机上大批量下载，也不要从它往外整包传输**：海外机（collector-stream 所在）的上行带宽很小。2026-10-26 一次 81 MB 的 rsync，让采集写入 Storage 和币安 WS 接连超时，1m 因子最多晚了 8 分钟。

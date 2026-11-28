@@ -150,7 +150,6 @@ test-script-contracts:
 
 test-skill-contracts:
 	bash scripts/build/package-skill_test.sh
-	bash skills/moox/scripts/test-data-query-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
 	bash skills/moox/scripts/test-factor-convert-contract.sh

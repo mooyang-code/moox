@@ -290,9 +290,8 @@ func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string]map[string][]string{
 		"scf-collector": {"trpc.moox.storage.PrimaryStore": {"CommitTimeSeriesBatch", "UpsertFields"}},
-		"moox-skill":    {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows"}},
 	}
-	if !slices.Equal(c.ExternalIdentities(), []string{"scf-collector", "moox-skill"}) {
+	if !slices.Equal(c.ExternalIdentities(), []string{"scf-collector"}) {
 		t.Fatalf("unexpected external identities %v", c.ExternalIdentities())
 	}
 	for _, principal := range c.ExternalIdentities() {

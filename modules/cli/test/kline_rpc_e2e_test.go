@@ -34,16 +34,16 @@ func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
 	storageAddress := startKlineStorage(t, storage)
 	gatewayTarget := startKlineNativeGateway(t, storageAddress)
-	configPath := writeKlineConfig(t)
 	operatorHome, manifestPath := writeKlineOperator(t, gatewayTarget)
 
 	binary := buildMooxCLI(t)
 	command := exec.Command(binary, "data", "kline", "get",
-		"--config", configPath,
 		"--file", manifestPath,
-		"--data-type", "crypto",
+		"--space-id", "crypto",
+		"--dataset-id", "dataset_binance_kline_1m",
 		"--symbol", "BTC-USDT",
 		"--interval", "1m",
+		"--series-tag", "venue:binance",
 		"--limit", "1",
 	)
 	command.Env = append(os.Environ(), "HOME="+operatorHome)
@@ -71,7 +71,7 @@ func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	}
 
 	// 外部身份用自己的私钥直接到主机网关：网关上没有它的公钥，调不了任何方法，更借不到 moox-cli 的身份。
-	headers, err := gatewayauth.Sign(authtest.Identity("moox-skill"), gatewayauth.Request{TargetNode: klineGatewayNode, Callee: "trpc.moox.storage.PrimaryStore", Func: "UpsertFields"}, time.Now())
+	headers, err := gatewayauth.Sign(authtest.Identity("scf-collector"), gatewayauth.Request{TargetNode: klineGatewayNode, Callee: "trpc.moox.storage.PrimaryStore", Func: "UpsertFields"}, time.Now())
 	require.NoError(t, err)
 	options := []client.Option{client.WithTarget(gatewayTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
 	for key, values := range headers {
@@ -308,24 +308,6 @@ func (buffer *lockedBuffer) String() string {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	return buffer.content.String()
-}
-
-func writeKlineConfig(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "data-access.yaml")
-	content := `version: 1
-data_types:
-  crypto:
-    default_exchange: binance
-    exchanges:
-      binance:
-        space_id: crypto
-        series_tag: venue:binance
-        kline_datasets:
-          1m: dataset_binance_kline_1m
-`
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	return path
 }
 
 func writeKlineOperator(t *testing.T, gatewayTarget string) (string, string) {

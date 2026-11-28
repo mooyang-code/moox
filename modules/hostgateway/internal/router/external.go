@@ -20,7 +20,7 @@ type RemoteForwarder interface {
 }
 
 // RegisterExternal 把外部入口（11004，明文加签名）挂到监听上。这个入口只接服务目录里的外部身份
-// （scf-collector、moox-skill）：验签、防重放、调用名单与 11003 相同，
+// （scf-collector）：验签、防重放、调用名单与 11003 相同，
 // 目标服务在本机就转本机，在别的主机就以 host-gateway 的身份带来源头转过去。
 func (p *Proxy) RegisterExternal(service server.Service) error {
 	return register(service, p, p.handleExternal)

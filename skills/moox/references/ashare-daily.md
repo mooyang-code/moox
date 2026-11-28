@@ -242,8 +242,8 @@ portfolio: {max_missing: 0.2}
 
 - `collector status`：日线数据集 `level: ok`，没有失败分块。
 - `kline check`：`status: complete`、`missing: 0`。`--to` 不要晚于“已经采过的最后一个交易日的下一天”，今天的日线明天 08:00 才有。停牌的交易日来源没有数据，补采确认后记在 `absent_at_source`，不算缺口。
-- skill 的 A 股 1d 数据查询（[`data-query.md`](data-query.md)）固定读纯日线任务“A 股 K 线 1d”的结果。只启用了带附加字段的那条时，用 skill 查 1d 查不到数据；要用 skill 查日线就把纯日线任务也启用并补历史。
-- `kline check --deep` 不检查附加字段（它们允许为空）。要看附加字段有没有值，在管理台数据页打开带附加字段那条任务的结果数据集取几行看（skill 的数据查询读的是纯日线任务，看不到这些列）：抽一只近期除过权的股票看 `adj_factor` 在除权日变化；抽一只银行股，`fin_total_revenue` 为空是正常的。
+- 用 `moox-cli data kline get`（[`data-query.md`](data-query.md)）查询 A 股日线时：若同时启用了纯日线与带附加字段两条 1d 任务，直接传 `--dataset-id` 区分（要看附加字段则显式加上 `--columns`）。
+- `kline check --deep` 不检查附加字段（它们允许为空）。要看附加字段有没有值，在管理台数据页打开带附加字段那条任务的结果数据集取几行看（或用 `moox-cli data kline get --space-id stockcn --dataset-id <结果数据集ID> --interval 1d --symbol <标的> --columns open,close,adj_factor,sw_l1,turnover_rate`）：抽一只近期除过权的股票看 `adj_factor` 在除权日变化；抽一只银行股，`fin_total_revenue` 为空是正常的。
 - 管理台“数据采集 › 数据源”页下方的“附加字段来源”应列出复权因子、申万行业、财务报表、换手率、股本与股利五个来源和它们的字段。
 - 换手率、股本：在管理台数据页取最近一个交易日的几行，`turnover_rate` 与行情软件的换手率一致，`total_shares × close` 与总市值一致。股本只在“接口标注的交易日”那一行有值，补出来的历史行为空是正常的。
 

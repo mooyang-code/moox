@@ -6,8 +6,8 @@
     "methods": 295,
     "read_only_methods": 136,
     "retryable_methods": 138,
-    "callers": 20,
-    "principals": 2
+    "callers": 19,
+    "principals": 1
   },
   "services": [
     {
@@ -2565,7 +2565,6 @@
       "trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountOrderSettings",
       "trpc.moox.trade.TradeConsoleService/UpdateTradingAccount"
     ],
-    "moox-skill": [],
     "scf-collector": [],
     "storage-primary": [],
     "storage-view": [],
@@ -2611,9 +2610,6 @@
     ]
   },
   "principals": {
-    "moox-skill": [
-      "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows"
-    ],
     "scf-collector": [
       "trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
       "trpc.moox.storage.PrimaryStore/UpsertFields"

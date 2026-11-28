@@ -245,8 +245,8 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	require.NotEqual(t, replaced.Hash, rotated.Hash)
 	require.Equal(t, publicKey("host/overseas-new"), gatewayauth.EncodePublicKey(snapshotHost(rotated, "overseas").SignPublicKey))
 	// 外部身份的公钥也在快照里：外部入口（11004）用它验签；11002、11003 上它们调不了任何方法。
-	require.NoError(t, f.keys.SetIdentity(ctx, "moox-skill", publicKey("moox-skill")))
-	require.NotNil(t, snapshotIdentity(f.snapshot(t, "storage"), "moox-skill"))
+	require.NoError(t, f.keys.SetIdentity(ctx, "scf-collector", publicKey("scf-collector")))
+	require.NotNil(t, snapshotIdentity(f.snapshot(t, "storage"), "scf-collector"))
 	// 外部入口的登记随快照下发；只能出站的主机不能登记成外部入口。
 	require.False(t, snapshotHost(f.snapshot(t, "storage"), "storage").ExternalEntry)
 	entry := sysdeploy.HostSpec{HostID: "storage", Address: "storage.example.test", ExternalEntry: true, Components: []string{"storage-primary", "storage-view"}}
@@ -311,7 +311,7 @@ func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				return store.SetIdentity(context.Background(), "moox-skill", publicKey("moox-skill"))
+				return store.SetIdentity(context.Background(), "scf-collector", publicKey("scf-collector"))
 			})
 		}()
 		// 给写入方一点时间撞上写锁。
@@ -325,9 +325,9 @@ func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 	after := f.snapshot(t, "storage")
 	require.NotEqual(t, before.Hash, after.Hash)
 	require.Equal(t, "storage.example.test", snapshotHost(during, "storage").Address)
-	require.Nil(t, snapshotIdentity(during, "moox-skill"))
+	require.Nil(t, snapshotIdentity(during, "scf-collector"))
 	require.Equal(t, "new.storage.example.test", snapshotHost(after, "storage").Address)
-	require.NotNil(t, snapshotIdentity(after, "moox-skill"))
+	require.NotNil(t, snapshotIdentity(after, "scf-collector"))
 }
 
 func (f *controlFixture) pull(t *testing.T, host, current string, sessions []*pb.RelaySessionStatus) *pb.PullSnapshotRsp {

@@ -323,7 +323,7 @@ func TestEndpointHonorsRequestedHost(t *testing.T) {
 }
 
 func TestExternalWhitelistAndTunnelLoopbackBoundary(t *testing.T) {
-	config := Config{Mode: External, Credentials: authtest.Identity("moox-skill"), EntryAddress: "entry.example.test:11004", EntryHost: "storage"}
+	config := Config{Mode: External, Credentials: authtest.Identity("scf-collector"), EntryAddress: "entry.example.test:11004", EntryHost: "storage"}
 	c := newTestClient(t, config)
 	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
 		t.Fatal("forbidden call reached transport")
@@ -352,7 +352,6 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 		caller, service, method string
 		attempts                int
 	}{
-		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", 2},
 		// 周期提交声明为幂等写：请求可能已发出的网络失败后重发一次；其他写方法绝不重发。
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 2},
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "UpsertFields", 1},
@@ -655,8 +654,10 @@ func TestHostGatewayForwardsExternalIdentityWithOriginCallerHeader(t *testing.T)
 	require.Len(t, seen, 1)
 	require.Equal(t, []string{"scf-collector"}, seen[0].Values(gatewayauth.HeaderOriginCaller))
 
-	_, err = c.Forward(WithOriginCaller(context.Background(), "moox-skill"), storage, "CommitTimeSeriesBatch", codec.SerializationTypePB, nil)
-	require.ErrorContains(t, err, "not allowed", "moox-skill 不在写入方法的名单上")
+	_, err = c.Forward(WithOriginCaller(context.Background(), "scf-collector"), storage, "ReadTimeSeriesRows", codec.SerializationTypePB, nil)
+	require.ErrorContains(t, err, "not allowed", "scf-collector 不在只读方法的名单上")
+	_, err = c.Forward(WithOriginCaller(context.Background(), "moox-skill"), storage, "ReadTimeSeriesRows", codec.SerializationTypePB, nil)
+	require.ErrorContains(t, err, "not allowed", "已删除的 moox-skill 不是外部身份")
 	_, err = c.Forward(WithOriginCaller(context.Background(), "moox-cli"), storage, "CommitTimeSeriesBatch", codec.SerializationTypePB, nil)
 	require.ErrorContains(t, err, "not allowed", "来源只能是外部身份")
 	_, err = c.Forward(context.Background(), storage, "CommitTimeSeriesBatch", codec.SerializationTypePB, nil)

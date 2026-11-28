@@ -282,7 +282,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     打开控制机终端、下载一个归档分区都成功。重启 Admin 之后要重新登录（会话只在进程内存里）。
 26. **跨主机与出站主机**：`$CLI trade account list`、`$CLI data kline get …` 成功（经控制机到海外机、存储机）；
     `$CLI host agent status --host factor`、`$CLI lifecycle status --module factor-engine` 成功（经控制机中转）。
-27. **外部入口**：`setup export-skill-config` 导出后用 skill 的 `scripts/data-kline.sh` 读到数据（`moox-skill` 身份走 11004）；`setup start --space-id stockcn` 之后等一期，A 股函数写入成功（第 6 步）。
+27. **外部入口**：`setup start --space-id stockcn` 之后等一期，A 股云函数以 `scf-collector` 身份经外部入口 11004 写入成功（第 6 步）。
 28. **隔离**：仓库里没有在真机上发伪造请求的命令，这一条由 `make test-e2e-gates` 的主机网关联调覆盖（场景 `external-entry-local-and-cross-host-forward-acl-and-origin-caller-rules`）。
     要在真机上做时，在因子机上用本机主机密钥对海外机 `11003` 发 Trade 下单请求，四次都应被拒：以 `factor-engine` 身份，被调用名单拒绝；
     以 `host-gateway` 身份带 `X-Moox-Origin-Caller: moox-cli` 或 `scf-collector`，原因都是 `origin_host`（先判签名主机，因子机不是入口主机）；

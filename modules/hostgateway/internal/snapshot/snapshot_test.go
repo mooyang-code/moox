@@ -39,7 +39,7 @@ func TestViewOwnsCompleteSnapshotAndVerifiesByHostKey(t *testing.T) {
 		testsnapshot.Credential("collector", "storage"),
 		testsnapshot.Credential("storage-primary", "control"),
 		{Caller: "collector", Host: "control", Key: testsnapshot.HostKey("storage")},
-		testsnapshot.Credential("moox-skill", ""),
+		testsnapshot.Credential("scf-collector", ""),
 	} {
 		err := verify(credentials)
 		require.EqualError(t, err, "host gateway authentication failed")

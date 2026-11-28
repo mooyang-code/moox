@@ -97,7 +97,6 @@
 | `data records search` | 检索记录型数据集（Bleve 索引）的数据 |
 | `data rows count` | 按数据集统计查询索引里的时序行数（selectors 与时间范围写在 --data 里） |
 | `data rows export` | 导出 Dataset 行为 JSON |
-| `data skill kline get` | 获取 K 线数据 |
 | `data view query` | 按数据集查询时序行（读它的查询索引；管理台看采集结果、因子结果用的接口；selectors、过滤与排序写在 --data 或对应参数里） |
 | `data view state` | 查看数据集查询索引（View）的状态：活动索引、代次、已建列、覆盖范围与跟随变更日志的进度 |
 | `data view wait-applied` | 等数据集的查询索引跟上此刻的变更日志头部（之前的写入都已可查） |
@@ -262,7 +261,6 @@
 | `setup backup` | 把全部非系统密钥与告警渠道加密备份到 moox.toml 同目录的 moox.backup（进程内派生口令，不输出明文；已有待导入备份时拒绝覆盖；--verify 读回校验并用 overwrite=false 验收） |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
 | `setup deploy` | 把一台主机部署成 moox.toml 描述的样子（始终保留数据，格式不兼容时拒绝并提示走全部覆盖）：先按 moox.toml 整份覆盖 Admin 的主机与部署登记（含启停），再放二进制、渲染配置、按声明启停并重启有变化的组件，等它们就绪（`--component` 只部署个别组件） |
-| `setup export-skill-config` | 导出 Skill 使用的最小数据访问配置（moox-skill 的签名私钥在本机生成，公钥登记到控制机） |
 | `setup firewall` | 初始化所有目标主机的腾讯云防火墙端口（默认只预览，--yes 才执行） |
 | `setup host-diagnostics` | 检查远端主机磁盘和服务进程 |
 | `setup hosts` | 列出可选的部署主机（不输出密码） |

@@ -35,7 +35,7 @@ Admin 启动时将 `MOOX_ADMIN_ENCRYPTION_KEY_FILE` 指向同一份持久主密�
 
 身份包里只有：`host.key`（新签发时）、`host.crt`、`host.tls.key`、`moox-ca.crt`，部署了 collector 的主机另有 `scf-collector.key`（新签发时），以及清单 `bundle.json`。
 CA 私钥和 Admin 主密钥不进入任何输出包。`bundle.json` 的 `files` 覆盖全部载荷文件（自身除外），记录 SHA256 与长度，供部署端传输时核对。
-`moox-admin-cli keys set|list|delete` 登记、列出、删除不属于主机的身份的公钥（`moox-cli`、`scf-collector`、`moox-skill`）；组件名与 `console` 不能登记成身份。
+`moox-admin-cli keys set|list|delete` 登记、列出、删除不属于主机的身份的公钥（`moox-cli`、`scf-collector`）；组件名与 `console` 不能登记成身份。
 
 主机与组件的启停只在 `moox.toml` 里声明，部署时整份覆盖登记；没有单独改状态的离线命令。
 

@@ -47,7 +47,7 @@ func TestKeysCLISetListDelete(t *testing.T) {
 	// 再登记一次就是替换：一个身份只有一把公钥。
 	_, err = f.run("set", "--identity", "moox-cli", "--public-key", second)
 	require.NoError(t, err)
-	_, err = f.run("set", "--identity", "moox-skill", "--public-key", first)
+	_, err = f.run("set", "--identity", "scf-collector", "--public-key", first)
 	require.NoError(t, err)
 	out, err := f.run("list")
 	require.NoError(t, err)
@@ -60,16 +60,16 @@ func TestKeysCLISetListDelete(t *testing.T) {
 	require.Len(t, listing.Identities, 2)
 	require.Equal(t, "moox-cli", listing.Identities[0].Identity)
 	require.Equal(t, second, listing.Identities[0].PublicKey)
-	_, err = f.run("delete", "--identity", "moox-skill")
+	_, err = f.run("delete", "--identity", "scf-collector")
 	require.NoError(t, err)
-	_, err = f.run("delete", "--identity", "moox-skill")
+	_, err = f.run("delete", "--identity", "scf-collector")
 	require.ErrorIs(t, err, keys.ErrNotRegistered)
 }
 
 func TestKeysCLIRejectsComponentIdentitiesAndRemovedSubcommands(t *testing.T) {
 	f := newKeysCLI(t)
 	key := identityPublicKey("x")
-	for _, identity := range []string{"console", "host-gateway", "trade", "factor-engine", "unknown"} {
+	for _, identity := range []string{"console", "host-gateway", "trade", "factor-engine", "moox-skill", "unknown"} {
 		_, err := f.run("set", "--identity", identity, "--public-key", key)
 		require.ErrorIs(t, err, keys.ErrInvalidIdentity, identity)
 	}

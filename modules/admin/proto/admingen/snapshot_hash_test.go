@@ -52,9 +52,9 @@ func TestSnapshotHashCoversHostsDeploymentsAndKeysWithoutMutatingInput(t *testin
 		"deployment changed": func(m *HostGatewaySnapshot) { m.Deployments[1].ComponentId = "storage-view" },
 		"deployment removed": func(m *HostGatewaySnapshot) { m.Deployments = m.Deployments[:1] },
 		"identity key":       func(m *HostGatewaySnapshot) { m.Identities[0].SignPublicKey[0] ^= 1 },
-		"identity name":      func(m *HostGatewaySnapshot) { m.Identities[0].Identity = "moox-skill" },
+		"identity name":      func(m *HostGatewaySnapshot) { m.Identities[0].Identity = "scf-collector" },
 		"identity added": func(m *HostGatewaySnapshot) {
-			m.Identities = append(m.Identities, &SnapshotIdentity{Identity: "moox-skill", SignPublicKey: []byte("another")})
+			m.Identities = append(m.Identities, &SnapshotIdentity{Identity: "scf-collector", SignPublicKey: []byte("another")})
 		},
 		"schema version": func(m *HostGatewaySnapshot) { m.SchemaVersion = 3 },
 	} {

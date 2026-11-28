@@ -40,7 +40,7 @@ func main() {
 		components []string
 		caller     string
 	}{
-		"entry-native":   {[]string{"storage-primary"}, "moox-skill"},
+		"entry-native":   {[]string{"storage-primary"}, "scf-collector"},
 		"kline-native":   {[]string{"storage-primary"}, servicecatalog.OperatorMooxCLI},
 		"storage-native": {[]string{"storage-primary", "storage-view"}, servicecatalog.OperatorMooxCLI},
 		"doctor-native":  {[]string{"admin", "monitor"}, servicecatalog.OperatorMooxCLI},

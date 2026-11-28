@@ -25,7 +25,7 @@ make test-deployment-packages
 `setup install` 的第一步就是它；公钥在部署控制机时由 bootstrap 登记，已经装好的系统换电脑用 `setup operator --register`（经 SSH 在控制机上替换登记的公钥，原电脑随即不能用）。
 同目录下的 `gateway-bootstrap.json`、`moox-ca.crt` 是部署控制机时记下的 MooX CA 指纹与根证书，之后取别的主机的身份包都按它校验。`setup wipe` 清空全部主机后把这三个文件一起删掉。
 
-`data kline get --file /absolute/path/moox.toml --config /absolute/path/data-access.yaml ...` 使用前者选择 SSH 主机，后者提供数据集目录；`data skill kline get --config ...` 不走 SSH，用同一份文件里的外部入口与 `moox-skill` 身份（`gateway_client`）访问。`setup export-skill-config` 在本机生成 `moox-skill` 的签名私钥（存在 `~/.config/moox/moox-skill.key`，反复导出是同一把）、把公钥登记到控制机，并把私钥抄一份到输出文件旁边的 `.moox-skill-keys/`。Collector 清单使用对象调用，任务 CRUD 使用原始 JSON 转发，两者复用命令持有的同一个隧道客户端。
+`data kline get --file ./moox.toml --space-id <空间> (--dataset-id <数据集> | --tag-id <标签>) --symbol <标的> [--interval 1m]` 经操作员 SSH 网关读取 K 线：可直接传数据集 ID，或按空间、标签、周期现查 Collector 的 K 线任务结果；Collector 清单使用对象调用，任务 CRUD 使用原始 JSON 转发，均复用命令持有的同一个隧道客户端。
 
 云账号、代码包与云函数的命令（`collector account`、`collector package`、`collector function`）调 Collector 的 CollectMgr，走同一条 SSH 隧道进主机网关。相关命令的 `--file` 默认 `./moox.toml`，用于选择可信 SSH 主机；COS 文件上传仍使用返回的预签名 HTTPS 地址。读回、删除与出口探测采用服务目录中的方法超时，命令退出统一关闭连接。
 

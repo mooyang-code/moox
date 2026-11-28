@@ -57,7 +57,7 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	cfg.Control.Target = controlSocket.Addr().String()
 	raw := testsnapshot.New(t, "storage", "storage-primary", "monitor")
 	testsnapshot.Host(t, raw, "storage").ExternalEntry = true
-	testsnapshot.AddIdentity(raw, "moox-skill")
+	testsnapshot.AddIdentity(raw, "scf-collector")
 	testsnapshot.Rehash(t, raw)
 	pulls := make(chan *pb.PullSnapshotReq, 10)
 	testrpc.Serve(t, tls.NewListener(controlSocket, controlTLS.Server()), servicecatalog.GatewayControlPath, func(ctx context.Context, body []byte) ([]byte, error) {
@@ -185,9 +185,9 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 		}
 	}
 	before := calls.Load()
-	for _, denied := range []struct{ caller, service, method string }{{"trade", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"}, {"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"}, {"collector", "trpc.moox.ops.SecretMgr", "GetSecretValue"}} {
+	for _, denied := range []struct{ caller, service, method string }{{"trade", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"}, {"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch"}, {"collector", "trpc.moox.ops.SecretMgr", "GetSecretValue"}} {
 		host := "control"
-		if denied.caller == "moox-skill" {
+		if denied.caller == "scf-collector" {
 			host = ""
 		}
 		headers, err := testrpc.Signed(testsnapshot.Credential(denied.caller, host), "storage", denied.service, denied.method, nil)
@@ -197,18 +197,18 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	}
 	require.Equal(t, before, calls.Load())
 	// 外部入口：外部身份调名单上的方法转到本机服务；名单外的方法、组件的签名都在入口被拒；外部入口上没有目录服务。
-	skill := testsnapshot.Credential("moox-skill", "")
+	scf := testsnapshot.Credential("scf-collector", "")
 	entryBody := []byte{0x0a, 0x01, 'e'}
-	headers, err = testrpc.Signed(skill, "storage", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", entryBody)
+	headers, err = testrpc.Signed(scf, "storage", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", entryBody)
 	require.NoError(t, err)
-	response, err := testrpc.Call(context.Background(), cfg.Server.ExternalAddr, nil, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", codec.SerializationTypePB, entryBody, headers)
+	response, err := testrpc.Call(context.Background(), cfg.Server.ExternalAddr, nil, "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", codec.SerializationTypePB, entryBody, headers)
 	require.NoError(t, err)
 	require.Equal(t, entryBody, response)
 	require.Equal(t, before+1, calls.Load())
 	for _, denied := range []struct {
 		credentials gatewayauth.Credentials
 		method      string
-	}{{skill, "UpsertFields"}, {testsnapshot.Credential("collector", "control"), "ReadTimeSeriesRows"}} {
+	}{{scf, "ReadTimeSeriesRows"}, {testsnapshot.Credential("collector", "control"), "ReadTimeSeriesRows"}} {
 		headers, err := testrpc.Signed(denied.credentials, "storage", "trpc.moox.storage.PrimaryStore", denied.method, nil)
 		require.NoError(t, err)
 		_, err = testrpc.Call(context.Background(), cfg.Server.ExternalAddr, nil, "trpc.moox.storage.PrimaryStore", denied.method, codec.SerializationTypePB, nil, headers)

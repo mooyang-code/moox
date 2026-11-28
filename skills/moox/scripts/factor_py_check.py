@@ -3,7 +3,7 @@
 
 子命令：
   synthetic    生成合成 OHLCV K 线 CSV（只用标准库）
-  rows-to-csv  把 data-kline.sh / moox-cli data rows export 输出的 JSON 转成 CSV
+  rows-to-csv  把 moox-cli data kline get / moox-cli data rows export 输出的 JSON 转成 CSV
   run-python   按旧契约 compute(df, params, context) 运行原 Python 因子，输出结果 CSV（需要 pandas）
   compare      逐值比较原 Python 结果与 factorexpr eval 的结果，按验收规则给出通过 / 失败（只用标准库）
 

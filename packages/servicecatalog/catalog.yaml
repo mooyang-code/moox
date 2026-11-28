@@ -5,8 +5,6 @@ version: 2
 identities:
   - id: scf-collector
     external: true
-  - id: moox-skill
-    external: true
 components:
   - id: host-gateway
     name: 主机网关
@@ -824,7 +822,7 @@ components:
             operators: [moox-cli]
           - name: ReadTimeSeriesRows
             read_only: true
-            callers: [archive-worker, collector, factor-engine, factor-mgr, monitor, moox-skill, strategy]
+            callers: [archive-worker, collector, factor-engine, factor-mgr, monitor, strategy]
             operators: [moox-cli]
           - name: CountTimeSeriesRows
             read_only: true

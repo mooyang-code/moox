@@ -98,7 +98,7 @@ func TestProxyRejectsUnauthorizedOrAlteredCallsBeforeUpstream(t *testing.T) {
 	// 调用名单之外的调用方、没有登记公钥的身份。
 	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signed(t, "trade", "ReadTimeSeriesRows", nil))
 	requireRejected(t, err, "trade 不在 ReadTimeSeriesRows 的名单里")
-	_, err = dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signedBy(t, testsnapshot.Credential("moox-skill", ""), "ReadTimeSeriesRows", nil))
+	_, err = dispatch(context.Background(), p, "CommitTimeSeriesBatch", nil, signedBy(t, testsnapshot.Credential("scf-collector", ""), "CommitTimeSeriesBatch", nil))
 	requireRejected(t, err, "外部身份不能直接到主机网关")
 	_, err = dispatch(context.Background(), p, "NotRegistered", nil, signed(t, "collector", "NotRegistered", nil))
 	require.ErrorContains(t, err, "not deployed")
@@ -125,11 +125,11 @@ func TestProxyRejectsExternalIdentityEvenWithRegisteredKey(t *testing.T) {
 		return nil, nil
 	}))
 	raw := state.Load().Proto()
-	skill := testsnapshot.Credential("moox-skill", "")
-	raw.Identities = append(raw.Identities, &pb.SnapshotIdentity{Identity: "moox-skill", SignPublicKey: skill.PublicKey()})
+	scf := testsnapshot.Credential("scf-collector", "")
+	raw.Identities = append(raw.Identities, &pb.SnapshotIdentity{Identity: "scf-collector", SignPublicKey: scf.PublicKey()})
 	applySnapshot(t, state, raw)
-	_, err := dispatch(context.Background(), p, "ReadTimeSeriesRows", nil, signedBy(t, skill, "ReadTimeSeriesRows", nil))
-	requireRejected(t, err, "moox-skill 直接到主机网关")
+	_, err := dispatch(context.Background(), p, "CommitTimeSeriesBatch", nil, signedBy(t, scf, "CommitTimeSeriesBatch", nil))
+	requireRejected(t, err, "scf-collector 直接到主机网关")
 }
 
 // 别的主机的密钥不能冒充：自称另一台主机、自称没部署在本机的组件、冒充 moox-cli，都在转发之前被拒。

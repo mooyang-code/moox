@@ -51,9 +51,8 @@ type setupDeps struct {
 	// ensureArchiveTasks 为已激活且保留期有限的时序数据集幂等创建归档任务（spaceID 为空表示全部空间）。
 	ensureArchiveTasks func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error)
 	// initStorage 的参数依次是存储机、源码或产物包目录、种子。
-	initStorage       func(context.Context, *setupSnapshot, string, string, setupInitBundle) (setupInitSummary, error)
-	initMetadata      func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error)
-	exportSkillConfig func(context.Context, *setupSnapshot, string) (dataAccessConfig, error)
+	initStorage  func(context.Context, *setupSnapshot, string, string, setupInitBundle) (setupInitSummary, error)
+	initMetadata func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error)
 	// ensureOperatorKey 确保这台电脑的身份目录里有 moox-cli 的签名私钥（已有就复用），返回公钥与是否新生成。
 	ensureOperatorKey func(string) (string, bool, error)
 	// registerIdentity 经 SSH 在控制机上登记（替换）一个不属于主机的身份的公钥。
@@ -121,7 +120,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupInspectSCFCommand(deps),
 		newSetupAttachSCFVPCCommand(deps),
 		newSetupInvokeSCFCommand(deps),
-		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
 	)
 	return cmd
@@ -517,7 +515,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.openInitFactor, defaults.openInitFactor)
 	fillSetupDep(&deps.checkNotification, defaults.checkNotification)
 	fillSetupDep(&deps.ensureArchiveTasks, defaults.ensureArchiveTasks)
-	fillSetupDep(&deps.exportSkillConfig, defaults.exportSkillConfig)
 	fillSetupDep(&deps.ensureOperatorKey, defaults.ensureOperatorKey)
 	fillSetupDep(&deps.registerIdentity, defaults.registerIdentity)
 	fillSetupDep(&deps.ensureFirewall, defaults.ensureFirewall)
@@ -605,7 +602,6 @@ func defaultSetupDeps() setupDeps {
 		},
 		checkNotification:   defaultSetupCheckNotification,
 		ensureArchiveTasks:  defaultSetupEnsureArchiveTasks,
-		exportSkillConfig:   defaultSetupExportSkillConfig,
 		ensureOperatorKey:   defaultSetupEnsureOperatorKey,
 		registerIdentity:    defaultSetupRegisterIdentity,
 		ensureFirewall:      defaultSetupEnsureFirewall,

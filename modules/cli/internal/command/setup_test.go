@@ -143,12 +143,12 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"install", "backup", "operator", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "build-linux", "export-skill-config", "firewall"} {
+	for _, name := range []string{"install", "backup", "operator", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "build-linux", "firewall"} {
 		require.Contains(t, output.String(), "  "+name+" ")
 	}
 	// 已删除的命令：setup update 已合并进 setup install；初始秘密由 setup init 写入，因子任务由 setup start 与 factor task apply 导入，运行配置由部署渲染；
-	// 旧部署路径的命令（bootstrap、deploy-host、deploy-unit、release、watchdog、package）已从注册表摘掉。
-	for _, removed := range []string{"update ", "apply ", "factors ", "render-runtime-config", "bootstrap", "deploy-host", "deploy-unit", "release ", "watchdog", "package ", "metadata-import"} {
+	// 旧部署路径的命令（bootstrap、deploy-host、deploy-unit、release、watchdog、package）及 export-skill-config 已从注册表摘掉。
+	for _, removed := range []string{"update ", "apply ", "factors ", "render-runtime-config", "bootstrap", "deploy-host", "deploy-unit", "release ", "watchdog", "package ", "metadata-import", "export-skill-config"} {
 		require.NotContains(t, output.String(), "  "+removed)
 	}
 }

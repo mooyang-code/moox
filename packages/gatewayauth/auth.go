@@ -1,5 +1,5 @@
 // Package gatewayauth 是 MooX 调用方身份的签名与校验：每台主机一把 ed25519 私钥，这台主机上的组件共用；
-// 不属于主机的身份（moox-cli、scf-collector、moox-skill）各一把。校验方只持有公钥。
+// 不属于主机的身份（moox-cli、scf-collector）各一把。校验方只持有公钥。
 package gatewayauth
 
 import (

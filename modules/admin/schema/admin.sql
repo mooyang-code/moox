@@ -64,7 +64,7 @@ BEGIN
     UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
 END;
 
--- 不属于主机的签名身份的公钥：moox-cli、scf-collector、moox-skill；一个身份一把，没有新旧并存
+-- 不属于主机的签名身份的公钥：moox-cli、scf-collector；一个身份一把，没有新旧并存
 CREATE TABLE IF NOT EXISTS t_identity_keys (
     c_identity TEXT NOT NULL PRIMARY KEY,
     c_sign_public_key TEXT NOT NULL,
