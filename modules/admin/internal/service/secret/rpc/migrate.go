@@ -113,8 +113,8 @@ func (s *Service) ImportSecrets(ctx context.Context, req *pb.ImportSecretsReq) (
 	return rsp, nil
 }
 
-// migrationActor 返回导出或导入的操作者标识：管理台登录请求取用户名（无用户名时取用户 ID）；
-// 无登录身份时取网关写入的调用方名，均为空则记为服务目录放行的非登录调用方 moox-cli。
+// migrationActor 返回导出或导入的操作者标识：管理台登录请求取用户名（无用户名时取用户 ID），
+// 无登录身份时记为服务目录放行的非登录调用方 moox-cli。
 func migrationActor(ctx context.Context) string {
 	if userID, username, err := auth.GetUserInfoFromCtx(ctx); err == nil {
 		if username != "" {
@@ -123,9 +123,6 @@ func migrationActor(ctx context.Context) string {
 		if userID != "" {
 			return userID
 		}
-	}
-	if caller := strings.TrimSpace(componentCaller(ctx)); caller != "" {
-		return caller
 	}
 	return servicecatalog.OperatorMooxCLI
 }

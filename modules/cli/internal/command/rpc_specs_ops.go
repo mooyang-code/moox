@@ -1,7 +1,7 @@
 package command
 
-// 运维视图与密钥迁移：监控、EventBus、主机与部署、主机代理、密钥（打码信息与加密迁移包导出/导入）。
-// 主机与部署的增删、启停走 setup，这里只提供查询。
+// 运维视图：监控、EventBus、主机与部署、主机代理、密钥（只列清单与打码后的信息）。
+// 主机与部署的增删、启停走 setup，密钥加密备份走 setup backup，这里只提供查询。
 
 const (
 	monitorMgr   = "trpc.moox.monitor.MonitorMgr"
@@ -13,7 +13,7 @@ const (
 
 func init() {
 	rpcGroupShort["eventbus"] = "EventBus：流、消费者与事件概览（调用 EventBusMgr，只读）"
-	rpcGroupShort["secret"] = "密钥：列清单与打码后的信息，及加密迁移包的导出与导入；新建、修改请用户在管理台“系统设置 › 密钥管理”填写"
+	rpcGroupShort["secret"] = "密钥：只列清单与打码后的信息；新建、修改请用户在管理台“系统设置 › 密钥管理”填写"
 	rpcGroupShort["host agent"] = "主机代理：主机资源采集状态（用 --host 指定主机）"
 
 	registerRPCSpecs(
@@ -50,9 +50,5 @@ func init() {
 			Flags: []rpcFlag{strFlag("keyword", "keyword", "关键字"), strFlag("category", "category", "分类"), strFlag("provider", "provider", "云厂商"), strFlag("status", "status", "状态")}},
 		rpcSpec{Path: []string{"secret", "show"}, Short: "查看一个密钥的元信息（值已打码）", Service: secretMgrSvc, Method: "GetSecret", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("secret-id", "secret_id", "密钥 ID")}},
-		rpcSpec{Path: []string{"secret", "export"}, Short: "把全部非系统密钥加密导出为迁移包（响应里只有密文）", Service: secretMgrSvc, Method: "ExportSecrets", NoSpace: true,
-			Flags: []rpcFlag{reqFlag("passphrase", "passphrase", "导出口令（至少 12 个字符；导入时需要同一口令）")}},
-		rpcSpec{Path: []string{"secret", "import"}, Short: "解开加密迁移包并按原 secret_id 导入密钥（默认只预览）", Service: secretMgrSvc, Method: "ImportSecrets", NoSpace: true, Destructive: true,
-			Flags: []rpcFlag{fileFlag("bundle", "bundle", "迁移包文件路径（- 读取标准输入）", true), reqFlag("passphrase", "passphrase", "导出口令"), boolFlag("overwrite", "overwrite", "同一 secret_id 已存在时覆盖（默认跳过）")}},
 	)
 }

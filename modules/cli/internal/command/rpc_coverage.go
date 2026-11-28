@@ -62,6 +62,9 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.monitor.MonitorMgr/GetAlertMute":             "monitor mute-status",
 	"trpc.moox.monitor.MonitorMgr/GetDoctorContext":         "doctor diagnose",
 
+	"trpc.moox.ops.SecretMgr/ExportSecrets": "setup backup",
+	"trpc.moox.ops.SecretMgr/ImportSecrets": "setup backup",
+
 	// 模块生命周期（设计 3.7）：管理台只读；暂停、恢复、放行只给命令行（见 cliOnlyCoverage）。
 	"trpc.moox.collector.CollectMgr/GetLifecycle":      "lifecycle status",
 	"trpc.moox.strategy.StrategyMgr/GetLifecycle":      "lifecycle status",
@@ -78,6 +81,8 @@ var handWrittenCoverage = map[string]string{
 var cliOnlyCoverage = map[string]string{
 	"trpc.moox.admin.Setup/ApplySetup":     "setup init",
 	"trpc.moox.admin.Setup/GetSetupStatus": "setup status",
+
+	"trpc.moox.monitor.MonitorMgr/ExportNotificationChannels": "setup backup",
 
 	"trpc.moox.collector.CollectMgr/DeleteCloudFunctions": "collector function delete",
 	"trpc.moox.collector.CollectMgr/ProbeFunctionEgress":  "collector function probe-egress",

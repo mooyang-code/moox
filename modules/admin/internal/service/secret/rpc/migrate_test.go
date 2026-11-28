@@ -14,12 +14,10 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
-	"trpc.group/trpc-go/trpc-go/codec"
 )
 
 // memSecrets 是内存里的秘钥服务：明文保存，模拟 DAO 解密之后的视图。
@@ -194,7 +192,7 @@ func TestImportSecretsReportsInvalidItems(t *testing.T) {
 	require.Contains(t, rsp.GetFailed(), "NoID：创建失败")
 }
 
-// 非登录调用方（经服务目录放行的 moox-cli 或带校验调用方头的调用）允许导出与导入，并记录对应操作者；导出口令太短拒绝。
+// 非登录调用方（经服务目录放行的 moox-cli）允许导出与导入，操作者记为 moox-cli；导出口令太短拒绝。
 func TestSecretMigrationAllowsNonLoginCallerAndRejectsWeakPassphrase(t *testing.T) {
 	source := newMemSecrets(model.Secret{SecretID: "sec_a", Name: "A", Category: "other", SecretValue: "v"})
 	exported, err := NewService(source).ExportSecrets(trpc.BackgroundContext(), &pb.ExportSecretsReq{Passphrase: testPassphrase})
@@ -209,14 +207,6 @@ func TestSecretMigrationAllowsNonLoginCallerAndRejectsWeakPassphrase(t *testing.
 	require.Equal(t, pb.ErrorCode_SUCCESS, imported.GetRetInfo().GetCode(), imported.GetRetInfo().GetMsg())
 	require.EqualValues(t, 1, imported.GetCreated())
 	require.Equal(t, servicecatalog.OperatorMooxCLI, target.byID["sec_a"].Creator)
-
-	callerCtx, msg := codec.WithNewMessage(context.Background())
-	msg.WithServerMetaData(codec.MetaData{gatewayauth.HeaderVerifiedCaller: []byte("backup-tool")})
-	targetWithCaller := newMemSecrets()
-	imported, err = NewService(targetWithCaller).ImportSecrets(callerCtx, &pb.ImportSecretsReq{Bundle: exported.GetBundle(), Passphrase: testPassphrase})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, imported.GetRetInfo().GetCode(), imported.GetRetInfo().GetMsg())
-	require.Equal(t, "backup-tool", targetWithCaller.byID["sec_a"].Creator)
 
 	short, err := NewService(source).ExportSecrets(userCtx(), &pb.ExportSecretsReq{Passphrase: "short-口令"})
 	require.NoError(t, err)

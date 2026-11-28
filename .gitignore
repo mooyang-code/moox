@@ -47,6 +47,8 @@ docs/计划/
 /moox.secrets.toml
 /moox.secrets.toml.*
 !/moox.secrets.toml.example
+/moox.backup
+/moox.backup.*
 
 # Local Cursor MCP config contains the remote bearer token.
 .cursor/mcp.json

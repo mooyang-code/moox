@@ -25,6 +25,8 @@ const (
 	FileName = "moox.toml"
 	// SecretsFileName 是秘密文件的文件名，总在 moox.toml 的同一目录。
 	SecretsFileName = "moox.secrets.toml"
+	// BackupFileName 是密钥与告警渠道加密备份的文件名，总在 moox.toml 的同一目录。
+	BackupFileName = "moox.backup"
 	maxFileSize     = 1 << 20
 	// DefaultDeployRoot 是每台主机的部署根：放在挂载到 /data 的云盘上，不占系统盘。
 	DefaultDeployRoot = "/data/moox"
@@ -75,6 +77,11 @@ func (c *Config) SecretsPath() string { return SecretsPathFor(c.path) }
 // SecretsPathFor 返回某个 moox.toml 同目录的秘密文件路径。
 func SecretsPathFor(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), SecretsFileName)
+}
+
+// BackupPathFor 返回某个 moox.toml 同目录的备份文件路径。
+func BackupPathFor(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), BackupFileName)
 }
 
 // Load 读取任意路径的 moox.toml 并校验。只读这一份明文文件，不读秘密文件。

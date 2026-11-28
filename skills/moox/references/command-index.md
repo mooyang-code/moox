@@ -254,14 +254,13 @@
 | --- | --- |
 | `secret list` | 列出密钥（只含打码后的信息） |
 | `secret show` | 查看一个密钥的元信息（值已打码） |
-| `secret export` | 把全部非系统密钥加密导出为迁移包（响应里只有密文） |
-| `secret import` | 解开加密迁移包并按原 secret_id 导入密钥（默认只预览） |
 
 ## setup：部署与初始化：主机、组件部署、防火墙、发布与初始数据
 
 | 命令 | 说明 |
 | --- | --- |
 | `setup attach-scf-vpc` | 为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定） |
+| `setup backup` | 把全部非系统密钥与告警渠道加密备份到 moox.toml 同目录的 moox.backup（进程内派生口令，不输出明文；--verify 读回校验并用 overwrite=false 验收） |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
 | `setup deploy` | 把一台主机部署成 moox.toml 描述的样子：先按 moox.toml 整份覆盖 Admin 的主机与部署登记（含启停），再放二进制、渲染配置、按声明启停并重启有变化的组件，等它们就绪（`--component` 只部署个别组件） |
 | `setup export-skill-config` | 导出 Skill 使用的最小数据访问配置（moox-skill 的签名私钥在本机生成，公钥登记到控制机） |
