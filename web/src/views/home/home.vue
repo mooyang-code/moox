@@ -57,7 +57,7 @@
                   <span>{{ Math.min(strategyIndex, strategies.length - 1) + 1 }} / {{ strategies.length }}</span>
                   <a aria-label="下一个实例" @click="stepStrategy(1)"><icon-right /></a>
                 </template>
-                <a @click="go(resultsLink())">运行结果 →</a>
+                <a @click="go(instancesLink())">运行实例 →</a>
               </span>
             </header>
             <div class="tile-body">
@@ -278,15 +278,15 @@ import { listFactorTasks } from "@/api/factor";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets, listDataSources } from "@/api/storage/metadata";
-import { listInstances, listStrategies, listStrategyTargets } from "@/api/strategy";
-import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
+import { listInstances, listStrategyTargets } from "@/api/strategy";
+import type { StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { listTradingAccounts } from "@/api/trade";
 import { usePolling } from "@/hooks/usePolling";
 import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { datasetMatchesAttribution, isFactorResultDataset } from "@/views/data/shared/module-attribution";
 import { alertHref } from "@/views/ops/monitor/health-display";
-import { instancesLink, replayLink, resultsLink } from "@/views/strategy/links";
+import { instancesLink, replayLink } from "@/views/strategy/links";
 import {
   TILE_LIMITS,
   activityRows,
@@ -341,7 +341,6 @@ const factorTasks = ref<FactorTaskInfo[]>([]);
 const factorLoaded = ref(false);
 const instances = ref<StrategyInstance[]>([]);
 const targets = ref<Record<string, StrategyTargetSnapshot>>({});
-const catalog = ref<Strategy[]>([]);
 const strategyLoaded = ref(false);
 const activityItems = ref<ActivityLogItem[]>([]);
 const activityLoaded = ref(false);
@@ -359,7 +358,7 @@ const seedLines = computed(() =>
 );
 
 const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value, displayZone.value));
-const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value, displayZone.value));
+const strategies = computed(() => strategyRows(instances.value, targets.value, nowMs.value, displayZone.value));
 // 监控概览取的是全部空间：告警、主机、组件看全局，数据新鲜度只看当前空间。
 const freshness = computed(() =>
   freshnessRows(scopeOverviewToSpace(overview.value, selectedSpaceId.value || ""), names, nowMs.value)
@@ -386,7 +385,7 @@ const activity = computed(() =>
 const attention = computed(() =>
   attentionItems({
     alerts: monitorError.value ? [] : overview.value?.alerts || [],
-    strategy: { instances: instances.value, targets: targets.value, catalog: catalog.value },
+    strategy: { instances: instances.value, targets: targets.value },
     factors: factors.value,
     freshness: freshness.value,
     names,
@@ -435,7 +434,7 @@ function stepStrategy(delta: number) {
 const quickLinks: { label: string; icon: string; target: HomeTarget }[] = [
   { label: "采集结果", icon: "icon-bar-chart", target: "/collector/tasks?tab=results" },
   { label: "因子结果", icon: "icon-experiment", target: "/factor/tasks?tab=results" },
-  { label: "策略结果", icon: "icon-compass", target: resultsLink() },
+  { label: "策略实例", icon: "icon-compass", target: instancesLink() },
   { label: "策略回放", icon: "icon-history", target: replayLink() },
   { label: "交易账户", icon: "icon-safe", target: "/trading/paper" },
   { label: "监控告警", icon: "icon-notification", target: "/ops/monitor" }
@@ -521,9 +520,6 @@ async function loadSpaceScoped() {
     // 云函数个数取采集计划里由 SCF 执行的函数（推送与本地执行端不算）
     getCollectorStatus(spaceId).then(rsp => {
       if (isCurrent()) counts.nodes = (rsp.functions || []).filter(item => (item.executor || "scf") === "scf").length;
-    }),
-    listStrategies({ page: 1, size: 200 }).then(rsp => {
-      if (isCurrent()) catalog.value = rsp.items;
     })
   ]);
 }
@@ -631,7 +627,6 @@ function resetSpace() {
   factorLoaded.value = false;
   instances.value = [];
   targets.value = {};
-  catalog.value = [];
   strategyLoaded.value = false;
   activityItems.value = [];
   activityLoaded.value = false;

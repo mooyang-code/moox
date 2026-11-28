@@ -26,7 +26,7 @@ export interface StrategyInstance {
   instance_id: string;
   strategy_id: string;
   /** 关联策略定义的名称（由服务端关联带出）。 */
-  strategy_name?: string;
+  strategy_name: string;
   space_id: string;
   factor_tasks: Record<string, string>;
   logical_account_id: string;
@@ -111,11 +111,11 @@ export interface StrategyTaskRequirement {
   /** 参考市场（market.reference）：也在 taskKeys 里，只用于年龄判定，不是主帧市场 */
   referenceMarkets: string[];
   /** 策略声明了 factor_params（动态调参） */
-  tuned?: boolean;
+  tuned: boolean;
   /** 策略池的分配方式：fixed | rotation | drift，非池为空 */
-  poolAllocationMethod?: string;
+  poolAllocationMethod: string;
   /** 策略池为 drift 时的 allocation.start 或 allocation.initial.at，其余为空 */
-  poolDriftStart?: string;
+  poolDriftStart: string;
 }
 
 export interface ValidateStrategyResult {

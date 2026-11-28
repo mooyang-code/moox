@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { AccountEnvironment, ControlMode, type LogicalAccount } from "@/api/trade/types";
-import { enabledInstanceAccounts, environmentPrefix, logicalAccountOptions, resolvedMarkets } from "./logical-account-options";
+import { enabledInstanceAccounts, environmentPrefix, logicalAccountOptions, marketsToResolved } from "./logical-account-options";
 
 const account = (patch: Partial<LogicalAccount>) =>
   ({
@@ -37,13 +37,13 @@ describe("策略绑定组合账户选项", () => {
         account({ logical_account_id: "both", markets: ["spot", "swap"] }),
         account({ logical_account_id: "empty", markets: [] })
       ],
-      resolvedMarkets('{"market":{"select":"both","prefer":"spot"}}')
+      marketsToResolved(["spot", "swap"])
     );
     expect(options.map(item => item.account.logical_account_id)).toEqual(["both"]);
   });
 
   it("A 股只列开通了股票市场的组合", () => {
-    const markets = resolvedMarkets('{"market":{"select":"equity","prefer":"equity"}}');
+    const markets = marketsToResolved(["equity"]);
     expect(markets.types).toEqual(["equity"]);
     const options = logicalAccountOptions(
       [
@@ -77,11 +77,9 @@ describe("策略绑定组合账户选项", () => {
     expect(option.disabledReason).toBe("");
   });
 
-  it("从校验结果读市场模式", () => {
-    expect(resolvedMarkets('{"market":{"select":"swap","prefer":"swap"}}')).toEqual({ types: ["swap"] });
-    expect(resolvedMarkets('{"market":{"select":"spot","prefer":"swap"}}').types).toEqual(["spot", "swap"]);
-    expect(resolvedMarkets("bad")).toEqual({});
-    expect(resolvedMarkets()).toEqual({});
+  it("过滤未知市场，仅保留交易模块支持的市场", () => {
+    expect(marketsToResolved(["spot", "swap", "unknown"])).toEqual({ types: ["spot", "swap"] });
+    expect(marketsToResolved([])).toEqual({ types: [] });
   });
 });
 

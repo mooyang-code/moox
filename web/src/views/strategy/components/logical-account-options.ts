@@ -11,23 +11,9 @@ export interface LogicalAccountOption {
   disabledReason: string;
 }
 
-// 策略要输出的市场（交易模块的市场写法）。校验前为空，不过滤账户。
+// 策略要输出的市场（交易模块的市场写法）。未确定市场时为空，不过滤账户。
 export interface ResolvedMarkets {
   types?: MarketType[];
-}
-
-// resolved_json 来自校验结果，校验前不知道市场。市场模式的 select 为 both 或 prefer 不同时要输出现货和永续两个市场。
-export function resolvedMarkets(resolvedJSON?: string): ResolvedMarkets {
-  if (!resolvedJSON) return {};
-  try {
-    const resolved = JSON.parse(resolvedJSON) as { market?: { select?: string; prefer?: string } };
-    const select = resolved.market?.select || "";
-    const prefer = resolved.market?.prefer || select;
-    if (!select) return {};
-    return marketsToResolved(select === "both" || select !== prefer ? ["spot", "swap"] : [select]);
-  } catch {
-    return {};
-  }
 }
 
 // 市场列表对应的账户要求：账户的可交易市场要包含列表里的全部市场（策略池按成员市场的并集）。

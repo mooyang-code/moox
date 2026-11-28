@@ -332,7 +332,18 @@ describe("strategy instance creation behavior", () => {
       diagnostics: [],
       resolved_json: '{"market":{"select":"equity","prefer":"equity"}}',
       trial: null,
-      trial_items: []
+      trial_items: [],
+      requirement: {
+        pool: false,
+        marketDeclared: true,
+        taskKeys: ["equity"],
+        sources: [],
+        problems: [],
+        referenceMarkets: [],
+        tuned: false,
+        poolAllocationMethod: "",
+        poolDriftStart: ""
+      }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     await wrapper.findAll("select")[1].setValue("ftask_a");
@@ -586,7 +597,18 @@ describe("strategy instance creation behavior", () => {
       diagnostics: [],
       resolved_json: '{"market":{"select":"both","prefer":"swap"}}',
       trial: null,
-      trial_items: []
+      trial_items: [],
+      requirement: {
+        pool: false,
+        marketDeclared: true,
+        taskKeys: ["spot", "swap"],
+        sources: [],
+        problems: [],
+        referenceMarkets: [],
+        tuned: false,
+        poolAllocationMethod: "",
+        poolDriftStart: ""
+      }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     await wrapper.findAll("select")[1].setValue("ftask_a");

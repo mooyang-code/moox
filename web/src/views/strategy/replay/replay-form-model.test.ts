@@ -8,7 +8,11 @@ import { replaySourceOf, wholeDays, type ReplayFormState } from "./replay-form-m
 function withRequirement(form: ReplayFormState, list: Strategy[]): ReplayFormState {
   const lookup = (id: string) => list.find(item => item.strategy_id === id)?.dsl_yaml ?? null;
   // 从实例发起时按实例引用的定义读
-  const dsl = form.instance_id ? (lookup(form.instance_strategy_id ?? "") ?? "") : model.replayDslText(form, list);
+  const dsl = form.instance_id
+    ? (lookup(form.instance_strategy_id ?? "") ?? "")
+    : form.source === "dsl"
+      ? form.dsl_yaml
+      : (lookup(form.strategy_id) ?? "");
   return { ...form, requirement: dsl ? fixtureRequirement(dsl, lookup) : null };
 }
 const replayPool = (form: ReplayFormState, list: Strategy[]) => model.replayPool(withRequirement(form, list));
@@ -18,11 +22,12 @@ const replayFactorTasks = (form: ReplayFormState, list: Strategy[]) => model.rep
 const replayDateOnly = (form: ReplayFormState, list: Strategy[], tasks: Parameters<typeof model.replayDateOnly>[1]) =>
   model.replayDateOnly(withRequirement(form, list), tasks);
 const replayFundingColumn = (form: ReplayFormState, list: Strategy[] = []) =>
-  model.replayFundingColumn(withRequirement(form, list), list);
+  model.replayFundingColumn(withRequirement(form, list));
 const validateReplayForm = (form: ReplayFormState, list: Strategy[] = []) =>
-  model.validateReplayForm(withRequirement(form, list), list);
-const replayIsPool = (form: ReplayFormState, list: Strategy[]) => model.replayIsPool(withRequirement(form, list), list);
-const { replayDriftHint, replayTuned } = model;
+  model.validateReplayForm(withRequirement(form, list));
+const replayIsPool = (form: ReplayFormState, list: Strategy[]) => model.replayIsPool(withRequirement(form, list));
+const replayDriftHint = (form: ReplayFormState, list: Strategy[]) => model.replayDriftHint(withRequirement(form, list));
+const replayTuned = (form: ReplayFormState, list: Strategy[]) => model.replayTuned(withRequirement(form, list));
 
 const strategies = [
   { strategy_id: "s1", dsl_yaml: "name: a\nmarket: {select: both, prefer: spot}\n" },

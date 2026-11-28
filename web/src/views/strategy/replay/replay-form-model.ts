@@ -1,7 +1,6 @@
-import type { ReplayInput, Strategy, StrategyTaskRequirement } from "@/api/strategy-types";
+import type { ReplayInput, StrategyTaskRequirement } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
 import { MARKET_ORDER, mainMarkets, requirementTaskKeys, taskKeyMarkets } from "@/views/strategy/market-mode";
-import { parseDSL } from "@/views/strategy/dsl";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 
@@ -41,36 +40,25 @@ export function replaySourceOf(
   return form.strategy_id ? { strategy_id: form.strategy_id } : null;
 }
 
-/** 回放用的 DSL 文本：草稿取输入框，已保存的定义取列表里的当前版本；从实例发起时没有（版本在实例会话里）。 */
-export function replayDslText(form: ReplayFormState, strategies: Strategy[]): string {
-  if (form.instance_id) return "";
-  return form.source === "dsl" ? form.dsl_yaml : (strategies.find(item => item.strategy_id === form.strategy_id)?.dsl_yaml ?? "");
-}
-
 /** 回放对象是策略池时，后端推出的要绑定的任务；不是策略池、从实例发起或还没读到时返回 null。 */
 export function replayPool(form: ReplayFormState): StrategyTaskRequirement | null {
   return !form.instance_id && form.requirement?.pool ? form.requirement : null;
 }
 
 /**
- * 回放对象是不是策略池：从实例发起时按实例引用的定义（当前版本）判断，实例的定义还没读到时按不是池处理；其余来源看 DSL 本身。
+ * 回放对象是不是策略池：直接读后端 requirement.pool（从实例发起时按实例引用的定义读回）；还没读到时按不是池处理。
  * 只用来决定资金费列与说明（池的资金费写在池 DSL 里），不用来校验成员：实例回放的成员取会话快照，由后端校验。
  */
-export function replayIsPool(form: ReplayFormState, strategies: Strategy[]): boolean {
-  if (!form.instance_id) return Boolean(replayPool(form));
-  const text = strategies.find(item => item.strategy_id === form.instance_strategy_id)?.dsl_yaml ?? "";
-  return Boolean(form.instance_strategy_id && parseDSL(text).preview?.pool);
+export function replayIsPool(form: ReplayFormState): boolean {
+  return Boolean(form.requirement?.pool);
 }
 
 /**
- * 回放对象是不是声明了 factor_params 的策略（这种策略只能用因子现算来源回放）：从实例发起时按实例引用的定义（当前版本）判断，
- * 实例的定义还没读到时按没声明处理（由后端校验）；其余来源看 DSL 本身。
+ * 回放对象是不是声明了 factor_params 的策略（这种策略只能用因子现算来源回放）：直接读后端 requirement.tuned，
+ * 还没读到时按没声明处理（由后端校验）。
  */
-export function replayTuned(form: ReplayFormState, strategies: Strategy[]): boolean {
-  const text = form.instance_id
-    ? (strategies.find(item => item.strategy_id === form.instance_strategy_id)?.dsl_yaml ?? "")
-    : replayDslText(form, strategies);
-  return Boolean(parseDSL(text).preview?.tuned);
+export function replayTuned(form: ReplayFormState): boolean {
+  return Boolean(form.requirement?.tuned);
 }
 
 /** 要读的市场是否由 DSL 决定：写了 market，或是策略池（成员市场的并集）；否则要先选任务所属的市场。 */
@@ -102,12 +90,12 @@ export function replayIsReference(form: ReplayFormState, market: string): boolea
   return (form.requirement?.referenceMarkets ?? []).includes(market);
 }
 
-/** drift 池的回放起点说明：写了漂移起点时起点必须选它，没写时漂移从区间的第一根开始；不是 drift 池时为空串。 */
-export function replayDriftHint(form: ReplayFormState, strategies: Strategy[]): string {
-  const pool = parseDSL(replayDslText(form, strategies)).preview?.pool;
-  if (pool?.method !== "drift") return "";
-  return pool.driftStart
-    ? `drift 池：起点必须选漂移起点 ${pool.driftStart}，结果才与实时可比。`
+/** drift 池的回放起点说明：直接读后端 requirement 的池分配方式与漂移起点；不是 drift 池或从实例发起时为空串。 */
+export function replayDriftHint(form: ReplayFormState): string {
+  const pool = replayPool(form);
+  if (pool?.poolAllocationMethod !== "drift") return "";
+  return pool.poolDriftStart
+    ? `drift 池：起点必须选漂移起点 ${pool.poolDriftStart}，结果才与实时可比。`
     : "drift 池：漂移从区间的第一根开始，与实时不可比；要逐期比对请在池 DSL 写 allocation.start。";
 }
 
@@ -117,7 +105,7 @@ export function replayFactorTasks(form: ReplayFormState): Record<string, string>
 }
 
 /** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的计算任务、区间、两个手续费与滑点的范围。 */
-export function validateReplayForm(form: ReplayFormState, strategies: Strategy[] = []): string {
+export function validateReplayForm(form: ReplayFormState): string {
   if (!replaySourceOf(form)) return "请选择定义、粘贴 DSL 文本或从实例详情进入";
   const problems = form.instance_id ? [] : (form.requirement?.problems ?? []);
   if (problems.length) return `这份定义还不能回放：${problems.join("；")}`;
@@ -126,7 +114,7 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   const omitted = Boolean(form.instance_id) && !markets.length;
   if (!omitted && !markets.length) return "请选择策略的计算任务（策略没写 market 时先选任务所属的市场）";
   if (markets.some(market => !form.tasks[market])) return "请为策略用到的每个市场选择计算任务";
-  const inputError = replayInputError(form, strategies);
+  const inputError = replayInputError(form);
   if (inputError) return inputError;
   if (!form.range) return "请选择回放区间";
   if (form.range[1] <= form.range[0]) return "结束时间必须晚于开始时间";
@@ -135,24 +123,24 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   }
   const slippage = Number(form.slippage_bps);
   if (!Number.isFinite(slippage) || slippage < 0 || slippage > 200) return "滑点需在 0～200 bps 之间";
-  const funding = replayFundingColumn(form, strategies);
+  const funding = replayFundingColumn(form);
   if (funding && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(funding)) return "资金费列只能是 View 里的列名";
   return "";
 }
 
 /** 因子数据来源的本地校验（与后端一致）：声明了 factor_params 的策略必须用因子现算；因子现算不支持策略池与股票。 */
-function replayInputError(form: ReplayFormState, strategies: Strategy[]): string {
+function replayInputError(form: ReplayFormState): string {
   if (form.input !== "compute") {
-    return replayTuned(form, strategies) ? "声明了 factor_params 的策略只能用“因子现算”来源回放" : "";
+    return replayTuned(form) ? "声明了 factor_params 的策略只能用“因子现算”来源回放" : "";
   }
-  if (replayIsPool(form, strategies)) return "“因子现算”来源不支持策略池";
+  if (replayIsPool(form)) return "“因子现算”来源不支持策略池";
   if (replayMainMarkets(form).includes("equity")) return "“因子现算”暂不支持股票市场";
   return "";
 }
 
 /** 提交用的资金费列：只在回放读取永续时带上，表单里隐藏的旧值不提交；策略池的资金费写在池 DSL 里，不提交；没写时为空串。 */
-export function replayFundingColumn(form: ReplayFormState, strategies: Strategy[] = []): string {
-  if (replayIsPool(form, strategies)) return "";
+export function replayFundingColumn(form: ReplayFormState): string {
+  if (replayIsPool(form)) return "";
   if (!replayMainMarkets(form).includes("swap")) return "";
   return (form.funding_column ?? "").trim();
 }

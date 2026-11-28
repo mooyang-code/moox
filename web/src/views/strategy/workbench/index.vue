@@ -24,12 +24,10 @@ const tabLoading = { render: () => h("div", { class: "workbench-loading" }, [h("
 const lazyTab = (loader: () => Promise<{ default: Component }>) =>
   defineAsyncComponent({ loader: () => loader().then(module => module.default), loadingComponent: tabLoading, delay: 200 });
 const StrategyRunning = lazyTab(() => import("@/views/strategy/running/index.vue"));
-const StrategyResults = lazyTab(() => import("@/views/strategy/results/index.vue"));
 const StrategyReplay = lazyTab(() => import("@/views/strategy/replay/index.vue"));
 
 const tabs = [
   { key: "instances", label: "运行实例" },
-  { key: "results", label: "运行结果" },
   { key: "replay", label: "策略回放" }
 ] as const;
 
@@ -42,7 +40,6 @@ const activeComponent = computed(
   () =>
     ({
       instances: StrategyRunning,
-      results: StrategyResults,
       replay: StrategyReplay
     })[activeTab.value]
 );

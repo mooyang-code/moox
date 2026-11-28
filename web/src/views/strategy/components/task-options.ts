@@ -1,4 +1,3 @@
-import { parseDocument } from "yaml";
 import type { FactorTaskInfo } from "@/api/factor/types";
 
 /** 创建实例时可选的计算任务：列出任务的全部结果列名，策略 DSL 里直接写这些列名。 */
@@ -33,19 +32,6 @@ export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOpti
       boundInstanceId: info.factor_task.bound_instance_id || ""
     }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.taskId.localeCompare(b.taskId));
-}
-
-/**
- * DSL 是否声明了 factor_params：声明了的实例启用时独占关联主帧任务、逐期提交参数。与后端一致按成员个数判断，
- * 写成空对象 `factor_params: {}` 不算声明；解析不了按没有声明处理（服务端预检再核对）。
- */
-export function declaresFactorParams(dslYaml: string): boolean {
-  try {
-    const params = parseDocument(dslYaml).toJS()?.factor_params;
-    return Boolean(params && typeof params === "object" && Object.keys(params).length > 0);
-  } catch {
-    return false;
-  }
 }
 
 /**

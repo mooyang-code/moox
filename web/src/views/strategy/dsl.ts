@@ -213,11 +213,6 @@ export interface DSLParseResult {
   syntaxErrorLine: number;
 }
 
-/** DSL 是不是策略池（写了 strategy_pool）：只用于展示（绑定表按池的样式显示）；解析不了按不是处理。 */
-export function isPoolDsl(source: string): boolean {
-  return Boolean(parseDSL(source).preview?.pool);
-}
-
 /**
  * 极简只读 YAML 解析，仅用于生成列表摘要与编辑器侧栏展示预览；
  * 全部 DSL 语义、规则、策略池约束与表达式校验统一由服务端 ValidateStrategy 负责。

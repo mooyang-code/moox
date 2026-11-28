@@ -1,4 +1,4 @@
-import { listInstances, listStrategies } from "@/api/strategy";
+import { listInstances } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { toInstantMs } from "@/utils/time-zone";
 
@@ -26,11 +26,10 @@ export function chooseInstance(candidates: readonly StrategyInstance[]): Strateg
   return [...candidates].sort((a, b) => (toInstantMs(b.created_at) ?? 0) - (toInstantMs(a.created_at) ?? 0))[0];
 }
 
-/** 把实例和策略定义合成每个组合账户的关联策略，键是组合账户编号。 */
+/** 把实例合成每个组合账户的关联策略，键是组合账户编号；策略名称直接取实例带出的 strategy_name。 */
 export function buildStrategyLinks(
   logicals: readonly LogicalRef[],
-  instances: readonly StrategyInstance[],
-  strategyNames: ReadonlyMap<string, string>
+  instances: readonly StrategyInstance[]
 ): Map<string, StrategyLink> {
   const result = new Map<string, StrategyLink>();
   for (const logical of logicals) {
@@ -40,7 +39,7 @@ export function buildStrategyLinks(
     result.set(logical.logical_account_id, {
       instanceId: instance.instance_id,
       strategyId: instance.strategy_id,
-      name: strategyNames.get(instance.strategy_id) || instance.strategy_id,
+      name: instance.strategy_name || instance.strategy_id,
       enabled: instance.enabled,
       health: instance.health
     });
@@ -49,16 +48,13 @@ export function buildStrategyLinks(
 }
 
 /**
- * 一次取全部实例和策略建好映射，不为每个组合各查一次。
+ * 一次取全部实例建好映射，不为每个组合各查一次。
  * 查询失败时返回 null：页面要写“策略读取失败”，不能把每个组合都说成“尚未绑定策略”。
  */
 export async function loadStrategyLinks(logicals: readonly LogicalRef[]): Promise<Map<string, StrategyLink> | null> {
   try {
-    const [instances, strategies] = await Promise.all([
-      listInstances({ page: 1, size: 500 }),
-      listStrategies({ page: 1, size: 500 })
-    ]);
-    return buildStrategyLinks(logicals, instances.items, new Map(strategies.items.map(item => [item.strategy_id, item.name])));
+    const instances = await listInstances({ page: 1, size: 500 });
+    return buildStrategyLinks(logicals, instances.items);
   } catch {
     return null;
   }

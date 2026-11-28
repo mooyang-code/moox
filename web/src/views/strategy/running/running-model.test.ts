@@ -14,35 +14,28 @@ describe("running page model", () => {
       strategyId: "s1",
       enabled: "",
       page: 1,
-      instanceId: "",
       create: false
     });
-    expect(parseRunningQuery({ enabled: "false", instance_id: "i1", page: "3" })).toMatchObject({
+    expect(parseRunningQuery({ enabled: "false", create: "1", page: "3" })).toMatchObject({
       enabled: "false",
-      instanceId: "i1",
+      create: true,
       page: 3
     });
   });
 
-  it("keeps the create drawer and the quick detail mutually exclusive", () => {
-    const state = parseRunningQuery({ create: "1", instance_id: "i1" });
-    expect(state).toMatchObject({ create: true, instanceId: "" });
-    expect(buildRunningQuery({ ...state, instanceId: "i1" })).toEqual({ create: "1" });
-  });
-
   it("omits defaults when writing the URL", () => {
-    expect(buildRunningQuery({ strategyId: "", enabled: "", page: 1, instanceId: "", create: false })).toEqual({});
-    expect(buildRunningQuery({ strategyId: "s1", enabled: "true", page: 2, instanceId: "i1", create: false })).toEqual({
+    expect(buildRunningQuery({ strategyId: "", enabled: "", page: 1, create: false })).toEqual({});
+    expect(buildRunningQuery({ strategyId: "s1", enabled: "true", page: 2, create: true })).toEqual({
+      create: "1",
       enabled: "true",
-      instance_id: "i1",
       page: "2",
       strategy_id: "s1"
     });
   });
 
   it("changes the list key only for list conditions", () => {
-    const base = { strategyId: "s1", enabled: "" as const, page: 2, instanceId: "", create: false };
-    expect(listKey({ ...base, instanceId: "i1" })).toBe(listKey(base));
+    const base = { strategyId: "s1", enabled: "" as const, page: 2, create: false };
+    expect(listKey({ ...base, create: true })).toBe(listKey(base));
     expect(listKey({ ...base, page: 3 })).not.toBe(listKey(base));
   });
 

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   extractDiagnosticLine,
-  isPoolDsl,
   mixedMarketTemplate,
   parseDSL,
   poolTemplate,
@@ -99,8 +98,6 @@ describe("策略池预览", () => {
   it("解析策略池模板并生成只读摘要", () => {
     const result = parseDSL(poolTemplate);
     expect(result.syntaxError).toBe("");
-    expect(isPoolDsl(poolTemplate)).toBe(true);
-    expect(isPoolDsl(rankedTemplate)).toBe(false);
     expect(result.preview?.rules).toEqual([]);
     expect(result.preview?.market).toBe("成员市场的并集（各成员按自己的 market）");
     expect(result.preview?.pool).toEqual({

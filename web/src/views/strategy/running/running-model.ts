@@ -5,18 +5,17 @@ import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
 
 export type EnabledFilter = "" | "true" | "false";
 
-/** 运行实例页的 URL 状态：筛选、分页、快速详情对象与创建抽屉。 */
+/** 运行实例页的 URL 状态：筛选、分页与创建抽屉。 */
 export interface RunningState {
   strategyId: string;
   enabled: EnabledFilter;
   page: number;
-  instanceId: string;
   create: boolean;
 }
 
 type QueryLike = Record<string, unknown>;
 
-/** 从 URL 解析并规范化：非法页码回到 1；创建抽屉与快速详情互斥，创建优先。 */
+/** 从 URL 解析并规范化：非法页码回到 1。 */
 export function parseRunningQuery(query: QueryLike): RunningState {
   const enabledRaw = queryString(query.enabled as string);
   const create = queryString(query.create as string) === "1";
@@ -24,7 +23,6 @@ export function parseRunningQuery(query: QueryLike): RunningState {
     strategyId: queryString(query.strategy_id as string),
     enabled: enabledRaw === "true" || enabledRaw === "false" ? enabledRaw : "",
     page: queryPage(query.page as string),
-    instanceId: create ? "" : queryString(query.instance_id as string),
     create
   };
 }
@@ -36,7 +34,6 @@ export function buildRunningQuery(state: RunningState): Record<string, string> {
       strategy_id: state.strategyId,
       enabled: state.enabled,
       page: state.page,
-      instance_id: state.create ? "" : state.instanceId,
       create: state.create ? "1" : ""
     },
     { page: 1 }

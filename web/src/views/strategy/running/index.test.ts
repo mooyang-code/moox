@@ -58,13 +58,7 @@ const stubs = {
     }
   }),
   InstanceEnableDialog: { template: "<div />", methods: { open: api.enableOpen } },
-  InstanceConfirmDialog: { template: "<div />", methods: { open: vi.fn() } },
-  InstanceQuickDrawer: defineComponent({
-    props: ["instanceId"],
-    setup(props) {
-      return () => h("div", { class: "quick" }, `quick:${props.instanceId}`);
-    }
-  })
+  InstanceConfirmDialog: { template: "<div />", methods: { open: vi.fn() } }
 };
 
 async function setup(query: Record<string, string>) {
@@ -118,21 +112,19 @@ describe("strategy running page", () => {
     wrapper.unmount();
   });
 
-  it("restores filters, page and the quick detail from the URL with one request", async () => {
-    const { wrapper } = await setup({ strategy_id: "s1", enabled: "false", page: "2", instance_id: "i1" });
+  it("restores filters and page from the URL with one request", async () => {
+    const { wrapper } = await setup({ strategy_id: "s1", enabled: "false", page: "2" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     expect(api.loadInstances).toHaveBeenCalledWith(
       { strategy_id: "s1", enabled: false, page: 2, size: 20 },
       { background: false }
     );
-    expect(wrapper.find(".quick").text()).toBe("quick:i1");
     expect(wrapper.find(".create").text()).toBe("create:false:s1");
   });
 
-  it("opens the create drawer from create=1 and drops the quick detail", async () => {
-    const { wrapper } = await setup({ create: "1", instance_id: "i1", strategy_id: "s1" });
+  it("opens the create drawer from create=1", async () => {
+    const { wrapper } = await setup({ create: "1", strategy_id: "s1" });
     expect(wrapper.find(".create").text()).toBe("create:true:s1");
-    expect(wrapper.find(".quick").text()).toBe("quick:");
   });
 
   it("ends on the detail page of a newly created instance instead of falling back to the list", async () => {
@@ -149,13 +141,13 @@ describe("strategy running page", () => {
     expect(router.currentRoute.value.query.strategy_id).toBe("s1");
   });
 
-  it("does not reload when only the overlay changes", async () => {
+  it("does not reload when only the create drawer toggles", async () => {
     const { router, wrapper } = await setup({ page: "2" });
     api.loadInstances.mockClear();
-    await router.push({ path: "/strategy/tasks", query: { page: "2", instance_id: "i7" } });
+    await router.push({ path: "/strategy/tasks", query: { page: "2", create: "1" } });
     await flushPromises();
     expect(api.loadInstances).not.toHaveBeenCalled();
-    expect(wrapper.find(".quick").text()).toBe("quick:i7");
+    expect(wrapper.find(".create").text()).toBe("create:true:");
   });
 
   it("writes paging with replace and reloads that page", async () => {
@@ -171,14 +163,14 @@ describe("strategy running page", () => {
 
   it("keeps the deep link when the space initializes but clears it on a real switch", async () => {
     api.space.selectedSpaceId = "";
-    const { router } = await setup({ page: "2", instance_id: "i1" });
+    const { router } = await setup({ page: "2", create: "1" });
     expect(api.loadInstances).not.toHaveBeenCalled();
     api.space.selectedSpaceId = "crypto";
     await nextTick();
     await flushPromises();
     // 挂载时清理一次；空间初始化（无 → 有）不再清理。
     expect(api.clearInstances).toHaveBeenCalledTimes(1);
-    expect(router.currentRoute.value.query).toEqual({ instance_id: "i1", page: "2" });
+    expect(router.currentRoute.value.query).toEqual({ create: "1", page: "2" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     api.space.selectedSpaceId = "hk";
     await nextTick();

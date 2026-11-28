@@ -43,7 +43,9 @@ function instance(id: string, overrides: Partial<StrategyInstance> = {}): Strate
   return {
     instance_id: id,
     strategy_id: "s1",
+    strategy_name: "动量",
     space_id: "crypto",
+    factor_tasks: {},
     logical_account_id: "",
     enabled: true,
     session_id: "sess",
@@ -51,12 +53,13 @@ function instance(id: string, overrides: Partial<StrategyInstance> = {}): Strate
     health: "ok",
     created_at: "0",
     updated_at: "1791849600000",
+    confirmed_at: "0",
     ...overrides
   };
 }
 function snapshot(validUntil: string, weights: Record<string, string>): StrategyTargetSnapshot {
   return {
-    targets: Object.entries(weights).map(([instrument_id, target_weight]) => ({ instrument_id, target_weight })),
+    targets: Object.entries(weights).map(([instrument_id, target_weight]) => ({ instrument_id, target_weight, market: "" })),
     session_id: "sess",
     bar_end_time: String(NOW - 120_000),
     valid_until: validUntil,
@@ -182,10 +185,15 @@ describe("home data rows", () => {
     const rows = strategyRows(
       [instance("a"), instance("off", { enabled: false, session_id: "" })],
       { a: snapshot(later, { "ETH-USDT": "0.1", "BTC-USDT": "0.2", "SOL-USDT": "-0.15" }) },
-      [{ strategy_id: "s1", name: "动量" }] as never,
       NOW
     );
-    expect(rows[0]).toMatchObject({ name: "动量", tone: "ok", lastBar: "2 分钟前", more: 0 });
+    expect(rows[0]).toMatchObject({
+      name: "动量",
+      tone: "ok",
+      lastBar: "2 分钟前",
+      more: 0,
+      link: { name: "strategy-detail", params: { instanceId: "a" } }
+    });
     expect(rows[0].state.label).toBe("目标有效");
     expect(rows[0].holdings.map(item => `${item.id} ${item.weight}${item.short ? " 空" : ""}`)).toEqual([
       "BTC-USDT 20.0%",
@@ -209,8 +217,7 @@ describe("home data rows", () => {
       ],
       strategy: {
         instances: [instance("deg", { health: "degraded" })],
-        targets: {},
-        catalog: [{ strategy_id: "s1", name: "动量" }] as never
+        targets: {}
       },
       freshness: [],
       factors: [
@@ -291,10 +298,9 @@ describe("home data rows", () => {
 
 describe("home tiles", () => {
   const later = String(NOW + 60_000);
-  const catalog = [{ strategy_id: "s1", name: "动量" }] as never;
 
   it("draws weight bars relative to the largest bar, cash included", () => {
-    const [row] = strategyRows([instance("a")], { a: snapshot(later, { "BTC-USDT": "0.2", "ETH-USDT": "0.1" }) }, catalog, NOW);
+    const [row] = strategyRows([instance("a")], { a: snapshot(later, { "BTC-USDT": "0.2", "ETH-USDT": "0.1" }) }, NOW);
     expect(row.gross).toBeCloseTo(0.3);
     expect(row.cash).toEqual({ text: "70.0%", ratio: 1 });
     expect(row.holdings.map(item => item.ratio)).toEqual([0.2 / 0.7, 0.1 / 0.7]);
@@ -303,7 +309,7 @@ describe("home tiles", () => {
 
   it("folds holdings beyond the tile limit into a count", () => {
     const weights = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`T${i}`, String(0.1 - i * 0.001)]));
-    const [row] = strategyRows([instance("a")], { a: snapshot(later, weights) }, catalog, NOW);
+    const [row] = strategyRows([instance("a")], { a: snapshot(later, weights) }, NOW);
     expect(row.holdings).toHaveLength(4);
     expect(row.more).toBe(3);
     expect(row.holdingCount).toBe(7);
@@ -318,7 +324,6 @@ describe("home tiles", () => {
     const strategies = strategyRows(
       [instance("a"), instance("off", { enabled: false })],
       { a: snapshot(later, { "BTC-USDT": "0.2", "ETH-USDT": "0.2" }) },
-      catalog,
       NOW
     );
     const freshness = freshnessRows(
@@ -488,7 +493,7 @@ describe("home tiles", () => {
       names
     );
     const base = {
-      strategy: { instances: [], targets: {}, catalog: [] },
+      strategy: { instances: [], targets: {} },
       factors: [],
       freshness,
       names,
@@ -710,7 +715,7 @@ describe("首页读取失败与空间范围", () => {
 
   it("别的空间的告警在标题前写空间名，当前空间的不加", () => {
     const base = {
-      strategy: { instances: [], targets: {}, catalog: [] },
+      strategy: { instances: [], targets: {} },
       factors: [],
       freshness: [],
       names,

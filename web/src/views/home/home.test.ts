@@ -57,7 +57,6 @@ vi.mock("@/api/storage/metadata", () => ({
 }));
 vi.mock("@/api/strategy", () => ({
   listInstances: vi.fn(async () => ({ items: ctx.instances, page: { total: ctx.instances.length } })),
-  listStrategies: vi.fn(async () => ({ items: [{ strategy_id: "s1", name: "动量" }], page: { total: 1 } })),
   listStrategyTargets: vi.fn(async (id: string) => ctx.targets[id])
 }));
 vi.mock("@/api/trade", () => ({ listTradingAccounts: vi.fn(async () => ({ accounts: [], page_result: { total: 0 } })) }));
@@ -90,7 +89,9 @@ function instance(id: string, overrides: Record<string, unknown> = {}) {
   return {
     instance_id: id,
     strategy_id: "s1",
+    strategy_name: "动量",
     space_id: "crypto",
+    factor_tasks: {},
     logical_account_id: "",
     enabled: true,
     session_id: "sess",
@@ -98,6 +99,7 @@ function instance(id: string, overrides: Record<string, unknown> = {}) {
     health: "ok",
     created_at: "",
     updated_at: "",
+    confirmed_at: "0",
     ...overrides
   };
 }
@@ -157,7 +159,7 @@ describe("home page", () => {
   it("puts the quick links in the banner and links them to their pages", async () => {
     const wrapper = await render();
     const links = wrapper.findAll(".banner .quick");
-    expect(links.map(link => link.text())).toEqual(["采集结果", "因子结果", "策略结果", "策略回放", "交易账户", "监控告警"]);
+    expect(links.map(link => link.text())).toEqual(["采集结果", "因子结果", "策略实例", "策略回放", "交易账户", "监控告警"]);
     await links[0].trigger("click");
     expect(ctx.push).toHaveBeenCalledWith("/collector/tasks?tab=results");
   });
@@ -197,7 +199,7 @@ describe("home page", () => {
       "动量 · i1 · 最近一期被跳过，查看历史结果中的跳过原因"
     ]);
     await rows[1].trigger("click");
-    expect(ctx.push).toHaveBeenCalledWith({ name: "strategy-tasks", query: { tab: "results", instance: "i1" } });
+    expect(ctx.push).toHaveBeenCalledWith({ name: "strategy-detail", params: { instanceId: "i1" } });
   });
 
   it("folds extra problems into a count instead of growing the tile", async () => {

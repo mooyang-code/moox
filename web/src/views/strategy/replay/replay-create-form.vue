@@ -159,13 +159,13 @@ watch(
   { immediate: true }
 );
 const pool = computed(() => replayPool(form.value));
-// 资金费列与说明看回放对象是不是策略池（从池实例发起时按实例引用的定义判断）：池的资金费写在池 DSL 里。
-const pooled = computed(() => replayIsPool(form.value, props.strategies));
+// 资金费列与说明看回放对象是不是策略池（读后端 requirement.pool）：池的资金费写在池 DSL 里。
+const pooled = computed(() => replayIsPool(form.value));
 const declared = computed(() => replayDeclared(form.value));
-const driftHint = computed(() => replayDriftHint(form.value, props.strategies));
+const driftHint = computed(() => replayDriftHint(form.value));
 const markets = computed(() => replayMarkets(form.value));
 // 声明了 factor_params 的策略只能用因子现算（可变成员的参数随策略逐期变化）：选中这种策略时自动切过去；策略池只能读结果 View。
-const tuned = computed(() => replayTuned(form.value, props.strategies));
+const tuned = computed(() => replayTuned(form.value));
 watch(
   [tuned, pooled],
   ([isTuned, isPool]) => {

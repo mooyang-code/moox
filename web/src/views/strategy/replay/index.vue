@@ -815,13 +815,13 @@ function timeLabel(time: unknown): string {
 }
 
 async function start() {
-  errors.start = validateReplayForm(form, strategyStore.strategyCatalog);
+  errors.start = validateReplayForm(form);
   const source = replaySourceOf(form);
   if (errors.start || !source || !form.range) return;
   const [startTime, endTime] = form.range;
   const gen = generation;
   const picks = userPicks;
-  const fundingColumn = replayFundingColumn(form, strategyStore.strategyCatalog);
+  const fundingColumn = replayFundingColumn(form);
   starting.value = true;
   try {
     const started = await startReplay({

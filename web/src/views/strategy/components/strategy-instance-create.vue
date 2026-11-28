@@ -14,14 +14,7 @@
           >
         </a-select>
       </a-form-item>
-      <a-descriptions v-if="preview" :column="1" bordered size="small" class="preview">
-        <a-descriptions-item v-if="preview.pool" label="策略池">{{ describePool(preview.pool) }}</a-descriptions-item>
-        <a-descriptions-item v-else label="规则">{{
-          preview.rules.map(rule => `${rule.name || rule.id}（${rule.type}）`).join("、")
-        }}</a-descriptions-item>
-        <a-descriptions-item v-if="!preview.pool" label="标的池">{{ preview.universe }}</a-descriptions-item>
-        <a-descriptions-item label="bar 断言">{{ preview.bar }}</a-descriptions-item>
-      </a-descriptions>
+      <p v-if="summary" class="meta-hint preview">{{ summary }}</p>
       <a-alert v-if="requirementError" type="error" show-icon class="form-alert"
         >读取这份定义要绑定的计算任务失败：{{ requirementError }}<a-link @click="reloadRequirement">重试</a-link></a-alert
       >
@@ -199,7 +192,6 @@ import { readAllPages } from "@/api/read-all-pages";
 import { listLogicalAccounts } from "@/api/trade";
 import type { LogicalAccount } from "@/api/trade/types";
 import {
-  declaresFactorParams,
   enabledTasks,
   selectableTask,
   varMemberBlockReason,
@@ -211,8 +203,7 @@ import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import {
   enabledInstanceAccounts,
   logicalAccountOptions,
-  marketsToResolved,
-  resolvedMarkets
+  marketsToResolved
 } from "@/views/strategy/components/logical-account-options";
 import {
   mainMarkets,
@@ -223,7 +214,7 @@ import {
   taskKeyLabel
 } from "@/views/strategy/market-mode";
 import { useTaskRequirement } from "@/views/strategy/use-task-requirement";
-import { describePool, parseDSL } from "@/views/strategy/dsl";
+import { summarizeDSL } from "@/views/strategy/dsl";
 
 const props = defineProps<{ visible: boolean; strategies: Strategy[]; spaceId: string; presetStrategyId?: string }>();
 const emit = defineEmits<{ "update:visible": [boolean]; created: [string] }>();
@@ -261,29 +252,27 @@ let submitRequest = 0;
 let checkRequest = 0;
 
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
-const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
-// 定义写了 factor_params：启用时独占关联主帧任务，已关联到别的实例的主帧任务不能选。
-const tuned = computed(() => declaresFactorParams(selectedStrategy.value?.dsl_yaml ?? ""));
+const summary = computed(() => (selectedStrategy.value ? summarizeDSL(selectedStrategy.value.dsl_yaml) : ""));
 
 // 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
 const singleMarkets = ["spot", "swap", "equity"];
-// 要绑定的任务由后端按定义的 DSL 推出（GetStrategy 的 requirement）：任务键、是否策略池、建不了实例的问题。
+// 要绑定的任务由后端按定义的 DSL 推出（GetStrategy / ValidateStrategy 的 requirement）：任务键、是否策略池、是否动态调参、建不了实例的问题。
 const {
   requirement,
   error: requirementError,
   reload: reloadRequirement
 } = useTaskRequirement(computed(() => ({ strategyId: form.strategy_id })));
+// 预检返回最新的 requirement 时以其为准；预检之前用 GetStrategy 的 requirement。
+const effectiveRequirement = computed(() => check_result.value?.requirement ?? requirement.value);
+// 定义写了 factor_params：启用时独占关联主帧任务，已关联到别的实例的主帧任务不能选。
+const tuned = computed(() => Boolean(effectiveRequirement.value?.tuned));
 // 要绑定的任务键：主帧市场、参考市场、附加来源（来源名:市场）；没写 market 时按选的市场拼出。
-const taskKeys = computed(() => requirementTaskKeys(requirement.value, form.single_market));
+const taskKeys = computed(() => requirementTaskKeys(effectiveRequirement.value, form.single_market));
 // 主帧市场：不带来源、也不是参考市场的键；参考市场只用于 age_markets: all 的年龄判定。
-const activeMarkets = computed(() => mainMarkets(requirement.value, form.single_market));
-const referenceKeys = computed(() => requirementReferenceMarkets(requirement.value, taskKeys.value));
+const activeMarkets = computed(() => mainMarkets(effectiveRequirement.value, form.single_market));
+const referenceKeys = computed(() => requirementReferenceMarkets(effectiveRequirement.value, taskKeys.value));
 // 只列策略驱动且可交易市场包含策略输出市场的组合账户（A 股要开通了股票市场），已被其他实例占用的显示但不可选。
-// 预检之后以服务端解析出的市场为准；预检之前按要绑定的市场（没写 market 时按选的市场）先筛。
-const market = computed(() => {
-  if (check_result.value?.resolved_json) return resolvedMarkets(check_result.value.resolved_json);
-  return activeMarkets.value.length ? marketsToResolved(activeMarkets.value) : {};
-});
+const market = computed(() => (activeMarkets.value.length ? marketsToResolved(activeMarkets.value) : {}));
 const marketNames = computed(() => (activeMarkets.value.length ? activeMarkets.value.map(marketLabel).join("、") : "策略市场"));
 // 已选的账户因为市场收窄被清空：提示一句，用户重新选择后消失。
 const accountCleared = ref(false);

@@ -3,14 +3,13 @@ import type { HistorySeed } from "@/api/collector/runtime-status";
 import { ACTIVITY_CATEGORY_LABELS } from "@/components/activity-log/activity-log";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview, LifecycleColor } from "@/api/monitor";
-import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
+import type { StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { seedEtaText } from "@/views/collector/runtime-status/runtime-status-model";
 import { freqSeconds, runBarLag, taskHealth } from "@/views/factor/shared/health";
 import { statusLabel } from "@/views/ops/monitor/health-display";
-import { resultsLink, type StrategyLink } from "@/views/strategy/links";
+import { detailLink, instancesLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
-import { pendingItems, stateOf } from "@/views/strategy/attention-model";
-import { sortInstancesForResults } from "@/views/strategy/results/results-model";
+import { pendingItems, sortInstancesByPriority, stateOf } from "@/views/strategy/attention-model";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
 import { formatInstant, marketTime, toInstantMs } from "@/utils/time-zone";
 
@@ -232,11 +231,10 @@ const HOLDING_LIMIT = 4;
 export function strategyRows(
   instances: StrategyInstance[],
   targets: Record<string, StrategyTargetSnapshot>,
-  catalog: Strategy[],
   nowMs: number,
   zone = "UTC"
 ): StrategyRow[] {
-  return sortInstancesForResults(instances).map(instance => {
+  return sortInstancesByPriority(instances).map(instance => {
     const state = stateOf(instance, targets, nowMs);
     const snapshot = targets[instance.instance_id];
     const ranked = snapshot ? rankTargets(snapshot.targets) : [];
@@ -256,7 +254,7 @@ export function strategyRows(
               : "idle";
     return {
       instanceId: instance.instance_id,
-      name: catalog.find(item => item.strategy_id === instance.strategy_id)?.name || instance.strategy_id,
+      name: instance.strategy_name || instance.strategy_id,
       enabled: instance.enabled,
       health: instance.health,
       state: instance.enabled ? targetStateTag(state) : { label: "已停用", color: "gray" },
@@ -273,7 +271,7 @@ export function strategyRows(
       cash: snapshot && instance.enabled ? { text: percent(cashRatio, 1), ratio: barMax > 0 ? cashRatio / barMax : 0 } : null,
       lastBar: relativeMs(toInstantMs(snapshot?.bar_end_time), nowMs, zone),
       lastBarTitle: toInstantMs(snapshot?.bar_end_time) === null ? "" : formatInstant(snapshot?.bar_end_time, zone),
-      link: resultsLink(instance.instance_id)
+      link: detailLink(instance.instance_id)
     };
   });
 }
@@ -299,7 +297,7 @@ function alertTone(alert: HealthAlert): "warn" | "bad" {
 /** 待处理：监控告警、策略实例与计算任务的问题合在一起，严重的在前。 */
 export function attentionItems(input: {
   alerts: HealthAlert[];
-  strategy: { instances: StrategyInstance[]; targets: Record<string, StrategyTargetSnapshot>; catalog: Strategy[] };
+  strategy: { instances: StrategyInstance[]; targets: Record<string, StrategyTargetSnapshot> };
   factors: FactorRow[];
   freshness: FreshnessRow[];
   names: NameBook;
@@ -673,7 +671,7 @@ export function kpiCards(input: {
         : !enabled.length
           ? "没有运行中的实例"
           : `${holdings} 个标的${only && only.gross !== null ? ` · ${Math.round(only.gross * 100)}% 仓位` : ""}`,
-      target: resultsLink()
+      target: instancesLink()
     },
     {
       key: "factor",
