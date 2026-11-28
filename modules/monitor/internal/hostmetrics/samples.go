@@ -99,6 +99,52 @@ func (s *SampleStore) History(ctx context.Context, hostID string, start, end tim
 	return out, nil
 }
 
+// DailyLatestHistory 返回 [start, end] 内每个 UTC 自然日最晚的一份主机快照（按时间升序），供磁盘写满预测使用。
+// 按天借助 (c_host_id, c_observed_at) 唯一索引只取至多 8 行，避免每轮主机检查扫描并反序列化 7 天上万条分钟样本。
+func (s *SampleStore) DailyLatestHistory(ctx context.Context, hostID string, start, end time.Time) ([]HistoryPoint, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("主机快照库未初始化")
+	}
+	if hostID == "" {
+		return nil, errors.New("缺少主机 ID")
+	}
+	start, end = start.UTC(), end.UTC()
+	if end.Before(start) {
+		return []HistoryPoint{}, nil
+	}
+	dayStart := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	var out []HistoryPoint
+	for !dayStart.After(end) {
+		low := dayStart
+		if low.Before(start) {
+			low = start
+		}
+		nextDay := dayStart.AddDate(0, 0, 1)
+		query := s.db.WithContext(ctx).Model(&hostSampleRecord{}).Where("c_host_id = ? AND c_observed_at >= ?", hostID, low)
+		if !nextDay.After(end) {
+			query = query.Where("c_observed_at < ?", nextDay)
+		} else {
+			query = query.Where("c_observed_at <= ?", end)
+		}
+		var record hostSampleRecord
+		err := query.Order("c_observed_at DESC").Limit(1).Take(&record).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			dayStart = nextDay
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("读取主机每日最新快照: %w", err)
+		}
+		snapshot := new(hostmetricpb.HostSnapshot)
+		if err := proto.Unmarshal(record.Snapshot, snapshot); err != nil {
+			return nil, fmt.Errorf("解码主机快照 host_id=%s observed_at=%s: %w", hostID, record.ObservedAt.UTC().Format(time.RFC3339), err)
+		}
+		out = append(out, HistoryPoint{HostID: hostID, ObservedAt: record.ObservedAt.UTC(), Snapshot: snapshot})
+		dayStart = nextDay
+	}
+	return out, nil
+}
+
 // evenlySpaced 从按时间排好的行里等间隔取 limit 行，保留首尾；不超过 limit 时原样返回。
 func evenlySpaced(ids []int64, limit int) []int64 {
 	if len(ids) <= limit {

@@ -293,6 +293,14 @@ func (s *Store) History(ctx context.Context, hostID string, start, end time.Time
 	return s.samples.History(ctx, hostID, start, end, limit)
 }
 
+// DailyLatestHistory 返回 [start, end] 内每个 UTC 自然日最晚的一份快照（按时间升序），供磁盘写满预测使用。
+func (s *Store) DailyLatestHistory(ctx context.Context, hostID string, start, end time.Time) ([]HistoryPoint, error) {
+	if s == nil {
+		return nil, errors.New("主机快照处理未初始化")
+	}
+	return s.samples.DailyLatestHistory(ctx, hostID, start, end)
+}
+
 func cloneSnapshot(snapshot *hostmetricpb.HostSnapshot) *hostmetricpb.HostSnapshot {
 	if snapshot == nil {
 		return nil

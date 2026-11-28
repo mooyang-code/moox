@@ -23,7 +23,7 @@ func TestTopProcessesIgnoresUnusableEntries(t *testing.T) {
 }
 
 func TestCheckIDRoundTrip(t *testing.T) {
-	for _, kind := range append([]string{CheckKindPresence, CheckKindAgent}, Metrics...) {
+	for _, kind := range append([]string{CheckKindPresence, CheckKindAgent, CheckKindDiskForecast}, Metrics...) {
 		agent, parsed, ok := ParseCheckID(CheckID("control", kind))
 		require.True(t, ok, kind)
 		require.Equal(t, "control", agent)
@@ -45,4 +45,5 @@ func TestEveryMetricHasAThreshold(t *testing.T) {
 		require.NotEmpty(t, MetricLabel(metric), metric)
 	}
 	require.Zero(t, MetricThreshold(CheckKindPresence))
+	require.Zero(t, MetricThreshold(CheckKindDiskForecast))
 }

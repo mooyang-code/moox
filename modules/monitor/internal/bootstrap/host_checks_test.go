@@ -483,3 +483,83 @@ func TestHostChecksKeepRunningWhileNotificationsFail(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, row.Firing())
 }
+
+// reportDisk 模拟 storage 主机上报带磁盘用量的快照（同时保留正常 CPU/内存）。
+func (h *hostCheckHarness) reportDisk(totalGiB, usedGiB uint64) {
+	h.t.Helper()
+	const gib = uint64(1 << 30)
+	h.sequence++
+	usage := float64(usedGiB) / float64(totalGiB) * 100
+	metric := &hostmetricpb.HostMetric{HostId: "storage", Hostname: "VM-0-9", BootId: "boot", Snapshot: &hostmetricpb.HostSnapshot{
+		Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 20},
+		Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 50, AvailableBytes: 50, UsagePercent: 50},
+		Filesystems: []*hostmetricpb.FilesystemMetric{
+			{Device: "/dev/vda1", Mountpoint: "/", TotalBytes: totalGiB * gib, UsedBytes: usedGiB * gib, AvailableBytes: (totalGiB - usedGiB) * gib, UsagePercent: usage},
+		},
+	}}
+	require.NoError(h.t, h.hosts.Persist(h.t.Context(), hostmetrics.Report{ID: fmt.Sprintf("disk-report-%d", h.sequence), CollectedAt: h.clock, Metric: metric}))
+}
+
+// 磁盘写满预测主机检查：历史不足 3 个自然日间隔时不告警；按近 7 天日增中位数预计 <= 7 天耗尽安全余量（10% 且不少于 5 GiB）时触发警告，
+// 告警后需回落到 > 10 天或停止增长才恢复；主机停用后随之恢复。
+func TestHostDiskForecastAlertsWithHysteresisAndResolves(t *testing.T) {
+	h := newHostCheckHarness(t)
+	checkID := hostmetrics.CheckID("storage", hostmetrics.CheckKindDiskForecast)
+
+	// 1. 前 3 天（仅 2 个自然日间隔）：样本不足，按正常记录、不告警。
+	// 总容量 100 GiB，安全余量 10 GiB（10%），可用上限 90 GiB；每天增长 2 GiB。
+	for day := 0; day < 3; day++ {
+		h.gateway(true)
+		h.reportDisk(100, 74+uint64(day)*2) // 74, 76, 78 GiB
+		h.evaluate()
+		require.Empty(t, h.sender.forCheck(checkID))
+		require.Nil(t, h.pageAlert(hostmetrics.CheckKindDiskForecast))
+		row, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, checkID)
+		require.NoError(t, err)
+		require.Equal(t, domain.CheckStatusOK, row.Status)
+		require.Contains(t, row.Reason, "样本不足")
+		h.advance(24 * time.Hour)
+	}
+
+	// 2. 第 4 天（3 个自然日间隔，日增中位数 2 GiB/天）：已用 80 GiB，距 90 GiB 剩 10 GiB = 5.0 天 <= 7 天，立刻触发警告。
+	h.gateway(true)
+	h.reportDisk(100, 80)
+	h.evaluate()
+	pushed := h.sender.forCheck(checkID)
+	require.Len(t, pushed, 1)
+	require.Equal(t, "主机 storage · 磁盘写满预测", pushed[0].Title)
+	require.Equal(t, notification.SeverityWarning, pushed[0].Severity)
+	require.Contains(t, pushed[0].Body, "/ 预计 5.0 天后耗尽安全余量")
+	require.Contains(t, pushed[0].Body, "阈值 7 天")
+	alert := h.pageAlert(hostmetrics.CheckKindDiskForecast)
+	requireSameAsPush(t, alert, pushed[0])
+	require.Equal(t, "storage", alert.Object.HostId)
+
+	// 3. 同一分钟之后仅推进 30 秒无新采样：冻结，不重复触发也不恢复。
+	h.advance(30 * time.Second)
+	h.evaluate()
+	require.Len(t, h.sender.forCheck(checkID), 1)
+	require.NotNil(t, h.pageAlert(hostmetrics.CheckKindDiskForecast))
+
+	// 4. 清理 7 GiB 后当天已用降到 73 GiB：前三天增量仍为 2、2，当天增量变 -5，中位数仍为 2 GiB/天，
+	// 剩余 17 GiB / 2 = 8.5 天（在 7 天与 10 天恢复线之间）：仍在告警，不抖动恢复。
+	h.advance(time.Minute)
+	h.gateway(true)
+	h.reportDisk(100, 73)
+	h.evaluate()
+	require.Len(t, h.sender.forCheck(checkID), 1)
+	alert = h.pageAlert(hostmetrics.CheckKindDiskForecast)
+	require.NotNil(t, alert)
+	require.Contains(t, alert.Reason, "还没有回落到恢复线 10 天")
+
+	// 5. 再清理到 60 GiB：剩余 30 GiB / 2 = 15.0 天 > 10 天，告警恢复并推送恢复通知。
+	h.advance(time.Minute)
+	h.gateway(true)
+	h.reportDisk(100, 60)
+	h.evaluate()
+	pushed = h.sender.forCheck(checkID)
+	require.Len(t, pushed, 2)
+	require.Equal(t, notification.SeverityInfo, pushed[1].Severity)
+	require.Contains(t, pushed[1].Body, "状态：已恢复")
+	require.Nil(t, h.pageAlert(hostmetrics.CheckKindDiskForecast))
+}

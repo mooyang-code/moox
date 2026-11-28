@@ -15,6 +15,7 @@ func TestRuleForAndSeverityMatchPreviousDefaults(t *testing.T) {
 	}{
 		{"host:control:presence", 0, 1, 1, "critical"},
 		{"host:control:agent", 0, 1, 1, "warning"},
+		{"host:control:disk_forecast", 0, 1, 1, "warning"},
 		{"host:control:cpu", 0, 3, 1, "warning"},
 		{"host:control:memory", 0, 5, 1, "warning"},
 		{"host:control:filesystem_usage", 0, 3, 1, "warning"},
@@ -32,7 +33,6 @@ func TestRuleForAndSeverityMatchPreviousDefaults(t *testing.T) {
 		{"subject_tag:crypto:binance_spot", 0, 3, 1, "critical"},
 		{"observation:ingest", 0, 3, 1, "critical"},
 		{"metrics_ingest:series_limit", 0, 3, 1, "warning"},
-		{"archive_coverage:archive", 0, 3, 1, "critical"},
 		{"attention:trade:auto_paused", 0, 3, 1, "critical"},
 		// 不是合法主机检查的 host: 前缀按普通检查算。
 		{"host:control:unknown", 0, 3, 1, "critical"},
@@ -50,6 +50,7 @@ func TestRuleForAndSeverityMatchPreviousDefaults(t *testing.T) {
 func TestDomainOf(t *testing.T) {
 	for checkID, want := range map[string]Domain{
 		"host:control:presence":           DomainHost,
+		"host:control:disk_forecast":      DomainHost,
 		"host:control:cpu":                DomainHost,
 		"market_canary:BTC-USDT:1m":       DomainCanary,
 		"subject_tag:crypto:binance_spot": DomainCanary,

@@ -7,11 +7,18 @@ import (
 )
 
 const (
-	forecastWindow       = 7 * 24 * time.Hour
+	// DiskForecastWindow 是磁盘写满预测回看的历史窗口（最近 7 天，与主机快照保留期一致）。
+	DiskForecastWindow = 7 * 24 * time.Hour
+	// DiskForecastAlertDays 是磁盘写满预测主机检查的告警阈值（天）：按日增长率中位数估算，距耗尽安全余量（10% 且不少于 5 GiB）不超过 7 天即告警。
+	DiskForecastAlertDays = 7
+	// DiskForecastRecoveryDays 是磁盘写满预测主机检查的恢复线（天）：告警触发后需回到超过 10 天（或磁盘停止增长）才恢复，防止在阈值附近抖动。
+	DiskForecastRecoveryDays = 10
+
+	forecastWindow       = DiskForecastWindow
 	minimumForecastGaps  = 3
 	minimumDiskReserve   = uint64(5 << 30)
 	warningRemainingDays = 14
-	failingRemainingDays = 7
+	failingRemainingDays = DiskForecastAlertDays
 	maxDailyInterval     = 36 * time.Hour
 )
 
