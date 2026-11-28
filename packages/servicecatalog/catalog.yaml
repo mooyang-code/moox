@@ -227,7 +227,6 @@ components:
     config_files:
       - from: modules/monitor/config/app.yaml
       - from: modules/monitor/config/trpc_go.yaml
-      - from: config/setup/dataset-health-policy.yaml
     after: [host-gateway, eventbus]
     credentials: ["eventbus:monitor-observability", cls]
     health:

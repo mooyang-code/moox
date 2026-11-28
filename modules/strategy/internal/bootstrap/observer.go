@@ -414,7 +414,7 @@ func (o *instanceObserver) restoreObservations(id string, point *restorePoint, k
 	return out
 }
 
-// 与 config/setup/dataset-health-policy.yaml 一致：Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行
+// 与 Monitor 配置（modules/monitor/config/app.yaml 的 metrics.dataset_health）一致：Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行
 // 报 run stale，在最近一次成功之后 success_missed_intervals 个间隔没有新的成功报 success stale。
 const (
 	runMissedIntervals     = 2

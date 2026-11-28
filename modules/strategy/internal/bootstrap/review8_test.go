@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
+	"gopkg.in/yaml.v3"
 )
 
 // 重启（或重新启用）后观察器的内存基准是空的：刷新时从库里取最近处理的一根与最近一个 ok 的一根，期望间隔与重启前
@@ -47,15 +49,27 @@ func TestStockBasesAreLoadedFromStore(t *testing.T) {
 	}
 }
 
-// 期望间隔的两个系数与 Monitor 的数据集健康策略一致。
+// 期望间隔的两个系数与 Monitor 默认数据集健康策略及 app.yaml 一致。
 func TestMissedIntervalsMatchHealthPolicy(t *testing.T) {
+	defaults := report.DefaultRealtimeTimeSeriesPolicy().Defaults
+	if defaults.RunMissedIntervals != runMissedIntervals || defaults.SuccessMissedIntervals != successMissedIntervals {
+		t.Fatalf("系数应与默认健康策略一致：run=%d/%d success=%d/%d", defaults.RunMissedIntervals, runMissedIntervals, defaults.SuccessMissedIntervals, successMissedIntervals)
+	}
 	_, file, _, _ := runtime.Caller(0)
-	policy, err := report.LoadDatasetHealthPolicy(filepath.Join(filepath.Dir(file), "../../../../config/setup/dataset-health-policy.yaml"))
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "../../../../modules/monitor/config/app.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaults := policy.RealtimeTimeSeries.Defaults
-	if defaults.RunMissedIntervals != runMissedIntervals || defaults.SuccessMissedIntervals != successMissedIntervals {
-		t.Fatalf("系数应与健康策略一致：run=%d/%d success=%d/%d", defaults.RunMissedIntervals, runMissedIntervals, defaults.SuccessMissedIntervals, successMissedIntervals)
+	var app struct {
+		Metrics struct {
+			DatasetHealth report.RealtimeTimeSeriesPolicy `yaml:"dataset_health"`
+		} `yaml:"metrics"`
+	}
+	if err := yaml.Unmarshal(raw, &app); err != nil {
+		t.Fatal(err)
+	}
+	appDefaults := app.Metrics.DatasetHealth.Defaults
+	if appDefaults.RunMissedIntervals != runMissedIntervals || appDefaults.SuccessMissedIntervals != successMissedIntervals {
+		t.Fatalf("系数应与 Monitor app.yaml 一致：run=%d/%d success=%d/%d", appDefaults.RunMissedIntervals, runMissedIntervals, appDefaults.SuccessMissedIntervals, successMissedIntervals)
 	}
 }

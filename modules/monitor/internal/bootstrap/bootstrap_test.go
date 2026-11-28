@@ -18,17 +18,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestLoadMonitorDatasetHealthPolicyFallsBackToAppConfigPath(t *testing.T) {
-	t.Setenv("MOOX_DATASET_HEALTH_POLICY", "")
-	t.Setenv("MOOX_DATASET_HEALTH_POLICY_HASH", "")
-	cfg := config.Default()
-	cfg.Metrics.DatasetHealthPolicyPath = filepath.Join("..", "..", "..", "..", "config", "setup", "dataset-health-policy.yaml")
-	policy, err := loadMonitorDatasetHealthPolicy(cfg)
-	require.NoError(t, err)
-	require.Equal(t, 2, policy.Version)
-	require.Greater(t, policy.RealtimeTimeSeries.Defaults.RunMissedIntervals, 0)
-}
-
 func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

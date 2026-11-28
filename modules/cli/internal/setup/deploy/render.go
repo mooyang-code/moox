@@ -385,7 +385,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("database.path", path.Join(data, "monitor.db"))
 			set("observability.eventbus_urls", []string{url})
 			set("observability.credential_file", credential)
-			set("metrics.dataset_health_policy_path", path.Join(layout.Config(id), "dataset-health-policy.yaml"))
 		case "collector":
 			set("database.path", path.Join(data, "moox_collector.db"))
 			set("event_bus.urls", []string{url})

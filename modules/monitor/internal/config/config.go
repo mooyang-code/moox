@@ -12,6 +12,7 @@ import (
 	watchdogpkg "github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/report"
 	"gopkg.in/yaml.v3"
 )
 
@@ -52,9 +53,9 @@ type DeploymentConfig struct {
 }
 
 type MetricsConfig struct {
-	Enabled                 bool   `yaml:"enabled"`
-	DatasetHealthPolicyPath string `yaml:"dataset_health_policy_path"`
-	NoDataIntervals         int    `yaml:"no_data_intervals"`
+	Enabled         bool                            `yaml:"enabled"`
+	DatasetHealth   report.RealtimeTimeSeriesPolicy `yaml:"dataset_health"`
+	NoDataIntervals int                             `yaml:"no_data_intervals"`
 	// MaxNewSeriesPerHour / MaxNewSeriesPerDay 限制每小时、每天新建的指标序列数，超出的新序列被丢弃并告警；不写用默认值，负数表示不限。
 	// 现状目录约 500 条序列，全新启动时一小时内要建全，所以默认值留足余量，只拦标签失控这种成倍增长。
 	MaxNewSeriesPerHour int `yaml:"max_new_series_per_hour"`
@@ -154,7 +155,7 @@ func Default() *Config {
 			Enabled: false, SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealth: report.DefaultRealtimeTimeSeriesPolicy(), NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000},
 	}
 }
 
@@ -225,9 +226,6 @@ func (c *Config) applyDefaults() {
 	if c.KlineFreshness.MaxSubjectsPerAlert == 0 {
 		c.KlineFreshness.MaxSubjectsPerAlert = klineDefaults.MaxSubjectsPerAlert
 	}
-	if c.Metrics.DatasetHealthPolicyPath == "" {
-		c.Metrics.DatasetHealthPolicyPath = metricsDefaults.DatasetHealthPolicyPath
-	}
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
 	}
@@ -255,10 +253,6 @@ func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_DELIVER_POLICY")); v != "" {
 		c.Observability.DeliverPolicy = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")); v != "" {
-		c.Metrics.DatasetHealthPolicyPath = v
-	}
-
 }
 
 func (c *Config) Validate() error {
@@ -279,6 +273,9 @@ func (c *Config) Validate() error {
 		}
 	}
 	if err := c.validateKlineFreshness(); err != nil {
+		return err
+	}
+	if err := c.Metrics.DatasetHealth.Validate(); err != nil {
 		return err
 	}
 	if c.MarketCanary.Enabled {
