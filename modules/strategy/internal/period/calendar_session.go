@@ -1,4 +1,4 @@
-package input
+package period
 
 import (
 	"errors"
@@ -40,7 +40,7 @@ func stockSessionClockFor(market *sessionMarket, frequency string) (periodClock,
 	if !slices.Contains(market.market.AllowedIntraday(), frequency) {
 		return nil, fmt.Errorf("%w：日历 %q 不支持频率 %q（日内周期须整除每个交易时段：%v）", ErrUnsupportedCalendar, market.calendarID, frequency, market.market.Sessions)
 	}
-	period, err := parseBarDuration(frequency)
+	period, err := ParseBarDuration(frequency)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (c *stockSessionClock) dayBars(index int64) (first, last int64, ok bool) {
 }
 
 // stockIntraday 报告日历与周期是否是受支持的股票市场日内周期。
-func stockIntraday(calendarID, frequency string) bool {
+func StockIntraday(calendarID, frequency string) bool {
 	clock, err := clockFor(calendarID, frequency)
 	if err != nil {
 		return false

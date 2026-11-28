@@ -13,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 // 本文件实现绑定两个因子任务（现货、永续各一个）的实例的汇合求值（设计 3.2.1）：每个 View 的就绪事件到达时先记下并确认，
@@ -38,12 +40,12 @@ type mergedReadiness struct {
 //     只有一部分市场不可用时，只让这些市场本期不可用。
 //
 // 各 View 的因子指纹写进本期输入记录，下一期据此核对相邻周期。
-func (h *Handler) checkReady(p *period, adjacent *store.InputRecord) mergedReadiness {
+func (h *Handler) checkReady(p *periodContext, adjacent *store.InputRecord) mergedReadiness {
 	return h.checkReadyFor(p, p.runtime.resolved, adjacent)
 }
 
 // checkReadyFor 按一个绑定（普通策略的绑定，或策略池一个成员的绑定）做就绪判断，只看这个绑定用到的市场与因子。
-func (h *Handler) checkReadyFor(p *period, resolved input.Resolved, adjacent *store.InputRecord) mergedReadiness {
+func (h *Handler) checkReadyFor(p *periodContext, resolved input.Resolved, adjacent *store.InputRecord) mergedReadiness {
 	merged := mergedReadiness{Results: map[string]readiness.Result{}, Unavailable: map[string]string{}}
 	var dataReason, dataDetail string
 	markets := resolved.Markets()
@@ -95,7 +97,7 @@ func (h *Handler) checkReadyFor(p *period, resolved input.Resolved, adjacent *st
 
 // checkSourcesReady 在汇合 bar 上对到达的附加来源事件做就绪判断（非汇合 bar 没有来源事件，不判断）：来源的因子指纹写进本期输入记录；
 // 成员契约变了（factor_changed）等配置、契约类原因整期按原因处理；来源的因子被跳过时只让这个来源本期不可用，它的列按缺数处理。
-func (h *Handler) checkSourcesReady(p *period, resolved input.Resolved, merged *mergedReadiness) {
+func (h *Handler) checkSourcesReady(p *periodContext, resolved input.Resolved, merged *mergedReadiness) {
 	for _, name := range resolved.SourceNames() {
 		source := resolved.Sources[name]
 		for _, key := range resolved.TaskKeys() {
@@ -128,7 +130,7 @@ func (h *Handler) checkSourcesReady(p *period, resolved input.Resolved, merged *
 }
 
 // eventUniverses 返回各市场事件里的标的名单（市场 → 名单）。
-func (p *period) eventUniverses() map[string][]string {
+func (p *periodContext) eventUniverses() map[string][]string {
 	universes := make(map[string][]string, len(p.events))
 	for key, event := range p.events {
 		if source, _ := dsl.SplitTaskKey(key); source != "" {
@@ -141,7 +143,7 @@ func (p *period) eventUniverses() map[string][]string {
 
 // gather 汇合本期各 View 的就绪事件，返回各市场的事件与是否到齐（设计 3.2.1 第 2～4 步）。绑定两个任务的实例先把到达的
 // 这条事件幂等地记下，再检查本期的两个 View 是否都到了；之后把更早还不会再等到齐的期补记为 skipped。
-func (h *Handler) gather(ctx context.Context, p *period, payload *storagepb.ViewDataReady, taskKey string, periodTime time.Time) (map[string]*storagepb.ViewDataReady, bool, error) {
+func (h *Handler) gather(ctx context.Context, p *periodContext, payload *storagepb.ViewDataReady, taskKey string, periodTime time.Time) (map[string]*storagepb.ViewDataReady, bool, error) {
 	resolved := p.runtime.resolved
 	if !resolved.Gathers() {
 		return map[string]*storagepb.ViewDataReady{taskKey: payload}, true, nil
@@ -255,18 +257,18 @@ func (h *Handler) arrivalBarEnd(rt *runtime, datasetID string, periodTime time.T
 	resolved := rt.resolved
 	_, source, _, _ := resolved.RoleOfDataset(datasetID)
 	if source == "" {
-		boundary, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, periodTime)
+		boundary, err := period.FromStorageStart(resolved.Calendar, resolved.Bar, periodTime)
 		if err != nil {
 			return time.Time{}, err
 		}
 		return boundary.BarEnd, nil
 	}
 	binding := resolved.Sources[source]
-	sourceBoundary, err := input.FromStorageStart(binding.Calendar, binding.Bar, periodTime)
+	sourceBoundary, err := period.FromStorageStart(binding.Calendar, binding.Bar, periodTime)
 	if err != nil {
 		return time.Time{}, err
 	}
-	mainBoundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, sourceBoundary.BarEnd)
+	mainBoundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, sourceBoundary.BarEnd)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -353,7 +355,7 @@ func (h *Handler) processPending(ctx context.Context, loader Loader, instance st
 //   - 更晚的某一期已经汇合完成（complete 为真，马上求值）。
 //
 // 只是“另一个 View 先到了下一期”不补记：两个 View 稳定相差一根以上是正常情况。
-func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) error {
+func (h *Handler) sweepStale(ctx context.Context, p *periodContext, complete bool) error {
 	instanceID, sessionID := p.instance.InstanceID, p.runtime.sessionID
 	arrived, periods, err := h.Store.UnprocessedReadyPeriods(ctx, instanceID, sessionID, p.after, p.boundary.BarEnd)
 	if err != nil || len(periods) == 0 {
@@ -404,7 +406,7 @@ func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) erro
 		if len(missing)+len(missingSources) == 0 || !(complete || moved) {
 			continue
 		}
-		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, barEnd)
+		boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, barEnd)
 		if err != nil {
 			return err
 		}

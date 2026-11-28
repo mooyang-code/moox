@@ -4,10 +4,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // A 股内嵌日历过了可用截止日（最后一个交易日往前 2 个交易日）后，启用的实例每一期都会被丢弃：启用时就拒绝。
@@ -30,7 +31,7 @@ func TestStartReplayStockUsesShanghaiDates(t *testing.T) {
 	h := newHarness(t)
 	h.now = time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	h.resolver.calendar = "cn_stock"
-	h.resolver.view = input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}
+	h.resolver.view = upstream.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}
 	h.createStrategy("s1", demoDSL)
 	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-10-01")})
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())

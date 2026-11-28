@@ -308,7 +308,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 		if err != nil {
 			return err
 		}
-		if instance.Enabled != 1 || !instance.SessionID.Valid || instance.SessionID.String != result.SessionID {
+		if !instance.SessionID.Valid || instance.SessionID.String != result.SessionID {
 			return ErrResultInstanceNotActive
 		}
 		if result.Status == StatusOK && !result.ValidUntil.After(now) {
@@ -620,7 +620,7 @@ func (s *Store) PreparePendingResult(ctx context.Context, resultID string, now t
 		if err != nil {
 			return err
 		}
-		active := instance.Enabled == 1 && instance.SessionID.Valid && instance.SessionID.String == row.SessionID
+		active := instance.SessionID.Valid && instance.SessionID.String == row.SessionID
 		switch {
 		case !active:
 			reason = CancelInactive

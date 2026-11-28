@@ -18,6 +18,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 var origin = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -35,9 +38,9 @@ type fakeClient struct {
 	// revision 是服务端当前的索引修订号（零按 1）；bumpBeforeProbe 为真时，第一次年龄探针读取之前修订号升到 2（模拟两次读取之间的原地补算）。
 	revision        uint64
 	bumpBeforeProbe bool
-	onQuery         func(query input.Query)
+	onQuery         func(query upstream.Query)
 	// failQuery 返回非空错误时本次读取失败；unknownCoverage 模拟索引统计暂时未知。
-	failQuery       func(query input.Query) error
+	failQuery       func(query upstream.Query) error
 	unknownCoverage bool
 	// activeIndex 是 View 当前的活动索引，为空时是 idx；build 是索引建成序号（为空时代次只有活动索引）；
 	// coverageCalls 统计读取覆盖统计的次数。
@@ -89,18 +92,18 @@ func price(id string, hour int) float64 {
 	}
 }
 
-func (f *fakeClient) ViewCoverage(context.Context, string, input.ViewInfo, bool) (input.Coverage, error) {
+func (f *fakeClient) ViewCoverage(context.Context, string, upstream.ViewInfo, bool) (upstream.Coverage, error) {
 	f.coverageCalls++
 	if f.coverageTransport > 0 {
 		f.coverageTransport--
-		return input.Coverage{}, &input.TransportError{Operation: "读取 View 覆盖统计", Err: errors.New("connection refused")}
+		return upstream.Coverage{}, &upstream.TransportError{Operation: "读取 View 覆盖统计", Err: errors.New("connection refused")}
 	}
 	if f.coverageStale > 0 {
 		f.coverageStale--
-		return input.Coverage{}, input.ErrStale
+		return upstream.Coverage{}, upstream.ErrStale
 	}
 	if f.unknownCoverage {
-		return input.Coverage{}, nil
+		return upstream.Coverage{}, nil
 	}
 	indexedFrom, indexedTo := f.indexedFrom, f.indexedTo
 	if indexedFrom.IsZero() {
@@ -109,7 +112,7 @@ func (f *fakeClient) ViewCoverage(context.Context, string, input.ViewInfo, bool)
 	if indexedTo.IsZero() {
 		indexedTo = origin.Add(1000 * time.Hour)
 	}
-	return input.Coverage{IndexedFrom: indexedFrom, IndexedTo: indexedTo}, nil
+	return upstream.Coverage{IndexedFrom: indexedFrom, IndexedTo: indexedTo}, nil
 }
 
 func (f *fakeClient) currentIndex() string {
@@ -120,25 +123,25 @@ func (f *fakeClient) currentIndex() string {
 }
 
 // GetView 与生产一致：View 元数据不带覆盖统计，需要时由 ViewCoverage 单独读取。
-func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
+func (f *fakeClient) GetView(context.Context, string, string) (upstream.ViewInfo, error) {
 	f.viewCalls++
 	if f.viewTransport > 0 {
 		f.viewTransport--
-		return input.ViewInfo{}, &input.TransportError{Operation: "读取 View", Err: errors.New("connection refused")}
+		return upstream.ViewInfo{}, &upstream.TransportError{Operation: "读取 View", Err: errors.New("connection refused")}
 	}
 	if f.viewDeleted {
-		return input.ViewInfo{}, &input.SkipError{Reason: input.SkipConfigError, Detail: "View " + f.dataset() + " 已不存在", Cause: input.ErrViewNotFound}
+		return upstream.ViewInfo{}, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: "View " + f.dataset() + " 已不存在", Cause: upstream.ErrViewNotFound}
 	}
 	index := f.currentIndex()
 	generation := index
 	if f.build != "" {
 		generation += "@" + f.build
 	}
-	columns := []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"column_kind": "output", "member_key": "mom", "factor_id": "mom", "member_kind": "fixed", "output_name": "mom"}}}
+	columns := []upstream.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"column_kind": "output", "member_key": "mom", "factor_id": "mom", "member_kind": "fixed", "output_name": "mom"}}}
 	if f.fundingRate != 0 {
-		columns = append(columns, input.ViewColumn{Name: "funding_rate", Attributes: map[string]string{}})
+		columns = append(columns, upstream.ViewColumn{Name: "funding_rate", Attributes: map[string]string{}})
 	}
-	return input.ViewInfo{DatasetID: f.dataset(), Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: columns}, nil
+	return upstream.ViewInfo{DatasetID: f.dataset(), Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: columns}, nil
 }
 
 func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
@@ -146,23 +149,23 @@ func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, datasetID stri
 	return view.Generation, err
 }
 
-func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
-	return input.DatasetInfo{DatasetID: datasetID, Status: "active", Frequency: "1h", Retention: "forever", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + f.marketType}}, nil
+func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (upstream.DatasetInfo, error) {
+	return upstream.DatasetInfo{DatasetID: datasetID, Status: "active", Frequency: "1h", Retention: "forever", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + f.marketType}}, nil
 }
 
-func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (input.TagInfo, error) {
-	return input.TagInfo{MarketType: strings.TrimPrefix(tagID, "binance_")}, nil
+func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (upstream.TagInfo, error) {
+	return upstream.TagInfo{MarketType: strings.TrimPrefix(tagID, "binance_")}, nil
 }
 
-func (f *fakeClient) ListDatasetSubjects(context.Context, string, string) ([]input.Subject, error) {
-	return []input.Subject{{SubjectID: "A", Active: true}, {SubjectID: "B", Active: true}, {SubjectID: "C", Active: false}}, nil
+func (f *fakeClient) ListDatasetSubjects(context.Context, string, string) ([]upstream.Subject, error) {
+	return []upstream.Subject{{SubjectID: "A", Active: true}, {SubjectID: "B", Active: true}, {SubjectID: "C", Active: false}}, nil
 }
 
-func (f *fakeClient) ListTagMembers(context.Context, string, string) ([]input.TagMember, error) {
+func (f *fakeClient) ListTagMembers(context.Context, string, string) ([]upstream.TagMember, error) {
 	return nil, nil
 }
 
-func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) ([]input.Row, uint64, error) {
+func (f *fakeClient) QueryRows(_ context.Context, _ string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	f.queries++
 	if f.panicOnRows {
 		panic("测试：读取行时崩溃")
@@ -174,7 +177,7 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 		}
 	}
 	if query.ExpectedIndexID != "" && query.ExpectedIndexID != f.currentIndex() {
-		return nil, 0, input.ErrStale
+		return nil, 0, upstream.ErrStale
 	}
 	if f.bumpBeforeProbe && len(query.Columns) == 1 && query.Columns[0] == "close" {
 		f.bumpBeforeProbe, f.revision = false, 2
@@ -184,7 +187,7 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 		served = 1
 	}
 	if query.ExpectedRevision != 0 && query.ExpectedRevision != served {
-		return nil, 0, input.ErrStale
+		return nil, 0, upstream.ErrStale
 	}
 	if f.onQuery != nil {
 		f.onQuery(query)
@@ -194,7 +197,7 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 			return nil, 0, err
 		}
 	}
-	rows := make([]input.Row, 0)
+	rows := make([]upstream.Row, 0)
 	for at := query.Start.Truncate(time.Hour); at.Before(query.End); at = at.Add(time.Hour) {
 		if at.Before(query.Start) {
 			continue
@@ -212,17 +215,17 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 			if f.fundingRate != 0 && slices.Contains(query.Columns, "funding_rate") {
 				values["funding_rate"] = f.fundingRate
 			}
-			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: values})
+			rows = append(rows, upstream.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: values})
 			if subject.SubjectID == "A" && f.ambiguous[hour] {
-				rows = append(rows, input.Row{SubjectID: "A", DataTime: at, SeriesTag: "venue:other", Values: map[string]float64{"close": value * 2, "mom": 0}})
+				rows = append(rows, upstream.Row{SubjectID: "A", DataTime: at, SeriesTag: "venue:other", Values: map[string]float64{"close": value * 2, "mom": 0}})
 			}
 		}
 	}
 	return rows, served, nil
 }
 
-func (f *fakeClient) GetFactor(context.Context, string) (input.FactorInfo, error) {
-	return input.FactorInfo{FactorID: "mom", DefinitionHash: "sha256:mom"}, nil
+func (f *fakeClient) GetFactor(context.Context, string) (upstream.FactorInfo, error) {
+	return upstream.FactorInfo{FactorID: "mom", DefinitionHash: "sha256:mom"}, nil
 }
 
 const replayDSL = `name: replay_demo
@@ -303,7 +306,7 @@ func TestReplayRunsEndToEnd(t *testing.T) {
 	job := startReplay(t, repo, "p1", replayDSL, 10)
 	runner.Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "p1")
-	if err != nil || done.Status != store.ReplayDone || done.ProgressTime == nil {
+	if err != nil || done.Status != store.ReplaySucceeded || done.ProgressTime == nil {
 		t.Fatalf("回放应完成：%+v err=%v", done, err)
 	}
 	var metrics Metrics
@@ -344,7 +347,7 @@ func TestS24InterruptedReplayKeepsBars(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeClient{marketType: "spot"}
 	calls := 0
-	client.onQuery = func(input.Query) {
+	client.onQuery = func(upstream.Query) {
 		calls++
 		if calls == 2 {
 			cancel()
@@ -370,7 +373,7 @@ func TestS24InterruptedReplayKeepsBars(t *testing.T) {
 	}
 	again := startReplay(t, repo, "p2", replayDSL, 9)
 	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, ChunkBars: 3}).Execute(context.Background(), again)
-	if done, _ := repo.GetReplay(context.Background(), "p2"); done.Status != store.ReplayDone {
+	if done, _ := repo.GetReplay(context.Background(), "p2"); done.Status != store.ReplaySucceeded {
 		t.Fatalf("可以重新发起：%+v", done)
 	}
 }
@@ -379,7 +382,7 @@ func TestReplayCancellationKeepsWrittenBars(t *testing.T) {
 	repo := openStore(t)
 	client := &fakeClient{marketType: "spot"}
 	calls := 0
-	client.onQuery = func(input.Query) {
+	client.onQuery = func(upstream.Query) {
 		calls++
 		if calls == 2 {
 			if err := repo.CancelReplay(context.Background(), "p1", origin); err != nil {
@@ -409,7 +412,7 @@ func TestReplayChunkBoundaryPreviousBar(t *testing.T) {
 		repo := openStore(t)
 		job := startReplay(t, repo, fmt.Sprintf("p%d", i), previousDSL, 8)
 		(&Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, ChunkBars: chunk}).Execute(context.Background(), job)
-		if done, _ := repo.GetReplay(context.Background(), job.ReplayID); done.Status != store.ReplayDone {
+		if done, _ := repo.GetReplay(context.Background(), job.ReplayID); done.Status != store.ReplaySucceeded {
 			t.Fatalf("回放应完成：%+v", done)
 		}
 		results = append(results, barsOf(t, repo, job.ReplayID))
@@ -479,7 +482,7 @@ func TestRunnerDrainsQueueAndWakes(t *testing.T) {
 	for time.Now().Before(deadline) {
 		first, _ := repo.GetReplay(context.Background(), "p1")
 		second, _ := repo.GetReplay(context.Background(), "p2")
-		if first.Status == store.ReplayDone && second.Status == store.ReplayDone {
+		if first.Status == store.ReplaySucceeded && second.Status == store.ReplaySucceeded {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -520,7 +523,7 @@ func TestReplayClampsEndToLatestData(t *testing.T) {
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
 	bars := barsOf(t, repo, "p1")
-	if done.Status != store.ReplayDone || len(bars) != 4 || !bars[len(bars)-1].BarEndTime.Equal(origin.Add(6*time.Hour)) {
+	if done.Status != store.ReplaySucceeded || len(bars) != 4 || !bars[len(bars)-1].BarEndTime.Equal(origin.Add(6*time.Hour)) {
 		t.Fatalf("应只回放到最新一根（bar_start 06:00）之前：status=%s bars=%d", done.Status, len(bars))
 	}
 }
@@ -530,7 +533,7 @@ func TestReplayAgeWindowsPerSegment(t *testing.T) {
 	repo := openStore(t)
 	var windows [][2]int
 	client := &fakeClient{marketType: "spot"}
-	client.onQuery = func(query input.Query) {
+	client.onQuery = func(query upstream.Query) {
 		if len(query.Columns) == 1 && query.Columns[0] == "close" {
 			windows = append(windows, [2]int{int(query.Start.Sub(origin) / time.Hour), int(query.End.Add(-time.Nanosecond).Sub(origin) / time.Hour)})
 		}
@@ -538,7 +541,7 @@ func TestReplayAgeWindowsPerSegment(t *testing.T) {
 	aged := strings.Replace(replayDSL, "rules:", "universe:\n  min_age_bars: 3\nrules:", 1)
 	job := startReplay(t, repo, "p1", aged, 10)
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
-	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v", done)
 	}
 	want := [][2]int{{-2, 3}, {2, 7}, {6, 9}}
@@ -628,7 +631,7 @@ func TestReplayIgnoresAmbiguityOfUninvolvedSubjects(t *testing.T) {
 	client := &fakeClient{marketType: "spot", ambiguous: map[int]bool{4: true}}
 	job := startReplay(t, repo, "p1", poolDSL, 6)
 	(&Runner{Store: repo, Client: client, ChunkBars: 10}).Execute(context.Background(), job)
-	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v", done)
 	}
 	for _, bar := range barsOf(t, repo, "p1") {
@@ -643,7 +646,7 @@ func TestReplayKeepsPartialMetricsWhenReadFailsAfterCancel(t *testing.T) {
 	repo := openStore(t)
 	client := &fakeClient{marketType: "spot"}
 	calls := 0
-	client.failQuery = func(input.Query) error {
+	client.failQuery = func(upstream.Query) error {
 		calls++
 		if calls == 3 {
 			if err := repo.CancelReplay(context.Background(), "p1", origin); err != nil {
@@ -682,7 +685,7 @@ func TestReplayRunsWithUnknownCoverageAtExecution(t *testing.T) {
 	job := startReplay(t, repo, "p1", replayDSL, 4)
 	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot", unknownCoverage: true}, ChunkBars: 10}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
-	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 4 {
+	if done.Status != store.ReplaySucceeded || len(barsOf(t, repo, "p1")) != 4 {
 		t.Fatalf("覆盖范围暂时未知时应按保存的区间执行：%+v", done)
 	}
 }
@@ -717,7 +720,7 @@ func TestReplayAgeProbeSharesRevisionWithMainRead(t *testing.T) {
 	repo := openStore(t)
 	client := &fakeClient{marketType: "spot", bumpBeforeProbe: true}
 	probeRevisions, mainRevisions := []uint64{}, []uint64{}
-	client.onQuery = func(query input.Query) {
+	client.onQuery = func(query upstream.Query) {
 		if len(query.Columns) == 1 && query.Columns[0] == "close" {
 			probeRevisions = append(probeRevisions, query.ExpectedRevision)
 		} else {
@@ -727,7 +730,7 @@ func TestReplayAgeProbeSharesRevisionWithMainRead(t *testing.T) {
 	aged := strings.Replace(replayDSL, "rules:", "universe:\n  min_age_bars: 3\nrules:", 1)
 	job := startReplay(t, repo, "p1", aged, 4)
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
-	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v", done)
 	}
 	if len(probeRevisions) == 0 {
@@ -780,7 +783,7 @@ func TestReplayFinishStopsRetryingWhenContextEnds(t *testing.T) {
 	defer cancel()
 	runner := &Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, FinishRetryDelay: 5 * time.Millisecond}
 	finished := make(chan error, 1)
-	go func() { finished <- runner.finish(ctx, job.ReplayID, store.ReplayDone, nil, "") }()
+	go func() { finished <- runner.finish(ctx, job.ReplayID, store.ReplaySucceeded, nil, "") }()
 	select {
 	case err := <-finished:
 		if err == nil {
@@ -799,7 +802,7 @@ func TestReplayTargetsMatchLiveAssembly(t *testing.T) {
 			client := &fakeClient{marketType: "spot"}
 			job := startReplay(t, repo, "p1", dslYaml, 10)
 			(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
-			if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+			if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplaySucceeded {
 				t.Fatalf("回放应完成：%+v", done)
 			}
 			strategy, err := dsl.Parse([]byte(dslYaml))
@@ -815,7 +818,7 @@ func TestReplayTargetsMatchLiveAssembly(t *testing.T) {
 				if replayed.Status != store.StatusOK {
 					continue
 				}
-				boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+				boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -849,7 +852,7 @@ func TestReplayOutputsFollowPrecisionRules(t *testing.T) {
 	job := startReplay(t, repo, "p1", replayDSL, 10)
 	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot"}, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "p1")
-	if err != nil || done.Status != store.ReplayDone {
+	if err != nil || done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v err=%v", done, err)
 	}
 	places := func(label string, value float64, max int) {

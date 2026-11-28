@@ -36,7 +36,7 @@ export function stateOf(instance: StrategyInstance, targets: Record<string, Stra
 
 /** 排队或运行中的回放。 */
 export function activeReplays(replays: Replay[]): Replay[] {
-  return replays.filter(item => item.status === "pending" || item.status === "running");
+  return replays.filter(item => item.status === "queued" || item.status === "running");
 }
 
 /** 待处理事项：每个实例最多一条，按严重程度取最先命中的一条。 */

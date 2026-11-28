@@ -10,6 +10,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const dualDSL = `name: dual
@@ -29,9 +32,9 @@ func newDualClient() *fakeClient {
 	swap := client.views["dataset_factor_1h"]
 	swap.DatasetID = "dataset_factor_swap1h"
 	client.views["dataset_factor_swap1h"] = swap
-	client.datasets["dataset_factor_swap1h"] = DatasetInfo{DatasetID: "dataset_factor_swap1h", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": "ds_kline_swap"}}
-	client.datasets["ds_kline_swap"] = DatasetInfo{DatasetID: "ds_kline_swap", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: []string{"binance_swap"}}
-	client.subjects["dataset_factor_swap1h"] = []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("DOGE-USDT", true)}
+	client.datasets["dataset_factor_swap1h"] = upstream.DatasetInfo{DatasetID: "dataset_factor_swap1h", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": "ds_kline_swap"}}
+	client.datasets["ds_kline_swap"] = upstream.DatasetInfo{DatasetID: "ds_kline_swap", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: []string{"binance_swap"}}
+	client.subjects["dataset_factor_swap1h"] = []upstream.Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("DOGE-USDT", true)}
 	return client
 }
 
@@ -80,12 +83,12 @@ func TestResolveRejectsInconsistentTwoTaskBindings(t *testing.T) {
 		}, dualDSL, []string{"ftask_1h", "ftask_swap1h"}, "周期不一致"},
 		"缺列": {func(c *fakeClient) {
 			v := c.views["dataset_factor_swap1h"]
-			v.Columns = []ViewColumn{plainColumn("close")}
+			v.Columns = []upstream.ViewColumn{plainColumn("close")}
 			c.views["dataset_factor_swap1h"] = v
 		}, dualDSL, []string{"ftask_1h", "ftask_swap1h"}, "不存在于 View dataset_factor_swap1h"},
 		"成员定义不一致": {func(c *fakeClient) {
 			v := c.views["dataset_factor_swap1h"]
-			cols := append([]ViewColumn(nil), v.Columns...)
+			cols := append([]upstream.ViewColumn(nil), v.Columns...)
 			for i := range cols {
 				if cols[i].Name == "ma_20" {
 					cols[i] = memberColumn("ma_20", "ma", "ma_other", "fixed")
@@ -93,7 +96,7 @@ func TestResolveRejectsInconsistentTwoTaskBindings(t *testing.T) {
 			}
 			v.Columns = cols
 			c.views["dataset_factor_swap1h"] = v
-			c.factors["ma_other"] = FactorInfo{FactorID: "ma_other", DefinitionHash: "sha256:other"}
+			c.factors["ma_other"] = upstream.FactorInfo{FactorID: "ma_other", DefinitionHash: "sha256:other"}
 		}, dualDSL, []string{"ftask_1h", "ftask_swap1h"}, "因子定义不一致"},
 		"纯现货做空": {func(*fakeClient) {}, "name: s\nrules:\n  - {id: r, type: rank, side: short, score: ma_20, select: {bottom: 1}, weight: 1}\n", []string{"ftask_1h"}, "不允许规则 r 做空"},
 	}
@@ -112,7 +115,7 @@ func TestLoadBarReadsEveryMarketAndMarksUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		if query.DatasetID == "dataset_factor_1h" {
 			return rowsAt(barStart, map[string]map[string]float64{"BTC-USDT": {"ma_20": 1}, "ETH-USDT": {"ma_20": 2}}), 1, nil
 		}
@@ -160,7 +163,7 @@ func TestLoadBarSelectSpotKeepsSwapOnlyForAvailability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		return rowsAt(barStart, map[string]map[string]float64{"ETH-USDT": {"ma_20": 2}, "DOGE-USDT": {"ma_20": 9}}), 1, nil
 	}
 	loaded, err := Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
@@ -205,11 +208,11 @@ type lateView struct {
 	after   int
 }
 
-func (c *lateView) GetView(ctx context.Context, space, datasetID string) (ViewInfo, error) {
+func (c *lateView) GetView(ctx context.Context, space, datasetID string) (upstream.ViewInfo, error) {
 	if datasetID == c.missing {
 		c.reads++
 		if c.reads <= c.after {
-			return ViewInfo{}, ErrViewNotFound
+			return upstream.ViewInfo{}, upstream.ErrViewNotFound
 		}
 	}
 	return c.fakeClient.GetView(ctx, space, datasetID)
@@ -254,7 +257,7 @@ func TestServiceReplayWindowChecksEveryView(t *testing.T) {
 	spot.Generation, spot.IndexedFrom, spot.IndexedTo = "idx_a@s", barStart.Add(-500*time.Hour), barStart
 	swap.Generation, swap.IndexedFrom, swap.IndexedTo = "idx_b@w", barStart.Add(-50*time.Hour), barStart.Add(-10*time.Hour)
 	client.views["dataset_factor_1h"], client.views["dataset_factor_swap1h"] = spot, swap
-	resolved := Resolved{Market: dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, Calendar: DefaultCalendar, Bar: "1h", Tasks: map[string]TaskBinding{
+	resolved := Resolved{Market: dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, Calendar: period.DefaultCalendar, Bar: "1h", Tasks: map[string]TaskBinding{
 		"spot": {DatasetID: "dataset_factor_1h"}, "swap": {DatasetID: "dataset_factor_swap1h"}}}
 	service := Service{Client: client}
 

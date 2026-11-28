@@ -65,7 +65,7 @@ func TestDeleteReplaysBeyondRanksOnlyFinished(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("认领失败：found=%v err=%v", found, err)
 		}
-		if err := repo.FinishReplay(ctx, claimed.ReplayID, ReplayDone, []byte(`{}`), "", testNow); err != nil {
+		if err := repo.FinishReplay(ctx, claimed.ReplayID, ReplaySucceeded, []byte(`{}`), "", testNow); err != nil {
 			t.Fatal(err)
 		}
 	}

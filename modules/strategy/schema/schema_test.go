@@ -54,7 +54,7 @@ func TestStrategySchemaColumns(t *testing.T) {
 		"t_strategy_defs":             {"c_strategy_id", "c_name", "c_dsl_yaml", "c_dsl_hash", "c_deleted_at", "c_ctime", "c_mtime"},
 		"t_strategy_def_versions":     {"c_dsl_hash", "c_dsl_yaml", "c_ctime"},
 		"t_strategy_display_settings": {"c_instance_id", "c_hidden_json", "c_ctime", "c_mtime"},
-		"t_strategy_instances":        {"c_instance_id", "c_strategy_id", "c_space_id", "c_logical_account_id", "c_enabled", "c_confirmed_at", "c_session_id", "c_health", "c_ctime", "c_mtime"},
+		"t_strategy_instances":        {"c_instance_id", "c_strategy_id", "c_space_id", "c_logical_account_id", "c_confirmed_at", "c_session_id", "c_health", "c_ctime", "c_mtime"},
 		"t_strategy_instance_tasks":   {"c_instance_id", "c_source", "c_market", "c_factor_task_id"},
 		"t_strategy_ready_events":     {"c_instance_id", "c_session_id", "c_dataset_id", "c_bar_end_time", "c_event_id", "c_event_bytes", "c_ctime"},
 		"t_strategy_sessions":         {"c_session_id", "c_instance_id", "c_logical_account_id", "c_dsl_hash", "c_resolved_json", "c_members_json", "c_warmed_through", "c_started_at", "c_ctime", "c_closed_at"},
@@ -80,7 +80,10 @@ func TestStrategySchemaIndexesAndConstraints(t *testing.T) {
 	for _, part := range []string{
 		"CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account",
 		"ON t_strategy_instances (c_space_id, c_logical_account_id)",
-		"WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL",
+		"WHERE c_session_id IS NOT NULL AND c_logical_account_id IS NOT NULL",
+		"CHECK (c_session_id IS NULL OR c_session_id <> '')",
+		"CHECK (c_confirmed_at IS NULL OR c_session_id IS NOT NULL)",
+		"CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled'))",
 		"CREATE INDEX IF NOT EXISTS idx_t_strategy_results_instance_bar ON t_strategy_results (c_instance_id, c_bar_end_time);",
 		"CREATE INDEX IF NOT EXISTS idx_t_strategy_results_pending",
 		"ON t_strategy_results (c_ctime, c_result_id)",
@@ -97,7 +100,7 @@ func TestStrategySchemaIndexesAndConstraints(t *testing.T) {
 			t.Errorf("schema 缺少 %q", part)
 		}
 	}
-	for _, obsolete := range []string{"unique (c_factor_task_id)", "c_rule_states_json", "c_warm_state", "data_revision", "input_bindings_json", "snapshot_json", "c_topic", "c_payload"} {
+	for _, obsolete := range []string{"c_enabled", "unique (c_factor_task_id)", "c_rule_states_json", "c_warm_state", "data_revision", "input_bindings_json", "snapshot_json", "c_topic", "c_payload"} {
 		if strings.Contains(strings.ToLower(sql), obsolete) {
 			t.Errorf("schema 仍包含过时列 %q", obsolete)
 		}

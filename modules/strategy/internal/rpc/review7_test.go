@@ -4,10 +4,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	trpc "trpc.group/trpc-go/trpc-go"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 读取回放的返回码：跨空间访问是请求的问题（参数无效）；查询阶段的存储错误是内部错误，不能笼统地报参数无效。
@@ -58,7 +59,7 @@ func mustCode[T retInfoGetter](rsp T, err error) commonpb.ErrorCode {
 func TestStartReplayRecordsCalendar(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.calendar = "cn_stock"
-	h.resolver.view = input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}
+	h.resolver.view = upstream.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}
 	h.createStrategy("s1", demoDSL)
 	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-10-01")})
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())

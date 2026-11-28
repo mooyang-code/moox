@@ -11,6 +11,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 本文件验证规则状态跨会话沿用：停用再启用产生新会话，DSL 与绑定解析都没变时状态原样沿用，变了才清空。
@@ -42,7 +45,7 @@ portfolio:
 `
 
 func reenableResolved() input.Resolved {
-	return input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
+	return input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
 }
 
 // newStopHarness：A 先领先入场（入场价 10），第 2 期跌到 8 触发止损并进入 3 根冷却；之后 A 的分数一直最高，
@@ -259,7 +262,7 @@ func TestUnparsableRuleStateIsClearedAndRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.run(2, 2)
-	if got := h.resultAt(2); got.Status != store.StatusSkipped || got.SkipReason != input.SkipConfigError {
+	if got := h.resultAt(2); got.Status != store.StatusSkipped || got.SkipReason != upstream.SkipConfigError {
 		t.Fatalf("状态无法解析的那一期应记 config_error：%+v", got)
 	}
 	if _, found, _ := h.repo.GetState(context.Background(), "i1"); found {
@@ -281,7 +284,7 @@ func TestPoolWithoutRuleStateIsNotEvaluatedFromScratch(t *testing.T) {
 	h.frame(2, abcFrame(3, 2, 1))
 	h.loader.prices[barStart(2).Unix()] = map[string]float64{"A|spot": 10, "B|spot": 10}
 	expectAck(t, h.deliverWith(2, bothFactors))
-	if got := h.resultAt(2); got.Status != store.StatusSkipped || got.SkipReason != input.SkipConfigError {
+	if got := h.resultAt(2); got.Status != store.StatusSkipped || got.SkipReason != upstream.SkipConfigError {
 		t.Fatalf("池没有状态时应记 config_error：%+v", got)
 	}
 	if _, found, _ := h.repo.GetState(context.Background(), "i1"); found {

@@ -9,29 +9,30 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 var now = time.Date(2026, 10, 23, 8, 0, 0, 0, time.UTC)
 
 type factorsFake struct {
-	calls   []input.ParamSubmission
-	results []input.MemberSubmitResult
+	calls   []upstream.ParamSubmission
+	results []upstream.MemberSubmitResult
 	err     error
 	// taskErr 是只对某个任务返回的错误（任务 → 错误）。
 	taskErr map[string]error
 }
 
-func (f *factorsFake) BindFactorTask(context.Context, string, string) (input.BoundTask, error) {
-	return input.BoundTask{}, nil
+func (f *factorsFake) BindFactorTask(context.Context, string, string) (upstream.BoundTask, error) {
+	return upstream.BoundTask{}, nil
 }
-func (f *factorsFake) GetFactorTask(context.Context, string) (input.FactorTaskRecord, error) {
-	return input.FactorTaskRecord{Status: "enabled"}, nil
+func (f *factorsFake) GetFactorTask(context.Context, string) (upstream.FactorTaskRecord, error) {
+	return upstream.FactorTaskRecord{Status: "enabled"}, nil
 }
-func (f *factorsFake) SubmitFactorParams(_ context.Context, submission input.ParamSubmission) ([]input.MemberSubmitResult, error) {
+func (f *factorsFake) SubmitFactorParams(_ context.Context, submission upstream.ParamSubmission) ([]upstream.MemberSubmitResult, error) {
 	f.calls = append(f.calls, submission)
 	if err := f.taskErr[submission.TaskID]; err != nil {
 		return nil, err
@@ -87,7 +88,7 @@ func harnessWith(t *testing.T, tasks map[string]string, resolved string) (*store
 		t.Fatal(err)
 	}
 	commit(t, db, 0)
-	fake := &factorsFake{results: []input.MemberSubmitResult{{Member: "bias__var", Result: input.SubmitAccepted}}}
+	fake := &factorsFake{results: []upstream.MemberSubmitResult{{Member: "bias__var", Result: upstream.SubmitAccepted}}}
 	return db, &Submitter{Store: db, Factors: fake, Now: func() time.Time { return now }}, fake
 }
 
@@ -141,7 +142,7 @@ func TestSubmitterRecordsRejected(t *testing.T) {
 	db, submitter, fake := harness(t)
 	var finished []string
 	submitter.OnResult = func(status string) { finished = append(finished, status) }
-	fake.results = []input.MemberSubmitResult{{Member: "bias__var", Result: input.SubmitRejected, Reason: "超出范围"}}
+	fake.results = []upstream.MemberSubmitResult{{Member: "bias__var", Result: upstream.SubmitRejected, Reason: "超出范围"}}
 	if _, err := submitter.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +155,7 @@ func TestSubmitterRecordsRejected(t *testing.T) {
 	}
 
 	commit(t, db, 1)
-	fake.err = &input.ServiceError{Operation: "提交因子参数", Code: commonpb.ErrorCode_INVALID_PARAM, Raw: errors.New("bad")}
+	fake.err = &upstream.ServiceError{Operation: "提交因子参数", Code: commonpb.ErrorCode_INVALID_PARAM, Raw: errors.New("bad")}
 	if _, err := submitter.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +220,7 @@ func TestSubmitterDeliversToEveryMainTask(t *testing.T) {
 	}
 
 	commit(t, db, 1)
-	fake.results = []input.MemberSubmitResult{{Member: "bias__var", Result: input.SubmitRejected, Reason: "超出范围"}}
+	fake.results = []upstream.MemberSubmitResult{{Member: "bias__var", Result: upstream.SubmitRejected, Reason: "超出范围"}}
 	if _, err := submitter.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +231,7 @@ func TestSubmitterDeliversToEveryMainTask(t *testing.T) {
 	// 现货接受、永续拒绝：整条仍记被拒绝，原因写明现货任务已接受（它已用上新参数，不撤回）。
 	commit(t, db, 2)
 	fake.results = nil
-	fake.taskErr = map[string]error{"ftask_w": &input.ServiceError{Operation: "提交因子参数", Code: commonpb.ErrorCode_INVALID_PARAM, Raw: errors.New("bad")}}
+	fake.taskErr = map[string]error{"ftask_w": &upstream.ServiceError{Operation: "提交因子参数", Code: commonpb.ErrorCode_INVALID_PARAM, Raw: errors.New("bad")}}
 	if _, err := submitter.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}

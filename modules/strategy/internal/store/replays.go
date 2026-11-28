@@ -15,9 +15,9 @@ import (
 
 // 回放状态。
 const (
-	ReplayPending   = "pending"
+	ReplayQueued    = "queued"
 	ReplayRunning   = "running"
-	ReplayDone      = "done"
+	ReplaySucceeded = "succeeded"
 	ReplayFailed    = "failed"
 	ReplayCancelled = "cancelled"
 )
@@ -163,19 +163,19 @@ const (
 	// sqlInsertReplay 写入一条排队中的回放。
 	sqlInsertReplay = `
 	INSERT INTO t_strategy_replays (c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_input, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)`
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, '{}', '', ?, ?)`
 	// sqlCountActiveReplays 统计空间内排队与运行中的回放。
-	sqlCountActiveReplays = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`
+	sqlCountActiveReplays = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('queued', 'running')`
 	// sqlSelectReplayByID 按回放 ID 读取回放。
 	sqlSelectReplayByID = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_input, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_replay_id = ?`
 	// sqlCountReplaysOfSpace 统计空间内的全部回放。
 	sqlCountReplaysOfSpace = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ?`
 	// sqlListReplaysOfSpace 按创建时间倒序分页列出空间内的回放，不读取 DSL 全文与成员快照（c_dsl_yaml 返回空串，c_members_json 返回 NULL）。
 	sqlListReplaysOfSpace = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, '' AS c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_input, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, NULL AS c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`
-	// sqlSelectNextPendingReplay 读取最早的一条排队中的回放。
-	sqlSelectNextPendingReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_input, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`
+	// sqlSelectNextQueuedReplay 读取最早的一条排队中的回放。
+	sqlSelectNextQueuedReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_input, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_slippage_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'queued' ORDER BY c_ctime, c_replay_id LIMIT 1`
 	// sqlClaimReplay 比较交换把排队中的回放改为运行中。
-	sqlClaimReplay = `UPDATE t_strategy_replays SET c_status = 'running', c_mtime = ? WHERE c_replay_id = ? AND c_status = 'pending'`
+	sqlClaimReplay = `UPDATE t_strategy_replays SET c_status = 'running', c_mtime = ? WHERE c_replay_id = ? AND c_status = 'queued'`
 	// sqlUpdateReplayProgress 推进运行中回放的进度。
 	sqlUpdateReplayProgress = `UPDATE t_strategy_replays SET c_progress_time = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'running'`
 	// sqlFinishReplay 把运行中的回放置为终态并写入指标与错误。
@@ -183,7 +183,7 @@ const (
 	// sqlRecordCancelledReplayMetrics 给已取消的回放写入部分指标。
 	sqlRecordCancelledReplayMetrics = `UPDATE t_strategy_replays SET c_metrics_json = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'cancelled'`
 	// sqlCancelReplay 取消排队或运行中的回放。
-	sqlCancelReplay = `UPDATE t_strategy_replays SET c_status = 'cancelled', c_mtime = ? WHERE c_replay_id = ? AND c_status IN ('pending', 'running')`
+	sqlCancelReplay = `UPDATE t_strategy_replays SET c_status = 'cancelled', c_mtime = ? WHERE c_replay_id = ? AND c_status IN ('queued', 'running')`
 	// sqlSelectReplayStatus 只读取回放状态。
 	sqlSelectReplayStatus = `SELECT c_status FROM t_strategy_replays WHERE c_replay_id = ?`
 	// sqlSelectRunningReplaysOfInput 列出某种输入来源的运行中回放（启动时先关掉“因子现算”遗留在因子引擎上的会话）。
@@ -202,7 +202,7 @@ const (
 	sqlListReplayBarsBrief = `SELECT c_replay_id, c_bar_end_time, c_status, '[]' AS c_targets_json, '{}' AS c_positions_json, '{}' AS c_summary_json, '{}' AS c_params_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time LIMIT ? OFFSET ?`
 )
 
-// CreateReplay 登记一个 pending 的回放任务。
+// CreateReplay 登记一个 queued 的回放任务。
 func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" || strings.TrimSpace(replay.Calendar) == "" {
 		return errors.New("回放缺少 replay_id、space_id、DSL 文本、版本哈希或日历")
@@ -317,7 +317,7 @@ func (s *Store) ListReplays(ctx context.Context, spaceID string, offset, limit i
 	return replays, total, nil
 }
 
-// ClaimNextReplay 把最早的 pending 回放改为 running 并返回；没有则返回 false。
+// ClaimNextReplay 把最早的 queued 回放改为 running 并返回；没有则返回 false。
 func (s *Store) ClaimNextReplay(ctx context.Context, at time.Time) (Replay, bool, error) {
 	now, err := requireTime(at)
 	if err != nil {
@@ -327,7 +327,7 @@ func (s *Store) ClaimNextReplay(ctx context.Context, at time.Time) (Replay, bool
 	found := false
 	err = s.transaction(ctx, func(tx *gorm.DB) error {
 		var row replayRow
-		if err := tx.Raw(sqlSelectNextPendingReplay).Scan(&row).Error; err != nil {
+		if err := tx.Raw(sqlSelectNextQueuedReplay).Scan(&row).Error; err != nil {
 			return err
 		}
 		if row.ReplayID == "" {
@@ -358,13 +358,13 @@ func (s *Store) UpdateReplayProgress(ctx context.Context, replayID string, progr
 	return s.db.WithContext(ctx).Exec(sqlUpdateReplayProgress, millis(progress), now, replayID).Error
 }
 
-// FinishReplay 把运行中的回放置为终态（done | failed）。
+// FinishReplay 把运行中的回放置为终态（succeeded | failed）。
 func (s *Store) FinishReplay(ctx context.Context, replayID, status string, metricsJSON json.RawMessage, errText string, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {
 		return err
 	}
-	if status != ReplayDone && status != ReplayFailed {
+	if status != ReplaySucceeded && status != ReplayFailed {
 		return fmt.Errorf("回放终态 %q 无效", status)
 	}
 	metrics := "{}"
@@ -398,7 +398,7 @@ func (s *Store) RecordCancelledReplayMetrics(ctx context.Context, replayID strin
 	return s.db.WithContext(ctx).Exec(sqlRecordCancelledReplayMetrics, string(metricsJSON), now, replayID).Error
 }
 
-// CancelReplay 取消 pending 或 running 的回放；运行中的任务由执行循环在下一期检查状态后停止。
+// CancelReplay 取消 queued 或 running 的回放；运行中的任务由执行循环在下一期检查状态后停止。
 func (s *Store) CancelReplay(ctx context.Context, replayID string, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {

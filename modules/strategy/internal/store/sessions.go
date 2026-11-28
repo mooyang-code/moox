@@ -85,7 +85,7 @@ const (
 	sqlListPendingWarmSessions = `SELECT c_session_id, c_instance_id, c_logical_account_id, c_started_at, c_dsl_hash, c_resolved_json, c_members_json, c_warmed_through, c_ctime, c_closed_at
 		FROM t_strategy_sessions
 		WHERE c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL
-		AND c_session_id IN (SELECT c_session_id FROM t_strategy_instances WHERE c_enabled = 1)
+		AND c_session_id IN (SELECT c_session_id FROM t_strategy_instances WHERE c_session_id IS NOT NULL)
 		ORDER BY c_ctime`
 )
 
@@ -120,7 +120,7 @@ func (s *Store) EnableInstance(ctx context.Context, session Session, dslYaml str
 		if err != nil {
 			return err
 		}
-		if current.Enabled == 1 {
+		if current.SessionID.Valid {
 			return errors.New("实例已处于启用状态")
 		}
 		var definitionHash string

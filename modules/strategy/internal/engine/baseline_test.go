@@ -134,10 +134,10 @@ func baselineEngineFrame(program *dsl.Program, index int64, bar baselineEngineBa
 	sort.Strings(frame.Universe)
 	for _, rule := range program.Rules {
 		expected := frame.Universe
-		if rule.Rule.Pool.Explicit {
+		if rule.Rule.Universe != nil && rule.Rule.Universe.OverridesMembers() && len(rule.Rule.Universe.Include) > 0 && len(rule.Rule.Universe.Tags) == 0 {
 			expected = nil
 			for _, id := range frame.Universe {
-				if contains(rule.Rule.Pool.Fixed, id) {
+				if contains(rule.Rule.Universe.Include, id) && !contains(rule.Rule.Universe.Exclude, id) {
 					expected = append(expected, id)
 				}
 			}

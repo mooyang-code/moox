@@ -25,7 +25,7 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 		}
 	}
 	got, err := repo.GetInstance(ctx, "i1")
-	if err != nil || got.Enabled || got.SessionID != nil || got.FactorTasks["spot"] != "ftask_a" || got.Health != HealthOK || string(got.ResolvedJSON) != "{}" || *got.LogicalAccountID != account {
+	if err != nil || got.StrategyName != "demo" || got.Enabled || got.SessionID != nil || got.FactorTasks["spot"] != "ftask_a" || got.Health != HealthOK || string(got.ResolvedJSON) != "{}" || *got.LogicalAccountID != account {
 		t.Fatalf("实例不符：%+v err=%v", got, err)
 	}
 	if err := repo.EnableInstance(ctx, Session{SessionID: "session-1", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: spotResolved, CreatedAt: testNow}, "name: demo"); err != nil {
@@ -140,9 +140,12 @@ func TestEnableAndDisableAreSingleTransactions(t *testing.T) {
 	if reopened, err := repo.GetSession(ctx, other); err != nil || reopened.LogicalAccountID != nil || reopened.StartedAt <= opened.StartedAt {
 		t.Fatalf("新会话记下改后的账户（观察实例为空），开始时刻更晚：%+v err=%v", reopened, err)
 	}
-	// 表约束兜底：启用与会话同在同无。
-	if err := repo.db.Exec(`UPDATE t_strategy_instances SET c_enabled = 0 WHERE c_instance_id = 'i1'`).Error; err == nil {
-		t.Fatal("停用的实例不应挂着会话")
+	// 表约束兜底：c_session_id 不能为空串，且停用（c_session_id 为空）时不能保留确认时间。
+	if err := repo.db.Exec(`UPDATE t_strategy_instances SET c_session_id = '' WHERE c_instance_id = 'i1'`).Error; err == nil {
+		t.Fatal("会话 ID 不应允许空串")
+	}
+	if err := repo.db.Exec(`UPDATE t_strategy_instances SET c_session_id = NULL WHERE c_instance_id = 'i1'`).Error; err == nil {
+		t.Fatal("停用的实例不应保留确认时间")
 	}
 }
 

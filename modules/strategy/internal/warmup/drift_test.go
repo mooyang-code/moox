@@ -13,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/replay"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 // driftYaml 是两个成员的 drift 池，allocation 写在 method、ratios 之后；freeze 的窗口让预热期数大于 1。
@@ -37,7 +39,7 @@ func hourText(hours int) string {
 
 func barIndexAt(t *testing.T, hours int) int64 {
 	t.Helper()
-	bar, err := input.FromStorageStart(input.DefaultCalendar, "1h", origin.Add(time.Duration(hours)*time.Hour))
+	bar, err := period.FromStorageStart(period.DefaultCalendar, "1h", origin.Add(time.Duration(hours)*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +140,7 @@ func TestDriftWarmUpInitialRatiosLandOnAt(t *testing.T) {
 	if err != nil || !start.Equal(origin.Add(85*time.Hour)) {
 		t.Fatalf("预热起点 %v，期望 at 往前 6 期；err=%v", start, err)
 	}
-	clock, err := input.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
+	clock, err := period.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +152,7 @@ func TestDriftWarmUpInitialRatiosLandOnAt(t *testing.T) {
 	ratios := map[int]map[string]string{}
 	run := replay.PoolRun{Client: h.client, SpaceID: "crypto", Resolved: resolved, Members: members, Programs: programs, Config: cfg,
 		Start: start, End: end, IncludeLatest: true, ChunkBars: 4, Now: h.manager.Now,
-		OnBar: func(bar input.PeriodBoundaries, decision engine.Decision) {
+		OnBar: func(bar period.PeriodBoundaries, decision engine.Decision) {
 			hour := int(bar.StorageStart.Sub(origin) / time.Hour)
 			phases[hour] = decision.Summary.Pool.Drift.Phase
 			ratios[hour] = map[string]string{}

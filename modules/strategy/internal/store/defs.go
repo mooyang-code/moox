@@ -54,7 +54,7 @@ const (
 	// sqlSelectDefinitionByID 按策略 ID 读取定义（包括已软删除的）。
 	sqlSelectDefinitionByID = `SELECT c_strategy_id, c_name, c_dsl_yaml, c_dsl_hash, c_deleted_at, c_ctime, c_mtime FROM t_strategy_defs WHERE c_strategy_id = ?`
 	// sqlCountActiveInstancesOfDefinition 统计引用该定义、已启用的实例。
-	sqlCountActiveInstancesOfDefinition = `SELECT COUNT(*) FROM t_strategy_instances WHERE c_strategy_id = ? AND c_enabled = 1`
+	sqlCountActiveInstancesOfDefinition = `SELECT COUNT(*) FROM t_strategy_instances WHERE c_strategy_id = ? AND c_session_id IS NOT NULL`
 	// sqlUpdateDefinition 替换定义的名称与 DSL。
 	sqlUpdateDefinition = `UPDATE t_strategy_defs SET c_name = ?, c_dsl_yaml = ?, c_dsl_hash = ?, c_mtime = ? WHERE c_strategy_id = ?`
 	// sqlListLiveDefinitions 按名称列出未删除的定义。

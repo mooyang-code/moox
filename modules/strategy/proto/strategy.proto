@@ -30,7 +30,7 @@ message StrategyInstance {
   string logical_account_id = 5;
   bool enabled = 6;
   string session_id = 7;
-  // 启用时固化的解析结果（只读）：bar、日历、市场类型、每列所属成员的 member_key 与契约哈希
+  // 启用时固化的解析结果（只读）：bar、日历、市场类型、是否策略池（pool）、每列所属成员的 member_key 与契约哈希
   string resolved_json = 8;
   string health = 9;                     // ok | degraded
   int64 created_at = 10;
@@ -40,6 +40,8 @@ message StrategyInstance {
   repeated string missing_factor_tasks = 12;
   // 确认实盘的时刻；0 表示试运行（挂了账户的实例启用后目标只发影子、不下单）。没挂账户的实例启用时写入；停用、修改实例都清空。
   int64 confirmed_at = 13;
+  // 关联策略定义的名称（由 t_strategy_defs 带出）。
+  string strategy_name = 14;
 }
 
 // InstrumentWeight 是一个标的的目标权重。
@@ -97,7 +99,7 @@ message Replay {
   string space_id = 4;
   int64 start_time = 6;
   int64 end_time = 7;
-  string status = 9;                     // pending | running | done | failed | cancelled
+  string status = 9;                     // queued | running | succeeded | failed | cancelled
   int64 progress_time = 10;
   string metrics_json = 11;              // 累计收益、年化、最大回撤、平均换手、平均持仓数、跳过周期数、局限性标注
   string error = 12;
@@ -157,6 +159,9 @@ message StrategyTaskRequirement {
   repeated StrategySourceRequirement sources = 4;  // 附加来源（声明顺序）
   repeated string problems = 5;                    // 据此建不了实例的问题（中文），例如策略池成员不存在、股票成员与现货永续成员混放
   repeated string reference_markets = 6;           // 参考市场（market.reference）：也在 task_keys 里，只用于年龄判定，不是主帧市场
+  bool tuned = 7;                                  // 策略声明了 factor_params（动态调参）
+  string pool_allocation_method = 8;               // 策略池的分配方式：fixed | rotation | drift，非池为空
+  string pool_drift_start = 9;                     // 策略池为 drift 时的 allocation.start 或 allocation.initial.at，其余为空
 }
 
 message StrategySourceRequirement {
@@ -197,7 +202,7 @@ message SetStrategyInstanceEnabledRsp { common.RetInfo ret_info = 1; StrategyIns
 message ConfirmStrategyInstanceReq { string instance_id = 1; string session_id = 2; }
 message ConfirmStrategyInstanceRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
 // DeleteStrategyInstanceReq 删除已停用、没有会话的实例，连同绑定到它的因子任务和任务的结果数据集（不可恢复）；
-// 没绑定到它的任务保留不动。有回放或补算在进行、结果数据集有归档任务时拒绝；实例不存在返回成功。
+// 没绑定到它的任务保留不动。有回放或补算在进行时拒绝；实例不存在返回成功。
 // 中途失败（例如超时）后再删一次即可接着做完。Trade 里的历史不删。
 message DeleteStrategyInstanceReq { string instance_id = 1; }
 message DeleteStrategyInstanceRsp {

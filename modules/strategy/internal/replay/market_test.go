@@ -13,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // dualClient 是现货与永续各一个结果 View 的客户端，按 View 与数据集转发给各自的模拟数据。
@@ -35,7 +37,7 @@ func (c *dualClient) byDataset(datasetID string) *fakeClient {
 	return c.spot
 }
 
-func (c *dualClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+func (c *dualClient) GetView(ctx context.Context, spaceID, datasetID string) (upstream.ViewInfo, error) {
 	return c.byDataset(datasetID).GetView(ctx, spaceID, datasetID)
 }
 
@@ -43,31 +45,31 @@ func (c *dualClient) ViewGeneration(ctx context.Context, spaceID, datasetID stri
 	return c.byDataset(datasetID).ViewGeneration(ctx, spaceID, datasetID)
 }
 
-func (c *dualClient) ViewCoverage(ctx context.Context, spaceID string, view input.ViewInfo, exact bool) (input.Coverage, error) {
+func (c *dualClient) ViewCoverage(ctx context.Context, spaceID string, view upstream.ViewInfo, exact bool) (upstream.Coverage, error) {
 	return c.byDataset(view.DatasetID).ViewCoverage(ctx, spaceID, view, exact)
 }
 
-func (c *dualClient) GetDataset(ctx context.Context, spaceID, datasetID string) (input.DatasetInfo, error) {
+func (c *dualClient) GetDataset(ctx context.Context, spaceID, datasetID string) (upstream.DatasetInfo, error) {
 	return c.byDataset(datasetID).GetDataset(ctx, spaceID, datasetID)
 }
 
-func (c *dualClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]input.Subject, error) {
+func (c *dualClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]upstream.Subject, error) {
 	return c.byDataset(datasetID).ListDatasetSubjects(ctx, spaceID, datasetID)
 }
 
-func (c *dualClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]input.TagMember, error) {
+func (c *dualClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]upstream.TagMember, error) {
 	return c.spot.ListTagMembers(ctx, spaceID, tagID)
 }
 
-func (c *dualClient) GetTag(ctx context.Context, spaceID, tagID string) (input.TagInfo, error) {
+func (c *dualClient) GetTag(ctx context.Context, spaceID, tagID string) (upstream.TagInfo, error) {
 	return c.spot.GetTag(ctx, spaceID, tagID)
 }
 
-func (c *dualClient) QueryRows(ctx context.Context, spaceID string, query input.Query) ([]input.Row, uint64, error) {
+func (c *dualClient) QueryRows(ctx context.Context, spaceID string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	return c.byDataset(query.DatasetID).QueryRows(ctx, spaceID, query)
 }
 
-func (c *dualClient) GetFactor(ctx context.Context, factorID string) (input.FactorInfo, error) {
+func (c *dualClient) GetFactor(ctx context.Context, factorID string) (upstream.FactorInfo, error) {
 	return c.spot.GetFactor(ctx, factorID)
 }
 
@@ -77,7 +79,7 @@ var (
 )
 
 // startMarketReplay 登记并认领一个按市场读取任务的回放：区间从第 2 根开始，共 hours 根。
-func startMarketReplay(t *testing.T, repo *store.Store, client input.Client, id, dslYaml string, hours int, tasks map[string]store.ReplayTask, spotFee, swapFee float64) store.Replay {
+func startMarketReplay(t *testing.T, repo *store.Store, client upstream.Client, id, dslYaml string, hours int, tasks map[string]store.ReplayTask, spotFee, swapFee float64) store.Replay {
 	t.Helper()
 	strategy, err := dsl.Parse([]byte(dslYaml))
 	if err != nil {
@@ -188,7 +190,7 @@ func TestReplaySwapOnlyUsesSwapPricesAndFeeRate(t *testing.T) {
 		job := startMarketReplay(t, repo, client, "p1", swapOnlyDSL, 10, map[string]store.ReplayTask{"swap": swapTask}, spotFee, swapFee)
 		(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
 		done, err := repo.GetReplay(context.Background(), "p1")
-		if err != nil || done.Status != store.ReplayDone {
+		if err != nil || done.Status != store.ReplaySucceeded {
 			t.Fatalf("回放应完成：%+v err=%v", done, err)
 		}
 		return done, barsOf(t, repo, "p1")
@@ -265,7 +267,7 @@ func TestReplayMixedMarketHedgeUsesPerMarketPrices(t *testing.T) {
 	client := newDualClient()
 	job := startMarketReplay(t, repo, client, "p1", hedgeDSL, 10, map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}, 0, 0)
 	(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
-	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v", done)
 	}
 	bars := barsOf(t, repo, "p1")
@@ -331,7 +333,7 @@ func TestReplayAgeIsJudgedPerMarket(t *testing.T) {
 	}
 	job := startMarketReplay(t, repo, client, "p1", agedPreferSwapDSL, 14, map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}, 0, 0)
 	(&Runner{Store: repo, Client: client, ChunkBars: 5}).Execute(context.Background(), job)
-	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v", done)
 	}
 	// B 的永续行从第 8 小时起有，年龄目标是 T−2（向前容忍两根）：第 10 小时起永续才满足年龄。第 8 小时 B 已领先，
@@ -363,7 +365,7 @@ func TestReplayFollowsIndexSwitchOfOneMarket(t *testing.T) {
 	job := startMarketReplay(t, repo, client, "p1", hedgeDSL, 12, map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}, 0, 0)
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
-	if done.Status != store.ReplayDone {
+	if done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v", done)
 	}
 	var metrics Metrics
@@ -570,7 +572,7 @@ func TestReplayLeveragedSwapBlowsUpAndStaysFlat(t *testing.T) {
 	job := startMarketReplay(t, repo, client, "p1", leveragedSwapDSL, 10, map[string]store.ReplayTask{"swap": swapTask}, 0, 0)
 	(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
-	if done.Status != store.ReplayDone {
+	if done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v", done)
 	}
 	bars := barsOf(t, repo, "p1")

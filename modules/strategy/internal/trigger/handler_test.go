@@ -22,6 +22,9 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const rankDSL = `name: rank_demo
@@ -114,14 +117,14 @@ func (l *fakeLoader) LoadBar(_ context.Context, spaceID string, resolved input.R
 			return input.Loaded{}, err
 		}
 	}
-	boundary, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, bar.BarStart)
+	boundary, err := period.FromStorageStart(resolved.Calendar, resolved.Bar, bar.BarStart)
 	if err != nil {
 		return input.Loaded{}, err
 	}
 	rows := l.frames[bar.BarStart.Unix()]
 	frameRows := map[string]engine.Row{}
 	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Expected: map[string][]string{}, AgedOut: map[string][]string{}}
-	sets := input.Sets{Expected: map[string][]string{}, AgedOut: map[string][]string{}, Subjects: map[string]input.Subject{}}
+	sets := input.Sets{Expected: map[string][]string{}, AgedOut: map[string][]string{}, Subjects: map[string]upstream.Subject{}}
 	ids := make([]string, 0, len(rows))
 	for id, values := range rows {
 		ids = append(ids, id)
@@ -137,7 +140,7 @@ func (l *fakeLoader) LoadBar(_ context.Context, spaceID string, resolved input.R
 			row.Previous = nil
 		}
 		frameRows[id] = row
-		sets.Subjects[id] = input.Subject{SubjectID: id, Active: true}
+		sets.Subjects[id] = upstream.Subject{SubjectID: id, Active: true}
 	}
 	frame.Markets = map[string]engine.MarketInput{}
 	for _, market := range resolved.Markets() {
@@ -171,7 +174,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
@@ -437,7 +440,7 @@ func TestHandleInfraRetryBudgetAndStoreFailure(t *testing.T) {
 func TestHandleRereadsOnStaleSnapshot(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
-	h.loader.errs = []error{input.ErrStale, nil}
+	h.loader.errs = []error{upstream.ErrStale, nil}
 	expectAck(t, h.deliver(1))
 	if h.loader.calls != 2 || h.resultAt(1).Status != store.StatusOK {
 		t.Fatalf("应重读一次后成功：calls=%d", h.loader.calls)
@@ -465,9 +468,9 @@ func TestHandleFactorChangedDegradesInstance(t *testing.T) {
 func TestHandleConfigErrorDegradesInstance(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
-	h.loader.errs = []error{&input.SkipError{Reason: input.SkipConfigError, Detail: "列已删除"}}
+	h.loader.errs = []error{&upstream.SkipError{Reason: upstream.SkipConfigError, Detail: "列已删除"}}
 	expectAck(t, h.deliver(1))
-	if result := h.resultAt(1); result.Status != store.StatusSkipped || result.SkipReason != input.SkipConfigError {
+	if result := h.resultAt(1); result.Status != store.StatusSkipped || result.SkipReason != upstream.SkipConfigError {
 		t.Fatalf("应记为 config_error：%+v", result)
 	}
 	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthDegraded {
@@ -479,11 +482,11 @@ func TestHandleConfigErrorDegradesInstance(t *testing.T) {
 	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthOK {
 		t.Fatalf("ok 后应恢复健康：%+v", instance)
 	}
-	h.loader.errs = []error{&input.SkipError{Reason: input.SkipAmbiguousSeries, Detail: "两个序列"}}
+	h.loader.errs = []error{&upstream.SkipError{Reason: upstream.SkipAmbiguousSeries, Detail: "两个序列"}}
 	h.frame(3, map[string]map[string]float64{"A": {"m": 1}})
 	h.now = barStart(3).Add(90 * time.Minute)
 	expectAck(t, h.deliver(3))
-	if result := h.resultAt(3); result.SkipReason != input.SkipAmbiguousSeries {
+	if result := h.resultAt(3); result.SkipReason != upstream.SkipAmbiguousSeries {
 		t.Fatalf("应记为 ambiguous_series：%+v", result)
 	}
 }
@@ -614,7 +617,7 @@ END;`); err != nil {
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}, "B": {"m": 2}})
 	expectAck(t, h.deliver(1))
 	result := h.resultAt(1)
-	if result.Status != store.StatusSkipped || result.SkipReason != input.SkipConfigError {
+	if result.Status != store.StatusSkipped || result.SkipReason != upstream.SkipConfigError {
 		t.Fatalf("确定性写入错误应记为 config_error：%+v", result)
 	}
 	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthDegraded {
@@ -647,7 +650,7 @@ END;`); err != nil {
 // ambiguous_series 同样需要人工处理，实例标记 degraded；下一个 ok 周期恢复 ok。
 func TestHandleHealthTransitions(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
-	h.loader.errs = []error{&input.SkipError{Reason: input.SkipAmbiguousSeries, Detail: "两个序列"}}
+	h.loader.errs = []error{&upstream.SkipError{Reason: upstream.SkipAmbiguousSeries, Detail: "两个序列"}}
 	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
 	expectAck(t, h.deliver(1))
 	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthDegraded {

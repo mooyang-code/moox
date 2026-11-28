@@ -13,6 +13,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // submitReplay 按 StartReplay 的做法登记并认领一个回放：记录 DSL 哈希与提交时校验区间所用的活动索引。
@@ -70,7 +73,7 @@ func TestReplayWithMinAgeAndUnknownCoverage(t *testing.T) {
 	job := submitReplay(t, repo, aged, "idx", origin.Add(4*time.Hour), 4)
 	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot", unknownCoverage: true}, ChunkBars: 10}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
-	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 4 {
+	if done.Status != store.ReplaySucceeded || len(barsOf(t, repo, "p1")) != 4 {
 		t.Fatalf("代次没变时应按提交的区间执行：%+v", done)
 	}
 
@@ -103,7 +106,7 @@ func TestReplayHandlesIndexSwitchDuringRun(t *testing.T) {
 	covered := &fakeClient{marketType: "spot", switchAtQuery: 2, switchedFrom: origin}
 	(&Runner{Store: repo, Client: covered, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
-	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 12 {
+	if done.Status != store.ReplaySucceeded || len(barsOf(t, repo, "p1")) != 12 {
 		t.Fatalf("新一代仍覆盖剩余区间时应切换过去继续：%+v bars=%d", done, len(barsOf(t, repo, "p1")))
 	}
 	for _, bar := range barsOf(t, repo, "p1") {
@@ -130,7 +133,7 @@ func TestReplayHandlesIndexSwitchDuringRun(t *testing.T) {
 func TestReplayFailureMessageIsFriendly(t *testing.T) {
 	repo := openStore(t)
 	job := submitReplay(t, repo, replayDSL, "idx", origin.Add(2*time.Hour), 4)
-	client := &fakeClient{marketType: "spot", failQuery: func(input.Query) error {
+	client := &fakeClient{marketType: "spot", failQuery: func(upstream.Query) error {
 		return fmt.Errorf("读取 View 行：%w", context.DeadlineExceeded)
 	}}
 	(&Runner{Store: repo, Client: client, ChunkBars: 10}).Execute(context.Background(), job)
@@ -150,7 +153,7 @@ func TestReplaySkipOrderMatchesLive(t *testing.T) {
 	job := submitReplay(t, repo, aged, "idx", origin.Add(5*time.Hour), 1)
 	(&Runner{Store: repo, Client: client, ChunkBars: 10}).Execute(context.Background(), job)
 	bars := barsOf(t, repo, "p1")
-	if len(bars) != 1 || bars[0].SkipReason != input.SkipHistoryInsufficient {
+	if len(bars) != 1 || bars[0].SkipReason != upstream.SkipHistoryInsufficient {
 		t.Fatalf("上一根歧义与历史缺口同时出现时应先报历史不足：%+v", bars)
 	}
 }
@@ -160,7 +163,7 @@ func TestPresenceSkipsRowsOffCalendar(t *testing.T) {
 	resolved := input.Resolved{Calendar: "cn_stock", Bar: "1d", MinAgeBars: 1}
 	holiday := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
 	trading := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
-	rows := input.RangeRows{Bars: map[int64]map[string]input.Row{
+	rows := input.RangeRows{Bars: map[int64]map[string]upstream.Row{
 		holiday.Unix(): {"600000.SH": {SubjectID: "600000.SH", DataTime: holiday}},
 		trading.Unix(): {"600000.SH": {SubjectID: "600000.SH", DataTime: trading}},
 	}}
@@ -169,11 +172,11 @@ func TestPresenceSkipsRowsOffCalendar(t *testing.T) {
 	if len(ages.cache) != 1 || len(ages.indexes["600000.SH"]) != 1 {
 		t.Fatalf("应只登记交易日的行：cache=%v indexes=%v", ages.cache, ages.indexes)
 	}
-	period, err := input.FromStorageStart("cn_stock", "1d", trading)
+	boundary, err := period.FromStorageStart("cn_stock", "1d", trading)
 	if err != nil {
 		t.Fatal(err)
 	}
-	satisfied, err := ages.probe(resolved.MinAgeBars, period)(context.Background(), []string{"600000.SH"})
+	satisfied, err := ages.probe(resolved.MinAgeBars, boundary)(context.Background(), []string{"600000.SH"})
 	if err != nil || len(satisfied) != 1 {
 		t.Fatalf("交易日的行应满足年龄：%v err=%v", satisfied, err)
 	}

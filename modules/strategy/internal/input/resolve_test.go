@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 func TestResolveExampleStrategy(t *testing.T) {
@@ -17,7 +20,7 @@ func TestResolveExampleStrategy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
-	if resolved.Bar != "1h" || resolved.Calendar != DefaultCalendar || resolved.Market != dsl.SingleMarket("spot") || resolved.Primary().SourceDatasetID != "ds_kline" {
+	if resolved.Bar != "1h" || resolved.Calendar != period.DefaultCalendar || resolved.Market != dsl.SingleMarket("spot") || resolved.Primary().SourceDatasetID != "ds_kline" {
 		t.Fatalf("解析结果不符：%+v", resolved)
 	}
 	if resolved.Factors["ma"] != "sha256:ma|fixed" || resolved.Factors["bias"] != "sha256:bias|fixed" || resolved.Factors["qv"] != "sha256:qv|fixed" || len(resolved.Factors) != 3 {
@@ -130,7 +133,7 @@ func TestResolveRejectsMinAgeBeyondRetentionAndMissingHash(t *testing.T) {
 	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, tooOld); err == nil || !strings.Contains(err.Error(), "保留根数") {
 		t.Fatalf("min_age_bars 超过保留根数应拒绝：%v", err)
 	}
-	client.factors["ma"] = FactorInfo{FactorID: "ma"}
+	client.factors["ma"] = upstream.FactorInfo{FactorID: "ma"}
 	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "definition_hash") {
 		t.Fatalf("缺少指纹应拒绝：%v", err)
 	}
@@ -182,13 +185,13 @@ func TestRetentionBars(t *testing.T) {
 	}{
 		{"720h", "1h", 720, true}, {"720h", "4h", 180, true}, {"48h", "1d", 2, true}, {"forever", "1h", 0, false}, {"", "1h", 0, false}, {"abc", "1h", 0, false},
 	} {
-		bars, ok := retentionBars(tc.retention, DefaultCalendar, tc.bar)
+		bars, ok := period.RetentionBars(tc.retention, period.DefaultCalendar, tc.bar)
 		if bars != tc.bars || ok != tc.ok {
-			t.Fatalf("retentionBars(%s, %s) = %d、%v，不符", tc.retention, tc.bar, bars, ok)
+			t.Fatalf("RetentionBars(%s, %s) = %d、%v，不符", tc.retention, tc.bar, bars, ok)
 		}
 	}
 	// A 股日线按交易日折算：30 个自然日约 20 个交易日。
-	if bars, ok := retentionBars("720h", "cn_stock", "1d"); !ok || bars != 20 {
+	if bars, ok := period.RetentionBars("720h", "cn_stock", "1d"); !ok || bars != 20 {
 		t.Fatalf("A 股日线应按交易日折算：%d、%v", bars, ok)
 	}
 }
@@ -232,7 +235,7 @@ func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 	delete(client.errors, "coverage")
 	noClose := newFakeClient("spot")
 	view = noClose.views["dataset_factor_1h"]
-	view.Columns = append([]ViewColumn{}, view.Columns[4:]...)
+	view.Columns = append([]upstream.ViewColumn{}, view.Columns[4:]...)
 	noClose.views["dataset_factor_1h"] = view
 	plain := parseStrategy(t, `name: no_close
 universe:

@@ -9,13 +9,14 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // referenceLoad 是一期里一个参考市场的年龄判定输入：参考 View（带覆盖统计）与参考数据集的活跃标的。
 type referenceLoad struct {
 	market string
-	view   ViewInfo
-	active map[string]Subject
+	view   upstream.ViewInfo
+	active map[string]upstream.Subject
 }
 
 // loadReferences 读取参考市场的 View 与活跃标的：参考市场只做年龄探针（修订号不固定），不读行、不进帧。
@@ -31,13 +32,13 @@ func (l Loader) loadReferences(ctx context.Context, spaceID string, resolved Res
 			return nil, err
 		}
 		if view.Status != "" && view.Status != "active" {
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.DatasetID, view.Status)}
+			return nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.DatasetID, view.Status)}
 		}
 		if view.ActiveIndexID == "" {
 			return nil, fmt.Errorf("参考市场的 View %s 没有活动索引", task.DatasetID)
 		}
 		if !strings.EqualFold(view.Frequency, resolved.Bar) {
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的周期已变化，请重新启用实例", task.DatasetID)}
+			return nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的周期已变化，请重新启用实例", task.DatasetID)}
 		}
 		if view, err = WithCoverage(ctx, l.Client, spaceID, view, false); err != nil {
 			return nil, err
@@ -46,7 +47,7 @@ func (l Loader) loadReferences(ctx context.Context, spaceID string, resolved Res
 		if err != nil {
 			return nil, err
 		}
-		active := make(map[string]Subject, len(subjects))
+		active := make(map[string]upstream.Subject, len(subjects))
 		for _, subject := range subjects {
 			if subject.Active {
 				active[subject.SubjectID] = subject
@@ -73,7 +74,7 @@ func (l Loader) mergeSources(ctx context.Context, spaceID string, resolved Resol
 		source := resolved.Sources[name]
 		period, _, err := source.Period(barEnd)
 		if err != nil {
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的周期无法换算：%v", name, err)}
+			return nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: fmt.Sprintf("来源 %s 的周期无法换算：%v", name, err)}
 		}
 		for _, market := range resolved.Markets() {
 			if unavailable[market] != "" || len(frame.Markets[market].Rows) == 0 {
@@ -86,22 +87,22 @@ func (l Loader) mergeSources(ctx context.Context, spaceID string, resolved Resol
 				return nil, err
 			}
 			if view.Status != "" && view.Status != "active" {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", name, task.DatasetID, view.Status)}
+				return nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", name, task.DatasetID, view.Status)}
 			}
 			if view.ActiveIndexID == "" {
 				return nil, fmt.Errorf("来源 %s 的 View %s 没有活动索引", name, task.DatasetID)
 			}
 			if !strings.EqualFold(view.Frequency, source.Bar) {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的周期已变化，请重新启用实例", name, task.DatasetID)}
+				return nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的周期已变化，请重新启用实例", name, task.DatasetID)}
 			}
 			if missing := missingViewColumns(view, columns); len(missing) > 0 {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于来源 %s 的 View %s，请重新启用实例", strings.Join(missing, "、"), name, task.DatasetID)}
+				return nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于来源 %s 的 View %s，请重新启用实例", strings.Join(missing, "、"), name, task.DatasetID)}
 			}
-			selected := make([]Subject, 0, len(subjects))
+			selected := make([]upstream.Subject, 0, len(subjects))
 			for _, id := range sortedKeys(subjects) {
-				selected = append(selected, Subject{SubjectID: id})
+				selected = append(selected, upstream.Subject{SubjectID: id})
 			}
-			query := Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: period.StorageStart, End: period.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
+			query := upstream.Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: period.StorageStart, End: period.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
 			rows, revision, err := l.Client.QueryRows(ctx, spaceID, query)
 			if err != nil {
 				return nil, err
@@ -119,8 +120,8 @@ func (l Loader) mergeSources(ctx context.Context, spaceID string, resolved Resol
 
 // sourceRowsOf 从来源读回的行里取应读那一根（data_time 等于 start）的行，按标的归并。
 // 读到的不是应读的那一根（比应有的最新一根旧，即来源缺了一期）的行不取，这些标的的来源列按缺数处理。
-func sourceRowsOf(rows []Row, start time.Time) (map[string]Row, error) {
-	picked := make([]Row, 0, len(rows))
+func sourceRowsOf(rows []upstream.Row, start time.Time) (map[string]upstream.Row, error) {
+	picked := make([]upstream.Row, 0, len(rows))
 	for _, row := range rows {
 		if row.DataTime.Equal(start) {
 			picked = append(picked, row)
@@ -130,7 +131,7 @@ func sourceRowsOf(rows []Row, start time.Time) (map[string]Row, error) {
 }
 
 // MergeSourceRows 把一个来源的行并进帧里一个市场的行：列名加上 来源名. 前缀；行的列表复制一份再改，不改动读回的原始行。
-func MergeSourceRows(rows map[string]engine.Row, name string, source map[string]Row) {
+func MergeSourceRows(rows map[string]engine.Row, name string, source map[string]upstream.Row) {
 	for id, row := range rows {
 		got, ok := source[id]
 		if !ok || len(got.Values) == 0 {
@@ -149,7 +150,7 @@ func MergeSourceRows(rows map[string]engine.Row, name string, source map[string]
 }
 
 // missingViewColumns 返回 columns 里 View 已不提供的列。
-func missingViewColumns(view ViewInfo, columns []string) []string {
+func missingViewColumns(view upstream.ViewInfo, columns []string) []string {
 	available := make(map[string]struct{}, len(view.Columns))
 	for _, column := range view.Columns {
 		available[column.Name] = struct{}{}

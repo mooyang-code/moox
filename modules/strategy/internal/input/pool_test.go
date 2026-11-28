@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const poolDSL = `name: pool
@@ -41,7 +43,7 @@ func TestResolvePoolBindsUnionOfMemberMarkets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pooled.Resolved.Market.Select != dsl.MarketBoth || len(pooled.Resolved.Tasks) != 2 || pooled.Program == nil || !pooled.Program.Strategy.IsPool() {
+	if !pooled.Resolved.Pool || pooled.Resolved.Market.Select != dsl.MarketBoth || len(pooled.Resolved.Tasks) != 2 || pooled.Program == nil || !pooled.Program.Strategy.IsPool() {
 		t.Fatalf("池的绑定不符：%+v", pooled.Resolved)
 	}
 	if len(pooled.Members) != 2 || len(pooled.Programs) != 2 {
@@ -79,12 +81,12 @@ func TestResolvePoolRejectsInconsistentBindings(t *testing.T) {
 		"成员定义缺失": {func(*fakeClient) {}, []string{"ftask_1h"}, []PoolMemberDef{memberDef(t, "a", "spot")}, "不存在"},
 		"View 没有 close": {func(c *fakeClient) {
 			v := c.views["dataset_factor_swap1h"]
-			v.Columns = []ViewColumn{factorColumn("ma_20", "ma")}
+			v.Columns = []upstream.ViewColumn{factorColumn("ma_20", "ma")}
 			c.views["dataset_factor_swap1h"] = v
 		}, []string{"ftask_1h", "ftask_swap1h"}, []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "swap")}, "没有 close 列"},
 		"成员缺列": {func(c *fakeClient) {
 			v := c.views["dataset_factor_swap1h"]
-			v.Columns = []ViewColumn{plainColumn("close")}
+			v.Columns = []upstream.ViewColumn{plainColumn("close")}
 			c.views["dataset_factor_swap1h"] = v
 		}, []string{"ftask_1h", "ftask_swap1h"}, []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "swap")}, "成员 b：列 ma_20 不存在于 View dataset_factor_swap1h"},
 	}

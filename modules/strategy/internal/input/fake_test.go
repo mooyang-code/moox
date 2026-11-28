@@ -8,32 +8,34 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // fakeClient 是内存中的 Storage/Factor 替身。
 type fakeClient struct {
-	views    map[string]ViewInfo
-	datasets map[string]DatasetInfo
-	subjects map[string][]Subject
+	views    map[string]upstream.ViewInfo
+	datasets map[string]upstream.DatasetInfo
+	subjects map[string][]upstream.Subject
 	tags     map[string][]string
 	// trading 是成员的交易状态（标签 → 标的 → 状态），没有的按 trading 处理。
 	trading    map[string]map[string]string
 	tagMarkets map[string]string
-	factors    map[string]FactorInfo
-	rows       func(query Query) ([]Row, uint64, error)
-	queries    []Query
+	factors    map[string]upstream.FactorInfo
+	rows       func(query upstream.Query) ([]upstream.Row, uint64, error)
+	queries    []upstream.Query
 	errors     map[string]error
 	// coverageReads 依次记录每次读取覆盖统计时是否要求精确统计。
 	coverageReads []bool
 }
 
-func (f *fakeClient) GetView(_ context.Context, _, datasetID string) (ViewInfo, error) {
+func (f *fakeClient) GetView(_ context.Context, _, datasetID string) (upstream.ViewInfo, error) {
 	if err := f.errors["view"]; err != nil {
-		return ViewInfo{}, err
+		return upstream.ViewInfo{}, err
 	}
 	view, ok := f.views[datasetID]
 	if !ok {
-		return ViewInfo{}, fmt.Errorf("View %s 不存在", datasetID)
+		return upstream.ViewInfo{}, fmt.Errorf("View %s 不存在", datasetID)
 	}
 	// 与生产一致：View 元数据不带覆盖统计，需要时由 ViewCoverage 单独读取。
 	view.IndexedFrom, view.IndexedTo, view.SeriesBars = time.Time{}, time.Time{}, 0
@@ -45,31 +47,31 @@ func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, datasetID stri
 	return view.Generation, err
 }
 
-func (f *fakeClient) ViewCoverage(_ context.Context, _ string, view ViewInfo, exact bool) (Coverage, error) {
+func (f *fakeClient) ViewCoverage(_ context.Context, _ string, view upstream.ViewInfo, exact bool) (upstream.Coverage, error) {
 	f.coverageReads = append(f.coverageReads, exact)
 	if err := f.errors["coverage"]; err != nil {
-		return Coverage{}, err
+		return upstream.Coverage{}, err
 	}
 	stored := f.views[view.DatasetID]
-	return Coverage{IndexedFrom: stored.IndexedFrom, IndexedTo: stored.IndexedTo, SeriesBars: stored.SeriesBars}, nil
+	return upstream.Coverage{IndexedFrom: stored.IndexedFrom, IndexedTo: stored.IndexedTo, SeriesBars: stored.SeriesBars}, nil
 }
 
-func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (DatasetInfo, error) {
+func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (upstream.DatasetInfo, error) {
 	dataset, ok := f.datasets[datasetID]
 	if !ok {
-		return DatasetInfo{}, fmt.Errorf("数据集 %s 不存在", datasetID)
+		return upstream.DatasetInfo{}, fmt.Errorf("数据集 %s 不存在", datasetID)
 	}
 	return dataset, nil
 }
 
-func (f *fakeClient) ListDatasetSubjects(_ context.Context, _, datasetID string) ([]Subject, error) {
+func (f *fakeClient) ListDatasetSubjects(_ context.Context, _, datasetID string) ([]upstream.Subject, error) {
 	if err := f.errors["subjects"]; err != nil {
 		return nil, err
 	}
-	return append([]Subject(nil), f.subjects[datasetID]...), nil
+	return append([]upstream.Subject(nil), f.subjects[datasetID]...), nil
 }
 
-func (f *fakeClient) ListTagMembers(_ context.Context, _, tagID string) ([]TagMember, error) {
+func (f *fakeClient) ListTagMembers(_ context.Context, _, tagID string) ([]upstream.TagMember, error) {
 	if err := f.errors["tags"]; err != nil {
 		return nil, err
 	}
@@ -77,27 +79,27 @@ func (f *fakeClient) ListTagMembers(_ context.Context, _, tagID string) ([]TagMe
 	if !ok {
 		return nil, fmt.Errorf("标签 %s 不存在", tagID)
 	}
-	members := make([]TagMember, 0, len(ids))
+	members := make([]upstream.TagMember, 0, len(ids))
 	for _, id := range ids {
-		members = append(members, TagMember{SubjectID: id, TradingStatus: f.trading[tagID][id]})
+		members = append(members, upstream.TagMember{SubjectID: id, TradingStatus: f.trading[tagID][id]})
 	}
 	return members, nil
 }
 
-func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (TagInfo, error) {
+func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (upstream.TagInfo, error) {
 	if err := f.errors["tag"]; err != nil {
-		return TagInfo{}, err
+		return upstream.TagInfo{}, err
 	}
 	if marketType, ok := f.tagMarkets[tagID]; ok {
-		return TagInfo{MarketType: marketType}, nil
+		return upstream.TagInfo{MarketType: marketType}, nil
 	}
 	if _, ok := f.tags[tagID]; ok {
-		return TagInfo{}, nil
+		return upstream.TagInfo{}, nil
 	}
-	return TagInfo{}, fmt.Errorf("%w：%s", ErrTagNotFound, tagID)
+	return upstream.TagInfo{}, fmt.Errorf("%w：%s", upstream.ErrTagNotFound, tagID)
 }
 
-func (f *fakeClient) QueryRows(_ context.Context, _ string, query Query) ([]Row, uint64, error) {
+func (f *fakeClient) QueryRows(_ context.Context, _ string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	f.queries = append(f.queries, query)
 	if f.rows == nil {
 		return nil, 0, errors.New("没有行数据")
@@ -105,56 +107,56 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query Query) ([]Row,
 	return f.rows(query)
 }
 
-func (f *fakeClient) GetFactor(_ context.Context, factorID string) (FactorInfo, error) {
+func (f *fakeClient) GetFactor(_ context.Context, factorID string) (upstream.FactorInfo, error) {
 	factor, ok := f.factors[factorID]
 	if !ok {
-		return FactorInfo{}, fmt.Errorf("因子 %s 不存在", factorID)
+		return upstream.FactorInfo{}, fmt.Errorf("因子 %s 不存在", factorID)
 	}
 	return factor, nil
 }
 
 // factorColumn 是固定成员的因子输出列：成员键取因子 ID，输出名取列名。
-func factorColumn(name, factorID string) ViewColumn {
+func factorColumn(name, factorID string) upstream.ViewColumn {
 	return memberColumn(name, factorID, factorID, "fixed")
 }
 
 // memberColumn 是成员 member（引用因子 factorID，类型 kind）的因子输出列。
-func memberColumn(name, member, factorID, kind string) ViewColumn {
-	return ViewColumn{Name: name, Attributes: map[string]string{"column_kind": "output", "member_key": member, "factor_id": factorID,
+func memberColumn(name, member, factorID, kind string) upstream.ViewColumn {
+	return upstream.ViewColumn{Name: name, Attributes: map[string]string{"column_kind": "output", "member_key": member, "factor_id": factorID,
 		"member_kind": kind, "output_name": name}}
 }
 
 // paramsColumn 是结果数据集的系统列 __params（各成员实际参数的 JSON）。
-func paramsColumn() ViewColumn {
-	return ViewColumn{Name: "__params", Attributes: map[string]string{"column_kind": "params"}}
+func paramsColumn() upstream.ViewColumn {
+	return upstream.ViewColumn{Name: "__params", Attributes: map[string]string{"column_kind": "params"}}
 }
 
-func plainColumn(name string) ViewColumn {
-	return ViewColumn{Name: name, Attributes: map[string]string{}}
+func plainColumn(name string) upstream.ViewColumn {
+	return upstream.ViewColumn{Name: name, Attributes: map[string]string{}}
 }
 
-func subject(id string, active bool) Subject {
-	return Subject{SubjectID: id, SeriesTag: "venue:binance", Active: active}
+func subject(id string, active bool) upstream.Subject {
+	return upstream.Subject{SubjectID: id, SeriesTag: "venue:binance", Active: active}
 }
 
 // newFakeClient 构造一个现货因子 View：K 线列 + ma_20、bias_q_20、quote_volume_mean_20、quote_volume_mean_q_20 因子列。
 func newFakeClient(marketType string) *fakeClient {
 	return &fakeClient{
-		views: map[string]ViewInfo{
-			"dataset_factor_1h": {DatasetID: "dataset_factor_1h", Frequency: "1h", Status: "active", ActiveIndexID: "idx_a", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, Columns: []ViewColumn{
+		views: map[string]upstream.ViewInfo{
+			"dataset_factor_1h": {DatasetID: "dataset_factor_1h", Frequency: "1h", Status: "active", ActiveIndexID: "idx_a", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, Columns: []upstream.ViewColumn{
 				plainColumn("open"), plainColumn("high"), plainColumn("low"), plainColumn("close"), plainColumn("volume"), plainColumn("quote_volume"), plainColumn("trade_num"),
 				factorColumn("ma_20", "ma"), factorColumn("bias_q_20", "bias"), factorColumn("quote_volume_mean_20", "qv"), factorColumn("quote_volume_mean_q_20", "qv"),
 			}},
 		},
-		datasets: map[string]DatasetInfo{
+		datasets: map[string]upstream.DatasetInfo{
 			"dataset_factor_1h": {DatasetID: "dataset_factor_1h", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": "ds_kline"}},
 			"ds_kline":          {DatasetID: "ds_kline", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + marketType}},
 		},
-		subjects:   map[string][]Subject{"dataset_factor_1h": {subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true), subject("USDC-USDT", true), subject("OLD-USDT", false)}},
+		subjects:   map[string][]upstream.Subject{"dataset_factor_1h": {subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true), subject("USDC-USDT", true), subject("OLD-USDT", false)}},
 		tags:       map[string][]string{"stablecoins": {"USDC-USDT"}, "majors": {"BTC-USDT", "ETH-USDT"}},
 		tagMarkets: map[string]string{"binance_spot": "spot", "binance_swap": "swap", "mixed_bad": "option"},
 		errors:     map[string]error{},
-		factors: map[string]FactorInfo{
+		factors: map[string]upstream.FactorInfo{
 			"ma":   {FactorID: "ma", DefinitionHash: "sha256:ma"},
 			"bias": {FactorID: "bias", DefinitionHash: "sha256:bias"},
 			"qv":   {FactorID: "qv", DefinitionHash: "sha256:qv"},

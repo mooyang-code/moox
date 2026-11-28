@@ -1,4 +1,5 @@
-package input
+// Package period 负责策略周期、交易日历、换仓时钟与区间换算（纯计算，无 IO）。
+package period
 
 import (
 	"errors"
@@ -16,6 +17,22 @@ import (
 
 // ErrUnsupportedCalendar 表示策略日历与频率的组合不受支持。
 var ErrUnsupportedCalendar = errors.New("不支持的策略日历")
+
+// DefaultCalendar 是没有声明日历的数据集使用的日历。
+const DefaultCalendar = "crypto_24x7"
+
+// StockTradingDaysPerYear 是 A 股一年的交易日数（与回放年化口径一致），用于把自然时长折算为交易日根数。
+// 港股约 246 天、美股约 252 天，折算与年化都只是估算，共用这个数。
+const StockTradingDaysPerYear = 244
+
+// describedError 是换成中文说明的错误：Error 只给说明，原错误（可能是英文）经 Unwrap 留给日志与 errors.Is 判断。
+type describedError struct {
+	message string
+	cause   error
+}
+
+func (e *describedError) Error() string { return e.message }
+func (e *describedError) Unwrap() error { return e.cause }
 
 // PeriodBoundaries 是一根已闭合 bar 在日历上的标识：Storage 用 StorageStart（bar_start）作行键，
 // Strategy 与 Trade 用 BarEnd。PreviousStart 与 NextEnd 按有效 bar 推进，而不是按墙钟时长。
@@ -98,7 +115,7 @@ func clockFor(calendarID, frequency string) (periodClock, error) {
 	calendarID = normalizeCalendar(calendarID)
 	frequency = strings.ToLower(strings.TrimSpace(frequency))
 	if calendarID == DefaultCalendar {
-		duration, err := parseBarDuration(frequency)
+		duration, err := ParseBarDuration(frequency)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +328,7 @@ func (c stockDailyClock) closed(trigger time.Time) (PeriodBoundaries, error) {
 }
 
 func (c stockDailyClock) fromStorageStart(storageStart time.Time) (PeriodBoundaries, error) {
-	if err := checkStockRowKey(storageStart); err != nil {
+	if err := CheckStockRowKey(storageStart); err != nil {
 		return PeriodBoundaries{}, err
 	}
 	day, err := stockKeyDay(storageStart)
@@ -463,7 +480,7 @@ func stockKeyDay(at time.Time) (marketcalendar.CivilDate, error) {
 
 // checkStockRowKey 要求股票市场日线的行键是 UTC 零点（日期键）。不静默规整：不按日期键写行的数据集（例如按上海零点，
 // 即前一日 16:00 UTC）规整后每期都读不到行，只会一直 no_data（回放则每根都缺数据）。
-func checkStockRowKey(at time.Time) error {
+func CheckStockRowKey(at time.Time) error {
 	if utc := at.UTC(); !utc.Equal(time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)) {
 		return fmt.Errorf("行键 %s 不是 UTC 零点：股票市场日线的 bar_start 必须是交易日期的 UTC 零点（例如 2026-10-09T00:00:00Z）", utc.Format(time.RFC3339))
 	}
@@ -534,7 +551,7 @@ func barsDuration(n int, duration time.Duration) (time.Duration, error) {
 	return time.Duration(n) * duration, nil
 }
 
-func parseBarDuration(bar string) (time.Duration, error) {
+func ParseBarDuration(bar string) (time.Duration, error) {
 	if len(bar) < 2 {
 		return 0, fmt.Errorf("bar %q 无效", bar)
 	}
@@ -564,6 +581,27 @@ func absInt(value int) int {
 func normalizeCalendar(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
 
 // stockDaily 报告日历与周期是否是股票市场的日线。
-func stockDaily(calendarID, frequency string) bool {
+func StockDaily(calendarID, frequency string) bool {
 	return strings.ToLower(strings.TrimSpace(frequency)) == "1d" && SessionCalendar(calendarID)
+}
+
+// RetentionBars 把数据集保留期（"<n>h" 或 "forever"）换算为根数；A 股先按交易日折算，再乘每个交易日的根数（日线 1，
+// 5m 为 48）。forever 或无法解析返回 false。
+func RetentionBars(retention, calendar, bar string) (int, bool) {
+	retention = strings.TrimSpace(strings.ToLower(retention))
+	if retention == "" || retention == "forever" || !strings.HasSuffix(retention, "h") {
+		return 0, false
+	}
+	hours, err := strconv.Atoi(strings.TrimSuffix(retention, "h"))
+	if err != nil || hours <= 0 {
+		return 0, false
+	}
+	if perDay := TradingDayBars(calendar, bar); perDay > 0 {
+		return hours / 24 * StockTradingDaysPerYear / 365 * perDay, true
+	}
+	duration, err := ParseBarDuration(bar)
+	if err != nil || duration <= 0 {
+		return 0, false
+	}
+	return int((time.Duration(hours) * time.Hour) / duration), true
 }

@@ -15,6 +15,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 const dualRankDSL = `name: dual_demo
@@ -38,7 +40,7 @@ func newDualHarness(t *testing.T) *harness {
 	t.Helper()
 	resolved := input.Resolved{Market: dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSwap}, Tasks: map[string]input.TaskBinding{
 		"spot": {FactorTaskID: "ftask_a", DatasetID: spotView}, "swap": {FactorTaskID: "ftask_b", DatasetID: swapView}},
-		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
+		Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	h := newHarnessWith(t, dualRankDSL, nil, resolved)
 	h.frame(1, map[string]map[string]float64{"A": {"m": 3}, "B": {"m": 1}})
@@ -261,7 +263,7 @@ func TestGatherSelectMarketUnavailableSkipsWholePeriod(t *testing.T) {
 	h := newDualHarness(t)
 	resolved := input.Resolved{Market: dsl.Market{Select: dsl.MarketSpot, Prefer: dsl.MarketSwap}, Tasks: map[string]input.TaskBinding{
 		"spot": {FactorTaskID: "ftask_a", DatasetID: spotView}, "swap": {FactorTaskID: "ftask_b", DatasetID: swapView}},
-		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
+		Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	dslText := "name: dual_demo\nmarket: {select: spot, prefer: swap}\nrules:\n  - id: r\n    type: rank\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 1}\nportfolio:\n  max_missing: 0.2\n"
 	h = newHarnessWith(t, dslText, nil, resolved)

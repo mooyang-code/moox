@@ -148,7 +148,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 | `universe.min_age_bars` | 标的在这么多根之前已有数据才参与；规则没写规则级 `min_age_bars` 时生效 |
 | `universe.max_age_bars` | 只保留年龄小于这么多根的新标的；写了它的规则必须同时写 `allow_empty: true` |
 | `universe.age_markets` | `each`（默认）任一市场通过即算通过；`all` 要求在绑定的全部市场上都通过 |
-| 规则级 `universe` | 规则里写 `universe`，写了的字段逐项覆盖策略级；写了显式 `pool` 的规则只能写年龄类字段 |
+| 规则级 `universe` | 规则里写 `universe`，写了的字段逐项覆盖策略级；规则级 `pool` 是覆盖标签与黑白名单的简写（解析期改写为规则级 `universe`），因此写了显式 `pool` 的规则在 `universe` 里只能写年龄类字段 |
 | 规则级 `allow_empty` | `true` 时这条规则不参与整期守门（`universe_too_small`、`min_universe`、`max_missing`），候选为空只是不出目标 |
 | `portfolio.leverage` | gross 上限，默认 1；纯现货与股票不允许大于 1，只有市场模式含永续才可以；各规则 `weight.total` 之和不超过它 |
 | `portfolio.max_weight` | 组合级单币上限，同一个币的现货、永续**合计**（绝对值之和，“现货多 + 永续空”的对冲也按绝对值之和截断）；两边都不为零时按比例缩小，只有一边时取上限，超出部分留现金 |
@@ -162,7 +162,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 
 | `type` | 用途 | 关键字段 |
 | --- | --- | --- |
-| `rank` | 截面选股；配显式 `pool` 与 `hold` 也用来对固定标的择时 | `filter`、`score`、`select`、`weight`，可选 `pool`、`holding`、`hold`、`filter_after`、`side`、`stop`、`scale`、`on_missing`、`market` |
+| `rank`（默认，可省略） | 截面选股；配显式 `pool` 与 `hold` 也用来对固定标的择时 | `filter`、`score`、`select`、`weight`，可选 `pool`、`holding`、`hold`、`filter_after`、`side`、`stop`、`scale`、`on_missing`、`market` |
 
 ### rank 规则
 

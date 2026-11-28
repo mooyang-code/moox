@@ -1,4 +1,4 @@
-package input
+package period
 
 import (
 	"fmt"
@@ -17,9 +17,9 @@ import (
 func PoolClock(calendarID, frequency string, pool dsl.StrategyPool) (engine.PoolClock, error) {
 	var clock engine.PoolClock
 	if text := pool.Allocation.DriftStart(); text != "" {
-		bar, err := anchorBoundaries(calendarID, frequency, text)
+		bar, err := AnchorBoundaries(calendarID, frequency, text)
 		if err != nil {
-			return engine.PoolClock{}, fmt.Errorf("%s %w", driftStartField(pool), err)
+			return engine.PoolClock{}, fmt.Errorf("%s %w", DriftStartField(pool), err)
 		}
 		clock.Start, clock.HasStart = bar.BarIndex, true
 	}
@@ -28,7 +28,7 @@ func PoolClock(calendarID, frequency string, pool dsl.StrategyPool) (engine.Pool
 		if text == "" {
 			continue
 		}
-		bar, err := anchorBoundaries(calendarID, frequency, text)
+		bar, err := AnchorBoundaries(calendarID, frequency, text)
 		if err != nil {
 			return engine.PoolClock{}, fmt.Errorf("strategy_pool.allocation.sides.%s.anchor %w", side, err)
 		}
@@ -40,7 +40,7 @@ func PoolClock(calendarID, frequency string, pool dsl.StrategyPool) (engine.Pool
 	return clock, nil
 }
 
-func driftStartField(pool dsl.StrategyPool) string {
+func DriftStartField(pool dsl.StrategyPool) string {
 	if pool.Allocation.Initial != nil {
 		return "strategy_pool.allocation.initial.at"
 	}
@@ -48,7 +48,7 @@ func driftStartField(pool dsl.StrategyPool) string {
 }
 
 // anchorBoundaries 返回 DSL 时刻所在那根 bar 的周期边界：交易日期取该日第一根；RFC3339 时刻必须恰好是某根的 bar_start。
-func anchorBoundaries(calendarID, frequency, text string) (PeriodBoundaries, error) {
+func AnchorBoundaries(calendarID, frequency, text string) (PeriodBoundaries, error) {
 	axis, err := dayAxisFor(calendarID, frequency)
 	if err != nil {
 		return PeriodBoundaries{}, err
@@ -66,7 +66,7 @@ func anchorBoundaries(calendarID, frequency, text string) (PeriodBoundaries, err
 		// 股票市场日内的 bar_start 是真实的开盘时刻：从该日当地的零点起找第一根。日线的 bar_start 是日期键，
 		// 与 crypto 一样就是该日期的 UTC 零点。
 		location := time.UTC
-		if stockIntraday(calendarID, frequency) {
+		if StockIntraday(calendarID, frequency) {
 			market, _, marketErr := sessionMarketFor(calendarID)
 			if marketErr != nil {
 				return PeriodBoundaries{}, marketErr

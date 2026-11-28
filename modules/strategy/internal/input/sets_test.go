@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 func shanghai(t *testing.T) *time.Location {
@@ -19,10 +22,15 @@ func shanghai(t *testing.T) *time.Location {
 	return location
 }
 
+func shAt(t *testing.T, month time.Month, day, hour, minute int) time.Time {
+	t.Helper()
+	return time.Date(2026, month, day, hour, minute, 0, 0, shanghai(t)).UTC()
+}
+
 func membershipOf(client *fakeClient) Membership {
 	return func(ctx context.Context, tagID string) ([]string, error) {
 		members, err := client.ListTagMembers(ctx, "space", tagID)
-		return MemberIDs(members), err
+		return upstream.MemberIDs(members), err
 	}
 }
 
@@ -157,11 +165,11 @@ func TestBuildSetsAgeProbe(t *testing.T) {
 
 func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 	client := newFakeClient("spot")
-	client.rows = func(query Query) ([]Row, uint64, error) {
-		return []Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
+		return []upstream.Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
 	}
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
-	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "ETH-USDT": subject("ETH-USDT", true)}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: period.DefaultCalendar, MinAgeBars: 24}
+	subjects := map[string]upstream.Subject{"BTC-USDT": subject("BTC-USDT", true), "ETH-USDT": subject("ETH-USDT", true)}
 	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, client.views["dataset_factor_1h"], "spot", subjects, barStart, 0, nil)
 	satisfied, err := probe(context.Background(), []string{"BTC-USDT", "ETH-USDT"})
 	if err != nil {
@@ -189,13 +197,13 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 // 探针窗口内候选全部没有行时，先确认整个数据集在窗口内是否有数据：有数据说明候选确实是新上市，照常剔除；
 // 一行都没有说明是历史缺口，整期 history_insufficient，不能把全部标的当作新上市。
 func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
-	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "NEW-USDT": subject("NEW-USDT", true)}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: period.DefaultCalendar, MinAgeBars: 24}
+	subjects := map[string]upstream.Subject{"BTC-USDT": subject("BTC-USDT", true), "NEW-USDT": subject("NEW-USDT", true)}
 	client := newFakeClient("spot")
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		for _, selected := range query.Subjects {
 			if selected.SubjectID == "BTC-USDT" {
-				return []Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
+				return []upstream.Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
 			}
 		}
 		return nil, 7, nil
@@ -210,11 +218,11 @@ func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
 	}
 
 	gap := newFakeClient("spot")
-	gap.rows = func(Query) ([]Row, uint64, error) { return nil, 7, nil }
+	gap.rows = func(upstream.Query) ([]upstream.Row, uint64, error) { return nil, 7, nil }
 	probe = NewAgeProbe(gap, "space", resolved, resolved.MinAgeBars, gap.views["dataset_factor_1h"], "spot", subjects, barStart, 7, nil)
 	_, err = probe(context.Background(), []string{"BTC-USDT", "NEW-USDT"})
-	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "历史缺口") {
+	var skip *upstream.SkipError
+	if !errors.As(err, &skip) || skip.Reason != upstream.SkipHistoryInsufficient || !strings.Contains(skip.Detail, "历史缺口") {
 		t.Fatalf("窗口内整个数据集都没有数据应记 history_insufficient：%v", err)
 	}
 }

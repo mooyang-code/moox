@@ -8,6 +8,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const tunedDSL = `name: tuned
@@ -27,7 +30,7 @@ portfolio:
 `
 
 func tunedResolved() input.Resolved {
-	return input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f__var", FactorID: "f", MemberKind: "var", DefinitionHash: "h1"}}, Factors: map[string]string{"f__var": "h1|var"}, ViewColumns: []string{"close", "m"}, FactorParams: map[string][]dsl.ParamDecl{"f__var": {{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}}
+	return input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f__var", FactorID: "f", MemberKind: "var", DefinitionHash: "h1"}}, Factors: map[string]string{"f__var": "h1|var"}, ViewColumns: []string{"close", "m"}, FactorParams: map[string][]dsl.ParamDecl{"f__var": {{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}}
 }
 
 // 声明了 factor_params 的实例每期求出下一期的参数，随结果同事务落库；目标期次是下一根 bar，成员快照完整。
@@ -48,7 +51,7 @@ func TestHandleWritesNextPeriodParams(t *testing.T) {
 	if got.ResultID != result.ResultID || got.InstanceID != "i1" || !got.Period.Equal(barStart(3)) {
 		t.Fatalf("记录不符（目标期次应是下一根 bar）：%+v", got)
 	}
-	var members map[string]map[string]input.ParamValue
+	var members map[string]map[string]upstream.ParamValue
 	if err := json.Unmarshal(got.Members, &members); err != nil {
 		t.Fatal(err)
 	}

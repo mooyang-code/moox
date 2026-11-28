@@ -15,12 +15,15 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/frequency"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // PoolRun 是策略池的一次历史推进（设计 3.5 预热）：复用研究回放的历史读取，按真实历史依次求值所有成员、推进成员账本，
 // 每一期都调用与实时求值同一个 pool.Step。启用后的预热就是用它从启用时刻往前推进到最新已收盘的一期。
 type PoolRun struct {
-	Client   input.Client
+	Client   upstream.Client
 	SpaceID  string
 	Resolved input.Resolved
 	Members  []input.PoolMember
@@ -40,7 +43,7 @@ type PoolRun struct {
 	// 不会再有这一根的事件（它的就绪事件在启用之前就发出了），排除它会在池的历史上留下一期空洞。调用方保证区间的终点已留过宽限。
 	IncludeLatest bool
 	// OnBar 非空时每推进一期调用一次（测试与观测用）。
-	OnBar func(bar input.PeriodBoundaries, decision engine.Decision)
+	OnBar func(bar period.PeriodBoundaries, decision engine.Decision)
 }
 
 // PoolRunResult 是历史推进的结果。
@@ -56,18 +59,18 @@ type PoolRunResult struct {
 // sharedReads 在一段之内共享行读取：策略池的成员读同一个 View 的同一段数据，读取的列取全体成员的并集后，每个成员的读取器发出的查询完全相同，
 // 第一个成员读 Storage，其余命中缓存。每段读完调用 reset，缓存只活一段。
 type sharedReads struct {
-	input.Client
+	upstream.Client
 	mu    sync.Mutex
 	cache map[string]cachedRows
 	reads int
 }
 
 type cachedRows struct {
-	rows     []input.Row
+	rows     []upstream.Row
 	revision uint64
 }
 
-func (c *sharedReads) QueryRows(ctx context.Context, spaceID string, query input.Query) ([]input.Row, uint64, error) {
+func (c *sharedReads) QueryRows(ctx context.Context, spaceID string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	subjects := make([]string, 0, len(query.Subjects))
 	for _, subject := range query.Subjects {
 		subjects = append(subjects, subject.SubjectID+"\x00"+subject.SeriesTag)
@@ -131,7 +134,7 @@ type poolPass struct {
 // 写了 fees.funding_column 时永续的行另读这一列；有成员用了 params() 时另读 __params 列。follow 为真时读取期间的索引换代按整个池跟随
 // （见 readerGroup），否则遇到换代直接失败。
 func newPoolPass(shared *sharedReads, spaceID string, resolved input.Resolved, members []input.PoolMember, programs []*dsl.Program, cfg pool.Config,
-	views map[string]input.ViewInfo, subjects map[string][]input.Subject, job store.Replay, runner *Runner, end time.Time, acc *accumulator, abort func(context.Context) error, follow bool) *poolPass {
+	views map[string]upstream.ViewInfo, subjects map[string][]upstream.Subject, job store.Replay, runner *Runner, end time.Time, acc *accumulator, abort func(context.Context) error, follow bool) *poolPass {
 	columns := []string{"close"}
 	for _, program := range programs {
 		columns = append(columns, program.Columns...)
@@ -181,7 +184,7 @@ func newPoolPass(shared *sharedReads, spaceID string, resolved input.Resolved, m
 }
 
 // load 读一段：每个成员读自己市场的行与年龄判定的历史（成员之间共享读取，读完清掉缓存）。
-func (p *poolPass) load(ctx context.Context, segment []input.PeriodBoundaries) error {
+func (p *poolPass) load(ctx context.Context, segment []period.PeriodBoundaries) error {
 	p.segments = make(map[string]marketSegment, len(p.resolved.Tasks))
 	for _, member := range p.members {
 		var err error
@@ -211,7 +214,7 @@ func (p *poolPass) end() time.Time {
 
 // step 推进一期：成员本期求值被跳过（缺数、守门等）记为没通过，沿用上一期的目标权重，与实时一致；所有成员都被跳过的期，池 skipped、
 // 状态不变。返回池的决策，以及这一期的收盘价与资金费率（池回放的池级账本也按它们估值、结算）。
-func (p *poolPass) step(ctx context.Context, bar input.PeriodBoundaries, state engine.State) (engine.Decision, map[string]float64, map[string]float64, error) {
+func (p *poolPass) step(ctx context.Context, bar period.PeriodBoundaries, state engine.State) (engine.Decision, map[string]float64, map[string]float64, error) {
 	results := make([]pool.MemberResult, 0, len(p.members))
 	for _, member := range p.members {
 		decision, _, err := evaluateBar(ctx, member.program, member.resolved, member.markets, nil, p.membership, member.segments, bar, state.Members[member.id])
@@ -224,7 +227,7 @@ func (p *poolPass) step(ctx context.Context, bar input.PeriodBoundaries, state e
 	prices, funding := barPrices(p.prices, p.segments, key), barFunding(p.prices, p.segments, key, p.funding)
 	decision, err := pool.Step(p.cfg, state, pool.Input{BarIndex: bar.BarIndex, Prices: prices, Funding: funding, Members: results})
 	if err != nil {
-		return engine.Decision{}, nil, nil, fmt.Errorf("%s：%w", input.BarEndLabel(p.resolved.Calendar, p.resolved.Bar, bar.BarEnd), err)
+		return engine.Decision{}, nil, nil, fmt.Errorf("%s：%w", period.BarEndLabel(p.resolved.Calendar, p.resolved.Bar, bar.BarEnd), err)
 	}
 	return decision, prices, funding, nil
 }
@@ -239,7 +242,7 @@ type readerGroup struct {
 	acc      *accumulator
 }
 
-func (g *readerGroup) follow(ctx context.Context, taskKey string, changed input.ViewInfo, from time.Time) error {
+func (g *readerGroup) follow(ctx context.Context, taskKey string, changed upstream.ViewInfo, from time.Time) error {
 	if g.switches >= maxIndexSwitches {
 		return fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", changed.DatasetID)
 	}
@@ -284,7 +287,7 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 	if err != nil {
 		return PoolRunResult{}, err
 	}
-	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, run.Start, end, runner.maxBars())
+	bars, err := period.ReplayBars(resolved.Calendar, resolved.Bar, run.Start, end, runner.maxBars())
 	if err != nil {
 		return PoolRunResult{}, err
 	}
@@ -347,7 +350,7 @@ func (r *Runner) replayPool(ctx context.Context, job store.Replay, strategy dsl.
 	if drift := factorDrift(job.Factors, resolved.Factors); drift != "" {
 		return Metrics{}, fmt.Errorf("因子定义在排队期间发生变化（%s），请重新发起回放", drift)
 	}
-	clock, err := input.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
+	clock, err := period.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -368,7 +371,7 @@ func (r *Runner) replayPool(ctx context.Context, job store.Replay, strategy dsl.
 	if views, end, err = r.recheckPoolWindow(ctx, job, pooled, views, job.StartTime, end, abort); err != nil {
 		return Metrics{}, err
 	}
-	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, job.StartTime, end, r.maxBars())
+	bars, err := period.ReplayBars(resolved.Calendar, resolved.Bar, job.StartTime, end, r.maxBars())
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -422,8 +425,8 @@ func (r *Runner) replayPool(ctx context.Context, job store.Replay, strategy dsl.
 
 // recheckPoolWindow 是策略池回放开始前的复查（排队期间可能换了索引或定时删除了最旧数据）：每个市场按每个用到它的成员各自的回看要求
 // 依次复查起点并截断终点（见 recheckView），复查后的 View 由这些成员共用；终点取各市场、各成员中最早的。
-func (r *Runner) recheckPoolWindow(ctx context.Context, job store.Replay, pooled input.PoolResolved, views map[string]input.ViewInfo, start, end time.Time, abort func(context.Context) error) (map[string]input.ViewInfo, time.Time, error) {
-	checked := make(map[string]input.ViewInfo, len(views))
+func (r *Runner) recheckPoolWindow(ctx context.Context, job store.Replay, pooled input.PoolResolved, views map[string]upstream.ViewInfo, start, end time.Time, abort func(context.Context) error) (map[string]upstream.ViewInfo, time.Time, error) {
+	checked := make(map[string]upstream.ViewInfo, len(views))
 	for _, market := range pooled.Resolved.Markets() {
 		view := views[market]
 		for i, member := range pooled.Members {
@@ -441,7 +444,7 @@ func (r *Runner) recheckPoolWindow(ctx context.Context, job store.Replay, pooled
 }
 
 // checkWindow 复查历史推进的区间（见 input.PoolWindow）。
-func (run PoolRun) checkWindow(ctx context.Context, views map[string]input.ViewInfo) (time.Time, error) {
+func (run PoolRun) checkWindow(ctx context.Context, views map[string]upstream.ViewInfo) (time.Time, error) {
 	now := time.Now().UTC()
 	if run.Now != nil {
 		now = run.Now().UTC()

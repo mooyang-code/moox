@@ -230,13 +230,6 @@ func millis(at time.Time) int64 { return at.UTC().UnixMilli() }
 
 func fromMillis(value int64) time.Time { return time.UnixMilli(value).UTC() }
 
-func boolInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
-}
-
 func requireTime(at time.Time) (time.Time, error) {
 	if at.IsZero() {
 		return time.Time{}, errors.New("时间不能为空")

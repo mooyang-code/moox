@@ -10,112 +10,13 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // DefaultReplayMaxBars 是一次回放允许的最多 bar 数。
 const DefaultReplayMaxBars = 20000
-
-// ReplayRange 把回放区间换成日历的口径：股票市场的日线按市场当地日期回放（A 股是上海日期），两端各取所在当地日期的零点，
-// [起始日期, 结束日期) 内的交易日都包含在内。页面按上海时区选日期，传来的两端是上海零点（前一日 16:00 UTC）；A 股日线的
-// bar_start 是日期键（交易日期 D 的 UTC 零点，即上海 D 日 08:00），落在 [起始日期的上海零点, 结束日期的上海零点) 内当且仅当
-// 起始日期 ≤ D < 结束日期，所以区间仍按上海零点记录。港股与上海同一时区，口径相同；美股日线的日期选择页面还没有适配。
-// 日内的 bar_start 是真实的开盘时刻，与 crypto 一样原样返回。
-func ReplayRange(calendar, bar string, start, end time.Time) (time.Time, time.Time, error) {
-	if !stockDaily(calendar, bar) {
-		return start, end, nil
-	}
-	market, _, err := sessionMarketFor(calendar)
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	location := market.location
-	floor := func(at time.Time) time.Time {
-		local := at.In(location)
-		return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location).UTC()
-	}
-	start, end = floor(start), floor(end)
-	if !end.After(start) {
-		return time.Time{}, time.Time{}, fmt.Errorf("%s日线按%s日期回放：结束日期必须晚于起始日期", market.name(), market.market.ZoneName)
-	}
-	return start, end, nil
-}
-
-// ReplayBars 返回 bar_start 落在 [start, end) 内的全部周期，超过 limit 根返回错误。A 股内嵌日历的最后一个交易日之后
-// 没有可知的周期，枚举到它为止。
-func ReplayBars(calendar, bar string, start, end time.Time, limit int) ([]PeriodBoundaries, error) {
-	if !end.After(start) {
-		return nil, errors.New("回放区间必须满足 start < end")
-	}
-	current, err := firstBarAtOrAfter(calendar, bar, start)
-	if err != nil {
-		return nil, err
-	}
-	bars := make([]PeriodBoundaries, 0)
-	for current.StorageStart.Before(end) {
-		if len(bars) >= limit {
-			return nil, fmt.Errorf("回放区间超过 %d 根 bar，请缩短区间", limit)
-		}
-		bars = append(bars, current)
-		if current.NextEnd.IsZero() {
-			break
-		}
-		if current, err = FromBarEnd(calendar, bar, current.NextEnd); err != nil {
-			return nil, err
-		}
-	}
-	return bars, nil
-}
-
-// firstBarAtOrAfter 返回 bar_start 不早于 at 的第一根。
-func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, error) {
-	if stockIntraday(calendar, bar) {
-		// 交易时段的 bar 不连续：直接取不早于 at 的那一根（跨午休、隔夜与休市）。
-		start, err := CeilStorageStart(calendar, bar, at)
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
-		return FromStorageStart(calendar, bar, start)
-	}
-	if stockDaily(calendar, bar) {
-		// 不经 ClosedPeriod 回看上一根收盘：at 落在日历首日时没有上一根。取 at 所在 UTC 日期起的第一个交易日，
-		// at 晚于那天的日期键（UTC 零点）时再往后一根。
-		day, err := CeilStorageStart(calendar, bar, at)
-		if err != nil {
-			return PeriodBoundaries{}, err
-		}
-		current, err := FromStorageStart(calendar, bar, day)
-		if err != nil || !current.StorageStart.Before(at) {
-			return current, err
-		}
-		if current.NextEnd.IsZero() {
-			return PeriodBoundaries{}, beyondCalendarError(calendar, at)
-		}
-		return FromBarEnd(calendar, bar, current.NextEnd)
-	}
-	current, err := ClosedPeriod(calendar, bar, at)
-	if err != nil {
-		return PeriodBoundaries{}, err
-	}
-	for current.StorageStart.Before(at) {
-		if current, err = FromBarEnd(calendar, bar, current.NextEnd); err != nil {
-			return PeriodBoundaries{}, err
-		}
-	}
-	return current, nil
-}
-
-// beyondCalendarError 说明 at 之后的周期超出了市场的内嵌日历；时间按市场当地时间写，与其余股票市场的报错一致。
-func beyondCalendarError(calendar string, at time.Time) error {
-	label := at.UTC().Format(time.RFC3339) + " UTC"
-	market := loadedSessionMarket(calendar)
-	if market != nil {
-		label = market.label(at)
-	}
-	return &describedError{
-		message: fmt.Sprintf("%s 之后的周期%s", label, translateCalendarError(market, marketcalendar.ErrNoNextTradingDay).Error()),
-		cause:   marketcalendar.ErrNoNextTradingDay,
-	}
-}
 
 // historyNeed 返回回放的每一根需要的历史根数（含自身）与来源说明：min_age_bars 的年龄目标是 T − (N−1) 根，
 // bars[-1] 要读上一根。
@@ -150,53 +51,22 @@ type EarlyStartError struct {
 }
 
 func (e *EarlyStartError) Error() string {
-	label := func(at time.Time) string { return PeriodLabel(e.Calendar, e.Bar, at) }
+	label := func(at time.Time) string { return period.PeriodLabel(e.Calendar, e.Bar, at) }
 	if e.History <= 0 {
 		return fmt.Sprintf("回放起点 %s 太早：View 的活跃序列从 %s 起才有数据；可用起点为 %s", label(e.First), label(e.Coverage), label(e.Earliest))
 	}
 	return fmt.Sprintf("回放起点 %s 太早：View 的活跃序列从 %s 起才有数据，%s 要求起点之前还有 %d 根历史；可用起点为 %s", label(e.First), label(e.Coverage), e.Source, e.History, label(e.Earliest))
 }
 
-// PeriodLabel 是给用户看的 bar 标识：股票市场日线写当地日期（A 股是上海日期：bar_start 是日期键，即上海当日 08:00，
-// 日期就是交易日期；回放区间的端点是上海零点，按上海时区取日期两者都对），日内写 bar_start 的当地时间，其余写 bar_start 的 UTC 时间。
-func PeriodLabel(calendar, bar string, storageStart time.Time) string {
-	if market := loadedSessionMarket(calendar); market != nil {
-		zone := market.market.ZoneName
-		if stockDaily(calendar, bar) {
-			return storageStart.In(market.location).Format("2006-01-02") + "（" + zone + "日期）"
-		}
-		if stockIntraday(calendar, bar) {
-			return storageStart.In(market.location).Format("2006-01-02 15:04") + "（" + zone + "时间）"
-		}
-	}
-	return storageStart.UTC().Format(time.RFC3339)
-}
-
-// BarEndLabel 是给用户看的 bar_end：UTC 时间（与回放表格的“K 线结束（UTC）”一致），股票市场日线再注明当地的交易日收盘，
-// 日内再注明当地时间。
-func BarEndLabel(calendar, bar string, barEnd time.Time) string {
-	label := barEnd.UTC().Format(time.RFC3339)
-	if market := loadedSessionMarket(calendar); market != nil {
-		zone := market.market.ZoneName
-		if stockDaily(calendar, bar) {
-			label += "（" + zone + " " + barEnd.In(market.location).Format("2006-01-02") + " 收盘）"
-		}
-		if stockIntraday(calendar, bar) {
-			label += "（" + zone + " " + barEnd.In(market.location).Format("2006-01-02 15:04") + "）"
-		}
-	}
-	return label
-}
-
 // ReplayWindow 校验并截断回放区间 [start, end)：
 // 起点不能早于活跃序列的覆盖起点加上 min_age_bars 与 bars[-1] 所需的历史，否则返回 *EarlyStartError；
 // 终点截到最新一根（按日历规整、并夹到 now 时已闭合的最后一根之内）之前：更晚的 bar 还没有数据，最新一根也可能还没
 // 写完，都不能当作完整的 bar 回放。最新一根已经写完时（见 Bounds.ToClosed）回放到它为止。
-func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start, end, now time.Time) (time.Time, error) {
+func ReplayWindow(resolved Resolved, program *dsl.Program, view upstream.ViewInfo, start, end, now time.Time) (time.Time, error) {
 	if !end.After(start) {
 		return time.Time{}, errors.New("回放区间必须满足 start < end")
 	}
-	label := func(at time.Time) string { return PeriodLabel(resolved.Calendar, resolved.Bar, at) }
+	label := func(at time.Time) string { return period.PeriodLabel(resolved.Calendar, resolved.Bar, at) }
 	need, source := historyNeed(resolved, program)
 	bounds, boundsErr := CoverageBounds(view, resolved, now)
 	// 稳定状态下覆盖起点是最新一根往前 SeriesBars−1 根，可用起点再往后 need−1 根，而回放只到最新一根之前：每一根连同
@@ -210,9 +80,9 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	}
 	coverage := coverageStart(bounds, view, resolved, time.Time{})
 	if coverage.After(bounds.To) {
-		return time.Time{}, fmt.Errorf("View %s 的数据已超出%s内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，日历之内已不能确定还保留着哪些 bar，暂不能回放；请更新日历数据", view.DatasetID, loadedSessionMarket(resolved.Calendar).spacedName(), label(bounds.To), bounds.Beyond, view.SeriesBars)
+		return time.Time{}, fmt.Errorf("View %s 的数据已超出%s内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，日历之内已不能确定还保留着哪些 bar，暂不能回放；请更新日历数据", view.DatasetID, period.MarketSpacedName(resolved.Calendar), label(bounds.To), bounds.Beyond, view.SeriesBars)
 	}
-	latest, err := FromStorageStart(resolved.Calendar, resolved.Bar, bounds.To)
+	latest, err := period.FromStorageStart(resolved.Calendar, resolved.Bar, bounds.To)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -235,7 +105,7 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	// 先反向判断历史够不够：从覆盖起点往后推 need−1 根可能越过 A 股内嵌日历的末尾，会被误报成日历需要更新。
 	bound := last
 	if need > 1 {
-		bound, err = HistoryStart(resolved.Calendar, resolved.Bar, last, need)
+		bound, err = period.HistoryStart(resolved.Calendar, resolved.Bar, last, need)
 		if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
 			bound, err = time.Time{}, nil
 		}
@@ -251,21 +121,21 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	}
 	earliest := coverage
 	if need > 1 {
-		period, err := FromStorageStart(resolved.Calendar, resolved.Bar, coverage)
+		startBar, err := period.FromStorageStart(resolved.Calendar, resolved.Bar, coverage)
 		if err != nil {
 			return time.Time{}, err
 		}
-		barEnd, err := AdvanceBarEnd(resolved.Calendar, resolved.Bar, period.BarEnd, need-1)
+		barEnd, err := period.AdvanceBarEnd(resolved.Calendar, resolved.Bar, startBar.BarEnd, need-1)
 		if err != nil {
 			return time.Time{}, err
 		}
-		shifted, err := FromBarEnd(resolved.Calendar, resolved.Bar, barEnd)
+		shifted, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, barEnd)
 		if err != nil {
 			return time.Time{}, err
 		}
 		earliest = shifted.StorageStart
 	}
-	first, err := firstBarAtOrAfter(resolved.Calendar, resolved.Bar, start)
+	first, err := period.FirstBarAtOrAfter(resolved.Calendar, resolved.Bar, start)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -278,7 +148,7 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 // IndexChangedError 表示读取期间 View 的活动索引换了一代（重建过）：新一代只保留最近的根数，调用方必须先按新索引
 // 复查剩余区间，再决定是否切换过去继续读。
 type IndexChangedError struct {
-	View ViewInfo
+	View upstream.ViewInfo
 }
 
 func (e *IndexChangedError) Error() string {
@@ -288,10 +158,10 @@ func (e *IndexChangedError) Error() string {
 // RangeLoader 为回放分段读取 View 的历史行：每段固定活动索引；活动索引换了一代时返回 *IndexChangedError，
 // 不静默改读新索引。
 type RangeLoader struct {
-	Client   Client
+	Client   upstream.Client
 	SpaceID  string
-	View     ViewInfo
-	Subjects []Subject
+	View     upstream.ViewInfo
+	Subjects []upstream.Subject
 	Columns  []string
 	// ExpectedRevision 非零时固定读取的索引修订号（取自同一段主数据读取返回的修订号）：修订号变化时不退避重读，
 	// 直接返回 *RevisionChangedError，由调用方连同主数据一起重读，保证同一段的两次读取来自同一修订号。
@@ -303,7 +173,7 @@ type RangeLoader struct {
 // RangeRows 是一段读取的结果：bar_start（Unix 秒）→ subject_id → 行；Ambiguous 记录同一标的同一周期出现多个序列的
 // bar 与标的（bar_start → subject_id → 说明），这些标的在该 bar 上的行不能用于估值。
 type RangeRows struct {
-	Bars      map[int64]map[string]Row
+	Bars      map[int64]map[string]upstream.Row
 	Ambiguous map[int64]map[string]string
 	// Revision 是这段读取时服务端返回的索引修订号，供同一段的其他读取固定到同一修订号。
 	Revision uint64
@@ -335,7 +205,7 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 			return grouped, nil
 		}
 		// 长回放有数百次分段读取：一次传输失败不应让整个回放失败，退避后重读同一段。
-		var transportErr *TransportError
+		var transportErr *upstream.TransportError
 		if errors.As(err, &transportErr) && transportRetries < maxRangeTransportRetries {
 			transportRetries++
 			if err := l.wait(ctx, time.Duration(transportRetries)*rangeRetryBackoff); err != nil {
@@ -343,7 +213,7 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 			}
 			continue
 		}
-		if !errors.Is(err, ErrStale) {
+		if !errors.Is(err, upstream.ErrStale) {
 			return RangeRows{}, err
 		}
 		if err := l.checkGeneration(ctx); err != nil {
@@ -356,7 +226,7 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 		wait := staleBackoff(staleRetries)
 		staleRetries++
 		if time.Now().Add(wait).After(deadline) {
-			return RangeRows{}, &staleError{message: fmt.Sprintf("View %s 在读取期间持续有新的写入，%s内没有读到一致的数据，请稍后重试", l.View.DatasetID, durationText(rangeStaleBudget)), raw: err}
+			return RangeRows{}, upstream.NewStaleError(fmt.Sprintf("View %s 在读取期间持续有新的写入，%s内没有读到一致的数据，请稍后重试", l.View.DatasetID, durationText(rangeStaleBudget)), err)
 		}
 		if err := l.wait(ctx, wait); err != nil {
 			return RangeRows{}, err
@@ -365,8 +235,8 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 }
 
 // queryRows 读一段原始行。
-func (l *RangeLoader) queryRows(ctx context.Context, start, end time.Time) ([]Row, uint64, error) {
-	return l.Client.QueryRows(ctx, l.SpaceID, Query{DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
+func (l *RangeLoader) queryRows(ctx context.Context, start, end time.Time) ([]upstream.Row, uint64, error) {
+	return l.Client.QueryRows(ctx, l.SpaceID, upstream.Query{DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
 }
 
 // wait 等待 d，等待前后都确认是否要放弃（Abort）：取消可能就落在等待期间；ctx 结束时返回 ctx 的错误。
@@ -397,7 +267,7 @@ func (l *RangeLoader) checkGeneration(ctx context.Context) error {
 	if err != nil || generation == l.View.Generation {
 		return err
 	}
-	view, err := retryTransport(ctx, l, func() (ViewInfo, error) {
+	view, err := retryTransport(ctx, l, func() (upstream.ViewInfo, error) {
 		return l.Client.GetView(ctx, l.SpaceID, l.View.DatasetID)
 	})
 	if err != nil || view.Generation == l.View.Generation {
@@ -410,7 +280,7 @@ func (l *RangeLoader) checkGeneration(ctx context.Context) error {
 func retryTransport[T any](ctx context.Context, l *RangeLoader, call func() (T, error)) (T, error) {
 	for retries := 0; ; retries++ {
 		value, err := call()
-		var transportErr *TransportError
+		var transportErr *upstream.TransportError
 		if err == nil || !errors.As(err, &transportErr) || retries >= maxRangeTransportRetries {
 			return value, err
 		}
@@ -473,10 +343,10 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 
 // GroupRows 按 bar_start 与标的整理一批行，规则与 RangeLoader 读回的行相同：同一标的同一周期有多个序列时记入 Ambiguous。
 // “因子现算”来源用它整理引擎返回的行，歧义判断与 View 来源一致。
-func GroupRows(rows []Row) RangeRows { return groupRange(rows) }
+func GroupRows(rows []upstream.Row) RangeRows { return groupRange(rows) }
 
-func groupRange(rows []Row) RangeRows {
-	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]map[string]string)}
+func groupRange(rows []upstream.Row) RangeRows {
+	result := RangeRows{Bars: make(map[int64]map[string]upstream.Row), Ambiguous: make(map[int64]map[string]string)}
 	tags := make(map[int64]map[string]string)
 	markAmbiguous := func(key int64, subjectID, detail string) {
 		if result.Ambiguous[key] == nil {
@@ -490,7 +360,7 @@ func groupRange(rows []Row) RangeRows {
 		}
 		key := row.DataTime.Unix()
 		if result.Bars[key] == nil {
-			result.Bars[key] = make(map[string]Row)
+			result.Bars[key] = make(map[string]upstream.Row)
 			tags[key] = make(map[string]string)
 		}
 		if tag, seen := tags[key][row.SubjectID]; seen && tag != row.SeriesTag {

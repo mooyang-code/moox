@@ -9,6 +9,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // sourceDSL 是 1h 主帧加 1d 来源 daily 的策略：filter 读来源的两列，score 读主帧的列。
@@ -29,11 +32,11 @@ portfolio: {max_missing: 1}
 // withDailySource 在 fake 上加一个日线因子 View（任务 ftask_d1d）：K 线列 close 与因子列 ma__20（成员 dma）。calendar 非空时
 // 主帧与来源的数据集都声明这个日历。
 func withDailySource(client *fakeClient, marketType, calendar string) {
-	client.views["dataset_factor_d1d"] = ViewInfo{DatasetID: "dataset_factor_d1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx_d",
-		Columns: []ViewColumn{plainColumn("close"), factorColumn("ma__20", "dma")}}
-	client.datasets["dataset_factor_d1d"] = DatasetInfo{DatasetID: "dataset_factor_d1d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{"source_dataset_id": "ds_kline_d"}}
-	client.datasets["ds_kline_d"] = DatasetInfo{DatasetID: "ds_kline_d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + marketType}}
-	client.factors["dma"] = FactorInfo{FactorID: "dma", DefinitionHash: "sha256:dma"}
+	client.views["dataset_factor_d1d"] = upstream.ViewInfo{DatasetID: "dataset_factor_d1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx_d",
+		Columns: []upstream.ViewColumn{plainColumn("close"), factorColumn("ma__20", "dma")}}
+	client.datasets["dataset_factor_d1d"] = upstream.DatasetInfo{DatasetID: "dataset_factor_d1d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{"source_dataset_id": "ds_kline_d"}}
+	client.datasets["ds_kline_d"] = upstream.DatasetInfo{DatasetID: "ds_kline_d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + marketType}}
+	client.factors["dma"] = upstream.FactorInfo{FactorID: "dma", DefinitionHash: "sha256:dma"}
 	if calendar != "" {
 		for id, sourceID := range map[string]string{"dataset_factor_1h": "ds_kline", "dataset_factor_d1d": "ds_kline_d"} {
 			dataset := client.datasets[id]
@@ -56,7 +59,7 @@ func TestResolveTasksBindsSource(t *testing.T) {
 		t.Fatalf("解析失败：%v", err)
 	}
 	source, ok := resolved.Sources["daily"]
-	if !ok || source.Bar != "1d" || source.Calendar != DefaultCalendar || source.Tasks["spot"].DatasetID != "dataset_factor_d1d" {
+	if !ok || source.Bar != "1d" || source.Calendar != period.DefaultCalendar || source.Tasks["spot"].DatasetID != "dataset_factor_d1d" {
 		t.Fatalf("来源绑定不符：%+v", resolved.Sources)
 	}
 	if source.Factors["dma"] != "sha256:dma|fixed" || len(source.Factors) != 1 || source.Columns["ma__20"].Member != "dma" || source.Columns["close"].Source != SourceDataset {
@@ -126,16 +129,16 @@ func TestResolveTasksRejectsBadSource(t *testing.T) {
 		"来源周期与 DSL 不符": {func(*fakeClient) {}, strings.Replace(sourceDSL, "{bar: 1d}", "{bar: 4h}", 1), sourceTasks(), "bar 断言为 4h"},
 		"可变成员": {func(c *fakeClient) {
 			v := c.views["dataset_factor_d1d"]
-			v.Columns = append(append([]ViewColumn(nil), v.Columns...), memberColumn("w__var", "w__var", "w", "var"))
+			v.Columns = append(append([]upstream.ViewColumn(nil), v.Columns...), memberColumn("w__var", "w__var", "w", "var"))
 			c.views["dataset_factor_d1d"] = v
 		}, sourceDSL, sourceTasks(), "来源任务不能有可变成员"},
 		"缺来源列": {func(c *fakeClient) {
 			v := c.views["dataset_factor_d1d"]
-			v.Columns = []ViewColumn{plainColumn("close")}
+			v.Columns = []upstream.ViewColumn{plainColumn("close")}
 			c.views["dataset_factor_d1d"] = v
 		}, sourceDSL, sourceTasks(), "列 ma__20 不存在于来源 daily"},
 		"来源市场不对": {func(c *fakeClient) {
-			c.datasets["ds_kline_d"] = DatasetInfo{DatasetID: "ds_kline_d", Status: "active", Frequency: "1d", Attributes: map[string]string{}, SubjectTags: []string{"binance_swap"}}
+			c.datasets["ds_kline_d"] = upstream.DatasetInfo{DatasetID: "ds_kline_d", Status: "active", Frequency: "1d", Attributes: map[string]string{}, SubjectTags: []string{"binance_swap"}}
 		}, sourceDSL, sourceTasks(), "源数据集是 swap 市场"},
 	}
 	for name, tc := range cases {
@@ -166,7 +169,7 @@ func TestLoadBarReadsSourceAsOf(t *testing.T) {
 	}
 	day := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC) // 2026-10-01 00:00 收盘的日线
 	var sourceStarts []time.Time
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		if query.DatasetID == "dataset_factor_d1d" {
 			sourceStarts = append(sourceStarts, query.Start)
 			if !query.End.Equal(query.Start.Add(time.Nanosecond)) {
@@ -237,7 +240,7 @@ func TestLoadBarStockSourceAsOf(t *testing.T) {
 		t.Fatalf("日历：%s / %+v", resolved.Calendar, resolved.Sources["daily"])
 	}
 	var sourceStart time.Time
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		if query.DatasetID == "dataset_factor_d1d" {
 			sourceStart = query.Start
 			return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 2, "ma__20": 1}}), 3, nil
@@ -251,7 +254,7 @@ func TestLoadBarStockSourceAsOf(t *testing.T) {
 		"15:00 读当天":    {shAt(t, 10, 9, 14, 0), stockDay(t, 2026, 10, 9), true},
 		"10:30 读上一交易日": {shAt(t, 10, 9, 9, 30), stockDay(t, 2026, 10, 8), false},
 	} {
-		boundary := mustPeriod(t, func() (PeriodBoundaries, error) { return FromStorageStart("cn_stock", "1h", tc.barStart) })
+		boundary := mustPeriod(t, func() (period.PeriodBoundaries, error) { return period.FromStorageStart("cn_stock", "1h", tc.barStart) })
 		if _, aligned, err := resolved.Sources["daily"].Period(boundary.BarEnd); err != nil || aligned != tc.aligned {
 			t.Fatalf("%s：对齐=%v err=%v", name, aligned, err)
 		}
@@ -263,6 +266,22 @@ func TestLoadBarStockSourceAsOf(t *testing.T) {
 		if loaded.Frame.Markets["spot"].Rows["BTC-USDT"].Values["daily.close"] != 2 {
 			t.Fatalf("%s：来源列没有并进来：%+v", name, loaded.Frame.Markets["spot"].Rows)
 		}
+	}
+}
+
+func mustPeriod(t *testing.T, compute func() (period.PeriodBoundaries, error)) period.PeriodBoundaries {
+	t.Helper()
+	boundary, err := compute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return boundary
+}
+
+func sameTime(t *testing.T, name string, got, want time.Time) {
+	t.Helper()
+	if !got.Equal(want) {
+		t.Fatalf("%s：期望 %s，实际 %s", name, want.In(shanghai(t)), got.In(shanghai(t)))
 	}
 }
 
@@ -322,7 +341,7 @@ func TestReferenceMarketAgeJudgement(t *testing.T) {
 	if _, _, reference, ok := resolved.RoleOfDataset("dataset_factor_1h"); !ok || !reference {
 		t.Fatal("现货 View 是参考市场")
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		if len(query.Columns) == 1 && query.Columns[0] == "close" && query.End.Before(barStart) {
 			// 年龄探针：永续上 BTC、ETH 都满 3 根；现货上只有 BTC。
 			if query.DatasetID == "dataset_factor_swap1h" {
@@ -404,7 +423,7 @@ func TestLoadBarGroupBySourceColumn(t *testing.T) {
 	day := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	evaluate := func(daily map[string]map[string]float64) engine.Decision {
 		t.Helper()
-		client.rows = func(query Query) ([]Row, uint64, error) {
+		client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 			if query.DatasetID == "dataset_factor_d1d" {
 				if len(query.Columns) != 1 || query.Columns[0] != "industry" {
 					t.Fatalf("来源应只读 industry：%v", query.Columns)
@@ -457,11 +476,11 @@ func TestLoadBarGroupBySourceColumn(t *testing.T) {
 func tunedSourceClient() *fakeClient {
 	client := newFakeClient("spot")
 	withDailySource(client, "spot", "")
-	client.factors["bias"] = FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
-	client.factors["w"] = FactorInfo{FactorID: "w", DefinitionHash: "sha256:w", Params: []ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
-	for datasetID, column := range map[string]ViewColumn{"dataset_factor_1h": memberColumn("bias__var", "bias__var", "bias", "var"), "dataset_factor_d1d": memberColumn("w__var", "w__var", "w", "var")} {
+	client.factors["bias"] = upstream.FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []upstream.ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
+	client.factors["w"] = upstream.FactorInfo{FactorID: "w", DefinitionHash: "sha256:w", Params: []upstream.ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
+	for datasetID, column := range map[string]upstream.ViewColumn{"dataset_factor_1h": memberColumn("bias__var", "bias__var", "bias", "var"), "dataset_factor_d1d": memberColumn("w__var", "w__var", "w", "var")} {
 		view := client.views[datasetID]
-		view.Columns = append(append([]ViewColumn(nil), view.Columns...), column, paramsColumn())
+		view.Columns = append(append([]upstream.ViewColumn(nil), view.Columns...), column, paramsColumn())
 		client.views[datasetID] = view
 	}
 	return client

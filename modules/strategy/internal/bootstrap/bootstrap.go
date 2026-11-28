@@ -32,6 +32,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const (
@@ -67,7 +70,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	closers = append(closers, gateway.Close)
 	// “因子现算”来源经同一个网关客户端调因子引擎的 EngineControl：不套 factor.timeout，超时按服务目录的路由超时。
-	engineClient := input.NewEngineClient(gateway)
+	engineClient := upstream.NewEngineClient(gateway)
 	// 先关掉上次运行中途退出的“因子现算”回放留在因子引擎上的会话，再把遗留的运行中回放标成 interrupted。
 	if err := replay.CloseInterruptedSessions(ctx, db, engineClient, log.Warnf); err != nil {
 		return nil, nil, fmt.Errorf("读取运行中的回放失败：%w", err)
@@ -85,10 +88,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 
 	// 实时与回放共用 Storage/Factor 适配；回放按 replay.page_size 分页读取较长的区间。
 	live := newInputClient(cfg, gateway)
-	var inputClient input.Client = live
+	var inputClient upstream.Client = live
 	ranged := *live
 	ranged.PageSize = uint32(cfg.Replay.PageSize)
-	var replayClient input.Client = &ranged
+	var replayClient upstream.Client = &ranged
 	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}}
 	// 启用绑了组合账户的实例前读一次 Trade 的账户；停用后通知 Trade 关闭会话（批 3 的 3.6）。
 	service.Trade = tradeowner.New(cfg.Trade, gateway)
@@ -286,7 +289,7 @@ func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (
 			continue
 		}
 		calendar := strings.ToLower(strings.TrimSpace(resolved.Calendar))
-		if input.SessionCalendar(calendar) && !slices.Contains(calendars, calendar) {
+		if period.SessionCalendar(calendar) && !slices.Contains(calendars, calendar) {
 			calendars = append(calendars, calendar)
 		}
 	}
@@ -294,10 +297,10 @@ func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (
 	var messages []string
 	down := false
 	for _, calendar := range calendars {
-		err := input.StockCalendarReadiness(calendar, now, calendarWarningWindow, trigger.ValidBars)
+		err := period.StockCalendarReadiness(calendar, now, calendarWarningWindow, trigger.ValidBars)
 		switch {
 		case err == nil:
-		case errors.Is(err, input.ErrCalendarExpiring):
+		case errors.Is(err, period.ErrCalendarExpiring):
 			messages = append(messages, err.Error())
 		default:
 			messages = append(messages, err.Error()+"；使用日历 "+calendar+" 的实例无法求值")
@@ -342,8 +345,8 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 }
 
 // newInputClient 构造 Storage（Metadata、DataView）与 Factor 的窄适配，调用经 gatewayclient 发往本机主机网关。
-func newInputClient(cfg Config, gateway gatewayclient.Invoker) *input.RPCClient {
-	return input.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
+func newInputClient(cfg Config, gateway gatewayclient.Invoker) *upstream.RPCClient {
+	return upstream.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
 }
 
 func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *health.State, consumer *eventconsumer.Consumer) func(context.Context) healthz.Response {

@@ -11,6 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/factorname"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // paramsClient 在 fakeClient 的 View 上多一个可变成员 bias__var 与 __params 列：请求了 __params 时，每行带上这个成员这一期
@@ -20,22 +22,22 @@ type paramsClient struct {
 	columns [][]string
 }
 
-func (c *paramsClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+func (c *paramsClient) GetView(ctx context.Context, spaceID, datasetID string) (upstream.ViewInfo, error) {
 	view, err := c.fakeClient.GetView(ctx, spaceID, datasetID)
 	view.Columns = append(view.Columns,
-		input.ViewColumn{Name: "bias__var", Attributes: map[string]string{"column_kind": "output", "member_key": "bias__var", "factor_id": "bias", "member_kind": "var", "output_name": "bias__var"}},
-		input.ViewColumn{Name: factorname.ParamsColumn, Attributes: map[string]string{"column_kind": "params"}})
+		upstream.ViewColumn{Name: "bias__var", Attributes: map[string]string{"column_kind": "output", "member_key": "bias__var", "factor_id": "bias", "member_kind": "var", "output_name": "bias__var"}},
+		upstream.ViewColumn{Name: factorname.ParamsColumn, Attributes: map[string]string{"column_kind": "params"}})
 	return view, err
 }
 
-func (c *paramsClient) GetFactor(ctx context.Context, factorID string) (input.FactorInfo, error) {
+func (c *paramsClient) GetFactor(ctx context.Context, factorID string) (upstream.FactorInfo, error) {
 	if factorID == "bias" {
-		return input.FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []input.ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}, nil
+		return upstream.FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []upstream.ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}, nil
 	}
 	return c.fakeClient.GetFactor(ctx, factorID)
 }
 
-func (c *paramsClient) QueryRows(ctx context.Context, spaceID string, query input.Query) ([]input.Row, uint64, error) {
+func (c *paramsClient) QueryRows(ctx context.Context, spaceID string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	rows, revision, err := c.fakeClient.QueryRows(ctx, spaceID, query)
 	if err != nil || !slices.Contains(query.Columns, factorname.ParamsColumn) {
 		return rows, revision, err
@@ -72,7 +74,7 @@ func TestReplayParamsReadFromView(t *testing.T) {
 	runner := &Runner{Store: repo, Client: client, ChunkBars: 3, InitialEquity: 100}
 	runner.Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "params")
-	if err != nil || done.Status != store.ReplayDone {
+	if err != nil || done.Status != store.ReplaySucceeded {
 		t.Fatalf("回放应完成：%+v err=%v", done, err)
 	}
 	if len(client.columns) == 0 {
@@ -117,7 +119,7 @@ func TestReplaySlippageReachesLedger(t *testing.T) {
 		}
 		(&Runner{Store: repo, Client: client, ChunkBars: 3, InitialEquity: 100}).Execute(context.Background(), claimed)
 		done, err := repo.GetReplay(context.Background(), id)
-		if err != nil || done.Status != store.ReplayDone {
+		if err != nil || done.Status != store.ReplaySucceeded {
 			t.Fatalf("回放应完成：%+v err=%v", done, err)
 		}
 		var metrics Metrics
@@ -150,7 +152,7 @@ func TestPoolWarmUpAndReplayReadParams(t *testing.T) {
 	job := startPoolReplay(t, repo, client, "pp", raw, list, 10)
 	client.columns = nil
 	(&Runner{Store: repo, Client: client, ChunkBars: 3, InitialEquity: 1}).Execute(context.Background(), job)
-	if done, _ := replayMetrics(t, repo, "pp"); done.Status != store.ReplayDone {
+	if done, _ := replayMetrics(t, repo, "pp"); done.Status != store.ReplaySucceeded {
 		t.Fatalf("池回放应完成：%+v", done)
 	}
 	if len(client.columns) == 0 {

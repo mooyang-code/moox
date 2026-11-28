@@ -9,6 +9,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // LoadPrices 读取一期里若干（标的|市场）的收盘价（键是 engine.TargetKey），策略池的成员账本据此估值与成交。
@@ -22,9 +25,9 @@ func (l Loader) LoadPrices(ctx context.Context, spaceID string, resolved Resolve
 	if l.Client == nil {
 		return nil, nil, fmt.Errorf("输入装配缺少客户端")
 	}
-	boundary, err := FromStorageStart(resolved.Calendar, resolved.Bar, bar.BarStart)
+	boundary, err := period.FromStorageStart(resolved.Calendar, resolved.Bar, bar.BarStart)
 	if err != nil {
-		return nil, nil, &SkipError{Reason: SkipConfigError, Detail: err.Error()}
+		return nil, nil, &upstream.SkipError{Reason: upstream.SkipConfigError, Detail: err.Error()}
 	}
 	if fundingColumn != "" {
 		funding = map[string]float64{}
@@ -56,7 +59,7 @@ func (l Loader) LoadPrices(ctx context.Context, spaceID string, resolved Resolve
 		for _, id := range ids {
 			wanted[id] = struct{}{}
 		}
-		selected := make([]Subject, 0, len(ids))
+		selected := make([]upstream.Subject, 0, len(ids))
 		for _, subject := range bindings {
 			if _, ok := wanted[subject.SubjectID]; ok {
 				selected = append(selected, subject)
@@ -71,7 +74,7 @@ func (l Loader) LoadPrices(ctx context.Context, spaceID string, resolved Resolve
 		if withFunding {
 			columns = append(columns, fundingColumn)
 		}
-		rows, _, err := l.Client.QueryRows(ctx, spaceID, Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected,
+		rows, _, err := l.Client.QueryRows(ctx, spaceID, upstream.Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected,
 			Start: boundary.StorageStart, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID})
 		if err != nil {
 			return nil, nil, err

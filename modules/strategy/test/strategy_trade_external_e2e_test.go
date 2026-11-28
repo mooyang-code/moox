@@ -33,6 +33,9 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const externalDSL = `name: external_e2e
@@ -75,7 +78,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	hash := dsl.Hash([]byte(externalDSL))
 	require.NoError(t, repo.CreateDefinition(ctx, store.Definition{StrategyID: "strategy-e2e", Name: "external_e2e", DSLYaml: externalDSL, DSLHash: hash, CreatedAt: now}))
 	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", FactorTasks: map[string]string{"spot": "ftask_e2e"}, LogicalAccountID: &logical, CreatedAt: now}))
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_e2e", DatasetID: "dataset_factor_e2e"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias|fixed"}, ViewColumns: []string{"bias", "close"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_e2e", DatasetID: "dataset_factor_e2e"}}, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias|fixed"}, ViewColumns: []string{"bias", "close"}}
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
 	require.NoError(t, repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
@@ -176,7 +179,7 @@ func (externalInput) LoadPrices(context.Context, string, input.Resolved, input.B
 }
 
 func (externalInput) LoadBar(_ context.Context, _ string, resolved input.Resolved, _ *dsl.Program, bar input.Bar) (input.Loaded, error) {
-	boundary, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, bar.BarStart)
+	boundary, err := period.FromStorageStart(resolved.Calendar, resolved.Bar, bar.BarStart)
 	if err != nil {
 		return input.Loaded{}, err
 	}
@@ -185,6 +188,6 @@ func (externalInput) LoadBar(_ context.Context, _ string, resolved input.Resolve
 		"BTC-USDT": {Values: map[string]float64{"bias": 2, "close": 100}},
 		"ETH-USDT": {Values: map[string]float64{"bias": 1, "close": 10}},
 	}}}}
-	subjects := map[string]input.Subject{"BTC-USDT": {SubjectID: "BTC-USDT", Active: true}, "ETH-USDT": {SubjectID: "ETH-USDT", Active: true}}
+	subjects := map[string]upstream.Subject{"BTC-USDT": {SubjectID: "BTC-USDT", Active: true}, "ETH-USDT": {SubjectID: "ETH-USDT", Active: true}}
 	return input.Loaded{Frame: frame, Sets: input.Sets{Universe: ids, Expected: frame.Expected, AgedOut: frame.AgedOut, Subjects: subjects}, Boundary: boundary}, nil
 }

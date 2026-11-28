@@ -101,7 +101,7 @@ func TestReplayRecordsSourceAndTrimsList(t *testing.T) {
 		t.Fatal("详情应带 DSL 全文")
 	}
 	stored, err := h.service.Store.GetReplay(h.ctx, replay.GetReplayId())
-	if err != nil || stored.Status != store.ReplayPending {
+	if err != nil || stored.Status != store.ReplayQueued {
 		t.Fatalf("回放应排队等待执行：%+v err=%v", stored, err)
 	}
 }

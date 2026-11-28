@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // A 股索引里的行全部晚于当前已闭合的最后一根时（未来的交易日，或盘中新建、只有当天一根的 View），说明是“晚于已闭合”，
@@ -13,7 +15,7 @@ import (
 func TestStockRowsLaterThanClosedBarAreReportedAsFuture(t *testing.T) {
 	now := time.Date(2026, 10, 12, 10, 0, 0, 0, shanghai(t))
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	for name, view := range map[string]ViewInfo{
+	for name, view := range map[string]upstream.ViewInfo{
 		"未来的交易日":    {IndexedFrom: stockDay(t, 2026, 10, 20), IndexedTo: stockDay(t, 2026, 10, 23), SeriesBars: 500},
 		"只有当天盘中的一行": {IndexedFrom: stockDay(t, 2026, 10, 12), IndexedTo: stockDay(t, 2026, 10, 12), SeriesBars: 500},
 	} {
@@ -31,7 +33,7 @@ func TestStockRowsLaterThanClosedBarAreReportedAsFuture(t *testing.T) {
 			t.Fatalf("%s：回放提交应带同样的说明：%v", name, err)
 		}
 	}
-	weekend := ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 10), IndexedTo: stockDay(t, 2026, 10, 11), SeriesBars: 500}
+	weekend := upstream.ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 10), IndexedTo: stockDay(t, 2026, 10, 11), SeriesBars: 500}
 	if _, err := CoverageBounds(weekend, resolved, now); err == nil || !strings.Contains(err.Error(), "都不在 A 股交易日上") || strings.Contains(err.Error(), "晚于") {
 		t.Fatalf("行全部落在周末应说明不在交易日上：%v", err)
 	}
@@ -42,7 +44,7 @@ func TestStockEnableWithoutMinAgeOnlyChecksRowKey(t *testing.T) {
 	now := time.Date(2026, 10, 12, 10, 0, 0, 0, shanghai(t))
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	client := newFakeClient("spot")
-	for name, view := range map[string]ViewInfo{
+	for name, view := range map[string]upstream.ViewInfo{
 		"未来的交易日":    {DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 10, 20), IndexedTo: stockDay(t, 2026, 10, 23), SeriesBars: 500},
 		"只有当天盘中的一行": {DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 10, 12), IndexedTo: stockDay(t, 2026, 10, 12), SeriesBars: 500},
 		"周末的行":      {DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 10, 10), IndexedTo: stockDay(t, 2026, 10, 11), SeriesBars: 500},

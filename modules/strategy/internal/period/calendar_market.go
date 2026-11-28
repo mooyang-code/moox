@@ -1,4 +1,4 @@
-package input
+package period
 
 import (
 	"fmt"
@@ -99,3 +99,9 @@ func (m *sessionMarket) closeAt(day marketcalendar.CivilDate) time.Time {
 func (m *sessionMarket) label(at time.Time) string {
 	return at.In(m.location).Format("2006-01-02 15:04:05") + " " + m.market.ZoneName + "时间"
 }
+
+// MarketName 返回日历对应的市场名（如“A 股”、“港股”）；非交易时段市场返回空串。
+func MarketName(calendarID string) string { return loadedSessionMarket(calendarID).name() }
+
+// MarketSpacedName 返回接在汉字后面的市场名（以拉丁字母开头的前置空格）；非交易时段市场返回空串。
+func MarketSpacedName(calendarID string) string { return loadedSessionMarket(calendarID).spacedName() }

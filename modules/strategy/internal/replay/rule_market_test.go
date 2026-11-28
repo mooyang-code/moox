@@ -12,6 +12,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 // 规则级市场（S4）的双市场回放：现货规则、永续规则与按币选行的规则同时存在，永续第 7 小时 D 缺一行；研究回放与逐期实时装配 + 同一引擎的
@@ -52,7 +54,7 @@ portfolio:
 	(&Runner{Store: repo, Client: client, ChunkBars: 5, MissingPriceLiquidateBars: 3, InitialEquity: 100}).Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "m1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 	strategy, err := dsl.Parse([]byte(dslYaml))
 	require.NoError(t, err)
 	resolved, program, err := input.Resolve(context.Background(), client, "crypto", input.TaskIDs(map[string]string{"spot": spotTask.FactorTaskID, "swap": swapTask.FactorTaskID}), strategy)
@@ -61,7 +63,7 @@ portfolio:
 	state, compared := engine.State{}, 0
 	sawMarket := map[string]bool{}
 	for _, replayed := range barsOf(t, repo, "m1") {
-		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+		boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 		require.NoError(t, err)
 		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, Held: state.HeldMarkets()})
 		require.NoError(t, err)

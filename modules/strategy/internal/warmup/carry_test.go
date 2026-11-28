@@ -11,6 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/replay"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 // 本文件验证策略池重新启用时规则状态的沿用：DSL、绑定与成员都没变时从沿用的状态接着推进（不重新预热），
@@ -65,7 +67,7 @@ func (h *harness) freshRun(t *testing.T, session store.Session, startNow, endNow
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock, err := input.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
+	clock, err := period.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}

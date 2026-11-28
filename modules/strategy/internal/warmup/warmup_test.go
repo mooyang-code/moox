@@ -22,6 +22,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 var origin = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -49,8 +52,8 @@ func price(id string, hour int) float64 {
 	}
 }
 
-func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
-	return input.ViewInfo{DatasetID: "dataset_factor_a", Frequency: "1h", Status: "active", ActiveIndexID: "idx", Generation: "idx", Columns: []input.ViewColumn{
+func (f *fakeClient) GetView(context.Context, string, string) (upstream.ViewInfo, error) {
+	return upstream.ViewInfo{DatasetID: "dataset_factor_a", Frequency: "1h", Status: "active", ActiveIndexID: "idx", Generation: "idx", Columns: []upstream.ViewColumn{
 		{Name: "close", Attributes: map[string]string{}},
 		{Name: "mom", Attributes: map[string]string{"column_kind": "output", "member_key": "mom", "factor_id": "mom", "member_kind": "fixed", "output_name": "mom"}},
 	}}, nil
@@ -60,7 +63,7 @@ func (f *fakeClient) ViewGeneration(context.Context, string, string) (string, er
 	return "idx", nil
 }
 
-func (f *fakeClient) ViewCoverage(context.Context, string, input.ViewInfo, bool) (input.Coverage, error) {
+func (f *fakeClient) ViewCoverage(context.Context, string, upstream.ViewInfo, bool) (upstream.Coverage, error) {
 	from := f.indexedFrom
 	if from.IsZero() {
 		from = origin
@@ -69,30 +72,30 @@ func (f *fakeClient) ViewCoverage(context.Context, string, input.ViewInfo, bool)
 	if to.IsZero() {
 		to = origin.Add(1000 * time.Hour)
 	}
-	return input.Coverage{IndexedFrom: from, IndexedTo: to}, nil
+	return upstream.Coverage{IndexedFrom: from, IndexedTo: to}, nil
 }
 
-func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
-	return input.DatasetInfo{DatasetID: datasetID, Status: "active", Frequency: "1h", Retention: "forever", Attributes: map[string]string{}, SubjectTags: []string{"binance_spot"}}, nil
+func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (upstream.DatasetInfo, error) {
+	return upstream.DatasetInfo{DatasetID: datasetID, Status: "active", Frequency: "1h", Retention: "forever", Attributes: map[string]string{}, SubjectTags: []string{"binance_spot"}}, nil
 }
 
-func (f *fakeClient) GetTag(context.Context, string, string) (input.TagInfo, error) {
-	return input.TagInfo{MarketType: "spot"}, nil
+func (f *fakeClient) GetTag(context.Context, string, string) (upstream.TagInfo, error) {
+	return upstream.TagInfo{MarketType: "spot"}, nil
 }
 
-func (f *fakeClient) ListDatasetSubjects(context.Context, string, string) ([]input.Subject, error) {
-	return []input.Subject{{SubjectID: "A", Active: true}, {SubjectID: "B", Active: true}, {SubjectID: "C", Active: true}}, nil
+func (f *fakeClient) ListDatasetSubjects(context.Context, string, string) ([]upstream.Subject, error) {
+	return []upstream.Subject{{SubjectID: "A", Active: true}, {SubjectID: "B", Active: true}, {SubjectID: "C", Active: true}}, nil
 }
 
-func (f *fakeClient) ListTagMembers(context.Context, string, string) ([]input.TagMember, error) {
+func (f *fakeClient) ListTagMembers(context.Context, string, string) ([]upstream.TagMember, error) {
 	return nil, nil
 }
 
-func (f *fakeClient) GetFactor(context.Context, string) (input.FactorInfo, error) {
-	return input.FactorInfo{FactorID: "mom", DefinitionHash: "sha256:mom"}, nil
+func (f *fakeClient) GetFactor(context.Context, string) (upstream.FactorInfo, error) {
+	return upstream.FactorInfo{FactorID: "mom", DefinitionHash: "sha256:mom"}, nil
 }
 
-func (f *fakeClient) QueryRows(ctx context.Context, _ string, query input.Query) ([]input.Row, uint64, error) {
+func (f *fakeClient) QueryRows(ctx context.Context, _ string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	f.mu.Lock()
 	f.queries++
 	var failure error
@@ -111,7 +114,7 @@ func (f *fakeClient) QueryRows(ctx context.Context, _ string, query input.Query)
 	if failure != nil {
 		return nil, 0, failure
 	}
-	var rows []input.Row
+	var rows []upstream.Row
 	for at := query.Start.Truncate(time.Hour); at.Before(query.End); at = at.Add(time.Hour) {
 		if at.Before(query.Start) {
 			continue
@@ -119,7 +122,7 @@ func (f *fakeClient) QueryRows(ctx context.Context, _ string, query input.Query)
 		hour := int(at.Sub(origin) / time.Hour)
 		for _, subject := range query.Subjects {
 			value := price(subject.SubjectID, hour)
-			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: map[string]float64{"close": value, "mom": value - price(subject.SubjectID, hour-1)}})
+			rows = append(rows, upstream.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: map[string]float64{"close": value, "mom": value - price(subject.SubjectID, hour-1)}})
 		}
 	}
 	return rows, 1, nil
@@ -454,7 +457,7 @@ func checkFirstLiveMatchesLongRun(t *testing.T, poolYaml string, memberIDs ...st
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock, err := input.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
+	clock, err := period.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +472,7 @@ func checkFirstLiveMatchesLongRun(t *testing.T, poolYaml string, memberIDs ...st
 	var want *engine.Decision
 	run := replay.PoolRun{Client: h.client, SpaceID: "crypto", Resolved: resolved, Members: members, Programs: programs, Config: cfg,
 		Start: start, End: origin.Add(100*time.Hour + time.Nanosecond), IncludeLatest: true, ChunkBars: 4, Now: func() time.Time { return origin.Add(101*time.Hour + 20*time.Minute) },
-		OnBar: func(bar input.PeriodBoundaries, decision engine.Decision) {
+		OnBar: func(bar period.PeriodBoundaries, decision engine.Decision) {
 			if bar.BarEnd.Equal(origin.Add(101 * time.Hour)) {
 				copied := decision
 				want = &copied

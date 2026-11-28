@@ -18,6 +18,9 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // ViewDataReadyConsumerName 是默认的 durable 消费者名。
@@ -190,7 +193,7 @@ func (h *Handler) firstDrop(eventID, instanceID string) bool {
 }
 
 // period 是一个实例处理一期时的上下文。
-type period struct {
+type periodContext struct {
 	loader   Loader
 	instance store.Instance
 	runtime  *runtime
@@ -199,7 +202,7 @@ type period struct {
 	after time.Time
 	// events 是本期各市场 View 的就绪事件（市场 → 事件）：只绑一个任务的实例就是到达的这一条，绑定两个任务的实例是汇合后的两条。
 	events     map[string]*storagepb.ViewDataReady
-	boundary   input.PeriodBoundaries
+	boundary   period.PeriodBoundaries
 	validUntil time.Time
 	input      store.InputRecord
 	timing     periodTiming
@@ -242,7 +245,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		h.recordArrival(ctx, instance, rt, message, payload, periodTime)
 		return ErrModuleNotReady
 	}
-	var skip *input.SkipError
+	var skip *upstream.SkipError
 	if rtErr != nil && !errors.As(rtErr, &skip) {
 		return rtErr
 	}
@@ -250,7 +253,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if rt == nil || rt.resolved.Bar == "" {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 的绑定快照无法解析，本期丢弃：%v", instance.InstanceID, rtErr)
-			h.observe(ctx, instance, strings.ToLower(payload.GetFrequency()), time.Time{}, time.Time{}, store.StatusSkipped, input.SkipConfigError)
+			h.observe(ctx, instance, strings.ToLower(payload.GetFrequency()), time.Time{}, time.Time{}, store.StatusSkipped, upstream.SkipConfigError)
 		}
 		return nil
 	}
@@ -280,25 +283,25 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if !bound {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 的绑定里没有 View %s，本期丢弃", instance.InstanceID, payload.GetDatasetId())
-			h.observe(ctx, instance, bar, time.Time{}, time.Time{}, store.StatusSkipped, input.SkipConfigError)
+			h.observe(ctx, instance, bar, time.Time{}, time.Time{}, store.StatusSkipped, upstream.SkipConfigError)
 		}
 		return nil
 	}
 	// 日历换算失败（例如 A 股内嵌日历已过期、周期不在交易日上）无法确定周期与有效期，只能 ACK：
 	// 记日志并计入模块健康失败，不能悄悄丢掉这一期。
-	boundary, err := input.FromStorageStart(calendar, bar, periodTime)
+	boundary, err := period.FromStorageStart(calendar, bar, periodTime)
 	if err != nil {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 无法确定周期边界（%s/%s），本期丢弃：%v", instance.InstanceID, calendar, bar, err)
-			h.observe(ctx, instance, bar, time.Time{}, time.Time{}, store.StatusSkipped, input.SkipConfigError)
+			h.observe(ctx, instance, bar, time.Time{}, time.Time{}, store.StatusSkipped, upstream.SkipConfigError)
 		}
 		return nil
 	}
 	validUntil, err := advance(calendar, bar, boundary.BarEnd, ValidBars)
 	if err != nil {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
-			h.logf("实例 %s 周期 %s 无法推算有效期（%s/%s），本期丢弃：%v", instance.InstanceID, input.BarEndLabel(calendar, bar, boundary.BarEnd), calendar, bar, err)
-			h.observe(ctx, instance, bar, boundary.StorageStart, boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+			h.logf("实例 %s 周期 %s 无法推算有效期（%s/%s），本期丢弃：%v", instance.InstanceID, period.BarEndLabel(calendar, bar, boundary.BarEnd), calendar, bar, err)
+			h.observe(ctx, instance, bar, boundary.StorageStart, boundary.BarEnd, store.StatusSkipped, upstream.SkipConfigError)
 		}
 		return nil
 	}
@@ -306,7 +309,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		// 不晚于预热终点的周期已经在预热里推进过：事件直接去重。等待期间排队的事件大多落在预热终点以内，不会因为重投的先后变成乱序跳过。
 		return nil
 	}
-	p := &period{timing: periodTiming{start: h.now()}, shadow: instance.Trial(), loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
+	p := &periodContext{timing: periodTiming{start: h.now()}, shadow: instance.Trial(), loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
 	p.input = store.InputRecord{Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{payload.GetDatasetId(): {EventID: message.GetEventId()}}}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
@@ -325,7 +328,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		if boundary.BarEnd.Equal(latest.BarEndTime) {
 			return nil
 		}
-		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
+		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", period.BarEndLabel(calendar, bar, latest.BarEndTime)))
 	}
 	if rt.resolved.Gathers() || rt.pool != nil {
 		// 更早的期各 View 都已记下、只是还没求值（例如门禁等待期间都被记下，放行后先重投了较晚的一期；策略池预热期间到达的事件）：
@@ -363,7 +366,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		if len(rt.resolved.PreviousFactors) > 0 {
 			previousEnd, err := advance(calendar, bar, boundary.BarEnd, -1)
 			if err != nil {
-				return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
+				return h.commitSkipped(ctx, p, upstream.SkipConfigError, err.Error())
 			}
 			_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, rt.resolved.DatasetIDs(), bar, calendar, previousEnd, rt.resolved.PreviousFactors, rt.sessionID)
 			if err != nil {
@@ -377,7 +380,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	}
 	if expired {
 		// 迟到周期（有效期已过）不发目标，但仍求值并只推进规则状态：状态是逐期累积的（holding 的批次、hold 的入场序号与冷却、持仓集合），跳过会让后续周期的状态缺口。
-		detail := fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil))
+		detail := fmt.Sprintf("有效期 %s 已过", period.BarEndLabel(calendar, bar, validUntil))
 		if ready.Reason != "" {
 			return h.commitSkipped(ctx, p, store.SkipExpired, detail)
 		}
@@ -412,12 +415,12 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		result, items, state, err := h.buildResult(p, *decision, loaded)
 		if err != nil {
-			return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
+			return h.commitSkipped(ctx, p, upstream.SkipConfigError, err.Error())
 		}
 		commitStart := h.now()
 		next, paramsErr := h.nextParams(p, *decision, loaded)
 		if paramsErr != nil {
-			return h.commitSkipped(ctx, p, input.SkipConfigError, paramsErr.Error())
+			return h.commitSkipped(ctx, p, upstream.SkipConfigError, paramsErr.Error())
 		}
 		result.NextParamsJSON = next
 		_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, Items: items, State: state, ExpectedLatestResultID: &expected, Now: h.now()})
@@ -439,7 +442,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 				return nil
 			}
 			if hasLatest && latest.BarEndTime.After(boundary.BarEnd) {
-				return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
+				return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", period.BarEndLabel(calendar, bar, latest.BarEndTime)))
 			}
 			expected = ""
 			if hasLatest {
@@ -460,7 +463,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 				// 结果本身无法写入（校验失败或违反表约束），重投也不会成功：记一条不带明细的 skipped(config_error) 后 ACK，
 				// 不能让这条消息无限重投并压住同一消费者上的其他事件。
 				h.logf("实例 %s 周期 %s 的结果无法写入：%v", instance.InstanceID, boundary.BarEnd.Format(time.RFC3339), err)
-				return h.commitSkipped(ctx, p, input.SkipConfigError, "结果无法写入存储（确定性错误，详见策略模块日志）")
+				return h.commitSkipped(ctx, p, upstream.SkipConfigError, "结果无法写入存储（确定性错误，详见策略模块日志）")
 			}
 			return fmt.Errorf("写入结果：%w", err)
 		}
@@ -468,7 +471,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 }
 
 // evaluate 读取输入并求值。返回 nil 决策表示本期已作为 skipped 落库。
-func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready mergedReadiness) (*engine.Decision, input.Loaded, error) {
+func (h *Handler) evaluate(ctx context.Context, p *periodContext, payload *storagepb.ViewDataReady, ready mergedReadiness) (*engine.Decision, input.Loaded, error) {
 	rt := p.runtime
 	key := p.eventID + "\x00" + p.instance.InstanceID
 	if detail, done := h.exhausted[key]; done {
@@ -504,7 +507,7 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	decision, err := engine.Evaluate(rt.program, loaded.Frame, previous)
 	p.timing.evalRun = h.now().Sub(runStart)
 	if err != nil {
-		return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
+		return nil, input.Loaded{}, h.commitSkipped(ctx, p, upstream.SkipConfigError, err.Error())
 	}
 	return &decision, loaded, nil
 }
@@ -514,7 +517,7 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 //   - 状态已经推进到本期或更晚（重新启用后沿用了上一个会话的状态，而这一期在上一个会话里求值过）：记 out_of_order，不重复推进；
 //   - 状态无法解析：普通策略清掉状态、本期记 config_error，下一期从头开始；策略池的状态要靠预热重建，只记 config_error；
 //   - 策略池没有状态（预热的结果与状态同事务写入，正常不会出现）：记 config_error。
-func (h *Handler) previousState(ctx context.Context, p *period) (engine.State, bool, error) {
+func (h *Handler) previousState(ctx context.Context, p *periodContext) (engine.State, bool, error) {
 	rt := p.runtime
 	previous := engine.State{}
 	start := h.now()
@@ -525,12 +528,12 @@ func (h *Handler) previousState(ctx context.Context, p *period) (engine.State, b
 	}
 	if !found || row.SessionID != rt.sessionID {
 		if rt.pool != nil {
-			return previous, false, h.commitSkipped(ctx, p, input.SkipConfigError, "策略池没有可用的规则状态，请停用后重新启用实例（会重新预热）")
+			return previous, false, h.commitSkipped(ctx, p, upstream.SkipConfigError, "策略池没有可用的规则状态，请停用后重新启用实例（会重新预热）")
 		}
 		return previous, true, nil
 	}
 	if !p.boundary.BarEnd.After(row.BarEndTime) {
-		return previous, false, h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("规则状态已推进到 %s，这一期不再求值", input.BarEndLabel(rt.resolved.Calendar, rt.resolved.Bar, row.BarEndTime)))
+		return previous, false, h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("规则状态已推进到 %s，这一期不再求值", period.BarEndLabel(rt.resolved.Calendar, rt.resolved.Bar, row.BarEndTime)))
 	}
 	decodeStart := h.now()
 	err = json.Unmarshal(row.StateJSON, &previous)
@@ -540,16 +543,16 @@ func (h *Handler) previousState(ctx context.Context, p *period) (engine.State, b
 	}
 	h.logf("实例 %s 的规则状态（推进到 %s）无法解析：%v", p.instance.InstanceID, row.BarEndTime.Format(time.RFC3339), err)
 	if rt.pool != nil {
-		return engine.State{}, false, h.commitSkipped(ctx, p, input.SkipConfigError, "策略池的规则状态无法解析（记录已损坏），请停用后重新启用实例（会重新预热）")
+		return engine.State{}, false, h.commitSkipped(ctx, p, upstream.SkipConfigError, "策略池的规则状态无法解析（记录已损坏），请停用后重新启用实例（会重新预热）")
 	}
 	// 清状态与这条 config_error 记录在同一个事务里：不会出现状态清了而记录没写。
 	p.clearState = true
-	return engine.State{}, false, h.commitSkipped(ctx, p, input.SkipConfigError, "规则状态无法解析（记录已损坏），已清空，下一期从头开始")
+	return engine.State{}, false, h.commitSkipped(ctx, p, upstream.SkipConfigError, "规则状态无法解析（记录已损坏），已清空，下一期从头开始")
 }
 
 // withReads 执行一组读取：活动索引换了就丢弃事件内缓存的元数据后整体重读；配置类问题返回 skip；基础设施错误按（事件, 实例）计尝试次数，
 // 次数耗尽就把 skipped(infra_retry_exhausted) 落库（terminal 为真，err 是落库结果），否则返回错误让事件重投。
-func (h *Handler) withReads(ctx context.Context, p *period, key string, read func() error) (skip *input.SkipError, terminal bool, err error) {
+func (h *Handler) withReads(ctx context.Context, p *periodContext, key string, read func() error) (skip *upstream.SkipError, terminal bool, err error) {
 	for reread := 0; ; reread++ {
 		loadStart := h.now()
 		err := read()
@@ -557,20 +560,20 @@ func (h *Handler) withReads(ctx context.Context, p *period, key string, read fun
 		if err == nil {
 			return nil, false, nil
 		}
-		if errors.Is(err, input.ErrStale) && reread < maxStaleRereads {
+		if errors.Is(err, upstream.ErrStale) && reread < maxStaleRereads {
 			// 索引已切换：丢弃事件内缓存的 View 元数据后整体重读。
 			if cache, ok := p.loader.(interface{ Invalidate() }); ok {
 				cache.Invalidate()
 			}
 			continue
 		}
-		var skipErr *input.SkipError
+		var skipErr *upstream.SkipError
 		if errors.As(err, &skipErr) {
 			return skipErr, false, nil
 		}
 		h.attempts[key]++
 		// 记录里只保存不含服务地址的概述，原始错误写日志。
-		h.logf("实例 %s 周期 %s 读取输入失败（第 %d 次）：%v；原始错误：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), h.attempts[key], err, input.RawCause(err))
+		h.logf("实例 %s 周期 %s 读取输入失败（第 %d 次）：%v；原始错误：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), h.attempts[key], err, upstream.RawCause(err))
 		if h.attempts[key] >= h.budget() {
 			delete(h.attempts, key)
 			h.exhausted[key] = err.Error()
@@ -585,7 +588,7 @@ func (h *Handler) withReads(ctx context.Context, p *period, key string, read fun
 }
 
 // loadInput 装配一个绑定（普通策略的绑定，或策略池一个成员的绑定）的一期输入，读取规则见 withReads。
-func (h *Handler) loadInput(ctx context.Context, p *period, key string, resolved input.Resolved, program *dsl.Program, ready mergedReadiness, previous engine.State) (loaded input.Loaded, skip *input.SkipError, terminal bool, err error) {
+func (h *Handler) loadInput(ctx context.Context, p *periodContext, key string, resolved input.Resolved, program *dsl.Program, ready mergedReadiness, previous engine.State) (loaded input.Loaded, skip *upstream.SkipError, terminal bool, err error) {
 	skip, terminal, err = h.withReads(ctx, p, key, func() error {
 		var readErr error
 		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: previous.HeldMarkets(), SourceDown: ready.SourceDown})
@@ -602,7 +605,7 @@ func (h *Handler) loadInput(ctx context.Context, p *period, key string, resolved
 
 // advanceState 对不发目标的迟到周期（追赶、有效期已过）求值并只记录推进后的规则状态，记为 skipped(reason)。
 // 求值没有给出 ok 决策时与原来一致，只记 skipped(reason)。
-func (h *Handler) advanceState(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready mergedReadiness, reason, detail string) error {
+func (h *Handler) advanceState(ctx context.Context, p *periodContext, payload *storagepb.ViewDataReady, ready mergedReadiness, reason, detail string) error {
 	decision, loaded, err := h.evaluate(ctx, p, payload, ready)
 	if err != nil || decision == nil {
 		return err
@@ -612,14 +615,14 @@ func (h *Handler) advanceState(ctx context.Context, p *period, payload *storagep
 
 // commitStateOnly 把一次求值只当作状态推进写成 skipped(reason)：不带目标、不投递，推进后的规则状态与这条记录同事务写进实例的状态行。
 // 决策不是 ok（守门跳过）时只记 skipped(reason)。
-func (h *Handler) commitStateOnly(ctx context.Context, p *period, decision engine.Decision, loaded input.Loaded, reason, detail string) error {
+func (h *Handler) commitStateOnly(ctx context.Context, p *periodContext, decision engine.Decision, loaded input.Loaded, reason, detail string) error {
 	if decision.Status != engine.StatusOK {
 		return h.commitSkipped(ctx, p, reason, detail)
 	}
 	decision.Status, decision.SkipReason, decision.Targets = engine.StatusSkipped, reason, nil
 	result, _, state, err := h.buildResult(p, decision, loaded)
 	if err != nil {
-		return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
+		return h.commitSkipped(ctx, p, upstream.SkipConfigError, err.Error())
 	}
 	record := p.input
 	record.Detail = detail
@@ -630,7 +633,7 @@ func (h *Handler) commitStateOnly(ctx context.Context, p *period, decision engin
 }
 
 // buildResult 把决策转成存储行与求值之后的规则状态（随结果同事务写进实例的状态行）；ok 且绑定账户的结果携带目标事件。
-func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.Loaded) (store.Result, []store.ResultItem, json.RawMessage, error) {
+func (h *Handler) buildResult(p *periodContext, decision engine.Decision, loaded input.Loaded) (store.Result, []store.ResultItem, json.RawMessage, error) {
 	resultID, err := store.NewID()
 	if err != nil {
 		return store.Result{}, nil, nil, err
@@ -674,7 +677,7 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 }
 
 // commitSkipped 写入一条没有求值的 skipped 记录，规则状态不动；实例已停用时视为无事可做。
-func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail string) error {
+func (h *Handler) commitSkipped(ctx context.Context, p *periodContext, reason, detail string) error {
 	if p.runtime == nil || p.runtime.sessionID == "" {
 		return nil
 	}
@@ -702,7 +705,7 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 }
 
 // commitSkippedResult 写入已构造好的 skipped 记录；state 非空时是求值推进后的规则状态，同事务写入。实例已停用时视为无事可做。
-func (h *Handler) commitSkippedResult(ctx context.Context, p *period, result store.Result, state json.RawMessage, reason, detail string) error {
+func (h *Handler) commitSkippedResult(ctx context.Context, p *periodContext, result store.Result, state json.RawMessage, reason, detail string) error {
 	_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, State: state, ClearState: p.clearState && len(state) == 0, Now: h.now()})
 	if err != nil {
 		if errors.Is(err, store.ErrResultInstanceNotActive) {
@@ -712,7 +715,7 @@ func (h *Handler) commitSkippedResult(ctx context.Context, p *period, result sto
 			// 连兜底的 skipped 也写不进去：重投不会成功，记错误日志并计入模块健康失败后确认，不能无限重投。
 			if h.firstDrop(p.eventID, p.instance.InstanceID) {
 				h.logf("实例 %s 周期 %s 的 skipped(%s) 记录无法写入，放弃本期：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), reason, err)
-				h.observe(ctx, p.instance, p.input.Bar, p.boundary.StorageStart, p.boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+				h.observe(ctx, p.instance, p.input.Bar, p.boundary.StorageStart, p.boundary.BarEnd, store.StatusSkipped, upstream.SkipConfigError)
 			}
 			return nil
 		}
@@ -729,10 +732,10 @@ func (h *Handler) commitSkippedResult(ctx context.Context, p *period, result sto
 // degradingReasons 是需要人工处理的跳过原因（重新启用、修复 View 或补数据）：实例标记 degraded，下一个 ok 周期恢复。
 // factor_changed 表示绑定的因子定义已变，只有重新启用才能恢复。
 var degradingReasons = map[string]bool{
-	input.SkipConfigError:         true,
-	input.SkipHistoryInsufficient: true,
-	input.SkipAmbiguousSeries:     true,
-	readiness.ReasonFactorChanged: true,
+	upstream.SkipConfigError:         true,
+	upstream.SkipHistoryInsufficient: true,
+	upstream.SkipAmbiguousSeries:     true,
+	readiness.ReasonFactorChanged:    true,
 }
 
 // updateHealth 按本期结果更新实例健康：ok 恢复 degraded，需要人工处理的跳过原因标记 degraded。
@@ -757,7 +760,7 @@ func (h *Handler) observe(ctx context.Context, instance store.Instance, bar stri
 
 // logTiming 记录一期的分段耗时。“就绪等待”是 View 数据就绪到本实例开始处理（含排队与事件投递），
 // “K 线至就绪”是 K 线结束到 View 数据就绪（上游因子计算、写入与 View 刷新）。
-func (h *Handler) logTiming(p *period, payload *storagepb.ViewDataReady, status string, steps []input.Step) {
+func (h *Handler) logTiming(p *periodContext, payload *storagepb.ViewDataReady, status string, steps []input.Step) {
 	var wait, upstream time.Duration
 	if ready := payload.GetReadyAt(); ready > 0 {
 		readyAt := time.UnixMilli(ready)
@@ -806,7 +809,7 @@ func eventUniverse(payload *storagepb.ViewDataReady) []string {
 }
 
 func advance(calendar, bar string, at time.Time, n int) (time.Time, error) {
-	return input.AdvanceBarEnd(calendar, bar, at, n)
+	return period.AdvanceBarEnd(calendar, bar, at, n)
 }
 
 // CatchupProgress 是实例的恢复追赶进度：已处理（含追赶期间只记录的周期）到哪一根，最新已收盘的是哪一根。
@@ -847,14 +850,14 @@ func (h *Handler) CatchupProgress(ctx context.Context, instanceID string, now ti
 	if warmErr != nil {
 		return CatchupProgress{}, warmErr
 	}
-	var skip *input.SkipError
+	var skip *upstream.SkipError
 	if rtErr != nil && !errors.As(rtErr, &skip) {
 		return CatchupProgress{}, rtErr
 	}
 	if rt == nil || rt.resolved.Bar == "" || rt.sessionID == "" {
 		return CatchupProgress{}, errors.New("实例的绑定快照无法解析")
 	}
-	closed, err := input.ClosedPeriod(rt.resolved.Calendar, rt.resolved.Bar, now.Add(-grace))
+	closed, err := period.ClosedPeriod(rt.resolved.Calendar, rt.resolved.Bar, now.Add(-grace))
 	if err != nil {
 		return CatchupProgress{}, err
 	}

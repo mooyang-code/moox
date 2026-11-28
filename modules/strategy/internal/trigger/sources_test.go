@@ -13,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
 
 const sourceRankDSL = `name: source_demo
@@ -44,9 +46,9 @@ func newSourceHarness(t *testing.T) *harness {
 func newSourceHarnessWith(t *testing.T, dslYaml string) *harness {
 	t.Helper()
 	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}},
-		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
+		Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"},
-		Sources: map[string]input.SourceBinding{"daily": {Bar: "1d", Calendar: input.DefaultCalendar,
+		Sources: map[string]input.SourceBinding{"daily": {Bar: "1d", Calendar: period.DefaultCalendar,
 			Tasks:   map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_d", DatasetID: dailyView}},
 			Columns: map[string]input.ColumnBinding{"g": {Source: input.SourceFactor, Member: "g", FactorID: "g", DefinitionHash: "h2"}},
 			Factors: map[string]string{"g": "h2|fixed"}, ViewColumns: []string{"close", "g"}}}}
@@ -196,7 +198,7 @@ func TestSingleTaskInstanceWritesNoArrival(t *testing.T) {
 func TestReferenceViewEventIgnored(t *testing.T) {
 	resolved := input.Resolved{Market: dsl.SingleMarket("swap"), Tasks: map[string]input.TaskBinding{"swap": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}},
 		References: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_r", DatasetID: "dataset_factor_r"}},
-		Bar:        "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
+		Bar:        "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	referenceDSL := "name: ref\nmarket: {select: swap, reference: [spot]}\nuniverse: {min_age_bars: 1, age_markets: all}\nrules:\n  - {id: r, type: rank, score: m, select: {top: 1}, weight: 1}\nportfolio: {max_missing: 1}\n"
 	h := newHarnessWith(t, referenceDSL, nil, resolved)

@@ -1,4 +1,4 @@
-package input
+package upstream
 
 import (
 	"context"
@@ -141,4 +141,39 @@ type failingDataView struct {
 
 func (f *failingDataView) QueryTimeSeriesRows(context.Context, *storagepb.QueryTimeSeriesRowsReq, ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error) {
 	return nil, f.err
+}
+
+var barStart = time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+
+func subject(id string, active bool) Subject {
+	return Subject{SubjectID: id, SeriesTag: "venue:binance", Active: active}
+}
+
+func leaksRaw(err error) bool {
+	return strings.Contains(err.Error(), "revision changed") || strings.Contains(err.Error(), "expected=") || strings.Contains(err.Error(), "index")
+}
+
+// Storage 的业务错误只给中文概述与错误码，原文留给日志；读取期间索引变化的报错也是中文。
+func TestStorageErrorsAreChinese(t *testing.T) {
+	err := retError("读取数据集 ds", &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "dataset_id is required"})
+	var service *ServiceError
+	if !errors.As(err, &service) || err.Error() != "读取数据集 ds失败：请求参数无效（INVALID_PARAM）" {
+		t.Fatalf("业务错误应是中文概述：%v", err)
+	}
+	if raw := RawCause(err); raw == nil || raw.Error() != "dataset_id is required" {
+		t.Fatalf("原文应留给日志：%v", raw)
+	}
+	stale := viewRetError("读取 View v 的行", "v", nil, &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_READY, Msg: "active View index revision changed: expected=1 actual=2"})
+	if !errors.Is(stale, ErrStale) || leaksRaw(stale) {
+		t.Fatalf("索引变化应是中文的 ErrStale：%v", stale)
+	}
+	// 读取时恰有一批写入在进行：同样是重读即可，不能算成服务故障去消耗重试次数。
+	writing := viewRetError("读取 View v 的行", "v", nil, &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_READY, Msg: "active View index write in progress: revision=7"})
+	if !errors.Is(writing, ErrStale) || leaksRaw(writing) {
+		t.Fatalf("写入进行中应是中文的 ErrStale：%v", writing)
+	}
+	other := viewRetError("读取 View v 的行", "v", nil, &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "duckdb: io error"})
+	if !errors.As(other, &service) || strings.Contains(other.Error(), "duckdb") {
+		t.Fatalf("其他 DataView 错误应是中文概述：%v", other)
+	}
 }

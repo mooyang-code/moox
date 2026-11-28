@@ -118,7 +118,7 @@ universe:
 ```
 
 - `tags`、`include` 任一非空时取并集作为白名单；都为空表示全部；然后再减去 `exclude_tags` 和 `exclude`。标的与标签 ID 区分大小写。
-- 标签与名单只作用于没有显式 `pool` 的规则；`min_age_bars` 对所有规则生效，但不会剔除规则上期已持有的标的。
+- 规则里写 `pool`（`[BTC-USDT]` 或 `{tags: [...]}`）是规则级 `universe` 的简写：解析时直接改写为覆盖标签与黑白名单的规则级 `universe`（`include` 或 `tags`，并清空策略级继承的排除项），年龄字段仍沿用策略级或规则级 `universe`；`min_age_bars` 对所有规则生效，但不会剔除规则上期已持有的标的。
 - 规则里也可以写自己的 `universe`，写了的字段逐项覆盖策略级，没写的沿用策略级。
 
 ### 3.2 年龄：只做老币
@@ -160,7 +160,7 @@ rules:
 ```yaml
 - id: momentum_long             # 稳定标识，改 id 等于规则状态从零开始
   name: 动量多头                  # 只用于展示
-  type: rank
+  type: rank                    # 可省略，默认 rank（目前唯一的规则类型）
   filter: "quote_volume_mean > 20000"    # 布尔表达式：淘汰不合格的标的
   score: "rank(roc__20)"                 # 数值表达式：分数越高越靠前
   select: {top: 10, buffer: 2}           # 取前 10 名，上期持有的在前 12 名内继续拿
@@ -452,7 +452,7 @@ holding:
 | 情形 | 行为 | 建议 |
 | --- | --- | --- |
 | 池里本期没有可评估的标的：全部年龄不够（`min_age_bars`），或池与本期基础集合没有交集（标的停用、退市，标签池没有成员，ID 写错） | 这条规则没有可评估的候选，整期跳过（`universe_too_small`），其他规则这一根也不出目标 | 池里放上市足够久、仍在交易的标的，或给这条规则写 `allow_empty: true` |
-| 池里的标的数少于 `portfolio.min_universe` | 固定列表保存即拒；`{tags}` 池保存不拒，运行时成员少于 `min_universe` 就每根整期跳过（`universe_too_small`）。两种都要写 `allow_empty: true`。写了之后这条规则不参与任何整期跳过的检查，持有的标的普通缺数时按 `exit_missing` 出场（市场不可用、只缺上一根的仍冻结保持） | 同时写 `on_missing: {keep_bars: N}`，缺数时先冻结而不是卖出 |
+| 池里的标的数少于 `portfolio.min_universe` | 固定列表（与只由 `include` 构成的白名单同口径，按去重后的标的数计）保存即拒；`{tags}` 池保存不拒，运行时成员少于 `min_universe` 就每根整期跳过（`universe_too_small`）。两种都要写 `allow_empty: true`。写了之后这条规则不参与任何整期跳过的检查，持有的标的普通缺数时按 `exit_missing` 出场（市场不可用、只缺上一根的仍冻结保持） | 同时写 `on_missing: {keep_bars: N}`，缺数时先冻结而不是卖出 |
 | 有标的被冻结（市场不可用、只缺上一根、`on_missing`） | 冻结的那一份按上期权重保持，其余持有标的按含冻结的个数平分预算。冻结标的上期份额大于本期平分份额时，规则合计会超过 `weight.total`（例如预算 0.5：上期 A 独占 0.5，本期 A 冻结、B 入场得 0.25，合计 0.75），只受 `portfolio.leverage` 封顶，冻结解除后恢复 | `leverage` 留出余量，或接受这几根暂时超出 |
 
 ## 7. 止损、仓位系数、缺数处理
