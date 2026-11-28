@@ -12,12 +12,12 @@ func TestArchiveCreateSendsBackfillAndDirName(t *testing.T) {
 	g := &rpcFakeGateway{response: `{"ret_info":{"code":0},"task":{"space_id":"crypto","dataset_id":"ds","backfill_from":"2026-10-15T00:00:00Z","purpose":"collect","dir_name":"binance-perp-kline-1m"}}`}
 	useRPCGateway(t, g)
 	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "create"),
-		"--space-id", "crypto", "--dataset-id", "ds", "--backfill-from", "2026-10-15T00:00:00Z", "--paused", "--dir-name", "binance-perp-kline-1m")
+		"--space-id", "crypto", "--dataset-id", "ds", "--backfill-from", "2026-10-15T00:00:00Z", "--disabled", "--dir-name", "binance-perp-kline-1m")
 	require.NoError(t, err)
 	assert.Equal(t, archiveMgrService, g.service)
 	assert.Equal(t, "CreateArchiveTask", g.method)
 	assert.True(t, g.closed)
-	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds","backfill_from":"2026-10-15T00:00:00Z","paused":true,"dir_name":"binance-perp-kline-1m"}`, string(g.body))
+	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds","backfill_from":"2026-10-15T00:00:00Z","disabled":true,"dir_name":"binance-perp-kline-1m"}`, string(g.body))
 	assert.Contains(t, out, `"backfill_from": "2026-10-15T00:00:00Z"`)
 	assert.Contains(t, out, `"dir_name": "binance-perp-kline-1m"`)
 }
@@ -35,12 +35,12 @@ func TestArchivePrepareAndRunsListOptions(t *testing.T) {
 
 	runs := &rpcFakeGateway{response: `{"ret_info":{"code":0},"runs":[]}`}
 	useRPCGateway(t, runs)
-	_, _, err = runSpecCommand(t, specByPath(t, "archive", "runs", "list"), "--include-follow")
+	_, _, err = runSpecCommand(t, specByPath(t, "archive", "runs", "list"), "--status", "cancelled")
 	require.NoError(t, err)
 	assert.Equal(t, "ListArchiveRuns", runs.method)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(runs.body, &body))
-	assert.Equal(t, true, body["include_follow"])
+	assert.Equal(t, "cancelled", body["status"])
 	_, hasSpace := body["space_id"]
 	assert.False(t, hasSpace, "未传 --space-id 时不限制空间")
 }
@@ -49,22 +49,22 @@ func TestArchiveDestructiveCommandsPreviewWithoutYes(t *testing.T) {
 	g := &rpcFakeGateway{response: `{"ret_info":{"code":0},"removed":[]}`}
 	useRPCGateway(t, g)
 
-	// clear-unrecoverable 缺必填参数时拒绝（含 --space-id）
+	// clear-unrecoverable 缺必填参数时拒绝（含 --space-id、--dataset-id）
 	_, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"), "--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z")
 	require.ErrorContains(t, err, "--space-id")
-	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"), "--space-id", "crypto", "--dataset-id", "ds")
-	require.ErrorContains(t, err, "--start")
+	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"), "--space-id", "crypto")
+	require.ErrorContains(t, err, "--dataset-id")
 	assert.Zero(t, g.calls)
 
-	// 无 --yes 只预览，不调用网关
+	// 无 --yes 只预览（支持清空全部：不带 --start/--end），不调用网关
 	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"),
-		"--space-id", "crypto", "--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z")
+		"--space-id", "crypto", "--dataset-id", "ds")
 	require.NoError(t, err)
 	assert.Zero(t, g.calls)
 	preview := parsePreview(t, out)
 	assert.Equal(t, "ClearArchiveUnrecoverable", preview["method"])
 
-	// 加 --yes 才调用
+	// 加 --yes（按范围清空）才调用
 	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"),
 		"--space-id", "crypto", "--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z", "--yes")
 	require.NoError(t, err)
@@ -72,10 +72,17 @@ func TestArchiveDestructiveCommandsPreviewWithoutYes(t *testing.T) {
 	assert.Equal(t, "ClearArchiveUnrecoverable", g.method)
 	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds","start":"2026-10-01T00:00:00Z","end":"2026-10-05T00:00:00Z"}`, string(g.body))
 
+	// 加 --yes（留空起止清空全部）
+	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"),
+		"--space-id", "crypto", "--dataset-id", "ds", "--yes")
+	require.NoError(t, err)
+	assert.Equal(t, 2, g.calls)
+	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds"}`, string(g.body))
+
 	// delete 无 --yes 只预览
 	out, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "delete"), "--space-id", "crypto", "--dataset-id", "ds")
 	require.NoError(t, err)
-	assert.Equal(t, 1, g.calls)
+	assert.Equal(t, 2, g.calls)
 	assert.Equal(t, "DeleteArchiveTask", parsePreview(t, out)["method"])
 }
 
@@ -90,7 +97,7 @@ func TestArchiveCommandsValidateRequiredFlagsAndMapMethods(t *testing.T) {
 		"create without dataset":   {[]string{"archive", "tasks", "create"}, []string{"--space-id", "crypto"}},
 		"prepare without space":    {[]string{"archive", "tasks", "prepare"}, []string{"--dataset-id", "ds"}},
 		"prepare without dataset":  {[]string{"archive", "tasks", "prepare"}, []string{"--space-id", "crypto"}},
-		"update without space":     {[]string{"archive", "tasks", "update"}, []string{"--dataset-id", "ds", "--status", "paused"}},
+		"update without space":     {[]string{"archive", "tasks", "update"}, []string{"--dataset-id", "ds", "--status", "disabled"}},
 		"run without space":        {[]string{"archive", "tasks", "run"}, []string{"--dataset-id", "ds"}},
 		"backfill without space":   {[]string{"archive", "tasks", "backfill"}, []string{"--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}},
 		"backfill without range":   {[]string{"archive", "tasks", "backfill"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
@@ -113,7 +120,7 @@ func TestArchiveCommandsValidateRequiredFlagsAndMapMethods(t *testing.T) {
 		{[]string{"archive", "overview"}, nil, "GetArchiveOverview"},
 		{[]string{"archive", "tasks", "list"}, []string{"--space-id", "crypto"}, "ListArchiveTasks"},
 		{[]string{"archive", "tasks", "prepare"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}, "PrepareArchiveTask"},
-		{[]string{"archive", "tasks", "update"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--status", "paused"}, "UpdateArchiveTask"},
+		{[]string{"archive", "tasks", "update"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--status", "disabled"}, "UpdateArchiveTask"},
 		{[]string{"archive", "tasks", "delete"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--yes"}, "DeleteArchiveTask"},
 		{[]string{"archive", "tasks", "run"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}, "RunArchiveTaskNow"},
 		{[]string{"archive", "tasks", "backfill"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}, "BackfillArchiveRange"},

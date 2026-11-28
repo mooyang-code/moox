@@ -43,9 +43,9 @@ func newSystemFixture(t *testing.T, modules ...string) *systemFixture {
 	return f
 }
 
-var systemAll = []string{"collector", "factor-engine", "strategy", "trade", "factor-mgr", "archive-mgr"}
+var systemAll = []string{"collector", "factor-engine", "strategy", "trade", "factor-mgr"}
 
-// H4：系统暂停按策略 → Trade → 因子引擎 → 采集逐个暂停；恢复时采集追平后因子才开始追赶（策略与 Trade 一开始就追），全部追平后按采集（自行放行）、因子引擎、Trade、策略的顺序放行。factor-mgr、archive-mgr 不参与。
+// H4：系统暂停按策略 → Trade → 因子引擎 → 采集逐个暂停；恢复时采集追平后因子才开始追赶（策略与 Trade 一开始就追），全部追平后按采集（自行放行）、因子引擎、Trade、策略的顺序放行。factor-mgr 不参与。
 func TestSystemPauseAndResumeAcrossModulesInOrder(t *testing.T) {
 	f := newSystemFixture(t, systemAll...)
 	f.caughtAfter["collector"], f.caughtAfter["factor-engine"] = 3, 2
@@ -64,7 +64,6 @@ func TestSystemPauseAndResumeAcrossModulesInOrder(t *testing.T) {
 		require.True(t, state.Quiesced(), name)
 	}
 	require.True(t, f.ctrls["factor-mgr"].Running(), "factor-mgr 不参与系统暂停")
-	require.True(t, f.ctrls["archive-mgr"].Running(), "archive-mgr 不参与系统暂停")
 
 	out.Reset()
 	require.NoError(t, runSystemStatus(ctx, opts, &out))
@@ -89,7 +88,6 @@ func TestSystemPauseAndResumeAcrossModulesInOrder(t *testing.T) {
 	}
 	for _, call := range calls {
 		require.NotContains(t, call, "factor-mgr")
-		require.NotContains(t, call, "archive-mgr")
 	}
 }
 

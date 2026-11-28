@@ -4,8 +4,8 @@
     "components": 16,
     "services": 23,
     "methods": 295,
-    "read_only_methods": 136,
-    "retryable_methods": 139,
+    "read_only_methods": 135,
+    "retryable_methods": 138,
     "callers": 19,
     "principals": 1
   },
@@ -65,12 +65,6 @@
           "timeout_ms": 30000
         },
         {
-          "name": "ControlLifecycle",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 30000
-        },
-        {
           "name": "CreateArchiveTask",
           "read_only": false,
           "retryable": false,
@@ -96,12 +90,6 @@
         },
         {
           "name": "GetArchiveRun",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 30000
-        },
-        {
-          "name": "GetLifecycle",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 30000
@@ -167,6 +155,12 @@
           "timeout_ms": 60000
         },
         {
+          "name": "ListFollowTasks",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 60000
+        },
+        {
           "name": "PullArchiveRun",
           "read_only": false,
           "retryable": false,
@@ -174,6 +168,12 @@
         },
         {
           "name": "ReportArchiveRunProgress",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 60000
+        },
+        {
+          "name": "ReportFollowResult",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 60000
@@ -1944,8 +1944,10 @@
     "archive-worker": [
       "trpc.moox.archive.ArchiveWorker/ArchiveWorkerHeartbeat",
       "trpc.moox.archive.ArchiveWorker/CompleteArchiveRun",
+      "trpc.moox.archive.ArchiveWorker/ListFollowTasks",
       "trpc.moox.archive.ArchiveWorker/PullArchiveRun",
       "trpc.moox.archive.ArchiveWorker/ReportArchiveRunProgress",
+      "trpc.moox.archive.ArchiveWorker/ReportFollowResult",
       "trpc.moox.storage.Metadata/GetDataset",
       "trpc.moox.storage.Metadata/ListDatasetColumns",
       "trpc.moox.storage.PrimaryStore/ReadDatasetChanges",
@@ -2002,12 +2004,12 @@
       "trpc.moox.admin.ActivityLog/ListActivityLogs",
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
+      "trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
       "trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
       "trpc.moox.archive.ArchiveMgr/DeleteArchiveTask",
       "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
       "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
       "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
-      "trpc.moox.archive.ArchiveMgr/GetLifecycle",
       "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
@@ -2315,13 +2317,11 @@
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
       "trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
-      "trpc.moox.archive.ArchiveMgr/ControlLifecycle",
       "trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
       "trpc.moox.archive.ArchiveMgr/DeleteArchiveTask",
       "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
       "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
       "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
-      "trpc.moox.archive.ArchiveMgr/GetLifecycle",
       "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",

@@ -23,7 +23,7 @@ type lifecycleModule struct {
 	Service string
 }
 
-// lifecycleModules 是 moox-cli lifecycle 能操作的模块。前四个参与系统暂停（moox-cli system），factor-mgr、archive-mgr 不参与；
+// lifecycleModules 是 moox-cli lifecycle 能操作的模块。前四个参与系统暂停（moox-cli system），factor-mgr 不参与；
 // Monitor 的暂停就是告警屏蔽，用 moox-cli monitor mute。
 var lifecycleModules = []lifecycleModule{
 	{sysctl.Collector, collectMgr},
@@ -31,7 +31,6 @@ var lifecycleModules = []lifecycleModule{
 	{sysctl.Strategy, "trpc.moox.strategy.StrategyMgr"},
 	{sysctl.Trade, "trpc.moox.trade.TradeConsoleService"},
 	{"factor-mgr", factorMgr},
-	{"archive-mgr", "trpc.moox.archive.ArchiveMgr"},
 }
 
 func lifecycleModuleByName(name string) (lifecycleModule, bool) {
@@ -100,7 +99,7 @@ var lifecycleCmd = &cobra.Command{
   moox-cli lifecycle release                     放行：恢复追赶已追平的模块回到运行
   moox-cli lifecycle catchup                     先让模块推进一次恢复追赶，再看进度
 
-默认操作 factor-engine，用 --module 换成 collector、strategy、trade、factor-mgr、archive-mgr。
+默认操作 factor-engine，用 --module 换成 collector、strategy、trade、factor-mgr。
 经操作员网关调用模块服务的 GetLifecycle、ControlLifecycle（因子机只能出站时经 control 中转），按 --file（moox.toml）建立隧道。
 Monitor 的暂停就是告警屏蔽，用 moox-cli monitor mute / unmute。
 因子任务能不能计算看 moox-cli factor task status，策略实例的确认实盘用 moox-cli strategy instance confirm。`,

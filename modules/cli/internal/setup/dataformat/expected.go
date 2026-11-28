@@ -129,7 +129,7 @@ func ExpectedWith(in Inputs) (map[string]pkgdataformat.Record, error) {
 	if err := addSQLite("factor-mgr", in.FactorSQL, true); err != nil {
 		return nil, err
 	}
-	if err := addSQLite("archive-mgr", in.ArchiveSQL, true); err != nil {
+	if err := addSQLite("archive-mgr", in.ArchiveSQL, false); err != nil {
 		return nil, err
 	}
 	if err := addSQLite("strategy", in.StrategySQL, true); err != nil {

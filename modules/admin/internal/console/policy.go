@@ -86,10 +86,6 @@ var globalMethods = map[string]map[string]bool{
 		"GetLifecycle":         true,
 		"ControlLifecycle":     true,
 	},
-	"archive": {
-		"GetLifecycle":     true,
-		"ControlLifecycle": true,
-	},
 }
 
 // optionalSpaceMethods 是无空间可调、有空间时按空间校验一致性并透传 X-Space-Id 的方法清单。

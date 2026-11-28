@@ -604,22 +604,22 @@ components:
             read_only: true
           - name: GetArchivePartition
             read_only: true
-          # moox-cli import 的归档目标建导入运行（行经 worker 数据端口写入），以及清除无法补齐区间：只给 moox-cli。
+          # moox-cli import 的归档目标建导入运行（行经 worker 数据端口写入）：只给 moox-cli。
           - name: StartArchiveImport
             operators: [moox-cli]
           - name: ClearArchiveUnrecoverable
-            operators: [moox-cli]
-          # 模块生命周期：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module archive-mgr）。
-          - name: GetLifecycle
-            read_only: true
-          - name: ControlLifecycle
-            operators: [moox-cli]
       - path: trpc.moox.archive.ArchiveWorker
         port: 11408
         timeout_ms: 60000
         max_body_bytes: 4194304
         methods:
           - name: ArchiveWorkerHeartbeat
+            callers: [archive-worker]
+            operators: []
+          - name: ListFollowTasks
+            callers: [archive-worker]
+            operators: []
+          - name: ReportFollowResult
             callers: [archive-worker]
             operators: []
           - name: PullArchiveRun
