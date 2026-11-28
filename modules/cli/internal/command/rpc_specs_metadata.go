@@ -106,7 +106,7 @@ func init() {
 		rpcSpec{Path: []string{"data", "records", "search"}, Short: "检索记录型数据集（Bleve 索引）的数据", Service: dataViewSvc, Method: "SearchRecordRows", SpaceField: "space_id", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), strFlag("text-query", "text_query", "全文检索语句"), listFlag("column", "column_names", "返回的列，可重复"), jsonFlag("filter", "filter", "过滤条件 JSON")}},
 		rpcSpec{Path: []string{"data", "view", "query"}, Short: "按数据集查询时序行（读它的查询索引；管理台看采集结果、因子结果用的接口；selectors、过滤与排序写在 --data 或对应参数里）", Service: dataViewSvc, Method: "QueryTimeSeriesRows", SpaceField: "space_id", Page: rpcPageSize,
-			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), jsonFlag("selectors", "selectors", `序列选择器 JSON，如 '[{"space_id":"crypto","dataset_id":"d","subject_id":"BTC-USDT","frequency":"1m"}]'`),
+			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), jsonFlag("selectors", "selectors", `序列选择器 JSON，如 '[{"subject_id":"BTC-USDT","frequency":"1m"}]'`),
 				timeFlag("from", "time_range.start_time", "起点（RFC3339，含）", false), timeFlag("to", "time_range.end_time", "终点（RFC3339，不含）", false), listFlag("column", "column_names", "返回的列，可重复"),
 				jsonFlag("filter", "filter", "过滤条件 JSON"), jsonFlag("sorts", "sorts", `排序 JSON，如 '[{"field_name":"data_time","desc":true}]'`), intFlag("limit", "limit", "最多返回多少行")}},
 		rpcSpec{Path: []string{"data", "view", "state"}, Short: "查看数据集查询索引（View）的状态：活动索引、代次、已建列、覆盖范围与跟随变更日志的进度", Service: dataViewSvc, Method: "GetViewState", SpaceField: "space_id",
@@ -114,7 +114,7 @@ func init() {
 		rpcSpec{Path: []string{"data", "view", "wait-applied"}, Short: "等数据集的查询索引跟上此刻的变更日志头部（之前的写入都已可查）", Service: dataViewSvc, Method: "WaitViewApplied", SpaceField: "space_id",
 			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), intFlag("wait-timeout-ms", "wait_timeout_ms", "最多等待的毫秒数，0 取 10000，上限 30000")}},
 		rpcSpec{Path: []string{"data", "rows", "count"}, Short: "按数据集统计查询索引里的时序行数（selectors 与时间范围写在 --data 里）", Service: dataViewSvc, Method: "CountTimeSeriesRows", SpaceField: "space_id",
-			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), jsonFlag("selectors", "selectors", `序列选择器 JSON，如 '[{"space_id":"crypto","dataset_id":"d","subject_id":"BTC-USDT","frequency":"1m"}]'`),
+			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "数据集 ID"), jsonFlag("selectors", "selectors", `序列选择器 JSON，如 '[{"subject_id":"BTC-USDT","frequency":"1m"}]'`),
 				timeFlag("from", "time_range.start_time", "起点（RFC3339）", false), timeFlag("to", "time_range.end_time", "终点（RFC3339）", false)}},
 	)
 }

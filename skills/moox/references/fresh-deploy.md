@@ -241,7 +241,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 17. **`__params`**：默认合约任务只有固定成员，结果行的 `__params` 为空：
     ```bash
     $CLI data view query --space-id crypto --dataset-id dataset_factor_swap_1m --column __params --limit 3 \
-      --selectors '[{"space_id":"crypto","dataset_id":"dataset_factor_swap_1m","subject_id":"BTC-USDT","frequency":"1m"}]'
+      --selectors '[{"subject_id":"BTC-USDT","frequency":"1m"}]'
     ```
     第 16 步那个调参任务的 `__params` 只有 `ma__var` 一个键，`$CLI factor task params --task-id <5m 任务>` 有 `ma__var` 最近一次提交（`t_factor_member_params` 的一行）。
     对固定成员发起一次补算（`factor recalc submit --task-id ftask_swap_1m --member ma__5 --from START --to END`），完成后同一区间的 `ma__5` 与补算前逐位相同，`__params` 仍为空。

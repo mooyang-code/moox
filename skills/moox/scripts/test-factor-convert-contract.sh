@@ -57,11 +57,64 @@ if python3 "${CHECK}" compare --expected "${TMP}/b.csv" --actual "${TMP}/wrong.c
   fail "写错的转写必须判失败"
 fi
 
+# 样例由 protojson.MarshalOptions{UseProtoNames: true, Multiline: true} 序列化 storagepb.ReadTimeSeriesRowsRsp 得到（与 moox-cli data rows export 一致）。
 cat > "${TMP}/rows.json" <<'EOF'
-{"rows": [
- {"key": {"subject_id": "BTC-USDT", "data_time": "2026-10-18T00:01:00Z", "series_tag": "t"}, "fields": [{"field_id": "close", "value": {"double_value": 101.5}}, {"field_id": "volume", "value": {"int_value": "12"}}]},
- {"key": {"subject_id": "BTC-USDT", "data_time": "2026-10-18T00:00:00Z", "series_tag": "t"}, "fields": [{"field_id": "close", "value": {"double_value": 100}}, {"field_id": "volume", "value": {}}]}
-]}
+{
+  "rows": [
+    {
+      "key": {
+        "space_id": "crypto",
+        "dataset_id": "dataset_kline_1m",
+        "time_series": {
+          "subject_id": "BTC-USDT",
+          "frequency": "1m",
+          "data_time": "2026-10-18T00:01:00Z",
+          "series_tag": "t"
+        }
+      },
+      "fields": [
+        {
+          "field_id": "close",
+          "value": {
+            "double_value": 101.5
+          }
+        },
+        {
+          "field_id": "volume",
+          "value": {
+            "int_value": "12"
+          }
+        }
+      ]
+    },
+    {
+      "key": {
+        "space_id": "crypto",
+        "dataset_id": "dataset_kline_1m",
+        "time_series": {
+          "subject_id": "BTC-USDT",
+          "frequency": "1m",
+          "data_time": "2026-10-18T00:00:00Z",
+          "series_tag": "t"
+        }
+      },
+      "fields": [
+        {
+          "field_id": "close",
+          "value": {
+            "double_value": 100
+          }
+        },
+        {
+          "field_id": "volume",
+          "value": {
+            "null_value": "NULL_VALUE_NULL"
+          }
+        }
+      ]
+    }
+  ]
+}
 EOF
 python3 "${CHECK}" rows-to-csv "${TMP}/rows.json" --output "${TMP}/rows.csv" 2>/dev/null
 expected=$'data_time,subject_id,series_tag,close,volume\n2026-10-18T00:00:00Z,BTC-USDT,t,100.0,\n2026-10-18T00:01:00Z,BTC-USDT,t,101.5,12.0'

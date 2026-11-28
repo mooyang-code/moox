@@ -70,7 +70,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli data rows export --file ./moox.toml --
   --subject <任一标的> --columns close --from <最近几分钟> --to <现在> --page-size 2
 ```
 
-`key.series_tag` 与 `manifest.json` 的 `series_tag` 不一致就停下汇报。
+`key.time_series.series_tag` 与 `manifest.json` 的 `series_tag` 不一致就停下汇报。
 
 ## 4. 屏蔽告警推送
 

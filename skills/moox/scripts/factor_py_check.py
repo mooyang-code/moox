@@ -121,8 +121,11 @@ def cmd_rows_to_csv(args):
         with open(path) as handle:
             payload = json.load(handle)
         for row in payload.get("rows", []):
-            key = row.get("key", {})
-            identity = (format_time(parse_time(key["data_time"])), key.get("subject_id", ""), key.get("series_tag", ""))
+            key = row.get("key") or {}
+            ts = key.get("time_series")
+            if not isinstance(ts, dict):
+                raise SystemExit(f"{path} 含非时序行或缺少 key.time_series：{key!r}")
+            identity = (format_time(parse_time(ts["data_time"])), ts.get("subject_id", ""), ts.get("series_tag", ""))
             values = records.setdefault(identity, {})
             for field in row.get("fields", []):
                 name = field["field_id"]
