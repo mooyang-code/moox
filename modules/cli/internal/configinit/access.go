@@ -198,18 +198,16 @@ func SetConfig(path, target, value string, write bool, keys configcrypt.KeyStore
 		return report, fmt.Errorf("%w%s", err, secretSectionHint(path, target))
 	}
 	if isSecretsFile(path) {
-		_, _ = topology.ParseSecrets(plain)
+		if _, err = topology.ParseSecrets(edited); err != nil {
+			return report, fmt.Errorf("改写后的配置校验没有通过，未写回：%w", err)
+		}
 		edited = stripDeprecatedSecretSections(edited)
+	} else {
+		if _, err = topology.Parse(edited); err != nil {
+			return report, fmt.Errorf("改写后的配置校验没有通过，未写回：%w", err)
+		}
 	}
 	report.Changed = !bytes.Equal(edited, plain)
-	if isSecretsFile(path) {
-		_, err = topology.ParseSecrets(edited)
-	} else {
-		_, err = topology.Parse(edited)
-	}
-	if err != nil {
-		return report, fmt.Errorf("改写后的配置校验没有通过，未写回：%w", err)
-	}
 	report.Valid = true
 	if !write || !report.Changed {
 		if report.Changed {

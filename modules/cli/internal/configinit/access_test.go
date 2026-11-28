@@ -1,6 +1,7 @@
 package configinit
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -182,4 +183,39 @@ func TestSetConfigTypesAndRefusals(t *testing.T) {
 	require.Equal(t, `"240d"`, tomlScalar("240d"))
 	require.Equal(t, `  # 说明`, trailingComment(`"a"  # 说明`))
 	require.Equal(t, "", trailingComment(`"a#b"`))
+}
+
+// 含废弃段的旧秘密文件执行 SetConfig 时只校验一次 ParseSecrets，最多打印一行提示（校验失败时不误打提示）。
+func TestSetConfigDeprecatedSecretsNoticePrintedOnce(t *testing.T) {
+	var notice bytes.Buffer
+	restore := topology.SetDeprecatedSecretsNoticeForTest(&notice)
+	t.Cleanup(restore)
+
+	dir := t.TempDir()
+	secretsPath := filepath.Join(dir, topology.SecretsFileName)
+	legacy := `[admin]
+username = "admin"
+password = "Adm1n-Password-123"
+
+[tencent_cloud]
+secret_id = "AKIDexample"
+secret_key = "sk-example"
+
+["notification"]
+channel_type = "wecom"
+webhook_url = "https://example.com/hook"
+`
+	require.NoError(t, os.WriteFile(secretsPath, []byte(legacy), 0o600))
+	keys := &configcrypt.MemoryStore{}
+
+	report, err := SetConfig(secretsPath, "admin.username", "ops", false, keys, nil)
+	require.NoError(t, err)
+	require.True(t, report.Valid)
+	require.Equal(t, 1, strings.Count(notice.String(), "已不再使用"), "提示只能打印一次，实际：%q", notice.String())
+
+	// 改写后的配置校验失败时不应打印废弃段提示。
+	notice.Reset()
+	_, err = SetConfig(secretsPath, "admin.password", "", false, keys, nil)
+	require.ErrorContains(t, err, "校验没有通过")
+	require.Empty(t, notice.String())
 }

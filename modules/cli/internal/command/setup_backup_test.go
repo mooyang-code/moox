@@ -14,6 +14,7 @@ import (
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupbackup "github.com/mooyang-code/moox/modules/cli/internal/setup/backup"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -150,14 +151,20 @@ control = ["admin", "monitor", "eventbus"]
 
 func runSetupBackupCommand(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	cmd := newSetupBackupCommand()
+	stdout, _, err := runSetupBackupCommandWithDeps(t, setupDeps{}, args...)
+	return stdout, err
+}
+
+func runSetupBackupCommandWithDeps(t *testing.T, deps setupDeps, args ...string) (string, string, error) {
+	t.Helper()
+	cmd := newSetupBackupCommand(deps)
 	var out, errOut bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
 	cmd.SetArgs(args)
 	cmd.SetContext(context.Background())
 	err := cmd.Execute()
-	return out.String(), err
+	return out.String(), errOut.String(), err
 }
 
 func TestSetupBackupWritesEncryptedFileAndPrintsCountsOnly(t *testing.T) {
@@ -302,13 +309,83 @@ func TestSetupBackupRefusesOverwriteWhenPendingImport(t *testing.T) {
 	}
 	t.Cleanup(func() { openCommandGateway = previous })
 
-	_, err = runSetupBackupCommand(t, "--file", manifest)
+	// 1. 系统未完成安装（incomplete）时，待导入备份仍然有效，必须拒绝覆盖且不连网关。
+	incompleteDeps := setupDeps{
+		scanDeployment: func(_ context.Context, _ *setupSnapshot, opts deployscan.Options) ([]deployscan.HostReport, error) {
+			assert.Equal(t, "control", opts.Host)
+			return []deployscan.HostReport{{Host: "control", Installed: true, InstallComplete: false}}, nil
+		},
+	}
+	_, _, err = runSetupBackupCommandWithDeps(t, incompleteDeps, "--file", manifest)
 	require.ErrorIs(t, err, setupbackup.ErrPendingImport)
-	assert.False(t, called, "已有待导入备份时手动 backup 应直接拒绝、不连接网关")
+	assert.False(t, called, "有效待导入备份时手动 backup 应直接拒绝、不连接网关")
+
+	// 2. 无法连接控制机确认状态时同样保守拒绝，不覆盖已有待导入备份。
+	unreachableDeps := setupDeps{
+		scanDeployment: func(context.Context, *setupSnapshot, deployscan.Options) ([]deployscan.HostReport, error) {
+			return nil, errors.New("ssh unreachable")
+		},
+	}
+	_, _, err = runSetupBackupCommandWithDeps(t, unreachableDeps, "--file", manifest)
+	require.ErrorIs(t, err, setupbackup.ErrPendingImport)
+	require.ErrorContains(t, err, "无法确认控制机安装完成状态")
+	assert.False(t, called)
 
 	after, err := os.ReadFile(backupPath)
 	require.NoError(t, err)
 	assert.Equal(t, pendingRaw, after, "原待导入备份必须毫发无损")
+}
+
+// 控制机完成标记仍在（已装好）时，本机残留的“待导入”标记按定义已过期，手动 setup backup 直接重新导出并覆盖。
+func TestSetupBackupOverwritesStalePendingImportWhenInstalled(t *testing.T) {
+	restoreKeys := configcrypt.SetDefaultForTest(&configcrypt.MemoryStore{})
+	t.Cleanup(restoreKeys)
+
+	manifest := writeTestSetupManifest(t)
+	backupPath := topology.BackupPathFor(manifest)
+	creds, err := setupbackup.DeriveCredentials(configcrypt.Default(), true)
+	require.NoError(t, err)
+	defer creds.Clear()
+
+	staleRaw, err := setupbackup.Seal(`{"format":"moox.secrets/v1","ciphertext":"STALE"}`, 1, nil, creds, time.Date(2026, 11, 27, 1, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.NoError(t, setupbackup.WriteAtomic(backupPath, staleRaw))
+	_, _, err = setupbackup.MarkPendingImport(backupPath)
+	require.NoError(t, err)
+
+	gateway := &fakeBackupGateway{
+		bundle:      `{"format":"moox.secrets/v1","ciphertext":"FRESH-BUNDLE"}`,
+		secretCount: 4,
+		channels: []*monitorpb.ExportedNotificationChannel{
+			{ChannelId: "c1", ChannelType: "feishu", WebhookUrl: "https://open.feishu.cn/hook/fresh", Secret: "fresh-sign"},
+		},
+	}
+	previous := openCommandGateway
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return gateway, nil }
+	t.Cleanup(func() { openCommandGateway = previous })
+
+	installedDeps := setupDeps{
+		scanDeployment: func(_ context.Context, _ *setupSnapshot, opts deployscan.Options) ([]deployscan.HostReport, error) {
+			assert.Equal(t, "control", opts.Host)
+			return []deployscan.HostReport{{Host: "control", Installed: true, InstallComplete: true}}, nil
+		},
+	}
+	stdout, stderr, err := runSetupBackupCommandWithDeps(t, installedDeps, "--file", manifest)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "已过期")
+	assert.True(t, gateway.closed)
+
+	var out setupBackupOutput
+	require.NoError(t, json.Unmarshal([]byte(stdout), &out))
+	assert.Equal(t, 4, out.SecretCount)
+	assert.Equal(t, 1, out.ChannelCount)
+
+	meta, exists, err := setupbackup.ReadMetadata(backupPath)
+	require.NoError(t, err)
+	require.True(t, exists)
+	assert.False(t, meta.PendingImport, "覆盖后的新备份不再带待导入标记")
+	assert.Equal(t, 4, meta.Secrets.Count)
+	assert.Equal(t, 1, meta.NotificationChannels.Count)
 }
 
 func TestCountBackupItemsExcludesEnvironmentBoundSecrets(t *testing.T) {

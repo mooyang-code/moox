@@ -73,7 +73,7 @@ func setupBackupPath(file string, cfg *topology.Config) string {
 	return topology.BackupPathFor(defaultFlag(file, defaultSetupFile))
 }
 
-func newSetupBackupCommand() *cobra.Command {
+func newSetupBackupCommand(deps setupDeps) *cobra.Command {
 	var file string
 	var verify bool
 	cmd := &cobra.Command{
@@ -81,12 +81,12 @@ func newSetupBackupCommand() *cobra.Command {
 		Short: "把全部非系统密钥与告警渠道加密备份到 moox.toml 同目录的 moox.backup",
 		Long: "调用 SecretMgr.ExportSecrets 与 MonitorMgr.ExportNotificationChannels，用本机钥匙串密钥在进程内派生口令与加密密钥，" +
 			"把加密迁移包与加密后的告警渠道合并原子写入 moox.toml 同目录的 moox.backup（权限 0600）。" +
-			"若本机已有带“卸载后待导入”标记的备份文件，将拒绝覆盖以防半成品状态覆写完好备份。" +
+			"若本机已有带“卸载后待导入”标记的备份文件，仅在控制机仍处于已装好状态（该标记已过期）时直接重新导出并覆盖，否则拒绝覆盖以防半成品状态覆写完好备份。" +
 			"不接受口令参数，不输出任何密钥内容或口令；--verify 在写入后读回备份并校验渠道解密与不覆盖导入。",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSetupBackup(cmd, file, verify)
+			return runSetupBackup(cmd, deps, file, verify)
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "部署配置文件；用于定位备份目录并解析操作员 SSH 网关")
@@ -94,14 +94,19 @@ func newSetupBackupCommand() *cobra.Command {
 	return cmd
 }
 
-func runSetupBackup(cmd *cobra.Command, file string, verify bool) error {
+func runSetupBackup(cmd *cobra.Command, deps setupDeps, file string, verify bool) error {
+	deps = completeSetupDeps(deps)
 	cfg, err := topology.Load(defaultFlag(file, defaultSetupFile))
 	if err != nil {
 		return err
 	}
 	backupPath := topology.BackupPathFor(cfg.Path())
-	if err := checkBackupWritable(backupPath); err != nil {
+	overwritePending, err := checkManualBackupWritable(cmd.Context(), deps, cfg, backupPath)
+	if err != nil {
 		return err
+	}
+	if overwritePending {
+		fmt.Fprintf(cmd.ErrOrStderr(), "提示：本机备份 %s 上的待导入标记因控制机仍处于已装好状态已过期，本次手动备份将重新导出并覆盖\n", backupPath)
 	}
 
 	gateway, err := openCommandGateway(cmd.Context(), file, cfg)
@@ -110,7 +115,7 @@ func runSetupBackup(cmd *cobra.Command, file string, verify bool) error {
 	}
 	defer gateway.Close()
 
-	output, err := exportBackupToFile(cmd.Context(), gateway, backupPath, false)
+	output, err := exportBackupToFile(cmd.Context(), gateway, backupPath, overwritePending)
 	if err != nil {
 		return err
 	}
@@ -132,6 +137,29 @@ func runSetupBackup(cmd *cobra.Command, file string, verify bool) error {
 	return nil
 }
 
+// checkManualBackupWritable 在手动备份发起导出前核对本机备份文件是否被“卸载后待导入”标记锁定。
+// 若标记存在但控制机完成标记仍在（route == RouteInstalled），按定义该待导入标记已过期，允许直接重新导出并覆盖；
+// 否则（未装完、已清空或无法确认控制机状态）拒绝覆盖，避免半成品状态覆写完好备份。
+func checkManualBackupWritable(ctx context.Context, deps setupDeps, cfg *topology.Config, backupPath string) (bool, error) {
+	meta, exists, err := setupbackup.ReadMetadata(backupPath)
+	if err != nil {
+		return false, err
+	}
+	if !exists || !meta.PendingImport {
+		return false, nil
+	}
+	controlHost := cfg.ControlHost().Name
+	reports, scanErr := deps.scanDeployment(ctx, &setupSnapshot{Manifest: cfg}, deployscan.Options{Host: controlHost})
+	if scanErr != nil {
+		return false, fmt.Errorf("%w: 本机备份 %s 带有“卸载后待导入”标记（含 %d 把密钥、%d 个告警渠道），且无法确认控制机安装完成状态（%v），拒绝覆盖；请先完成安装导入该备份或排查控制机连接",
+			setupbackup.ErrPendingImport, backupPath, meta.Secrets.Count, meta.NotificationChannels.Count, scanErr)
+	}
+	if deployscan.RouteForControl(reports, controlHost) == deployscan.RouteInstalled {
+		return true, nil
+	}
+	return false, pendingImportError(backupPath, meta)
+}
+
 // checkBackupWritable 在发起导出前先核对本机备份文件是否被“卸载后待导入”标记锁定。
 func checkBackupWritable(backupPath string) error {
 	meta, exists, err := setupbackup.ReadMetadata(backupPath)
@@ -139,10 +167,14 @@ func checkBackupWritable(backupPath string) error {
 		return err
 	}
 	if exists && meta.PendingImport {
-		return fmt.Errorf("%w: 本机备份 %s 带有“卸载后待导入”标记（含 %d 把密钥、%d 个告警渠道），拒绝覆盖；请先完成安装导入该备份",
-			setupbackup.ErrPendingImport, backupPath, meta.Secrets.Count, meta.NotificationChannels.Count)
+		return pendingImportError(backupPath, meta)
 	}
 	return nil
+}
+
+func pendingImportError(backupPath string, meta *setupbackup.File) error {
+	return fmt.Errorf("%w: 本机备份 %s 带有“卸载后待导入”标记（含 %d 把密钥、%d 个告警渠道），拒绝覆盖；请先完成安装导入该备份",
+		setupbackup.ErrPendingImport, backupPath, meta.Secrets.Count, meta.NotificationChannels.Count)
 }
 
 // exportBackupToFile 经已打开的操作员网关导出全部非系统密钥与告警渠道，原子落盘为不带待导入标记的备份文件。

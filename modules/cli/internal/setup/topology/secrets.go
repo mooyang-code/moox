@@ -16,6 +16,13 @@ import (
 // deprecatedSecretsNotice 是读取到已废弃的 [notification] 或 [[exchange_keys]] 段时输出提示的目标，默认标准错误；测试可替换。
 var deprecatedSecretsNotice io.Writer = os.Stderr
 
+// SetDeprecatedSecretsNoticeForTest 在测试里替换废弃秘密段提示的输出目标，返回恢复函数。
+func SetDeprecatedSecretsNoticeForTest(w io.Writer) func() {
+	prev := deprecatedSecretsNotice
+	deprecatedSecretsNotice = w
+	return func() { deprecatedSecretsNotice = prev }
+}
+
 // Secrets 是 moox.secrets.toml 的内容：部署阶段所需的初始秘密（管理员、云账号与 CLS 写入密钥）。
 // setup init 只把腾讯云密钥写入管理台（固定 ID tencent-default，只建不改，之后以管理台为准）；
 // CLS 写入密钥不进管理台，每次部署从这里读出来渲染进各组件的环境文件。
