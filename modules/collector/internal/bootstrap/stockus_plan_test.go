@@ -38,8 +38,8 @@ func usGroups(subjects int) []fetchplan.TaskGroup {
 // usPlanFromDefaults 是部署配置只写代码包与命名空间时的采集计划配置：其余取 market.yaml 的默认值。
 func usPlanFromDefaults() SCFPlanConfig {
 	defaults := defaultSCFPlan()
-	plan := SCFPlanConfig{Fetch: defaults.Fetch, SymbolsPerFunction: defaults.SymbolsPerFunction,
-		Spaces: map[string]SCFPlanSpaceConfig{"stockus": {PackageName: "moox-collector-stockus-plan", Namespace: "moox-stockus-plan"}}}
+	plan := SCFPlanConfig{PackageName: DefaultSCFPackageName, Fetch: defaults.Fetch, SymbolsPerFunction: defaults.SymbolsPerFunction,
+		Spaces: map[string]SCFPlanSpaceConfig{"stockus": {Namespace: "moox-stockus-plan"}}}
 	plan.mergeSpaceDefaults(defaults.Spaces)
 	return plan
 }

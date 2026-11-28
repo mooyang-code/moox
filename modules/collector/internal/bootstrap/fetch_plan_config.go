@@ -106,8 +106,7 @@ type SCFPlanSpaceConfig struct {
 	// EgressBalance 非空时在收盘后的空闲时段探测函数出口 IP，并重建共用 IP 的函数；只对 A 股有效。
 	EgressBalance *SCFPlanEgressBalance `yaml:"egress_balance"`
 	Fetch         *SCFPlanFetchConfig   `yaml:"fetch"`
-	// PackageName、Namespace、BaseEnvironmentFile 为空表示沿用全局值；各空间默认共享同一个代码包，必要时可按空间覆盖。
-	PackageName         string `yaml:"package_name"`
+	// Namespace、BaseEnvironmentFile 为空表示沿用全局值。
 	Namespace           string `yaml:"namespace"`
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	// BackfillRegion 是补采函数所在的地域；为空时用各市场的第一个地域。
@@ -328,10 +327,8 @@ func (c *Config) validateSCFPlan() error {
 	if plan.SymbolsPerFunction < 1 || plan.SymbolsPerFunction > 200 || plan.MemoryMB < 64 || plan.MaxConcurrentOperations < 1 {
 		return fmt.Errorf("scf_plan has an out-of-range symbols_per_function, memory_mb or max_concurrent_operations")
 	}
-	for space := range c.SCFMarkets {
-		if strings.TrimSpace(plan.packageNameFor(space)) == "" {
-			return fmt.Errorf("scf_plan: space %s needs package_name", space)
-		}
+	if strings.TrimSpace(plan.PackageName) == "" {
+		return fmt.Errorf("scf_plan requires package_name when scf_markets is configured")
 	}
 	for space, override := range plan.Spaces {
 		if region := override.BackfillRegion; region != "" {
@@ -382,13 +379,6 @@ func (c *Config) checkSCFRegion(region string) error {
 	return nil
 }
 
-func (c SCFPlanConfig) packageNameFor(spaceID string) string {
-	if override := c.Spaces[strings.ToLower(spaceID)]; override.PackageName != "" {
-		return override.PackageName
-	}
-	return c.PackageName
-}
-
 // fetchPlanDeploy 读取某个空间的非受管环境文件并生成部署参数。空间身份由对账器所属空间强制写入，
 // 不信任环境文件里的取值，避免一个空间的函数拿到另一个空间的身份。
 func (c *Config) fetchPlanDeploy(spaceID string) (fetchplan.PlanDeploy, error) {
@@ -421,7 +411,7 @@ func (c *Config) fetchPlanDeploy(spaceID string) (fetchplan.PlanDeploy, error) {
 		namespace = override.Namespace
 	}
 	return fetchplan.PlanDeploy{
-		CloudAccountID: c.SCFPlan.CloudAccountID, PackageName: c.SCFPlan.packageNameFor(spaceID), Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
+		CloudAccountID: c.SCFPlan.CloudAccountID, PackageName: c.SCFPlan.PackageName, Namespace: namespace, MemoryMB: c.SCFPlan.MemoryMB,
 		BaseEnvironment: environment, Networks: c.SCFRegions, NamespaceCapacity: maxFunctionsPerNamespace,
 	}, nil
 }

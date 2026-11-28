@@ -15,7 +15,8 @@ import (
 type CollectParams struct {
 	OutputFields []string `json:"output_fields,omitempty"`
 	Frequency    string   `json:"frequency,omitempty"`
-	// SourceTaskID 是合成的源采集任务：创建时由它推导 source_dataset_id、source_frequency、source_series_tag。
+	// SourceTaskID 是合成的源采集任务；source_dataset_id、source_frequency、source_series_tag 在创建时由源任务推导并定格保存：
+	// 保证目标数据集的血缘不可变（源任务切换主来源后不会混入新 series_tag），且源任务被 --keep-result 删除后合成任务与结果清单仍可独立工作。
 	SourceTaskID    string `json:"source_task_id,omitempty"`
 	SourceDatasetID string `json:"source_dataset_id,omitempty"`
 	SourceFrequency string `json:"source_frequency,omitempty"`

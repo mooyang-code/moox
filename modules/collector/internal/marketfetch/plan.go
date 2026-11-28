@@ -70,7 +70,7 @@ type PlanFetch struct {
 	NotBeforeMS int `json:"not_before_ms,omitempty"`
 }
 
-// FeedLimits 是一次取数的限流与超时（计划的 fetch 段），零值字段用数据源默认或进程环境。
+// FeedLimits 是一次取数的限流与超时（计划的 fetch 段），零值字段用数据源默认配置。
 type FeedLimits struct {
 	RPS              int `json:"rps,omitempty"`
 	Burst            int `json:"burst,omitempty"`

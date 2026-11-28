@@ -712,7 +712,7 @@ const (
 )
 
 // KlineOutputFields 是 K 线（时序）结果数据集的基础输出字段，按建列顺序；任务的输出字段只能从这里与附加字段里选。
-// 管理台的任务表单经 GetDataTypeConfigWithFields 读它，合成任务按字段名取显示名与分组，都不另抄一份。
+// 管理台的任务表单经 GetDataTypeConfigs 读它，合成任务按字段名取显示名与分组，都不另抄一份。
 var KlineOutputFields = []OutputField{
 	{"open", typeDouble, "开盘价", GroupQuote}, {"high", typeDouble, "最高价", GroupQuote},
 	{"low", typeDouble, "最低价", GroupQuote}, {"close", typeDouble, "收盘价", GroupQuote},

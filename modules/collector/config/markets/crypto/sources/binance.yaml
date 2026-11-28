@@ -1,10 +1,4 @@
 # Binance source configuration embedded in collector runtime (SCF / Collector / collector-stream).
-app:
-  id: "binance"
-  name: "加密交易所"
-  description: "加密现货/永续合约 K 线与标的采集"
-  type: "market"
-
 api:
   # 现货配 3 个出口各不相同的官方端点，按顺序故障转移：
   #   api.binance.com        CloudFront 边缘节点

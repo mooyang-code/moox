@@ -38,8 +38,8 @@ func hkGroups(subjects int) []fetchplan.TaskGroup {
 // 路由、结算延迟、东方财富的限速都读编进二进制的 config/markets/stockhk/。
 func TestStockHKPlanUsesFourFunctionsAndWaitsFiveSeconds(t *testing.T) {
 	defaults := defaultSCFPlan()
-	plan := SCFPlanConfig{Fetch: defaults.Fetch, SymbolsPerFunction: defaults.SymbolsPerFunction,
-		Spaces: map[string]SCFPlanSpaceConfig{"stockhk": {PackageName: "moox-collector-stockhk-plan", Namespace: "moox-stockhk-plan"}}}
+	plan := SCFPlanConfig{PackageName: DefaultSCFPackageName, Fetch: defaults.Fetch, SymbolsPerFunction: defaults.SymbolsPerFunction,
+		Spaces: map[string]SCFPlanSpaceConfig{"stockhk": {Namespace: "moox-stockhk-plan"}}}
 	plan.mergeSpaceDefaults(defaults.Spaces)
 
 	require.Equal(t, 25, plan.symbolsPerFunction("stockhk"))

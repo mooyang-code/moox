@@ -794,3 +794,75 @@ func TestMaxInFlightPerSpace(t *testing.T) {
 	require.Equal(t, LocalMaxInFlight, b.maxInFlight(ctx, "crypto"))
 	require.Equal(t, 7, b.maxInFlight(ctx, "stockcn"), "返回 0 表示用默认")
 }
+
+// 按路由分配的市场（例如美股 CNBC 补齐一块需 15 秒）补采时必须清零 FetchLimits.RequestTimeoutMS，
+// 让函数沿用数据源配置文件的 request_timeout；单一来源市场保留计划的 RequestTimeoutMS。
+func TestChunkRequestClearsRequestTimeoutForRoutedMarkets(t *testing.T) {
+	base := time.Date(2026, 11, 20, 14, 30, 0, 0, time.UTC)
+	fetch := marketfetch.PlanFetch{
+		Concurrency:      4,
+		RPS:              5,
+		Burst:            10,
+		FeedConcurrency:  2,
+		RequestTimeoutMS: 3000,
+		StorageTimeoutMS: 8000,
+	}
+
+	t.Run("routed market clears request timeout", func(t *testing.T) {
+		plan := &marketfetch.Plan{
+			Market: marketfetch.PlanMarket{
+				MarketID:       "stockus",
+				InstrumentType: "equity",
+				MarketType:     "equity",
+				Provider:       "eastmoney",
+				SourceID:       "eastmoney",
+			},
+			Fetch: fetch,
+		}
+		chunk := store.BackfillChunk{
+			ChunkID:   "chunk-us-1",
+			DatasetID: "ds_us_5m",
+			Frequency: "5m",
+			SubjectID: "AAPL.XNAS",
+			From:      base,
+			To:        base.Add(50 * time.Minute),
+		}
+		req, err := chunkRequest("stockus", "moox-backfill-us", plan, chunk, false, 10)
+		require.NoError(t, err)
+		require.Empty(t, req.Provider)
+		require.Empty(t, req.SourceID)
+		require.NotNil(t, req.FetchLimits)
+		require.Zero(t, req.FetchLimits.RequestTimeoutMS, "路由市场补采必须清空 RequestTimeoutMS，避免覆盖数据源 15 秒超时")
+		require.Equal(t, 5, req.FetchLimits.RPS)
+		require.Equal(t, 10, req.FetchLimits.Burst)
+		require.Equal(t, 2, req.FetchLimits.FeedConcurrency)
+		require.Equal(t, 8000, req.FetchLimits.StorageTimeoutMS)
+	})
+
+	t.Run("single-source market keeps request timeout", func(t *testing.T) {
+		plan := &marketfetch.Plan{
+			Market: marketfetch.PlanMarket{
+				MarketID:       "crypto",
+				InstrumentType: "spot",
+				MarketType:     "spot",
+				Provider:       "binance",
+				SourceID:       "spot_http",
+			},
+			Fetch: fetch,
+		}
+		chunk := store.BackfillChunk{
+			ChunkID:   "chunk-crypto-1",
+			DatasetID: "ds_spot_1m",
+			Frequency: "1m",
+			SubjectID: "BTC-USDT",
+			From:      base,
+			To:        base.Add(10 * time.Minute),
+		}
+		req, err := chunkRequest("crypto", "moox-backfill-crypto", plan, chunk, false, 10)
+		require.NoError(t, err)
+		require.Equal(t, "binance", req.Provider)
+		require.Equal(t, "spot_http", req.SourceID)
+		require.NotNil(t, req.FetchLimits)
+		require.Equal(t, 3000, req.FetchLimits.RequestTimeoutMS)
+	})
+}

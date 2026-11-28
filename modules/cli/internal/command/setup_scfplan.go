@@ -58,52 +58,42 @@ func defaultSetupEnsureSCFPlan(ctx context.Context, snapshot *setupSnapshot, sou
 
 func ensureSCFPlanPackages(ctx context.Context, manifest *topology.Config, packages scfPlanPackages) *setupSCFPlanSummary {
 	summary := &setupSCFPlanSummary{Enabled: true, Status: "ready"}
-	// 多个空间默认共享同一个代码包名（moox-collector-plan），按包名去重，只构建上传一次。
-	type packageOutcome struct {
-		packageID string
-		action    string
-		warning   string
+	if len(manifest.SCFPlan.Spaces) == 0 {
+		return summary
 	}
-	resolved := map[string]packageOutcome{}
+	// 所有空间共享同一个全局代码包名（默认 moox-collector-plan），初始化只查询和上传一次。
+	packageName := manifest.SCFPlan.PackageName
+	if packageName == "" {
+		packageName = topology.DefaultSCFPackageName
+	}
+	pkgCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	id, found, err := packages.Latest(pkgCtx, packageName)
+	var packageID, action, warning string
+	switch {
+	case err != nil:
+		action, warning = "failed", "query code package failed: "+err.Error()
+	case found:
+		action, packageID = "exists", id
+	default:
+		uploaded, uploadErr := packages.Upload(pkgCtx, packageName)
+		if uploadErr != nil {
+			action, warning = "failed", "build or upload code package failed: "+uploadErr.Error()
+		} else {
+			action, packageID = "uploaded", uploaded
+		}
+	}
+	cancel()
+	if action == "failed" {
+		summary.Status = "failed"
+	}
 	for _, space := range manifest.SCFPlan.Spaces {
-		packageName := space.PackageName
-		if packageName == "" {
-			packageName = manifest.SCFPlan.PackageName
-		}
-		if packageName == "" {
-			packageName = topology.DefaultSCFPackageName
-		}
-		outcome, cached := resolved[packageName]
-		if !cached {
-			pkgCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-			id, found, err := packages.Latest(pkgCtx, packageName)
-			switch {
-			case err != nil:
-				outcome = packageOutcome{action: "failed", warning: "query code package failed: " + err.Error()}
-			case found:
-				outcome = packageOutcome{action: "exists", packageID: id}
-			default:
-				uploaded, uploadErr := packages.Upload(pkgCtx, packageName)
-				if uploadErr != nil {
-					outcome = packageOutcome{action: "failed", warning: "build or upload code package failed: " + uploadErr.Error()}
-				} else {
-					outcome = packageOutcome{action: "uploaded", packageID: uploaded}
-				}
-			}
-			cancel()
-			resolved[packageName] = outcome
-		}
-		result := setupSCFPlanSpaceResult{
+		summary.Spaces = append(summary.Spaces, setupSCFPlanSpaceResult{
 			SpaceID:     space.SpaceID,
 			PackageName: packageName,
-			PackageID:   outcome.packageID,
-			Action:      outcome.action,
-			Warning:     outcome.warning,
-		}
-		if result.Action == "failed" {
-			summary.Status = "failed"
-		}
-		summary.Spaces = append(summary.Spaces, result)
+			PackageID:   packageID,
+			Action:      action,
+			Warning:     warning,
+		})
 	}
 	return summary
 }

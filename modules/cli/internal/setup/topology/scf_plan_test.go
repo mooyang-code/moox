@@ -31,7 +31,6 @@ func TestSCFPlanDefaultsAndRenderedCollectorConfig(t *testing.T) {
 	require.Equal(t, 128, manifest.SCFPlan.MemoryMB)
 	require.Equal(t, 50, manifest.SCFPlan.SymbolsPerFunction)
 	require.Equal(t, DefaultSCFPackageName, manifest.SCFPlan.PackageName)
-	require.Equal(t, DefaultSCFPackageName, manifest.SCFPlan.Spaces[0].PackageName)
 	require.Equal(t, "moox-crypto-plan", manifest.SCFPlan.Spaces[0].Namespace)
 
 	rendered, err := RenderCollectorRuntimeConfig(manifest, []byte("database: {path: keep.db}\nscf_plan: {package_id: stale}\n"))

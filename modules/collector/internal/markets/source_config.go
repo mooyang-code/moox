@@ -12,21 +12,12 @@ import (
 )
 
 // SourceFile 是 config/markets/<市场>/sources/<数据源>.yaml 的统一解码结构。
-// 三段核心配置均可选：provider（K 线/附加字段运行参数与限速）、api（各品种故障转移地址）、stream（WS 推送参数）；
-// app 为可选的描述信息。严格校验未知字段，不再靠嗅探区分文件格式。
+// 三段核心配置均可选：provider（K 线/附加字段运行参数与限速）、api（各品种故障转移地址）、stream（WS 推送参数）。
+// 严格校验未知字段，不再靠嗅探区分文件格式。
 type SourceFile struct {
-	App      *SourceAppConfig      `yaml:"app"`
 	Provider *SourceProviderConfig `yaml:"provider"`
 	API      *SourceAPIConfig      `yaml:"api"`
 	Stream   *SourceStreamConfig   `yaml:"stream"`
-}
-
-// SourceAppConfig 是数据源文件的描述信息（可选）。
-type SourceAppConfig struct {
-	ID          string `yaml:"id"`
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Type        string `yaml:"type"`
 }
 
 // SourceProviderConfig 是数据源的 K 线或附加字段运行参数与限速配置。

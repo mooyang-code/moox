@@ -30,15 +30,15 @@ func (s *stubSCFPlanPackages) Upload(_ context.Context, name string) (string, er
 	return "pkg-" + name, nil
 }
 
-// 多个空间共享默认代码包名时，初始化只查询和上传一次。
-func TestEnsureSCFPlanPackagesDeduplicatesSharedPackageName(t *testing.T) {
+// 所有空间共享同一个全局代码包名时，初始化只查询和上传一次。
+func TestEnsureSCFPlanPackagesUploadsSharedPackageOnce(t *testing.T) {
 	manifest := &topology.Config{
 		SCFPlan: topology.SCFPlan{
 			Enabled: true,
 			Spaces: []topology.SCFPlanSpace{
 				{SpaceID: "crypto"},
 				{SpaceID: "stockcn"},
-				{SpaceID: "stockhk", PackageName: "moox-collector-hk"},
+				{SpaceID: "stockhk"},
 			},
 		},
 	}
@@ -46,10 +46,11 @@ func TestEnsureSCFPlanPackagesDeduplicatesSharedPackageName(t *testing.T) {
 	stub := &stubSCFPlanPackages{}
 	summary := ensureSCFPlanPackages(context.Background(), manifest, stub)
 	require.Equal(t, "ready", summary.Status)
-	require.Equal(t, []string{topology.DefaultSCFPackageName, "moox-collector-hk"}, stub.latestCalls)
-	require.Equal(t, []string{topology.DefaultSCFPackageName, "moox-collector-hk"}, stub.uploadCalls)
+	require.Equal(t, []string{topology.DefaultSCFPackageName}, stub.latestCalls)
+	require.Equal(t, []string{topology.DefaultSCFPackageName}, stub.uploadCalls)
 	require.Len(t, summary.Spaces, 3)
-	require.Equal(t, "pkg-"+topology.DefaultSCFPackageName, summary.Spaces[0].PackageID)
-	require.Equal(t, "pkg-"+topology.DefaultSCFPackageName, summary.Spaces[1].PackageID)
-	require.Equal(t, "pkg-moox-collector-hk", summary.Spaces[2].PackageID)
+	for _, space := range summary.Spaces {
+		require.Equal(t, topology.DefaultSCFPackageName, space.PackageName)
+		require.Equal(t, "pkg-"+topology.DefaultSCFPackageName, space.PackageID)
+	}
 }

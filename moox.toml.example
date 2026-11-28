@@ -149,7 +149,7 @@ enabled = false
 
 # [[scf_plan.spaces]]
 # space_id = "crypto"
-# # package_name 默认全局共用 moox-collector-plan，namespace 默认 moox-<space>-plan，均可覆盖
+# # 代码包名由顶层 scf_plan.package_name 统一指定（默认全局共用 moox-collector-plan）；namespace 默认 moox-<space>-plan，可按空间覆盖
 # # 采集方式不在这里配置：它记在采集任务上（stream / scf / local），建任务不写时用市场默认值（crypto 是 stream，其余是 scf），
 # # 之后用 moox-cli collector ingest-mode set 切换。
 # [scf_plan.spaces.markets]

@@ -113,9 +113,6 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	for _, space := range plan.Spaces {
 		markets[space.SpaceID] = space.Markets
 		override := map[string]any{"namespace": space.Namespace}
-		if space.PackageName != "" && space.PackageName != plan.PackageName {
-			override["package_name"] = space.PackageName
-		}
 		if space.SymbolsPerFunction > 0 {
 			override["symbols_per_function"] = space.SymbolsPerFunction
 		}

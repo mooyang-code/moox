@@ -19,7 +19,7 @@ type SCFPlan struct {
 	Enabled bool `toml:"enabled"`
 	// CloudAccount 是 SCF 与 COS 使用的云账号。
 	CloudAccount SCFCloudAccountConfig `toml:"cloud_account"`
-	// PackageName 是全局默认代码包名称，默认 moox-collector-plan；各空间共享同一个二进制，必要时可在 spaces 中按空间覆盖。
+	// PackageName 是全局代码包名称，默认 moox-collector-plan；各空间共享同一个二进制。
 	PackageName string `toml:"package_name"`
 	// MemoryMB 是每个函数的内存，默认 128。
 	MemoryMB int `toml:"memory_mb"`
@@ -68,8 +68,6 @@ type SCFPlanSpace struct {
 	SpaceID string `toml:"space_id"`
 	// Markets 是市场（spot、swap、equity……）到运行地域的映射。
 	Markets map[string][]string `toml:"markets"`
-	// PackageName 是空间的代码包名称覆盖，默认沿用全局 scf_plan.package_name（moox-collector-plan）；Collector 总是使用该名称的最新可用版本。
-	PackageName string `toml:"package_name"`
 	// Namespace 是函数所在命名空间，默认 moox-<space>-plan。
 	Namespace          string `toml:"namespace"`
 	SymbolsPerFunction int    `toml:"symbols_per_function"`
@@ -127,12 +125,8 @@ func (p *SCFPlan) Normalize() {
 			markets[strings.ToLower(strings.TrimSpace(market))] = normalized
 		}
 		space.Markets = markets
-		space.PackageName = strings.TrimSpace(space.PackageName)
 		space.Namespace = strings.TrimSpace(space.Namespace)
 		space.BackfillRegion = strings.ToLower(strings.TrimSpace(space.BackfillRegion))
-		if space.PackageName == "" && space.SpaceID != "" {
-			space.PackageName = p.PackageName
-		}
 		if space.Namespace == "" && space.SpaceID != "" {
 			space.Namespace = "moox-" + space.SpaceID + "-plan"
 		}
