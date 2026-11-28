@@ -31,7 +31,7 @@ test("建归档任务：手工新建抽屉、目录名默认建议值、路径�
   const dirInput = drawer.locator(".arco-input-wrapper input").first();
   await expect(dirInput).toHaveValue("binance-spot-kline-5m");
   await expect(drawer).toContainText("/data/moox/archive/crypto/collect/binance-spot-kline-5m/<yyyy>/<yyyymmdd>.csv.gz");
-  await expect(drawer).toContainText("创建后每分钟按 Storage 的变更日志跟随");
+  await expect(drawer).toContainText("创建后由执行器每分钟按 Storage 的变更日志本地跟随");
   // 改成已有任务的目录名：防抖后检查，标红
   await dirInput.fill("binance-spot-kline-1m");
   await expect(drawer).toContainText("目录名已被「现货 1 分钟 K 线」使用，请改一个");
@@ -42,7 +42,7 @@ test("建归档任务：手工新建抽屉、目录名默认建议值、路径�
   await expect(page).toHaveURL(/task=ds_kline_5m/);
   expect(calls.bodies.CreateArchiveTask?.[0]).toMatchObject({
     dataset_id: "ds_kline_5m",
-    paused: false,
+    disabled: false,
     dir_name: "binance-spot-kline-5m"
   });
   expect(calls.bodies.CreateArchiveTask?.[0]).not.toHaveProperty("space_id");

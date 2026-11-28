@@ -252,7 +252,7 @@ async function gateway(route: Route) {
     case "ListArchiveRuns":
       return route.fulfill({ json: ok({ runs, page_result: { total: runs.length } }) });
     case "CancelArchiveRun":
-      return route.fulfill({ json: ok({ run: { ...runs[0], status: "canceled" } }) });
+      return route.fulfill({ json: ok({ run: { ...runs[0], status: "cancelled" } }) });
     case "ListArchivePartitions":
       return route.fulfill({ json: ok({ partitions, page_result: { total: partitions.length } }) });
     case "GetArchivePartition":

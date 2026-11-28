@@ -148,6 +148,7 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
     name: "Paper 组合",
     control_mode: 1,
     execution_mode: 1,
+    environment: 3,
     markets: ["spot"],
     settlement_asset: "USDT",
     automation_state: "PAUSED",

@@ -200,14 +200,13 @@ async function mockGateway(route: Route) {
   }
   if (method === "RecalcFactors") {
     const job = {
-      job_id: body.request_id || "job-1",
-      request_id: body.request_id || "job-1",
+      job_id: body.job_id || "job-1",
       task_id: body.task_id,
       members: body.members || [],
       subjects: body.subjects || [],
       start_time: body.start_time,
       end_time: body.end_time,
-      status: "accepted",
+      status: "queued",
       progress_time: "",
       error: ""
     };
@@ -296,7 +295,7 @@ test("recalc tab accepts a manual recalculation", async ({ page }) => {
     .locator(".arco-drawer")
     .getByRole("button", { name: /^(提交|确定|提交补算)/ })
     .click();
-  await expect(page.getByText("已受理").first()).toBeVisible();
+  await expect(page.getByText("排队中").first()).toBeVisible();
 });
 
 test("new definition is created without a set and highlights the definitions menu", async ({ page }) => {

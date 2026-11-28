@@ -82,6 +82,7 @@ const logicals = [
     name: "默认策略模拟组合",
     control_mode: 1,
     execution_mode: 1,
+    environment: 3,
     markets: ["spot", "swap"],
     settlement_asset: "USDT",
     automation_state: "ACTIVE",
@@ -97,6 +98,7 @@ const logicals = [
     name: "手动模拟组合",
     control_mode: 2,
     execution_mode: 1,
+    environment: 3,
     markets: [],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
@@ -109,6 +111,7 @@ const logicals = [
     name: "测试网组合",
     control_mode: 1,
     execution_mode: 2,
+    environment: 1,
     markets: ["swap"],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
@@ -122,6 +125,7 @@ const logicals = [
     name: "生产组合",
     control_mode: 1,
     execution_mode: 2,
+    environment: 2,
     markets: ["spot", "swap"],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
@@ -171,6 +175,7 @@ const orders = [
 
 export interface Calls {
   paper: Record<string, unknown>[];
+  logicalCreates: Record<string, unknown>[];
   members: Record<string, unknown>[];
   flatten: Record<string, unknown>[];
   /** ListLogicalAccounts 被调用的次数 */
@@ -398,7 +403,14 @@ async function gateway(route: Route) {
       return route.fulfill({
         json: ok({
           instances: [
-            { instance_id: "inst-1", strategy_id: "st-1", logical_account_id: "la-paper-1", enabled: true, health: "ok" }
+            {
+              instance_id: "inst-1",
+              strategy_id: "st-1",
+              strategy_name: "动量轮动",
+              logical_account_id: "la-paper-1",
+              enabled: true,
+              health: "ok"
+            }
           ],
           page_result: { page: 1, size: 500, total: "1", has_more: false }
         })
@@ -413,7 +425,18 @@ async function gateway(route: Route) {
     case "CreateTradingAccount":
       if (body.paper) calls.paper.push(body);
       return route.fulfill({
-        json: ok({ account: accounts[0], logical_account: { ...logicals[1], logical_account_id: "la-new", name: "新模拟" } })
+        json: ok({ account: accounts[0] })
+      });
+    case "CreateLogicalAccount":
+      calls.logicalCreates.push(body);
+      return route.fulfill({
+        json: ok({
+          logical_account: {
+            ...logicals[1],
+            logical_account_id: "la-new",
+            name: String(body.name || "新模拟")
+          }
+        })
       });
     case "UpdateTradingAccount":
       return route.fulfill({
@@ -488,7 +511,7 @@ async function gateway(route: Route) {
 }
 
 export async function installTradingMock(page: Page) {
-  calls = { paper: [], members: [], flatten: [], listLogicals: 0, getLogical: 0 };
+  calls = { paper: [], logicalCreates: [], members: [], flatten: [], listLogicals: 0, getLogical: 0 };
   await installE2ESession(page, "space-1");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, gateway);
   return calls;
