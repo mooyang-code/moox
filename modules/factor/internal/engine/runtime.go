@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -153,6 +154,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}
 	r.udf.reclaim = r.reclaimModules
 	r.udf.Host().SetObserver(r.observeUDF)
+	// 打开本地状态前先核对或写入数据格式文件：已有旧格式数据时拒绝启动，不触碰旧状态文件。
+	if err := recordFactorEngineFormat(cfg.SeriesStore.Dir, factorEngineHasData(cfg)); err != nil {
+		return nil, fmt.Errorf("核对或写入因子引擎数据格式文件失败：%w", err)
+	}
 	if r.series, err = seriesstore.Open(seriesstore.Options{Dir: cfg.SeriesStore.Dir, BlockCacheBytes: int64(cfg.SeriesStore.BlockCache)}); err != nil {
 		return nil, fmt.Errorf("open factor series store: %w", err)
 	}
@@ -212,9 +217,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.preload.onSeedReleased = r.clearSeedPending
 	if r.life, err = r.newLifecycle(); err != nil {
 		return nil, fmt.Errorf("open factor lifecycle: %w", err)
-	}
-	if err := recordFactorEngineFormat(cfg.SeriesStore.Dir); err != nil {
-		return nil, fmt.Errorf("写入因子引擎数据格式文件失败：%w", err)
 	}
 
 	r.syncer = &catalogSyncer{
@@ -303,7 +305,33 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 // other engine holds the lease.
 func (r *Runtime) active() bool { return r.catalog.Loaded() && !r.lease.Conflict() }
 
-func recordFactorEngineFormat(seriesStoreDir string) error {
+// factorEngineHasData 报告因子引擎数据目录是否已有持久化本地状态（与部署预检同口径：不含可重拉的 catalog.json 与 udf/）。
+func factorEngineHasData(cfg *Config) bool {
+	if cfg == nil {
+		return false
+	}
+	paths := []string{
+		cfg.Watermark.StateFile,
+		cfg.Params.CacheFile,
+	}
+	if dir := strings.TrimSpace(cfg.SeriesStore.Dir); dir != "" {
+		paths = append(paths,
+			filepath.Join(dir, "CURRENT"),
+			filepath.Join(filepath.Dir(dir), "lifecycle.json"),
+		)
+	}
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return dataformat.DirHasEntries(cfg.Gap.LedgerDir)
+}
+
+func recordFactorEngineFormat(seriesStoreDir string, hadData bool) error {
 	if strings.TrimSpace(seriesStoreDir) == "" {
 		return nil
 	}
@@ -314,7 +342,7 @@ func recordFactorEngineFormat(seriesStoreDir string) error {
 	if err != nil {
 		return err
 	}
-	return dataformat.WriteDir(filepath.Dir(seriesStoreDir), rec)
+	return dataformat.VerifyOrWriteDir(filepath.Dir(seriesStoreDir), rec, hadData)
 }
 
 // onCatalogApplied 在每次目录同步成功（含 NotModified）后执行：先清理已删除任务的本地状态，再回收不再引用的自定义算子模块。

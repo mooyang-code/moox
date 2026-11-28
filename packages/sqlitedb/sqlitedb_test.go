@@ -138,3 +138,127 @@ func TestValidateTablesSQLIgnoresDynamicTables(t *testing.T) {
 	err = ValidateTablesSQL(context.Background(), db, "archive-worker", changedFixed, false)
 	require.ErrorIs(t, err, ErrIncompatibleSchema)
 }
+
+func TestSchemaIncludesTriggersAndViews(t *testing.T) {
+	base := `
+CREATE TABLE IF NOT EXISTS t_items (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_name TEXT NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_items_mtime
+AFTER UPDATE ON t_items
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_items SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
+CREATE VIEW IF NOT EXISTS v_items AS
+SELECT c_id, c_name FROM t_items;
+`
+	reformatted := `
+create table if not exists t_items(
+  c_id integer not null primary key autoincrement,
+  c_name text not null,
+  c_mtime datetime not null default current_timestamp
+);
+-- 仅排版调整
+create trigger if not exists trg_t_items_mtime
+after update on t_items for each row when new.c_mtime=old.c_mtime begin
+  update t_items set c_mtime=current_timestamp where c_id=old.c_id;
+end;
+create view if not exists v_items as select c_id,c_name from t_items;
+`
+	changedTrigger := `
+CREATE TABLE IF NOT EXISTS t_items (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_name TEXT NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_items_mtime
+AFTER UPDATE ON t_items
+FOR EACH ROW
+BEGIN
+    UPDATE t_items SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
+CREATE VIEW IF NOT EXISTS v_items AS
+SELECT c_id, c_name FROM t_items;
+`
+	changedView := `
+CREATE TABLE IF NOT EXISTS t_items (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_name TEXT NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_items_mtime
+AFTER UPDATE ON t_items
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_items SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
+CREATE VIEW IF NOT EXISTS v_items AS
+SELECT c_id, c_name, c_mtime FROM t_items;
+`
+	hBase, err := SchemaHash(base)
+	require.NoError(t, err)
+	hReformatted, err := SchemaHash(reformatted)
+	require.NoError(t, err)
+	require.Equal(t, hBase, hReformatted, "触发器与视图纯格式调整不改变哈希")
+
+	hTrigger, err := SchemaHash(changedTrigger)
+	require.NoError(t, err)
+	require.NotEqual(t, hBase, hTrigger, "触发器语义变化必须改变哈希")
+
+	hView, err := SchemaHash(changedView)
+	require.NoError(t, err)
+	require.NotEqual(t, hBase, hView, "视图语义变化必须改变哈希")
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "tv.db")
+	db, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchemaSQL(context.Background(), db, dbPath, "demo", base, nil))
+	require.NoError(t, db.Close())
+
+	// 触发器语义变化时启动校验必须拒绝。
+	db2, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	err = EnsureSchemaSQL(context.Background(), db2, dbPath, "demo", changedTrigger, nil)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+	require.ErrorContains(t, err, "触发器")
+	require.NoError(t, db2.Close())
+
+	// 视图语义变化时启动校验必须拒绝。
+	db3, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	defer db3.Close()
+	err = EnsureSchemaSQL(context.Background(), db3, dbPath, "demo", changedView, nil)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+	require.ErrorContains(t, err, "视图")
+}
+
+func TestEnsureSchemaRejectsLifecycleVersionMismatchOnExistingData(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "demo.db")
+
+	db, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchemaSQL(context.Background(), db, dbPath, "demo", testSchemaV1, map[string]string{dataformat.PartLifecycle: "1"}))
+	require.NoError(t, db.Close())
+
+	// 已有数据且 schema 未变，但 lifecycle 版本常量改变：必须拒绝启动并提示 setup install --wipe。
+	db2, err := OpenSQL(Options{Path: dbPath})
+	require.NoError(t, err)
+	defer db2.Close()
+	err = EnsureSchemaSQL(context.Background(), db2, dbPath, "demo", testSchemaV1, map[string]string{dataformat.PartLifecycle: "2"})
+	require.ErrorIs(t, err, dataformat.ErrIncompatibleFormat)
+	require.ErrorContains(t, err, dataformat.PartLifecycle)
+	require.ErrorContains(t, err, "setup install --wipe")
+}

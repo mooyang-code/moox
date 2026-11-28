@@ -53,12 +53,19 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	if err != nil {
 		return nil, err
 	}
-	// 2. embedded broker
+	// 2. embedded broker（启动前先记录 JetStream 目录是否已有持久化数据）
+	hadData := dataformat.DirHasEntries(cfg.Broker.StoreDir)
 	b, err := broker.New(cfg)
 	if err != nil {
 		return nil, err
 	}
 	if err := b.Start(ctx); err != nil {
+		return nil, err
+	}
+	// broker 启动后、Reconcile 之前核对并写入格式文件：已有数据但格式不符时拒绝启动，
+	// 首次启动即使后续 Reconcile 失败也不会留下“有数据无格式文件”。
+	if err := recordEventBusFormat(cfg.Broker.StoreDir, hadData); err != nil {
+		_ = b.Shutdown(trpc.BackgroundContext())
 		return nil, err
 	}
 	// 3. local JetStream client
@@ -81,11 +88,6 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 		return nil, err
 	}
 	if _, err := reg.Reconcile(ctx); err != nil {
-		nc.Close()
-		_ = b.Shutdown(trpc.BackgroundContext())
-		return nil, err
-	}
-	if err := recordEventBusFormat(cfg.Broker.StoreDir); err != nil {
 		nc.Close()
 		_ = b.Shutdown(trpc.BackgroundContext())
 		return nil, err
@@ -118,21 +120,22 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	return rt, nil
 }
 
-func recordEventBusFormat(storeDir string) error {
+func recordEventBusFormat(storeDir string, hadData bool) error {
 	if strings.TrimSpace(storeDir) == "" {
 		return nil
 	}
-	digest, err := events.FormatDigest()
+	digest, err := events.MessagesFormatDigest()
 	if err != nil {
 		return fmt.Errorf("计算事件格式摘要失败：%w", err)
 	}
 	rec, err := dataformat.Build("eventbus", map[string]string{
-		dataformat.PartEvents: digest,
+		dataformat.PartEvents:           digest,
+		dataformat.PartEventBusTopology: events.TopologyFormatDigest(),
 	})
 	if err != nil {
 		return err
 	}
-	return dataformat.WriteDir(filepath.Dir(storeDir), rec)
+	return dataformat.VerifyOrWriteDir(filepath.Dir(storeDir), rec, hadData)
 }
 
 func registerMetricsReporter(s *server.Server, readiness func(context.Context) (bool, string)) {

@@ -714,7 +714,6 @@ components:
     config_files:
       - {from: modules/storage/config/trpc_go.primary.yaml, to: trpc_go.yaml}
       - {from: modules/storage/config/storage.primary.yaml, to: storage.yaml}
-      - from: modules/storage/schema/metadata.sql
     after: [host-gateway, eventbus]
     credentials: ["eventbus:storage-eventbus", cls]
     health:

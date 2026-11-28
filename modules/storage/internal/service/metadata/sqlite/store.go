@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -51,15 +50,13 @@ func (s *Store) WithReadSnapshot(ctx context.Context, fn func(context.Context) e
 
 // Options 保存 SQLite 元数据存储打开配置。
 type Options struct {
-	Path       string
-	SchemaPath string
+	Path string
 }
 
 // Store 封装 SQLite 元数据表的直接读写能力。
 type Store struct {
-	db         *sql.DB
-	schemaPath string
-	now        func() time.Time
+	db  *sql.DB
+	now func() time.Time
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
@@ -77,7 +74,7 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db, schemaPath: opts.SchemaPath, now: time.Now}, nil
+	return &Store{db: db, now: time.Now}, nil
 }
 
 func (s *Store) Close() error {
@@ -87,26 +84,12 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) schemaSQL() (string, error) {
-	if strings.TrimSpace(s.schemaPath) == "" {
-		return storageschema.AllSQL(), nil
-	}
-	raw, err := os.ReadFile(s.schemaPath)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
+// InitSchema 统一使用二进制内嵌的 schema 初始化并校验元数据库。
 func (s *Store) InitSchema(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("metadata store is not open")
 	}
-	schemaText, err := s.schemaSQL()
-	if err != nil {
-		return err
-	}
-	return sqlitedb.ApplySchemaSQL(ctx, s.db, "storage-primary", schemaText)
+	return sqlitedb.ApplySchemaSQL(ctx, s.db, "storage-primary", storageschema.AllSQL())
 }
 
 // ValidateSchema 严格比对持久化元数据库与当前二进制内嵌的 schema（不建表、不改表）。
@@ -117,12 +100,14 @@ func (s *Store) ValidateSchema(ctx context.Context) error {
 	return sqlitedb.ValidateSQL(ctx, s.db, "storage-primary", storageschema.AllSQL(), false)
 }
 
-// RecordPrimaryFormat 在元数据库与 Pebble 布局都校验通过后，把 storage-primary 的复合格式写入数据目录。
-func RecordPrimaryFormat(storageRoot string) error {
+// RecordPrimaryFormat 在元数据库与 Pebble 布局都校验通过后，核对并把 storage-primary 的复合格式写入数据目录。
+// storage-primary 的事件摘要仅覆盖已注册事件的名称、版本与负载描述（不含 EventBus Stream 与消费者声明）。
+// hasExistingData 为真且已有格式文件但格式值不符时拒绝启动并提示全新部署。
+func RecordPrimaryFormat(storageRoot string, hasExistingData bool) error {
 	if strings.TrimSpace(storageRoot) == "" {
 		return nil
 	}
-	eventsDigest, err := events.FormatDigest()
+	eventsDigest, err := events.MessagesFormatDigest()
 	if err != nil {
 		return fmt.Errorf("计算事件格式摘要失败：%w", err)
 	}
@@ -134,6 +119,7 @@ func RecordPrimaryFormat(storageRoot string) error {
 			dataformat.PartStoragePebbleLayout: strconv.Itoa(dataformat.StoragePebbleLayoutVersion),
 			dataformat.PartEvents:              eventsDigest,
 		},
+		hasExistingData,
 	)
 }
 

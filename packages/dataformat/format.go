@@ -38,11 +38,15 @@ const (
 	PartSQLiteSchema        = "sqlite_schema"
 	PartStagingSchema       = "staging_schema"
 	PartEvents              = "events"
+	PartEventBusTopology    = "eventbus_topology"
 	PartStoragePebbleLayout = "storage_pebble_layout"
 	PartStorageViewIndex    = "storage_view_index"
 	PartFactorEngineState   = "factor_engine_state"
 	PartLifecycle           = "lifecycle"
 )
+
+// ErrIncompatibleFormat 表示本地已有数据对应的 data-format 与当前版本格式不符。
+var ErrIncompatibleFormat = errors.New("本地数据格式与当前版本不符")
 
 // Record 是落盘到 data-format 文件的组件格式快照。
 type Record struct {
@@ -195,4 +199,69 @@ func DiffParts(want, got Record) []string {
 	}
 	slices.Sort(diff)
 	return diff
+}
+
+// VerifyOrWriteDir 在 dir 下的 data-format 文件执行启动时的格式核对与落盘（见 VerifyOrWriteFile）。
+func VerifyOrWriteDir(dir string, rec Record, hasExistingData bool) error {
+	if strings.TrimSpace(dir) == "" {
+		return errors.New("数据格式目录不能为空")
+	}
+	return VerifyOrWriteFile(filepath.Join(dir, FileName), rec, hasExistingData)
+}
+
+// VerifyOrWriteFile 是各组件启动时共用的格式核对与落盘逻辑：
+//   - 若尚无已有数据（hasExistingData 为假），或格式文件尚不存在：照常写入 rec。
+//   - 若已有数据且格式文件存在：解析并比对组件名与格式值；不一致或格式文件损坏时拒绝启动，提示执行全新部署（setup install --wipe）；一致时放行。
+func VerifyOrWriteFile(path string, rec Record, hasExistingData bool) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("数据格式文件路径不能为空")
+	}
+	validated, err := Build(rec.Component, rec.Parts)
+	if err != nil {
+		return err
+	}
+	if rec.Format != "" && rec.Format != validated.Format {
+		return fmt.Errorf("组件 %s 的数据格式摘要与组成部分不匹配", rec.Component)
+	}
+	if !hasExistingData {
+		return WriteFile(path, validated)
+	}
+	existing, err := ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return WriteFile(path, validated)
+		}
+		return fmt.Errorf("%w：组件 %s 的格式文件 %s 无法解析（%v）；请备份后执行全新部署（moox-cli setup install --wipe）",
+			ErrIncompatibleFormat, validated.Component, path, err)
+	}
+	if existing.Component != validated.Component {
+		return fmt.Errorf("%w：目录 %s 的格式文件属于组件 %s，与当前组件 %s 不符；请备份后执行全新部署（moox-cli setup install --wipe）",
+			ErrIncompatibleFormat, filepath.Dir(path), existing.Component, validated.Component)
+	}
+	if existing.Format != validated.Format {
+		diff := DiffParts(validated, existing)
+		detail := "格式摘要不一致"
+		if len(diff) > 0 {
+			detail = "变更项：" + strings.Join(diff, "、")
+		}
+		return fmt.Errorf("%w：组件 %s 的本地数据格式已变化（%s）；请备份后执行全新部署（moox-cli setup install --wipe）",
+			ErrIncompatibleFormat, validated.Component, detail)
+	}
+	return nil
+}
+
+// DirHasEntries 报告目录是否存在且包含除 data-format 及临时格式文件外的任何条目。
+func DirHasEntries(dir string) bool {
+	entries, err := os.ReadDir(strings.TrimSpace(dir))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == FileName || strings.HasPrefix(name, "."+FileName+".tmp-") {
+			continue
+		}
+		return true
+	}
+	return false
 }

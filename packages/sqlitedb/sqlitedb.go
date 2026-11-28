@@ -191,7 +191,7 @@ func ErrorCode(err error) (int, bool) {
 	return 0, false
 }
 
-// SchemaObject 是 sqlite_master 中的一张表或一条显式索引（SQL 已规范化）。
+// SchemaObject 是 sqlite_master 中的表、显式索引、触发器或视图（SQL 已规范化）。
 type SchemaObject struct {
 	Type  string
 	Name  string
@@ -202,7 +202,7 @@ type SchemaObject struct {
 const sqlSelectSchemaObjects = `
 SELECT type, name, tbl_name, sql
 FROM sqlite_master
-WHERE type IN ('table', 'index')
+WHERE type IN ('table', 'index', 'trigger', 'view')
   AND sql IS NOT NULL
   AND name NOT LIKE 'sqlite_%'`
 
@@ -417,6 +417,10 @@ func objectKindLabel(kind string) string {
 		return "表"
 	case "index":
 		return "索引"
+	case "trigger":
+		return "触发器"
+	case "view":
+		return "视图"
 	default:
 		return kind
 	}
@@ -447,13 +451,47 @@ func ApplySchemaSQL(ctx context.Context, db *sql.DB, component, schemaSQL string
 	return ValidateSQL(ctx, db, component, schemaSQL, false)
 }
 
-// EnsureSchemaSQL 应用并严格校验 schema，通过后把组件格式记录写入数据库同目录的 data-format 文件。
+// EnsureSchemaSQL 应用并严格校验 schema，通过后核对并写入数据库同目录的 data-format 文件。
+// 已有数据、已有格式文件且格式值（如 lifecycle 版本常量）不同时拒绝启动；尚无数据或尚无格式文件时照常写入。
 // 内存库或 component 为空时不写格式文件。
 func EnsureSchemaSQL(ctx context.Context, db *sql.DB, dbPath, component, schemaSQL string, extraParts map[string]string) error {
+	hadData, err := hasExistingSQLiteData(ctx, db, dbPath, extraParts)
+	if err != nil {
+		return err
+	}
 	if err := ApplySchemaSQL(ctx, db, component, schemaSQL); err != nil {
 		return err
 	}
-	return RecordFormat(dbPath, component, schemaSQL, extraParts)
+	return recordFormat(dbPath, component, schemaSQL, extraParts, hadData)
+}
+
+func hasExistingSQLiteData(ctx context.Context, db *sql.DB, dbPath string, extraParts map[string]string) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	objects, err := readSchemaObjects(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	if len(objects) > 0 {
+		return true, nil
+	}
+	if _, hasLifecycle := extraParts[dataformat.PartLifecycle]; hasLifecycle && !isLocalPathSkipped(dbPath) {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(dbPath), "lifecycle.json")); err == nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func isLocalPathSkipped(dbPath string) bool {
+	trimmed := strings.TrimSpace(dbPath)
+	return trimmed == "" || IsMemoryPath(trimmed) || strings.HasPrefix(trimmed, "file:")
+}
+
+func fileNonEmpty(path string) bool {
+	info, err := os.Stat(strings.TrimSpace(path))
+	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
 // EnsureSchemaGORM 是 EnsureSchemaSQL 的 GORM 封装。
@@ -494,16 +532,22 @@ func FormatRecord(component, schemaSQL string, extraParts map[string]string) (da
 	return dataformat.Build(component, parts)
 }
 
-// RecordFormat 把格式记录写入 dbPath 所在目录的 data-format 文件；内存库或 component 为空时跳过。
+// RecordFormat 核对并把格式记录写入 dbPath 所在目录的 data-format 文件；内存库或 component 为空时跳过。
+// 库文件非空且已有格式文件但格式值不符时拒绝启动并提示全新部署。
 func RecordFormat(dbPath, component, schemaSQL string, extraParts map[string]string) error {
-	if strings.TrimSpace(component) == "" || strings.TrimSpace(dbPath) == "" || IsMemoryPath(dbPath) || strings.HasPrefix(dbPath, "file:") {
-		return nil
-	}
-	return RecordFormatAt(filepath.Join(filepath.Dir(dbPath), dataformat.FileName), component, schemaSQL, extraParts)
+	return recordFormat(dbPath, component, schemaSQL, extraParts, fileNonEmpty(dbPath))
 }
 
-// RecordFormatAt 把格式记录写入指定的格式文件路径（用于库文件位于数据目录子目录的组件，如 storage-primary）。
-func RecordFormatAt(formatPath, component, schemaSQL string, extraParts map[string]string) error {
+func recordFormat(dbPath, component, schemaSQL string, extraParts map[string]string, hasExistingData bool) error {
+	if strings.TrimSpace(component) == "" || isLocalPathSkipped(dbPath) {
+		return nil
+	}
+	return RecordFormatAt(filepath.Join(filepath.Dir(dbPath), dataformat.FileName), component, schemaSQL, extraParts, hasExistingData)
+}
+
+// RecordFormatAt 核对并把格式记录写入指定的格式文件路径（用于库文件位于数据目录子目录的组件，如 storage-primary）。
+// hasExistingData 为真且格式文件已存在但不一致时拒绝启动并提示全新部署。
+func RecordFormatAt(formatPath, component, schemaSQL string, extraParts map[string]string, hasExistingData bool) error {
 	if strings.TrimSpace(component) == "" || strings.TrimSpace(formatPath) == "" {
 		return nil
 	}
@@ -511,7 +555,7 @@ func RecordFormatAt(formatPath, component, schemaSQL string, extraParts map[stri
 	if err != nil {
 		return err
 	}
-	return dataformat.WriteFile(formatPath, rec)
+	return dataformat.VerifyOrWriteFile(formatPath, rec, hasExistingData)
 }
 
 // LifecycleVersion 返回生命周期格式版本常量的字符串形式。

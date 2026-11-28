@@ -17,8 +17,7 @@ func newDatasetFixture(t *testing.T) (*sqlite.Store, *Service, *pb.Dataset) {
 	t.Helper()
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, sqlite.Options{
-		Path:       filepath.Join(t.TempDir(), "metadata.db"),
-		SchemaPath: filepath.Join("..", "..", "..", "schema", "metadata.sql"),
+		Path: filepath.Join(t.TempDir(), "metadata.db"),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })

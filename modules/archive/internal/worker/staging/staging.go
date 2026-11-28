@@ -202,6 +202,10 @@ func Open(path string, opts Options) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
+	hadData := false
+	if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() && info.Size() > 0 {
+		hadData = true
+	}
 	db, err := openDB(path, opts)
 	if err != nil {
 		return nil, err
@@ -231,14 +235,14 @@ func Open(path string, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := recordStagingFormat(path, schemaSQL); err != nil {
+	if err := recordStagingFormat(path, schemaSQL, hadData); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return &Store{db: db, path: path, opts: opts}, nil
 }
 
-func recordStagingFormat(path, schemaSQL string) error {
+func recordStagingFormat(path, schemaSQL string, hadData bool) error {
 	if strings.TrimSpace(path) == "" || sqlitedb.IsMemoryPath(path) || strings.HasPrefix(path, "file:") {
 		return nil
 	}
@@ -252,7 +256,7 @@ func recordStagingFormat(path, schemaSQL string) error {
 	if err != nil {
 		return err
 	}
-	return dataformat.WriteDir(filepath.Dir(path), rec)
+	return dataformat.VerifyOrWriteDir(filepath.Dir(path), rec, hadData)
 }
 
 func openDB(path string, opts Options) (*sql.DB, error) {

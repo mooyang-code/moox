@@ -12,15 +12,19 @@ import (
 )
 
 func TestFormatDigestDeterministicAndSensitiveToSchemaChanges(t *testing.T) {
-	base, err := FormatDigest()
+	baseMsg, err := MessagesFormatDigest()
 	require.NoError(t, err)
-	require.Contains(t, base, "sha256:")
+	require.Contains(t, baseMsg, "sha256:")
 
-	again, err := FormatDigest()
+	againMsg, err := MessagesFormatDigest()
 	require.NoError(t, err)
-	require.Equal(t, base, again)
+	require.Equal(t, baseMsg, againMsg)
 
-	// 修改某条事件的负载字段后，摘要必须变化。
+	baseTopo := TopologyFormatDigest()
+	require.Contains(t, baseTopo, "sha256:")
+	require.Equal(t, baseTopo, TopologyFormatDigest())
+
+	// 修改某条事件的负载字段后，事件消息摘要必须变化。
 	reg, err := DefaultRegistry()
 	require.NoError(t, err)
 	envelope := (&eventpb.EventMessage{}).ProtoReflect().Descriptor()
@@ -43,9 +47,10 @@ func TestFormatDigestDeterministicAndSensitiveToSchemaChanges(t *testing.T) {
 		return out
 	}
 
-	baselineFromSpecs, err := FormatDigestFromSpecs(Streams(), Consumers(), envelope, buildSpecs("", nil))
+	baselineFromSpecs, err := MessagesFormatDigestFromSpecs(envelope, buildSpecs("", nil))
 	require.NoError(t, err)
-	require.Equal(t, base, baselineFromSpecs)
+	require.Equal(t, baseMsg, baselineFromSpecs)
+	require.Equal(t, baseTopo, TopologyFormatDigestFromSpecs(Streams(), Consumers()))
 
 	// 1. 改事件负载字段：给 DatasetPeriodCompleted 追加一个字段。
 	origDesc := DatasetPeriodCompleted.NewPayload().ProtoReflect().Descriptor()
@@ -67,9 +72,9 @@ func TestFormatDigestDeterministicAndSensitiveToSchemaChanges(t *testing.T) {
 	modDesc := modFile.Messages().ByName(origDesc.Name())
 	require.NotNil(t, modDesc)
 
-	changedField, err := FormatDigestFromSpecs(Streams(), Consumers(), envelope, buildSpecs(DatasetPeriodCompleted.Name(), modDesc))
+	changedField, err := MessagesFormatDigestFromSpecs(envelope, buildSpecs(DatasetPeriodCompleted.Name(), modDesc))
 	require.NoError(t, err)
-	require.NotEqual(t, base, changedField, "事件负载字段变化必须改变事件格式摘要")
+	require.NotEqual(t, baseMsg, changedField, "事件负载字段变化必须改变事件消息摘要")
 
 	// 2. 改事件负载所在 proto 包名（模拟 3M-3 换包）。
 	movedPkg := proto.Clone(origFile).(*descriptorpb.FileDescriptorProto)
@@ -88,21 +93,19 @@ func TestFormatDigestDeterministicAndSensitiveToSchemaChanges(t *testing.T) {
 	movedDesc := movedFile.Messages().ByName(origDesc.Name())
 	require.NotNil(t, movedDesc)
 
-	changedPkg, err := FormatDigestFromSpecs(Streams(), Consumers(), envelope, buildSpecs(DatasetPeriodCompleted.Name(), movedDesc))
+	changedPkg, err := MessagesFormatDigestFromSpecs(envelope, buildSpecs(DatasetPeriodCompleted.Name(), movedDesc))
 	require.NoError(t, err)
-	require.NotEqual(t, base, changedPkg, "事件负载换包必须改变事件格式摘要")
+	require.NotEqual(t, baseMsg, changedPkg, "事件负载换包必须改变事件消息摘要")
 
-	// 3. 改 Stream 配置。
+	// 3. 改 Stream 配置只改变 EventBus 拓扑摘要，不影响事件消息摘要。
 	streams := Streams()
 	streams[0].MaxBytes++
-	changedStream, err := FormatDigestFromSpecs(streams, Consumers(), envelope, buildSpecs("", nil))
-	require.NoError(t, err)
-	require.NotEqual(t, base, changedStream, "Stream 声明变化必须改变事件格式摘要")
+	changedStream := TopologyFormatDigestFromSpecs(streams, Consumers())
+	require.NotEqual(t, baseTopo, changedStream, "Stream 声明变化必须改变拓扑摘要")
 
-	// 4. 改消费者声明。
+	// 4. 改消费者声明只改变 EventBus 拓扑摘要。
 	consumers := Consumers()
 	consumers[0].name += "_v2"
-	changedConsumer, err := FormatDigestFromSpecs(Streams(), consumers, envelope, buildSpecs("", nil))
-	require.NoError(t, err)
-	require.NotEqual(t, base, changedConsumer, "消费者声明变化必须改变事件格式摘要")
+	changedConsumer := TopologyFormatDigestFromSpecs(Streams(), consumers)
+	require.NotEqual(t, baseTopo, changedConsumer, "消费者声明变化必须改变拓扑摘要")
 }

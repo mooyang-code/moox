@@ -74,10 +74,8 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	schemaPath := resolveSchemaPath(opts.schemaPath)
 	if err := metadata.InitSchema(trpc.BackgroundContext(), metadata.SchemaOptions{
-		Storage:    storage,
-		SchemaPath: schemaPath,
+		Storage: storage,
 	}); err != nil {
 		return err
 	}
@@ -91,12 +89,10 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) error {
 
 type commandOptions struct {
 	storageConf string
-	schemaPath  string
 }
 
 func registerCommonFlags(fs *flag.FlagSet, opts *commandOptions) {
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultStorageConfigPath(), "storage business config path")
-	fs.StringVar(&opts.schemaPath, "schema-path", "", "metadata schema sql path")
 }
 
 func loadStorage(configPath string) (storageconfig.StorageConfig, error) {
@@ -132,25 +128,6 @@ func defaultStorageConfigPath() string {
 		return filepath.Join(dir, "storage.yaml")
 	}
 	return filepath.Join("config", "storage.yaml")
-}
-
-func resolveSchemaPath(path string) string {
-	if path != "" {
-		return path
-	}
-	if path := os.Getenv("STORAGE_SCHEMA_FILE"); path != "" {
-		return path
-	}
-	candidates := []string{
-		filepath.Join("schema", "metadata.sql"),
-		filepath.Join("modules", "storage", "schema", "metadata.sql"),
-	}
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return candidates[0]
 }
 
 func printError(stderr io.Writer, err error) {

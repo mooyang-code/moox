@@ -105,8 +105,8 @@ func runPrimaryRole() error {
 		return err
 	}
 	defer store.Close()
-	if err := metasqlite.RecordPrimaryFormat(loadedCfg.Storage.Root); err != nil {
-		return fmt.Errorf("write storage-primary data format: %w", err)
+	if err := metasqlite.RecordPrimaryFormat(loadedCfg.Storage.Root, true); err != nil {
+		return fmt.Errorf("verify or write storage-primary data format: %w", err)
 	}
 	if err := observability.RegisterPebbleDiskUsage(prometheus.DefaultRegisterer, store.DiskSpaceUsage); err != nil {
 		return err
@@ -268,6 +268,10 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
+	hadViewData := dataformat.DirHasEntries(loadedCfg.Storage.Devices.ViewIndexRoot)
+	if err := recordStorageViewFormat(loadedCfg.Storage.Root, loadedCfg.Storage.Devices.ViewIndexRoot, hadViewData); err != nil {
+		return fmt.Errorf("verify or write storage-view data format: %w", err)
+	}
 	svc, err := viewservice.New(loadedCfg.Storage.Devices.ViewIndexRoot)
 	if err != nil {
 		return err
@@ -280,9 +284,6 @@ func runViewRole() error {
 	observability.DefaultViewMetrics.SetAttention(viewAttention)
 	if !svc.HasEngine("duckdb") {
 		return errors.New("storage-view requires a CGO-enabled DuckDB engine")
-	}
-	if err := recordStorageViewFormat(loadedCfg.Storage.Root, loadedCfg.Storage.Devices.ViewIndexRoot); err != nil {
-		return fmt.Errorf("write storage-view data format: %w", err)
 	}
 	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
 	if rawURL == "" {
@@ -496,8 +497,8 @@ func storageEventBusConfig(loadedCfg storageconfig.LoadedConfig, urls []string, 
 	return cfg, nil
 }
 
-// recordStorageViewFormat 在 storage-view 启动校验通过后把格式记录写入数据目录。
-func recordStorageViewFormat(storageRoot, viewIndexRoot string) error {
+// recordStorageViewFormat 在 storage-view 启动时核对或写入数据目录的格式记录：已有旧格式数据时拒绝启动。
+func recordStorageViewFormat(storageRoot, viewIndexRoot string, hadData bool) error {
 	dir := strings.TrimSpace(storageRoot)
 	if dir == "" {
 		dir = filepath.Dir(strings.TrimSpace(viewIndexRoot))
@@ -511,7 +512,7 @@ func recordStorageViewFormat(storageRoot, viewIndexRoot string) error {
 	if err != nil {
 		return err
 	}
-	return dataformat.WriteDir(dir, rec)
+	return dataformat.VerifyOrWriteDir(dir, rec, hadData)
 }
 
 // registerRoleHealth 注册健康检查；返回的状态再交给指标上报，上报里的就绪与 /readyz 是同一个判断。

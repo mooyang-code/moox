@@ -16,8 +16,7 @@ func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	store, err := Open(ctx, Options{
-		Path:       filepath.Join(dir, "metadata.db"),
-		SchemaPath: metadataSchemaPath(),
+		Path: filepath.Join(dir, "metadata.db"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +29,7 @@ func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 	if err := store.ValidateSchema(ctx); err != nil {
 		t.Fatalf("fresh database ValidateSchema: %v", err)
 	}
-	if err := RecordPrimaryFormat(dir); err != nil {
+	if err := RecordPrimaryFormat(dir, false); err != nil {
 		t.Fatalf("RecordPrimaryFormat: %v", err)
 	}
 	rec, err := dataformat.ReadFile(filepath.Join(dir, dataformat.FileName))
@@ -44,6 +43,22 @@ func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 		if rec.Parts[key] == "" {
 			t.Fatalf("missing part %q in storage-primary data-format", key)
 		}
+	}
+
+	// 已有数据且格式文件事件摘要不同时，RecordPrimaryFormat 必须拒绝并提示 setup install --wipe。
+	stale, err := dataformat.Build("storage-primary", map[string]string{
+		dataformat.PartSQLiteSchema:        rec.Parts[dataformat.PartSQLiteSchema],
+		dataformat.PartStoragePebbleLayout: rec.Parts[dataformat.PartStoragePebbleLayout],
+		dataformat.PartEvents:              "sha256:stale",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dataformat.WriteDir(dir, stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordPrimaryFormat(dir, true); !errors.Is(err, dataformat.ErrIncompatibleFormat) || !strings.Contains(err.Error(), "setup install --wipe") {
+		t.Fatalf("RecordPrimaryFormat with stale events digest = %v, want ErrIncompatibleFormat", err)
 	}
 }
 
@@ -64,7 +79,7 @@ func TestInitSchemaRejectsObsoleteSchemaWithRebuildInstructions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := Open(ctx, Options{Path: path, SchemaPath: metadataSchemaPath()})
+	store, err := Open(ctx, Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +96,4 @@ func TestInitSchemaRejectsObsoleteSchemaWithRebuildInstructions(t *testing.T) {
 	if !errors.Is(err, sqlitedb.ErrIncompatibleSchema) {
 		t.Fatalf("ValidateSchema error = %v, want ErrIncompatibleSchema", err)
 	}
-}
-
-func metadataSchemaPath() string {
-	return filepath.Join("..", "..", "..", "..", "schema", "metadata.sql")
 }

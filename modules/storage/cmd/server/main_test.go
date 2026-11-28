@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/dataformat"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -326,5 +329,31 @@ func TestTRPCMaxFrameSizeCoversCatalogMaxBodyBytes(t *testing.T) {
 	const catalogMaxBodyBytes = 33554432 // 32 MiB
 	if trpc.DefaultMaxFrameSize < catalogMaxBodyBytes {
 		t.Fatalf("trpc.DefaultMaxFrameSize=%d 小于 catalog.yaml 声明的 max_body_bytes=%d", trpc.DefaultMaxFrameSize, catalogMaxBodyBytes)
+	}
+}
+
+func TestRecordStorageViewFormatVerifiesExistingData(t *testing.T) {
+	dir := t.TempDir()
+	indexRoot := filepath.Join(dir, "view_index")
+	if err := recordStorageViewFormat(dir, indexRoot, false); err != nil {
+		t.Fatalf("首次写入 storage-view 格式文件失败：%v", err)
+	}
+	stale, err := dataformat.Build("storage-view", map[string]string{
+		dataformat.PartStorageViewIndex: strconv.Itoa(dataformat.StorageViewIndexVersion + 1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dataformat.WriteDir(dir, stale); err != nil {
+		t.Fatal(err)
+	}
+	// 已有数据时格式不同必须拒绝启动。
+	err = recordStorageViewFormat(dir, indexRoot, true)
+	if !errors.Is(err, dataformat.ErrIncompatibleFormat) || !strings.Contains(err.Error(), "setup install --wipe") {
+		t.Fatalf("期望格式不符拒启，实际 err = %v", err)
+	}
+	// 尚无数据时照常覆盖写入。
+	if err := recordStorageViewFormat(dir, indexRoot, false); err != nil {
+		t.Fatalf("尚无数据时应照常写入：%v", err)
 	}
 }

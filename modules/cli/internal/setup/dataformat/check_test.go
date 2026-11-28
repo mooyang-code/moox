@@ -192,6 +192,20 @@ func TestAcceptanceEventPayloadAndLifecycleVersionSensitivity(t *testing.T) {
 	slices.Sort(gotEventChanged)
 	require.Equal(t, []string{"eventbus", "storage-primary"}, gotEventChanged)
 
+	// 3a-2：只改 Stream 容量上限，只有 EventBus 被判格式变化，storage-primary 不受影响。
+	streams := events.Streams()
+	streams[0].MaxBytes++
+	topoInputs, err := DefaultInputs()
+	require.NoError(t, err)
+	topoInputs.EventBusTopologyDigest = events.TopologyFormatDigestFromSpecs(streams, events.Consumers())
+	topoExpected, err := ExpectedWith(topoInputs)
+	require.NoError(t, err)
+	topoReport := CheckHost("all", statefulComponents, allObserved, topoExpected)
+	require.False(t, topoReport.CanKeep)
+	require.Len(t, topoReport.Incompatible, 1)
+	require.Equal(t, "eventbus", topoReport.Incompatible[0].Component)
+	require.Equal(t, []string{pkgdataformat.PartEventBusTopology}, topoReport.Incompatible[0].ChangedParts)
+
 	// 3b：升级 LifecycleStateVersion，所有用到 lifecycle 的 7 个组件全部被列出，其余 5 个组件不受影响。
 	lifeInputs, err := DefaultInputs()
 	require.NoError(t, err)
@@ -365,7 +379,7 @@ func buildMutatedEventsDigest(t *testing.T) string {
 			Descriptor: desc,
 		})
 	}
-	digest, err := events.FormatDigestFromSpecs(events.Streams(), events.Consumers(), envelope, specs)
+	digest, err := events.MessagesFormatDigestFromSpecs(envelope, specs)
 	require.NoError(t, err)
 	return digest
 }

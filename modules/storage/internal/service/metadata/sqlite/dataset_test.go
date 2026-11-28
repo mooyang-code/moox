@@ -205,8 +205,7 @@ func createTestDataset(t *testing.T, ctx context.Context, store *Store, datasetI
 func openTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 	store, err := Open(ctx, Options{
-		Path:       filepath.Join(t.TempDir(), "metadata.db"),
-		SchemaPath: filepath.Join("..", "..", "..", "..", "schema", "metadata.sql"),
+		Path: filepath.Join(t.TempDir(), "metadata.db"),
 	})
 	if err != nil {
 		t.Fatal(err)

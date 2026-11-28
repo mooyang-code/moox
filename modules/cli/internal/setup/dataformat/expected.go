@@ -58,6 +58,7 @@ type Inputs struct {
 	TradeSQL                   string
 	StorageMetadataSQL         string
 	EventsDigest               string
+	EventBusTopologyDigest     string
 	StoragePebbleLayoutVersion int
 	StorageViewIndexVersion    int
 	FactorEngineStateVersion   int
@@ -66,7 +67,7 @@ type Inputs struct {
 
 // DefaultInputs 从当前代码内嵌的 schema、事件注册表与版本常量构造期望格式输入。
 func DefaultInputs() (Inputs, error) {
-	eventsDigest, err := events.FormatDigest()
+	eventsDigest, err := events.MessagesFormatDigest()
 	if err != nil {
 		return Inputs{}, fmt.Errorf("计算当前事件格式摘要失败：%w", err)
 	}
@@ -81,6 +82,7 @@ func DefaultInputs() (Inputs, error) {
 		TradeSQL:                   tradeschema.AllSQL(),
 		StorageMetadataSQL:         storageschema.AllSQL(),
 		EventsDigest:               eventsDigest,
+		EventBusTopologyDigest:     events.TopologyFormatDigest(),
 		StoragePebbleLayoutVersion: pkgdataformat.StoragePebbleLayoutVersion,
 		StorageViewIndexVersion:    pkgdataformat.StorageViewIndexVersion,
 		FactorEngineStateVersion:   pkgdataformat.FactorEngineStateVersion,
@@ -155,7 +157,8 @@ func ExpectedWith(in Inputs) (map[string]pkgdataformat.Record, error) {
 	out["storage-view"] = viewRec
 
 	eventbusRec, err := pkgdataformat.Build("eventbus", map[string]string{
-		pkgdataformat.PartEvents: in.EventsDigest,
+		pkgdataformat.PartEvents:           in.EventsDigest,
+		pkgdataformat.PartEventBusTopology: in.EventBusTopologyDigest,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("计算组件 eventbus 期望格式失败：%w", err)

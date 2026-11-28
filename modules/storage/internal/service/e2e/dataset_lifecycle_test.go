@@ -139,8 +139,7 @@ func readLifecycleValues(t *testing.T, ctx context.Context, primary *primarystor
 func openLifecycleStore(t *testing.T, ctx context.Context) *metasqlite.Store {
 	t.Helper()
 	store, err := metasqlite.Open(ctx, metasqlite.Options{
-		Path:       filepath.Join(t.TempDir(), "metadata.db"),
-		SchemaPath: filepath.Join("..", "..", "..", "schema", "metadata.sql"),
+		Path: filepath.Join(t.TempDir(), "metadata.db"),
 	})
 	if err != nil {
 		t.Fatal(err)

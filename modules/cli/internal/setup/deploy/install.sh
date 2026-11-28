@@ -126,8 +126,7 @@ storage_init() {
     MOOX_STORAGE_ROLE=primary MOOX_STORAGE_HOME="${root}/data/storage-primary" \
     MOOX_STORAGE_CONFIG="${root}/config/storage-primary/storage.yaml" \
     MOOX_STORAGE_METADATA_PATH="${root}/data/storage-primary/metadata/storage_metadata.db" \
-    "${root}/bin/moox-storage-cli" init --storage-conf "${root}/config/storage-primary/storage.yaml" \
-    --schema-path "${root}/config/storage-primary/metadata.sql" >/dev/null) || fail "Storage 元数据库初始化失败"
+    "${root}/bin/moox-storage-cli" init --storage-conf "${root}/config/storage-primary/storage.yaml" >/dev/null) || fail "Storage 元数据库初始化失败"
 }
 
 # 重启正在运行的主机网关之后，等它的本机入口重新开始监听再重启后面的组件：它们启动时要从这里取目录，取不到就退出、等 systemd 再拉起。

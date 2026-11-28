@@ -563,7 +563,7 @@ func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 	for _, file := range primary.ConfigFiles {
 		targets = append(targets, file.Target())
 	}
-	if !slices.Equal(targets, []string{"trpc_go.yaml", "storage.yaml", "metadata.sql"}) {
+	if !slices.Equal(targets, []string{"trpc_go.yaml", "storage.yaml"}) {
 		t.Fatalf("storage-primary config files = %v", targets)
 	}
 	if UnitName("collector") != "moox-collector.service" {
