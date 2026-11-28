@@ -23,9 +23,9 @@ func testFieldOffers() marketdata.FieldOffers {
 	funding := marketdata.FieldSpec{ID: "funding_rate", Name: "资金费率", Group: marketdata.GroupDerivatives, Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}
 	basis := marketdata.FieldSpec{ID: "basis", Name: "基差", Group: marketdata.GroupDerivatives, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: []string{"1h"}}
 	return marketdata.FieldOffers{
-		{MarketID: "crypto", Instrument: "swap", ProviderID: "binance", Spec: funding},
-		{MarketID: "crypto", Instrument: "spot", ProviderID: "fake_basis", Spec: basis},
-		{MarketID: "crypto", Instrument: "swap", ProviderID: "fake_basis", Spec: basis},
+		{MarketID: "crypto", Instrument: "swap", ProviderID: "binance", ProviderName: "Binance", Spec: funding},
+		{MarketID: "crypto", Instrument: "spot", ProviderID: "fake_basis", ProviderName: "模拟基差", Spec: basis},
+		{MarketID: "crypto", Instrument: "swap", ProviderID: "fake_basis", ProviderName: "模拟基差", Spec: basis},
 	}
 }
 
@@ -130,6 +130,8 @@ func TestGetDataTypeConfigsListsFrequencyAndFields(t *testing.T) {
 	require.Equal(t, "swap", options[0].GetInstrumentType())
 	require.Equal(t, []string{"1h", "1d"}, options[0].GetFrequencies())
 	require.Equal(t, "binance", options[0].GetProviderId())
+	require.Equal(t, "Binance", options[0].GetProviderName())
+	require.Equal(t, "模拟基差", options[1].GetProviderName())
 	// 显示名、分组、值类型与填充策略取自字段规格。
 	require.Equal(t, "资金费率", options[0].GetDisplayName())
 	require.Equal(t, marketdata.GroupDerivatives, options[0].GetGroup())

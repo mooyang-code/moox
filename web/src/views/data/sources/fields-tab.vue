@@ -55,9 +55,7 @@
             <a-option value="spec_only">仅规格可选</a-option>
           </a-select>
         </div>
-        <a-tag v-if="filter.provider" closable color="arcoblue" @close="clearProvider">
-          来源：{{ extraFieldProviderName(filter.provider) }}
-        </a-tag>
+        <a-tag v-if="filter.provider" closable color="arcoblue" @close="clearProvider"> 来源：{{ activeProviderLabel }} </a-tag>
       </div>
       <div class="toolbar-meta">
         <span class="field-total">共 {{ filteredRows.length }} 个字段</span>
@@ -127,7 +125,6 @@ import { canonicalFieldValueTypeOptions, defaultPagination, normalizeFieldValueT
 import { isFactorResultDataset } from "@/views/data/shared/module-attribution";
 import FieldCatalogTable from "./components/FieldCatalogTable.vue";
 import FieldDetailDrawer from "./components/FieldDetailDrawer.vue";
-import { extraFieldProviderName } from "./extra-field-sources";
 import {
   buildFieldGroupItems,
   fieldTabQueryFromRoute,
@@ -167,6 +164,15 @@ let pendingQuerySync = 0;
 const filteredWithoutGroup = computed(() => filterFieldCatalog(allItems.value, { ...filter, group: "" }));
 const groupItems = computed(() => buildFieldGroupItems(allItems.value, filteredWithoutGroup.value));
 const filteredRows = computed(() => filterFieldCatalog(allItems.value, filter));
+const activeProviderLabel = computed(() => {
+  const target = filter.provider.trim().toLowerCase();
+  if (!target) return "";
+  for (const item of allItems.value) {
+    const matched = item.extra_scopes.find(scope => scope.provider_id.toLowerCase() === target);
+    if (matched?.provider_name) return matched.provider_name;
+  }
+  return filter.provider;
+});
 
 const hasActiveFilter = computed(() =>
   Boolean(filter.group || filter.keyword || filter.category || filter.valueType || filter.landed || filter.provider)

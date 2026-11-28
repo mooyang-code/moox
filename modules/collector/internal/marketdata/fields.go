@@ -100,10 +100,11 @@ type FieldSource interface {
 
 // FieldOffer 是目录里一个来源在某个（市场, 品种）下提供的一个附加字段。
 type FieldOffer struct {
-	MarketID   MarketID
-	Instrument InstrumentType
-	ProviderID string
-	Spec       FieldSpec
+	MarketID     MarketID
+	Instrument   InstrumentType
+	ProviderID   string
+	ProviderName string
+	Spec         FieldSpec
 }
 
 // FieldOffers 是目录里全部可用的附加字段，供建任务校验、结果数据集建列、任务表单使用。
@@ -184,8 +185,15 @@ func (c *Catalog) FieldOffers() (FieldOffers, error) {
 		if !ok {
 			continue
 		}
+		providerName := strings.TrimSpace(source.Descriptor().DisplayName)
 		for _, spec := range source.FieldSpecs() {
-			offers = append(offers, FieldOffer{MarketID: entry.MarketID, Instrument: entry.Instrument, ProviderID: entry.Key.ProviderID, Spec: spec})
+			offers = append(offers, FieldOffer{
+				MarketID:     entry.MarketID,
+				Instrument:   entry.Instrument,
+				ProviderID:   entry.Key.ProviderID,
+				ProviderName: providerName,
+				Spec:         spec,
+			})
 		}
 	}
 	return offers, nil

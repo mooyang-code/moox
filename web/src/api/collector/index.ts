@@ -204,6 +204,8 @@ export interface ExtraFieldOption {
   frequencies?: string[];
   /** 来源提供方 */
   provider_id: string;
+  /** 来源提供方显示名（取自后端 ProviderDescriptor.DisplayName） */
+  provider_name?: string;
   /** 值类型：double 或 int */
   value_type?: string;
   /** 缺失填充策略：prev（前值填充）、zero（补零）或空 */

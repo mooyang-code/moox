@@ -10,13 +10,16 @@ import (
 
 // catalogFieldSource 是测试用的字段来源：specs 为空表示这个实例不提供附加字段。
 type catalogFieldSource struct {
-	id    string
-	specs []FieldSpec
-	deps  Deps
+	id          string
+	displayName string
+	specs       []FieldSpec
+	deps        Deps
 }
 
-func (s catalogFieldSource) Descriptor() ProviderDescriptor { return ProviderDescriptor{ID: s.id} }
-func (s catalogFieldSource) FieldSpecs() []FieldSpec        { return s.specs }
+func (s catalogFieldSource) Descriptor() ProviderDescriptor {
+	return ProviderDescriptor{ID: s.id, DisplayName: s.displayName}
+}
+func (s catalogFieldSource) FieldSpecs() []FieldSpec { return s.specs }
 func (s catalogFieldSource) FetchFields(context.Context, FieldRequest) (map[time.Time]map[string]FieldValue, error) {
 	return nil, nil
 }
@@ -26,10 +29,10 @@ type plainProvider struct{ id string }
 func (p plainProvider) Descriptor() ProviderDescriptor { return ProviderDescriptor{ID: p.id} }
 
 func fieldCatalog() *Catalog {
-	fieldEntry := func(market MarketID, instrument InstrumentType, provider string, specs ...FieldSpec) CatalogEntry {
+	fieldEntry := func(market MarketID, instrument InstrumentType, provider, displayName string, specs ...FieldSpec) CatalogEntry {
 		return CatalogEntry{Key: SourceKey{ProviderID: provider, SourceID: "http"}, MarketID: market, Instrument: instrument,
 			New: func(deps Deps) (MarketProvider, error) {
-				return catalogFieldSource{id: provider, specs: specs, deps: deps}, nil
+				return catalogFieldSource{id: provider, displayName: displayName, specs: specs, deps: deps}, nil
 			}}
 	}
 	daily := []string{"1d"}
@@ -38,11 +41,11 @@ func fieldCatalog() *Catalog {
 		CatalogEntry{Key: SourceKey{ProviderID: "sina", SourceID: "stockcn_minute_http"}, MarketID: "stockcn", Instrument: InstrumentEquity, RouteSource: true,
 			New: func(Deps) (MarketProvider, error) { return plainProvider{id: "sina"}, nil }},
 		// 只提供附加字段的来源：独立的提供方 ID，不标 RouteSource。
-		fieldEntry("stockcn", InstrumentEquity, "sina_hfq", FieldSpec{ID: "adj_factor", Type: FieldTypeDouble, Fill: "prev", Frequencies: daily}),
-		fieldEntry("stockcn", InstrumentEquity, "swsresearch", FieldSpec{ID: "sw_l1", Type: FieldTypeInt, Fill: "prev", Frequencies: daily}, FieldSpec{ID: "sw_l2", Type: FieldTypeInt, Fill: "prev", Frequencies: daily}),
+		fieldEntry("stockcn", InstrumentEquity, "sina_hfq", "新浪复权因子", FieldSpec{ID: "adj_factor", Type: FieldTypeDouble, Fill: "prev", Frequencies: daily}),
+		fieldEntry("stockcn", InstrumentEquity, "swsresearch", "申万行业分类", FieldSpec{ID: "sw_l1", Type: FieldTypeInt, Fill: "prev", Frequencies: daily}, FieldSpec{ID: "sw_l2", Type: FieldTypeInt, Fill: "prev", Frequencies: daily}),
 		// 同一类型的适配器，按实例决定有没有字段：永续有，现货没有。
-		fieldEntry("crypto", InstrumentSwap, "binance", FieldSpec{ID: "funding_rate", Type: FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}),
-		fieldEntry("crypto", InstrumentSpot, "binance"),
+		fieldEntry("crypto", InstrumentSwap, "binance", "Binance", FieldSpec{ID: "funding_rate", Type: FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}),
+		fieldEntry("crypto", InstrumentSpot, "binance", "Binance"),
 	)
 }
 
@@ -87,6 +90,7 @@ func TestCatalogFieldOffers(t *testing.T) {
 	offer, ok := offers.Find("stockcn", "equity", "ADJ_FACTOR")
 	require.True(t, ok)
 	require.Equal(t, "sina_hfq", offer.ProviderID)
+	require.Equal(t, "新浪复权因子", offer.ProviderName)
 	_, ok = offers.Find("crypto", "spot", "funding_rate")
 	require.False(t, ok)
 	_, ok = offers.Spec("crypto", "funding_rate")

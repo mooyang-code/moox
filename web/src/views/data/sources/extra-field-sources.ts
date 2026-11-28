@@ -1,23 +1,6 @@
 import type { ExtraFieldOption } from "@/api/collector";
 import { marketLabel } from "@/views/data/shared/series-market";
 
-// 附加字段来源的中文名：这些提供方只给 K 线补字段，不登记在 Storage 的数据源里，名字写在这里。
-const PROVIDER_NAMES: Record<string, string> = {
-  sina_hfq: "复权因子（新浪）",
-  swsresearch: "申万行业",
-  sina_finance: "财务报表（新浪）",
-  eastmoney_turnover: "换手率（东方财富）",
-  eastmoney_select: "股本与股利（东方财富选股器）",
-  binance: "资金费率（币安）"
-};
-
-/** 附加字段提供方 ID 对应的中文名；未登记时原样返回 ID（忽略大小写查表）。 */
-export function extraFieldProviderName(providerId?: string): string {
-  const key = (providerId || "").trim();
-  if (!key) return "";
-  return PROVIDER_NAMES[key.toLowerCase()] || key;
-}
-
 export interface ExtraFieldSourceRow {
   provider_id: string;
   name: string;
@@ -30,14 +13,24 @@ export interface ExtraFieldSourceRow {
 
 /**
  * 把接口给出的附加字段按提供方归并成“附加字段来源”的行：只取当前空间的，保持接口给出的顺序。
- * 字段显示名取 Collector 字段规格（接口直接给出），没有时显示字段 ID。
+ * 提供方名称和字段显示名均直接取自接口（Collector 的 ProviderDescriptor 与字段规格），缺省时回落到 ID。
  */
 export function buildExtraFieldSources(options: ReadonlyArray<ExtraFieldOption>, spaceId: string): ExtraFieldSourceRow[] {
   const space = spaceId.trim().toLowerCase();
-  const grouped = new Map<string, { instruments: Set<string>; frequencies: Set<string>; fields: Map<string, string> }>();
+  const grouped = new Map<
+    string,
+    { name: string; instruments: Set<string>; frequencies: Set<string>; fields: Map<string, string> }
+  >();
   for (const option of options) {
     if ((option.market_id || "").trim().toLowerCase() !== space || !option.provider_id || !option.field_id) continue;
-    const group = grouped.get(option.provider_id) || { instruments: new Set(), frequencies: new Set(), fields: new Map() };
+    const group = grouped.get(option.provider_id) || {
+      name: "",
+      instruments: new Set(),
+      frequencies: new Set(),
+      fields: new Map()
+    };
+    const providerName = (option.provider_name || "").trim();
+    if (!group.name && providerName) group.name = providerName;
     group.instruments.add(option.instrument_type);
     for (const frequency of option.frequencies || []) group.frequencies.add(frequency);
     group.fields.set(option.field_id, option.display_name?.trim() || option.field_id);
@@ -45,7 +38,7 @@ export function buildExtraFieldSources(options: ReadonlyArray<ExtraFieldOption>,
   }
   return [...grouped.entries()].map(([providerId, group]) => ({
     provider_id: providerId,
-    name: extraFieldProviderName(providerId),
+    name: group.name || providerId,
     instruments: [...group.instruments].map(item => marketLabel(item)).join("、"),
     frequencies: [...group.frequencies].join("、"),
     fields: [...group.fields].map(([field_id, name]) => ({ field_id, name }))

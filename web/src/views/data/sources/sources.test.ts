@@ -111,6 +111,7 @@ const collector = vi.hoisted(() => ({
             instrument_type: "swap",
             frequencies: ["1h", "1d"],
             provider_id: "binance",
+            provider_name: "Binance",
             value_type: "double",
             fill: "zero"
           },
@@ -122,6 +123,7 @@ const collector = vi.hoisted(() => ({
             instrument_type: "equity",
             frequencies: ["1d"],
             provider_id: "sina_hfq",
+            provider_name: "新浪复权因子",
             value_type: "double",
             fill: "prev"
           }
@@ -233,7 +235,8 @@ describe("附加字段来源与字段定义页签", () => {
       market_id: "stockcn",
       instrument_type: "equity",
       frequencies: ["1d"],
-      provider_id: "sina_hfq"
+      provider_id: "sina_hfq",
+      provider_name: "新浪复权因子"
     },
     {
       field_id: "sw_l1",
@@ -241,7 +244,8 @@ describe("附加字段来源与字段定义页签", () => {
       market_id: "stockcn",
       instrument_type: "equity",
       frequencies: ["1d"],
-      provider_id: "swsresearch"
+      provider_id: "swsresearch",
+      provider_name: "申万行业分类"
     },
     { field_id: "sw_l2", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "swsresearch" },
     {
@@ -257,22 +261,23 @@ describe("附加字段来源与字段定义页签", () => {
       market_id: "crypto",
       instrument_type: "swap",
       frequencies: ["1h", "1d"],
-      provider_id: "binance"
+      provider_id: "binance",
+      provider_name: "Binance"
     }
   ];
 
-  it("按提供方归并当前空间的附加字段，带中文名和各自的字段", () => {
+  it("按提供方归并当前空间的附加字段，直接使用接口的提供方显示名并在缺失时回落为 ID", () => {
     expect(buildExtraFieldSources(options, "stockcn")).toEqual([
       {
         provider_id: "sina_hfq",
-        name: "复权因子（新浪）",
+        name: "新浪复权因子",
         instruments: "股票",
         frequencies: "1d",
         fields: [{ field_id: "adj_factor", name: "后复权因子" }]
       },
       {
         provider_id: "swsresearch",
-        name: "申万行业",
+        name: "申万行业分类",
         instruments: "股票",
         frequencies: "1d",
         fields: [
@@ -282,14 +287,14 @@ describe("附加字段来源与字段定义页签", () => {
       },
       {
         provider_id: "sina_finance",
-        name: "财务报表（新浪）",
+        name: "sina_finance",
         instruments: "股票",
         frequencies: "1d",
         fields: [{ field_id: "fin_revenue", name: "fin_revenue" }]
       }
     ]);
     expect(buildExtraFieldSources(options, "crypto").map(row => [row.name, row.instruments, row.frequencies])).toEqual([
-      ["资金费率（币安）", "永续", "1h、1d"]
+      ["Binance", "永续", "1h、1d"]
     ]);
     expect(buildExtraFieldSources(options, "other")).toEqual([]);
   });
@@ -298,7 +303,7 @@ describe("附加字段来源与字段定义页签", () => {
     await mountSourcesPage("crypto");
     const section = wrapper.find(".extra-sources");
     expect(section.exists()).toBe(true);
-    expect(section.text()).toContain("资金费率（币安）");
+    expect(section.text()).toContain("Binance");
     expect(section.text()).toContain("共 1 个字段");
     expect(section.text()).not.toContain("复权因子");
 
@@ -308,7 +313,7 @@ describe("附加字段来源与字段定义页签", () => {
     await flushPromises();
 
     expect(routeMocks.route!.query).toEqual({ tab: "fields", provider: "binance" });
-    expect(wrapper.text()).toContain("来源：资金费率（币安）");
+    expect(wrapper.text()).toContain("来源：Binance");
     expect(wrapper.text()).toContain("funding_rate");
     expect(wrapper.text()).not.toContain("open");
   });
@@ -358,7 +363,7 @@ describe("附加字段来源与字段定义页签", () => {
     await flushPromises();
 
     expect(routeMocks.route!.query).toEqual({ tab: "fields", provider: "sina_hfq" });
-    expect(wrapper.text()).toContain("来源：复权因子（新浪）");
+    expect(wrapper.text()).toContain("来源：新浪复权因子");
     expect(wrapper.text()).toContain("后复权因子");
     expect(wrapper.text()).not.toContain("开盘价");
   });
