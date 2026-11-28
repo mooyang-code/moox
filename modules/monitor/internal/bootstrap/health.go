@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
-	"github.com/mooyang-code/moox/modules/monitor/internal/health"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -17,7 +16,7 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 	if cfg == nil {
 		return nil
 	}
-	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
+	state := healthz.NewState("monitor", cfg.Instance.InstanceID, "", "")
 	state.SetReady(true)
 	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime)
 	var life *lifecycle.Controller

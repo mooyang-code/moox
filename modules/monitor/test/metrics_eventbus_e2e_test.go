@@ -80,8 +80,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 			observedAt := time.UnixMilli(message.GetOccurredAt()).UTC()
 			samples, parseErr := metrics.ParseSnapshot(report.GetSnapshot(), metrics.Envelope{
 				ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(),
-				MessageID: message.GetEventId(), ProducerNodeID: report.GetNodeId(),
-				ProducerVersion: report.GetServiceVersion(), ObservedAt: observedAt,
+				MessageID: message.GetEventId(), ObservedAt: observedAt,
 			}, metrics.DefaultLimits())
 			if parseErr != nil {
 				return observabilityconsumer.Permanent(parseErr)

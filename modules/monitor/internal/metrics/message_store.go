@@ -62,11 +62,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 	var dropped []droppedSeries
 	var hourNew, dayNew int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		row := &MetricIngestMessage{MessageID: msg.GetEventId(), ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), ProcessedAt: now, ExpiresAt: expires}
-		if at := msg.GetOccurredAt(); at > 0 {
-			t := time.UnixMilli(at).UTC()
-			row.OccurredAt = &t
-		}
+		row := &MetricIngestMessage{MessageID: msg.GetEventId(), ExpiresAt: expires}
 		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(row)
 		if res.Error != nil {
 			return res.Error
@@ -225,7 +221,7 @@ func upsertSamples(tx *gorm.DB, samples []Sample) error {
 			SeriesID: sample.SeriesID, ServiceName: sample.ServiceName, InstanceID: sample.InstanceID,
 			MetricName: sample.MetricName, MetricType: sample.MetricType, LabelsJSON: sample.LabelsJSON, LastSeenAt: observedAt,
 			Value: sample.Value, ObservedAt: observedAt, IntervalSeconds: int(sample.Interval / time.Second),
-			MessageID: sample.MessageID, ProducerNodeID: sample.ProducerNodeID, ProducerVersion: sample.ProducerVersion,
+			MessageID: sample.MessageID,
 			CreatedAt: now, UpdatedAt: now,
 		}
 		if monotonicMetric(sample.MetricName) {
@@ -255,7 +251,7 @@ func upsertSamples(tx *gorm.DB, samples []Sample) error {
 			"c_mtime":        gorm.Expr("CURRENT_TIMESTAMP"),
 		}
 		// 最新值的各列只在这次观测被采纳时才换（采纳条件在 SET 之前按旧值求值）。
-		for _, column := range []string{"c_value", "c_observed_at", "c_interval_seconds", "c_message_id", "c_producer_node_id", "c_producer_version"} {
+		for _, column := range []string{"c_value", "c_observed_at", "c_interval_seconds", "c_message_id"} {
 			assignments[column] = gorm.Expr("CASE WHEN " + group.accept + " THEN excluded." + column + " ELSE t_monitor_metric_series." + column + " END")
 		}
 		upsert := clause.OnConflict{Columns: []clause.Column{{Name: "c_series_id"}}, DoUpdates: clause.Assignments(assignments)}

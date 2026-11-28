@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/report/logsink"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -58,7 +59,7 @@ func NewState(module, instance, version, commit string) *State {
 	return &State{
 		Module: module, InstanceID: instance, Version: runtimeValue(version, "MOOX_VERSION"), GitCommit: runtimeValue(commit, "MOOX_GIT_COMMIT"),
 		BinarySHA256: processBinarySHA256(),
-		BootID:       processBootID(), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
+		BootID:       logsink.ProcessBootID(), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
 		ConfigHash: os.Getenv("MOOX_CONFIG_HASH"),
 		StartedAt:  time.Now().UTC(),
 	}
@@ -230,7 +231,7 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 		Version:      runtimeValue(version, "MOOX_VERSION"),
 		GitCommit:    runtimeValue(gitCommit, "MOOX_GIT_COMMIT"),
 		BinarySHA256: processBinarySHA256(),
-		BootID:       processBootID(),
+		BootID:       logsink.ProcessBootID(),
 		BuildTime:    os.Getenv("MOOX_BUILD_TIME"),
 		ConfigHash:   os.Getenv("MOOX_CONFIG_HASH"),
 		StartTime:    start,

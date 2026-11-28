@@ -221,8 +221,7 @@ func metricsObservabilityRoute(
 		observed := time.UnixMilli(message.GetOccurredAt()).UTC()
 		samples, err := monmetrics.ParseSnapshot(metricReport.GetSnapshot(), monmetrics.Envelope{
 			ServiceName: metricReport.GetServiceName(), InstanceID: metricReport.GetInstanceId(),
-			MessageID: message.GetEventId(), ProducerNodeID: metricReport.GetNodeId(),
-			ProducerVersion: metricReport.GetServiceVersion(), ObservedAt: observed,
+			MessageID: message.GetEventId(), ObservedAt: observed,
 		}, monmetrics.DefaultLimits())
 		if err != nil {
 			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectReason(err))
