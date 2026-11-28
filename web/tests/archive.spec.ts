@@ -8,23 +8,24 @@ test.beforeEach(async ({ page }) => {
   calls = await installArchiveMock(page);
 });
 
-test("归档任务页：执行器一行（在线、所在主机）、未归档的数据集、任务表都在", async ({ page }) => {
+test("归档任务页：执行器一行（在线、所在主机）、任务表都在，无未归档列表", async ({ page }) => {
   await page.goto("/#/archive/tasks");
   const line = page.locator(".worker-line");
   await expect(line).toContainText("归档执行器 在线");
   await expect(line).toContainText("所在主机 因子机（192.168.0.103）");
   await expect(line).toContainText("本空间运行中 0 · 排队 1");
-  await expect(page.getByRole("heading", { name: "未归档的数据集" })).toBeVisible();
-  await expect(page.getByText("现货 5 分钟 K 线")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "未归档的数据集" })).toHaveCount(0);
   await expect(page.getByText("每分钟跟随变更日志")).toBeVisible();
   await line.getByRole("link", { name: "存放位置与磁盘" }).click();
   await expect(page).toHaveURL(/#\/archive\/storage/);
 });
 
-test("建归档任务：目录名默认建议值、路径预览、冲突标红；建好后打开详情", async ({ page }) => {
+test("建归档任务：手工新建抽屉、目录名默认建议值、路径预览、冲突标红；建好后打开详情", async ({ page }) => {
   await page.goto("/#/archive/tasks");
-  await page.getByRole("button", { name: "建归档任务", exact: true }).click();
+  await page.getByRole("button", { name: "新建归档任务" }).click();
   const drawer = page.locator(".arco-drawer").filter({ hasText: "新建归档任务" });
+  await drawer.locator(".arco-select-view").click();
+  await page.locator(".arco-select-option").filter({ hasText: "现货 5 分钟 K 线" }).click();
   await expect(drawer.locator(".arco-select-view")).toContainText("现货 5 分钟 K 线 · 5m · 35 天");
   await expect(drawer.locator(".zoned-picker input")).not.toHaveValue("");
   const dirInput = drawer.locator(".arco-input-wrapper input").first();

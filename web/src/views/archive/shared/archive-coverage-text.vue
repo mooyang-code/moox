@@ -9,7 +9,7 @@ import { computed } from "vue";
 import { useSpaceStore } from "@/store/modules/space";
 import { useArchiveCoverage } from "./archive-coverage";
 
-/** 采集任务页里的一行小字：已归档 · 健康等级，或未归档；读不到时什么都不显示。链接到归档页。 */
+/** 采集任务页里的一行小字：已归档 · 健康等级；没有归档任务或读不到时什么都不显示。链接到归档页。 */
 const props = defineProps<{ datasetId?: string }>();
 const spaceStore = useSpaceStore();
 const coverageOf = useArchiveCoverage(computed(() => spaceStore.selectedSpaceId || ""));

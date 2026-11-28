@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { ArchiveTask } from "@/api/archive";
-import type { Dataset } from "@/api/storage/types";
 import {
   archiveQueryFor,
   archiveUnavailableHint,
@@ -23,8 +22,7 @@ import {
   runMessageLines,
   runStatusLabel,
   systemAlerts,
-  toNum,
-  unarchivedDatasets
+  toNum
 } from "./archive-model";
 
 describe("文案", () => {
@@ -108,24 +106,7 @@ describe("时长", () => {
   });
 });
 
-describe("未归档的数据集", () => {
-  const dataset = (id: string, over: Partial<Dataset> = {}) =>
-    ({ dataset_id: id, data_kind: "DATA_KIND_TIME_SERIES", status: "active", retention: "840h", ...over }) as Dataset;
-
-  it("和 Monitor 同口径：时序、active（不分大小写）、有限保留期，再减去已有任务", () => {
-    const datasets = [
-      dataset("a"),
-      dataset("b", { data_kind: 2 }),
-      dataset("c", { status: "ACTIVE" }),
-      dataset("d", { data_kind: "DATA_KIND_RECORD" }),
-      dataset("e", { status: "disabled" }),
-      dataset("f", { retention: "forever" }),
-      dataset("g", { retention: "" }),
-      dataset("h")
-    ];
-    expect(unarchivedDatasets(datasets, [{ dataset_id: "h" }]).map(item => item.dataset_id)).toEqual(["a", "b", "c"]);
-  });
-
+describe("系统提醒", () => {
   it("提醒里只去掉和任务健康原因完全相同的（任务表已显示），其余以任务 ID 开头的照常显示", () => {
     const tasks = [{ dataset_id: "ds_1m", health_reason: "最近一次成功运行距今 30 天" }];
     expect(systemAlerts(["ds_1m：最近一次成功运行距今 30 天", "ds_1m：别的提醒", "归档 worker 不在线"], tasks)).toEqual([

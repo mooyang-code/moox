@@ -61,8 +61,8 @@
               <a-space size="mini" wrap>
                 <span>{{ record.provider || "-" }}</span>
                 <template v-if="record.category === 'exchange'">
-                  <a-tag size="small" :color="secretEnvironmentOf(record.extra_config) === 1 ? 'arcoblue' : 'green'">
-                    {{ secretEnvironmentOf(record.extra_config) === 1 ? "测试网" : "生产" }}
+                  <a-tag size="small" :color="exchangeEnvironmentDisplay(record.extra_config).color">
+                    {{ exchangeEnvironmentDisplay(record.extra_config).label }}
                   </a-tag>
                   <a-tag v-if="isReadonlySecret(record.extra_config)" size="small" color="gold">只读</a-tag>
                 </template>
@@ -142,6 +142,9 @@
               <a-radio value="production">生产环境</a-radio>
               <a-radio value="testnet">测试网</a-radio>
             </a-radio-group>
+            <template v-if="editing && !exchangeExtra.environment" #extra>
+              该旧密钥未标注环境（历史默认按生产处理），保存前请明确选择生产环境或测试网
+            </template>
           </a-form-item>
           <a-form-item v-if="isExchangeCategory" field="readonly" label="用途">
             <a-checkbox v-model="exchangeExtra.readonly"> 只读密钥（仅用于行情与下架检测，不能建交易账户） </a-checkbox>
@@ -294,10 +297,10 @@ import {
 import { reportError } from "@/api/http";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 import InspectionTestDialog from "@/components/trade-inspection/inspection-test-dialog.vue";
-import { canTestConnection, isReadonlySecret, secretEnvironmentOf } from "@/components/trade-inspection/inspection-request";
+import { canTestConnection, isReadonlySecret } from "@/components/trade-inspection/inspection-request";
 import { defaultPagination } from "@/views/data/shared/metadata-utils";
 import { formatInstant } from "@/utils/time-zone";
-import { buildExchangeExtra, parseExchangeExtra, type ExchangeExtraState } from "./exchange-extra";
+import { buildExchangeExtra, exchangeEnvironmentDisplay, parseExchangeExtra, type ExchangeExtraState } from "./exchange-extra";
 import { secretDeleteText, secretToggleText } from "./secret-actions";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
 
@@ -353,7 +356,7 @@ const form = reactive({
 });
 
 const exchangeExtra = reactive<ExchangeExtraState>({
-  environment: "production",
+  environment: "",
   readonly: false,
   passphrase: "",
   hasPassphrase: false,
@@ -465,6 +468,10 @@ async function submit(): Promise<boolean> {
     provider = provider.toLowerCase();
     if (!provider) {
       Message.warning("请选择交易所");
+      return false;
+    }
+    if (!exchangeExtra.environment) {
+      Message.warning("请选择交易所密钥所属环境（生产环境或测试网）");
       return false;
     }
     if (!form.key_id.trim()) {

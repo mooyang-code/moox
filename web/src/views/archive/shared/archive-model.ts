@@ -316,26 +316,9 @@ export function recentCellText(value: string | null, type: string, zone: string)
 
 // ---- 数据集 ----
 
-/** 时序数据集：data_kind 是枚举名或数字 2。 */
-function isTimeSeries(dataset: Pick<Dataset, "data_kind">): boolean {
+/** 时序数据集：data_kind 是枚举名或数字 2（用于手工新建归档任务的数据集下拉筛选）。 */
+export function isTimeSeriesDataset(dataset: Pick<Dataset, "data_kind">): boolean {
   return dataset.data_kind === "DATA_KIND_TIME_SERIES" || dataset.data_kind === 2;
-}
-
-/**
- * 应该归档的数据集：时序、active、有限的线上保留期。
- * 和 ArchiveMgr 的 isAutoArchivable（modules/archive/internal/service/jobs.go）同口径。
- */
-export function archivableDataset(dataset: Dataset): boolean {
-  const retention = (dataset.retention || "").trim();
-  return (
-    isTimeSeries(dataset) && (dataset.status || "").toLowerCase() === "active" && retention !== "" && retention !== "forever"
-  );
-}
-
-/** 应该归档、但还没有任务的数据集。 */
-export function unarchivedDatasets(datasets: Dataset[], tasks: ArchiveTask[]): Dataset[] {
-  const archived = new Set(tasks.map(task => task.dataset_id));
-  return datasets.filter(dataset => archivableDataset(dataset) && !archived.has(dataset.dataset_id));
 }
 
 /**

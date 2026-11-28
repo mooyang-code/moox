@@ -131,7 +131,7 @@ const props = defineProps<{
   mode: "create" | "edit";
   task: ArchiveTask | null;
   presetDatasetId: string;
-  /** 应该归档的数据集（时序、active、有限保留期） */
+  /** 当前空间的时序数据集（归档任务由 ArchiveMgr 自动补齐，手工新建入口保留） */
   datasets: Dataset[];
   tasks: ArchiveTask[];
   zone: string;

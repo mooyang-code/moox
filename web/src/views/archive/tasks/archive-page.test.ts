@@ -126,9 +126,7 @@ describe("归档任务页", () => {
     expect(text).toContain("archive-mgr 是可选组件");
     expect(text).toContain("无法读取归档任务");
     expect(text).not.toContain("正常");
-    expect(text).not.toContain("这个空间没有需要归档的时序数据集");
-    // 两路读取任一失败，未归档提醒也写明暂不可用
-    expect(text).toContain("未归档提醒暂不可用");
+    expect(text).not.toContain("还没有归档任务");
   });
 
   it("打开页面读执行器状态与任务列表", async () => {
@@ -192,8 +190,6 @@ describe("任务表", () => {
   const props = {
     loaded: true,
     error: "",
-    unarchivedCount: 0,
-    datasetsLoaded: true,
     names: {},
     zone: "UTC",
     nowMs: Date.parse("2026-11-07T04:40:00Z"),

@@ -14,7 +14,7 @@
       :scroll="{ x: 1280 }"
     >
       <template #empty>
-        <div class="empty-text">{{ emptyText }}</div>
+        <div class="empty-text">还没有归档任务</div>
       </template>
       <template #columns>
         <a-table-column title="数据集" :width="220">
@@ -112,7 +112,6 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
 import type { ArchiveTask } from "@/api/archive";
 import { formatBytes } from "@/api/modules/host-monitor";
 import { formatInstant, toInstantMs } from "@/utils/time-zone";
@@ -135,13 +134,10 @@ import {
  */
 const DELETE_BLOCKED = "已有分区的任务不能删除，只能停用";
 
-const props = defineProps<{
+defineProps<{
   tasks: ArchiveTask[];
   loaded: boolean;
   error: string;
-  unarchivedCount: number;
-  /** 数据集读到了没有：没读到时空态不能说“没有需要归档的数据集” */
-  datasetsLoaded: boolean;
   names: Record<string, string>;
   zone: string;
   nowMs: number;
@@ -158,14 +154,6 @@ const emit = defineEmits<{
   remove: [task: ArchiveTask];
   retry: [];
 }>();
-
-const emptyText = computed(() =>
-  !props.datasetsLoaded
-    ? "还没有归档任务"
-    : props.unarchivedCount
-      ? "还没有归档任务，从上面的未归档数据集开始建"
-      : "这个空间没有需要归档的时序数据集"
-);
 
 function onMore(action: string, task: ArchiveTask) {
   if (action === "backfill") emit("backfill", task);
