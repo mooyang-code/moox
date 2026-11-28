@@ -37,6 +37,7 @@ func (r archivableDatasetRef) key() string {
 // defaultSetupEnsureArchiveTasks 为已激活且保留期有限的时序数据集幂等创建归档任务：
 //   - spaceID 为空时覆盖全部业务空间（setup init 在全部组件就绪后调用，覆盖 Collector 种子建好的原始 K 线数据集）；
 //   - spaceID 非空时覆盖该空间（setup start 在导入默认因子任务后调用，补齐新建的因子结果数据集）。
+//
 // 未部署或已停用 archive-mgr 时跳过并返回 nil。
 func defaultSetupEnsureArchiveTasks(ctx context.Context, snapshot *setupSnapshot, spaceID string) (*setupArchiveTasksSummary, error) {
 	if snapshot == nil || snapshot.Manifest == nil {
