@@ -27,7 +27,7 @@ const (
 	SecretsFileName = "moox.secrets.toml"
 	// BackupFileName 是密钥与告警渠道加密备份的文件名，总在 moox.toml 的同一目录。
 	BackupFileName = "moox.backup"
-	maxFileSize     = 1 << 20
+	maxFileSize    = 1 << 20
 	// DefaultDeployRoot 是每台主机的部署根：放在挂载到 /data 的云盘上，不占系统盘。
 	DefaultDeployRoot = "/data/moox"
 	// DefaultLogRetentionDays 是日志服务里日志默认保留的天数。

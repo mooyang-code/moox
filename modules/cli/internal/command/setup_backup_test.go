@@ -27,14 +27,14 @@ type fakeBackupGateway struct {
 	importOverwrite  bool
 	importCalled     bool
 
-	bundle       string
-	secretCount  int32
-	channels     []*monitorpb.ExportedNotificationChannel
-	importRsp    *adminpb.ImportSecretsRsp
-	exportErr    error
-	channelErr   error
-	importErr    error
-	closed       bool
+	bundle      string
+	secretCount int32
+	channels    []*monitorpb.ExportedNotificationChannel
+	importRsp   *adminpb.ImportSecretsRsp
+	exportErr   error
+	channelErr  error
+	importErr   error
+	closed      bool
 }
 
 func (g *fakeBackupGateway) Invoke(_ context.Context, service, method string, req, rsp any) error {
