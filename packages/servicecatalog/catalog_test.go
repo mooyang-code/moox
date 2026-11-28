@@ -448,7 +448,7 @@ func TestOnlyReadOnlyAndDeclaredIdempotentMethodsAreRetryable(t *testing.T) {
 func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	c := mustCatalog(t)
 	for service, methods := range map[string][]string{
-		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"},
+		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportDatasetPeriodCompleted"},
 		"Metadata":     {"GetDataset", "ListDatasetColumns", "UpsertDataset", "UpsertDatasetColumn", "DeleteDataset", "ListDatasetSubjects"},
 	} {
 		for _, method := range methods {
@@ -458,7 +458,7 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 		}
 	}
 	for service, methods := range map[string][]string{
-		"PrimaryStore": {"CommitTimeSeriesBatch"},
+		"PrimaryStore": {"CommitTimeSeriesBatch", "ReadDatasetChanges", "GetDatasetPeriodCompleted"},
 		"Metadata":     {"CreateSpace", "DeleteSpace"},
 	} {
 		for _, method := range methods {
@@ -475,7 +475,7 @@ func TestExternalProgramComponents(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string]map[string][]string{
 		"factor-engine":  {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}, "trpc.moox.factor.FactorEngine": {"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress", "GetTaskParams", "GetUdfModule"}},
-		"archive-worker": {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns"}, "trpc.moox.archive.ArchiveWorker": {"ArchiveWorkerHeartbeat", "ListFollowTasks", "ReportFollowResult", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}},
+		"archive-worker": {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges"}, "trpc.moox.storage.Metadata": {"ListDatasetColumns"}, "trpc.moox.archive.ArchiveWorker": {"ArchiveWorkerHeartbeat", "ListFollowTasks", "ReportFollowResult", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}},
 	}
 	for _, id := range []string{"factor-engine", "archive-worker"} {
 		component, ok := c.Component(id)

@@ -158,13 +158,6 @@ func (w *collectorGatewayWire) UpdateSubjectAttributes(ctx context.Context, requ
 	return &storagepb.UpdateSubjectAttributesRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) GetDataSource(ctx context.Context, request *storagepb.GetDataSourceReq) (*storagepb.GetDataSourceRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "GetDataSource", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.GetDataSourceRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (w *collectorGatewayWire) ListSubjects(ctx context.Context, request *storagepb.ListSubjectsReq) (*storagepb.ListSubjectsRsp, error) {
 	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "ListSubjects", request); err != nil {
 		return nil, err
@@ -302,10 +295,6 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.UpdateSubjectAttributes(t.Context(), &storagepb.UpdateSubjectAttributesReq{})
 		require.NoError(t, err)
 	})
-	t.Run("GetDataSource", func(t *testing.T) {
-		_, err := adapter.GetDataSource(t.Context(), &storagepb.GetDataSourceReq{})
-		require.NoError(t, err)
-	})
 	t.Run("ListSubjects", func(t *testing.T) {
 		_, err := adapter.ListSubjects(t.Context(), &storagepb.ListSubjectsReq{})
 		require.NoError(t, err)
@@ -329,7 +318,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 16)
+	require.Len(t, wire.calls, 15)
 	wire.mu.Unlock()
 	// 云账号密钥经网关读 Admin 的专用方法 GetCloudCredential。
 	credential, err := (&cloud.GatewayCredentials{Gateway: gateway}).Resolve(t.Context(), store.CloudAccount{AccountID: "account-a", Provider: "tencent", CredentialSecretID: "secret-1"})

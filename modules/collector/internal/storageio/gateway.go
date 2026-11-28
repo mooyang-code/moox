@@ -22,7 +22,6 @@ type Metadata interface {
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 	ApplyTagSnapshot(context.Context, *storagepb.ApplyTagSnapshotReq, ...client.Option) (*storagepb.ApplyTagSnapshotRsp, error)
 	UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error)
-	GetDataSource(context.Context, *storagepb.GetDataSourceReq, ...client.Option) (*storagepb.GetDataSourceRsp, error)
 	ListSubjects(context.Context, *storagepb.ListSubjectsReq, ...client.Option) (*storagepb.ListSubjectsRsp, error)
 }
 
@@ -109,10 +108,6 @@ func (c *Client) ListTagMembers(ctx context.Context, request *storagepb.ListTagM
 
 func (c *Client) SetTagMemberTradingStatus(ctx context.Context, request *storagepb.SetTagMemberTradingStatusReq, options ...client.Option) (*storagepb.SetTagMemberTradingStatusRsp, error) {
 	return invoke[storagepb.SetTagMemberTradingStatusRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "SetTagMemberTradingStatus", request, options)
-}
-
-func (c *Client) GetDataSource(ctx context.Context, request *storagepb.GetDataSourceReq, options ...client.Option) (*storagepb.GetDataSourceRsp, error) {
-	return invoke[storagepb.GetDataSourceRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "GetDataSource", request, options)
 }
 
 func (c *Client) ListSubjects(ctx context.Context, request *storagepb.ListSubjectsReq, options ...client.Option) (*storagepb.ListSubjectsRsp, error) {

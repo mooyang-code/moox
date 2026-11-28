@@ -728,37 +728,34 @@ components:
             space_policy: global
           - name: GetSpace
             read_only: true
-            callers: [archive-mgr, collector, factor-mgr, monitor, strategy]
+            callers: [archive-mgr]
           - name: ListSpaces
             space_policy: global
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector]
           - name: UpsertDataSource
           - name: DeleteDataSource
           - name: GetDataSource
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
           - name: ListDataSources
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
           - name: UpsertSubject
           - name: GetSubject
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
           - name: ListSubjects
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector, strategy]
           - name: UpsertTag
           - name: GetTag
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector, strategy]
           - name: ListTags
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector, monitor]
           - name: DeleteTag
           - name: ListTagMembers
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector, strategy]
           - name: AddTagMembers
           - name: RemoveTagMembers
           - name: SetTagMemberStatus
@@ -773,25 +770,25 @@ components:
             operators: []
           - name: ResolveSubjects
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector]
           - name: UpsertDataset
             callers: [collector, factor-mgr]
           - name: DeleteDataset
             callers: [collector, factor-mgr]
           - name: GetDataset
             read_only: true
-            callers: [archive-mgr, archive-worker, collector, factor-engine, factor-mgr, monitor, strategy]
+            callers: [archive-mgr, collector, factor-engine, factor-mgr, monitor, strategy]
           - name: ListDatasets
             read_only: true
-            callers: [archive-mgr, collector, factor-mgr, monitor, strategy]
+            callers: [archive-mgr, monitor]
           - name: ListDatasetSubjects
             read_only: true
-            callers: [collector, factor-engine, factor-mgr, monitor, strategy]
+            callers: [factor-engine, factor-mgr, monitor, strategy]
           - name: UpsertDatasetColumn
             callers: [collector, factor-mgr]
           - name: ListDatasetColumns
             read_only: true
-            callers: [archive-worker, collector, factor-engine, factor-mgr, monitor, strategy]
+            callers: [archive-worker, collector, factor-engine, factor-mgr, strategy]
       - path: trpc.moox.storage.PrimaryStore
         port: 20102
         console_name: storage
@@ -812,15 +809,15 @@ components:
             operators: [moox-cli]
           - name: ReadRows
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector, monitor]
             operators: [moox-cli]
           - name: ReadTimeSeriesRows
             read_only: true
-            callers: [archive-worker, collector, factor-engine, factor-mgr, monitor, strategy]
+            callers: [archive-worker, collector, factor-engine, factor-mgr]
             operators: [moox-cli]
           - name: CountTimeSeriesRows
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector]
             operators: [moox-cli]
           - name: ReadDatasetChanges
             read_only: true
@@ -831,7 +828,7 @@ components:
             operators: [moox-cli]
           - name: GetDatasetPeriodCompleted
             read_only: true
-            callers: [collector, factor-engine, factor-mgr, monitor, strategy]
+            callers: [factor-engine]
             operators: [moox-cli]
     doctor:
       transport: reporter
@@ -857,20 +854,17 @@ components:
         methods:
           - name: QueryTimeSeriesRows
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [strategy]
           - name: CountTimeSeriesRows
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
           - name: SearchRecordRows
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
           - name: GetViewState
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
+            callers: [collector, strategy]
           # WaitViewApplied 服务端最多等待 30 秒，路由预算要大于它并留出传输余量。
           - name: WaitViewApplied
             read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
             timeout_ms: 35000
     doctor:
       transport: reporter
