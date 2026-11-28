@@ -17,11 +17,19 @@ func TestCollectorSubjectExclusionCommands(t *testing.T) {
 	}}
 	useRPCGateway(t, gw)
 
-	_, _, err := runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--subjects", "BTC-USDT")
+	_, _, err := runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--subjects", "BTC-USDT", "--reason", "x")
+	require.ErrorContains(t, err, "--space-id")
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "unexclude"), "--subjects", "BTC-USDT")
+	require.ErrorContains(t, err, "--space-id")
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclusions"))
+	require.ErrorContains(t, err, "--space-id")
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--space-id", "crypto", "--subjects", "BTC-USDT")
 	require.ErrorContains(t, err, "--reason")
-	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--reason", "x")
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--space-id", "crypto", "--reason", "x")
 	require.ErrorContains(t, err, "--subjects")
-	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--subjects", "BTC-USDT", "--reason", "x", "--expires-in", "-1h")
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--space-id", "crypto", "--subjects", " , ", "--reason", "x")
+	require.ErrorContains(t, err, "--subjects")
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--space-id", "crypto", "--subjects", "BTC-USDT", "--reason", "x", "--expires-in", "-1h")
 	require.ErrorContains(t, err, "--expires-in")
 	assert.Zero(t, gw.calls)
 

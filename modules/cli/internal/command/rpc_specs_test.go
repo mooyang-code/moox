@@ -272,6 +272,9 @@ func TestRPCSpecsMatchProtoAndCatalog(t *testing.T) {
 				_, exists, why := index.checkPath(request, field)
 				assert.True(t, exists, "自动 ID 字段 %s：%s", field, why)
 			}
+			if spec.SpaceRequired {
+				assert.False(t, spec.NoSpace, "NoSpace 与 SpaceRequired 矛盾")
+			}
 			if spec.SpaceField != "" {
 				assert.False(t, spec.NoSpace, "NoSpace 与 SpaceField 矛盾")
 				_, exists, why := index.checkPath(request, spec.SpaceField)

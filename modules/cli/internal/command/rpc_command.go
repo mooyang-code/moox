@@ -151,23 +151,26 @@ const (
 )
 
 type rpcSpec struct {
-	Path         []string // 命令路径，如 {"factor", "task", "list"}
-	Short        string
-	Service      string // 完整服务名，如 trpc.moox.factor.FactorMgr
-	Method       string
-	Flags        []rpcFlag
-	Page         rpcPageStyle
-	SpaceField   string   // 非空时 --space-id 也写入这个请求字段（通常是 space_id）
-	NoSpace      bool     // 空间无关的方法不加 --space-id
-	Host         bool     // 加 --host，指定调用哪台主机上的服务
-	HostRequired bool     // --host 必填：服务部署在多台主机上、不指定会静默落到别的主机时用
-	Destructive  bool     // 默认只预览，--yes 才执行
-	AutoIDs      []string // 请求里缺省时自动生成随机 ID 的字段
+	Path          []string // 命令路径，如 {"factor", "task", "list"}
+	Short         string
+	Service       string // 完整服务名，如 trpc.moox.factor.FactorMgr
+	Method        string
+	Flags         []rpcFlag
+	Page          rpcPageStyle
+	SpaceField    string   // 非空时 --space-id 也写入这个请求字段（通常是 space_id）
+	SpaceRequired bool     // --space-id 必填且不设默认值（避免漏写时静默落到 crypto）
+	NoSpace       bool     // 空间无关的方法不加 --space-id
+	Host          bool     // 加 --host，指定调用哪台主机上的服务
+	HostRequired  bool     // --host 必填：服务部署在多台主机上、不指定会静默落到别的主机时用
+	Destructive   bool     // 默认只预览，--yes 才执行
+	AutoIDs       []string // 请求里缺省时自动生成随机 ID 的字段
 	// Fixed 是固定写入请求的字段（如启用/停用命令里的 status）。
 	Fixed map[string]any
 	// Merge 非空时，在发请求（和预览）之前先取回现有对象，把用户给的字段合并进去再提交：
 	// 服务端的修改接口是整体替换，只给几个字段会把其余字段清空。
 	Merge rpcMerge
+	// FormatResponse 非空时，成功响应先经它整理成精简结构再输出（业务失败仍输出原始响应）。
+	FormatResponse func(raw []byte) (any, error)
 }
 
 // rpcMerge 读取现有对象并把用户给的字段合并进请求。request 是已经构造好的请求，实现里原地改写。
@@ -336,6 +339,9 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 	switch f.Kind {
 	case rpcString:
 		v, _ := flags.GetString(f.Name)
+		if f.Required && strings.TrimSpace(v) == "" {
+			return nil, false, nil
+		}
 		return v, true, nil
 	case rpcInt:
 		v, _ := flags.GetInt64(f.Name)
@@ -348,7 +354,16 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 		return v, true, nil
 	case rpcStrings:
 		v, _ := flags.GetStringSlice(f.Name)
-		return v, true, nil
+		cleaned := make([]string, 0, len(v))
+		for _, item := range v {
+			if item = strings.TrimSpace(item); item != "" {
+				cleaned = append(cleaned, item)
+			}
+		}
+		if len(cleaned) == 0 {
+			return nil, false, nil
+		}
+		return cleaned, true, nil
 	case rpcTime:
 		v, _ := flags.GetString(f.Name)
 		normalized, err := parseRPCTime(f.Name, v)
@@ -445,8 +460,14 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 	// 默认值（空间 crypto、分页 1/50）不能覆盖 --data 里显式给的值；用户显式传了参数才覆盖。
 	if !s.NoSpace && s.SpaceField != "" {
 		space, _ := cmd.Flags().GetString("space-id")
+		space = strings.TrimSpace(space)
 		if space != "" && (cmd.Flags().Changed("space-id") || !hasRequestPath(request, s.SpaceField)) {
 			setRequestPath(request, s.SpaceField, space)
+		}
+		if s.SpaceRequired {
+			if v, ok := lookupRequestString(request, s.SpaceField); !ok || strings.TrimSpace(v) == "" {
+				return nil, fmt.Errorf("缺少 --space-id（也可以在 --data 里提供 %s）", s.SpaceField)
+			}
 		}
 	}
 	for _, flag := range s.Flags {
@@ -522,11 +543,15 @@ func buildRPCCommand(spec rpcSpec) *cobra.Command {
 			inv := rpcInvocation{File: file, Service: spec.Service, Method: spec.Method, Request: request}
 			if !spec.NoSpace {
 				inv.SpaceID, _ = cmd.Flags().GetString("space-id")
+				inv.SpaceID = strings.TrimSpace(inv.SpaceID)
 				// 没显式给 --space-id 时，--data 里的空间就是请求所属的空间。
 				if !cmd.Flags().Changed("space-id") && spec.SpaceField != "" {
 					if fromData, ok := lookupRequestString(request, spec.SpaceField); ok {
-						inv.SpaceID = fromData
+						inv.SpaceID = strings.TrimSpace(fromData)
 					}
+				}
+				if spec.SpaceRequired && inv.SpaceID == "" {
+					return errors.New("缺少 --space-id")
 				}
 			}
 			if spec.Host {
@@ -547,13 +572,32 @@ func buildRPCCommand(spec rpcSpec) *cobra.Command {
 				}
 			}
 			cmd.SilenceUsage = true
+			if spec.FormatResponse != nil {
+				response, err := invokeRPC(cmd.Context(), inv)
+				if err != nil {
+					return err
+				}
+				if err := rpcRetError(response); err != nil {
+					_ = printRPCResponse(cmd.OutOrStdout(), response, true)
+					return err
+				}
+				formatted, err := spec.FormatResponse(response)
+				if err != nil {
+					return err
+				}
+				return printJSON(cmd.OutOrStdout(), formatted)
+			}
 			return runRPC(cmd.Context(), cmd.OutOrStdout(), inv, true)
 		},
 	}
 	cmd.Flags().String("file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 	cmd.Flags().String("data", "", "完整请求 JSON；@文件 读取文件，- 读取标准输入。各参数优先于它")
 	if !spec.NoSpace {
-		cmd.Flags().String("space-id", "crypto", "空间 ID")
+		if spec.SpaceRequired {
+			cmd.Flags().String("space-id", "", "空间 ID（必填）")
+		} else {
+			cmd.Flags().String("space-id", "crypto", "空间 ID")
+		}
 	}
 	if spec.Host {
 		cmd.Flags().String("host", "", "主机 ID：只调用这台主机上的服务（moox.toml 里的主机名）")

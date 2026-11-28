@@ -10,6 +10,7 @@ import (
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type fetchPlanPauseConfig struct {
@@ -32,8 +33,11 @@ var collectorFetchPlanPauseCmd = &cobra.Command{
 		"恢复后行由自动补采补齐，因子结果需要用因子管理 CLI 的 recalc 补算。",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if strings.TrimSpace(fetchPlanPauseFlags.SpaceID) == "" {
+			return errors.New("--space-id 必填")
+		}
 		if !fetchPlanPauseYes {
-			return writePreview(cmd, map[string]any{"action": "pause_fetch_plan", "space_id": fetchPlanPauseFlags.SpaceID})
+			return writePreview(cmd, map[string]any{"action": "pause_fetch_plan", "space_id": strings.TrimSpace(fetchPlanPauseFlags.SpaceID)})
 		}
 		return runFetchPlanPause(cmd.Context(), cmd.OutOrStdout(), fetchPlanPauseFlags, true, fetchPlanPauseFlags.Wait)
 	},
@@ -41,9 +45,46 @@ var collectorFetchPlanPauseCmd = &cobra.Command{
 
 func init() {
 	collectorFetchPlanPauseCmd.Flags().StringVar(&fetchPlanPauseFlags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
-	collectorFetchPlanPauseCmd.Flags().StringVar(&fetchPlanPauseFlags.SpaceID, "space-id", "", "空间 ID")
+	collectorFetchPlanPauseCmd.Flags().StringVar(&fetchPlanPauseFlags.SpaceID, "space-id", "", "空间 ID（必填）")
 	collectorFetchPlanPauseCmd.Flags().BoolVar(&fetchPlanPauseYes, "yes", false, "确认暂停；不加只预览")
 	collectorFetchPlanPauseCmd.Flags().DurationVar(&fetchPlanPauseFlags.Wait, "wait", 5*time.Minute, "等待云端确认定时器全部停用的最长时间；0 表示只保存开关不等待")
+}
+
+// formatFetchPlanShow 把 GetCollectorStatus 的完整响应精简为采集计划摘要（与原先的 collector fetch-plan 输出一致）。
+func formatFetchPlanShow(raw []byte) (any, error) {
+	rsp := &collectorpb.GetCollectorStatusRsp{}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, rsp); err != nil {
+		return nil, fmt.Errorf("解析采集计划响应失败：%w", err)
+	}
+	planSummary := func(plan *collectorpb.FetchPlanSummary) any {
+		if plan == nil {
+			return nil
+		}
+		return map[string]any{
+			"id":         plan.GetId(),
+			"status":     plan.GetStatus(),
+			"last_error": plan.GetLastError(),
+			"created_at": plan.GetCreatedAt(),
+			"updated_at": plan.GetUpdatedAt(),
+		}
+	}
+	functions := make([]map[string]any, 0, len(rsp.GetFunctions()))
+	for _, fn := range rsp.GetFunctions() {
+		functions = append(functions, map[string]any{
+			"name":     fn.GetName(),
+			"region":   fn.GetRegion(),
+			"market":   fn.GetMarket(),
+			"cron":     fn.GetCron(),
+			"subjects": fn.GetSubjectCount(),
+			"datasets": fn.GetDatasets(),
+			"state":    fn.GetState(),
+		})
+	}
+	return map[string]any{
+		"open":      planSummary(rsp.GetOpen()),
+		"applied":   planSummary(rsp.GetApplied()),
+		"functions": functions,
+	}, nil
 }
 
 func collectorRetError(action string, ret *collectorpb.RetInfo) error {

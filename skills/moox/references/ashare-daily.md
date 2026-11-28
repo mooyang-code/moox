@@ -13,7 +13,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 - **换手率有完整历史，股本这一组只有开通以后的值。** 股本、每股股利、是否 ST 来自只有当日值的接口，补历史时这些列是空的（只有最近一个交易日可能写上）；所以市值、市盈率这类因子只能从开通日起用。平日某天没采到，那一天的股本也补不回来（内置的市值、估值因子会沿用最近 20 个交易日里的值）。
 - **沪深 300 里没有 ST 股**，`is_st` 在这个股票池里基本恒为 0。
 
-全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`（`collector kline`、`collector status`、`collector fetch-plan`、`collector task create/delete` 没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`）都要写 `--space-id stockcn`；`metadata apply`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
+全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 在多数规格命令里默认值是 `crypto`（但 `collector status`、`collector fetch-plan show|pause|resume|reregister`、`collector kline`、`collector resample`、`collector subjects exclude|unexclude|exclusions`、`collector history-seed skip`、`collector task create/delete` 以及 `archive tasks|partitions` 等没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`）都要写 `--space-id stockcn`；`metadata apply`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
 
 ## 0. 前提
 
@@ -255,7 +255,7 @@ portfolio: {max_missing: 0.2}
 | 管理台新建任务时看不到复权、行业、财务、换手率、股本字段 | 标签不是 A 股股票、频率不是 `1d` | 检查标签和频率（第 1 步看 `extra_fields` 的适用范围） |
 | 某天的日线整只股票没有行 | 五个附加来源里有一个当时报错，带附加字段的任务整行不写（纯日线任务不受影响）。其中“选股器的数据还停在某天”表示取数时东方财富还没更新到这个交易日 | 等自动补采（隔一天），或手工 `kline backfill` 那一天 |
 | 某只股票 `adj_factor` 一直为空 | 新浪复权接口对少数标的返回空列表 | 目前没有别的来源；因子里按缺数处理 |
-| 启用或停用日线任务后几分钟了 `collector fetch-plan` 还是未生效 | 计划在等下发确认（云函数操作慢、失败），或数据集在等旧份过窗口 | 看 `collector status` 的等待原因与失败原因 |
+| 启用或停用日线任务后几分钟了 `collector fetch-plan show` 还是未生效 | 计划在等下发确认（云函数操作慢、失败），或数据集在等旧份过窗口 | 看 `collector status` 的等待原因与失败原因 |
 | 申万行业全部失败，日志里有证书校验错误 | 申万网站换了证书链，内嵌的中间证书不再适用 | 需要更新程序里内嵌的证书，向用户说明后停下，不要关闭校验 |
 | 某只股票 `sw_l1` 一直为空 | 申万文件里没有它的记录（新股等） | 正常；策略里按缺数处理 |
 | 补出来的历史里 `total_shares` 等股本列全是空的 | 股本来源只有当日值，没有历史 | 正常；市值、估值因子从开通日起才有值 |

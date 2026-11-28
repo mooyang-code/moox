@@ -49,14 +49,16 @@ func TestArchiveDestructiveCommandsPreviewWithoutYes(t *testing.T) {
 	g := &rpcFakeGateway{response: `{"ret_info":{"code":0},"removed":[]}`}
 	useRPCGateway(t, g)
 
-	// clear-unrecoverable 缺必填参数时拒绝
-	_, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"), "--dataset-id", "ds")
+	// clear-unrecoverable 缺必填参数时拒绝（含 --space-id）
+	_, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"), "--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z")
+	require.ErrorContains(t, err, "--space-id")
+	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"), "--space-id", "crypto", "--dataset-id", "ds")
 	require.ErrorContains(t, err, "--start")
 	assert.Zero(t, g.calls)
 
 	// 无 --yes 只预览，不调用网关
 	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"),
-		"--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z")
+		"--space-id", "crypto", "--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z")
 	require.NoError(t, err)
 	assert.Zero(t, g.calls)
 	preview := parsePreview(t, out)
@@ -64,14 +66,14 @@ func TestArchiveDestructiveCommandsPreviewWithoutYes(t *testing.T) {
 
 	// 加 --yes 才调用
 	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"),
-		"--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z", "--yes")
+		"--space-id", "crypto", "--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z", "--yes")
 	require.NoError(t, err)
 	assert.Equal(t, 1, g.calls)
 	assert.Equal(t, "ClearArchiveUnrecoverable", g.method)
 	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds","start":"2026-10-01T00:00:00Z","end":"2026-10-05T00:00:00Z"}`, string(g.body))
 
 	// delete 无 --yes 只预览
-	out, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "delete"), "--dataset-id", "ds")
+	out, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "delete"), "--space-id", "crypto", "--dataset-id", "ds")
 	require.NoError(t, err)
 	assert.Equal(t, 1, g.calls)
 	assert.Equal(t, "DeleteArchiveTask", parsePreview(t, out)["method"])
@@ -84,12 +86,19 @@ func TestArchiveCommandsValidateRequiredFlagsAndMapMethods(t *testing.T) {
 		path []string
 		args []string
 	}{
-		"create without dataset":  {[]string{"archive", "tasks", "create"}, nil},
-		"prepare without dataset": {[]string{"archive", "tasks", "prepare"}, nil},
-		"backfill without range":  {[]string{"archive", "tasks", "backfill"}, []string{"--dataset-id", "ds"}},
+		"create without space":    {[]string{"archive", "tasks", "create"}, []string{"--dataset-id", "ds"}},
+		"create without dataset":  {[]string{"archive", "tasks", "create"}, []string{"--space-id", "crypto"}},
+		"prepare without space":   {[]string{"archive", "tasks", "prepare"}, []string{"--dataset-id", "ds"}},
+		"prepare without dataset": {[]string{"archive", "tasks", "prepare"}, []string{"--space-id", "crypto"}},
+		"update without space":    {[]string{"archive", "tasks", "update"}, []string{"--dataset-id", "ds", "--status", "paused"}},
+		"run without space":       {[]string{"archive", "tasks", "run"}, []string{"--dataset-id", "ds"}},
+		"backfill without space":  {[]string{"archive", "tasks", "backfill"}, []string{"--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}},
+		"backfill without range":  {[]string{"archive", "tasks", "backfill"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
 		"run get without id":      {[]string{"archive", "runs", "get"}, nil},
 		"run cancel without id":   {[]string{"archive", "runs", "cancel"}, nil},
-		"partition get no key":    {[]string{"archive", "partitions", "get"}, []string{"--dataset-id", "ds"}},
+		"partitions without space": {[]string{"archive", "partitions", "list"}, nil},
+		"partition get no space":  {[]string{"archive", "partitions", "get"}, []string{"--dataset-id", "ds", "--partition-key", "2026-10-16"}},
+		"partition get no key":    {[]string{"archive", "partitions", "get"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
 	} {
 		_, _, err := runSpecCommand(t, specByPath(t, tc.path...), tc.args...)
 		require.Error(t, err, name)
@@ -103,16 +112,16 @@ func TestArchiveCommandsValidateRequiredFlagsAndMapMethods(t *testing.T) {
 	}{
 		{[]string{"archive", "overview"}, nil, "GetArchiveOverview"},
 		{[]string{"archive", "tasks", "list"}, []string{"--space-id", "crypto"}, "ListArchiveTasks"},
-		{[]string{"archive", "tasks", "prepare"}, []string{"--dataset-id", "ds"}, "PrepareArchiveTask"},
-		{[]string{"archive", "tasks", "update"}, []string{"--dataset-id", "ds", "--status", "paused"}, "UpdateArchiveTask"},
-		{[]string{"archive", "tasks", "delete"}, []string{"--dataset-id", "ds", "--yes"}, "DeleteArchiveTask"},
-		{[]string{"archive", "tasks", "run"}, []string{"--dataset-id", "ds"}, "RunArchiveTaskNow"},
-		{[]string{"archive", "tasks", "backfill"}, []string{"--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}, "BackfillArchiveRange"},
+		{[]string{"archive", "tasks", "prepare"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}, "PrepareArchiveTask"},
+		{[]string{"archive", "tasks", "update"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--status", "paused"}, "UpdateArchiveTask"},
+		{[]string{"archive", "tasks", "delete"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--yes"}, "DeleteArchiveTask"},
+		{[]string{"archive", "tasks", "run"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}, "RunArchiveTaskNow"},
+		{[]string{"archive", "tasks", "backfill"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}, "BackfillArchiveRange"},
 		{[]string{"archive", "runs", "list"}, []string{"--status", "queued"}, "ListArchiveRuns"},
 		{[]string{"archive", "runs", "get"}, []string{"--run-id", "run_1"}, "GetArchiveRun"},
 		{[]string{"archive", "runs", "cancel"}, []string{"--run-id", "run_1"}, "CancelArchiveRun"},
-		{[]string{"archive", "partitions", "list"}, []string{"--from-month", "2026-10"}, "ListArchivePartitions"},
-		{[]string{"archive", "partitions", "get"}, []string{"--dataset-id", "ds", "--partition-key", "2026-10-16"}, "GetArchivePartition"},
+		{[]string{"archive", "partitions", "list"}, []string{"--space-id", "crypto", "--from-month", "2026-10"}, "ListArchivePartitions"},
+		{[]string{"archive", "partitions", "get"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--partition-key", "2026-10-16"}, "GetArchivePartition"},
 	} {
 		gw := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
 		useRPCGateway(t, gw)
@@ -126,7 +135,7 @@ func TestArchiveCommandsValidateRequiredFlagsAndMapMethods(t *testing.T) {
 func TestArchiveSurfacesManagerErrorsAndTreeMounted(t *testing.T) {
 	g := &rpcFakeGateway{response: `{"ret_info":{"code":6,"msg":"数据集已有归档任务"}}`}
 	useRPCGateway(t, g)
-	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "create"), "--dataset-id", "ds")
+	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "create"), "--space-id", "crypto", "--dataset-id", "ds")
 	require.ErrorContains(t, err, "数据集已有归档任务")
 	assert.Contains(t, out, "数据集已有归档任务", "业务失败时按统一约定先打印响应再非 0 退出")
 

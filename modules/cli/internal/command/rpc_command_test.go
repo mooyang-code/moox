@@ -196,6 +196,13 @@ func TestSpecRequiredFlagMayComeFromData(t *testing.T) {
 	_, _, err = runSpecCommand(t, spec, "--data", `{"factor_id":"ma"}`)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"factor_id":"ma"}`, string(gateway.body))
+
+	spaceSpec := rpcSpec{Path: []string{"x", "space"}, Short: "t", Service: "trpc.moox.collector.CollectMgr", Method: "GetCollectorStatus", SpaceField: "space_id", SpaceRequired: true}
+	_, _, err = runSpecCommand(t, spaceSpec)
+	require.ErrorContains(t, err, "缺少 --space-id")
+	_, _, err = runSpecCommand(t, spaceSpec, "--data", `{"space_id":"stockcn"}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"space_id":"stockcn"}`, string(gateway.body))
 }
 
 func TestSpecDestructiveOnlyPreviewsWithoutYes(t *testing.T) {
