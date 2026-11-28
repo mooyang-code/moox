@@ -335,7 +335,7 @@ func TestFlattenWithManyMembersStillPlacesOrders(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	extra := []string{"account-c", "account-d", "account-e", "account-f"}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "configure"); err != nil {
+		if err := tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("configure")); err != nil {
 			return err
 		}
 		for _, id := range extra {
@@ -349,7 +349,7 @@ func TestFlattenWithManyMembersStillPlacesOrders(t *testing.T) {
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	fixture.orders.nextID = ""
@@ -397,7 +397,7 @@ func TestFlattenTradingAccountOnlyTouchesThatMember(t *testing.T) {
 	require.NotContains(t, fixture.trace, "cancel:other-member-order")
 	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logical.AutomationState)
+	require.Equal(t, "PAUSED", logical.AutomationState())
 
 	// 工作线程恢复时从请求 JSON 读回过滤条件。
 	command, err := decodeFlattenRequest(result.Action)

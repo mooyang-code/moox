@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
 )
@@ -63,14 +64,27 @@ type DelistRecord struct {
 	FinishedAt   int64  `gorm:"column:c_finished_at"`
 }
 
-// DelistFlattenRecord 是一轮里一个（空间、组合账户）的下架清仓：只存确定生成的操作号，动作状态从 t_operator_actions 读。
+// delistActionNamespace 是下架清仓操作号的固定命名空间，写入方与 t_operator_actions 查询方共用。
+var delistActionNamespace = uuid.MustParse("2b7e4f0a-5c1d-4e8b-9a36-7d0c1e5f8a42")
+
+// DelistFlattenActionID 由（下架记录、轮次、空间、组合账户）确定地算出下架清仓的操作号：
+// 重启后重新发起与列表查询 t_operator_actions 共用同一纯函数，不在表里冗余存储。
+func DelistFlattenActionID(delistID string, round int, spaceID, logicalAccountID string) string {
+	return uuid.NewSHA1(delistActionNamespace, []byte(fmt.Sprintf("%s|%d|%s|%s", delistID, round, spaceID, logicalAccountID))).String()
+}
+
+// DelistFlattenRecord 是一轮里一个（空间、组合账户）的下架清仓；操作号由主键经 DelistFlattenActionID 算出，动作状态从 t_operator_actions 读。
 type DelistFlattenRecord struct {
 	DelistID         string `gorm:"column:c_delist_id"`
 	Round            int    `gorm:"column:c_round"`
 	SpaceID          string `gorm:"column:c_space_id"`
 	LogicalAccountID string `gorm:"column:c_logical_account_id"`
-	ActionID         string `gorm:"column:c_action_id"`
 	CreatedAt        int64  `gorm:"column:c_created_at"`
+}
+
+// ActionID 返回该轮该组合确定的操作号。
+func (r DelistFlattenRecord) ActionID() string {
+	return DelistFlattenActionID(r.DelistID, r.Round, r.SpaceID, r.LogicalAccountID)
 }
 
 const (
@@ -138,10 +152,10 @@ const (
 		WHERE c_delist_id = ? AND c_status = 'ACTIVE'`
 	sqlInsertDelistFlatten = `
 		INSERT INTO t_trade_delist_flattens (
-			c_delist_id, c_round, c_space_id, c_logical_account_id, c_action_id, c_created_at
-		) VALUES (?, ?, ?, ?, ?, ?)`
+			c_delist_id, c_round, c_space_id, c_logical_account_id, c_created_at
+		) VALUES (?, ?, ?, ?, ?)`
 	sqlListDelistFlattens = `
-		SELECT c_delist_id, c_round, c_space_id, c_logical_account_id, c_action_id, c_created_at
+		SELECT c_delist_id, c_round, c_space_id, c_logical_account_id, c_created_at
 		FROM t_trade_delist_flattens
 		WHERE c_delist_id = ?
 		ORDER BY c_round, c_space_id, c_logical_account_id`
@@ -291,7 +305,7 @@ func (tx *Tx) PlanDelistRound(delistID string, round int, note string, at int64,
 	}
 	for _, flatten := range flattens {
 		if err := writeError(tx.db.Exec(sqlInsertDelistFlatten,
-			delistID, round, flatten.SpaceID, flatten.LogicalAccountID, flatten.ActionID, at).Error); err != nil {
+			delistID, round, flatten.SpaceID, flatten.LogicalAccountID, at).Error); err != nil {
 			return false, err
 		}
 	}

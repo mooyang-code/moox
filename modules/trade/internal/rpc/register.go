@@ -21,16 +21,12 @@ func RegisterAll(
 	if consoleService == nil {
 		panic("TradeConsoleService is not configured")
 	}
-	if accounts != nil && accounts.Logical == nil {
-		accounts.Logical = logicalAccounts
-	}
 	console := &ConsoleServer{
 		AccountServer: accounts, LogicalAccountServer: logicalAccounts,
 		ExecutionServer: execution, Store: accounts.Store,
 	}
 	console.LiveTradingEnabled = options.LiveTradingEnabled
 	console.MatcherReady = options.MatcherReady
-	console.Holdings = options.Holdings
 	console.Exchanges = options.Exchanges
 	console.Adapters = options.Adapters
 	console.FlattenAccount = options.FlattenAccount
@@ -42,7 +38,6 @@ func RegisterAll(
 type ConsoleOptions struct {
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
-	Holdings           HoldingQueryService
 	Exchanges          executionport.ExchangeCatalog
 	Adapters           AdapterSource
 	FlattenAccount     FlattenTradingAccountFunc

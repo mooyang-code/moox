@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,13 +16,13 @@ import (
 func TestPortfolioMarginAccountSharesOneFundsPool(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := mixedStandardAccount("0", "0")
-	account.AccountMode = exchange.AccountModeBinancePortfolioMargin
-	account.Snapshot = exchange.AccountSnapshot{
-		Balances: []exchange.AssetBalance{
-			{Wallet: exchange.WalletMargin, Asset: "USDT", Available: shared.MustDecimal("300")},
-			{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("700")},
+	account.AccountMode = string(exchange.AccountModeBinancePortfolioMargin)
+	account.Snapshot = store.TradingAccountSnapshot{
+		Balances: []store.AssetBalance{
+			{Wallet: string(exchange.WalletMargin), Asset: "USDT", Available: "300"},
+			{Wallet: string(exchange.WalletUnified), Asset: "USDT", Available: "700"},
 		},
-		AvailableFunds: shared.MustDecimal("1000"),
+		AvailableFunds: "1000",
 	}
 	spotSpec := testSpec(now)
 	spotSpec.InstrumentID = "BTC-USDT-SPOT"
@@ -34,7 +35,7 @@ func TestPortfolioMarginAccountSharesOneFundsPool(t *testing.T) {
 	_, err = testValidator(now, account, testInstrument(exchange.MarketTypeSwap)).Validate(context.Background(), "space-1", swapSpec)
 	require.NoError(t, err)
 
-	account.Snapshot.AvailableFunds = shared.MustDecimal("500")
+	account.Snapshot.AvailableFunds = "500"
 	_, err = testValidator(now, account, testInstrument(exchange.MarketTypeSpot)).Validate(context.Background(), "space-1", spotSpec)
 	require.ErrorIs(t, err, ErrInsufficientFunds, "合约占掉保证金后资金池只剩 500，900 的现货买单被拒")
 }
@@ -46,11 +47,11 @@ func TestMarketsSharingFundsFollowsFundsPool(t *testing.T) {
 	require.Equal(t, []string{"swap"}, standard.MarketsSharingFunds(exchange.MarketTypeSwap))
 
 	portfolio := standard
-	portfolio.AccountMode = exchange.AccountModeBinancePortfolioMargin
+	portfolio.AccountMode = string(exchange.AccountModeBinancePortfolioMargin)
 	require.Equal(t, []string{"spot", "swap"}, portfolio.MarketsSharingFunds(exchange.MarketTypeSpot))
 	require.Equal(t, []string{"spot", "swap"}, portfolio.MarketsSharingFunds(exchange.MarketTypeSwap))
 
 	okx := standard
-	okx.Exchange, okx.AccountMode = exchange.ExchangeOKX, exchange.AccountModeUnspecified
+	okx.Exchange, okx.AccountMode = string(exchange.ExchangeOKX), string(exchange.AccountModeUnspecified)
 	require.Equal(t, []string{"spot", "swap"}, okx.MarketsSharingFunds(exchange.MarketTypeSwap), "OKX 尚未检测账户类型时也按统一账户")
 }

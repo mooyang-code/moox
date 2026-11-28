@@ -230,7 +230,7 @@ func TestSeedSmokeStoreCreatesOnlyTestnetLiveSpotAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if logical.AutomationState != "PAUSED" {
+	if !logical.IsPaused() {
 		t.Fatalf("logical account = %+v", logical)
 	}
 	members, err := database.ListLogicalAccountMembers(

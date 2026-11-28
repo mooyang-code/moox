@@ -64,8 +64,7 @@ function mountTab(env: Environment, stored: Partial<FundSettings> = {}, binanceM
           strategy: ref(null),
           snapshot: ref({ swapPositions: [], spotHoldings: [] }),
           membersEditable: computed(() => true),
-          reload,
-          openClosePaper: vi.fn()
+          reload
         } as unknown as DetailContext);
         return () => h(SettingsTab);
       }

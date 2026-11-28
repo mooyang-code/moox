@@ -59,8 +59,8 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   string(exchange.ExecutionModeLive),
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+			Environment:     string(exchange.AccountEnvironmentTestnet),
+			SettlementAsset: "USDT", PauseReason: "test",
 		}); err != nil {
 			return err
 		}
@@ -140,8 +140,8 @@ func TestEquityFreshnessFollowsConfirmedSyncNotBalanceChangeTime(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   string(exchange.ExecutionModeLive),
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+			Environment:     string(exchange.AccountEnvironmentTestnet),
+			SettlementAsset: "USDT", PauseReason: "test",
 		}); err != nil {
 			return err
 		}

@@ -69,23 +69,17 @@ func TestOperatorActionConflictRollsBackAtomicPause(t *testing.T) {
 	_, _, err := s.CreateOperatorAction(ctx, record)
 	require.NoError(t, err)
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.SetLogicalAccountAutomation(
-			"space-1",
-			"logical-1",
-			"ACTIVE",
-			"",
-		)
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 
 	conflict := record
 	conflict.Reason = "other"
 	conflict.RequestJSON = `{"deadline":20}`
 	err = s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
+		if err := tx.PauseLogicalAccount(
 			"space-1",
 			"logical-1",
-			"PAUSED",
-			"operator",
+			UserPause("operator"),
 		); err != nil {
 			return err
 		}
@@ -96,6 +90,6 @@ func TestOperatorActionConflictRollsBackAtomicPause(t *testing.T) {
 
 	account, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", account.AutomationState)
+	require.Equal(t, "ACTIVE", account.AutomationState())
 	require.Empty(t, account.PauseReason)
 }

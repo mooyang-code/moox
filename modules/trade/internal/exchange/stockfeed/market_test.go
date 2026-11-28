@@ -84,10 +84,8 @@ func TestMarketQuoteUnavailableIsCachedBriefly(t *testing.T) {
 	require.Equal(t, 2, calls)
 }
 
-func TestAdapterDoesNotPlaceOrders(t *testing.T) {
+func TestAdapterExposesPublicMarketData(t *testing.T) {
 	adapter := NewAdapter(&Market{Exchange: exchange.ExchangeHKEX})
-	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{})
-	require.True(t, errors.Is(err, ErrNoOrders))
 	require.Equal(t, exchange.ExchangeHKEX, adapter.Exchange(), "适配器的场所取自共用行情")
 }
 

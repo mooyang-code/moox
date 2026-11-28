@@ -56,7 +56,7 @@ func TestLogicalAccountMarketsFollowEnabledMembers(t *testing.T) {
 	tradeStore := openRPCStore(t)
 	handler := &LogicalAccountServer{LogicalAccounts: &logicalapp.Service{Store: tradeStore}, Store: tradeStore}
 	created, err := handler.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
-		Name: "main", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT",
+		Name: "main", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER, SettlementAsset: "USDT",
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo().String())

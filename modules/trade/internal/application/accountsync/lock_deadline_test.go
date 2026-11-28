@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -23,7 +23,7 @@ func TestSyncAccountLockWaitHonorsDeadline(t *testing.T) {
 			require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 				return tx.UpdateTradingAccountReadiness("space-1", "account-1", true, 1_000, "")
 			}))
-			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}, SessionState: readySessionState(true)}
+			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &fillreduce.Reducer{Store: db}, SessionState: readySessionState(true)}
 			var unlock func()
 			var lockErr error
 			switch kind {
@@ -73,7 +73,7 @@ func TestSyncAccountDoesNotWaitForMembershipLock(t *testing.T) {
 	unlock, lockErr := db.LockLogicalAccountMembershipContext(context.Background())
 	require.NoError(t, lockErr)
 	defer unlock()
-	svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}}
+	svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &fillreduce.Reducer{Store: db}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err := svc.SyncAccount(ctx, "account-1")
@@ -94,7 +94,7 @@ func TestSyncAccountLockFailureRetainsCleanupDatabaseError(t *testing.T) {
 			unlock, lockErr := db.LockTradingAccountContext(context.Background(), "account-1")
 			require.NoError(t, lockErr)
 			defer unlock()
-			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}}
+			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &fillreduce.Reducer{Store: db}}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
 			_, err := svc.SyncAccount(ctx, "account-1")

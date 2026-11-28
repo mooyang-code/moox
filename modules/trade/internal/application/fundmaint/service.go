@@ -249,10 +249,10 @@ func (s *Service) runDiscount(ctx context.Context, logical store.LogicalAccountR
 	return errs
 }
 
-// tradingAllowed 判断能不能做会下单的维护：自动执行没暂停，且没有运行中的清仓、减仓、下架清仓。
-// 自主下单组合没有自动执行（一直是暂停状态），不看暂停，只看有没有运行中的清仓、减仓、下架清仓。
+// tradingAllowed 判断能不能做会下单的维护：组合没暂停，且没有运行中的清仓、减仓、下架清仓。
+// 自主下单组合不带暂停状态（IsPaused 恒为假），只看有没有运行中的清仓、减仓、下架清仓。
 func (s *Service) tradingAllowed(ctx context.Context, logical store.LogicalAccountRecord) (bool, error) {
-	if logical.ControlMode != "MANUAL" && logical.AutomationState != "ACTIVE" {
+	if logical.IsPaused() {
 		return false, nil
 	}
 	running, err := s.Store.ListRunningOperatorActions(ctx, logical.SpaceID, logical.LogicalAccountID)
@@ -283,10 +283,10 @@ func (s *Service) warnOnce(key, message string) {
 
 // ensureBNBDiscount 只会把 BNB 抵扣打开，不会关：用户在交易所里自己开的开关，这里不动。
 func (s *Service) ensureBNBDiscount(ctx context.Context, account store.TradingAccountRecord, adapter execution.ExecutionAdapter) error {
-	configurer, ok := adapter.(execution.FeeDiscountConfigurer)
-	if !ok {
+	if !execution.Supports(adapter, execution.CapabilityFeeDiscount) {
 		return nil
 	}
+	configurer := adapter.(execution.FeeDiscountConfigurer)
 	s.mu.Lock()
 	applied := s.discountApplied[account.TradingAccountID]
 	s.mu.Unlock()

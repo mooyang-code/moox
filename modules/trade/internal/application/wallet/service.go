@@ -142,11 +142,10 @@ func (s *Service) transferer(accountID string) (execution.ExecutionAdapter, exec
 	if err != nil {
 		return nil, nil, err
 	}
-	transferer, ok := adapter.(execution.WalletTransferer)
-	if !ok || !execution.Supports(adapter, execution.CapabilityTransfer) {
+	if !execution.Supports(adapter, execution.CapabilityTransfer) {
 		return nil, nil, errUnsupported
 	}
-	return adapter, transferer, nil
+	return adapter, adapter.(execution.WalletTransferer), nil
 }
 
 var errUnsupported = errors.New("适配器不支持钱包划转")

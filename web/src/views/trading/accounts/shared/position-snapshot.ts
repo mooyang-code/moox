@@ -1,35 +1,26 @@
-import { listHoldings, listPositions } from "@/api/trade";
-import type { Holding, LogicalAccount, Position, TradingAccount } from "@/api/trade/types";
+import { listPositions } from "@/api/trade";
+import type { LogicalAccount, Position, TradingAccount } from "@/api/trade/types";
 import { coinOf } from "./markets";
 
 export interface PositionSnapshot {
   /** 永续持仓（已去掉零仓位） */
   swapPositions: Position[];
-  /** 现货和股票余额，来自开通了现货或股票的启用成员 */
-  spotHoldings: Holding[];
+  /** 现货和股票余额，统一来自 ListPositions（market_type !== "swap"） */
+  spotHoldings: Position[];
 }
 
 /**
- * 读组合账户的实际持仓：永续来自 ListPositions，现货和股票来自成员的 ListHoldings（持仓来自余额的市场）。
- * ListHoldings 对只开通永续的账户会报错，所以只查开通了现货或股票的启用成员；两处数据各管各的市场，不会重复计数。
+ * 读组合账户的实际持仓：统一调用一次 ListPositions，由后端返回启用成员的永续合约持仓与现货/股票余额。
  */
 export async function loadPositionSnapshot(
   logical: LogicalAccount,
-  accounts: ReadonlyMap<string, TradingAccount>
+  _accounts?: ReadonlyMap<string, TradingAccount>
 ): Promise<PositionSnapshot> {
-  const balanceMembers = (logical.members || []).filter(
-    member =>
-      member.enabled && accounts.get(member.trading_account_id)?.markets?.some(market => market === "spot" || market === "equity")
-  );
-  const [positions, holdings] = await Promise.all([
-    logical.markets?.includes("swap")
-      ? listPositions({ logical_account_id: logical.logical_account_id })
-      : Promise.resolve({ positions: [] as Position[] }),
-    Promise.all(balanceMembers.map(member => listHoldings(member.trading_account_id)))
-  ]);
+  const response = await listPositions({ logical_account_id: logical.logical_account_id });
+  const positions = response.positions || [];
   return {
-    swapPositions: (positions.positions || []).filter(item => item.market_type === "swap" && Number(item.signed_quantity) !== 0),
-    spotHoldings: holdings.flatMap(item => item.holdings || [])
+    swapPositions: positions.filter(item => item.market_type === "swap" && Number(item.signed_quantity) !== 0),
+    spotHoldings: positions.filter(item => item.market_type !== "swap")
   };
 }
 
@@ -38,7 +29,7 @@ export function positionCount(snapshot: PositionSnapshot): number {
   const coins = new Set<string>();
   for (const item of snapshot.swapPositions) coins.add(coinOf(item.instrument_id));
   for (const item of snapshot.spotHoldings) {
-    if (item.instrument_id && Number(item.quantity) !== 0) coins.add(coinOf(item.instrument_id));
+    if (item.instrument_id && Number(item.signed_quantity) !== 0) coins.add(coinOf(item.instrument_id));
   }
   return coins.size;
 }

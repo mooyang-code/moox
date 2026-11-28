@@ -23,7 +23,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"SubmitOrder", "CancelOrder", "GetOperatorAction",
 			"GetLogicalAccountTarget", "ListShadowTargets", "GetOrder", "ListOrders", "ListFills",
 			"ListPositions",
-			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve", "ListHoldings",
+			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve",
 			"ListAccountLedger", "FlattenTradingAccount",
 			"UnblockInstrument", "ListBlockedInstruments", "ListInstrumentHolders",
 			"ListDelists", "SummarizeAccountPnl", "ListOperatorActions",
@@ -66,7 +66,7 @@ func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 		},
 		"AccountEnvironment": {
 			"ACCOUNT_ENVIRONMENT_UNSPECIFIED", "ACCOUNT_ENVIRONMENT_TESTNET",
-			"ACCOUNT_ENVIRONMENT_PRODUCTION",
+			"ACCOUNT_ENVIRONMENT_PRODUCTION", "ACCOUNT_ENVIRONMENT_PAPER",
 		},
 		"OrderType": {
 			"ORDER_TYPE_UNSPECIFIED", "ORDER_TYPE_MARKET", "ORDER_TYPE_LIMIT",

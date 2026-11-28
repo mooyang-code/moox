@@ -91,9 +91,9 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 		Session:          fakeSession{open: &open},
 		SessionHours:     hkex.SessionHours,
 		InstrumentScope:  hkex.InstrumentScope,
-	}, func(exchange.AccountConfig, exchange.Credential) (execution.ExecutionAdapter, error) {
+	}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
 		return stockfeed.NewAdapter(market), nil
-	})
+	}, nil)
 
 	path := filepathForTest(t)
 	db, err := store.Open(path)
@@ -104,14 +104,13 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	logicalSrv := &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}
 	console := &rpc.ConsoleServer{
 		Store:                db,
-		AccountServer:        &rpc.AccountServer{Store: db, Logical: logicalSrv, Accounts: &accountapp.Service{Store: accountapp.Repository{Store: db}, Exchanges: registry}},
+		AccountServer:        &rpc.AccountServer{Store: db, Accounts: &accountapp.Service{Store: db, Exchanges: registry}},
 		LogicalAccountServer: logicalSrv,
 	}
 	request := &tradepb.CreateTradingAccountReq{
-		Name: "港股模拟", LogicalAccountName: "港股模拟组合", Exchange: "hkex",
+		Name: "港股模拟", Exchange: "hkex",
 		Markets: []string{"equity"}, SettlementAsset: "CNY",
-		Paper:       &tradepb.PaperConfig{InitialBalance: "1000000", MakerFeeRate: "0.0003", TakerFeeRate: "0.0003", SlippageBps: "0"},
-		ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+		Paper: &tradepb.PaperConfig{InitialBalance: "1000000", MakerFeeRate: "0.0003", TakerFeeRate: "0.0003", SlippageBps: "0"},
 	}
 	rejected, err := console.CreateTradingAccount(ctx, request)
 	require.NoError(t, err)
@@ -122,7 +121,19 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo())
 	require.Equal(t, "hkex", created.GetAccount().GetExchange())
-	logicalID, accountID := created.GetLogicalAccount().GetLogicalAccountId(), created.GetAccount().GetTradingAccountId()
+	accountID := created.GetAccount().GetTradingAccountId()
+	createdLogical, err := console.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
+		Name: "港股模拟组合", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
+		SettlementAsset: "HKD", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, createdLogical.GetRetInfo().GetCode(), createdLogical.GetRetInfo())
+	logicalID := createdLogical.GetLogicalAccount().GetLogicalAccountId()
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: testSpace, LogicalAccountID: logicalID, TradingAccountID: accountID, Enabled: true, Priority: 1,
+		})
+	}))
 
 	// 标的入库（生产里由会话启动时写入）。
 	instruments, err := market.LoadInstruments(ctx)
@@ -163,7 +174,7 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	}
 	syncAccount()
 	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation(testSpace, logicalID, "ACTIVE", "")
+		return tx.ResumeLogicalAccount(testSpace, logicalID)
 	}))
 
 	prices := targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: adapter}, Exchanges: registry, Now: clock}

@@ -62,7 +62,7 @@ func pseudoMarketPrice(reference shared.Decimal, side exchange.Side, settings or
 	}
 	price := reference.Mul(one.Sub(slippage))
 	if validTick {
-		price = floorToStep(price, tick)
+		price = shared.FloorToStep(price, tick)
 	}
 	return price
 }
@@ -96,7 +96,7 @@ func ClampToPriceBand(price, reference shared.Decimal, side exchange.Side, instr
 		}
 		ceiling := reference.Mul(one.Add(ratio.Sub(one).Mul(headroom)))
 		if validTick {
-			ceiling = floorToStep(ceiling, tick)
+			ceiling = shared.FloorToStep(ceiling, tick)
 		}
 		if byTicks := reference.Add(tickBand); byTicks.Cmp(ceiling) > 0 {
 			ceiling = byTicks
@@ -125,7 +125,7 @@ func ClampToPriceBand(price, reference shared.Decimal, side exchange.Side, instr
 
 // ceilToStep 把正数向上取整到步长的整数倍。
 func ceilToStep(value, step shared.Decimal) shared.Decimal {
-	floored := floorToStep(value, step)
+	floored := shared.FloorToStep(value, step)
 	if floored.Cmp(value) == 0 {
 		return floored
 	}

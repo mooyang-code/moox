@@ -12,7 +12,7 @@ describe("Trade public API", () => {
   beforeEach(() => call.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "ok" } }));
 
   it("constructs 组合账户生命周期请求", async () => {
-    await trade.createLogicalAccount({ name: "paper", execution_mode: 1, settlement_asset: "USDT" });
+    await trade.createLogicalAccount({ name: "paper", environment: 3, settlement_asset: "USDT" });
     await trade.pauseLogicalAccount("logical-1", "manual intervention");
     await trade.resumeLogicalAccount("logical-1");
     await trade.flattenLogicalAccount("action-1", "logical-1", "risk cleanup");
@@ -42,7 +42,7 @@ describe("Trade public API", () => {
   it("preserves explicit account control mode in creation requests", async () => {
     const logical = {
       name: "manual",
-      execution_mode: 1 as const,
+      environment: 3 as const,
       settlement_asset: "USDT",
       control_mode: 2 as const
     };
@@ -50,7 +50,6 @@ describe("Trade public API", () => {
     expect(call).toHaveBeenLastCalledWith("trade", "CreateLogicalAccount", logical);
     const paper = {
       name: "paper",
-      logical_account_name: "manual",
       exchange: "binance" as const,
       markets: ["spot", "swap"] as ("spot" | "swap")[],
       settlement_asset: "USDT",
@@ -59,8 +58,7 @@ describe("Trade public API", () => {
         maker_fee_rate: "0",
         taker_fee_rate: "0",
         slippage_bps: "0"
-      },
-      control_mode: 2 as const
+      }
     };
     await trade.createTradingAccount(paper);
     expect(call).toHaveBeenLastCalledWith("trade", "CreateTradingAccount", paper);
@@ -72,6 +70,7 @@ describe("Trade public API", () => {
     });
     expect(trade).not.toHaveProperty("createPaperSimulation");
     expect(trade).not.toHaveProperty("closePaperSimulation");
+    expect(trade).not.toHaveProperty("listHoldings");
   });
 
   it("文案键与后端状态一一对应", () => {

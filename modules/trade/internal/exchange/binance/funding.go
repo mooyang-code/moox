@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -31,16 +32,11 @@ type fundingRatePayload struct {
 	MarkPrice   string `json:"markPrice"`
 }
 
-// SupportsFundingRates：只有 U 本位永续有资金费。
-func (a *Adapter) SupportsFundingRates() bool {
-	return a.config.Market() == exchange.MarketTypeSwap
-}
-
 // ListFundingRates 返回 [start, end] 内 symbols 这些合约的资金费结算记录。接口不带 symbol，一次返回全部合约，按 4 小时分段请求；
 // 某段满 1000 条说明可能被截断，对半拆开重查，不依赖返回顺序；同一毫秒就超过 1000 条时报错，不返回不完整的结果。
 // 只严格解析 symbols 里的合约，其他合约格式不对的记录只记日志跳过。
 func (a *Adapter) ListFundingRates(ctx context.Context, start, end time.Time, symbols []string) ([]exchange.FundingRate, error) {
-	if !a.SupportsFundingRates() {
+	if !a.Supports(execution.CapabilityFundingRates) {
 		return nil, exchange.Rejected("该市场没有资金费", nil)
 	}
 	if end.Before(start) {

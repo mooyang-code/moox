@@ -35,7 +35,6 @@ export interface DetailContext {
   openOrder: (instrumentId?: string, accountId?: string, prefill?: OrderPrefill) => void;
   openFlatten: (account?: TradingAccount) => void;
   openCancel: (order: Order) => void;
-  openClosePaper: (account: TradingAccount) => void;
   syncAccounts: (accounts: TradingAccount[]) => Promise<void>;
 }
 

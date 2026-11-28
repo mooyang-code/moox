@@ -369,7 +369,7 @@ func TestDelistFlattenCompletesWhileOtherInstrumentsHaveOpenOrders(t *testing.T)
 	}
 	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", logical.AutomationState)
+	require.Equal(t, "ACTIVE", logical.AutomationState())
 }
 
 // 解除禁止提前结束时要确认撤单：本动作的子单还没结束就不能记 COMPLETED，也不能唤醒目标（执行器会把没结束的 OPERATOR 单当冲突、暂停组合）。

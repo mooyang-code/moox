@@ -228,9 +228,6 @@ func (p *PortfolioMargin) RateStatus() exchange.RateStatus {
 	}
 }
 
-// LedgerSupported：只有合约（UM）有 /papi/v1/um/income。
-func (p *PortfolioMargin) LedgerSupported() bool { return p.hasMarket(exchange.MarketTypeSwap) }
-
 func (p *PortfolioMargin) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	if !p.hasMarket(exchange.MarketTypeSwap) || (query.Market != exchange.MarketTypeUnspecified && query.Market != exchange.MarketTypeSwap) {
 		return exchange.LedgerPage{}, exchange.Rejected("该账户不支持这个市场的资金流水", nil)
@@ -674,13 +671,15 @@ func (p *PortfolioMargin) dispatchUMAccount(ctx context.Context, root fields, ha
 	return nil
 }
 
-// Supports：统一账户不划转（现货和合约保证金同属一个账户），BNB 抵扣和小额兑换可用。
+// Supports：统一账户不划转（现货和合约保证金同属一个账户），支持私有流与 BNB 抵扣，小额兑换需开通现货，资金流水需开通合约。
 func (p *PortfolioMargin) Supports(capability string) bool {
 	switch capability {
-	case execution.CapabilityFeeDiscount:
+	case execution.CapabilityFeeDiscount, execution.CapabilityAccountEvents:
 		return true
 	case execution.CapabilityDust:
 		return p.hasMarket(exchange.MarketTypeSpot)
+	case execution.CapabilityLedger:
+		return p.hasMarket(exchange.MarketTypeSwap)
 	}
 	return false
 }

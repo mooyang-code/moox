@@ -39,41 +39,19 @@ func actionStage(action laneAction) int {
 }
 
 // WalletTransfer 是普通账户第 4、6 阶段的钱包划转。统一账户、OKX、模拟盘没有划转，不会调用它；
-// 真实实现是 application/wallet（通过 NewWalletTransfer 接进来），这里定义执行器要求的行为。
+// 真实实现是 application/wallet.Service，直接共用 wallet.Buy 与 wallet.Outcome。
 type WalletTransfer interface {
 	// BeforeSpotBuy 在现货买入前把资金划进现货钱包，并等现货钱包的快照晚于划转完成时间。
 	// buys 只含需要划转的普通账户的现货买入。每一轮收敛都会调用它：实现必须按目标 ID 查划转表保证幂等，
 	// 已经划过的不重复划，划转完成但快照还没追上时把该账户放进 Waiting（只挡这个账户的买单）。
 	// 合约钱包可划额度不够时，用 BuyScale 把该账户的现货买入按比例缩小（0 到 1，缺省不缩小，0 表示这轮买不了）。
-	BeforeSpotBuy(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, buys []TransferBuy) (TransferOutcome, error)
+	BeforeSpotBuy(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, buys []wallet.Buy) (wallet.Outcome, error)
 	// Collect 在目标执行完毕后把现货钱包多出来的资金归集回合约钱包，pending 为真表示归集还没完成。
 	// 同样每一轮都会调用，实现须保证幂等。
 	Collect(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, accounts []store.TradingAccountRecord) (pending bool, err error)
 	// CollectForRisk 是保证金率风控触发后的归集：没有目标（划转记录的 target_id 为空串），一次风控事件由幂等键标识
 	// （风控减仓的动作号 margin-<组合>-<时间>）。同一个幂等键最多归集一次，不同幂等键各自归集；每一轮都会调用，实现须幂等。
 	CollectForRisk(ctx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord) (pending bool, err error)
-}
-
-// TransferOutcome 是第 4 阶段一次划转检查的结果。
-type TransferOutcome struct {
-	// Waiting 是本轮还不能买入的账户（键：执行账户 ID）：正在划转、等待现货钱包快照，或失败后在退避等待。
-	// 值是给人看的原因，空串表示正常等待、不用显示。只有这些账户的买单被挡，同组合的其他账户照常下单。
-	Waiting map[string]string
-	// BuyScale 是各账户现货买入要缩小到的比例（键：执行账户 ID，0 到 1）；没有条目表示不缩小。
-	BuyScale map[string]shared.Decimal
-	// Reasons 是比例缩小或为 0 的原因（键：执行账户 ID），写进 blocked_targets；没有写原因的用默认说明。
-	Reasons map[string]string
-	// ReasonCodes 是与 Reasons 对应的结构化原因码（键：执行账户 ID），供状态机与关注项判断。
-	ReasonCodes map[string]string
-	// RetryAfter 是建议的下次收敛间隔（失败后退避的剩余时间）；0 表示用 transferPollInterval。
-	RetryAfter time.Duration
-}
-
-// TransferBuy 是一个需要划转资金的现货买入：账户、标的和计划买入的基础资产数量（金额由划转实现按报价折算）。
-type TransferBuy struct {
-	Account    store.TradingAccountRecord
-	Instrument store.InstrumentRecord
-	Quantity   shared.Decimal
 }
 
 // needsWalletTransfer 报告执行账户的现货和合约资金是否在不同钱包里，需要在两者之间划转。
@@ -89,18 +67,18 @@ func (e *Executor) walletTransferBeforeSpotBuy(
 	spaceID string,
 	target store.LogicalAccountTargetRecord,
 	buys []laneAction,
-) (TransferOutcome, error) {
+) (wallet.Outcome, error) {
 	if e.Transfers == nil {
-		return TransferOutcome{}, nil
+		return wallet.Outcome{}, nil
 	}
-	var transfers []TransferBuy
+	var transfers []wallet.Buy
 	for _, action := range buys {
 		if !action.noTransfer && needsWalletTransfer(action.member.account) {
-			transfers = append(transfers, TransferBuy{Account: action.member.account, Instrument: action.instrument, Quantity: action.delta.Abs()})
+			transfers = append(transfers, wallet.Buy{Account: action.member.account, Instrument: action.instrument, Quantity: action.delta.Abs()})
 		}
 	}
 	if len(transfers) == 0 {
-		return TransferOutcome{}, nil
+		return wallet.Outcome{}, nil
 	}
 	return e.Transfers.BeforeSpotBuy(ctx, spaceID, target, transfers)
 }

@@ -303,6 +303,179 @@ func (r TradingAccountRecord) SupportsMarket(market string) bool {
 	return slices.Contains(r.Markets, market)
 }
 
+// MarketTypes 返回账户已开通市场的类型化切片。
+func (r TradingAccountRecord) MarketTypes() []exchange.MarketType {
+	result := make([]exchange.MarketType, len(r.Markets))
+	for i, market := range r.Markets {
+		result[i] = exchange.MarketType(market)
+	}
+	return result
+}
+
+// HasLeverageMarket 报告账户是否开通了需要配置杠杆和保证金模式的市场（SWAP）。
+func (r TradingAccountRecord) HasLeverageMarket() bool {
+	return slices.ContainsFunc(r.Markets, func(market string) bool {
+		return exchange.RuleFor(market).Leverage
+	})
+}
+
+// SharesFundsAcrossMarkets 报告各市场是否共用一个资金池（币安统一账户、OKX 统一账户与模拟盘）。
+func (r TradingAccountRecord) SharesFundsAcrossMarkets() bool {
+	return tradingaccount.SharesFundsAcrossMarkets(
+		exchange.ExecutionMode(r.ExecutionMode),
+		exchange.Exchange(r.Exchange),
+		exchange.AccountMode(r.AccountMode),
+	)
+}
+
+// MarketsSharingFunds 返回和某个市场占用同一份资金的市场。
+func (r TradingAccountRecord) MarketsSharingFunds(market exchange.MarketType) []string {
+	var markets []string
+	wallet := r.WalletFor(string(market))
+	for _, candidate := range r.Markets {
+		if r.SharesFundsAcrossMarkets() || r.WalletFor(candidate) == wallet {
+			markets = append(markets, candidate)
+		}
+	}
+	return markets
+}
+
+// MarketForInstrument 返回内部标的 ID 在这个账户里所属的市场。
+func (r TradingAccountRecord) MarketForInstrument(instrumentID string) exchange.MarketType {
+	return exchange.ResolveInstrumentMarket(instrumentID, r.MarketTypes())
+}
+
+// EffectiveEnvironment 返回账户的三值环境（PAPER / TESTNET / PRODUCTION），与组合环境校验对齐。
+func (r TradingAccountRecord) EffectiveEnvironment() exchange.AccountEnvironment {
+	if r.ExecutionMode == string(exchange.ExecutionModePaper) {
+		return exchange.AccountEnvironmentPaper
+	}
+	return exchange.AccountEnvironment(r.Environment)
+}
+
+// MarketDataEnvironment 返回读取行情与标的规则时使用的环境（模拟盘用 PRODUCTION，实盘用自身环境）。
+func (r TradingAccountRecord) MarketDataEnvironment() exchange.AccountEnvironment {
+	return tradingaccount.MarketDataEnvironment(
+		exchange.ExecutionMode(r.ExecutionMode),
+		exchange.AccountEnvironment(r.Environment),
+	)
+}
+
+// LeverageDecimal 读取指定键（标的 ID 或 "*"）的杠杆倍数。
+func (r TradingAccountRecord) LeverageDecimal(key string) (shared.Decimal, bool) {
+	raw, ok := r.LeverageSettings[key]
+	if !ok {
+		return shared.Zero(), false
+	}
+	value, err := shared.ParseDecimal(raw)
+	if err != nil {
+		return shared.Zero(), false
+	}
+	return value, true
+}
+
+// PaperDecimals 解析模拟盘配置的初始资金、挂单费率、吃单费率与滑点。
+func (r TradingAccountRecord) PaperDecimals() (initial, maker, taker, slippage shared.Decimal, ok bool) {
+	if r.PaperConfig == nil {
+		return shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero(), false
+	}
+	var err error
+	if initial, err = shared.ParseDecimal(r.PaperConfig.InitialBalance); err != nil {
+		return shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero(), false
+	}
+	if maker, err = parseOptionalZeroDecimal(r.PaperConfig.MakerFeeRate); err != nil {
+		return shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero(), false
+	}
+	if taker, err = parseOptionalZeroDecimal(r.PaperConfig.TakerFeeRate); err != nil {
+		return shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero(), false
+	}
+	if slippage, err = parseOptionalZeroDecimal(r.PaperConfig.SlippageBPS); err != nil {
+		return shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero(), false
+	}
+	return initial, maker, taker, slippage, true
+}
+
+func parseOptionalZeroDecimal(raw string) (shared.Decimal, error) {
+	if strings.TrimSpace(raw) == "" {
+		return shared.Zero(), nil
+	}
+	return shared.ParseDecimal(raw)
+}
+
+// InspectionBlockers 返回最近一次检测里按账户已开通市场算出的阻断项：有任何一项，账户都不能下单。
+// 还没有检测过的账户（模拟盘、股票，或检测前的实盘账户）没有阻断项；检测结果解析失败时不阻断，由复查重新写入。
+func (r TradingAccountRecord) InspectionBlockers() []exchange.InspectionFinding {
+	if r.ExecutionMode != string(exchange.ExecutionModeLive) {
+		return nil
+	}
+	inspection, err := exchange.ParseInspection(r.InspectionJSON)
+	if err != nil {
+		return nil
+	}
+	return inspection.BlockersFor(r.MarketTypes())
+}
+
+// Validate 校验执行账户的字段完整性、市场规范、实盘/模拟盘配置与杠杆约束。
+func (r TradingAccountRecord) Validate() error {
+	exch := exchange.Exchange(r.Exchange)
+	execMode := exchange.ExecutionMode(r.ExecutionMode)
+	status := exchange.AccountStatus(r.Status)
+	if blank(r.TradingAccountID) ||
+		blank(r.SpaceID) ||
+		blank(r.Name) ||
+		!exch.Valid() ||
+		!execMode.Valid() ||
+		blank(r.SettlementAsset) ||
+		!tradingaccount.ValidStatus(status) {
+		return tradingaccount.InvalidAccount("缺少必填字段或取值不受支持（名称、交易所、执行方式、结算资产、状态）")
+	}
+	env := exchange.AccountEnvironment(r.Environment)
+	if execMode == exchange.ExecutionModePaper && env == exchange.AccountEnvironmentUnspecified {
+		env = exchange.AccountEnvironmentPaper
+	}
+	if err := tradingaccount.ValidateMarkets(exch, execMode, env, exchange.AccountMode(r.AccountMode), r.MarketTypes()); err != nil {
+		return err
+	}
+	switch execMode {
+	case exchange.ExecutionModeLive:
+		if r.PaperConfig != nil {
+			return tradingaccount.InvalidAccount("实盘账户不能携带模拟配置")
+		}
+		if !exchange.AccountEnvironment(r.Environment).ValidLive() || blank(r.CredentialSecretID) {
+			return tradingaccount.InvalidAccount("实盘账户必须带环境和密钥")
+		}
+	case exchange.ExecutionModePaper:
+		if r.PaperConfig == nil {
+			return tradingaccount.InvalidAccount("模拟账户必须带模拟配置")
+		}
+		if r.Environment != "" && r.Environment != string(exchange.AccountEnvironmentPaper) {
+			return tradingaccount.InvalidAccount("模拟账户环境必须为 PAPER 或空")
+		}
+		initial, maker, taker, slippage, ok := r.PaperDecimals()
+		if !ok {
+			return tradingaccount.InvalidAccount("模拟配置数值格式不合法")
+		}
+		if err := tradingaccount.ValidatePaperParams(initial, maker, taker, slippage, r.PaperConfig.OrderRetentionDays); err != nil {
+			return err
+		}
+	}
+	return tradingaccount.ValidateLeverageRules(r.HasLeverageMarket(), exchange.MarginMode(r.MarginMode), r.LeverageSettings)
+}
+
+// ExecutionEligibility 校验执行账户当前是否允许下单。
+func (r TradingAccountRecord) ExecutionEligibility() error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if r.Status != string(exchange.AccountStatusEnabled) || !r.Ready {
+		return tradingaccount.ErrAccountNotExecutable
+	}
+	if blockers := r.InspectionBlockers(); len(blockers) != 0 {
+		return fmt.Errorf("%w：%s", tradingaccount.ErrAccountNotExecutable, blockers[0].Message)
+	}
+	return nil
+}
+
 type tradingAccountRow struct {
 	SpaceID              string    `gorm:"column:c_space_id"`
 	TradingAccountID     string    `gorm:"column:c_trading_account_id"`

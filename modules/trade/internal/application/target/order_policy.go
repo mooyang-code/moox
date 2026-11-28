@@ -253,7 +253,7 @@ func (env *laneEnv) applyHourlyCap(
 	if remaining.Cmp(shared.Zero()) <= 0 {
 		return shared.Zero(), true, nil
 	}
-	allowed := floorToStep(remaining.Div(price), mustBaseStep(candidate.instrument))
+	allowed := shared.FloorToStep(remaining.Div(price), mustBaseStep(candidate.instrument))
 	if allowed.Cmp(quantity) < 0 {
 		return allowed, true, nil
 	}
@@ -273,7 +273,7 @@ func (env *laneEnv) tooSmallToPlace(candidate laneAction, quantity, price shared
 	if quantity.Cmp(shared.Zero()) <= 0 {
 		return true
 	}
-	if _, minimum, err := baseQuantityRules(candidate.instrument); err != nil || quantity.Cmp(minimum) < 0 {
+	if _, minimum, err := candidate.instrument.BaseQuantityRules(); err != nil || quantity.Cmp(minimum) < 0 {
 		return true
 	}
 	// 交易所最小名义金额：给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。

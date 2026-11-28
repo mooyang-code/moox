@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 const (
@@ -29,16 +30,11 @@ type incomePayload struct {
 	TradeID    string      `json:"tradeId"`
 }
 
-// LedgerSupported：U 本位永续有 /fapi/v1/income；现货没有统一的资金流水接口。
-func (a *Adapter) LedgerSupported() bool {
-	return a.config.Market() == exchange.MarketTypeSwap
-}
-
 // ListLedger 返回 [Start, End] 内最新的至多 Limit 条资金流水，按时间倒序。
 // income 接口一次最多返回 1000 条，从结束时间往前分段查：第一次查整个时间段（稀疏账户一次就够）；
 // 满页说明这段装不下，按这一页覆盖的时间跨度估算密度，缩小窗口重查这段的末尾；不满页就整段收下再往前。
 func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
-	if !a.LedgerSupported() {
+	if !a.Supports(execution.CapabilityLedger) {
 		return exchange.LedgerPage{}, exchange.Rejected("该账户不支持资金流水", nil)
 	}
 	if query.Limit <= 0 || query.End.Before(query.Start) {

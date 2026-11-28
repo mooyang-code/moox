@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
@@ -47,7 +47,7 @@ func claimFill(orderID, tradeID, quantity string, at int64) exchange.Fill {
 func claimService(tradeStore *store.Store, adapter *syncAdapter) *Service {
 	return &Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 }
@@ -188,7 +188,7 @@ func TestMissingOrderWithFillsInTheSameRoundStaysFilled(t *testing.T) {
 	adapter := &missingAdapter{fills: []exchange.Fill{claimFill("missing-filled", "trade-1", "1", 2_000)}}
 	service := &Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
+		SessionState: readySessionState(true), Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now: func() time.Time { return time.Now().Add(10 * time.Minute) },
 	}
 

@@ -12,6 +12,7 @@ import (
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	positionapp "github.com/mooyang-code/moox/modules/trade/internal/application/position"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
@@ -285,6 +286,8 @@ func executionModeToPB(value string) tradepb.ExecutionMode {
 
 func environmentFromPB(value tradepb.AccountEnvironment) exchange.AccountEnvironment {
 	switch value {
+	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER:
+		return exchange.AccountEnvironmentPaper
 	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET:
 		return exchange.AccountEnvironmentTestnet
 	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION:
@@ -296,6 +299,8 @@ func environmentFromPB(value tradepb.AccountEnvironment) exchange.AccountEnviron
 
 func environmentToPB(value string) tradepb.AccountEnvironment {
 	switch exchange.AccountEnvironment(value) {
+	case exchange.AccountEnvironmentPaper:
+		return tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER
 	case exchange.AccountEnvironmentTestnet:
 		return tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET
 	case exchange.AccountEnvironmentProduction:
@@ -464,11 +469,12 @@ func logicalAccountToPB(
 		LogicalAccountId: value.LogicalAccountID,
 		SpaceId:          value.SpaceID,
 		Name:             value.Name,
-		ExecutionMode:    executionModeToPB(value.ExecutionMode),
+		Environment:      environmentToPB(value.Environment),
+		ExecutionMode:    executionModeToPB(value.ExecutionMode()),
 		ControlMode:      controlModeToPB(value.ControlMode),
 		Markets:          marketStrings(markets),
 		SettlementAsset:  value.SettlementAsset,
-		AutomationState:  value.AutomationState,
+		AutomationState:  value.AutomationState(),
 		PauseReason:      value.PauseReason,
 		Members:          pbMembers,
 		Ready:            readiness.Ready,
@@ -523,18 +529,32 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 	}
 }
 
-func positionToPB(value store.PositionRecord) *tradepb.Position {
-	return &tradepb.Position{
-		MarketType:       value.MarketType,
-		TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
-		PositionSide:   positionSideToPB(value.PositionSide),
-		SignedQuantity: value.SignedQuantity, EntryPrice: value.EntryPrice,
-		MarkPrice: value.MarkPrice, Leverage: value.Leverage,
-		MarginMode: value.MarginMode, UsedMargin: value.UsedMargin,
-		LiquidationPrice: value.LiquidationPrice,
-		UnrealizedPnl:    value.UnrealizedPnL, RealizedPnl: value.RealizedPnL,
-		ExchangeUpdatedAt: value.ExchangeUpdatedAt, UpdatedAt: unixMilli(value.UpdatedAt),
+func positionToPB(value positionapp.Position) *tradepb.Position {
+	item := &tradepb.Position{
+		MarketType:        value.MarketType,
+		TradingAccountId:  value.TradingAccountID,
+		InstrumentId:      value.InstrumentID,
+		ExchangeSymbol:    value.ExchangeSymbol,
+		Asset:             value.Asset,
+		PositionSide:      positionSideToPB(value.PositionSide),
+		SignedQuantity:    value.SignedQuantity,
+		EntryPrice:        value.EntryPrice,
+		MarkPrice:         value.MarkPrice,
+		MarketValue:       value.MarketValue,
+		Leverage:          value.Leverage,
+		MarginMode:        value.MarginMode,
+		UsedMargin:        value.UsedMargin,
+		LiquidationPrice:  value.LiquidationPrice,
+		RealizedPnl:       value.RealizedPnL,
+		Sellable:          value.Sellable,
+		ExchangeUpdatedAt: value.ExchangeUpdatedAt,
+		UpdatedAt:         value.UpdatedAt,
 	}
+	if value.UnrealizedPnL != nil {
+		pnl := *value.UnrealizedPnL
+		item.UnrealizedPnl = &pnl
+	}
+	return item
 }
 
 func logicalAccountTargetToPB(

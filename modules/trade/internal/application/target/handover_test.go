@@ -46,7 +46,7 @@ func TestNewInstanceTargetStopsPreviousInstanceRestingOrder(t *testing.T) {
 	require.Equal(t, []string{"resting-1"}, f.orders.canceled)
 	logical, err := f.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", logical.AutomationState)
+	require.Equal(t, "ACTIVE", logical.AutomationState())
 }
 
 // 过期路径撤目标单（releaseTargetOrders 不带 keepTargetID）不分哪一份目标：挂单撤掉，待提交的丢弃，市价单不动；
@@ -210,11 +210,11 @@ func TestFinishedFlattenChildrenDoNotPauseButManualOrdersDo(t *testing.T) {
 			require.NoError(t, err)
 			if c.pauses {
 				require.Equal(t, StatusPaused, result.Status)
-				require.Equal(t, "PAUSED", logical.AutomationState)
+				require.Equal(t, "PAUSED", logical.AutomationState())
 				return
 			}
 			require.NotEqual(t, StatusPaused, result.Status, logical.PauseReason)
-			require.Equal(t, "ACTIVE", logical.AutomationState)
+			require.Equal(t, "ACTIVE", logical.AutomationState())
 		})
 	}
 }

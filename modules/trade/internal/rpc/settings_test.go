@@ -14,10 +14,10 @@ import (
 
 func newSettingsHandler(t *testing.T) (*LogicalAccountServer, context.Context) {
 	t.Helper()
-	return newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_PAPER)
+	return newSettingsHandlerFor(t, tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER)
 }
 
-func newSettingsHandlerFor(t *testing.T, mode tradepb.ExecutionMode) (*LogicalAccountServer, context.Context) {
+func newSettingsHandlerFor(t *testing.T, environment tradepb.AccountEnvironment) (*LogicalAccountServer, context.Context) {
 	t.Helper()
 	tradeStore := openRPCStore(t)
 	handler := &LogicalAccountServer{
@@ -27,7 +27,7 @@ func newSettingsHandlerFor(t *testing.T, mode tradepb.ExecutionMode) (*LogicalAc
 	}
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	created, err := handler.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
-		Name: "main", ExecutionMode: mode, SettlementAsset: "USDT",
+		Name: "main", Environment: environment, SettlementAsset: "USDT",
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
@@ -79,7 +79,7 @@ func TestUpdateOrderSettingsRejectsInvalidValues(t *testing.T) {
 }
 
 func TestUpdateFundSettingsValidatesStablecoinMargin(t *testing.T) {
-	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	handler, ctx := newSettingsHandlerFor(t, tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION)
 	update := func(settings *tradepb.FundSettings) *tradepb.UpdateLogicalAccountFundSettingsRsp {
 		response, err := handler.UpdateLogicalAccountFundSettings(ctx, &tradepb.UpdateLogicalAccountFundSettingsReq{
 			LogicalAccountId: "logical-1", Settings: settings,
@@ -141,7 +141,7 @@ func TestPaperLogicalAccountRejectsLiveOnlyFundSettings(t *testing.T) {
 
 // 含非币安成员的组合不能开 BNB 抵扣、BNB 保留、小额兑换、稳定币保证金；保证金币不能写成组合的结算币。
 func TestFundSettingsAreRestrictedToBinanceMembersAndSettlementAsset(t *testing.T) {
-	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	handler, ctx := newSettingsHandlerFor(t, tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION)
 	require.NoError(t, handler.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx", Exchange: "okx", Markets: []string{"spot"},
@@ -172,7 +172,7 @@ func TestFundSettingsAreRestrictedToBinanceMembersAndSettlementAsset(t *testing.
 // 存的设置读不出来时返回错误说明、不返回设置：界面不能按默认值显示（一保存就覆盖了原设置）。
 // 只是不满足后来加的写入校验的旧设置，照常显示（和执行器一样宽松解析）。
 func TestUnreadableStoredSettingsAreReportedNotShownAsDefaults(t *testing.T) {
-	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	handler, ctx := newSettingsHandlerFor(t, tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION)
 	set := func(order, fund string) *tradepb.LogicalAccount {
 		require.NoError(t, handler.Store.DBForTest().Exec(
 			"UPDATE t_logical_accounts SET c_order_settings_json = ?, c_fund_settings_json = ?", order, fund).Error)
@@ -198,7 +198,7 @@ func (noopSyncer) SyncAccount(context.Context, string) error { return nil }
 
 // 先开 BNB 项再加非币安成员也不能绕过检查：加成员时复查资金设置。
 func TestAddingANonBinanceMemberIsRejectedWhenFundMaintenanceIsOn(t *testing.T) {
-	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	handler, ctx := newSettingsHandlerFor(t, tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION)
 	handler.LogicalAccounts.Syncer = noopSyncer{}
 	require.NoError(t, handler.Store.Transaction(ctx, func(tx *store.Tx) error {
 		for _, account := range []store.TradingAccountRecord{
@@ -233,7 +233,7 @@ func TestAddingANonBinanceMemberIsRejectedWhenFundMaintenanceIsOn(t *testing.T) 
 // 个别数值读不出来（宽松解析给出 warning）时，设置照常返回，但错误说明也要有：
 // 否则界面稳定币保证金显示为空、BNB 保留显示 0，一保存就把排除集合和 BNB 保留悄悄改掉。
 func TestFundSettingsWarningsAreReportedAndSavingIsBlockedByTheErrorField(t *testing.T) {
-	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	handler, ctx := newSettingsHandlerFor(t, tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION)
 	set := func(fund string) *tradepb.LogicalAccount {
 		require.NoError(t, handler.Store.DBForTest().Exec("UPDATE t_logical_accounts SET c_fund_settings_json = ?", fund).Error)
 		got, err := handler.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: "logical-1"})

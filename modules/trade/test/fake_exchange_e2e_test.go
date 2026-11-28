@@ -166,8 +166,8 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "A 股组合",
-			ExecutionMode:   string(exchange.ExecutionModeLive),
-			SettlementAsset: "CNY", AutomationState: "PAUSED", PauseReason: "configure",
+			Environment:     string(exchange.AccountEnvironmentTestnet),
+			SettlementAsset: "CNY", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -177,7 +177,7 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 }
 
@@ -204,6 +204,8 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 		Exchange:   fakeExchangeName,
 		OrderTypes: []exchange.OrderType{exchange.OrderTypeMarket},
 		Session:    fakeSession{open: &open},
+	}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
+		return fakeAdapter{ExecutionAdapter: core}, nil
 	}, func(_ exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
 		if credential.Extra["gateway"] == "" {
 			return nil, fmt.Errorf("缺少券商网关地址")

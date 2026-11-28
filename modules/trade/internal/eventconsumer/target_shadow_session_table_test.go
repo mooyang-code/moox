@@ -78,7 +78,7 @@ func TestShadowTargetSessionTable(t *testing.T) {
 			seedLogicalTargetAccount(t, db, true, true)
 			shadowCurrentSession(t, db, test.current)
 			if test.manual {
-				require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+				require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 			}
 			now := time.Now().UTC().Truncate(time.Millisecond)
 			woke := false

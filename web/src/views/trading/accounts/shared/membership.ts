@@ -33,8 +33,8 @@ export function eligibleAccounts(
 }
 
 /**
- * 执行账户能加入的已有组合：环境一致、结算资产一致，并且已暂停自动执行
- * （后端要求增删成员前先暂停，运行中的组合要先去暂停）。
+ * 执行账户能加入的已有组合：环境一致、结算资产一致，并且允许编辑成员
+ * （自主下单组合没有暂停态，随时可加；策略驱动组合需先暂停自动执行）。
  */
 export function joinableLogicals(
   logicals: readonly LogicalAccount[],
@@ -44,7 +44,10 @@ export function joinableLogicals(
 ): LogicalAccount[] {
   const asset = settlementAsset.trim().toUpperCase();
   return logicals.filter(
-    item => logicalInEnvironment(item, accounts, env) && item.settlement_asset === asset && item.automation_state === "PAUSED"
+    item =>
+      logicalInEnvironment(item, accounts, env) &&
+      item.settlement_asset === asset &&
+      (item.control_mode === 2 || item.automation_state === "PAUSED")
   );
 }
 

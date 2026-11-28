@@ -43,7 +43,7 @@ func (h *LogicalAccountServer) CreateLogicalAccount(
 		spaceID,
 		h.logicalAccountID(),
 		req.GetName(),
-		executionModeFromPB(req.GetExecutionMode()),
+		environmentFromPB(req.GetEnvironment()),
 		req.GetSettlementAsset(),
 		controlModeFromPB(req.GetControlMode()),
 	)
@@ -379,15 +379,7 @@ func applyLogicalAccountSummary(pb *tradepb.LogicalAccount, summary store.Logica
 	pb.PositionCount = summary.PositionCount
 	pb.EquityChange_24H = summary.EquityChange24h
 	pb.EquityChangePct_24H = summary.EquityChangePct24h
-}
-
-func logicalAccountReadinessFallback(st *store.Store, ctx context.Context, record store.LogicalAccountRecord) logicalapp.Readiness {
-	svc := &logicalapp.Service{Store: st}
-	readiness, err := svc.Readiness(ctx, st, record.SpaceID, record.LogicalAccountID)
-	if err != nil {
-		return logicalapp.Readiness{Reasons: []string{err.Error()}}
-	}
-	return readiness
+	pb.TotalEquity = summary.TotalEquity
 }
 
 func (h *LogicalAccountServer) logicalAccountID() string {

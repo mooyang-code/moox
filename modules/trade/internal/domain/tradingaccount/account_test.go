@@ -2,262 +2,67 @@ package tradingaccount
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
-func TestAccountValidation(t *testing.T) {
-	tests := []struct {
-		name    string
-		account Account
-		wantErr bool
-	}{
-		{name: "valid SPOT", account: validSpotAccount()},
-		{name: "valid SWAP", account: validSwapAccount()},
-		{
-			name: "PAPER does not require credential",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.CredentialSecretID = ""
-			}),
-		},
-		{
-			name: "LIVE requires credential",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.ExecutionMode = exchange.ExecutionModeLive
-				account.Environment = exchange.AccountEnvironmentTestnet
-				account.CredentialSecretID = ""
-				account.Paper = nil
-				account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentTestnet}
-			}),
-			wantErr: true,
-		},
-		{
-			name: "LIVE rejects missing LiveConfig even when legacy fields are set",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.ExecutionMode = exchange.ExecutionModeLive
-				account.Environment = exchange.AccountEnvironmentTestnet
-				account.CredentialSecretID = "secret-1"
-				account.Paper = nil
-				account.Live = nil
-			}),
-			wantErr: true,
-		},
-		{
-			name: "PAPER rejects missing PaperConfig even when environment is PAPER",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Paper = nil
-			}),
-			wantErr: true,
-		},
-		{
-			name: "PAPER requires PAPER environment",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Environment = exchange.AccountEnvironmentTestnet
-			}),
-			wantErr: true,
-		},
-		{
-			name: "PAPER accepts empty environment with PaperConfig",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Environment = exchange.AccountEnvironmentUnspecified
-			}),
-		},
-		{
-			name: "PAPER rejects nonpositive initial balance",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Paper = &PaperConfig{InitialBalance: shared.Zero(), OrderRetentionDays: DefaultOrderRetentionDays}
-			}),
-			wantErr: true,
-		},
-		{
-			name: "PAPER rejects invalid slippage",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Paper = &PaperConfig{
-					InitialBalance: shared.MustDecimal("100"), SlippageBPS: shared.MustDecimal("10000"),
-					OrderRetentionDays: DefaultOrderRetentionDays,
-				}
-			}),
-			wantErr: true,
-		},
-		{
-			name: "rejects both Live and Paper configs",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
-			}),
-			wantErr: true,
-		},
-		{
-			name: "LIVE rejects PaperConfig",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.ExecutionMode = exchange.ExecutionModeLive
-			}),
-			wantErr: true,
-		},
-		{
-			name: "PAPER rejects LiveConfig",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Paper = nil
-				account.Live = &LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
-			}),
-			wantErr: true,
-		},
-		{
-			name: "LIVE rejects mismatched Environment",
-			account: mutate(validLiveAccount(exchange.AccountEnvironmentTestnet), func(account *Account) {
-				account.Environment = exchange.AccountEnvironmentProduction
-			}),
-			wantErr: true,
-		},
-		{
-			name: "LIVE rejects mismatched CredentialSecretID",
-			account: mutate(validLiveAccount(exchange.AccountEnvironmentTestnet), func(account *Account) {
-				account.CredentialSecretID = "secret-other"
-			}),
-			wantErr: true,
-		},
-		{
-			name: "LIVE accepts LiveConfig with empty legacy fields",
-			account: mutate(validLiveAccount(exchange.AccountEnvironmentProduction), func(account *Account) {
-				account.Environment = exchange.AccountEnvironmentUnspecified
-				account.CredentialSecretID = ""
-			}),
-		},
-		{
-			name:    "LIVE accepts TESTNET",
-			account: validLiveAccount(exchange.AccountEnvironmentTestnet),
-		},
-		{
-			name:    "LIVE accepts PRODUCTION",
-			account: validLiveAccount(exchange.AccountEnvironmentProduction),
-		},
-		{
-			name: "SPOT rejects margin mode",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.MarginMode = exchange.MarginModeCross
-			}),
-			wantErr: true,
-		},
-		{
-			name: "SPOT rejects leverage",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.LeverageSettings = map[string]shared.Decimal{
-					"BTC-USDT": shared.MustDecimal("5"),
-				}
-			}),
-			wantErr: true,
-		},
-		{
-			name: "SWAP requires CROSS",
-			account: mutate(validSwapAccount(), func(account *Account) {
-				account.MarginMode = exchange.MarginModeUnspecified
-			}),
-			wantErr: true,
-		},
-		{
-			name: "SWAP rejects nonpositive leverage",
-			account: mutate(validSwapAccount(), func(account *Account) {
-				account.LeverageSettings["BTC-USDT"] = shared.Zero()
-			}),
-			wantErr: true,
-		},
-		{
-			name: "missing identity",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.SpaceID = ""
-			}),
-			wantErr: true,
-		},
-		{
-			name: "missing Exchange",
-			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Exchange = exchange.ExchangeUnspecified
-			}),
-			wantErr: true,
-		},
+func TestValidateMarketsAndTestnetRestriction(t *testing.T) {
+	both := []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
+	if err := ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModePaper, exchange.AccountEnvironmentPaper, "", both); err != nil {
+		t.Fatalf("模拟盘现货加合约应合法：%v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.account.Validate()
-			if tt.wantErr && !errors.Is(err, ErrInvalidAccount) {
-				t.Fatalf("Validate() error = %v, want ErrInvalidAccount", err)
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("Validate() error = %v", err)
-			}
-		})
+	// 币安测试网一个账户只能开一个市场；生产环境和 OKX 测试网可以同时开两个。
+	err := ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModeLive, exchange.AccountEnvironmentTestnet, "", both)
+	if !errors.Is(err, ErrInvalidAccount) || !strings.Contains(err.Error(), "币安测试网一个账户只能开通一个市场") {
+		t.Fatalf("err = %v，想要测试网只能开一个市场的中文错误", err)
+	}
+	if err := ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModeLive, exchange.AccountEnvironmentProduction, "", both); err != nil {
+		t.Fatalf("生产环境可以同时开通两个市场：%v", err)
+	}
+	if err := ValidateMarkets(exchange.ExchangeOKX, exchange.ExecutionModeLive, exchange.AccountEnvironmentTestnet, "", both); err != nil {
+		t.Fatalf("OKX 模拟盘可以同时开通两个市场：%v", err)
+	}
+
+	for name, err := range map[string]error{
+		"顺序不规范":      ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModePaper, exchange.AccountEnvironmentPaper, "", []exchange.MarketType{exchange.MarketTypeSwap, exchange.MarketTypeSpot}),
+		"重复":         ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModePaper, exchange.AccountEnvironmentPaper, "", []exchange.MarketType{exchange.MarketTypeSwap, exchange.MarketTypeSwap}),
+		"空":          ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModePaper, exchange.AccountEnvironmentPaper, "", nil),
+		"股票混合现货":     ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModePaper, exchange.AccountEnvironmentPaper, "", []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeEquity}),
+		"模拟盘不能有账户类型": ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModePaper, exchange.AccountEnvironmentPaper, exchange.AccountModeBinanceStandard, []exchange.MarketType{exchange.MarketTypeSpot}),
+		"未知账户类型":     ValidateMarkets(exchange.ExchangeBinance, exchange.ExecutionModeLive, exchange.AccountEnvironmentProduction, "UNKNOWN", []exchange.MarketType{exchange.MarketTypeSpot}),
+	} {
+		if !errors.Is(err, ErrInvalidAccount) {
+			t.Errorf("%s: err = %v，想要 ErrInvalidAccount", name, err)
+		}
 	}
 }
 
-func TestAccountExecutionEligibility(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*Account)
-	}{
-		{"disabled", func(account *Account) { account.Status = exchange.AccountStatusDisabled }},
-		{"not ready", func(account *Account) { account.Ready = false }},
+func TestValidatePaperParamsAndLeverageRules(t *testing.T) {
+	if err := ValidatePaperParams(shared.MustDecimal("1000"), shared.Zero(), shared.Zero(), shared.Zero(), DefaultOrderRetentionDays); err != nil {
+		t.Fatalf("合法模拟参数被拒：%v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			account := validSpotAccount()
-			tt.mutate(&account)
-			if !errors.Is(account.ExecutionEligibility(), ErrAccountNotExecutable) {
-				t.Fatalf("ExecutionEligibility() error = %v", account.ExecutionEligibility())
-			}
-		})
+	if !errors.Is(ValidatePaperParams(shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero(), DefaultOrderRetentionDays), ErrInvalidAccount) {
+		t.Fatal("零初始资金应被拒绝")
 	}
-
-	account := validSpotAccount()
-	if err := account.ExecutionEligibility(); err != nil {
-		t.Fatalf("ExecutionEligibility() error = %v", err)
+	if !errors.Is(ValidatePaperParams(shared.MustDecimal("100"), shared.Zero(), shared.Zero(), shared.MustDecimal("10000"), DefaultOrderRetentionDays), ErrInvalidAccount) {
+		t.Fatal("滑点达到 10000 应被拒绝")
 	}
-}
-
-func validSpotAccount() Account {
-	return Account{
-		ID:                 "account-1",
-		SpaceID:            "space-1",
-		Name:               "main",
-		Exchange:           exchange.ExchangeBinance,
-		Markets:            []exchange.MarketType{exchange.MarketTypeSpot},
-		ExecutionMode:      exchange.ExecutionModePaper,
-		Environment:        exchange.AccountEnvironmentPaper,
-		CredentialSecretID: "secret-1",
-		Paper: &PaperConfig{
-			InitialBalance:     shared.MustDecimal("100000"),
-			MakerFeeRate:       shared.Zero(),
-			TakerFeeRate:       shared.Zero(),
-			SlippageBPS:        shared.Zero(),
-			OrderRetentionDays: DefaultOrderRetentionDays,
-		},
-		SettlementAsset: "USDT",
-		Status:          exchange.AccountStatusEnabled,
-		Ready:           true,
+	if !errors.Is(ValidateLeverageRules(false, exchange.MarginModeCross, nil), ErrInvalidAccount) {
+		t.Fatal("无永续市场不能设保证金模式")
 	}
-}
-
-func validLiveAccount(env exchange.AccountEnvironment) Account {
-	account := validSpotAccount()
-	account.ExecutionMode = exchange.ExecutionModeLive
-	account.Environment = env
-	account.CredentialSecretID = "secret-1"
-	account.Paper = nil
-	account.Live = &LiveConfig{Environment: env, CredentialSecretID: "secret-1"}
-	return account
-}
-
-func validSwapAccount() Account {
-	account := validSpotAccount()
-	account.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
-	account.MarginMode = exchange.MarginModeCross
-	account.LeverageSettings = map[string]shared.Decimal{
-		"BTC-USDT": shared.MustDecimal("5"),
+	if !errors.Is(ValidateLeverageRules(false, exchange.MarginModeUnspecified, map[string]string{"BTC-USDT": "5"}), ErrInvalidAccount) {
+		t.Fatal("无永续市场不能设杠杆")
 	}
-	return account
-}
-
-func mutate(account Account, fn func(*Account)) Account {
-	fn(&account)
-	return account
+	if !errors.Is(ValidateLeverageRules(true, exchange.MarginModeUnspecified, nil), ErrInvalidAccount) {
+		t.Fatal("永续市场必须全仓")
+	}
+	if !errors.Is(ValidateLeverageRules(true, exchange.MarginModeCross, map[string]string{"BTC-USDT": "0"}), ErrInvalidAccount) {
+		t.Fatal("非正杠杆应被拒绝")
+	}
+	if err := ValidateLeverageRules(true, exchange.MarginModeCross, map[string]string{"BTC-USDT": "5"}); err != nil {
+		t.Fatalf("合法永续杠杆被拒：%v", err)
+	}
 }

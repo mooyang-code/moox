@@ -70,7 +70,7 @@ export function equityDelta(points: readonly EquityPoint[]): EquityDelta | null 
 export function flattenPreview(snapshot: PositionSnapshot, accountId?: string) {
   const swaps = snapshot.swapPositions.filter(item => !accountId || item.trading_account_id === accountId);
   const spots = snapshot.spotHoldings.filter(
-    item => item.instrument_id && Number(item.quantity) !== 0 && (!accountId || item.trading_account_id === accountId)
+    item => item.instrument_id && Number(item.signed_quantity) !== 0 && (!accountId || item.trading_account_id === accountId)
   );
   const value =
     swaps.reduce((sum, item) => sum + Math.abs(num(item.signed_quantity) * num(item.mark_price)), 0) +

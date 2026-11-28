@@ -99,7 +99,7 @@ func TestExecutorSessionTable(t *testing.T) {
 		{
 			name: "人工控制：不下单",
 			arrange: func(t *testing.T, f *targetFixture, _ *Executor) {
-				require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+				require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 			},
 			err: ErrTargetSession,
 		},

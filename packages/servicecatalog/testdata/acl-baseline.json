@@ -3,9 +3,9 @@
   "summary": {
     "components": 16,
     "services": 23,
-    "methods": 292,
-    "read_only_methods": 135,
-    "retryable_methods": 138,
+    "methods": 291,
+    "read_only_methods": 134,
+    "retryable_methods": 137,
     "callers": 19,
     "principals": 1
   },
@@ -1769,12 +1769,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "ListHoldings",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "ListInstrumentHolders",
           "read_only": true,
           "retryable": true,
@@ -2173,7 +2167,6 @@
       "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
       "trpc.moox.trade.TradeConsoleService/ListDelists",
       "trpc.moox.trade.TradeConsoleService/ListFills",
-      "trpc.moox.trade.TradeConsoleService/ListHoldings",
       "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
       "trpc.moox.trade.TradeConsoleService/ListLogicalAccounts",
       "trpc.moox.trade.TradeConsoleService/ListOperatorActions",
@@ -2509,7 +2502,6 @@
       "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
       "trpc.moox.trade.TradeConsoleService/ListDelists",
       "trpc.moox.trade.TradeConsoleService/ListFills",
-      "trpc.moox.trade.TradeConsoleService/ListHoldings",
       "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
       "trpc.moox.trade.TradeConsoleService/ListLogicalAccounts",
       "trpc.moox.trade.TradeConsoleService/ListOperatorActions",

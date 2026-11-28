@@ -268,7 +268,7 @@ func TestRunningDelistFlattenIsNotAConflictAndIsSkipped(t *testing.T) {
 	result := f.converged(t)
 	logical, err := f.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", logical.AutomationState, "下架清仓的单不暂停组合")
+	require.Equal(t, "ACTIVE", logical.AutomationState(), "下架清仓的单不暂停组合")
 	require.NotEqual(t, StatusPaused, result.Status)
 	require.Equal(t, []string{"ETH-USDT-SPOT:BUY"}, placedInstruments(f), "清仓中的标的不碰，别的标的照常")
 }

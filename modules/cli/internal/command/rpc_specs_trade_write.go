@@ -56,7 +56,7 @@ func init() {
 
 		// ---- 逻辑账户（组合） ----
 		rpcSpec{Path: []string{"trade", "logical", "create"}, Destructive: true, Short: "新建逻辑账户（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CreateLogicalAccount",
-			Flags: []rpcFlag{reqFlag("name", "name", "名称"), reqFlag("execution-mode", "execution_mode", "执行模式（EXECUTION_MODE_PAPER 或 EXECUTION_MODE_LIVE；测试网是 LIVE 加测试网环境的账户）"),
+			Flags: []rpcFlag{reqFlag("name", "name", "名称"), reqFlag("environment", "environment", "环境（ACCOUNT_ENVIRONMENT_PAPER、ACCOUNT_ENVIRONMENT_TESTNET 或 ACCOUNT_ENVIRONMENT_PRODUCTION）"),
 				usdt, strFlag("control-mode", "control_mode", "控制方式（CONTROL_MODE_STRATEGY 或 CONTROL_MODE_MANUAL）")}},
 		rpcSpec{Path: []string{"trade", "logical", "update"}, Destructive: true, Short: "修改逻辑账户名称（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "UpdateLogicalAccount",
 			Flags: []rpcFlag{logicalID, reqFlag("name", "name", "名称")}},
@@ -95,17 +95,15 @@ func init() {
 			Flags: []rpcFlag{reqFlag("order-id", "order_id", "订单 ID"), reason}},
 
 		// ---- 模拟账户 ----
-		rpcSpec{Path: []string{"trade", "paper", "create"}, Destructive: true, Short: "新建模拟账户，并新建或加入一个组合（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CreateTradingAccount",
-			Flags: []rpcFlag{reqFlag("account-name", "name", "模拟账户名称"), strFlag("logical-account-name", "logical_account_name", "新建组合的名称（与 --logical-account-id 二选一）"),
-				strFlag("logical-account-id", "logical_account_id", "加入已有组合"), reqFlag("exchange", "exchange", "模拟的交易所（binance、okx、ashare 或 hkex）"),
+		rpcSpec{Path: []string{"trade", "paper", "create"}, Destructive: true, Short: "新建模拟账户（与实盘建户一致，需另行加入组合；默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CreateTradingAccount",
+			Flags: []rpcFlag{reqFlag("account-name", "name", "模拟账户名称"), reqFlag("exchange", "exchange", "模拟的交易所（binance、okx、ashare 或 hkex）"),
 				{Name: "markets", Field: "markets", Kind: rpcJSON, Required: true, Usage: "开通的市场，JSON 数组，如 [\"swap\"]"}, usdt,
 				strFlag("margin-mode", "margin_mode", "保证金模式（开永续时写 CROSS）"), reqFlag("initial-balance", "paper.initial_balance", "初始资金"),
 				{Name: "maker-fee-rate", Field: "paper.maker_fee_rate", Kind: rpcString, Default: "0.0002", Usage: "挂单费率"},
 				{Name: "taker-fee-rate", Field: "paper.taker_fee_rate", Kind: rpcString, Default: "0.0005", Usage: "吃单费率"},
 				{Name: "slippage-bps", Field: "paper.slippage_bps", Kind: rpcString, Default: "1", Usage: "滑点（基点）"},
-				strFlag("control-mode", "control_mode", "控制方式（CONTROL_MODE_STRATEGY 或 CONTROL_MODE_MANUAL）"), intFlag("priority", "priority", "在组合里的优先级"),
 				intFlag("order-retention-days", "paper.order_retention_days", "订单与成交明细保留天数（0 不清理，默认 5）")}},
-		rpcSpec{Path: []string{"trade", "paper", "close"}, Destructive: true, Short: "关闭模拟账户（仅限模拟盘账户，不可逆；默认只预览，--yes 才执行）", Service: tradeConsole, Method: "UpdateTradingAccount", Fixed: map[string]any{"status": "DISABLED"}, Flags: []rpcFlag{accountID}, Merge: requirePaperTradingAccount},
+		rpcSpec{Path: []string{"trade", "paper", "close"}, Destructive: true, Short: "关闭模拟账户（需先移出组合，仅限模拟盘账户，不可逆；默认只预览，--yes 才执行）", Service: tradeConsole, Method: "UpdateTradingAccount", Fixed: map[string]any{"status": "DISABLED"}, Flags: []rpcFlag{accountID}, Merge: requirePaperTradingAccount},
 	)
 }
 

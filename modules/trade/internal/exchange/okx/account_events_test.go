@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
@@ -60,27 +60,27 @@ func TestOrdersChannelFeeCompletenessAndRESTParity(t *testing.T) {
 			require.Len(t, h.fills, 1)
 			require.Equal(t, tc.want, h.fills[0].Fee.String())
 			require.Equal(t, h.fills, fills)
-			for _, first := range []consumer.FillOrigin{consumer.OriginPrivateSocket, consumer.OriginRESTSnapshot} {
+			for _, first := range []fillreduce.FillOrigin{fillreduce.OriginPrivateSocket, fillreduce.OriginRESTSnapshot} {
 				t.Run(string(first), func(t *testing.T) {
 					s := openOKXReplayStore(t)
-					r := consumer.Reducer{Store: s}
-					second := consumer.OriginRESTSnapshot
+					r := fillreduce.Reducer{Store: s}
+					second := fillreduce.OriginRESTSnapshot
 					if first == second {
-						second = consumer.OriginPrivateSocket
+						second = fillreduce.OriginPrivateSocket
 					}
-					for i, origin := range []consumer.FillOrigin{first, second, first, second} {
+					for i, origin := range []fillreduce.FillOrigin{first, second, first, second} {
 						fill := fills[0]
-						if origin == consumer.OriginPrivateSocket {
+						if origin == fillreduce.OriginPrivateSocket {
 							fill = h.fills[0]
 						}
-						applied, err := r.ApplyFill(context.Background(), fill, consumer.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: origin})
+						applied, err := r.ApplyFill(context.Background(), fill, fillreduce.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: origin})
 						require.NoError(t, err)
 						require.Equal(t, i == 0, applied)
 					}
 					// 只有手续费不同的重放按重复处理，不报冲突，也不重复入账。
 					replay := fills[0]
 					replay.Fee = replay.Fee.Add(shared.MustDecimal("1"))
-					applied, err := r.ApplyFill(context.Background(), replay, consumer.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: second})
+					applied, err := r.ApplyFill(context.Background(), replay, fillreduce.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: second})
 					require.NoError(t, err)
 					require.False(t, applied)
 					record, err := s.GetOrder(context.Background(), "space-1", "order-1")
@@ -169,9 +169,9 @@ func TestOrdersChannelMultipleFillsPersistIndependentFees(t *testing.T) {
 		"fillFee":"-0.01","fillFeeCcy":"USDT","fillTime":"170000000000%d"}]}`, i, i, i, i)), h))
 	}
 	s := openOKXReplayStore(t)
-	r := consumer.Reducer{Store: s}
+	r := fillreduce.Reducer{Store: s}
 	for _, fill := range h.fills {
-		applied, err := r.ApplyFill(context.Background(), fill, consumer.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: consumer.OriginPrivateSocket})
+		applied, err := r.ApplyFill(context.Background(), fill, fillreduce.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: fillreduce.OriginPrivateSocket})
 		require.NoError(t, err)
 		require.True(t, applied)
 	}

@@ -40,9 +40,6 @@ type billPayload struct {
 	Ts       string `json:"ts"`
 }
 
-// LedgerSupported：OKX 统一账户的现货和永续都有账单接口。
-func (a *Adapter) LedgerSupported() bool { return true }
-
 // ListLedger 返回 [Start, End] 内最新的至多 Limit 条账单，按时间倒序。账单接口本身按时间倒序，
 // 用 after=<上一页最后一条 billId> 往更早翻页。
 func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {

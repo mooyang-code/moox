@@ -51,14 +51,15 @@ describe("成员资格", () => {
     expect(eligibleAccounts(all, [withTestnet], withTestnet).map(item => item.trading_account_id)).toEqual(["testnet"]);
   });
 
-  it("只能加入同环境、同结算资产、已暂停的组合，优先级排在成员之后", () => {
+  it("只能加入同环境、同结算资产、可编辑成员（自主下单或已暂停）的组合，优先级排在成员之后", () => {
     const list = [
       logical("ok"),
-      logical("running", { automation_state: "ACTIVE" }),
+      logical("manual", { control_mode: 2, automation_state: "" }),
+      logical("running", { control_mode: 1, automation_state: "ACTIVE" }),
       logical("other-asset", { settlement_asset: "USDC" }),
       logical("live", { execution_mode: 2 })
     ];
-    expect(joinableLogicals(list, new Map(), "paper", "usdt").map(item => item.logical_account_id)).toEqual(["ok"]);
+    expect(joinableLogicals(list, new Map(), "paper", "usdt").map(item => item.logical_account_id)).toEqual(["ok", "manual"]);
     expect(nextPriority(logical("x", { members: [{ trading_account_id: "a", enabled: true, priority: 3 }] }))).toBe(4);
     expect(nextPriority(logical("y"))).toBe(1);
   });

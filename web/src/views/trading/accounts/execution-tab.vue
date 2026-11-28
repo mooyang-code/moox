@@ -73,12 +73,21 @@
     <template #expand-row="{ record }">
       <MemberSettings :account="record.account" @changed="emit('changed')">
         <template #actions>
-          <!-- 模拟账户不能改启停（后端拒绝）；在组合里的实盘账户要先移出组合才能停用，这里只给未加入组合的实盘账户启停 -->
-          <template v-if="record.account.execution_mode === 2 && !record.logical">
-            <a-button v-if="record.account.status !== 'ENABLED'" size="small" @click="setStatus(record.account, 'ENABLED')"
-              >启用</a-button
+          <!-- 在组合里的账户要先移出组合才能停用或关闭；未加入组合的实盘账户可启停，模拟账户仅可不可逆关闭 -->
+          <template v-if="!record.logical">
+            <template v-if="record.account.execution_mode === 2">
+              <a-button v-if="record.account.status !== 'ENABLED'" size="small" @click="setStatus(record.account, 'ENABLED')"
+                >启用</a-button
+              >
+              <a-button v-else size="small" status="danger" @click="setStatus(record.account, 'DISABLED')">停用</a-button>
+            </template>
+            <a-button
+              v-else-if="record.account.status === 'ENABLED'"
+              size="small"
+              status="danger"
+              @click="setStatus(record.account, 'DISABLED')"
+              >关闭模拟账户</a-button
             >
-            <a-button v-else size="small" status="danger" @click="setStatus(record.account, 'DISABLED')">停用</a-button>
           </template>
         </template>
       </MemberSettings>
@@ -167,12 +176,13 @@ async function runPending() {
 
 function setStatus(account: TradingAccount, status: "ENABLED" | "DISABLED") {
   const accountId = account.trading_account_id;
+  const paper = account.execution_mode === 1;
   pending.value = {
-    ...accountStatusConfirm({ accountName: account.name, enable: status === "ENABLED" }),
+    ...accountStatusConfirm({ accountName: account.name, enable: status === "ENABLED", paper }),
     name: account.name,
     run: async () => {
       await updateTradingAccount({ trading_account_id: accountId, status });
-      Message.success(status === "ENABLED" ? "已启用，等首次同步" : "已停用");
+      Message.success(paper ? "模拟账户已关闭" : status === "ENABLED" ? "已启用，等首次同步" : "已停用");
       emit("changed");
     }
   };

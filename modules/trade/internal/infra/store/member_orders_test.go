@@ -18,7 +18,7 @@ func TestEnablingMemberAdoptsOpenOrdersWithoutLogicalAccount(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "one",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}

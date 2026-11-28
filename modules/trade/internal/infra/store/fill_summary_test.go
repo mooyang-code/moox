@@ -20,7 +20,7 @@ func seedLiveSummaryFills(t *testing.T, s *Store) {
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
+			Environment: "PRODUCTION", SettlementAsset: "USDT", PauseReason: "x",
 		}); err != nil {
 			return err
 		}

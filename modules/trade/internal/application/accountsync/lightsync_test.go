@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
@@ -74,7 +74,7 @@ func lightSyncFixture(t *testing.T, now *time.Time) (*Service, *store.Store, *la
 	adapter := newLagAdapter(*now)
 	service := &Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
+		Fills: &fillreduce.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
 		Now: func() time.Time { return *now },
 	}
 	return service, tradeStore, adapter
@@ -185,7 +185,7 @@ func TestSpotStaleBalanceDoesNotRestoreReady(t *testing.T) {
 	adapter := newLagAdapter(time.UnixMilli(80_000))
 	service := &Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
+		Fills: &fillreduce.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
 		Now: func() time.Time { return now },
 	}
 	result, err := service.SyncAccountLight(context.Background(), "spot-1")

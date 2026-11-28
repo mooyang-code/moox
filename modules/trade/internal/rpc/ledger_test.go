@@ -21,7 +21,9 @@ type ledgerAdapter struct {
 	query     exchange.LedgerQuery
 }
 
-func (a *ledgerAdapter) LedgerSupported() bool { return a.supported }
+func (a *ledgerAdapter) Supports(capability string) bool {
+	return capability == execution.CapabilityLedger && a.supported
+}
 func (a *ledgerAdapter) ListLedger(_ context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	a.query = query
 	return exchange.LedgerPage{HasMore: true, Entries: []exchange.LedgerEntry{{
@@ -118,9 +120,9 @@ func TestGetExecutionCapabilitiesLedgerFlag(t *testing.T) {
 	} {
 		server := ledgerServer(t, tc.adapters)
 		registry := execution.NewRegistry()
-		registry.Register(execution.ExchangeDescriptor{Exchange: exchange.ExchangeBinance, OrderTypes: testDescriptor.OrderTypes}, func(exchange.AccountConfig, exchange.Credential) (execution.ExecutionAdapter, error) {
+		registry.Register(execution.ExchangeDescriptor{Exchange: exchange.ExchangeBinance, OrderTypes: testDescriptor.OrderTypes}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
 			return nil, nil
-		})
+		}, nil)
 		server.Exchanges = registry
 		rsp, err := server.GetExecutionCapabilities(spacecontext.WithSpaceID(context.Background(), "space-1"),
 			&tradepb.GetExecutionCapabilitiesReq{TradingAccountId: "account-1"})

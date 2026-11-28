@@ -8,26 +8,69 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
-// 可选能力的名字，配合 CapabilityProbe 使用。
+// 可选能力的名字，配合 CapabilityProbe 与 Supports 使用。
 const (
-	CapabilityTransfer    = "transfer"
-	CapabilityFeeDiscount = "fee_discount"
-	CapabilityDust        = "dust"
+	CapabilityTransfer      = "transfer"
+	CapabilityFeeDiscount   = "fee_discount"
+	CapabilityDust          = "dust"
+	CapabilityAccountEvents = "account_events"
+	CapabilityFundingRates  = "funding_rates"
+	CapabilityLedger        = "ledger"
 )
 
-// CapabilityProbe 由实现了某个可选能力接口、但只在部分市场里可用的适配器实现：
-// 币安普通账户按市场拆成现货、合约两个适配器，钱包划转、小额兑换只在现货这个适配器里有意义。
-// 没有实现 CapabilityProbe 的适配器，实现了接口就视为可用。
+// CapabilityProbe 由实现了某个可选能力接口、但只在部分市场或运行条件下可用的适配器实现：
+// 币安普通账户按市场拆成现货、合约两个适配器，钱包划转、小额兑换只在现货适配器可用，
+// 资金费率与资金流水只在合约适配器可用；多市场合成适配器则按子适配器能力汇总。
+// 没有实现 CapabilityProbe 的适配器，只要实现了对应接口就视为可用。
 type CapabilityProbe interface {
 	Supports(capability string) bool
 }
 
-// Supports 报告适配器是否具备某个可选能力。
+func implementsCapability(adapter any, capability string) bool {
+	if adapter == nil {
+		return false
+	}
+	switch capability {
+	case CapabilityTransfer:
+		_, ok := adapter.(WalletTransferer)
+		return ok
+	case CapabilityFeeDiscount:
+		_, ok := adapter.(FeeDiscountConfigurer)
+		return ok
+	case CapabilityDust:
+		_, ok := adapter.(DustConverter)
+		return ok
+	case CapabilityAccountEvents:
+		_, ok := adapter.(AccountEventSource)
+		return ok
+	case CapabilityFundingRates:
+		_, ok := adapter.(FundingRateSource)
+		return ok
+	case CapabilityLedger:
+		_, ok := adapter.(LedgerSource)
+		return ok
+	default:
+		return false
+	}
+}
+
+// Supports 报告适配器是否具备某个可选能力：须先实现对应接口，若实现了 CapabilityProbe 再按探针结果收窄。
 func Supports(adapter any, capability string) bool {
+	if !implementsCapability(adapter, capability) {
+		return false
+	}
 	if probe, ok := adapter.(CapabilityProbe); ok {
 		return probe.Supports(capability)
 	}
 	return true
+}
+
+// LedgerOf 返回适配器真实具备的资金流水来源；不支持时返回 nil。
+func LedgerOf(adapter any) LedgerSource {
+	if !Supports(adapter, CapabilityLedger) {
+		return nil
+	}
+	return adapter.(LedgerSource)
 }
 
 // TransferStatus 是一次钱包划转在交易所侧的状态。

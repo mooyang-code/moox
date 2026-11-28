@@ -29,8 +29,8 @@ func TestDownsampleEquityPointsRetentionTiers(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "s1", LogicalAccountID: "log-1", Name: "log-1",
-			ExecutionMode: string(exchange.ExecutionModePaper), SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "init",
+			Environment: string(exchange.AccountEnvironmentPaper), SettlementAsset: "USDT",
+			PauseReason: "init",
 		}); err != nil {
 			return err
 		}

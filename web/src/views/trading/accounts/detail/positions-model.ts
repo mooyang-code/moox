@@ -1,4 +1,4 @@
-import type { BlockedTarget, Holding, InstrumentQuantity, MarketType, Position, TargetLane } from "@/api/trade/types";
+import type { BlockedTarget, InstrumentQuantity, MarketType, Position, TargetLane } from "@/api/trade/types";
 import { coinOf, marketOfInstrument } from "../shared/markets";
 import { decimalAdd, decimalSub } from "../shared/order-rules";
 
@@ -61,7 +61,7 @@ export interface BuildCoinRowsInput {
   targets: readonly InstrumentQuantity[];
   blocked: readonly BlockedTarget[];
   swapPositions: readonly Position[];
-  spotHoldings: readonly Holding[];
+  spotHoldings: readonly Position[];
   /** 目标整体已到位：差额只是下不了单的零头，全部算到位 */
   converged: boolean;
   /** 后端按标的给的结论（执行器还会不会下单、不下单的原因）；页面只显示，不自己算。目标已收敛或后端算不出时为空 */
@@ -195,11 +195,11 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
   }
   for (const holding of input.spotHoldings) {
     const row = rowOf(holding.asset || coinOf(holding.instrument_id));
-    const quantity = Number(holding.quantity);
+    const quantity = Number(holding.signed_quantity);
     row.spotBalance += quantity;
     if (holding.instrument_id) {
       row.actualSpot += quantity;
-      row.actualSpotText = decimalAdd(row.actualSpotText, holding.quantity);
+      row.actualSpotText = decimalAdd(row.actualSpotText, holding.signed_quantity);
       row.sellable += Number(holding.sellable || 0);
       row.markSpot ||= Number(holding.mark_price) || 0;
       addPnl(row, quantity, holding.unrealized_pnl, pnlMissing);

@@ -44,14 +44,14 @@ func TestAddMemberRequiresAdoptionForExistingExposure(t *testing.T) {
 func TestManualControlRejectsResume(t *testing.T) {
 	s, db := logicalAccountServiceFixture(t)
 	ctx := context.Background()
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL' WHERE c_logical_account_id = 'logical-1'").Error)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = '' WHERE c_logical_account_id = 'logical-1'").Error)
 	_, _, err := s.Resume(ctx, "space-1", "logical-1")
 	require.Error(t, err)
 }
 
 func TestManualReadinessUsesActualMembers(t *testing.T) {
 	s, db := logicalAccountServiceFixture(t)
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 	ready, err := s.Readiness(context.Background(), s.Store, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.True(t, ready.Ready, ready.Reasons)
@@ -195,14 +195,14 @@ func TestResumeRequiresReadyNoConflictAndWarnsAboutReopen(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", account.AutomationState)
+	require.Equal(t, "ACTIVE", account.AutomationState())
 	require.Contains(t, warning, "重新开仓")
 
 	account, err = service.Pause(
 		context.Background(), "space-1", "logical-1", "manual intervention",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", account.AutomationState)
+	require.Equal(t, "PAUSED", account.AutomationState())
 	require.Equal(t, "manual intervention", account.PauseReason)
 
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
@@ -224,14 +224,14 @@ func TestModernSessionTargetCanResume(t *testing.T) {
 	acceptModernSessionTarget(t, tradeStore, "session-1")
 	account, _, err := service.Resume(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", account.AutomationState)
+	require.Equal(t, "ACTIVE", account.AutomationState())
 }
 
 func TestModernResumeWithoutTargetWaitsForNextTarget(t *testing.T) {
 	service, tradeStore := modernSessionFixture(t)
 	account, _, err := service.Resume(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", account.AutomationState)
+	require.Equal(t, "ACTIVE", account.AutomationState())
 	_, err = tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
@@ -252,7 +252,7 @@ func TestModernResumeIgnoresExpiredTargetMetadata(t *testing.T) {
 	}))
 	account, _, err := service.Resume(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", account.AutomationState)
+	require.Equal(t, "ACTIVE", account.AutomationState())
 	got, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, want, got)
@@ -349,9 +349,9 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "LIVE",
+			Environment:     "TESTNET",
 			SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			PauseReason:     "configure",
 		}); err != nil {
 			return err
 		}
@@ -519,8 +519,8 @@ func TestAddMemberRejectsAccountOwnedByAnotherGroupBeforeSync(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "TESTNET", SettlementAsset: "USDT",
+			PauseReason: "configure",
 		})
 	}))
 	calls := 0

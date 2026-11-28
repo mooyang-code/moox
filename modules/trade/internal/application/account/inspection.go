@@ -116,34 +116,36 @@ func FailureSummary(err error) string {
 
 // inspectForSave 在建账户、换密钥、重新启用之前检测：检测没完成或有阻断项都不能保存；
 // 通过后把账户类型和检测结果写进账户。只读密钥不能用来建执行账户。
-func (s *Service) inspectForSave(ctx context.Context, value tradingaccount.Account) (tradingaccount.Account, error) {
-	if value.ExecutionMode != exchange.ExecutionModeLive {
+func (s *Service) inspectForSave(ctx context.Context, value store.TradingAccountRecord) (store.TradingAccountRecord, error) {
+	if value.ExecutionMode != string(exchange.ExecutionModeLive) {
 		return value, nil
 	}
 	if s.Inspector == nil {
-		return tradingaccount.Account{}, ErrServiceNotConfigured
+		return store.TradingAccountRecord{}, ErrServiceNotConfigured
 	}
-	credential, readOnly, err := s.loadCredential(ctx, value.Exchange, credentialSecret(value))
+	exch := exchange.Exchange(value.Exchange)
+	markets := value.MarketTypes()
+	credential, readOnly, err := s.loadCredential(ctx, exch, value.CredentialSecretID)
 	if err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
 	if readOnly {
-		return tradingaccount.Account{}, ErrReadOnlyCredential
+		return store.TradingAccountRecord{}, ErrReadOnlyCredential
 	}
-	inspection, err := s.inspect(ctx, value.Exchange, exchange.InspectRequest{
-		Environment: liveEnvironment(value), Credential: credential, Markets: value.Markets,
+	inspection, err := s.inspect(ctx, exch, exchange.InspectRequest{
+		Environment: value.EffectiveEnvironment(), Credential: credential, Markets: markets,
 	})
 	if err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
-	if blockers := inspection.BlockersFor(value.Markets); len(blockers) != 0 {
-		return tradingaccount.Account{}, fmt.Errorf("%w：%s", ErrInspectionBlocked, joinFindings(blockers))
+	if blockers := inspection.BlockersFor(markets); len(blockers) != 0 {
+		return store.TradingAccountRecord{}, fmt.Errorf("%w：%s", ErrInspectionBlocked, joinFindings(blockers))
 	}
 	encoded, err := inspection.Encode()
 	if err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
-	value.AccountMode, value.InspectionJSON = inspection.AccountMode, encoded
+	value.AccountMode, value.InspectionJSON = string(inspection.AccountMode), encoded
 	return value, nil
 }
 
@@ -184,22 +186,25 @@ func (s *Service) reinspect(ctx context.Context, accountID string, countFailure 
 	if s == nil || s.Store == nil || s.Inspector == nil {
 		return ReinspectResult{}, ErrServiceNotConfigured
 	}
-	current, err := s.Store.Get(ctx, accountID)
+	current, err := s.getAccount(ctx, accountID)
 	if err != nil {
 		return ReinspectResult{}, err
 	}
-	if current.ExecutionMode != exchange.ExecutionModeLive {
+	if current.ExecutionMode != string(exchange.ExecutionModeLive) {
 		return ReinspectResult{}, fmt.Errorf("%w：只有实盘账户需要检测", tradingaccount.ErrInvalidAccount)
 	}
-	secretID := credentialSecret(current)
-	credential, _, err := s.loadCredential(ctx, current.Exchange, secretID)
+	exch := exchange.Exchange(current.Exchange)
+	markets := current.MarketTypes()
+	currentMode := exchange.AccountMode(current.AccountMode)
+	secretID := current.CredentialSecretID
+	credential, _, err := s.loadCredential(ctx, exch, secretID)
 	if err != nil {
 		return ReinspectResult{}, err
 	}
 	previous, _ := exchange.ParseInspection(current.InspectionJSON)
-	result := ReinspectResult{PreviousMode: current.AccountMode}
-	inspection, err := s.inspect(ctx, current.Exchange, exchange.InspectRequest{
-		Environment: liveEnvironment(current), Credential: credential, Markets: current.Markets,
+	result := ReinspectResult{PreviousMode: currentMode}
+	inspection, err := s.inspect(ctx, exch, exchange.InspectRequest{
+		Environment: current.EffectiveEnvironment(), Credential: credential, Markets: markets,
 	})
 	if err != nil {
 		if !errors.Is(err, ErrInspectionUnavailable) {
@@ -212,46 +217,46 @@ func (s *Service) reinspect(ctx context.Context, accountID string, countFailure 
 			if encodeErr != nil {
 				return ReinspectResult{}, encodeErr
 			}
-			if writeErr := s.Store.SetInspection(ctx, accountID, secretID, current.AccountMode, encoded); writeErr != nil {
+			if writeErr := s.setInspection(ctx, accountID, secretID, currentMode, encoded); writeErr != nil {
 				return ReinspectResult{}, staleInspection(writeErr)
 			}
 		}
 		result.Inspection, result.Inconclusive, result.Cause = previous, true, err
-		result.Blocked = previous.Blocked(current.Markets)
+		result.Blocked = previous.Blocked(markets)
 		return result, nil
 	}
 	// 签名检测没有结论、只测到了时钟偏差（账户类型为空且密钥没被拒绝）：权限字段全是零值，不是检测到的事实。
 	// 在上次结果的基础上只更新时钟偏差、检测时间和阻断项，不覆盖权限字段，也不把账户类型写回去造出假阻断项。
 	if inspection.AccountMode == exchange.AccountModeUnspecified && inspection.CredentialRejected == "" {
 		previous.ClockSkewMillis, previous.InspectedAt = inspection.ClockSkewMillis, inspection.InspectedAt
-		previous.ApplyFindings(current.Markets)
+		previous.ApplyFindings(markets)
 		encoded, err := previous.Encode()
 		if err != nil {
 			return ReinspectResult{}, err
 		}
-		if err := s.Store.SetInspection(ctx, accountID, secretID, current.AccountMode, encoded); err != nil {
+		if err := s.setInspection(ctx, accountID, secretID, currentMode, encoded); err != nil {
 			return ReinspectResult{}, staleInspection(err)
 		}
 		result.Inspection = previous
-		result.Blocked = previous.Blocked(current.Markets)
+		result.Blocked = previous.Blocked(markets)
 		return result, nil
 	}
 	// 交易所拒绝了密钥，或疑似统一账户旧密钥（papi、fapi 都被拒）：这次检测的结论是“密钥有问题”，不是“账户类型变了”，
 	// 也没能读出账户类型。已有账户的类型沿用，否则会话会被换成另一种适配器、账户类型被清空；阻断项照常生效。
-	if current.AccountMode != exchange.AccountModeUnspecified &&
+	if currentMode != exchange.AccountModeUnspecified &&
 		(inspection.CredentialRejected != "" || inspection.PortfolioMarginSuspected) {
-		inspection.AccountMode = current.AccountMode
+		inspection.AccountMode = currentMode
 	}
 	encoded, err := inspection.Encode()
 	if err != nil {
 		return ReinspectResult{}, err
 	}
-	if err := s.Store.SetInspection(ctx, accountID, secretID, inspection.AccountMode, encoded); err != nil {
+	if err := s.setInspection(ctx, accountID, secretID, inspection.AccountMode, encoded); err != nil {
 		return ReinspectResult{}, staleInspection(err)
 	}
 	result.Inspection = inspection
-	result.ModeChanged = current.AccountMode != exchange.AccountModeUnspecified && current.AccountMode != inspection.AccountMode
-	result.Blocked = inspection.Blocked(current.Markets)
+	result.ModeChanged = currentMode != exchange.AccountModeUnspecified && currentMode != inspection.AccountMode
+	result.Blocked = inspection.Blocked(markets)
 	return result, nil
 }
 

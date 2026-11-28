@@ -97,7 +97,7 @@ func (s *ConsoleServer) ListDelists(ctx context.Context, req *tradepb.ListDelist
 		for _, flatten := range view.Flattens {
 			delist.Flattens = append(delist.Flattens, &tradepb.DelistFlatten{
 				Round: int32(flatten.Round), SpaceId: flatten.SpaceID, LogicalAccountId: flatten.LogicalAccountID,
-				ActionId: flatten.ActionID, ActionStatus: flatten.ActionStatus, LastError: flatten.LastError,
+				ActionId: flatten.ActionID(), ActionStatus: flatten.ActionStatus, LastError: flatten.LastError,
 				CreatedAt: flatten.CreatedAt,
 			})
 		}

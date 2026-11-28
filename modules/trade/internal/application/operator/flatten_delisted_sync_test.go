@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
@@ -97,7 +97,7 @@ func TestLaterFlattenWithRealSyncClosesDelistedLeftover(t *testing.T) {
 			service, command := startFinishingWithUnknownChild(t, fixture, "delist-gone", "child-gone", gone)
 			clock := func() time.Time { return fixture.now }
 			service.Syncer = realSyncer{service: &accountsync.Service{
-				Store: fixture.store, Fills: &consumer.Reducer{Store: fixture.store}, Now: clock,
+				Store: fixture.store, Fills: &fillreduce.Reducer{Store: fixture.store}, Now: clock,
 				Adapters: fixtureAdapters{
 					"account-a": &delistedSwapAdapter{now: clock, balances: []exchange.AssetBalance{
 						{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("1000"), Total: shared.MustDecimal("1000")},

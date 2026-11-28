@@ -4,40 +4,37 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_name TEXT NOT NULL,
     -- 关闭到哪个会话为止（会话的开始时刻，毫秒）：开始时刻不大于它的会话的目标一律不再接受
     c_closed_through INTEGER NOT NULL DEFAULT 0,
-    c_execution_mode TEXT NOT NULL,
+    c_control_mode TEXT NOT NULL DEFAULT 'STRATEGY',
+    -- 组合所属环境：PAPER 模拟盘、TESTNET 测试网、PRODUCTION 生产环境，创建时定下
+    c_environment TEXT NOT NULL,
     c_settlement_asset TEXT NOT NULL,
     -- 下单设置与资金设置：空对象表示全部取默认值
     c_order_settings_json TEXT NOT NULL DEFAULT '{}',
     c_fund_settings_json TEXT NOT NULL DEFAULT '{}',
-    c_automation_state TEXT NOT NULL DEFAULT 'PAUSED',
-    -- 暂停原因只用于展示；程序按暂停来源与减仓状态判断
+    -- 暂停原因只用于展示；程序按控制方式、暂停来源与减仓状态判断；自主下单组合与运行中的策略组合三列均为空
     c_pause_reason TEXT NOT NULL DEFAULT '',
-    -- 暂停来源：USER 人工（含新建时的初始暂停）、SYSTEM 系统自动、MARGIN 保证金率风控；运行中为空
+    -- 暂停来源：USER 人工（含新建策略组合时的初始暂停）、SYSTEM 系统自动、MARGIN 保证金率风控；未暂停或自主下单为空
     c_pause_source TEXT NOT NULL DEFAULT '',
     -- 保证金率风控暂停的减仓状态：REDUCED 已发起减仓、PENDING 减仓待执行、UNREDUCED 未减仓已回安全线、FAILED 减仓失败、PARTIAL 只减了一部分；其他情况为空
     c_margin_reduce_state TEXT NOT NULL DEFAULT '',
-    -- 最近一次从暂停恢复自动执行的时间（毫秒）：保证金率风控据此判断“上次风控减仓之后组合是否恢复过”，不依赖进程内存
-    c_resumed_at INTEGER NOT NULL DEFAULT 0,
-    -- 恢复自动执行时已人工确认的最近一次保证金风控减仓动作号；与 c_resumed_at 配合保证同秒/同毫秒恢复后仍能再次触发风控
+    -- 恢复自动执行时已人工确认的最近一次保证金风控减仓动作号
     c_acked_margin_action_id TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_control_mode TEXT NOT NULL DEFAULT 'STRATEGY',
-    CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
     CHECK (c_control_mode IN ('STRATEGY', 'MANUAL')),
+    CHECK (c_environment IN ('PAPER', 'TESTNET', 'PRODUCTION')),
     CHECK (json_valid(c_order_settings_json)),
     CHECK (json_type(c_order_settings_json) = 'object'),
     CHECK (json_valid(c_fund_settings_json)),
     CHECK (json_type(c_fund_settings_json) = 'object'),
-    CHECK (c_automation_state IN ('ACTIVE', 'PAUSED')),
     CHECK (c_pause_source IN ('', 'USER', 'SYSTEM', 'MARGIN')),
     CHECK (c_margin_reduce_state IN ('', 'REDUCED', 'PENDING', 'UNREDUCED', 'FAILED', 'PARTIAL')),
-    CHECK (
-        (c_automation_state = 'ACTIVE' AND c_pause_reason = '' AND c_pause_source = '')
-        OR
-        (c_automation_state = 'PAUSED' AND c_pause_reason <> '' AND c_pause_source <> '')
-    ),
+    CHECK ((c_pause_source = '') = (c_pause_reason = '')),
     CHECK ((c_pause_source = 'MARGIN') = (c_margin_reduce_state <> '')),
+    CHECK (
+        c_control_mode <> 'MANUAL'
+        OR (c_pause_source = '' AND c_pause_reason = '' AND c_margin_reduce_state = '')
+    ),
     UNIQUE (c_space_id, c_name),
     PRIMARY KEY (c_space_id, c_logical_account_id)
 );

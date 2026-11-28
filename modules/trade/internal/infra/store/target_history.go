@@ -178,13 +178,13 @@ func findAcceptedTargetHistory(db *gorm.DB, spaceID, targetID string) (targetHis
 	return rows[0], nil
 }
 
-// AcceptLogicalAccountTargetWithHistoryLocked 在一个事务里接受当前目标并写它的目标历史，要求调用方已持有组合锁：
+// AcceptLogicalAccountTargetWithHistoryLocked 在一个事务里按同一份记录生成当前目标与目标历史并落库，要求调用方已持有组合锁：
 // Trade 换算权重时持锁，让成员关系、权益和落库的历史看到的是同一个状态。同一请求哈希的重放是幂等的；同一目标号换了内容是冲突。
-func (s *Store) AcceptLogicalAccountTargetWithHistoryLocked(ctx context.Context, target LogicalAccountTargetRecord, history TargetHistoryRecord) (LogicalAccountTargetRecord, bool, error) {
+func (s *Store) AcceptLogicalAccountTargetWithHistoryLocked(ctx context.Context, history TargetHistoryRecord) (LogicalAccountTargetRecord, bool, error) {
 	var current LogicalAccountTargetRecord
 	var accepted bool
 	err := s.Transaction(ctx, func(tx *Tx) error {
-		account, accountErr := tx.GetLogicalAccount(target.SpaceID, target.LogicalAccountID)
+		account, accountErr := tx.GetLogicalAccount(history.SpaceID, history.LogicalAccountID)
 		if accountErr != nil {
 			return accountErr
 		}
@@ -193,20 +193,36 @@ func (s *Store) AcceptLogicalAccountTargetWithHistoryLocked(ctx context.Context,
 		}
 		// 会话先后（含已关闭）和有效期在历史重放之前判断：旧会话的重复投递不能借已接受过的历史绕过会话与过期的检查。
 		// 同一会话的 bar_end_time 先后在历史之后由 AcceptLogicalAccountTarget 判断，被取代之后重投旧目标靠历史确认。
-		if target.InstanceID != "" || target.SessionID != "" || target.BarEndTime != 0 || target.ValidUntil != 0 {
-			if history.InstanceID != target.InstanceID || history.SessionID != target.SessionID || history.StrategyID != target.StrategyID || history.BarEndTime != target.BarEndTime || history.ValidUntil != target.ValidUntil {
-				return fmt.Errorf("%w: target and history session contract mismatch", ErrInvalidRecord)
-			}
-			if target.SessionStartedAt <= 0 {
-				return fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
-			}
-			if err := tx.checkTargetSession(account, target.session()); err != nil {
-				return err
-			}
-			now := time.Now().UTC().UnixMilli()
-			if now >= target.ValidUntil {
-				return fmt.Errorf("%w: target validity window [%d,%d), now=%d", ErrTargetExpired, target.BarEndTime, target.ValidUntil, now)
-			}
+		if blank(history.InstanceID) || blank(history.SessionID) || blank(history.StrategyID) ||
+			history.SessionStartedAt <= 0 || history.BarEndTime <= 0 || history.ValidUntil <= history.BarEndTime {
+			return fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
+		}
+		if err := tx.checkTargetSession(account, TargetSession{
+			InstanceID: history.InstanceID, SessionID: history.SessionID, StartedAt: history.SessionStartedAt,
+		}); err != nil {
+			return err
+		}
+		now := time.Now().UTC().UnixMilli()
+		if now >= history.ValidUntil {
+			return fmt.Errorf("%w: target validity window [%d,%d), now=%d", ErrTargetExpired, history.BarEndTime, history.ValidUntil, now)
+		}
+		targets, decodeErr := decodeCurrentTargets(history.QuantityTargetsJSON)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		target := LogicalAccountTargetRecord{
+			SpaceID:          history.SpaceID,
+			LogicalAccountID: history.LogicalAccountID,
+			TargetID:         history.TargetID,
+			InstanceID:       history.InstanceID,
+			SessionID:        history.SessionID,
+			SessionStartedAt: history.SessionStartedAt,
+			StrategyID:       history.StrategyID,
+			BarEndTime:       history.BarEndTime,
+			ValidUntil:       history.ValidUntil,
+			Targets:          targets,
+			Status:           "PENDING",
+			AcceptedAt:       history.RecordedAt,
 		}
 		existing, lookupErr := findAcceptedTargetHistory(tx.db, history.SpaceID, history.TargetID)
 		if lookupErr == nil {
@@ -224,9 +240,6 @@ func (s *Store) AcceptLogicalAccountTargetWithHistoryLocked(ctx context.Context,
 		current, accepted, err = tx.AcceptLogicalAccountTarget(target)
 		if err != nil || !accepted {
 			return err
-		}
-		if history.SessionStartedAt == 0 {
-			history.SessionStartedAt = target.SessionStartedAt
 		}
 		return tx.InsertTargetHistory(history)
 	})

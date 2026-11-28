@@ -269,24 +269,6 @@
             撤单会暂停这个组合的自动执行，否则策略会马上重新下单。
           </a-alert>
         </ConfirmDialog>
-
-        <ConfirmDialog
-          v-model:visible="closePaperVisible"
-          :title="`关闭模拟账户「${closePaperTarget?.name ?? ''}」`"
-          :env="env"
-          :combo-name="logical.name"
-          :need-reason="false"
-          danger
-          confirm-text="关闭"
-          :submit="submitClosePaper"
-        >
-          <a-alert type="error" class="dialog-block">
-            撤掉这个账户的未完成订单，停用账户并移出组合，同时暂停整个组合账户的自动执行（组合里其他执行账户也不再按策略下单，需要时再手动恢复）。关闭后不能再下单，也不能重新启用；历史订单、成交保留。
-          </a-alert>
-          <a-alert v-if="(logical.members || []).length === 1" type="info" class="dialog-block">
-            这是组合里唯一的执行账户，关闭后组合会变成未就绪。
-          </a-alert>
-        </ConfirmDialog>
       </template>
       <a-spin v-else class="loading" />
     </div>
@@ -320,8 +302,7 @@ import {
   pauseLogicalAccount,
   queryEquityCurve,
   resumeLogicalAccount,
-  syncTradingAccount,
-  updateTradingAccount
+  syncTradingAccount
 } from "@/api/trade";
 import type { LogicalAccount, LogicalAccountTarget, Order, TargetLane, TradingAccount } from "@/api/trade";
 import { accountMapOf } from "../account-list";
@@ -454,7 +435,7 @@ async function loadDayChange() {
   // 读不到时保留上一次的数，下一轮再试
   if (rsp && id === logicalId.value) dayChange.value = equityDelta(rsp.points || []);
 }
-const membersEditable = computed(() => logical.value?.automation_state === "PAUSED");
+const membersEditable = computed(() => logical.value?.control_mode === 2 || logical.value?.automation_state === "PAUSED");
 
 const tracker = useActionTracker({
   logicalAccountId: () => logical.value?.logical_account_id,
@@ -605,8 +586,6 @@ const flattenActionId = ref("");
 const cancelVisible = ref(false);
 const cancelOrderTarget = ref<Order | null>(null);
 const cancelActionId = ref("");
-const closePaperVisible = ref(false);
-const closePaperTarget = ref<TradingAccount | null>(null);
 const flattenOrdersText = computed(() => {
   if (flattenOrders.value === null) return "读取中…";
   if (flattenOrders.value === undefined) return "未完成订单数读取失败，清仓时仍会全部撤销";
@@ -685,21 +664,6 @@ async function submitCancel(reason: string) {
   return true;
 }
 
-function openClosePaper(account: TradingAccount) {
-  closePaperTarget.value = account;
-  closePaperVisible.value = true;
-}
-
-async function submitClosePaper() {
-  const account = closePaperTarget.value;
-  if (!account) return false;
-  const id = logicalId.value;
-  await updateTradingAccount({ trading_account_id: account.trading_account_id, status: "DISABLED" });
-  Message.success("模拟账户已关闭");
-  if (!abandoned(id)) afterAction();
-  return true;
-}
-
 async function syncAccounts(list: TradingAccount[]) {
   if (!list.length) return;
   syncing.value = true;
@@ -739,7 +703,6 @@ provide(detailContextKey, {
   openOrder,
   openFlatten,
   openCancel,
-  openClosePaper,
   syncAccounts
 });
 </script>

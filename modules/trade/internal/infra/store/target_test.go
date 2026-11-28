@@ -80,7 +80,7 @@ func TestAcceptLogicalAccountTargetAllowsEmptyFullWhilePaused(t *testing.T) {
 	require.Empty(t, current.Targets)
 	account, err := s.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", account.AutomationState)
+	require.Equal(t, "PAUSED", account.AutomationState())
 }
 
 // 接收按会话开始时刻比较（批 3 的 3.6）：组合上没有目标行时直接接受（不看归属）；更早的会话按被取代拒绝；
@@ -361,9 +361,9 @@ func seedLogicalAccount(t *testing.T, s *Store, runnerID string) {
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
 			Name:            "logical",
-			ExecutionMode:   "PAPER",
-			SettlementAsset: "USDT", AutomationState: "PAUSED",
-			PauseReason: "新建的组合账户，等待恢复自动执行",
+			Environment:     "PAPER",
+			SettlementAsset: "USDT",
+			PauseReason:     "新建的组合账户，等待恢复自动执行",
 		})
 	}))
 }

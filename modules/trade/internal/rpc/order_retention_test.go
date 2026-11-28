@@ -19,7 +19,7 @@ func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	accounts := &AccountServer{
 		Accounts: &accountapp.Service{
-			Store: accountapp.Repository{Store: tradeStore}, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
+			Store: tradeStore, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
 		},
 		Store: tradeStore, NewID: func() string { return "live-1" },
 	}

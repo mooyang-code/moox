@@ -175,7 +175,7 @@ func TestLogicalAccountFullTargetConvergesAcrossBinanceAndOKX(t *testing.T) {
 func TestManualAccountCannotExecutePersistedTarget(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}})
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.Error(t, err)
 	require.Empty(t, f.orders.specs)
@@ -202,7 +202,7 @@ func TestTargetExecutorDiscardsPendingChildWhenAutomationChangesBeforeSubmit(t *
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", account.AutomationState)
+	require.Equal(t, "PAUSED", account.AutomationState())
 }
 
 // 落单之后、提交之前组合的当前目标换成了别的实例的新会话（开始时刻更晚）：丢弃待提交单，返回 ErrTargetSession。
@@ -257,7 +257,7 @@ func TestTargetExecutorWaitsWithoutPausingWhenAccountTurnsNotReady(t *testing.T)
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", account.AutomationState)
+	require.Equal(t, "ACTIVE", account.AutomationState())
 	target, err := fixture.store.GetLogicalAccountTarget(
 		context.Background(), "space-1", "logical-1",
 	)
@@ -437,7 +437,7 @@ func TestTargetExecutorRetriesQuoteAgainstCurrentMemberPriorityWithoutRevaluatio
 	require.ErrorIs(t, err, quoteErr)
 	require.Empty(t, fixture.orders.specs)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "change priority"); err != nil {
+		if err := tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("change priority")); err != nil {
 			return err
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
@@ -445,7 +445,7 @@ func TestTargetExecutorRetriesQuoteAgainstCurrentMemberPriorityWithoutRevaluatio
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	executor.Prices = targetPriceStub{price: shared.MustDecimal("200")}
 	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
@@ -492,7 +492,7 @@ func TestTargetExecutorPauseKeepsExistingPauseReason(t *testing.T) {
 	ctx := context.Background()
 	logicalAccount, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", logicalAccount.AutomationState)
+	require.Equal(t, "ACTIVE", logicalAccount.AutomationState())
 	target, err := fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
@@ -503,7 +503,7 @@ func TestTargetExecutorPauseKeepsExistingPauseReason(t *testing.T) {
 
 	current, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", current.AutomationState)
+	require.Equal(t, "PAUSED", current.AutomationState())
 	require.Equal(t, store.MarginPause(store.MarginReduced).Reason, current.PauseReason)
 	target, err = fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
@@ -558,7 +558,7 @@ func TestTargetExecutorPausesOnExternalOrderWithoutCancel(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState())
 	require.Contains(t, logicalAccount.PauseReason, "外部")
 	require.Empty(t, fixture.orders.canceled)
 }
@@ -914,9 +914,9 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
+			Environment:     "PAPER",
 			SettlementAsset: "USDT", OrderSettingsJSON: legacyOrderSettings,
-			AutomationState: "PAUSED", PauseReason: "configure",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -933,9 +933,7 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "ACTIVE", "",
-		)
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	return fixture
 }

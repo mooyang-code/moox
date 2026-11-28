@@ -96,7 +96,7 @@ func TestInstrumentSummaryMatchesFillHistoryAndSurvivesPruning(t *testing.T) {
 				return err
 			}
 			if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-" + id, Name: id,
-				ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"}); err != nil {
+				Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "test"}); err != nil {
 				return err
 			}
 			if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{SpaceID: "space-1", LogicalAccountID: "logical-" + id,

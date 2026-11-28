@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -70,7 +69,7 @@ func delistLimitPrice(reference shared.Decimal, side exchange.Side, priceTick st
 	if side == exchange.SideBuy {
 		price := reference.Mul(one.Add(delistSlippage))
 		if validTick {
-			floored := exposure.FloorToStep(price, tick)
+			floored := shared.FloorToStep(price, tick)
 			if floored.Cmp(price) != 0 {
 				price = floored.Add(tick)
 			} else {
@@ -81,7 +80,7 @@ func delistLimitPrice(reference shared.Decimal, side exchange.Side, priceTick st
 	}
 	price := reference.Mul(one.Sub(delistSlippage))
 	if validTick {
-		price = exposure.FloorToStep(price, tick)
+		price = shared.FloorToStep(price, tick)
 	}
 	return price
 }

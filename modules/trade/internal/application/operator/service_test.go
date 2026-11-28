@@ -236,7 +236,7 @@ func TestManualOrderPausesAndCancelsTargetsBeforeSubmit(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", account.AutomationState)
+	require.Equal(t, "PAUSED", account.AutomationState())
 	require.Equal(t, "operator override", account.PauseReason)
 }
 
@@ -282,9 +282,7 @@ func TestManualOrderTerminalReplayDoesNotPauseAfterResume(t *testing.T) {
 		); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "ACTIVE", "",
-		)
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 
 	_, err = fixture.service().PlaceOrder(context.Background(), command)
@@ -294,7 +292,7 @@ func TestManualOrderTerminalReplayDoesNotPauseAfterResume(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", account.AutomationState)
+	require.Equal(t, "ACTIVE", account.AutomationState())
 }
 
 func TestManualOrderRunningReplayFailsStablyAfterMemberRemoval(t *testing.T) {
@@ -318,8 +316,8 @@ func TestManualOrderRunningReplayFailsStablyAfterMemberRemoval(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "PAUSED", "membership change",
+		if err := tx.PauseLogicalAccount(
+			"space-1", "logical-1", store.UserPause("membership change"),
 		); err != nil {
 			return err
 		}
@@ -362,8 +360,8 @@ func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing
 	)
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "PAUSED", "membership change",
+		if err := tx.PauseLogicalAccount(
+			"space-1", "logical-1", store.UserPause("membership change"),
 		); err != nil {
 			return err
 		}
@@ -374,8 +372,8 @@ func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "PAPER", SettlementAsset: "USDT",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -532,7 +530,7 @@ func TestCancelOrderPausesLogicalAccountAndIsIdempotent(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", account.AutomationState)
+	require.Equal(t, "PAUSED", account.AutomationState())
 	require.Equal(t, "operator cancel", account.PauseReason)
 	orderRecord, err := fixture.store.GetOrder(
 		context.Background(), "space-1", "target-child",
@@ -616,9 +614,9 @@ func newOperatorFixture(t *testing.T, market exchange.MarketType) *operatorFixtu
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
+			Environment:     "PAPER",
 			SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			PauseReason:     "configure",
 		}); err != nil {
 			return err
 		}
@@ -635,9 +633,7 @@ func newOperatorFixture(t *testing.T, market exchange.MarketType) *operatorFixtu
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "ACTIVE", "",
-		)
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	return fixture
 }

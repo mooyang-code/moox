@@ -22,9 +22,6 @@ type fundingLedgerStore interface {
 	ListPaperFundingFees(ctx context.Context, spaceID, tradingAccountID string, start, end int64, limit int) ([]store.PaperFundingFeeRecord, int64, error)
 }
 
-// LedgerSupported：模拟盘的流水由本地成交（手续费、已实现盈亏）和资金费记录生成，没有划转。
-func (a *Adapter) LedgerSupported() bool { return true }
-
 // ListLedger 返回 [Start, End] 内最新的至多 Limit 条流水，按时间倒序。每笔成交至多生成手续费和已实现盈亏两条，
 // 每条资金费记录生成一条资金费；每条都带所属市场（现货、永续同名标的靠它区分）。查现货时没有资金费。
 // 成交和资金费各取至多 Limit 条再合并：哪一路没取完，就只保留不早于这一路已取到的最老时间的流水，翻页时不会漏掉中间的记录。

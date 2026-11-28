@@ -133,11 +133,11 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 	require.Equal(t, string(operatordomain.StatusCompleted), replay.Action.Status)
 }
 
-// 自主下单组合没有自动执行：减仓（包括保证金率风控减仓）和撤单一样不暂停组合，暂停原因不被改写。
+// 自主下单组合没有自动执行：减仓（包括保证金率风控减仓）和撤单一样不暂停组合，也不写入暂停原因。
 func TestReduceDoesNotRewriteThePauseReasonOfAManualGroup(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
-		c_automation_state = 'PAUSED', c_pause_reason = '自主下单', c_pause_source = 'USER' WHERE c_logical_account_id = 'logical-1'`).Error)
+		c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = '' WHERE c_logical_account_id = 'logical-1'`).Error)
 	command := flattenCommand("margin-logical-1-1")
 	command.ReduceRatio, command.Reason = shared.MustDecimal("0.5"), store.MarginPause(store.MarginReduced).Reason
 	command.PauseAs = store.MarginPause(store.MarginReduced)
@@ -149,7 +149,9 @@ func TestReduceDoesNotRewriteThePauseReasonOfAManualGroup(t *testing.T) {
 	require.Equal(t, []string{"BTC-USDT-SPOT:SELL:1", "BTC-USDT-SWAP:SELL:1.5"}, placed(fixture), "照常减仓")
 	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "自主下单", logical.PauseReason)
+	require.Empty(t, logical.PauseReason)
+	require.Empty(t, logical.PauseSource)
+	require.False(t, logical.IsPaused())
 }
 
 // 策略组合的风控减仓按 PauseAs 暂停：来源记保证金率风控、减仓状态记已减仓，原因取对应的固定文字。
@@ -239,7 +241,7 @@ func TestFlattenSingleInstrumentLeavesOthersAndDoesNotPause(t *testing.T) {
 	}
 	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", logical.AutomationState, "单标的清仓不暂停组合")
+	require.Equal(t, "ACTIVE", logical.AutomationState(), "单标的清仓不暂停组合")
 }
 
 func TestFlattenConflictRules(t *testing.T) {

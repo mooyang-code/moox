@@ -108,7 +108,6 @@ type pnlLedgerAdapter struct {
 	calls []exchange.LedgerQuery
 }
 
-func (a *pnlLedgerAdapter) LedgerSupported() bool { return true }
 func (a *pnlLedgerAdapter) ListLedger(_ context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	a.calls = append(a.calls, query)
 	page := a.pages[0]
@@ -175,7 +174,7 @@ func TestSummarizeAccountPnlFundingFromIsTheLatestOfTheOldestTimes(t *testing.T)
 	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
+			Environment: "PRODUCTION", SettlementAsset: "USDT", PauseReason: "x",
 		}); err != nil {
 			return err
 		}

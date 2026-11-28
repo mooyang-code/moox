@@ -172,7 +172,7 @@ func TestRunTargetReportsBusinessDecisionAfterTransportAction(t *testing.T) {
 		}
 	})
 	// 合法的信封、但组合是人工控制：这是永久的业务拒绝，不是传输失败；TERM 成功了也要能看到。
-	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 	delivery := logicalTargetDelivery(t, now, "report-rejected-target", "runner-1", "logical-1", nil)
 	before := targetReportMetric(t, "TERM", "authorization_conflict", "success")
 	_, err = client.PublishRaw(ctx, delivery.Subject, delivery.RawMessageID, delivery.RawData, delivery.ContentType)

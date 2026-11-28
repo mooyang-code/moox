@@ -21,7 +21,7 @@ func inspectionHandler(t *testing.T, inspector inspectorStub) (*AccountServer, *
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tradeStore.Close() })
 	service := &accountapp.Service{
-		Store: accountapp.Repository{Store: tradeStore}, Secrets: secretSourceStub{}, Inspector: inspector,
+		Store: tradeStore, Secrets: secretSourceStub{}, Inspector: inspector,
 	}
 	return &AccountServer{Accounts: service, Store: tradeStore, NewID: func() string { return "account-1" }}, tradeStore
 }

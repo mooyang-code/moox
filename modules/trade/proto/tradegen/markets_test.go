@@ -57,26 +57,22 @@ func TestCreatePaperAccountMarginRulesFollowSwapInMarkets(t *testing.T) {
 	}
 }
 
-func TestCreatePaperAccountJoinExistingLogicalAccount(t *testing.T) {
-	req := func(id, name string, priority int32) *CreateTradingAccountReq {
-		return &CreateTradingAccountReq{
-			Name: "paper", Exchange: "binance", Markets: []string{"spot"},
-			SettlementAsset:  "USDT",
-			Paper:            &PaperConfig{InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
-			LogicalAccountId: id, LogicalAccountName: name, Priority: priority,
+func TestCreateLogicalAccountRequiresThreeValueEnvironment(t *testing.T) {
+	for _, env := range []AccountEnvironment{
+		AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
+		AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET,
+		AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION,
+	} {
+		req := &CreateLogicalAccountReq{Name: "combo", Environment: env, SettlementAsset: "USDT"}
+		if err := req.Validate(); err != nil {
+			t.Errorf("环境 %s 应通过：%v", env, err)
 		}
 	}
-	if err := req("la-1", "", 3).Validate(); err != nil {
-		t.Fatalf("加入已有组合应合法：%v", err)
-	}
-	if err := req("", "新组合", 0).Validate(); err != nil {
-		t.Fatalf("新建组合应合法：%v", err)
-	}
-	if err := req("la-1", "新组合", 0).Validate(); err == nil {
-		t.Error("同时给组合编号和组合名称应被拒绝")
-	}
-	if err := req("la-1", "", -1).Validate(); err == nil {
-		t.Error("负的优先级应被拒绝")
+	for _, env := range []AccountEnvironment{AccountEnvironment_ACCOUNT_ENVIRONMENT_UNSPECIFIED, AccountEnvironment(99)} {
+		req := &CreateLogicalAccountReq{Name: "combo", Environment: env, SettlementAsset: "USDT"}
+		if err := req.Validate(); err == nil {
+			t.Errorf("非法环境 %v 应被拒绝", env)
+		}
 	}
 }
 

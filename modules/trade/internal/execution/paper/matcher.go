@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -48,7 +48,7 @@ type Decision struct {
 	Fill       exchange.Fill
 }
 type MatchReducer interface {
-	ApplyFillToOrderTx(context.Context, *store.Tx, store.OrderRecord, exchange.Fill, consumer.Source) error
+	ApplyFillToOrderTx(context.Context, *store.Tx, store.OrderRecord, exchange.Fill, fillreduce.Source) error
 }
 type Matcher struct {
 	Store         *store.Store
@@ -475,11 +475,11 @@ func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, d
 		if m.Reducer == nil {
 			return tx.CancelPaperOrder(current, candidate.Version, orderdomain.RejectCodeUnknown, "paper matcher reducer is not configured")
 		}
-		err = m.Reducer.ApplyFillToOrderTx(ctx, tx, current, decision.Fill, consumer.Source{
+		err = m.Reducer.ApplyFillToOrderTx(ctx, tx, current, decision.Fill, fillreduce.Source{
 			SpaceID: current.SpaceID, TradingAccountID: current.TradingAccountID,
-			Kind: consumer.OriginPaperMatcher,
+			Kind: fillreduce.OriginPaperMatcher,
 		})
-		if errors.Is(err, consumer.ErrDuplicateFill) {
+		if errors.Is(err, fillreduce.ErrDuplicateFill) {
 			return nil
 		}
 		return err

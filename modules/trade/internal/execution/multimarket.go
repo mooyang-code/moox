@@ -242,22 +242,12 @@ func (m *MultiMarket) RateStatus() exchange.RateStatus {
 	return result
 }
 
-// LedgerSupported 报告是否有任何一个市场支持资金流水。
-func (m *MultiMarket) LedgerSupported() bool {
-	for _, market := range m.markets {
-		if source, ok := m.adapters[market].(LedgerSource); ok && source.LedgerSupported() {
-			return true
-		}
-	}
-	return false
-}
-
 // ListLedger 按查询里的市场路由；没写市场时只在一个市场支持流水的情况下取它。
 func (m *MultiMarket) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	market := query.Market
 	if market == exchange.MarketTypeUnspecified {
 		for _, candidate := range m.markets {
-			if source, ok := m.adapters[candidate].(LedgerSource); ok && source.LedgerSupported() {
+			if Supports(m.adapters[candidate], CapabilityLedger) {
 				if market != exchange.MarketTypeUnspecified {
 					return exchange.LedgerPage{}, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("多个市场都有资金流水，请指定市场")}
 				}
@@ -269,8 +259,8 @@ func (m *MultiMarket) ListLedger(ctx context.Context, query exchange.LedgerQuery
 	if err != nil {
 		return exchange.LedgerPage{}, err
 	}
-	source, ok := adapter.(LedgerSource)
-	if !ok || !source.LedgerSupported() {
+	source := LedgerOf(adapter)
+	if source == nil {
 		return exchange.LedgerPage{}, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("市场 %s 不支持资金流水", market)}
 	}
 	query.Market = market
@@ -287,23 +277,13 @@ func (m *MultiMarket) ListLedger(ctx context.Context, query exchange.LedgerQuery
 	return page, nil
 }
 
-// SupportsAccountEvents 报告每个市场的适配器是否都有私有流；任何一个没有就整体没有，会话用轮询同步。
-func (m *MultiMarket) SupportsAccountEvents() bool {
-	for _, market := range m.markets {
-		if _, ok := m.adapters[market].(AccountEventSource); !ok {
-			return false
-		}
-	}
-	return true
-}
-
 // Subscribe 同时订阅各市场的私有流，任何一路断开都整体结束并上报，由会话重连；
 // 全部订阅成功后才通知会话已订阅。
 func (m *MultiMarket) Subscribe(ctx context.Context, handler AccountEventHandler) error {
 	sources := make([]AccountEventSource, 0, len(m.markets))
 	for _, market := range m.markets {
-		source, ok := m.adapters[market].(AccountEventSource)
-		if !ok {
+		source := AccountEventsOf(m.adapters[market])
+		if source == nil {
 			return fmt.Errorf("execution: 市场 %s 的适配器没有私有流", market)
 		}
 		sources = append(sources, source)
@@ -343,31 +323,35 @@ func (s *subscribedOnce) OnSubscribed() {
 	}
 }
 
-// Supports 报告某个可选能力是否至少有一个市场的适配器具备。
+// Supports 汇总各子适配器的可选能力：私有流要求全部市场具备；资金费率看永续市场；其余只要任一市场具备即可。
 func (m *MultiMarket) Supports(capability string) bool {
-	for _, market := range m.markets {
-		if m.supporting(market, capability) {
-			return true
+	switch capability {
+	case CapabilityAccountEvents:
+		if len(m.markets) == 0 {
+			return false
 		}
+		for _, market := range m.markets {
+			if !Supports(m.adapters[market], CapabilityAccountEvents) {
+				return false
+			}
+		}
+		return true
+	case CapabilityFundingRates:
+		return Supports(m.adapters[exchange.MarketTypeSwap], CapabilityFundingRates)
+	case CapabilityLedger, CapabilityTransfer, CapabilityFeeDiscount, CapabilityDust:
+		for _, market := range m.markets {
+			if Supports(m.adapters[market], capability) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
 	}
-	return false
 }
 
-// supporting 报告某个市场的适配器是否实现并启用了某个可选能力。
 func (m *MultiMarket) supporting(market exchange.MarketType, capability string) bool {
-	adapter := m.adapters[market]
-	switch capability {
-	case CapabilityTransfer:
-		_, ok := adapter.(WalletTransferer)
-		return ok && Supports(adapter, capability)
-	case CapabilityFeeDiscount:
-		_, ok := adapter.(FeeDiscountConfigurer)
-		return ok && Supports(adapter, capability)
-	case CapabilityDust:
-		_, ok := adapter.(DustConverter)
-		return ok && Supports(adapter, capability)
-	}
-	return false
+	return Supports(m.adapters[market], capability)
 }
 
 func (m *MultiMarket) unsupported(capability string) error {
@@ -462,14 +446,105 @@ func (m *MultiMarket) ConvertDust(ctx context.Context, assets []string) (exchang
 	return merged, nil
 }
 
-// SupportsFundingRates 报告永续市场的适配器是否能查资金费率；没开通永续时没有。
-func (m *MultiMarket) SupportsFundingRates() bool {
-	return FundingRatesOf(m.adapters[exchange.MarketTypeSwap]) != nil
-}
-
 // ListFundingRates 交给永续市场的适配器查。
 func (m *MultiMarket) ListFundingRates(ctx context.Context, start, end time.Time, symbols []string) ([]exchange.FundingRate, error) {
 	source := FundingRatesOf(m.adapters[exchange.MarketTypeSwap])
+	if source == nil {
+		return nil, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("账户的永续市场不支持资金费率查询")}
+	}
+	return source.ListFundingRates(ctx, start, end, symbols)
+}
+
+var (
+	_ PublicMarketData  = (*MultiMarketData)(nil)
+	_ ExchangeIdentity  = (*MultiMarketData)(nil)
+	_ QuotePrefetcher   = (*MultiMarketData)(nil)
+	_ FundingRateSource = (*MultiMarketData)(nil)
+	_ CapabilityProbe   = (*MultiMarketData)(nil)
+)
+
+// MultiMarketData 把多个单市场公共行情源按市场路由合成一个公共行情源（供开通多市场的模拟账户使用）。
+type MultiMarketData struct {
+	name    exchange.Exchange
+	markets []exchange.MarketType
+	sources map[exchange.MarketType]PublicMarketData
+}
+
+// NewMultiMarketData 按 markets 的顺序组合公共行情源；每个市场都必须有对应的来源。
+func NewMultiMarketData(name exchange.Exchange, markets []exchange.MarketType, sources map[exchange.MarketType]PublicMarketData) (*MultiMarketData, error) {
+	for _, market := range markets {
+		if sources[market] == nil {
+			return nil, fmt.Errorf("execution: 市场 %s 没有公共行情源", market)
+		}
+	}
+	return &MultiMarketData{name: name, markets: append([]exchange.MarketType(nil), markets...), sources: sources}, nil
+}
+
+func (m *MultiMarketData) Exchange() exchange.Exchange { return m.name }
+
+func (m *MultiMarketData) route(market exchange.MarketType) (PublicMarketData, error) {
+	if source := m.sources[market]; source != nil {
+		return source, nil
+	}
+	return nil, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("账户没有开通市场 %q", market)}
+}
+
+func (m *MultiMarketData) LoadInstruments(ctx context.Context) ([]exchange.Instrument, error) {
+	var all []exchange.Instrument
+	for _, market := range m.markets {
+		items, err := m.sources[market].LoadInstruments(ctx)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, items...)
+	}
+	return all, nil
+}
+
+func (m *MultiMarketData) GetQuote(ctx context.Context, key exchange.SymbolKey) (MarketQuote, error) {
+	source, err := m.route(key.Market)
+	if err != nil {
+		return MarketQuote{}, err
+	}
+	return source.GetQuote(ctx, key)
+}
+
+func (m *MultiMarketData) GetReferencePrice(ctx context.Context, key exchange.SymbolKey) (exchange.ReferencePrice, error) {
+	source, err := m.route(key.Market)
+	if err != nil {
+		return exchange.ReferencePrice{}, err
+	}
+	return source.GetReferencePrice(ctx, key)
+}
+
+func (m *MultiMarketData) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) error {
+	byMarket := make(map[exchange.MarketType][]exchange.SymbolKey)
+	for _, key := range keys {
+		byMarket[key.Market] = append(byMarket[key.Market], key)
+	}
+	for _, market := range m.markets {
+		batch := byMarket[market]
+		if len(batch) == 0 {
+			continue
+		}
+		if prefetcher, ok := m.sources[market].(QuotePrefetcher); ok {
+			if err := prefetcher.PrefetchQuotes(ctx, batch); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (m *MultiMarketData) Supports(capability string) bool {
+	if capability == CapabilityFundingRates {
+		return Supports(m.sources[exchange.MarketTypeSwap], CapabilityFundingRates)
+	}
+	return false
+}
+
+func (m *MultiMarketData) ListFundingRates(ctx context.Context, start, end time.Time, symbols []string) ([]exchange.FundingRate, error) {
+	source := FundingRatesOf(m.sources[exchange.MarketTypeSwap])
 	if source == nil {
 		return nil, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("账户的永续市场不支持资金费率查询")}
 	}

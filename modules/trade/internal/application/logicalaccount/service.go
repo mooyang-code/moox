@@ -70,32 +70,40 @@ func (s *Service) Create(
 	spaceID string,
 	logicalAccountID string,
 	name string,
-	mode exchange.ExecutionMode,
+	environment exchange.AccountEnvironment,
 	settlementAsset string,
 	controlMode string,
 ) (store.LogicalAccountRecord, error) {
 	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
 	}
-	value, err := logicaldomain.New(
-		spaceID,
-		logicalAccountID,
-		strings.TrimSpace(name),
-		mode,
-		strings.ToUpper(strings.TrimSpace(settlementAsset)),
-		logicaldomain.ControlMode(controlMode),
-	)
-	if err != nil {
+	trimmedName := strings.TrimSpace(name)
+	normalizedAsset := strings.ToUpper(strings.TrimSpace(settlementAsset))
+	mode := logicaldomain.ControlMode(strings.TrimSpace(controlMode))
+	if mode == "" {
+		mode = logicaldomain.ControlStrategy
+	}
+	var pauseSource store.PauseSource
+	var pauseReason string
+	if mode == logicaldomain.ControlStrategy {
+		pauseSource = store.PauseSourceUser
+		pauseReason = logicaldomain.DefaultPauseReason
+	}
+	if err := logicaldomain.ValidateConfig(
+		spaceID, logicalAccountID, trimmedName, environment, normalizedAsset, mode, string(pauseSource), pauseReason, "",
+	); err != nil {
 		return store.LogicalAccountRecord{}, err
 	}
-	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			ControlMode: string(value.ControlMode),
-			SpaceID:     value.SpaceID, LogicalAccountID: value.ID, Name: value.Name,
-			ExecutionMode:   string(value.ExecutionMode),
-			SettlementAsset: value.SettlementAsset,
-			AutomationState: string(value.AutomationState),
-			PauseReason:     value.PauseReason,
+			ControlMode:      string(mode),
+			SpaceID:          spaceID,
+			LogicalAccountID: logicalAccountID,
+			Name:             trimmedName,
+			Environment:      string(environment),
+			SettlementAsset:  normalizedAsset,
+			PauseSource:      pauseSource,
+			PauseReason:      pauseReason,
 		})
 	})
 	if err != nil {
@@ -177,7 +185,7 @@ func (s *Service) UpdateFundSettings(
 	check := func(existing store.LogicalAccountRecord) error {
 		// BNB 抵扣、BNB 保留、小额兑换和稳定币调平只对实盘组合生效：模拟盘组合设了也没有任何维护任务去补，
 		// 换算目标时却会一直扣着 BNB 的缺口，所以直接拒绝。
-		if existing.ExecutionMode == string(exchange.ExecutionModePaper) && maintenance {
+		if existing.ExecutionMode() == string(exchange.ExecutionModePaper) && maintenance {
 			return fmt.Errorf("%w: 模拟盘组合不支持 BNB 抵扣、BNB 保留、小额兑换和稳定币保证金（只对实盘生效）", store.ErrInvalidRecord)
 		}
 		if !maintenance {
@@ -493,8 +501,8 @@ func (s *Service) Pause(
 	}
 	defer unlock()
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation(
-			spaceID, logicalAccountID, "PAUSED", strings.TrimSpace(reason),
+		return tx.PauseLogicalAccount(
+			spaceID, logicalAccountID, store.UserPause(strings.TrimSpace(reason)),
 		)
 	}); err != nil {
 		return store.LogicalAccountRecord{}, err
@@ -550,7 +558,7 @@ func (s *Service) Resume(
 	if err != nil {
 		return store.LogicalAccountRecord{}, "", err
 	}
-	if current.AutomationState != before.AutomationState || current.Pause() != before.Pause() {
+	if current.Pause() != before.Pause() {
 		return store.LogicalAccountRecord{}, "", fmt.Errorf(
 			"%w：恢复期间组合的状态被改动了，请重试",
 			ErrNotReady,
@@ -576,7 +584,7 @@ func (s *Service) Resume(
 			fmt.Errorf("%w：还有人工操作在执行", ErrNotReady)
 	}
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.ResumeLogicalAccount(spaceID, logicalAccountID, s.now())
+		return tx.ResumeLogicalAccount(spaceID, logicalAccountID)
 	}); err != nil {
 		return store.LogicalAccountRecord{}, "", err
 	}

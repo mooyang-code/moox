@@ -303,7 +303,7 @@ func TestSystemOrdersDoNotPauseTheLogicalAccountOrBlockTheTarget(t *testing.T) {
 	require.Empty(t, f.orders.canceled, "也不会被当成本目标的挂单撤掉")
 	logical, err := f.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", logical.AutomationState)
+	require.Equal(t, "ACTIVE", logical.AutomationState())
 }
 
 // 挂单取不到买一卖一时退回伪市价，仍受最多尝试次数限制：已经有 4 笔零成交 IOC 就记未到位，不再下第 5 笔。

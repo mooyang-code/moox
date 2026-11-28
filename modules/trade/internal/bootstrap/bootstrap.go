@@ -10,14 +10,15 @@ import (
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/fundmaint"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/marginmonitor"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	positionapp "github.com/mooyang-code/moox/modules/trade/internal/application/position"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	walletapp "github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
@@ -34,7 +35,6 @@ import (
 	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	tradeobservability "github.com/mooyang-code/moox/modules/trade/internal/observability"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
@@ -121,7 +121,7 @@ func initialize(
 		RetryMin: time.Second, RetryMax: 30 * time.Second,
 	}
 	accounts := &accountapp.Service{
-		Store: accountapp.Repository{Store: tradeStore}, RawStore: tradeStore, Secrets: secrets,
+		Store: tradeStore, Secrets: secrets,
 		SessionState: manager, SymbolConfigs: manager, Exchanges: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 		Inspector: registry,
 	}
@@ -138,7 +138,7 @@ func initialize(
 			Quotes:           manager,
 		},
 	}
-	balanceMetrics, err := tradeobservability.DefaultBalanceMetrics()
+	balanceMetrics, err := telemetry.DefaultBalanceMetrics()
 	if err != nil {
 		return nil, fmt.Errorf("register trade balance metrics: %w", err)
 	}
@@ -150,7 +150,7 @@ func initialize(
 	equityService := &equityapp.Service{Store: tradeStore, Adapters: manager, Exchanges: registry}
 	equitySampler := traderuntime.NewEquitySampler(equityService)
 	registerEquitySamplerTimer(serverInstance, equitySampler)
-	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
+	fillReducer := &fillreduce.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: manager, SessionState: manager,
 		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics, Equity: equityService,
@@ -216,10 +216,10 @@ func initialize(
 		PaperMinBatchInterval: 300 * time.Millisecond,
 		RateStatus:            adapterRateStatus(manager),
 		// 普通账户的第 4、6 阶段：钱包划转与归集；统一账户、OKX、模拟盘不会调用。
-		Transfers: targetapp.NewWalletTransfer(&walletapp.Service{
+		Transfers: &walletapp.Service{
 			Store: tradeStore, Adapters: manager,
 			RequestSync: func(accountID string) { manager.RequestSync(accountID) },
-		}),
+		},
 	}
 	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{
@@ -347,18 +347,15 @@ func initialize(
 		var accountEvents execution.AccountEventSource
 		if accountConfig.ExecutionMode == exchange.ExecutionModePaper {
 			publicConfig := accountConfig
-			// Public market-data endpoints do not require private credentials. Keep
-			// this binding PAPER so the registry does not apply live credential
-			// requirements; the environment still pins it to production.
 			publicConfig.ExecutionMode = exchange.ExecutionModePaper
 			publicConfig.Environment = exchange.AccountEnvironmentProduction
-			publicAdapter, bindErr := registry.Bind(publicConfig, exchange.Credential{})
+			publicMarket, bindErr := registry.BindMarketData(publicConfig)
 			if bindErr != nil {
 				return nil, bindErr
 			}
-			marketData = publicAdapter
+			marketData = publicMarket
 			adapter = &executionpaper.Adapter{
-				Account: record, Store: tradeStore, MarketData: publicAdapter, Exchanges: registry, Wake: paperMatcherWorker.Wake,
+				Account: record, Store: tradeStore, MarketData: publicMarket, Exchanges: registry, Wake: paperMatcherWorker.Wake,
 			}
 		} else {
 			var bindErr error
@@ -511,8 +508,9 @@ func initialize(
 			},
 		},
 		&rpc.ExecutionServer{
-			Store: tradeStore,
-			Lanes: targetExecutor.LaneStatuses,
+			Store:     tradeStore,
+			Lanes:     targetExecutor.LaneStatuses,
+			Positions: &positionapp.Query{Store: tradeStore.ReadOnly(), Adapters: manager},
 			Submit: func(callCtx context.Context, command rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 				result, submitErr := operatorService.PlaceOrder(callCtx, operatorapp.ManualOrderCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
@@ -546,7 +544,6 @@ func initialize(
 			Exchanges:          registry,
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 			MatcherReady:       paperMatcherWorker.Ready,
-			Holdings:           &rpc.HoldingQuery{Store: tradeStore.ReadOnly(), Adapters: manager},
 			Adapters:           manager,
 			Delist:             delistService,
 			Lifecycle:          life,

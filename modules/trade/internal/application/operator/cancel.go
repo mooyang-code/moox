@@ -120,20 +120,13 @@ func (s *Service) CancelOrder(
 	defer unlock()
 	var action store.OperatorActionRecord
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		logical, err := tx.GetLogicalAccount(command.SpaceID, orderRecord.LogicalAccountID)
-		if err != nil {
+		// 自主下单组合没有自动执行，PauseLogicalAccount 对自主下单为空操作。
+		if err := tx.PauseLogicalAccount(
+			command.SpaceID,
+			orderRecord.LogicalAccountID,
+			store.UserPause(strings.TrimSpace(command.Reason)),
+		); err != nil {
 			return err
-		}
-		// 自主下单账户没有自动执行，撤单不需要暂停。
-		if logical.ControlMode != "MANUAL" {
-			if err := tx.SetLogicalAccountAutomation(
-				command.SpaceID,
-				orderRecord.LogicalAccountID,
-				"PAUSED",
-				strings.TrimSpace(command.Reason),
-			); err != nil {
-				return err
-			}
 		}
 		now := s.clock().UTC()
 		var ensureErr error

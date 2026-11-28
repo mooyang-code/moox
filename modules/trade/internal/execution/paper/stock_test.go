@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
@@ -149,7 +149,7 @@ func TestMatcherSkipsOutsideSession(t *testing.T) {
 		return nil
 	}))
 	decided := 0
-	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}, Exchanges: ashareCatalog(t),
+	m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}, Exchanges: ashareCatalog(t),
 		Now: func() time.Time { return beijingTime("2026-11-06 12:00:00") }}
 	m.DecideContext = func(context.Context, store.OrderRecord) (Decision, error) {
 		decided++

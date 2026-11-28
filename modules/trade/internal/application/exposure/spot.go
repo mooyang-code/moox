@@ -2,7 +2,6 @@
 package exposure
 
 import (
-	"math/big"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -50,7 +49,7 @@ func SpotDust(total, price shared.Decimal, instrument store.InstrumentRecord) bo
 	if err != nil {
 		return false
 	}
-	floored := FloorToStep(total, step)
+	floored := shared.FloorToStep(total, step)
 	if floored.IsZero() || floored.Cmp(minimum) < 0 {
 		return true
 	}
@@ -66,23 +65,6 @@ func SpotDust(total, price shared.Decimal, instrument store.InstrumentRecord) bo
 		return false
 	}
 	return minNotional.Cmp(shared.Zero()) > 0 && floored.Mul(price).Cmp(minNotional) < 0
-}
-
-// FloorToStep 把数量向下取整到步长的整数倍。
-func FloorToStep(value, step shared.Decimal) shared.Decimal {
-	if value.Cmp(shared.Zero()) <= 0 || step.Cmp(shared.Zero()) <= 0 {
-		return shared.Zero()
-	}
-	ratio := new(big.Rat)
-	if _, ok := ratio.SetString(value.Div(step).String()); !ok {
-		return shared.Zero()
-	}
-	units := new(big.Int).Quo(ratio.Num(), ratio.Denom())
-	whole, err := shared.ParseDecimal(units.String())
-	if err != nil {
-		return shared.Zero()
-	}
-	return whole.Mul(step)
 }
 
 func decimalOrZero(raw string) (shared.Decimal, error) {

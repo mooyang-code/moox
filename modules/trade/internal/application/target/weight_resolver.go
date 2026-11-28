@@ -230,7 +230,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.Logi
 		// executor creates child orders; quantizing here would let the first
 		// member's step silently erase a quantity that another member can fill.
 		negative := quantity.IsNegative()
-		quantity = floorToStep(quantity.Abs(), logicalTargetQuantityStep)
+		quantity = shared.FloorToStep(quantity.Abs(), logicalTargetQuantityStep)
 		if negative {
 			quantity = quantity.Neg()
 		}

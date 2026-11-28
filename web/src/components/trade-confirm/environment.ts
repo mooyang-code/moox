@@ -49,15 +49,17 @@ export function accountEnvironment(account: Pick<TradingAccount, "execution_mode
 }
 
 /**
- * 组合账户的环境：后端要求成员环境一致，所以取第一个能找到的成员的环境。
- * 实盘组合没有可判断的成员时（测试账户、实盘账户两个菜单都列出它）用 entered：从哪个菜单进来就按哪个环境显示；
- * 不知道从哪进来（例如直接打开链接）时按生产环境处理，确认也按最严的一档。
+ * 组合账户的环境：优先读后端返回的三值 environment（1 测试网、2 生产环境、3 模拟盘）；
+ * 兼容局部测试桩未填 environment 时，回退到 execution_mode 和成员环境推导。
  */
 export function logicalEnvironment(
-  logical: Pick<LogicalAccount, "execution_mode" | "members">,
+  logical: Pick<LogicalAccount, "execution_mode" | "environment" | "members">,
   accounts: ReadonlyMap<string, TradingAccount>,
   entered?: Environment
 ): Environment {
+  if (logical.environment === 3) return "paper";
+  if (logical.environment === 1) return "testnet";
+  if (logical.environment === 2) return "prod";
   if (logical.execution_mode === 1) return "paper";
   for (const member of logical.members || []) {
     const account = accounts.get(member.trading_account_id);
@@ -67,14 +69,17 @@ export function logicalEnvironment(
 }
 
 /**
- * 组合是否列在这个环境的菜单里。实盘组合还没有可判断的成员时（例如新建账户加入组合失败后留下的空组合），
- * 测试账户和实盘账户两个菜单都列出它，好让用户在任一处给它加成员或处理掉；其余按 logicalEnvironment 判断。
+ * 组合是否列在这个环境的菜单里：组合自带三值 environment 时直接精确匹配；
+ * 局部测试桩未填 environment 时沿用旧回退逻辑。
  */
 export function logicalInEnvironment(
-  logical: Pick<LogicalAccount, "execution_mode" | "members">,
+  logical: Pick<LogicalAccount, "execution_mode" | "environment" | "members">,
   accounts: ReadonlyMap<string, TradingAccount>,
   env: Environment
 ): boolean {
+  if (logical.environment === 1 || logical.environment === 2 || logical.environment === 3) {
+    return logicalEnvironment(logical, accounts) === env;
+  }
   if (logical.execution_mode === 1) return env === "paper";
   const known = (logical.members || []).some(member => accounts.has(member.trading_account_id));
   if (!known) return env !== "paper";

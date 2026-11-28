@@ -65,7 +65,7 @@ func TestFlattenUsesPausedAutomationStateAndRunningAction(t *testing.T) {
 		}
 		account, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
 		require.NoError(t, err)
-		require.Equal(t, "PAUSED", account.AutomationState)
+		require.Equal(t, "PAUSED", account.AutomationState())
 		action, err := fixture.store.GetOperatorAction(ctx, "space-1", "flatten-1")
 		require.NoError(t, err)
 		require.Equal(t, string(operatordomain.StatusRunning), action.Status)
@@ -92,9 +92,7 @@ func TestFlattenCompletedReplayDoesNotPauseAfterResume(t *testing.T) {
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "ACTIVE", "",
-		)
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 
 	_, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
@@ -104,7 +102,7 @@ func TestFlattenCompletedReplayDoesNotPauseAfterResume(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", account.AutomationState)
+	require.Equal(t, "ACTIVE", account.AutomationState())
 }
 
 func TestFlattenWaitsForCancellationConfirmation(t *testing.T) {
@@ -195,7 +193,7 @@ func TestFlattenReportsPartialRemainingPositionsAndEndsPaused(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", account.AutomationState)
+	require.Equal(t, "PAUSED", account.AutomationState())
 }
 
 func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
@@ -251,8 +249,8 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
 	fixture.orders.nextID = ""
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "PAUSED", "configure",
+		if err := tx.PauseLogicalAccount(
+			"space-1", "logical-1", store.UserPause("configure"),
 		); err != nil {
 			return err
 		}
@@ -262,9 +260,7 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "ACTIVE", "",
-		)
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	account, err := fixture.store.GetTradingAccountByID(context.Background(), "account-b")
 	require.NoError(t, err)

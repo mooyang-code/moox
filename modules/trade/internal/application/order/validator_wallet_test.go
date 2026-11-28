@@ -6,22 +6,22 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
-func mixedStandardAccount(spotUSDT, futuresUSDT string) tradingaccount.Account {
+func mixedStandardAccount(spotUSDT, futuresUSDT string) store.TradingAccountRecord {
 	account := executableAccount(exchange.MarketTypeSwap)
-	account.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
-	account.AccountMode = exchange.AccountModeBinanceStandard
-	account.LeverageSettings = map[string]shared.Decimal{"*": shared.MustDecimal("5")}
-	account.Snapshot = exchange.AccountSnapshot{
-		Balances: []exchange.AssetBalance{
-			{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal(spotUSDT)},
-			{Wallet: exchange.WalletFutures, Asset: "USDT", Available: shared.MustDecimal(futuresUSDT)},
+	account.Markets = []string{string(exchange.MarketTypeSpot), string(exchange.MarketTypeSwap)}
+	account.AccountMode = string(exchange.AccountModeBinanceStandard)
+	account.LeverageSettings = store.LeverageSettings{"*": "5"}
+	account.Snapshot = store.TradingAccountSnapshot{
+		Balances: []store.AssetBalance{
+			{Wallet: string(exchange.WalletSpot), Asset: "USDT", Available: spotUSDT},
+			{Wallet: string(exchange.WalletFutures), Asset: "USDT", Available: futuresUSDT},
 		},
-		AvailableFunds: shared.MustDecimal(futuresUSDT).Add(shared.MustDecimal(spotUSDT)),
+		AvailableFunds: shared.MustDecimal(futuresUSDT).Add(shared.MustDecimal(spotUSDT)).String(),
 	}
 	return account
 }
@@ -49,11 +49,11 @@ func TestValidatorChecksFundsInTheOrderWalletOfStandardAccount(t *testing.T) {
 func TestValidatorSharesUnifiedWalletForOKX(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := mixedStandardAccount("0", "0")
-	account.Exchange = exchange.ExchangeOKX
-	account.AccountMode = exchange.AccountModeOKXUnified
-	account.Snapshot = exchange.AccountSnapshot{
-		Balances:       []exchange.AssetBalance{{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("1000")}},
-		AvailableFunds: shared.MustDecimal("1000"),
+	account.Exchange = string(exchange.ExchangeOKX)
+	account.AccountMode = string(exchange.AccountModeOKXUnified)
+	account.Snapshot = store.TradingAccountSnapshot{
+		Balances:       []store.AssetBalance{{Wallet: string(exchange.WalletUnified), Asset: "USDT", Available: "1000"}},
+		AvailableFunds: "1000",
 	}
 	swapSpec := testSpec(now)
 	swapSpec.InstrumentID, swapSpec.PositionSide = "BTC-USDT-SWAP", exchange.PositionSideNet

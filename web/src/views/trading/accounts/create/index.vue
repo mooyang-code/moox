@@ -407,13 +407,8 @@ async function submit() {
   try {
     // 前面几步已经建成的对象记在 state 里：中途失败后重试，只补没做完的，不会重复建账户（同名会冲突）
     if (!state.accountId) {
-      if (form.kind === "paper") {
-        // 模拟盘一次请求完成：新建组合或加入已有组合都由后端在同一个事务里做，中途失败不会留下孤立的账户
-        state.accountId = (await createTradingAccount(buildPaperRequest(form))).account.trading_account_id;
-        state.joined = true;
-      } else {
-        state.accountId = (await createTradingAccount(buildLiveRequest(form))).account.trading_account_id;
-      }
+      const request = form.kind === "paper" ? buildPaperRequest(form) : buildLiveRequest(form);
+      state.accountId = (await createTradingAccount(request)).account.trading_account_id;
     }
     if (!state.joined) {
       let target = exist?.logical_account_id ?? state.logicalId;
@@ -422,14 +417,14 @@ async function submit() {
           await createLogicalAccount({
             name: form.logicalName.trim() || form.name.trim(),
             control_mode: form.controlMode,
-            // 按账户类型取执行模式：模拟盘是 1，测试网和生产环境是 2
-            execution_mode: form.kind === "paper" ? 1 : 2,
+            // 组合按三值环境创建：1 测试网、2 生产环境、3 模拟盘
+            environment: form.kind === "paper" ? 3 : form.kind === "testnet" ? 1 : 2,
             settlement_asset: form.settlementAsset.trim().toUpperCase()
           })
         ).logical_account.logical_account_id;
         state.logicalId = target;
       }
-      // 实盘：新账户的会话要等运行时的周期检查才建起来，这时加入组合会返回 TRADE_SESSION_NOT_READY，等几秒重试。
+      // 新建账户的会话要等运行时的周期检查才建起来，这时加入组合会返回 TRADE_SESSION_NOT_READY，等几秒重试。
       const accountId = state.accountId;
       await retryWhileSessionStarting(() =>
         addLogicalAccountMember({

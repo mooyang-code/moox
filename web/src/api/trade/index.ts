@@ -25,7 +25,6 @@ import type {
   ExecutionCapabilities,
   EquityPoint,
   Fill,
-  Holding,
   InspectExchangeCredentialReq,
   LedgerEntry,
   ListAccountLedgerReq,
@@ -132,12 +131,6 @@ export function queryEquityCurve(req: {
   end_time?: string;
 }) {
   return call<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("trade", "QueryEquityCurve", req);
-}
-
-export function listHoldings(trading_account_id: string) {
-  return call<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>("trade", "ListHoldings", {
-    trading_account_id
-  });
 }
 
 /** 从交易所即查资金流水（手续费、资金费、已实现盈亏、划转等），按时间倒序 */
