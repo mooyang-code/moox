@@ -259,7 +259,8 @@ func TestGatedChunkReleasesLocks(t *testing.T) {
 	locks := setlock.New()
 	window := testWindow(2)
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithChunkPeriods(2), WithLocks(locks), WithWatermark(noWatermark), WithGate(func(string) bool { return false }))
+	executor := NewExecutor(runner, WithChunkPeriods(2), WithLocks(locks), WithWatermark(noWatermark),
+		WithWriteScope(func(context.Context, string) (func(), bool) { return nil, false }))
 	var records []progressRecord
 	require.ErrorIs(t, executor.Run(context.Background(), window, fixedSource(executorSelection("BTC")), recordProgress(&records, 0)), ErrGated)
 	_, err := executor.RunChunkWith(context.Background(), fixedSource(executorSelection("BTC")), window.Start, window.End, nil)

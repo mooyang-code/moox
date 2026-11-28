@@ -32,15 +32,11 @@ type ConsumerConfig struct {
 	MaxAckPending      int
 	InProgressInterval time.Duration
 	ReadColumnTimeout  time.Duration
-	// Continuity 非空时按连续水位逐期推进。
+	// Continuity 是必填的连续水位推进器。
 	Continuity *Continuity
-	// Gate 非空时是生命周期门禁：任务没有处于预热或运行就不计算。
-	Gate func(taskID string) bool
-	// CatchupGate 非空时是恢复追赶的门禁：Gate 不放行但 CatchupGate 放行的任务，只允许连续水位追赶（历史周期），实时事件仍不处理。
-	CatchupGate func(taskID string) bool
-	// NoteWhenClosed 非空且返回 true 时，Gate 不放行的实时事件仍记下追赶目标（见 Handler.SetNoteWhenClosed）。
+	// NoteWhenClosed 非空且返回 true 时，被门禁挡住的实时事件仍记下追赶目标（见 HandlerConfig.NoteWhenClosed）。
 	NoteWhenClosed func(taskID string) bool
-	// Begin 非空时是登记式门禁，取代任务队列里对 Gate/CatchupGate 的二次检查（见 Handler.SetBegin）。
+	// Begin 非空时是登记式写门禁（见 HandlerConfig.Begin）。
 	Begin func(ctx context.Context, taskID string, live bool) (func(), bool)
 	// Params 非空时在开算每一期之前取参；为空时全部按成员自己的参数计算。
 	Params trigger.ParamSelector
@@ -111,8 +107,8 @@ type Consumer struct {
 }
 
 func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocator, periodStore trigger.PeriodStore, runner trigger.PipelineRunner, locks trigger.TaskLocks) (*Consumer, error) {
-	if sets == nil || periodStore == nil || runner == nil {
-		return nil, fmt.Errorf("factor trigger set locator, Storage and pipeline runner are required")
+	if sets == nil || periodStore == nil || runner == nil || cfg.Continuity == nil {
+		return nil, fmt.Errorf("factor trigger set locator, Storage, pipeline runner and continuity are required")
 	}
 	cfg.applyDefaults()
 	registry, err := events.DefaultRegistry()
@@ -152,18 +148,16 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 		_ = client.Close()
 		return nil, err
 	}
-	handler := NewHandler(sets, periodStore, runner, locks, HandlerConfig{
+	handler, err := NewHandler(sets, periodStore, runner, locks, HandlerConfig{
 		NakDelay: cfg.NakDelay, PeriodBudgetMin: cfg.PeriodBudgetMin,
 		PeriodBudgetMax: cfg.PeriodBudgetMax, ReadColumnTimeout: cfg.ReadColumnTimeout,
+		Continuity: cfg.Continuity, Begin: cfg.Begin, NoteWhenClosed: cfg.NoteWhenClosed, Params: cfg.Params,
 	})
-	if cfg.Continuity != nil {
-		handler.SetContinuity(cfg.Continuity)
+	if err != nil {
+		_ = consumer.Close()
+		_ = client.Close()
+		return nil, err
 	}
-	handler.SetGate(cfg.Gate)
-	handler.SetCatchupGate(cfg.CatchupGate)
-	handler.SetBegin(cfg.Begin)
-	handler.SetNoteWhenClosed(cfg.NoteWhenClosed)
-	handler.SetParamSelector(cfg.Params)
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{

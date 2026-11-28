@@ -93,28 +93,53 @@ func periodDelivery(t *testing.T, eventID string, period time.Time, universe, fa
 }
 
 type continuityHarness struct {
-	t       *testing.T
-	handler *Handler
-	periods *handlerPeriodStore
-	runner  *handlerRunner
-	rows    *periodRows
-	store   *watermark.Store
-	cont    *Continuity
-	now     time.Time
-	taskID  string
+	t              *testing.T
+	locator        *handlerTaskLocator
+	handler        *Handler
+	periods        *handlerPeriodStore
+	runner         *handlerRunner
+	rows           *periodRows
+	store          *watermark.Store
+	cont           *Continuity
+	now            time.Time
+	taskID         string
+	begin          func(ctx context.Context, taskID string, live bool) (func(), bool)
+	noteWhenClosed func(taskID string) bool
 }
 
 func newContinuityHarness(t *testing.T) *continuityHarness {
 	set := enabledTestTask()
-	h := &continuityHarness{t: t, periods: &handlerPeriodStore{}, runner: new(handlerRunner), rows: &periodRows{}, now: continuityBase.Add(time.Hour), taskID: set.TaskID}
-	h.handler = NewHandler(&handlerTaskLocator{set: set, factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true}, h.periods, h.runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(h.handler.Close)
+	h := &continuityHarness{
+		t:       t,
+		locator: &handlerTaskLocator{set: set, factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true},
+		periods: &handlerPeriodStore{},
+		runner:  new(handlerRunner),
+		rows:    &periodRows{},
+		now:     continuityBase.Add(time.Hour),
+		taskID:  set.TaskID,
+	}
 	store, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
 	require.NoError(t, err)
 	h.store = store
 	h.cont, err = NewContinuity(ContinuityConfig{Store: store, Local: h.rows, Now: func() time.Time { return h.now }})
 	require.NoError(t, err)
-	h.handler.SetContinuity(h.cont)
+	h.handler, err = NewHandler(h.locator, h.periods, h.runner, new(testTaskLocks), HandlerConfig{
+		Continuity: h.cont,
+		Begin: func(ctx context.Context, taskID string, live bool) (func(), bool) {
+			if h.begin == nil {
+				return func() {}, true
+			}
+			return h.begin(ctx, taskID, live)
+		},
+		NoteWhenClosed: func(taskID string) bool {
+			if h.noteWhenClosed == nil {
+				return false
+			}
+			return h.noteWhenClosed(taskID)
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(h.handler.Close)
 	return h
 }
 
@@ -266,10 +291,12 @@ func TestContinuityResumesAfterRestart(t *testing.T) {
 	require.NoError(t, err)
 	cont, err := NewContinuity(ContinuityConfig{Store: reopened, Local: h.rows})
 	require.NoError(t, err)
-	h.handler.SetContinuity(cont)
+	restarted, err := NewHandler(h.locator, h.periods, h.runner, new(testTaskLocks), HandlerConfig{Continuity: cont})
+	require.NoError(t, err)
+	t.Cleanup(restarted.Close)
 	h.rows.set(minuteAt(1), universe...)
 	h.rows.set(minuteAt(2), universe...)
-	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
+	require.NoError(t, restarted.Advance(context.Background(), h.taskID))
 	state, _ := reopened.Get(h.taskID)
 	require.Equal(t, minuteAt(2), state.CommittedThrough)
 }
@@ -355,9 +382,13 @@ func TestAdvanceFollowsCatchupGateWhenRealtimeGateClosed(t *testing.T) {
 	// 之后的周期只在读回里，没有事件：模拟暂停期间错过的周期。
 	h.rows.set(minuteAt(3), universe...)
 	h.rows.set(minuteAt(4), universe...)
-	h.handler.SetGate(func(string) bool { return false })
 	catchup := false
-	h.handler.SetCatchupGate(func(string) bool { return catchup })
+	h.begin = func(_ context.Context, _ string, live bool) (func(), bool) {
+		if !live && catchup {
+			return func() {}, true
+		}
+		return nil, false
+	}
 	require.NoError(t, h.cont.NoteTarget(h.taskID, minuteAt(4)))
 
 	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
@@ -375,8 +406,13 @@ func TestNotReadyEventIsNotedAndCaughtUpAfterReady(t *testing.T) {
 	h := newContinuityHarness(t)
 	universe := subjectsN(20)
 	ready, running := false, false
-	h.handler.SetGate(func(string) bool { return ready })
-	h.handler.SetNoteWhenClosed(func(string) bool { return running })
+	h.begin = func(_ context.Context, _ string, _ bool) (func(), bool) {
+		if !ready {
+			return nil, false
+		}
+		return func() {}, true
+	}
+	h.noteWhenClosed = func(string) bool { return running }
 
 	running = true
 	require.Equal(t, jetstream.ACK, h.event(0, universe, nil).Decision)

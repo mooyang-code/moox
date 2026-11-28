@@ -377,7 +377,13 @@ func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	var attempts int
 	executor := func(runner *planRecorder) *recalcexec.Executor {
 		return recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2),
-			recalcexec.WithGate(func(string) bool { attempts++; return attempts > 2 }))
+			recalcexec.WithWriteScope(func(context.Context, string) (func(), bool) {
+				attempts++
+				if attempts <= 2 {
+					return nil, false
+				}
+				return func() {}, true
+			}))
 	}
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
@@ -394,7 +400,7 @@ func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	// 一直被挡住：超过等待时间后归还作业、按没有任务处理，不报失败。
 	client2 := &jobClientFake{job: testJob("BTC"), found: true}
 	runner2 := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
-	blocked := recalcexec.NewExecutor(runner2, recalcexec.WithGate(func(string) bool { return false }))
+	blocked := recalcexec.NewExecutor(runner2, recalcexec.WithWriteScope(func(context.Context, string) (func(), bool) { return nil, false }))
 	loop2 := &recalcLoop{client: client2, executor: blocked, source: &sourceFake{}, poll: time.Millisecond, gateWait: 20 * time.Millisecond, gateRetry: 5 * time.Millisecond}
 	found, err = loop2.RunOnce(context.Background())
 	require.NoError(t, err)
@@ -513,7 +519,7 @@ func TestRecalcLoopKeepsOriginalProgressBeforeFirstChunkOnSessionCalendar(t *tes
 
 	// 3. 首块前被门禁挡住归还（giveBack）：原样回传 start。
 	gatedClient := &jobClientFake{job: newStockJob(), found: true}
-	gatedExec := recalcexec.NewExecutor(&planRecorder{}, recalcexec.WithGate(func(string) bool { return false }))
+	gatedExec := recalcexec.NewExecutor(&planRecorder{}, recalcexec.WithWriteScope(func(context.Context, string) (func(), bool) { return nil, false }))
 	gatedLoop := &recalcLoop{client: gatedClient, executor: gatedExec, source: &sourceFake{}, poll: time.Millisecond, gateWait: 10 * time.Millisecond, gateRetry: 2 * time.Millisecond}
 	found, err = gatedLoop.RunOnce(context.Background())
 	require.NoError(t, err)

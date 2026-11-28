@@ -22,79 +22,48 @@ type HandlerConfig struct {
 	PeriodBudgetMin   time.Duration
 	PeriodBudgetMax   time.Duration
 	ReadColumnTimeout time.Duration
+	// Continuity 是必填的连续水位推进器。
+	Continuity *Continuity
+	// Begin 是登记式写门禁：先登记在途、再检查门禁，允许时返回的函数在写操作结束后注销。
+	// live 为真表示实时事件（只看实时门禁），否则表示追赶推进（实时门禁或追赶门禁放行都可以）。未设置时一律放行。
+	Begin func(ctx context.Context, taskID string, live bool) (func(), bool)
+	// NoteWhenClosed 非空且返回 true 时，不计算的实时事件仍记下追赶目标（模块在运行、只是任务还没就绪，例如窗口载入中）：
+	// 就绪后追赶循环直接补算，不必等下一条实时事件。模块暂停时返回 false，目标由恢复追赶显式建立。
+	// 还没有水位记录的任务（从没算过）不记，见 Continuity.note。
+	NoteWhenClosed func(taskID string) bool
+	// Params 在开算一期之前取得任务各可变成员用的参数（设计 6.3）；为空时全部按成员自己的参数计算。
+	Params trigger.ParamSelector
 }
 
 type Handler struct {
-	sets     trigger.TaskLocator
-	store    trigger.PeriodStore
-	runner   trigger.PipelineRunner
-	runners  *trigger.TaskRunners
-	registry *events.Registry
-	initErr  error
-	cfg      HandlerConfig
-	// continuity 非空时按连续水位逐期推进。
-	continuity *Continuity
-	// gate 非空时，任务没有处于预热或运行就不计算：事件直接 ACK，水位不前进，
-	// 之后由下一个事件和追赶循环从水位下一期补算。
-	gate func(taskID string) bool
-	// noteWhenClosed 非空且返回 true 时，不计算的实时事件仍记下追赶目标（模块在运行、只是任务还没就绪，例如窗口载入中）：
-	// 就绪后追赶循环直接补算，不必等下一条实时事件。模块暂停时返回 false，目标由恢复追赶显式建立。
-	// 还没有水位记录的任务（从没算过）不记，见 Continuity.note。
+	sets           trigger.TaskLocator
+	store          trigger.PeriodStore
+	runner         trigger.PipelineRunner
+	runners        *trigger.TaskRunners
+	registry       *events.Registry
+	initErr        error
+	cfg            HandlerConfig
+	continuity     *Continuity
+	begin          func(ctx context.Context, taskID string, live bool) (func(), bool)
 	noteWhenClosed func(taskID string) bool
-	// catchupGate 非空时，实时门禁关闭的任务在恢复追赶中仍可推进连续水位（只写历史周期）。
-	catchupGate func(taskID string) bool
-	// begin 非空时取代 gate/catchupGate 的二次检查：先登记在途、再检查门禁，返回的函数在这次计算结束后注销。
-	// live 为真是实时事件（只看实时门禁），否则是追赶推进（实时门禁或追赶门禁放行都可以）。
-	begin func(ctx context.Context, taskID string, live bool) (func(), bool)
-	// params 在开算一期之前取得任务各可变成员用的参数（设计 6.3）；为空时全部按成员自己的参数计算。
-	params trigger.ParamSelector
+	params         trigger.ParamSelector
 }
 
-// SetParamSelector 设置取参来源；必须在开始消费之前调用。
-func (h *Handler) SetParamSelector(params trigger.ParamSelector) { h.params = params }
-
-// SetGate 设置生命周期门禁；必须在开始消费之前调用。
-func (h *Handler) SetGate(gate func(taskID string) bool) { h.gate = gate }
-
-// SetNoteWhenClosed 设置“不计算的实时事件是否仍记下追赶目标”的判断；必须在开始消费之前调用。
-func (h *Handler) SetNoteWhenClosed(note func(taskID string) bool) { h.noteWhenClosed = note }
-
-// SetBegin 设置登记式门禁；任务串行队列里的闭包在真正执行前用它再检查一次。必须在开始消费之前调用。
-func (h *Handler) SetBegin(begin func(ctx context.Context, taskID string, live bool) (func(), bool)) {
-	h.begin = begin
-}
-
-// enter 在写结果之前登记并检查门禁；没有设置 begin 时沿用 gate/catchupGate。
+// enter 在写结果之前登记并检查门禁；未设置 begin 时直接放行。
 func (h *Handler) enter(ctx context.Context, taskID string, live bool) (func(), bool) {
-	if h.begin != nil {
-		return h.begin(ctx, taskID, live)
+	if h.begin == nil {
+		return func() {}, true
 	}
-	open := h.gate == nil || h.gate(taskID)
-	if !open && !live && h.catchupGate != nil {
-		open = h.catchupGate(taskID)
-	}
-	if !open {
-		return nil, false
-	}
-	return func() {}, true
+	return h.begin(ctx, taskID, live)
 }
-
-// SetCatchupGate 设置恢复追赶的门禁：Advance（连续水位追赶）在实时门禁关闭时，只要追赶门禁放行就可以推进。
-func (h *Handler) SetCatchupGate(gate func(taskID string) bool) { h.catchupGate = gate }
-
-// SetContinuity 打开连续水位推进；必须在开始消费之前调用。
-func (h *Handler) SetContinuity(continuity *Continuity) { h.continuity = continuity }
 
 // Advance 在任务的通道里按连续水位推进一次（追赶循环与K 线补写事件调用）。
 func (h *Handler) Advance(ctx context.Context, taskID string) error {
 	if h == nil || h.continuity == nil {
 		return nil
 	}
-	if h.gate != nil && !h.gate(taskID) && (h.catchupGate == nil || !h.catchupGate(taskID)) {
-		return nil
-	}
 	_, err := h.runners.Do(ctx, taskID, func(runnerCtx context.Context) (pipeline.Outcome, error) {
-		// 排队期间可能已经暂停：真正执行前登记并再检查一次门禁。
+		// 排队期间可能已经暂停：真正执行前登记并检查门禁。
 		release, ok := h.enter(runnerCtx, taskID, false)
 		if !ok {
 			return pipeline.Outcome{}, nil
@@ -105,7 +74,10 @@ func (h *Handler) Advance(ctx context.Context, taskID string) error {
 	return err
 }
 
-func NewHandler(sets trigger.TaskLocator, periodStore trigger.PeriodStore, runner trigger.PipelineRunner, locks trigger.TaskLocks, cfg HandlerConfig) *Handler {
+func NewHandler(sets trigger.TaskLocator, periodStore trigger.PeriodStore, runner trigger.PipelineRunner, locks trigger.TaskLocks, cfg HandlerConfig) (*Handler, error) {
+	if cfg.Continuity == nil {
+		return nil, errors.New("连续水位推进器（Continuity）不能为空")
+	}
 	if cfg.NakDelay <= 0 {
 		cfg.NakDelay = 10 * time.Second
 	}
@@ -123,8 +95,10 @@ func NewHandler(sets trigger.TaskLocator, periodStore trigger.PeriodStore, runne
 	}
 	registry, initErr := events.DefaultRegistry()
 	return &Handler{
-		sets: sets, store: periodStore, runner: runner, runners: trigger.NewTaskRunners(locks), registry: registry, initErr: initErr, cfg: cfg,
-	}
+		sets: sets, store: periodStore, runner: runner, runners: trigger.NewTaskRunners(locks),
+		registry: registry, initErr: initErr, cfg: cfg,
+		continuity: cfg.Continuity, begin: cfg.Begin, noteWhenClosed: cfg.NoteWhenClosed, params: cfg.Params,
+	}, nil
 }
 
 func (h *Handler) Close() {
@@ -144,7 +118,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if h == nil || h.sets == nil || h.store == nil || h.runner == nil || h.runners == nil || h.registry == nil {
+	if h == nil || h.sets == nil || h.store == nil || h.runner == nil || h.runners == nil || h.registry == nil || h.continuity == nil {
 		if h != nil && h.initErr != nil {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("initialize factor period event registry: %w", h.initErr)}
 		}
@@ -211,7 +185,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 				release, ok := h.enter(runnerCtx, set.TaskID, true)
 				if !ok {
 					// 本期不算；模块在运行、只是任务没就绪时记下追赶目标，就绪后由追赶循环补算。
-					if h.continuity != nil && h.noteWhenClosed != nil && h.noteWhenClosed(set.TaskID) {
+					if h.noteWhenClosed != nil && h.noteWhenClosed(set.TaskID) {
 						_, noteErr := h.continuity.note(set, event, false)
 						return pipeline.Outcome{}, noteErr
 					}
@@ -228,10 +202,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 					return pipeline.Outcome{}, nil
 				}
 				current, currentMembers := fresh.Set, fresh.Members
-				if h.continuity != nil {
-					return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, current, currentMembers, event)
-				}
-				return h.computePeriod(runnerCtx, current, currentMembers, event.periodTime, event.scope())
+				return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, current, currentMembers, event)
 			})
 			if setErr != nil {
 				taskErrs[index] = fmt.Errorf("factor task %s: %w", set.TaskID, setErr)
