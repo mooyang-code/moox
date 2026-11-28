@@ -192,9 +192,23 @@ func TestAcceptanceEventPayloadAndLifecycleVersionSensitivity(t *testing.T) {
 	slices.Sort(gotEventChanged)
 	require.Equal(t, []string{"eventbus", "storage-primary"}, gotEventChanged)
 
-	// 3a-2：只改 Stream 容量上限，只有 EventBus 被判格式变化，storage-primary 不受影响。
+	// 3a-2：只改 Stream 的容量与保留期运行参数，不触发格式变化，允许保留数据。
+	tunedStreams := events.Streams()
+	tunedStreams[0].MaxAge *= 2
+	tunedStreams[0].MaxBytes *= 2
+	tunedInputs, err := DefaultInputs()
+	require.NoError(t, err)
+	tunedInputs.EventBusTopologyDigest = events.TopologyFormatDigestFromSpecs(tunedStreams, events.Consumers())
+	require.Equal(t, baseExpected["eventbus"].Parts[pkgdataformat.PartEventBusTopology], tunedInputs.EventBusTopologyDigest)
+	tunedExpected, err := ExpectedWith(tunedInputs)
+	require.NoError(t, err)
+	tunedReport := CheckHost("all", statefulComponents, allObserved, tunedExpected)
+	require.True(t, tunedReport.CanKeep)
+	require.Empty(t, tunedReport.Incompatible)
+
+	// 3a-3：改 Stream 主题等影响磁盘读回的拓扑结构，只有 EventBus 被判格式变化，storage-primary 不受影响。
 	streams := events.Streams()
-	streams[0].MaxBytes++
+	streams[0].Subjects = append(streams[0].Subjects, "moox.probe.v1.>")
 	topoInputs, err := DefaultInputs()
 	require.NoError(t, err)
 	topoInputs.EventBusTopologyDigest = events.TopologyFormatDigestFromSpecs(streams, events.Consumers())

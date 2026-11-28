@@ -38,8 +38,8 @@ func Consumers() []DurableConsumer {
 
 // MessagesFormatDigest 计算磁盘上持久化事件消息的格式摘要：
 // 覆盖事件信封描述符以及全部已注册事件的名称、版本与负载消息描述符。
-// storage-primary 与 EventBus 都依赖它；Stream 与消费者配置只进 TopologyFormatDigest，
-// 调整 Stream 容量上限等拓扑参数不会让 storage-primary 被判格式变化。
+// storage-primary 与 EventBus 都依赖它；Stream 与消费者声明只进 TopologyFormatDigest，
+// 调整 Stream 或消费者拓扑声明不会让 storage-primary 被判格式变化。
 func MessagesFormatDigest() (string, error) {
 	reg, err := DefaultRegistry()
 	if err != nil {
@@ -112,17 +112,19 @@ func TopologyFormatDigest() string {
 }
 
 // TopologyFormatDigestFromSpecs 由给定的 Stream 与持久消费者声明计算确定性 SHA-256 摘要。
+// 仅纳入影响磁盘上消息与消费者能否被读回的结构项：Stream 名称、保留策略（WorkQueue）、存储类型（file）、主题列表，
+// 以及持久消费者的名称、所属 Stream 与过滤主题；MaxAge、MaxBytes、去重窗口、描述与角色权限标记等可由 Reconcile 原地更新的运行参数不计入。
 func TopologyFormatDigestFromSpecs(streams []StreamSpec, consumers []DurableConsumer) string {
 	h := sha256.New()
 
-	// 1. Stream 声明（按名称排序）。
+	// 1. Stream 声明（按名称排序）；所有 Stream 固定使用文件存储（nats.FileStorage）。
 	sortedStreams := append([]StreamSpec(nil), streams...)
 	sort.Slice(sortedStreams, func(i, j int) bool { return sortedStreams[i].Name < sortedStreams[j].Name })
 	fmt.Fprintf(h, "streams\x00%d\x00", len(sortedStreams))
 	for _, s := range sortedStreams {
 		subjects := append([]string(nil), s.Subjects...)
 		slices.Sort(subjects)
-		fmt.Fprintf(h, "stream\x00%s\x00%t\x00%d\x00%d\x00%d\x00", s.Name, s.WorkQueue, s.MaxAge, s.MaxBytes, StreamDuplicates)
+		fmt.Fprintf(h, "stream\x00%s\x00%t\x00file\x00", s.Name, s.WorkQueue)
 		for _, subj := range subjects {
 			fmt.Fprintf(h, "subject\x00%s\x00", subj)
 		}
@@ -135,7 +137,7 @@ func TopologyFormatDigestFromSpecs(streams []StreamSpec, consumers []DurableCons
 	for _, c := range sortedConsumers {
 		filters := c.FilterSubjects()
 		slices.Sort(filters)
-		fmt.Fprintf(h, "consumer\x00%s\x00%s\x00%t\x00", c.Name(), c.Stream(), c.Deletable())
+		fmt.Fprintf(h, "consumer\x00%s\x00%s\x00", c.Name(), c.Stream())
 		for _, f := range filters {
 			fmt.Fprintf(h, "filter\x00%s\x00", f)
 		}
