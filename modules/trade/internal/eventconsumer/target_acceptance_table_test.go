@@ -94,7 +94,7 @@ func acceptanceClose(session string) func(*testing.T, *store.Store) {
 }
 
 func acceptanceManual(t *testing.T, db *store.Store) {
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 }
 
 func TestTargetAcceptanceTable(t *testing.T) {

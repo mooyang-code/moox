@@ -30,22 +30,22 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 	if s.Adapters == nil {
 		return shared.Zero(), ErrServiceConfig
 	}
-	adapter, err := s.Adapters.Adapter(validation.Account.ID)
+	adapter, err := s.Adapters.Adapter(validation.Account.TradingAccountID)
 	if err != nil {
-		return shared.Zero(), accountExecutionError(validation.Account.ID, "adapter", err)
+		return shared.Zero(), accountExecutionError(validation.Account.TradingAccountID, "adapter", err)
 	}
 	policy = execution.ResolveOrderPolicy(adapter, validation.Account)
 	// 账户上有挂着的单（OPEN、部分成交）时不复用：撮合随时可能让它成交，持仓和保证金会变。
 	reusable, err := s.noRestingPaperOrders(ctx, validation)
 	if err != nil {
-		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
+		return shared.Zero(), accountExecutionError(validation.Account.TradingAccountID, "snapshot", err)
 	}
 	load := adapter.GetAccountSnapshot
 	if !reusable {
 		snapshot, loadErr := load(ctx)
 		return s.marginFromSnapshot(policy, validation, snapshot, loadErr)
 	}
-	snapshot, err := reusedSnapshot(ctx, validation.Account.ID, load)
+	snapshot, err := reusedSnapshot(ctx, validation.Account.TradingAccountID, load)
 	return s.marginFromSnapshot(policy, validation, snapshot, err)
 }
 
@@ -54,7 +54,7 @@ func (s *Service) noRestingPaperOrders(ctx context.Context, validation Validatio
 	if ctx.Value(snapshotReuseKey{}) == nil {
 		return true, nil
 	}
-	orders, err := s.Store.ListActiveOrdersForAccount(ctx, validation.Account.SpaceID, validation.Account.ID)
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, validation.Account.SpaceID, validation.Account.TradingAccountID)
 	if err != nil {
 		return false, err
 	}
@@ -69,11 +69,11 @@ func (s *Service) noRestingPaperOrders(ctx context.Context, validation Validatio
 
 func (s *Service) marginFromSnapshot(policy execution.OrderPolicy, validation Validation, snapshot exchange.AccountSnapshot, err error) (shared.Decimal, error) {
 	if err != nil {
-		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
+		return shared.Zero(), accountExecutionError(validation.Account.TradingAccountID, "snapshot", err)
 	}
 	if !snapshot.Present.UsedMargin || !snapshot.Present.UnrealizedPnL || snapshot.UsedMargin.IsNegative() ||
 		snapshot.ExchangeUpdatedAt.IsZero() || snapshot.ExchangeUpdatedAt.After(s.now()) || s.now().Sub(snapshot.ExchangeUpdatedAt) > 10*time.Second {
-		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig))
+		return shared.Zero(), accountExecutionError(validation.Account.TradingAccountID, "snapshot", fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig))
 	}
 	return policy.MarginPoolAdjustment(validation.Instrument.MarketType, snapshot.UsedMargin, snapshot.UnrealizedPnL), nil
 }
@@ -136,7 +136,7 @@ func checkLocalLedgerFunds(tx *store.Tx, validation Validation, marginAdjustment
 		}
 		return nil
 	}
-	balances, err := tx.GetPaperBalanceSnapshot(validation.Account.SpaceID, validation.Account.ID)
+	balances, err := tx.GetPaperBalanceSnapshot(validation.Account.SpaceID, validation.Account.TradingAccountID)
 	if err != nil {
 		return err
 	}

@@ -13,7 +13,6 @@ import (
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -28,15 +27,24 @@ func submissionCommand(f *operatorFixture) ManualOrderCommand {
 
 type submissionSources struct{ f *operatorFixture }
 
-func (s submissionSources) ExecutionEligibility(ctx context.Context, id string) (tradingaccount.Account, error) {
+func (s submissionSources) ExecutionEligibility(ctx context.Context, id string) (store.TradingAccountRecord, error) {
 	record, err := s.f.store.GetTradingAccount(ctx, "space-1", id)
 	if err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
 	if record.Status != "ENABLED" {
-		return tradingaccount.Account{}, ErrInvalidCommand
+		return store.TradingAccountRecord{}, ErrInvalidCommand
 	}
-	return tradingaccount.Account{ID: id, SpaceID: "space-1", Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet, Status: exchange.AccountStatusEnabled, Ready: true, SettlementAsset: "USDT", LastSyncAt: s.f.now, Snapshot: exchange.AccountSnapshot{AvailableFunds: shared.MustDecimal("100000"), Balances: []exchange.AssetBalance{{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal("100000")}}}}, nil
+	return store.TradingAccountRecord{
+		TradingAccountID: id, SpaceID: "space-1", Exchange: string(exchange.ExchangeBinance),
+		Markets: []string{string(exchange.MarketTypeSpot)}, ExecutionMode: string(exchange.ExecutionModeLive),
+		Environment: string(exchange.AccountEnvironmentTestnet), Status: string(exchange.AccountStatusEnabled),
+		Ready: true, SettlementAsset: "USDT", LastSyncAt: s.f.now.UnixMilli(),
+		Snapshot: store.TradingAccountSnapshot{
+			AvailableFunds: "100000",
+			Balances:       []store.AssetBalance{{Wallet: string(exchange.WalletSpot), Asset: "USDT", Available: "100000"}},
+		},
+	}, nil
 }
 
 func (s submissionSources) GetInstrument(context.Context, exchange.Exchange, exchange.MarketType, string) (exchange.Instrument, error) {
@@ -65,7 +73,7 @@ func (a *submissionAdapter) ListRecentFills(context.Context, exchange.SymbolKey,
 
 func realSubmissionService(t *testing.T) (*operatorFixture, *Service, *submissionAdapter) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_automation_state = 'PAUSED', c_pause_reason = 'manual', c_pause_source = 'USER' WHERE c_logical_account_id='logical-1'").Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL', c_environment='TESTNET', c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = '' WHERE c_logical_account_id='logical-1'").Error)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_execution_mode='LIVE',c_live_environment='TESTNET',c_credential_secret_id='test-only'").Error)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_environment='TESTNET'").Error)
 	source := submissionSources{f: f}
@@ -196,7 +204,7 @@ func TestSubmitOrderPendingExpiredOrModeChangedReleasesReservation(t *testing.T)
 
 func TestSubmitOrderAcceptsWithoutTakeoverOrPost(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_automation_state = 'PAUSED', c_pause_reason = 'manual', c_pause_source = 'USER' WHERE c_logical_account_id='logical-1'").Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL', c_environment='TESTNET', c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = '' WHERE c_logical_account_id='logical-1'").Error)
 	got, err := f.service().PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.Equal(t, string(operatordomain.StatusRunning), got.Action.Status)

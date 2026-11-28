@@ -104,7 +104,7 @@ func seedRemovalExposure(t *testing.T, tradeStore *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "TESTNET", SettlementAsset: "USDT", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}

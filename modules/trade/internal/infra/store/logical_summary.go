@@ -9,15 +9,17 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
-// LogicalAccountSummary 是组合账户列表直接携带的聚合摘要：持仓标的数与近 24 小时净值变化。
+// LogicalAccountSummary 是组合账户列表与详情直接携带的聚合摘要：持仓标的数、成员权益合计与近 24 小时净值变化。
 type LogicalAccountSummary struct {
-	PositionCount      int32
+	PositionCount int32
+	// TotalEquity 是启用成员的权益合计；没有任何启用成员给出有效权益时为 nil，以区分“成员还没同步”与“权益为零”。
+	TotalEquity        *string
 	EquityChange24h    *string
 	EquityChangePct24h *string
 }
 
 // BatchLogicalAccountSummaries 批量计算一组组合账户的持仓标的数（去重后的基础资产/股票代码数，
-// 现货/股票余额与永续持仓口径一致，不发外部交易所请求）以及 [now-24h, now] 窗口内的净值绝对变化与涨跌幅。
+// 现货/股票余额与永续持仓口径一致，不发外部交易所请求）、启用成员权益合计，以及 [now-24h, now] 窗口内的净值绝对变化与涨跌幅。
 func (s *Store) BatchLogicalAccountSummaries(
 	ctx context.Context,
 	spaceID string,
@@ -35,13 +37,18 @@ func (s *Store) BatchLogicalAccountSummaries(
 		now = time.Now().UTC()
 	}
 
-	counts, err := s.batchLogicalPositionCounts(ctx, spaceID, logicalIDs)
+	counts, equities, err := s.batchLogicalMemberStats(ctx, spaceID, logicalIDs)
 	if err != nil {
 		return nil, err
 	}
 	for id, count := range counts {
 		summary := result[id]
 		summary.PositionCount = count
+		result[id] = summary
+	}
+	for id, equity := range equities {
+		summary := result[id]
+		summary.TotalEquity = equity
 		result[id] = summary
 	}
 
@@ -58,11 +65,11 @@ func (s *Store) BatchLogicalAccountSummaries(
 	return result, nil
 }
 
-func (s *Store) batchLogicalPositionCounts(
+func (s *Store) batchLogicalMemberStats(
 	ctx context.Context,
 	spaceID string,
 	logicalIDs []string,
-) (map[string]int32, error) {
+) (map[string]int32, map[string]*string, error) {
 	var members []struct {
 		LogicalAccountID string `gorm:"column:c_logical_account_id"`
 		TradingAccountID string `gorm:"column:c_trading_account_id"`
@@ -71,10 +78,10 @@ func (s *Store) batchLogicalPositionCounts(
 		Select("c_logical_account_id, c_trading_account_id").
 		Where("c_space_id = ? AND c_logical_account_id IN ? AND c_enabled = 1", spaceID, logicalIDs).
 		Scan(&members).Error; err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(members) == 0 {
-		return map[string]int32{}, nil
+		return map[string]int32{}, map[string]*string{}, nil
 	}
 
 	memberToLogical := make(map[string]string, len(members))
@@ -88,17 +95,29 @@ func (s *Store) batchLogicalPositionCounts(
 	if err := s.db.WithContext(ctx).Table("t_trading_accounts").
 		Where("c_space_id = ? AND c_trading_account_id IN ?", spaceID, accountIDs).
 		Find(&accountRows).Error; err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	accounts := make([]TradingAccountRecord, 0, len(accountRows))
 	swapAccountIDs := make([]string, 0, len(accountRows))
 	balanceAccounts := make([]TradingAccountRecord, 0, len(accountRows))
+	equitySums := make(map[string]shared.Decimal, len(logicalIDs))
+	hasEquity := make(map[string]bool, len(logicalIDs))
 	for _, row := range accountRows {
 		account, err := decodeAccountRow(row)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		accounts = append(accounts, account)
+		if logicalID, ok := memberToLogical[account.TradingAccountID]; ok {
+			if raw := strings.TrimSpace(account.Snapshot.Equity); raw != "" {
+				if val, parseErr := shared.ParseDecimal(raw); parseErr == nil {
+					if hasEquity[logicalID] {
+						equitySums[logicalID] = equitySums[logicalID].Add(val)
+					} else {
+						equitySums[logicalID] = val
+						hasEquity[logicalID] = true
+					}
+				}
+			}
+		}
 		if account.SupportsMarket(string(exchange.MarketTypeSwap)) {
 			swapAccountIDs = append(swapAccountIDs, account.TradingAccountID)
 		}
@@ -109,7 +128,7 @@ func (s *Store) batchLogicalPositionCounts(
 
 	coinsByLogical := make(map[string]map[string]struct{}, len(logicalIDs))
 	addCoin := func(logicalID, instrumentID string) {
-		coin := summaryCoinOf(instrumentID)
+		coin := exchange.CoinOf(instrumentID)
 		if coin == "" {
 			return
 		}
@@ -131,7 +150,7 @@ func (s *Store) batchLogicalPositionCounts(
 			Select("c_trading_account_id, c_instrument_id, c_signed_quantity").
 			Where("c_space_id = ? AND c_trading_account_id IN ? AND c_market_type = ?", spaceID, swapAccountIDs, string(exchange.MarketTypeSwap)).
 			Scan(&positions).Error; err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, pos := range positions {
 			qty, err := shared.ParseDecimal(pos.SignedQuantity)
@@ -166,7 +185,7 @@ func (s *Store) batchLogicalPositionCounts(
 			Select("c_exchange, c_environment, c_market_type, c_instrument_id, c_base_asset, c_quote_asset").
 			Where("c_exchange IN ? AND c_market_type IN ?", exchanges, []string{string(exchange.MarketTypeSpot), string(exchange.MarketTypeEquity)}).
 			Scan(&instruments).Error; err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		type scopeKey struct {
 			exchange string
@@ -242,7 +261,12 @@ func (s *Store) batchLogicalPositionCounts(
 	for logicalID, coins := range coinsByLogical {
 		counts[logicalID] = int32(len(coins))
 	}
-	return counts, nil
+	equities := make(map[string]*string, len(hasEquity))
+	for logicalID := range hasEquity {
+		str := equitySums[logicalID].String()
+		equities[logicalID] = &str
+	}
+	return counts, equities, nil
 }
 
 type equityChangeResult struct {
@@ -304,20 +328,6 @@ func (s *Store) batchLogicalEquityChange24h(
 		result[logicalID] = item
 	}
 	return result, nil
-}
-
-// summaryCoinOf 与前端 coinOf 口径一致：去掉 -SPOT/-SWAP 后缀后取第一段；股票代码没有分隔符则原样返回。
-func summaryCoinOf(instrumentID string) string {
-	trimmed := strings.TrimSpace(instrumentID)
-	if trimmed == "" {
-		return ""
-	}
-	trimmed = strings.TrimSuffix(trimmed, "-SPOT")
-	trimmed = strings.TrimSuffix(trimmed, "-SWAP")
-	if idx := strings.IndexByte(trimmed, '-'); idx > 0 {
-		return trimmed[:idx]
-	}
-	return trimmed
 }
 
 const sqlBatchLogicalEquityEndpoints = `

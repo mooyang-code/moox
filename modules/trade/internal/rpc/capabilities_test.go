@@ -6,20 +6,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
-
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
-func capabilityAccount(mode exchange.ExecutionMode, environment exchange.AccountEnvironment) tradingaccount.Account {
-	return tradingaccount.Account{
-		ExecutionMode: mode,
-		Environment:   environment,
-		Status:        exchange.AccountStatusEnabled,
+func capabilityAccount(mode exchange.ExecutionMode, environment exchange.AccountEnvironment) store.TradingAccountRecord {
+	return store.TradingAccountRecord{
+		ExecutionMode: string(mode),
+		Environment:   string(environment),
+		Status:        string(exchange.AccountStatusEnabled),
 		Ready:         true,
 	}
 }

@@ -54,6 +54,9 @@ describe("环境推导", () => {
       inEnv({ execution_mode: 2, members: [{ trading_account_id: "t", enabled: true, priority: 0 }] } as LogicalAccount)
     ).toEqual(["testnet"]);
     expect(inEnv({ execution_mode: 1, members: [] } as unknown as LogicalAccount)).toEqual(["paper"]);
+    expect(inEnv({ execution_mode: 2, environment: 1, members: [] } as unknown as LogicalAccount)).toEqual(["testnet"]);
+    expect(inEnv({ execution_mode: 2, environment: 2, members: [] } as unknown as LogicalAccount)).toEqual(["prod"]);
+    expect(inEnv({ execution_mode: 1, environment: 3, members: [] } as unknown as LogicalAccount)).toEqual(["paper"]);
   });
 
   it("页面所属环境读路由 meta.env，没写或不认识时为空", () => {

@@ -49,8 +49,8 @@ func newMixedExecutorFixture(t *testing.T) *targetFixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
-			SettlementAsset: "USDT", OrderSettingsJSON: legacyOrderSettings, AutomationState: "PAUSED", PauseReason: "configure",
+			Environment:     "PAPER",
+			SettlementAsset: "USDT", OrderSettingsJSON: legacyOrderSettings, PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -72,7 +72,7 @@ func newMixedExecutorFixture(t *testing.T) *targetFixture {
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	return fixture
 }

@@ -21,7 +21,7 @@ export type Exchange = "binance" | "okx" | "ashare" | "hkex";
 export type MarketType = "spot" | "swap" | "equity";
 export type ExecutionMode = 0 | 1 | 2;
 export type ControlMode = 0 | 1 | 2;
-export type AccountEnvironment = 0 | 1 | 2;
+export type AccountEnvironment = 0 | 1 | 2 | 3;
 export type OrderType = 0 | 1 | 2;
 export type FillPolicy = 0 | 1 | 2 | 3;
 export type PositionSide = 0 | 1;
@@ -102,10 +102,12 @@ export interface LogicalAccount {
   name: string;
   control_mode: ControlMode;
   execution_mode: ExecutionMode;
+  /** 组合所处环境：1 测试网、2 生产环境、3 模拟盘 */
+  environment?: AccountEnvironment;
   /** 可交易的市场：启用成员已开通市场的并集（只读，由 Trade 计算）；策略要输出的市场必须都在里面。 */
   markets: MarketType[];
   settlement_asset: string;
-  automation_state: "ACTIVE" | "PAUSED" | string;
+  automation_state: "ACTIVE" | "PAUSED" | "" | string;
   pause_reason: string;
   members: LogicalAccountMember[];
   ready: boolean;
@@ -114,6 +116,8 @@ export interface LogicalAccount {
   updated_at: string;
   /** 当前非零持仓标的数（合并跨市场去重） */
   position_count?: number;
+  /** 启用成员的快照总权益合计，无快照时为空 */
+  total_equity?: string;
   /** 近 24 小时权益绝对变化，历史点不足时为空 */
   equity_change_24h?: string;
   /** 近 24 小时权益变化比例（如 0.05 表示 +5%），历史点不足或起点为 0 时为空 */
@@ -183,21 +187,28 @@ export interface Fill {
 }
 
 export interface Position {
-  /** 持仓所属市场；现货和合约的持仓互不抵消 */
+  /** 持仓所属市场；现货、股票余额与合约持仓统一返回且互不抵消 */
   market_type: MarketType;
   trading_account_id: string;
   instrument_id: string;
   exchange_symbol: string;
+  /** 币种或资产代码（如 BTC、USDT、600519.XSHG） */
+  asset?: string;
   position_side: PositionSide;
   signed_quantity: string;
   entry_price: string;
   mark_price: string;
+  /** 持仓市值（按标记价估值，取不到报价时为空） */
+  market_value?: string;
   leverage: string;
   margin_mode: string;
   used_margin: string;
   liquidation_price: string;
-  unrealized_pnl: string;
+  /** 未实现盈亏；实盘现货或取不到报价时为空 */
+  unrealized_pnl?: string;
   realized_pnl: string;
+  /** 可卖数量：A 股扣掉冻结和当日买入（T+1），现货等于可用余额，合约为空 */
+  sellable?: string;
   exchange_updated_at: string;
   updated_at: string;
 }
@@ -342,14 +353,6 @@ export interface CreateTradingAccountReq {
   margin_mode?: string;
   live?: LiveConfig;
   paper?: PaperConfig;
-  /** 模拟盘专用：在同一个事务里新建组合的名称（与 logical_account_id 互斥，均空则只建执行账户） */
-  logical_account_name?: string;
-  /** 模拟盘新建组合时的控制模式 */
-  control_mode?: ControlMode;
-  /** 模拟盘专用：在同一个事务里加入已有的已暂停模拟盘组合 */
-  logical_account_id?: string;
-  /** 加入已有组合时的优先级；不填排在现有成员之后 */
-  priority?: number;
 }
 
 export interface UpdateTradingAccountReq {
@@ -375,7 +378,8 @@ export interface ListTradingAccountsReq {
 export interface CreateLogicalAccountReq {
   name: string;
   control_mode?: ControlMode;
-  execution_mode: ExecutionMode;
+  /** 组合所处环境：1 测试网、2 生产环境、3 模拟盘 */
+  environment: AccountEnvironment;
   settlement_asset: string;
 }
 
@@ -438,7 +442,6 @@ export interface ListPositionsReq {
 export interface AccountResponse {
   ret_info: RetInfo;
   account: TradingAccount;
-  logical_account?: LogicalAccount;
 }
 
 export interface LogicalAccountResponse {
@@ -453,21 +456,6 @@ export interface EquityPoint {
   used_margin: string;
   unrealized_pnl?: string;
   source_time: string;
-}
-
-export interface Holding {
-  trading_account_id: string;
-  instrument_id: string;
-  exchange_symbol: string;
-  asset: string;
-  quantity: string;
-  average_cost: string;
-  mark_price: string;
-  market_value: string;
-  unrealized_pnl?: string;
-  source_time: string;
-  /** 可卖数量：A 股是总数减冻结、减当日买入（T+1）；其余市场等于可用余额 */
-  sellable?: string;
 }
 
 export interface ExecutionCapabilities {

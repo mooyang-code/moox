@@ -230,8 +230,8 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "stress logical",
-			ExecutionMode: string(exchange.ExecutionModeLive), SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: string(exchange.AccountEnvironmentTestnet), SettlementAsset: "USDT",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -240,7 +240,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 	_, accepted, err := storetest.AcceptTarget(context.Background(), tradeStore, store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "stress-target",
@@ -255,7 +255,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	source := adapterSource{adapter: market}
 	clock := testNow.Add(time.Minute)
 	now := func() time.Time { return clock }
-	accountService := &accountapp.Service{Store: accountapp.Repository{Store: tradeStore}, SessionState: readySession(true)}
+	accountService := &accountapp.Service{Store: tradeStore, SessionState: readySession(true)}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: source, SessionState: readySession(true),
 		Fills: &fillreduce.Reducer{Store: tradeStore, Now: now}, Now: now,

@@ -91,7 +91,7 @@ func TestManualTargetReplayRejectedBeforeResolverAndWake(t *testing.T) {
 	delivery := logicalTargetDelivery(t, now, "target-manual", "runner-1", "logical-1", nil)
 	opts := targetOptions(db, now)
 	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 	opts.Wake = func() { t.Error("manual target must not wake") }
 	opts.WeightResolver = targetResolverFunc(func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
 		t.Error("manual target must not resolve")
@@ -375,9 +375,9 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
+			Environment:     "PAPER",
 			SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			PauseReason:     "configure",
 		})
 	}))
 	now := time.Now().UTC()
@@ -406,9 +406,9 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
+			Environment:     "PAPER",
 			SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			PauseReason:     "configure",
 		}); err != nil {
 			return err
 		}
@@ -575,9 +575,9 @@ func seedLogicalTargetAccount(
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
+			Environment:     "PAPER",
 			SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			PauseReason:     "configure",
 		}); err != nil {
 			return err
 		}

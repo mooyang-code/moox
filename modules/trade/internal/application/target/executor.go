@@ -246,7 +246,7 @@ func (e *Executor) Converge(
 	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
 		return Result{Status: StatusPaused}, err
 	}
-	if logicalAccount.AutomationState != "ACTIVE" {
+	if !logicalAccount.IsActive() {
 		return e.stopWhenInactive(ctx, spaceID, logicalAccountID, logicalAccount, &target)
 	}
 	// 快速路径：只在等当前目标已发出的子单结束时，不加载成员、不逐个标的计算。每笔成交都会唤醒收敛，

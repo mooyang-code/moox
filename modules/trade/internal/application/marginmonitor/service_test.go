@@ -214,8 +214,8 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "实盘组合", ExecutionMode: "LIVE", SettlementAsset: "USDT",
-			FundSettingsJSON: fundSettings, AutomationState: "PAUSED", PauseReason: "configure",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "实盘组合", Environment: "PRODUCTION", SettlementAsset: "USDT",
+			FundSettingsJSON: fundSettings, PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -237,7 +237,7 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	f := &fixture{t: t, store: tradeStore}
 	f.service = &Service{
@@ -398,7 +398,7 @@ func TestRunPausesFirstWhenTheReduceCannotStart(t *testing.T) {
 	f.run()
 	require.Empty(t, f.reduces)
 	require.Equal(t, []string{store.MarginPause(store.MarginReducePending).Reason}, f.pauses, "先暂停时不能写已减仓")
-	require.Equal(t, "PAUSED", f.logical().AutomationState)
+	require.Equal(t, "PAUSED", f.logical().AutomationState())
 
 	f.run()
 	require.Len(t, f.pauses, 1, "已经暂停，不重复暂停")
@@ -414,10 +414,10 @@ func (f *fixture) resume() {
 	f.resumeAt(f.service.now().Add(5 * time.Second))
 }
 
-func (f *fixture) resumeAt(at time.Time) {
+func (f *fixture) resumeAt(_ time.Time) {
 	f.t.Helper()
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.ResumeLogicalAccount("space-1", "logical-1", at)
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 }
 
@@ -428,7 +428,7 @@ func TestRunDoesNotReduceAgainAfterTheManualOverrideOfThePauseReason(t *testing.
 	require.Len(t, f.reduces, 1)
 
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工清仓")
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("人工清仓"))
 	}))
 	f.run()
 	require.Len(t, f.reduces, 1, "暂停原因被人工操作改写后不再触发")
@@ -449,7 +449,7 @@ func TestRestartKeepsTheProtectionAfterAnEarlierMarginReduceWasResumed(t *testin
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
 	f.resume()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工暂停")
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("人工暂停"))
 	}))
 
 	f.restart()
@@ -481,7 +481,7 @@ func TestRestartStillCompletesAReduceThatWasPendingBehindADelistFlatten(t *testi
 func TestRunMonitorsManuallyPausedGroups(t *testing.T) {
 	f := newFixture(t, "", "400")
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工暂停")
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("人工暂停"))
 	}))
 	f.run()
 	require.Len(t, f.reduces, 1)
@@ -490,7 +490,7 @@ func TestRunMonitorsManuallyPausedGroups(t *testing.T) {
 // 模拟盘、OKX、账户类型未知的账户不监控。
 func TestRunIgnoresPaperOkxAndUnknownTypeAccounts(t *testing.T) {
 	f := newFixture(t, "", "400")
-	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_execution_mode = 'PAPER'`).Error)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_environment = 'PAPER'`).Error)
 	f.run()
 	require.Empty(t, f.reduces)
 
@@ -699,7 +699,7 @@ func TestPendingReasonBecomesUnreducedOnceTheRatioIsSafe(t *testing.T) {
 func TestManualGroupReducesAgainOnceTheLastReduceFinished(t *testing.T) {
 	f := newFixture(t, "", "400")
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
-		c_automation_state = 'PAUSED', c_pause_reason = '自主下单', c_pause_source = 'USER'`).Error)
+		c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = ''`).Error)
 	setEquity := func(equity string) {
 		t.Helper()
 		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_snapshot_json = json_set(c_snapshot_json, '$.exchange_equity', ?)`, equity).Error)
@@ -707,7 +707,7 @@ func TestManualGroupReducesAgainOnceTheLastReduceFinished(t *testing.T) {
 
 	f.run()
 	require.Len(t, f.reduces, 1)
-	require.Equal(t, "自主下单", f.logical().PauseReason, "自主下单组合减仓不改写暂停原因")
+	require.Empty(t, f.logical().PauseReason, "自主下单组合减仓不写入暂停原因")
 
 	f.advance(time.Minute)
 	f.run()
@@ -727,7 +727,7 @@ func TestManualGroupReducesAgainOnceTheLastReduceFinished(t *testing.T) {
 	require.Len(t, f.reduces, 2)
 	require.NotEqual(t, f.reduces[0].actionID, f.reduces[1].actionID)
 	require.Empty(t, f.pauses, "自主下单组合不暂停")
-	require.Equal(t, "自主下单", f.logical().PauseReason)
+	require.Empty(t, f.logical().PauseReason)
 
 	// 这一次一笔都没减（持仓太小）：一小时内不再发起，过后再试。
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED', c_result_json = '{}'`).Error)
@@ -822,7 +822,7 @@ func TestClockRollbackDoesNotFalselyAcknowledgeMarginAction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, last)
 	require.Equal(t, secondID, last.ActionID)
-	require.Greater(t, logical.ResumedAt, last.CreatedAt.UnixMilli(), "前提：时钟回拨使新动作时间早于上次恢复时间")
+	require.Equal(t, firstID, logical.AckedMarginActionID)
 	require.False(t, marginActionAcknowledged(logical, *last), "未匹配 c_acked_margin_action_id 的新动作绝不能因时钟回拨被误判为已确认")
 
 	// 重启后仍应为第二笔未确认减仓执行归集，且不会误判为已确认而再次发起减仓。

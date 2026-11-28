@@ -51,10 +51,7 @@ func (s *Service) pauseForIsolated(ctx context.Context, tradingAccountID string,
 	if err != nil {
 		return err
 	}
-	if logical.ControlMode == "MANUAL" {
-		return nil
-	}
-	// 条件写入：只在组合仍是“运行中、没有暂停原因”时才暂停，已被风控或用户暂停的不改写原因。
+	// 条件写入：只在策略组合仍是“运行中、没有暂停原因”时才暂停，已被风控或用户暂停的不改写原因，自主下单组合为空操作。
 	pause := store.SystemPause(description)
 	var paused bool
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) (err error) {

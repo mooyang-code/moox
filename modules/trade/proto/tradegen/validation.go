@@ -29,31 +29,14 @@ func (r *CreateTradingAccountReq) Validate() error {
 		return fmt.Errorf("exactly one of live or paper config is required")
 	}
 	if r.Live != nil {
-		if !validAccountEnvironment(r.Live.GetEnvironment()) ||
-			(r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET &&
-				r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) ||
+		if !validLiveEnvironment(r.Live.GetEnvironment()) ||
 			strings.TrimSpace(r.Live.GetCredentialSecretId()) == "" {
 			return fmt.Errorf("live environment and credential_secret_id are required")
-		}
-		if strings.TrimSpace(r.LogicalAccountId) != "" ||
-			strings.TrimSpace(r.LogicalAccountName) != "" ||
-			r.ControlMode != ControlMode_CONTROL_MODE_UNSPECIFIED ||
-			r.Priority != 0 {
-			return fmt.Errorf("logical account creation options are only supported for paper accounts")
 		}
 		return nil
 	}
 	if strings.TrimSpace(r.SettlementAsset) == "" {
 		return fmt.Errorf("settlement_asset is required for paper account")
-	}
-	if !validCreationControlMode(r.ControlMode) {
-		return fmt.Errorf("control_mode is invalid")
-	}
-	if strings.TrimSpace(r.LogicalAccountId) != "" && strings.TrimSpace(r.LogicalAccountName) != "" {
-		return fmt.Errorf("logical_account_id 和 logical_account_name 只能给一个：加入已有组合，或新建组合")
-	}
-	if r.Priority < 0 {
-		return fmt.Errorf("priority must not be negative")
 	}
 	if err := validateOrderRetentionDays(r.Paper.OrderRetentionDays); err != nil {
 		return err
@@ -211,21 +194,12 @@ func (r *QueryEquityCurveReq) Validate() error {
 	return nil
 }
 
-func (r *ListHoldingsReq) Validate() error {
-	return requireID(r != nil, value(func() string {
-		if r == nil {
-			return ""
-		}
-		return r.TradingAccountId
-	}), "trading_account_id")
-}
-
 func (r *CreateLogicalAccountReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.Name) == "" ||
-		!validExecutionMode(r.ExecutionMode) ||
+		!validLogicalEnvironment(r.Environment) ||
 		strings.TrimSpace(r.SettlementAsset) == "" {
 		return fmt.Errorf(
-			"name, execution_mode and settlement_asset are required",
+			"name, environment and settlement_asset are required",
 		)
 	}
 	if !validCreationControlMode(r.ControlMode) {
@@ -556,8 +530,13 @@ func validExecutionMode(value ExecutionMode) bool {
 		value == ExecutionMode_EXECUTION_MODE_LIVE
 }
 
-func validAccountEnvironment(value AccountEnvironment) bool {
-	return value == AccountEnvironment_ACCOUNT_ENVIRONMENT_UNSPECIFIED ||
+func validLiveEnvironment(value AccountEnvironment) bool {
+	return value == AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET ||
+		value == AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION
+}
+
+func validLogicalEnvironment(value AccountEnvironment) bool {
+	return value == AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER ||
 		value == AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET ||
 		value == AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION
 }

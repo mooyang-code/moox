@@ -18,7 +18,7 @@ func liveStandardFixture(t *testing.T) *targetFixture {
 	f := newMixedExecutorFixture(t)
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION',
 		c_credential_secret_id = 'secret-1', c_account_mode = 'BINANCE_STANDARD'`).Error)
-	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_execution_mode = 'LIVE'`).Error)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_environment = 'PRODUCTION'`).Error)
 	f.setSpotBalance("ETH", "0")
 	f.now = time.Now().UTC()
 	return f
@@ -28,7 +28,7 @@ func liveStandardFixture(t *testing.T) *targetFixture {
 func addOKXSpotMember(t *testing.T, f *targetFixture) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "加成员"); err != nil {
+		if err := tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("加成员")); err != nil {
 			return err
 		}
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
@@ -55,7 +55,7 @@ func addOKXSpotMember(t *testing.T, f *targetFixture) {
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 }
 

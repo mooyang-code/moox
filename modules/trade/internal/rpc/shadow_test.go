@@ -21,7 +21,7 @@ func shadowStore(t *testing.T) *store.Store {
 	t.Cleanup(func() { tradeStore.Close() })
 	for _, space := range []string{"space-1", "space-2"} {
 		if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-			return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: space, LogicalAccountID: "logical-1", Name: "shadow", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
+			return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: space, LogicalAccountID: "logical-1", Name: "shadow", Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "test"})
 		}); err != nil {
 			t.Fatal(err)
 		}

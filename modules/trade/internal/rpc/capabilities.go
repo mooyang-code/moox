@@ -1,14 +1,12 @@
 package rpc
 
 import (
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-// ExecutionCapabilities is the server-side capability model used by both the
-// HTTP console and non-HTTP callers. Keeping the decision here prevents the UI
-// from re-implementing the production gate or Paper matcher readiness rules.
+// ExecutionCapabilities 是服务端计算出的执行账户能力模型，避免前端重复实现生产开关或模拟撮合就绪判断。
 type ExecutionCapabilities struct {
 	CanPlaceOrder        bool
 	UnavailableReason    string
@@ -18,7 +16,7 @@ type ExecutionCapabilities struct {
 }
 
 func ResolveExecutionCapabilities(
-	account tradingaccount.Account,
+	account store.TradingAccountRecord,
 	descriptor execution.ExchangeDescriptor,
 	liveTradingEnabled bool,
 	matcherReady bool,
@@ -26,10 +24,10 @@ func ResolveExecutionCapabilities(
 	capabilities := ExecutionCapabilities{
 		OrderTypes:   descriptor.OrderTypes,
 		FillPolicies: descriptor.FillPolicies,
-		CanClosePaperAccount: account.ExecutionMode == exchange.ExecutionModePaper &&
-			account.Status == exchange.AccountStatusEnabled,
+		CanClosePaperAccount: account.ExecutionMode == string(exchange.ExecutionModePaper) &&
+			account.Status == string(exchange.AccountStatusEnabled),
 	}
-	if account.Status != exchange.AccountStatusEnabled {
+	if account.Status != string(exchange.AccountStatusEnabled) {
 		capabilities.UnavailableReason = "账户已停用"
 		return capabilities
 	}
@@ -37,11 +35,11 @@ func ResolveExecutionCapabilities(
 		capabilities.UnavailableReason = "账户未就绪"
 		return capabilities
 	}
-	if account.ExecutionMode == exchange.ExecutionModePaper && !matcherReady {
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) && !matcherReady {
 		capabilities.UnavailableReason = "模拟撮合未就绪"
 		return capabilities
 	}
-	if account.ExecutionMode == exchange.ExecutionModeLive &&
+	if account.ExecutionMode == string(exchange.ExecutionModeLive) &&
 		account.MarketDataEnvironment() == exchange.AccountEnvironmentProduction && !liveTradingEnabled {
 		capabilities.UnavailableReason = "生产交易未开启"
 		return capabilities

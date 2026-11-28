@@ -28,6 +28,7 @@ enum AccountEnvironment {
   ACCOUNT_ENVIRONMENT_UNSPECIFIED = 0;
   ACCOUNT_ENVIRONMENT_TESTNET = 1;
   ACCOUNT_ENVIRONMENT_PRODUCTION = 2;
+  ACCOUNT_ENVIRONMENT_PAPER = 3;
 }
 
 enum OrderType {
@@ -130,10 +131,12 @@ message LogicalAccount {
   string logical_account_id = 1;
   string space_id = 2;
   string name = 3;
+  // 只读：由 environment 推出（PAPER 对应模拟盘，TESTNET/PRODUCTION 对应实盘）。
   ExecutionMode execution_mode = 5;
   // 只读：启用成员已开通市场的并集，是这个组合当前可交易的市场。
   repeated string markets = 6;
   string settlement_asset = 7;
+  // 策略驱动的组合返回 ACTIVE 或 PAUSED；自主下单的组合没有自动执行，返回空串（未指定）。
   string automation_state = 8;
   string pause_reason = 9;
   repeated LogicalAccountMember members = 10;
@@ -153,6 +156,10 @@ message LogicalAccount {
   // 只读：近 24 小时净值绝对变化与变化比例（小数字符串，例如 0.05 表示 +5%）；窗口内不足两个采样点时为空。
   optional string equity_change_24h = 25;
   optional string equity_change_pct_24h = 26;
+  // 组合所属环境（PAPER / TESTNET / PRODUCTION），创建时定下。
+  AccountEnvironment environment = 27;
+  // 只读：启用成员的权益合计；还没有已同步权益的启用成员时未设置，用于区分“成员还没同步”与“权益为零”。
+  optional string total_equity = 28;
 }
 
 // 组合账户的下单设置，数值用字符串；写入时的校验见 domain/ordersettings。
@@ -266,23 +273,32 @@ message Fill {
 }
 
 message Position {
-  // 持仓所属市场；现货和合约的持仓互不抵消。
+  // 持仓所属市场（spot、swap、equity）；现货和合约的持仓互不抵消。
   string market_type = 16;
   string trading_account_id = 1;
   string instrument_id = 2;
   string exchange_symbol = 3;
   PositionSide position_side = 4;
+  // 永续为带符号持仓数量（多正空负），现货与股票为余额总数。
   string signed_quantity = 5;
+  // 永续为开仓均价，模拟盘现货与股票为成交均价。
   string entry_price = 6;
   string mark_price = 7;
   string leverage = 8;
   string margin_mode = 9;
   string used_margin = 10;
   string liquidation_price = 11;
-  string unrealized_pnl = 12;
+  // 永续与有成本价的模拟盘余额持仓带未实现盈亏；实盘现货无成本价，未设置。
+  optional string unrealized_pnl = 12;
   string realized_pnl = 13;
   int64 exchange_updated_at = 14;
   int64 updated_at = 15;
+  // 资产或币种代码（余额类市场为钱包资产名，如 BTC、USDT、600519.XSHG；永续为基础币种）。
+  string asset = 17;
+  // 持仓市值（永续按数量绝对值乘以标记价，余额类市场按数量乘以标记价，结算资产为自身数量）。
+  string market_value = 18;
+  // 可卖数量（仅余额类市场：A 股为总数减冻结、减当日买入，其余市场为可用余额）。
+  string sellable = 19;
 }
 
 // InstrumentQuantity 是一个标的的目标数量（由目标权重换算而来）。
@@ -341,19 +357,10 @@ message CreateTradingAccountReq {
   LiveConfig live = 7;
   // 模拟盘配置（与 live 二选一）；模拟账户用一个资金池同时撮合开通的各个市场。
   PaperConfig paper = 8;
-  // 仅模拟盘可选：建账户的同时新建一个组合账户并加入成为启用成员（与 logical_account_id 互斥）。
-  string logical_account_name = 9;
-  // 仅模拟盘同时新建组合账户时有效；创建后不可更改。
-  ControlMode control_mode = 10;
-  // 仅模拟盘可选：建账户的同时加入已有组合账户（组合须已暂停、同为模拟盘且结算资产一致；与 logical_account_name 互斥）。
-  string logical_account_id = 11;
-  // 仅模拟盘加入已有组合账户时的优先级；不填排在现有成员之后。
-  int32 priority = 12;
 }
 message CreateTradingAccountRsp {
   common.RetInfo ret_info = 1;
   TradingAccount account = 2;
-  LogicalAccount logical_account = 3;
 }
 
 message UpdateTradingAccountReq {
@@ -362,7 +369,7 @@ message UpdateTradingAccountReq {
   string credential_secret_id = 3;
   string settlement_asset = 4;
   string margin_mode = 5;
-  // 停用模拟盘执行账户（status = DISABLED）会原子撤消未结订单、刷新余额快照、停用账户并移出所属组合。
+  // 停用账户（status = DISABLED）前须先移出所属组合；停用模拟盘账户会原子撤销未结订单并刷新余额快照。
   string status = 6;
   // 模拟账户的订单保留天数：0 表示不清理，1～365 天；不传表示不改。只有模拟账户能改（创建后唯一能改的模拟配置），
   // 实盘账户传了会被拒绝；所有模拟账户都按它清理（见 PaperConfig）。
@@ -371,8 +378,6 @@ message UpdateTradingAccountReq {
 message UpdateTradingAccountRsp {
   common.RetInfo ret_info = 1;
   TradingAccount account = 2;
-  // 停用模拟盘执行账户并移出所属组合时返回更新后的组合账户。
-  LogicalAccount logical_account = 3;
 }
 
 // 交易所密钥检测发现的一条问题（阻断项或提醒）。code 取值见 exchange.Finding* 常量。
@@ -501,7 +506,8 @@ message SyncTradingAccountRsp {
 
 message CreateLogicalAccountReq {
   string name = 1;
-  ExecutionMode execution_mode = 2;
+  // 组合所属环境：ACCOUNT_ENVIRONMENT_PAPER、ACCOUNT_ENVIRONMENT_TESTNET 或 ACCOUNT_ENVIRONMENT_PRODUCTION。
+  AccountEnvironment environment = 2;
   string settlement_asset = 4;
   // Unspecified creates a STRATEGY-controlled account.
   ControlMode control_mode = 5;
@@ -863,30 +869,6 @@ message QueryEquityCurveRsp {
   repeated EquityPoint points = 2;
 }
 
-message Holding {
-  string trading_account_id = 1;
-  string instrument_id = 2;
-  string exchange_symbol = 3;
-  string asset = 4;
-  string quantity = 5;
-  string average_cost = 6;
-  string mark_price = 7;
-  string market_value = 8;
-  optional string unrealized_pnl = 9;
-  int64 source_time = 10;
-  // 可卖数量：A 股是总数减冻结、减当日买入（T+1）；其余市场等于可用余额。
-  string sellable = 11;
-}
-
-message ListHoldingsReq {
-  string trading_account_id = 1;
-}
-
-message ListHoldingsRsp {
-  common.RetInfo ret_info = 1;
-  repeated Holding holdings = 2;
-}
-
 service TradeConsoleService {
   rpc CreateTradingAccount(CreateTradingAccountReq) returns (CreateTradingAccountRsp);
   rpc UpdateTradingAccount(UpdateTradingAccountReq) returns (UpdateTradingAccountRsp);
@@ -921,7 +903,6 @@ service TradeConsoleService {
   rpc GetExecutionCapabilities(GetExecutionCapabilitiesReq) returns (GetExecutionCapabilitiesRsp);
   rpc ListTradableInstruments(ListTradableInstrumentsReq) returns (ListTradableInstrumentsRsp);
   rpc QueryEquityCurve(QueryEquityCurveReq) returns (QueryEquityCurveRsp);
-  rpc ListHoldings(ListHoldingsReq) returns (ListHoldingsRsp);
   rpc ListAccountLedger(ListAccountLedgerReq) returns (ListAccountLedgerRsp);
   rpc FlattenTradingAccount(FlattenTradingAccountReq) returns (FlattenTradingAccountRsp);
   rpc UnblockInstrument(UnblockInstrumentReq) returns (UnblockInstrumentRsp);

@@ -136,28 +136,24 @@ describe("新建账户", () => {
     expect(validateStep({ ...base, markets: ["swap"] }, 2)).toBe("");
   });
 
-  it("模拟盘请求带市场集合，永续固定全仓，新建组合时组合名称缺省取账户名", () => {
+  it("模拟盘请求只建执行账户：带市场集合与模拟配置，永续固定全仓，只开现货不设保证金模式", () => {
     const form = { ...createDefaultForm(), name: " 演示 ", markets: ["spot", "swap"] as (1 | 2)[], controlMode: 2 as const };
-    expect(buildPaperRequest(form)).toMatchObject({
+    const swapReq = buildPaperRequest(form);
+    expect(swapReq).toMatchObject({
       name: "演示",
-      logical_account_name: "演示",
-      control_mode: 2,
       markets: ["spot", "swap"],
       margin_mode: "CROSS",
       settlement_asset: "USDT"
     });
-    expect(buildPaperRequest({ ...form, logicalName: "组合一" }).logical_account_name).toBe("组合一");
-    expect(buildPaperRequest(form).logical_account_id).toBeUndefined();
-  });
+    expect(swapReq).not.toHaveProperty("logical_account_name");
+    expect(swapReq).not.toHaveProperty("logical_account_id");
+    expect(swapReq).not.toHaveProperty("control_mode");
 
-  it("加入已有组合时带组合编号、不带组合名称，由后端在同一个事务里加入；只开现货不设保证金模式", () => {
-    const form = { ...createDefaultForm(), name: "a", markets: ["spot"] as 1[], join: "exist" as const, existingLogicalId: "l" };
-    const request = buildPaperRequest(form);
-    expect(request.logical_account_name).toBe("");
-    expect(request.logical_account_id).toBe("l");
-    expect(request.margin_mode).toBe("");
-    expect(request.paper.order_retention_days).toBe(5);
-    expect(buildPaperRequest({ ...form, orderRetentionDays: " 0 " }).paper.order_retention_days).toBe(0);
+    const spotForm = { ...createDefaultForm(), name: "a", markets: ["spot"] as 1[], join: "exist" as const, existingLogicalId: "l" };
+    const spotReq = buildPaperRequest(spotForm);
+    expect(spotReq.margin_mode).toBe("");
+    expect(spotReq.paper.order_retention_days).toBe(5);
+    expect(buildPaperRequest({ ...spotForm, orderRetentionDays: " 0 " }).paper.order_retention_days).toBe(0);
   });
 
   it("实盘请求带环境和密钥", () => {

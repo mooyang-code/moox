@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -221,14 +219,14 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 	defer cancel()
 	require.NoError(t, manager.reconcile(ctx))
 	<-session.started
-	account := tradingaccount.Account{
-		ID: "account-1", SpaceID: "space-1",
-		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot},
-		ExecutionMode: exchange.ExecutionModeLive, AccountMode: exchange.AccountModeBinanceStandard,
+	account := store.TradingAccountRecord{
+		TradingAccountID: "account-1", SpaceID: "space-1",
+		Exchange: string(exchange.ExchangeBinance), Markets: []string{string(exchange.MarketTypeSpot)},
+		ExecutionMode: string(exchange.ExecutionModeLive), AccountMode: string(exchange.AccountModeBinanceStandard),
 		CredentialSecretID: "secret-1", InspectionJSON: inspected("fingerprint-1"),
-		SettlementAsset: "USDT", Status: exchange.AccountStatusEnabled,
+		SettlementAsset: "USDT", Status: string(exchange.AccountStatusEnabled),
 		// 杠杆不属于会话配置：改了杠杆不重建会话，也不影响就绪。
-		LeverageSettings: map[string]shared.Decimal{"*": shared.MustDecimal("10")},
+		LeverageSettings: store.LeverageSettings{"*": "10"},
 	}
 	require.True(t, manager.ReadyFor(account))
 	changed := account

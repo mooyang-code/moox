@@ -358,7 +358,6 @@
 | `trade equity` | 查询权益曲线（跨度超过 2 天按 15 分钟、超过 30 天按小时降采样，最多 3000 点） |
 | `trade fills` | 列出成交 |
 | `trade holders` | 列出策略持有某个标的的执行账户（跨空间，全局；零头和模拟盘有标记） |
-| `trade holdings` | 列出账户的持仓明细 |
 | `trade inspect-credential` | 检测一把交易所密钥的账户类型和权限（只读，不落库，不下单） |
 | `trade instruments` | 列出交易账户可下单的标的 |
 | `trade ledger` | 查询交易账户的资金流水（手续费、资金费、已实现盈亏、划转） |
@@ -378,10 +377,10 @@
 | `trade order list` | 列出订单 |
 | `trade order show` | 查看订单 |
 | `trade order submit` | 人工下单（默认只预览，--yes 才执行；超时后先用 trade actions 或 trade order list 查是否已下，重试要用 --data 带上原 action_id 和 client_order_id） |
-| `trade paper close` | 关闭模拟账户（仅限模拟盘账户，不可逆；默认只预览，--yes 才执行） |
-| `trade paper create` | 新建模拟账户，并新建或加入一个组合（默认只预览，--yes 才执行） |
+| `trade paper close` | 关闭模拟账户（需先移出组合，仅限模拟盘账户，不可逆；默认只预览，--yes 才执行） |
+| `trade paper create` | 新建模拟账户（与实盘建户一致，需另行加入组合；默认只预览，--yes 才执行） |
 | `trade pnl` | 收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，时间范围最长 90 天，取不全时标明截断） |
-| `trade positions` | 列出持仓 |
+| `trade positions` | 列出持仓（统一含永续合约与现货/股票余额） |
 | `trade shadow list` | 列出试运行中的策略实例最近的影子目标（权重、换算出的数量，从新到旧） |
 
 ## udf：自定义算子（wasm UDF）：new → build → publish → preview → activate

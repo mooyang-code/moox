@@ -28,11 +28,11 @@ func requireNameTaken(t *testing.T, label string, info *tradepb.RetInfo) {
 func TestClosedPaperSimulationKeepsNameTaken(t *testing.T) {
 	tradeStore := openRPCStore(t)
 	accountSvc := &accountapp.Service{
-		Store: accountapp.Repository{Store: tradeStore}, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
+		Store: tradeStore, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
 	}
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	command := accountapp.CreatePaperCommand{
-		SpaceID: "space-1", AccountName: "模拟一号", LogicalAccountName: "模拟组合",
+		SpaceID: "space-1", AccountName: "模拟一号",
 		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot},
 		SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("1000"),
 		MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(),
@@ -41,7 +41,7 @@ func TestClosedPaperSimulationKeepsNameTaken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := accountSvc.ClosePaperAccount(ctx, "space-1", created.Account.TradingAccountID); err != nil {
+	if _, err := accountSvc.ClosePaperAccount(ctx, "space-1", created.TradingAccountID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,23 +50,17 @@ func TestClosedPaperSimulationKeepsNameTaken(t *testing.T) {
 		Store:    tradeStore,
 		NewID:    func() string { return "live-1" },
 	}
-	for _, item := range []struct{ label, account, logical string }{
-		{"账户名和组合名都相同", "模拟一号", "模拟组合"},
-		{"只有账户名相同", "模拟一号", "另一个组合"},
-		{"只有组合名相同", "模拟二号", "模拟组合"},
-	} {
-		rsp, err := accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
-			Name: item.account, LogicalAccountName: item.logical,
-			Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
-			Paper: &tradepb.PaperConfig{InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		requireNameTaken(t, item.label, rsp.GetRetInfo())
-	}
-
 	rsp, err := accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
+		Name:     "模拟一号",
+		Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
+		Paper: &tradepb.PaperConfig{InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNameTaken(t, "模拟账户用了关闭的模拟账户的名称", rsp.GetRetInfo())
+
+	rsp, err = accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
 		Name: "模拟一号", Exchange: "binance",
 		Markets:         []string{"spot"},
 		Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
@@ -96,7 +90,7 @@ func TestRenameAndCreateWithTakenName(t *testing.T) {
 		return nil
 	}))
 	accounts := &AccountServer{
-		Accounts: &accountapp.Service{Store: accountapp.Repository{Store: tradeStore}},
+		Accounts: &accountapp.Service{Store: tradeStore},
 		Store:    tradeStore,
 	}
 	renamed, err := accounts.UpdateTradingAccount(ctx, &tradepb.UpdateTradingAccountReq{TradingAccountId: "account-2", Name: "主账户"})
@@ -110,7 +104,7 @@ func TestRenameAndCreateWithTakenName(t *testing.T) {
 	}
 	for _, name := range []string{"组合甲", "组合乙"} {
 		created, err := logical.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
-			Name: name, ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT",
+			Name: name, Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER, SettlementAsset: "USDT",
 		})
 		requireNoError(t, err)
 		if created.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS {
@@ -118,7 +112,7 @@ func TestRenameAndCreateWithTakenName(t *testing.T) {
 		}
 	}
 	duplicate, err := logical.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
-		Name: "组合甲", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT",
+		Name: "组合甲", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER, SettlementAsset: "USDT",
 	})
 	requireNoError(t, err)
 	requireNameTaken(t, "新建同名组合", duplicate.GetRetInfo())

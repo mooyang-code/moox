@@ -37,7 +37,7 @@ func TestExternalOrderPlacedBeforeJoiningIsVisibleAndCancelable(t *testing.T) {
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "带挂单加入",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "configure",
 		})
 	}))
 	logical := &logicalapp.Service{Store: f.store, Syncer: syncBridge{service: f.sync}, Now: func() time.Time { return testNow }}

@@ -284,20 +284,14 @@ func (s *Service) FlattenLogicalAccount(
 			}
 		}
 		// 整组清仓和减仓先暂停组合；只平一个标的不动组合的自动执行状态。
-		// 自主下单组合没有自动执行，和撤单一样不暂停，也就不改写暂停原因。动作运行期间组合不能恢复自动执行，暂停只在进入运行时写一次。
+		// 自主下单组合没有自动执行，PauseLogicalAccount 对自主下单为空操作。动作运行期间组合不能恢复自动执行，暂停只在进入运行时写一次。
 		if !alreadyRunning && command.pausesLogicalAccount() {
-			logical, err := tx.GetLogicalAccount(command.SpaceID, command.LogicalAccountID)
-			if err != nil {
-				return err
+			pause := command.PauseAs
+			if pause.Source == "" {
+				pause = store.UserPause(strings.TrimSpace(command.Reason))
 			}
-			if logical.ControlMode != "MANUAL" {
-				pause := command.PauseAs
-				if pause.Source == "" {
-					pause = store.UserPause(strings.TrimSpace(command.Reason))
-				}
-				if err := tx.PauseLogicalAccount(command.SpaceID, command.LogicalAccountID, pause); err != nil {
-					return err
-				}
+			if err := tx.PauseLogicalAccount(command.SpaceID, command.LogicalAccountID, pause); err != nil {
+				return err
 			}
 		}
 		var ensureErr error

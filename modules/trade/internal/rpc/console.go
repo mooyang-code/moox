@@ -6,9 +6,7 @@ import (
 	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
-	holdingapp "github.com/mooyang-code/moox/modules/trade/internal/application/holding"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -29,7 +27,6 @@ type ConsoleServer struct {
 	Store              *store.Store
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
-	Holdings           HoldingQueryService
 	Exchanges          execution.ExchangeCatalog
 	Adapters           AdapterSource
 	FlattenAccount     FlattenTradingAccountFunc
@@ -37,10 +34,6 @@ type ConsoleServer struct {
 	Delist *delistapp.Service
 	// Lifecycle 是模块的生命周期控制器（GetLifecycle、ControlLifecycle 转给它，见 lifecycle.go）。
 	Lifecycle *lifecycle.Controller
-}
-
-type HoldingQueryService interface {
-	List(context.Context, string, string) ([]holdingapp.Holding, error)
 }
 
 func (s *ConsoleServer) GetExecutionCapabilities(
@@ -61,7 +54,6 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	if err != nil {
 		return &tradepb.GetExecutionCapabilitiesRsp{RetInfo: errorInfo(err)}, nil
 	}
-	account := domainAccountForCapabilities(accountRecord)
 	matcherReady := true
 	if s.MatcherReady != nil {
 		matcherReady = s.MatcherReady()
@@ -69,8 +61,8 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	if s.Exchanges == nil {
 		return &tradepb.GetExecutionCapabilitiesRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	descriptor, _ := s.Exchanges.Descriptor(account.Exchange)
-	value := ResolveExecutionCapabilities(account, descriptor, s.LiveTradingEnabled, matcherReady)
+	descriptor, _ := s.Exchanges.Descriptor(exchange.Exchange(accountRecord.Exchange))
+	value := ResolveExecutionCapabilities(accountRecord, descriptor, s.LiveTradingEnabled, matcherReady)
 	capabilities := &tradepb.ExecutionCapabilities{
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,
 		CanClosePaperAccount: value.CanClosePaperAccount,
@@ -211,89 +203,10 @@ func (s *ConsoleServer) QueryEquityCurve(
 	return &tradepb.QueryEquityCurveRsp{RetInfo: success(), Points: points}, nil
 }
 
-func (s *ConsoleServer) ListHoldings(
-	ctx context.Context,
-	req *tradepb.ListHoldingsReq,
-) (*tradepb.ListHoldingsRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.ListHoldingsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if s.Store == nil {
-		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
-	}
-	if s.Holdings == nil {
-		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(errors.New("持币查询服务未配置"))}, nil
-	}
-	account, err := s.Store.ReadOnly().GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
-	if err != nil {
-		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
-	}
-	if !account.HasBalanceMarket() {
-		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("只有开通现货的账户才有持币明细"))}, nil
-	}
-	values, err := s.Holdings.List(ctx, spaceID, req.GetTradingAccountId())
-	if err != nil {
-		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
-	}
-	result := make([]*tradepb.Holding, 0, len(values))
-	for _, value := range values {
-		item := &tradepb.Holding{
-			TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID,
-			ExchangeSymbol: value.ExchangeSymbol, Asset: value.Asset,
-			Quantity: value.Quantity.String(), AverageCost: value.AverageCost.String(),
-			MarkPrice: value.MarkPrice.String(), MarketValue: value.MarketValue.String(),
-			SourceTime: value.SourceTime.UnixMilli(), Sellable: value.Sellable.String(),
-		}
-		if value.UnrealizedPnL != nil {
-			pnl := value.UnrealizedPnL.String()
-			item.UnrealizedPnl = &pnl
-		}
-		result = append(result, item)
-	}
-	return &tradepb.ListHoldingsRsp{RetInfo: success(), Holdings: result}, nil
-}
-
-func domainAccountForCapabilities(record store.TradingAccountRecord) tradingaccount.Account {
-	value := tradingaccount.Account{
-		ID: record.TradingAccountID, SpaceID: record.SpaceID, Name: record.Name,
-		Exchange: exchange.Exchange(record.Exchange), Markets: marketTypes(record.Markets),
-		ExecutionMode: exchange.ExecutionMode(record.ExecutionMode), Environment: exchange.AccountEnvironment(record.Environment),
-		CredentialSecretID: record.CredentialSecretID, SettlementAsset: record.SettlementAsset,
-		MarginMode: exchange.MarginMode(record.MarginMode), Status: exchange.AccountStatus(record.Status), Ready: record.Ready,
-		LeverageSettings: map[string]shared.Decimal{},
-	}
-	if record.ExecutionMode == string(exchange.ExecutionModePaper) {
-		config := record.PaperConfig
-		if config == nil {
-			config = &store.PaperAccountConfigRecord{}
-		}
-		value.Paper = &tradingaccount.PaperConfig{InitialBalance: decimalValue(config.InitialBalance), MakerFeeRate: decimalValue(config.MakerFeeRate), TakerFeeRate: decimalValue(config.TakerFeeRate), SlippageBPS: decimalValue(config.SlippageBPS),
-			OrderRetentionDays: config.OrderRetentionDays}
-	} else {
-		value.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironment(record.Environment), CredentialSecretID: record.CredentialSecretID}
-	}
-	for key, raw := range record.LeverageSettings {
-		value.LeverageSettings[key] = decimalValue(raw)
-	}
-	return value
-}
-
 func marketTypes(markets []string) []exchange.MarketType {
 	result := make([]exchange.MarketType, len(markets))
 	for i, market := range markets {
 		result[i] = exchange.MarketType(market)
 	}
 	return result
-}
-
-func decimalValue(raw string) shared.Decimal {
-	value, err := shared.ParseDecimal(raw)
-	if err != nil {
-		return shared.Zero()
-	}
-	return value
 }

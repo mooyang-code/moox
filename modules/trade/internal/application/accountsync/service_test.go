@@ -210,7 +210,7 @@ func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
@@ -232,7 +232,7 @@ func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
 			context.Background(), "space-1", "logical-1",
 		)
 		return err == nil &&
-			logicalAccount.AutomationState == "PAUSED" &&
+			logicalAccount.AutomationState() == "PAUSED" &&
 			strings.Contains(logicalAccount.PauseReason, "EXTERNAL")
 	}, time.Second, 10*time.Millisecond)
 }
@@ -250,7 +250,7 @@ func TestExternalFactKeepsMarginPauseReason(t *testing.T) {
 
 	logicalAccount, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState())
 	require.Equal(t, store.MarginPause(store.MarginReducePending).Reason, logicalAccount.PauseReason)
 	require.True(t, (logicalAccount.MarginReduceState == store.MarginReducePending))
 }
@@ -260,7 +260,7 @@ func TestExternalFactOverridesManualPauseReason(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工暂停")
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("人工暂停"))
 	}))
 	service := Service{Store: tradeStore}
 
@@ -268,7 +268,7 @@ func TestExternalFactOverridesManualPauseReason(t *testing.T) {
 
 	logicalAccount, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState())
 	require.Equal(t, store.SystemPause("发现外部订单或成交 EXTERNAL：account-1").Reason, logicalAccount.PauseReason)
 }
 
@@ -276,7 +276,7 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	adapter := &syncAdapter{lookupErr: &exchange.Error{
 		Kind: exchange.ErrorOrderNotFound, Err: errors.New("missing"),
@@ -307,7 +307,7 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 			context.Background(), "space-1", "logical-1",
 		)
 		return err == nil &&
-			logicalAccount.AutomationState == "PAUSED" &&
+			logicalAccount.AutomationState() == "PAUSED" &&
 			strings.Contains(logicalAccount.PauseReason, "EXTERNAL")
 	}, time.Second, 10*time.Millisecond)
 }
@@ -465,7 +465,7 @@ func TestTerminalExternalFillPausesSynchronouslyWithoutObserver(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState())
 	order, err := tradeStore.GetOrderByClientID(
 		context.Background(), "space-1", "account-1", exchange.MarketTypeSwap, current.ClientOrderID)
 	require.NoError(t, err)
@@ -516,7 +516,7 @@ func TestExternalFactsDoNotReenterLogicalAccountLock(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
@@ -545,7 +545,7 @@ func TestExternalFactsDoNotReenterLogicalAccountLock(t *testing.T) {
 		logicalAccount, err := tradeStore.GetLogicalAccount(
 			context.Background(), "space-1", "logical-1",
 		)
-		return err == nil && logicalAccount.AutomationState == "PAUSED"
+		return err == nil && logicalAccount.AutomationState() == "PAUSED"
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -1104,7 +1104,10 @@ func setLogicalAccountAutomation(
 ) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", state, "")
+		if state == "ACTIVE" {
+			return tx.ResumeLogicalAccount("space-1", "logical-1")
+		}
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("test"))
 	}))
 }
 
@@ -1118,7 +1121,7 @@ func requireLogicalAccountAutomation(
 		logicalAccount, err := tradeStore.GetLogicalAccount(
 			context.Background(), "space-1", "logical-1",
 		)
-		return err == nil && logicalAccount.AutomationState == state
+		return err == nil && logicalAccount.AutomationState() == state
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -1131,7 +1134,7 @@ func requireLogicalAccountRemainsActive(
 		logicalAccount, err := tradeStore.GetLogicalAccount(
 			context.Background(), "space-1", "logical-1",
 		)
-		return err != nil || logicalAccount.AutomationState != "ACTIVE"
+		return err != nil || logicalAccount.AutomationState() != "ACTIVE"
 	}, 100*time.Millisecond, 10*time.Millisecond)
 }
 
@@ -1151,9 +1154,9 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "LIVE",
+			Environment:     "TESTNET",
 			SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "test",
+			PauseReason:     "test",
 		}); err != nil {
 			return err
 		}

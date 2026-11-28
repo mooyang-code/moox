@@ -66,43 +66,51 @@ afterEach(() => {
 });
 
 describe("新建账户提交", () => {
-  it("模拟盘加入已有组合：一次请求完成，后端在同一个事务里加入，前端不再单独加成员", async () => {
+  it("模拟盘加入已有组合：与实盘统一走建账户再加入组合，优先级排在现有成员之后", async () => {
     const vm = await openDialog();
     await vm.submit();
     expect(mocks.createTradingAccount).toHaveBeenCalledTimes(1);
     expect(mocks.createTradingAccount).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "新账户",
-        logical_account_id: "la-existing",
-        logical_account_name: "",
         markets: ["spot", "swap"],
         paper: expect.objectContaining({ initial_balance: "100000" })
       })
     );
-    expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
+    expect(mocks.createLogicalAccount).not.toHaveBeenCalled();
+    expect(mocks.addLogicalAccountMember).toHaveBeenCalledWith({
+      logical_account_id: "la-existing",
+      trading_account_id: "ta-new",
+      enabled: true,
+      priority: 3,
+      adopt_existing_exposure: false
+    });
     expect(wrapper.emitted("created")).toEqual([["paper"]]);
   });
 
-  it("模拟盘加入失败时后端不留账户：不锁定前几步，再点一次重新提交整个请求", async () => {
+  it("模拟盘建账户失败时不锁定前几步，再点一次重新提交整个请求", async () => {
     const vm = await openDialog();
-    mocks.createTradingAccount.mockRejectedValueOnce(new Error("组合账户正在自动执行，先暂停再加入新账户"));
+    mocks.createTradingAccount.mockRejectedValueOnce(new Error("名称已被使用"));
     await vm.submit();
     await flushPromises();
-    expect(document.body.textContent).toContain("先暂停再加入新账户");
+    expect(document.body.textContent).toContain("名称已被使用");
     expect(document.body.textContent).not.toContain("已锁定");
     expect(wrapper.emitted("created")).toBeUndefined();
     await vm.submit();
     expect(mocks.createTradingAccount).toHaveBeenCalledTimes(2);
   });
 
-  it("新建组合时一次请求就完成", async () => {
+  it("模拟盘新建组合：先建执行账户，再按环境 3（PAPER）建组合并加入成员", async () => {
     const vm = await openDialog();
     Object.assign(vm.form, { join: "new", logicalName: "新组合" });
     await vm.submit();
-    expect(mocks.createTradingAccount).toHaveBeenCalledWith(
-      expect.objectContaining({ logical_account_name: "新组合", logical_account_id: undefined })
+    expect(mocks.createTradingAccount).toHaveBeenCalledTimes(1);
+    expect(mocks.createLogicalAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "新组合", environment: 3, settlement_asset: "USDT" })
     );
-    expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
+    expect(mocks.addLogicalAccountMember).toHaveBeenCalledWith(
+      expect.objectContaining({ logical_account_id: "la-made", trading_account_id: "ta-new", priority: 1 })
+    );
   });
 
   it("提交到一半对话框被关闭重开：账户已建成仍通知列表刷新，不动新打开的对话框", async () => {
@@ -386,14 +394,14 @@ describe("新建账户提交", () => {
       );
     });
 
-    it("新建组合的执行模式是 2；组合建好后组合名称、运行方式置灰，重试不再重复建组合", async () => {
+    it("测试网新建组合的环境是 1；组合建好后组合名称、运行方式置灰，重试不再重复建组合", async () => {
       mocks.createTradingAccount.mockResolvedValue({ account: { trading_account_id: "ta-live" } });
       const vm = await openDialog();
       Object.assign(vm.form, { ...liveForm, join: "new", logicalName: "实盘组合", step: 3 });
       mocks.addLogicalAccountMember.mockRejectedValueOnce(new Error("暂时失败"));
       await vm.submit();
       await flushPromises();
-      expect(mocks.createLogicalAccount).toHaveBeenCalledWith(expect.objectContaining({ execution_mode: 2 }));
+      expect(mocks.createLogicalAccount).toHaveBeenCalledWith(expect.objectContaining({ environment: 1 }));
       // 组合名称输入框、运行方式和“新建/加入”的单选都置灰
       const disabled = [...document.querySelectorAll<HTMLInputElement>(".arco-modal input")].filter(item => item.disabled);
       expect(disabled.length).toBeGreaterThanOrEqual(3);

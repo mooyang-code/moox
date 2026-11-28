@@ -79,3 +79,11 @@ func TestMarketOfInstrumentID(t *testing.T) {
 	require.Equal(t, MarketTypeSpot, MarketOfInstrumentID("BTC-USDT-SPOT"))
 	require.Equal(t, MarketTypeEquity, MarketOfInstrumentID("600519.XSHG"))
 }
+
+func TestCoinOf(t *testing.T) {
+	require.Equal(t, "BTC", CoinOf("BTC-USDT-SWAP"))
+	require.Equal(t, "BTC", CoinOf("BTC-USDT-SPOT"))
+	require.Equal(t, "600519.XSHG", CoinOf("600519.XSHG"))
+	require.Equal(t, "00700.XHKG", CoinOf(" 00700.XHKG "))
+	require.Equal(t, "", CoinOf("   "))
+}

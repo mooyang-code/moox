@@ -17,7 +17,6 @@ import (
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -520,9 +519,9 @@ func (s adapterSource) Adapter(string) (execution.ExecutionAdapter, error) { ret
 
 type readySession bool
 
-func (s readySession) ReadyFor(tradingaccount.Account) bool { return bool(s) }
-func (readySession) Invalidate(string)                      {}
-func (s readySession) Ready(string) bool                    { return bool(s) }
+func (s readySession) ReadyFor(store.TradingAccountRecord) bool { return bool(s) }
+func (readySession) Invalidate(string)                          {}
+func (s readySession) Ready(string) bool                        { return bool(s) }
 
 type instrumentSource struct{ store *store.Store }
 
@@ -643,7 +642,7 @@ func buildFixture(
 ) *fixture {
 	source := adapterSource{adapter: adapter}
 	accountService := &accountapp.Service{
-		Store: accountapp.Repository{Store: tradeStore}, SessionState: readySession(true),
+		Store: tradeStore, SessionState: readySession(true),
 	}
 	reducer := &fillreduce.Reducer{Store: tradeStore, Now: func() time.Time { return testNow }}
 	syncService := &accountsync.Service{

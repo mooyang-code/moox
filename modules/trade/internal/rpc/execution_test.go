@@ -28,7 +28,7 @@ func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
 			db := rpcStoreWithAccount(t)
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 			if err := db.Transaction(ctx, func(tx *store.Tx) error {
-				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
+				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "test"})
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -196,8 +196,8 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "test",
+			Environment: "PAPER", SettlementAsset: "USDT",
+			PauseReason: "test",
 		}); err != nil {
 			return err
 		}

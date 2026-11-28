@@ -55,13 +55,12 @@ WHERE c_status = 'ACTIVE';
 CREATE INDEX IF NOT EXISTS idx_t_trade_delists_status ON t_trade_delists (c_status, c_finished_at);
 
 -- ************ 下架清仓的各轮各组合 ************
--- 规划一轮时，给每个持有的（空间、组合账户）建一行，先写下确定生成的操作号，再发起。动作状态不在这里存，从 t_operator_actions 读。
+-- 规划一轮时，给每个持有的（空间、组合账户）建一行；操作号由主键确定地算出，动作状态从 t_operator_actions 读。
 CREATE TABLE IF NOT EXISTS t_trade_delist_flattens (
     c_delist_id TEXT NOT NULL,
     c_round INTEGER NOT NULL,
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
-    c_action_id TEXT NOT NULL,
     c_created_at INTEGER NOT NULL,
     CHECK (c_round IN (1, 2)),
     FOREIGN KEY (c_delist_id) REFERENCES t_trade_delists (c_delist_id) ON DELETE CASCADE,

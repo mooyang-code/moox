@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -28,13 +27,10 @@ const (
 	failedAttentionWindow = 24 * time.Hour
 )
 
-// actionNamespace 是下架清仓操作号的命名空间。
-var actionNamespace = uuid.MustParse("2b7e4f0a-5c1d-4e8b-9a36-7d0c1e5f8a42")
-
 // ActionID 由（记录、轮次、空间、组合账户）确定地生成操作号：重启后重新发起用的是同一个号，由动作表的主键和同号幂等挡住重复。
 // 每一轮、每条记录的号都不同，改期新建的记录不会撞上旧记录的号。
 func ActionID(delistID string, round int, spaceID, logicalAccountID string) string {
-	return uuid.NewSHA1(actionNamespace, []byte(fmt.Sprintf("%s|%d|%s|%s", delistID, round, spaceID, logicalAccountID))).String()
+	return store.DelistFlattenActionID(delistID, round, spaceID, logicalAccountID)
 }
 
 // dueRound 是 now 时应到的轮次：0（T−24h 之前）、1（[T−24h, T−2h)）、2（[T−2h, T)）。
@@ -117,7 +113,6 @@ func (s *Service) plan(ctx context.Context, record store.DelistRecord, round int
 	for _, group := range groups {
 		rows = append(rows, store.DelistFlattenRecord{
 			SpaceID: group.SpaceID, LogicalAccountID: group.LogicalAccountID,
-			ActionID: ActionID(record.DelistID, round, group.SpaceID, group.LogicalAccountID),
 		})
 	}
 	note := fmt.Sprintf("第 %d 轮查到 %d 个持有的组合", round, len(groups))
@@ -144,7 +139,7 @@ func (s *Service) drive(ctx context.Context, record store.DelistRecord) error {
 		if row.Round != record.PlannedRound {
 			continue
 		}
-		action, found, err := s.Store.FindOperatorAction(ctx, row.SpaceID, row.ActionID)
+		action, found, err := s.Store.FindOperatorAction(ctx, row.SpaceID, row.ActionID())
 		if err != nil {
 			failures = append(failures, err)
 			continue
@@ -181,7 +176,7 @@ func (s *Service) launch(ctx context.Context, record store.DelistRecord, row sto
 		return err
 	}
 	err = s.Flatten(ctx, FlattenRequest{
-		SpaceID: row.SpaceID, ActionID: row.ActionID, LogicalAccountID: row.LogicalAccountID,
+		SpaceID: row.SpaceID, ActionID: row.ActionID(), LogicalAccountID: row.LogicalAccountID,
 		Exchange: record.Exchange, InstrumentID: instrumentID, Reason: flattenReason(record, row.Round), DeadlineAt: record.DelistAt,
 	})
 	if errors.Is(err, ErrFlattenBusy) {
@@ -308,7 +303,7 @@ func (s *Service) Attention(ctx context.Context, now time.Time) ([]string, error
 			if row.Round != record.PlannedRound {
 				continue
 			}
-			action, found, err := readStore.FindOperatorAction(ctx, row.SpaceID, row.ActionID)
+			action, found, err := readStore.FindOperatorAction(ctx, row.SpaceID, row.ActionID())
 			if err != nil {
 				return items, err
 			}
@@ -383,7 +378,7 @@ func (s *Service) ListDelists(ctx context.Context, activeOnly bool, limit int) (
 		view := DelistView{DelistRecord: record, Flattens: make([]FlattenView, 0, len(rows))}
 		for _, row := range rows {
 			flatten := FlattenView{DelistFlattenRecord: row}
-			action, found, err := readStore.FindOperatorAction(ctx, row.SpaceID, row.ActionID)
+			action, found, err := readStore.FindOperatorAction(ctx, row.SpaceID, row.ActionID())
 			if err != nil {
 				return nil, err
 			}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -15,11 +14,6 @@ var (
 	ErrInvalidAccount       = errors.New("执行账户的参数不合法")
 	ErrAccountNotExecutable = errors.New("执行账户当前不能下单")
 )
-
-type LiveConfig struct {
-	Environment        exchange.AccountEnvironment
-	CredentialSecretID string
-}
 
 const (
 	// DefaultOrderRetentionDays 是模拟账户已结束订单与成交默认保留的天数（创建时没给就取它）。
@@ -33,232 +27,98 @@ func ValidOrderRetentionDays(days int) bool {
 	return days >= 0 && days <= MaxOrderRetentionDays
 }
 
-type PaperConfig struct {
-	InitialBalance shared.Decimal
-	MakerFeeRate   shared.Decimal
-	TakerFeeRate   shared.Decimal
-	SlippageBPS    shared.Decimal
-	// OrderRetentionDays 是已结束订单与成交保留的天数，0 表示不清理。所有模拟账户都按它清理（见 runtime.OrderHistoryPruner）。
-	OrderRetentionDays int
-}
-
-type Account struct {
-	ID       string
-	SpaceID  string
-	Name     string
-	Exchange exchange.Exchange
-	// Markets 是账户已开通的市场，按固定顺序排列：加密货币取 spot、swap 的子集，股票只有 equity。
-	Markets       []exchange.MarketType
-	ExecutionMode exchange.ExecutionMode
-	// AccountMode 只用于加密货币实盘账户，由交易所检测写入，用户不能改。
-	AccountMode exchange.AccountMode
-	// InspectionJSON 是最近一次检测的结果（权限、持仓模式、检测时间、阻断项）。
-	InspectionJSON string
-	Live           *LiveConfig
-	Paper          *PaperConfig
-	// Environment and CredentialSecretID are retained as in-memory projections
-	// for existing exchange adapters; persistence uses Live/Paper configuration.
-	Environment        exchange.AccountEnvironment
-	CredentialSecretID string
-	SettlementAsset    string
-	MarginMode         exchange.MarginMode
-	Status             exchange.AccountStatus
-	Ready              bool
-	// LeverageSettings 只对 SWAP 生效，键是内部标的 ID，"*" 是账户默认杠杆。
-	LeverageSettings   map[string]shared.Decimal
-	Snapshot           exchange.AccountSnapshot
-	SnapshotSourceTime time.Time
-	LastSyncAt         time.Time
-	LastReadyAt        time.Time
-	LastError          string
-}
-
-func (a Account) Validate() error {
-	if blank(a.ID) ||
-		blank(a.SpaceID) ||
-		blank(a.Name) ||
-		!a.Exchange.Valid() ||
-		!a.ExecutionMode.Valid() ||
-		blank(a.SettlementAsset) ||
-		!validStatus(a.Status) {
-		return invalidAccount("缺少必填字段或取值不受支持（名称、交易所、执行方式、结算资产、状态）")
-	}
-	if err := a.validateMarkets(); err != nil {
-		return err
-	}
-	if (a.Live == nil) == (a.Paper == nil) {
-		return invalidAccount("实盘配置与模拟配置必须且只能有一个")
-	}
-	switch a.ExecutionMode {
-	case exchange.ExecutionModeLive:
-		if a.Live == nil || !a.Live.Environment.ValidLive() || blank(a.Live.CredentialSecretID) {
-			return invalidAccount("实盘账户必须带环境和密钥")
-		}
-		if a.Environment != exchange.AccountEnvironmentUnspecified && a.Environment != a.Live.Environment {
-			return invalidAccount("实盘账户的环境与实盘配置不一致")
-		}
-		if !blank(a.CredentialSecretID) && strings.TrimSpace(a.CredentialSecretID) != strings.TrimSpace(a.Live.CredentialSecretID) {
-			return invalidAccount("实盘账户的密钥与实盘配置不一致")
-		}
-	case exchange.ExecutionModePaper:
-		if a.Paper == nil {
-			return invalidAccount("模拟账户必须带模拟配置")
-		}
-		if a.Environment != exchange.AccountEnvironmentUnspecified && a.Environment != exchange.AccountEnvironmentPaper {
-			return invalidAccount("模拟账户环境必须为 PAPER")
-		}
-		if a.Paper.InitialBalance.Cmp(shared.Zero()) <= 0 ||
-			a.Paper.MakerFeeRate.Cmp(shared.Zero()) < 0 ||
-			a.Paper.TakerFeeRate.Cmp(shared.Zero()) < 0 ||
-			a.Paper.SlippageBPS.Cmp(shared.Zero()) < 0 ||
-			a.Paper.SlippageBPS.Cmp(shared.MustDecimal("10000")) >= 0 ||
-			!ValidOrderRetentionDays(a.Paper.OrderRetentionDays) {
-			return invalidAccount("模拟配置不合法：初始资金要大于 0，费率不能为负，滑点在 0～10000 基点之间，订单保留天数在允许范围内")
-		}
-	}
-	switch {
-	case !a.HasLeverageMarket():
-		if a.MarginMode != exchange.MarginModeUnspecified || len(a.LeverageSettings) != 0 {
-			return invalidAccount("没有开通 SWAP 的账户不能配置保证金模式或杠杆")
-		}
-	default:
-		if a.MarginMode != exchange.MarginModeCross {
-			return invalidAccount("SWAP 一律全仓，保证金模式必须是 CROSS")
-		}
-		for symbol, leverage := range a.LeverageSettings {
-			if blank(symbol) || leverage.Cmp(shared.Zero()) <= 0 {
-				return invalidAccount("SWAP 杠杆必须为正数且绑定标的")
-			}
-		}
-	}
-	return nil
-}
-
-// validateMarkets 校验已开通市场的规范写法，以及账户类型只出现在加密货币实盘账户上。
-func (a Account) validateMarkets() error {
-	normalized, err := exchange.NormalizeMarkets(a.Markets)
-	if err != nil {
-		return invalidAccount(err.Error())
-	}
-	if !slices.Equal(normalized, a.Markets) {
-		return invalidAccount("已开通的市场必须去重并按 spot、swap、equity 的顺序排列")
-	}
-	environment := a.Environment
-	if a.Live != nil {
-		environment = a.Live.Environment
-	}
-	// 只有币安测试网要求一个账户一个市场；OKX 模拟盘一把密钥同时能做现货和永续。
-	if environment == exchange.AccountEnvironmentTestnet && a.Exchange == exchange.ExchangeBinance && len(a.Markets) > 1 {
-		return invalidAccount("币安测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥")
-	}
-	if !a.AccountMode.Valid() {
-		return invalidAccount("不支持的账户类型")
-	}
-	if a.AccountMode != exchange.AccountModeUnspecified &&
-		(a.ExecutionMode != exchange.ExecutionModeLive || a.SupportsMarket(exchange.MarketTypeEquity)) {
-		return invalidAccount("账户类型只用于加密货币实盘账户")
-	}
-	return nil
-}
-
-// SupportsMarket 报告账户是否已开通某个市场。
-func (a Account) SupportsMarket(market exchange.MarketType) bool {
-	return slices.Contains(a.Markets, market)
-}
-
-// HasLeverageMarket 报告账户是否开通了需要配置杠杆和保证金模式的市场（SWAP）。
-// WalletFor 返回某个市场的资金在这个账户里所在的钱包；模拟盘只有一个统一钱包。
-func (a Account) WalletFor(market exchange.MarketType) exchange.Wallet {
-	if a.ExecutionMode == exchange.ExecutionModePaper {
-		return exchange.WalletUnified
-	}
-	return exchange.WalletFor(a.Exchange, a.AccountMode, market)
-}
-
-// SharesFundsAcrossMarkets 报告各市场是否共用一个资金池：币安统一账户、OKX 统一账户和模拟盘都是，
-// 现货买入和合约保证金花同一份结算币；币安普通账户的现货、合约钱包各用各的。
-// 余额里的钱包标签（统一账户现货在 MARGIN、合约在 UNIFIED）只用于展示和对账，不决定资金池。
-func (a Account) SharesFundsAcrossMarkets() bool {
-	if a.ExecutionMode == exchange.ExecutionModePaper {
-		return true
-	}
-	mode := a.AccountMode
-	if mode == exchange.AccountModeUnspecified && a.Exchange == exchange.ExchangeOKX {
-		mode = exchange.AccountModeOKXUnified
-	}
-	return mode == exchange.AccountModeOKXUnified || mode == exchange.AccountModeBinancePortfolioMargin
-}
-
-// MarketsSharingFunds 返回和某个市场占用同一份资金的市场：共用资金池时是全部已开通市场，
-// 否则是同一个钱包里的市场。
-func (a Account) MarketsSharingFunds(market exchange.MarketType) []string {
-	var markets []string
-	wallet := a.WalletFor(market)
-	for _, candidate := range a.Markets {
-		if a.SharesFundsAcrossMarkets() || a.WalletFor(candidate) == wallet {
-			markets = append(markets, string(candidate))
-		}
-	}
-	return markets
-}
-
-func (a Account) HasLeverageMarket() bool {
-	return slices.ContainsFunc(a.Markets, func(market exchange.MarketType) bool {
-		return exchange.RuleFor(market).Leverage
-	})
-}
-
-// MarketForInstrument 返回内部标的 ID 在这个账户里所属的市场。
-func (a Account) MarketForInstrument(instrumentID string) exchange.MarketType {
-	return exchange.ResolveInstrumentMarket(instrumentID, a.Markets)
-}
-
-func (a Account) ExecutionEligibility() error {
-	if err := a.Validate(); err != nil {
-		return err
-	}
-	if a.Status != exchange.AccountStatusEnabled || !a.Ready {
-		return ErrAccountNotExecutable
-	}
-	if blockers := a.InspectionBlockers(); len(blockers) != 0 {
-		return fmt.Errorf("%w：%s", ErrAccountNotExecutable, blockers[0].Message)
-	}
-	return nil
-}
-
-// InspectionBlockers 返回最近一次检测里按账户已开通市场算出的阻断项：有任何一项，账户都不能下单。
-// 还没有检测过的账户（模拟盘、股票，或检测前的实盘账户）没有阻断项；检测结果解析失败时不阻断，由复查重新写入。
-func (a Account) InspectionBlockers() []exchange.InspectionFinding {
-	if a.ExecutionMode != exchange.ExecutionModeLive {
-		return nil
-	}
-	inspection, err := exchange.ParseInspection(a.InspectionJSON)
-	if err != nil {
-		return nil
-	}
-	return inspection.BlockersFor(a.Markets)
-}
-
-func (a Account) MarketDataEnvironment() exchange.AccountEnvironment {
-	if a.Paper != nil {
-		return exchange.AccountEnvironmentProduction
-	}
-	if a.Live != nil {
-		return a.Live.Environment
-	}
-	return a.Environment
-}
-
-func validStatus(status exchange.AccountStatus) bool {
+// ValidStatus 报告执行账户状态是否合法。
+func ValidStatus(status exchange.AccountStatus) bool {
 	return status == exchange.AccountStatusEnabled ||
 		status == exchange.AccountStatusDisabled ||
 		status == exchange.AccountStatusError
 }
 
-func invalidAccount(reason string) error {
-	return fmt.Errorf("%w: %s", ErrInvalidAccount, reason)
+// ValidateMarkets 校验已开通市场的规范写法、测试网单市场限制以及账户类型只用于加密货币实盘账户。
+func ValidateMarkets(
+	exch exchange.Exchange,
+	execMode exchange.ExecutionMode,
+	env exchange.AccountEnvironment,
+	accountMode exchange.AccountMode,
+	markets []exchange.MarketType,
+) error {
+	normalized, err := exchange.NormalizeMarkets(markets)
+	if err != nil {
+		return InvalidAccount(err.Error())
+	}
+	if !slices.Equal(normalized, markets) {
+		return InvalidAccount("已开通的市场必须去重并按 spot、swap、equity 的顺序排列")
+	}
+	// 只有币安测试网要求一个账户一个市场；OKX 模拟盘一把密钥同时能做现货和永续。
+	if env == exchange.AccountEnvironmentTestnet && exch == exchange.ExchangeBinance && len(markets) > 1 {
+		return InvalidAccount("币安测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥")
+	}
+	if !accountMode.Valid() {
+		return InvalidAccount("不支持的账户类型")
+	}
+	if accountMode != exchange.AccountModeUnspecified &&
+		(execMode != exchange.ExecutionModeLive || slices.Contains(markets, exchange.MarketTypeEquity)) {
+		return InvalidAccount("账户类型只用于加密货币实盘账户")
+	}
+	return nil
 }
 
-func blank(value string) bool {
-	return strings.TrimSpace(value) == ""
+// ValidatePaperParams 校验模拟盘的初始资金、费率、滑点与订单保留天数。
+func ValidatePaperParams(initialBalance, makerFeeRate, takerFeeRate, slippageBPS shared.Decimal, orderRetentionDays int) error {
+	if initialBalance.Cmp(shared.Zero()) <= 0 ||
+		makerFeeRate.Cmp(shared.Zero()) < 0 ||
+		takerFeeRate.Cmp(shared.Zero()) < 0 ||
+		slippageBPS.Cmp(shared.Zero()) < 0 ||
+		slippageBPS.Cmp(shared.MustDecimal("10000")) >= 0 ||
+		!ValidOrderRetentionDays(orderRetentionDays) {
+		return InvalidAccount("模拟配置不合法：初始资金要大于 0，费率不能为负，滑点在 0～10000 基点之间，订单保留天数在允许范围内")
+	}
+	return nil
+}
+
+// ValidateLeverageRules 校验保证金模式与杠杆设置是否与已开通市场一致。
+func ValidateLeverageRules(hasLeverage bool, marginMode exchange.MarginMode, leverages map[string]string) error {
+	if !hasLeverage {
+		if marginMode != exchange.MarginModeUnspecified || len(leverages) != 0 {
+			return InvalidAccount("没有开通 SWAP 的账户不能配置保证金模式或杠杆")
+		}
+		return nil
+	}
+	if marginMode != exchange.MarginModeCross {
+		return InvalidAccount("SWAP 一律全仓，保证金模式必须是 CROSS")
+	}
+	for symbol, raw := range leverages {
+		value, err := shared.ParseDecimal(raw)
+		if strings.TrimSpace(symbol) == "" || err != nil || value.Cmp(shared.Zero()) <= 0 {
+			return InvalidAccount("SWAP 杠杆必须为正数且绑定标的")
+		}
+	}
+	return nil
+}
+
+// SharesFundsAcrossMarkets 报告各市场是否共用一个资金池：币安统一账户、OKX 统一账户和模拟盘都是，
+// 现货买入和合约保证金花同一份结算币；币安普通账户的现货、合约钱包各用各的。
+// 余额里的钱包标签（统一账户现货在 MARGIN、合约在 UNIFIED）只用于展示和对账，不决定资金池。
+func SharesFundsAcrossMarkets(execMode exchange.ExecutionMode, exch exchange.Exchange, accountMode exchange.AccountMode) bool {
+	if execMode == exchange.ExecutionModePaper {
+		return true
+	}
+	mode := accountMode
+	if mode == exchange.AccountModeUnspecified && exch == exchange.ExchangeOKX {
+		mode = exchange.AccountModeOKXUnified
+	}
+	return mode == exchange.AccountModeOKXUnified || mode == exchange.AccountModeBinancePortfolioMargin
+}
+
+// MarketDataEnvironment 返回拉取公共行情与标的规则时使用的环境：模拟盘用生产环境行情，实盘用自身环境。
+func MarketDataEnvironment(execMode exchange.ExecutionMode, env exchange.AccountEnvironment) exchange.AccountEnvironment {
+	if execMode == exchange.ExecutionModePaper {
+		return exchange.AccountEnvironmentProduction
+	}
+	return env
+}
+
+// InvalidAccount 构造带 ErrInvalidAccount 的参数错误。
+func InvalidAccount(reason string) error {
+	return fmt.Errorf("%w: %s", ErrInvalidAccount, reason)
 }

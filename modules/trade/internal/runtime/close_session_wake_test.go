@@ -94,8 +94,8 @@ func TestClosedConvergedTargetCancelsRestingOrderWithinSeconds(t *testing.T) {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "PAPER",
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", Environment: "PAPER",
+			SettlementAsset: "USDT", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -104,7 +104,7 @@ func TestClosedConvergedTargetCancelsRestingOrderWithinSeconds(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		if err := tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", ""); err != nil {
+		if err := tx.ResumeLogicalAccount("space-1", "logical-1"); err != nil {
 			return err
 		}
 		if _, _, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{

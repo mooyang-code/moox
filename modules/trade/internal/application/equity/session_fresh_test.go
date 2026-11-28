@@ -52,8 +52,8 @@ func seedStockAccount(t *testing.T, lastSync time.Time) *store.Store {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "PAPER",
-			SettlementAsset: "CNY", AutomationState: "PAUSED", PauseReason: "test",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", Environment: "PAPER",
+			SettlementAsset: "CNY", PauseReason: "test",
 		}); err != nil {
 			return err
 		}

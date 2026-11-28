@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,23 +17,69 @@ type LogicalAccountRecord struct {
 	LogicalAccountID string
 	Name             string
 	// ClosedThrough 是关闭到哪个会话为止（会话的开始时刻，毫秒）：开始时刻不大于它的会话的目标一律不再接受，0 表示没关闭过。
-	ClosedThrough   int64
-	ExecutionMode   string
+	ClosedThrough int64
+	// Environment 是组合所属环境（PAPER / TESTNET / PRODUCTION），创建时定下。
+	Environment     string
 	SettlementAsset string
 	// OrderSettingsJSON、FundSettingsJSON 是下单设置和资金设置，空对象表示全部取默认值。
 	OrderSettingsJSON string
 	FundSettingsJSON  string
-	AutomationState   string
-	// PauseReason 只用于展示；程序按 PauseSource（暂停来源）与 MarginReduceState（保证金率风控的减仓状态）判断，运行中三者都为空。
+	// PauseReason 只用于展示；程序按 ControlMode、PauseSource（暂停来源）与 MarginReduceState（保证金率风控的减仓状态）判断，未暂停与自主下单三者均为空。
 	PauseReason       string
 	PauseSource       PauseSource
 	MarginReduceState MarginReduceState
-	// ResumedAt 是最近一次从暂停恢复自动执行的时间（毫秒），没恢复过为 0。
-	ResumedAt int64
 	// AckedMarginActionID 是最近一次恢复自动执行时已人工确认的保证金风控减仓动作号。
 	AckedMarginActionID string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+}
+
+// ExecutionMode 由三值环境推导出执行模式（PAPER 为模拟盘，TESTNET/PRODUCTION 为实盘）。
+func (r LogicalAccountRecord) ExecutionMode() string {
+	switch exchange.AccountEnvironment(r.Environment) {
+	case exchange.AccountEnvironmentPaper:
+		return string(exchange.ExecutionModePaper)
+	case exchange.AccountEnvironmentTestnet, exchange.AccountEnvironmentProduction:
+		return string(exchange.ExecutionModeLive)
+	default:
+		return ""
+	}
+}
+
+// IsManual 报告组合是否是自主下单模式（没有策略自动执行，也没有暂停状态）。
+func (r LogicalAccountRecord) IsManual() bool {
+	return r.ControlMode == string(logicalaccount.ControlManual)
+}
+
+// IsPaused 报告策略组合当前是否处于暂停状态；自主下单组合恒为 false。
+func (r LogicalAccountRecord) IsPaused() bool {
+	return !r.IsManual() && r.PauseSource != ""
+}
+
+// IsActive 报告策略组合当前是否处于自动执行中；自主下单组合恒为 false。
+func (r LogicalAccountRecord) IsActive() bool {
+	return !r.IsManual() && r.PauseSource == ""
+}
+
+// AutomationState 推导协议展示用的自动执行状态：自主下单返回空串，策略组合按暂停来源返回 PAUSED 或 ACTIVE。
+func (r LogicalAccountRecord) AutomationState() string {
+	if r.IsManual() {
+		return ""
+	}
+	if r.PauseSource != "" {
+		return string(logicalaccount.AutomationPaused)
+	}
+	return string(logicalaccount.AutomationActive)
+}
+
+// CanEditMembers 报告当前是否允许增删成员：自主下单组合随时允许，策略组合须先暂停。
+func (r LogicalAccountRecord) CanEditMembers() bool {
+	return r.IsManual() || r.IsPaused()
+}
+
+// Pause 返回组合当前的暂停状态（未暂停或自主下单为零值）。
+func (r LogicalAccountRecord) Pause() Pause {
+	return Pause{Source: r.PauseSource, MarginReduce: r.MarginReduceState, Reason: r.PauseReason}
 }
 
 type LogicalAccountMemberRecord struct {
@@ -51,15 +98,13 @@ type logicalAccountRow struct {
 	LogicalAccountID    string    `gorm:"column:c_logical_account_id"`
 	Name                string    `gorm:"column:c_name"`
 	ClosedThrough       int64     `gorm:"column:c_closed_through"`
-	ExecutionMode       string    `gorm:"column:c_execution_mode"`
+	Environment         string    `gorm:"column:c_environment"`
 	SettlementAsset     string    `gorm:"column:c_settlement_asset"`
 	OrderSettingsJSON   string    `gorm:"column:c_order_settings_json"`
 	FundSettingsJSON    string    `gorm:"column:c_fund_settings_json"`
-	AutomationState     string    `gorm:"column:c_automation_state"`
 	PauseReason         string    `gorm:"column:c_pause_reason"`
 	PauseSource         string    `gorm:"column:c_pause_source"`
 	MarginReduceState   string    `gorm:"column:c_margin_reduce_state"`
-	ResumedAt           int64     `gorm:"column:c_resumed_at"`
 	AckedMarginActionID string    `gorm:"column:c_acked_margin_action_id"`
 	CreatedAt           time.Time `gorm:"column:c_ctime"`
 	UpdatedAt           time.Time `gorm:"column:c_mtime"`
@@ -87,8 +132,15 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 	if record.ControlMode == "" {
 		record.ControlMode = string(logicalaccount.ControlStrategy)
 	}
-	account := logicalAccountDomain(record)
-	if err := account.Validate(); err != nil {
+	if !record.IsManual() && record.PauseReason != "" && record.PauseSource == "" {
+		record.PauseSource = PauseSourceUser
+	}
+	if err := logicalaccount.ValidateConfig(
+		record.SpaceID, record.LogicalAccountID, record.Name,
+		exchange.AccountEnvironment(record.Environment), record.SettlementAsset,
+		logicalaccount.ControlMode(record.ControlMode),
+		string(record.PauseSource), record.PauseReason, string(record.MarginReduceState),
+	); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
 	}
 	if blank(record.OrderSettingsJSON) {
@@ -97,14 +149,11 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 	if blank(record.FundSettingsJSON) {
 		record.FundSettingsJSON = "{}"
 	}
-	if record.AutomationState == string(logicalaccount.AutomationPaused) && record.PauseSource == "" {
-		record.PauseSource = PauseSourceUser
-	}
 	err := tx.db.Exec(execInsertLogicalAccount,
 		record.SpaceID, record.LogicalAccountID, record.Name,
-		record.ControlMode, record.ExecutionMode, record.SettlementAsset,
+		record.ControlMode, record.Environment, record.SettlementAsset,
 		record.OrderSettingsJSON, record.FundSettingsJSON,
-		record.AutomationState, record.PauseReason, string(record.PauseSource), string(record.MarginReduceState),
+		record.PauseReason, string(record.PauseSource), string(record.MarginReduceState),
 	).Error
 	return nameWriteError(err, uniqueLogicalAccountName)
 }
@@ -188,17 +237,9 @@ func (tx *Tx) SetLogicalAccountFundSettings(spaceID, logicalAccountID, settingsJ
 	return requireUpdated(result.Error, result.RowsAffected, "logical account fund settings")
 }
 
-// Pause 返回组合当前的暂停状态（运行中为零值）。
-func (r LogicalAccountRecord) Pause() Pause {
-	return Pause{Source: r.PauseSource, MarginReduce: r.MarginReduceState, Reason: r.PauseReason}
-}
-
-// ResumeLogicalAccount 在事务内以调用方时钟恢复自动执行，并显式确认当前最近一条保证金风控减仓动作，
+// ResumeLogicalAccount 恢复策略组合的自动执行，并显式确认当前最近一条保证金风控减仓动作，
 // 保证同秒/同毫秒恢复后新的风控告警仍可再次触发，无需时间宽限。
-func (tx *Tx) ResumeLogicalAccount(spaceID, logicalAccountID string, now time.Time) error {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
+func (tx *Tx) ResumeLogicalAccount(spaceID, logicalAccountID string) error {
 	ackedActionID := ""
 	lastMargin, err := tx.LastMarginReduceAction(spaceID, logicalAccountID)
 	if err != nil {
@@ -207,38 +248,36 @@ func (tx *Tx) ResumeLogicalAccount(spaceID, logicalAccountID string, now time.Ti
 	if lastMargin != nil {
 		ackedActionID = lastMargin.ActionID
 	}
-	result := tx.db.Exec(execResumeLogicalAccount, now.UTC().UnixMilli(), ackedActionID, spaceID, logicalAccountID)
+	result := tx.db.Exec(execResumeLogicalAccount, ackedActionID, spaceID, logicalAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
 }
 
-// SetLogicalAccountAutomation 恢复自动执行（state 为 ACTIVE，原因为空）或人工暂停（state 为 PAUSED，来源记 USER）。
-// 系统自动暂停与保证金率风控暂停走 PauseLogicalAccount、PauseLogicalAccountIf。
-func (tx *Tx) SetLogicalAccountAutomation(
-	spaceID string,
-	logicalAccountID string,
-	state string,
-	reason string,
-) error {
-	switch {
-	case state == string(logicalaccount.AutomationActive) && blank(reason):
-		return tx.ResumeLogicalAccount(spaceID, logicalAccountID, time.Now().UTC())
-	case state == string(logicalaccount.AutomationPaused):
-		return tx.PauseLogicalAccount(spaceID, logicalAccountID, UserPause(reason))
-	}
-	return fmt.Errorf("%w: automation state and reason disagree", ErrInvalidRecord)
-}
-
-// PauseLogicalAccount 无条件暂停组合，写入暂停来源、减仓状态与原因。
+// PauseLogicalAccount 暂停策略组合，写入暂停来源、减仓状态与原因。
+// 对自主下单组合不生效且直接返回成功（自主下单没有自动执行，暂停列恒为空）。
 func (tx *Tx) PauseLogicalAccount(spaceID, logicalAccountID string, pause Pause) error {
 	if !validPause(pause) {
 		return fmt.Errorf("%w: invalid pause", ErrInvalidRecord)
 	}
 	result := tx.db.Exec(execPauseLogicalAccount, pause.Reason, string(pause.Source), string(pause.MarginReduce), spaceID, logicalAccountID)
-	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
+	if result.Error != nil {
+		return writeError(result.Error)
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+	// 没更新到行时区分“自主下单组合（忽略暂停）”与“组合不存在”。
+	current, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
+	if err == nil && current.IsManual() {
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return fmt.Errorf("%w: missing logical account automation", ErrInvalidRecord)
 }
 
-// PauseLogicalAccountIf 只在组合当前的暂停来源与减仓状态仍是 expected 时把它暂停成 pause，返回是否改了；
-// expected 为零值表示“仍在自动执行”。风控在读到组合之后、写入之前，用户可能已经恢复、人工暂停或别处改写了状态，不能覆盖。
+// PauseLogicalAccountIf 只在策略组合当前的暂停来源与减仓状态仍是 expected 时把它暂停成 pause，返回是否改了；
+// expected 为零值表示“仍在自动执行”。自主下单组合不匹配，直接返回 false, nil。
 func (tx *Tx) PauseLogicalAccountIf(spaceID, logicalAccountID string, expected, pause Pause) (bool, error) {
 	if blank(spaceID) || blank(logicalAccountID) || !validPause(pause) {
 		return false, fmt.Errorf("%w: incomplete conditional pause", ErrInvalidRecord)
@@ -285,19 +324,14 @@ func logicalAccountMarkets(db *gorm.DB, spaceID, logicalAccountID string) ([]str
 }
 
 func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
-	member := logicalaccount.Member{
-		SpaceID: record.SpaceID, LogicalAccountID: record.LogicalAccountID,
-		TradingAccountID: record.TradingAccountID,
-		Enabled:          record.Enabled, Priority: record.Priority,
-	}
-	if err := member.Validate(); err != nil {
+	if err := logicalaccount.ValidateMember(record.SpaceID, record.LogicalAccountID, record.TradingAccountID); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
 	}
 	account, err := tx.GetLogicalAccount(record.SpaceID, record.LogicalAccountID)
 	if err != nil {
 		return err
 	}
-	if account.AutomationState != string(logicalaccount.AutomationPaused) {
+	if !account.CanEditMembers() {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrMembershipChange)
 	}
 	var elsewhere int64
@@ -311,24 +345,9 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 	if err != nil {
 		return err
 	}
-	if physical.ExecutionMode != account.ExecutionMode ||
+	if string(physical.EffectiveEnvironment()) != account.Environment ||
 		physical.SettlementAsset != account.SettlementAsset {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
-	}
-	var environments []string
-	if err := tx.db.Raw(queryMemberEnvironments,
-		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
-	).Scan(&environments).Error; err != nil {
-		return err
-	}
-	for _, environment := range environments {
-		physicalEnvironment := physical.Environment
-		if physicalEnvironment == "" || physicalEnvironment == "PAPER" {
-			physicalEnvironment = "PRODUCTION"
-		}
-		if environment != physicalEnvironment {
-			return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
-		}
 	}
 	err = tx.db.Exec(execInsertLogicalAccountMember,
 		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
@@ -381,7 +400,7 @@ func (tx *Tx) DeleteLogicalAccountMember(
 	if err != nil {
 		return err
 	}
-	if account.AutomationState != string(logicalaccount.AutomationPaused) {
+	if !account.CanEditMembers() {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrMembershipChange)
 	}
 	result := tx.db.Exec(execDeleteLogicalAccountMember, spaceID, logicalAccountID, tradingAccountID)
@@ -422,29 +441,18 @@ func (s *Store) FindLogicalAccountMembership(
 	return account, logicalAccountMemberRecord(member), err
 }
 
-func logicalAccountDomain(record LogicalAccountRecord) logicalaccount.Account {
-	return logicalaccount.Account{
-		ControlMode: logicalaccount.ControlMode(record.ControlMode),
-		SpaceID:     record.SpaceID, ID: record.LogicalAccountID, Name: record.Name,
-		ExecutionMode:   exchange.ExecutionMode(record.ExecutionMode),
-		SettlementAsset: record.SettlementAsset,
-		AutomationState: logicalaccount.AutomationState(record.AutomationState),
-		PauseReason:     record.PauseReason,
-	}
-}
-
 func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 	return LogicalAccountRecord{
 		ControlMode: row.ControlMode,
 		SpaceID:     row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		Name: row.Name, ClosedThrough: row.ClosedThrough,
-		ExecutionMode:     row.ExecutionMode,
+		Environment:       row.Environment,
 		SettlementAsset:   row.SettlementAsset,
 		OrderSettingsJSON: row.OrderSettingsJSON, FundSettingsJSON: row.FundSettingsJSON,
-		AutomationState: row.AutomationState, PauseReason: row.PauseReason,
+		PauseReason: row.PauseReason,
 		PauseSource: PauseSource(row.PauseSource), MarginReduceState: MarginReduceState(row.MarginReduceState),
-		ResumedAt: row.ResumedAt, AckedMarginActionID: row.AckedMarginActionID,
-		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		AckedMarginActionID: row.AckedMarginActionID,
+		CreatedAt:           row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
 
@@ -461,26 +469,26 @@ func logicalAccountMemberRecord(row logicalAccountMemberRow) LogicalAccountMembe
 const (
 	execInsertLogicalAccount = `INSERT INTO t_logical_accounts (
 			c_space_id, c_logical_account_id, c_name,
-			c_control_mode, c_execution_mode, c_settlement_asset,
+			c_control_mode, c_environment, c_settlement_asset,
 			c_order_settings_json, c_fund_settings_json,
-			c_automation_state, c_pause_reason, c_pause_source, c_margin_reduce_state
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	// 恢复自动执行：从暂停恢复时记下恢复时间与已确认的最近一次风控减仓动作号，清空暂停原因、来源与减仓状态；只有策略控制的组合能恢复自动执行。
+			c_pause_reason, c_pause_source, c_margin_reduce_state
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	// 恢复自动执行：从暂停恢复时记下已确认的最近一次风控减仓动作号，清空暂停原因、来源与减仓状态；只有策略控制的组合能恢复自动执行。
 	execResumeLogicalAccount = `UPDATE t_logical_accounts
-		SET c_resumed_at = CASE WHEN c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
-			c_acked_margin_action_id = CASE WHEN c_automation_state <> 'ACTIVE' THEN ? ELSE c_acked_margin_action_id END,
-			c_automation_state = 'ACTIVE', c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = '',
+		SET c_acked_margin_action_id = CASE WHEN c_pause_source <> '' THEN ? ELSE c_acked_margin_action_id END,
+			c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = '',
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_control_mode = 'STRATEGY'`
 	execPauseLogicalAccount = `UPDATE t_logical_accounts
-		SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_pause_source = ?, c_margin_reduce_state = ?,
+		SET c_pause_reason = ?, c_pause_source = ?, c_margin_reduce_state = ?,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?`
-	// 条件暂停：按当前的暂停来源与减仓状态比对（运行中两者都为空）。
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_control_mode = 'STRATEGY'`
+	// 条件暂停：按当前的暂停来源与减仓状态比对（运行中两者都为空），只对策略组合生效。
 	execPauseLogicalAccountIf = `UPDATE t_logical_accounts
-		SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_pause_source = ?, c_margin_reduce_state = ?,
+		SET c_pause_reason = ?, c_pause_source = ?, c_margin_reduce_state = ?,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_pause_source = ? AND c_margin_reduce_state = ?`
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_control_mode = 'STRATEGY'
+			AND c_pause_source = ? AND c_margin_reduce_state = ?`
 	queryLogicalAccountMemberMarkets = `SELECT a.c_markets
 		FROM t_logical_account_members AS m
 		JOIN t_trading_accounts AS a
@@ -492,13 +500,6 @@ const (
 		WHERE c_space_id = ? AND c_logical_account_id = ?`
 	queryCountMemberAccountMembership = `SELECT COUNT(*) FROM t_logical_account_members
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_logical_account_id <> ?`
-	queryMemberEnvironments = `SELECT DISTINCT COALESCE(NULLIF(a.c_live_environment, ''), 'PRODUCTION')
-		FROM t_logical_account_members AS m
-		JOIN t_trading_accounts AS a
-			ON a.c_space_id = m.c_space_id
-			AND a.c_trading_account_id = m.c_trading_account_id
-		WHERE m.c_space_id = ? AND m.c_logical_account_id = ?
-			AND m.c_trading_account_id <> ?`
 	execInsertLogicalAccountMember = `INSERT INTO t_logical_account_members (
 			c_space_id, c_logical_account_id, c_trading_account_id,
 			c_enabled, c_priority

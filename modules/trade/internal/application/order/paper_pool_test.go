@@ -23,8 +23,8 @@ func (a fixedSnapshotAdapter) GetAccountSnapshot(context.Context) (exchange.Acco
 func TestPaperMarginPoolAppliesToSpotBuyOfMixedAccount(t *testing.T) {
 	s, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	account := executableAccount(exchange.MarketTypeSwap)
-	account.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
-	account.ExecutionMode = exchange.ExecutionModePaper
+	account.Markets = []string{string(exchange.MarketTypeSpot), string(exchange.MarketTypeSwap)}
+	account.ExecutionMode = string(exchange.ExecutionModePaper)
 	now := s.now()
 	s.Adapters = errorBoundarySource{adapter: fixedSnapshotAdapter{adapterStub: adapter, snapshot: exchange.AccountSnapshot{
 		UsedMargin: shared.MustDecimal("10000"), UnrealizedPnL: shared.MustDecimal("-500"), ExchangeUpdatedAt: now,
@@ -48,10 +48,10 @@ func TestPaperMarginPoolAppliesToSpotBuyOfMixedAccount(t *testing.T) {
 	require.True(t, adjustment.IsZero(), "减仓单不占新保证金")
 
 	spotOnly := spotBuy
-	spotOnly.Account.Markets = []exchange.MarketType{exchange.MarketTypeSpot}
+	spotOnly.Account.Markets = []string{string(exchange.MarketTypeSpot)}
 	require.False(t, orderPolicyOf(spotOnly, nil).NeedsMarginPoolSnapshot(spotOnly.Account, spotOnly.ReservedAsset, spotOnly.ReduceOnly), "没开通合约的账户没有保证金占用")
 	live := spotBuy
-	live.Account.ExecutionMode = exchange.ExecutionModeLive
+	live.Account.ExecutionMode = string(exchange.ExecutionModeLive)
 	require.False(t, orderPolicyOf(live, nil).NeedsMarginPoolSnapshot(live.Account, live.ReservedAsset, live.ReduceOnly))
 }
 
@@ -59,8 +59,8 @@ func TestPaperMarginPoolAppliesToSpotBuyOfMixedAccount(t *testing.T) {
 func TestPaperSpotBuyDoesNotSpendUnrealizedProfit(t *testing.T) {
 	s, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	account := executableAccount(exchange.MarketTypeSwap)
-	account.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
-	account.ExecutionMode = exchange.ExecutionModePaper
+	account.Markets = []string{string(exchange.MarketTypeSpot), string(exchange.MarketTypeSwap)}
+	account.ExecutionMode = string(exchange.ExecutionModePaper)
 	s.Adapters = errorBoundarySource{adapter: fixedSnapshotAdapter{adapterStub: adapter, snapshot: exchange.AccountSnapshot{
 		UsedMargin: shared.MustDecimal("7000"), UnrealizedPnL: shared.MustDecimal("20000"), ExchangeUpdatedAt: s.now(),
 		Present: exchange.AccountSnapshotPresence{UsedMargin: true, UnrealizedPnL: true},

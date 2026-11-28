@@ -225,10 +225,6 @@ export function buildPaperRequest(form: CreateForm): CreateTradingAccountReq & {
   const swap = form.markets.includes("swap");
   return {
     name: form.name.trim(),
-    // 新建组合：后端同时建组合；加入已有组合：后端在同一个事务里把新账户加进去，两者只给一个
-    logical_account_name: form.join === "new" ? form.logicalName.trim() || form.name.trim() : "",
-    logical_account_id: form.join === "exist" ? form.existingLogicalId : undefined,
-    control_mode: form.controlMode,
     exchange: form.exchange,
     markets: [...form.markets],
     settlement_asset: form.settlementAsset.trim().toUpperCase(),

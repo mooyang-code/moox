@@ -9,23 +9,22 @@ import (
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
-func stockAccount(holding string) tradingaccount.Account {
-	return tradingaccount.Account{
-		ID: "stock-1", SpaceID: "space-1", Name: "A 股", Exchange: exchange.ExchangeAShare,
-		Markets: []exchange.MarketType{exchange.MarketTypeEquity}, ExecutionMode: exchange.ExecutionModePaper,
-		Environment: exchange.AccountEnvironmentPaper, SettlementAsset: "CNY", Status: exchange.AccountStatusEnabled, Ready: true,
-		Paper: &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("1000000"), MakerFeeRate: shared.MustDecimal("0.00025"),
-			TakerFeeRate: shared.MustDecimal("0.00025"), SlippageBPS: shared.Zero()},
-		Snapshot: exchange.AccountSnapshot{Balances: []exchange.AssetBalance{
-			{Wallet: exchange.WalletUnified, Asset: "CNY", Available: shared.MustDecimal("1000000"), Total: shared.MustDecimal("1000000")},
-			{Wallet: exchange.WalletUnified, Asset: "600519.XSHG", Available: shared.MustDecimal(holding), Total: shared.MustDecimal(holding)},
+func stockAccount(holding string) store.TradingAccountRecord {
+	return store.TradingAccountRecord{
+		TradingAccountID: "stock-1", SpaceID: "space-1", Name: "A 股", Exchange: string(exchange.ExchangeAShare),
+		Markets: []string{string(exchange.MarketTypeEquity)}, ExecutionMode: string(exchange.ExecutionModePaper),
+		Environment: string(exchange.AccountEnvironmentPaper), SettlementAsset: "CNY", Status: string(exchange.AccountStatusEnabled), Ready: true,
+		PaperConfig: &store.PaperAccountConfigRecord{InitialBalance: "1000000", MakerFeeRate: "0.00025",
+			TakerFeeRate: "0.00025", SlippageBPS: "0"},
+		Snapshot: store.TradingAccountSnapshot{Balances: []store.AssetBalance{
+			{Wallet: string(exchange.WalletUnified), Asset: "CNY", Available: "1000000", Total: "1000000"},
+			{Wallet: string(exchange.WalletUnified), Asset: "600519.XSHG", Available: holding, Total: holding},
 		}},
 	}
 }

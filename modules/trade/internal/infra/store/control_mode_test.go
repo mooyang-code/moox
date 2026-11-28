@@ -27,26 +27,56 @@ func TestTargetReceiptPreservesAccountReadFailure(t *testing.T) {
 	require.NotErrorIs(t, err, ErrTargetAuthorization)
 }
 
-func TestManualControlModeRejectsStrategyMutations(t *testing.T) {
+func TestManualControlModePauseNoOpResumeRejectsAndMemberEditable(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.CreateLogicalAccount(LogicalAccountRecord{SpaceID: "space", LogicalAccountID: "manual", Name: "manual", ControlMode: "MANUAL", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "manual"})
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
+			return err
+		}
+		return tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "manual", Name: "manual",
+			ControlMode: "MANUAL", Environment: "PAPER", SettlementAsset: "USDT",
+		})
 	}))
-	before, err := s.GetLogicalAccount(ctx, "space", "manual")
+	before, err := s.GetLogicalAccount(ctx, "space-1", "manual")
 	require.NoError(t, err)
 	require.Equal(t, "MANUAL", before.ControlMode)
-	cases := map[string]func(*Tx) error{
-		"activate": func(tx *Tx) error { return tx.SetLogicalAccountAutomation("space", "manual", "ACTIVE", "") },
-	}
-	for name, operation := range cases {
-		t.Run(name, func(t *testing.T) {
-			require.Error(t, s.Transaction(ctx, operation))
-			after, err := s.GetLogicalAccount(ctx, "space", "manual")
-			require.NoError(t, err)
-			require.Equal(t, before, after)
+	require.Empty(t, before.AutomationState())
+	require.Empty(t, before.PauseSource)
+	require.Empty(t, before.PauseReason)
+	require.False(t, before.IsPaused())
+	require.False(t, before.IsActive())
+	require.True(t, before.CanEditMembers())
+
+	// 自主下单组合不带暂停状态：暂停为空操作且返回成功，条件暂停返回 false 且不改写，恢复被拒绝。
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PauseLogicalAccount("space-1", "manual", UserPause("手动暂停"))
+	}))
+	var changed bool
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		var pauseErr error
+		changed, pauseErr = tx.PauseLogicalAccountIf("space-1", "manual", Pause{}, SystemPause("逐仓"))
+		return pauseErr
+	}))
+	require.False(t, changed)
+	require.Error(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.ResumeLogicalAccount("space-1", "manual")
+	}))
+
+	after, err := s.GetLogicalAccount(ctx, "space-1", "manual")
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+
+	// 自主下单组合随时允许增删成员，无需暂停。
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "manual", TradingAccountID: "account-1", Enabled: true, Priority: 1,
 		})
-	}
+	}))
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.DeleteLogicalAccountMember("space-1", "manual", "account-1")
+	}))
 }
 
 func TestManualControlRejectsTargetReplay(t *testing.T) {
@@ -56,7 +86,7 @@ func TestManualControlRejectsTargetReplay(t *testing.T) {
 	target := validLogicalAccountTarget()
 	_, _, err := acceptTargetForTest(ctx, s, target)
 	require.NoError(t, err)
-	require.NoError(t, s.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	require.NoError(t, s.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 	_, _, err = acceptTargetForTest(ctx, s, target)
 	require.Error(t, err)
 	receipt := TargetHistoryRecord{SpaceID: "space-1", TargetID: target.TargetID, LogicalAccountID: "logical-1", InstanceID: target.InstanceID, SessionID: target.SessionID, StrategyID: target.StrategyID, SessionStartedAt: target.SessionStartedAt, BarEndTime: target.BarEndTime, ValidUntil: target.ValidUntil, RequestHash: "hash", SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", RecordedAt: 1}
@@ -68,8 +98,15 @@ func TestManualControlRejectsTargetReplay(t *testing.T) {
 func TestCreateControlModesPersistAndRejectUnknown(t *testing.T) {
 	s := openTestStore(t)
 	for _, mode := range []string{"", "STRATEGY", "MANUAL", "invalid"} {
+		pauseReason := "created"
+		if mode == "MANUAL" {
+			pauseReason = ""
+		}
 		err := s.Transaction(context.Background(), func(tx *Tx) error {
-			return tx.CreateLogicalAccount(LogicalAccountRecord{SpaceID: "space", LogicalAccountID: "account-" + mode, Name: "account-" + mode, ControlMode: mode, ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "created"})
+			return tx.CreateLogicalAccount(LogicalAccountRecord{
+				SpaceID: "space", LogicalAccountID: "account-" + mode, Name: "account-" + mode,
+				ControlMode: mode, Environment: "PAPER", SettlementAsset: "USDT", PauseReason: pauseReason,
+			})
 		})
 		if mode == "invalid" {
 			require.Error(t, err)
@@ -84,4 +121,12 @@ func TestCreateControlModesPersistAndRejectUnknown(t *testing.T) {
 		}
 		require.Equal(t, want, got.ControlMode)
 	}
+	// 自主下单建户带暂停原因会被拒绝。
+	err := s.Transaction(context.Background(), func(tx *Tx) error {
+		return tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space", LogicalAccountID: "manual-paused", Name: "manual-paused",
+			ControlMode: "MANUAL", Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "should fail",
+		})
+	})
+	require.Error(t, err)
 }

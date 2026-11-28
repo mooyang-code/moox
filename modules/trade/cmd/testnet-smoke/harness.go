@@ -64,7 +64,7 @@ func openLiveHarness(
 		RetryMin: 250 * time.Millisecond, RetryMax: 2 * time.Second,
 	}
 	accounts := &accountapp.Service{
-		Store:              accountapp.Repository{Store: database},
+		Store:              database,
 		SessionState:       manager,
 		Exchanges:          registry,
 		LiveTradingEnabled: false,

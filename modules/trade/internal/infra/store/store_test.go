@@ -40,8 +40,8 @@ func TestReadOnlyView(t *testing.T) {
 
 	err = ro.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other", ExecutionMode: "PAPER",
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "测试",
+			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other", Environment: "PAPER",
+			SettlementAsset: "USDT", PauseReason: "测试",
 		})
 	})
 	require.ErrorContains(t, err, "readonly", "经只读视图写库会被拒绝")

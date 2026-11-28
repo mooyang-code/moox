@@ -984,8 +984,6 @@ components:
             read_only: true
           - name: QueryEquityCurve
             read_only: true
-          - name: ListHoldings
-            read_only: true
           - name: ListAccountLedger
             read_only: true
             timeout_ms: 15000

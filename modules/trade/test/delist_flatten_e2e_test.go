@@ -82,7 +82,7 @@ func TestDelistFlattenThroughTheRealOrderPath(t *testing.T) {
 	// 不暂停组合；执行器不会按目标把仓位买回来。
 	logical, err := f.store.GetLogicalAccount(ctx, testSpace, testLogicalAccount)
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", logical.AutomationState)
+	require.Equal(t, "ACTIVE", logical.AutomationState())
 	afterFlatten := len(f.fake.requests)
 	for attempts := 0; attempts < 3; attempts++ {
 		_, err = executor.Converge(ctx, testSpace, testLogicalAccount)

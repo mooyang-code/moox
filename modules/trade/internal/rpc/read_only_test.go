@@ -10,13 +10,21 @@ import (
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	positionapp "github.com/mooyang-code/moox/modules/trade/internal/application/position"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+type readOnlyAdaptersStub struct{ err error }
+
+func (s readOnlyAdaptersStub) Adapter(string) (execution.ExecutionAdapter, error) {
+	return nil, s.err
+}
 
 // 管理台组合详情页、列表页轮询的查询接口经只读视图读库：读写连接上开着没提交的事务（例如目标执行正在写）时，
 // 照样在短超时内返回，读到的是已提交的数据。
@@ -35,7 +43,7 @@ func TestConsoleQueriesDoNotWaitForReadWriteConnection(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -52,10 +60,12 @@ func TestConsoleQueriesDoNotWaitForReadWriteConnection(t *testing.T) {
 		LogicalAccountServer: &LogicalAccountServer{
 			Store: tradeStore, LogicalAccounts: &logicalapp.Service{Store: tradeStore},
 		},
-		ExecutionServer: &ExecutionServer{Store: tradeStore},
-		Store:           tradeStore,
-		Holdings:        &HoldingQuery{Store: tradeStore.ReadOnly(), Adapters: holdingAdaptersStub{err: errors.New("会话未启动")}},
-		Delist:          &delistapp.Service{Store: tradeStore},
+		ExecutionServer: &ExecutionServer{
+			Store:     tradeStore,
+			Positions: &positionapp.Query{Store: tradeStore.ReadOnly(), Adapters: readOnlyAdaptersStub{err: errors.New("会话未启动")}},
+		},
+		Store:  tradeStore,
+		Delist: &delistapp.Service{Store: tradeStore},
 	}
 
 	require.NoError(t, tradeStore.DBForTest().Transaction(func(tx *gorm.DB) error {
@@ -92,10 +102,10 @@ func TestConsoleQueriesDoNotWaitForReadWriteConnection(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tradepb.ErrorCode_SUCCESS, positions.GetRetInfo().GetCode(), positions.GetRetInfo())
 
-		holdings, err := server.ListHoldings(ctx, &tradepb.ListHoldingsReq{TradingAccountId: "account-1"})
+		accountPositions, err := server.ListPositions(ctx, &tradepb.ListPositionsReq{TradingAccountId: "account-1"})
 		require.NoError(t, err)
-		require.Equal(t, tradepb.ErrorCode_SUCCESS, holdings.GetRetInfo().GetCode(), holdings.GetRetInfo())
-		require.Len(t, holdings.GetHoldings(), 1)
+		require.Equal(t, tradepb.ErrorCode_SUCCESS, accountPositions.GetRetInfo().GetCode(), accountPositions.GetRetInfo())
+		require.Len(t, accountPositions.GetPositions(), 1)
 
 		orders, err := server.ListOrders(ctx, &tradepb.ListOrdersReq{LogicalAccountId: "logical-1", InstrumentId: "BTC-USDT"})
 		require.NoError(t, err)

@@ -8,23 +8,22 @@ import (
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
-func hkAccount(holding string) tradingaccount.Account {
-	return tradingaccount.Account{
-		ID: "hk-1", SpaceID: "space-1", Name: "港股", Exchange: exchange.ExchangeHKEX,
-		Markets: []exchange.MarketType{exchange.MarketTypeEquity}, ExecutionMode: exchange.ExecutionModePaper,
-		Environment: exchange.AccountEnvironmentPaper, SettlementAsset: "HKD", Status: exchange.AccountStatusEnabled, Ready: true,
-		Paper: &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("1000000"), MakerFeeRate: shared.MustDecimal("0.0003"),
-			TakerFeeRate: shared.MustDecimal("0.0003"), SlippageBPS: shared.Zero()},
-		Snapshot: exchange.AccountSnapshot{Balances: []exchange.AssetBalance{
-			{Wallet: exchange.WalletUnified, Asset: "HKD", Available: shared.MustDecimal("1000000"), Total: shared.MustDecimal("1000000")},
-			{Wallet: exchange.WalletUnified, Asset: "00005.XHKG", Available: shared.MustDecimal(holding), Total: shared.MustDecimal(holding)},
+func hkAccount(holding string) store.TradingAccountRecord {
+	return store.TradingAccountRecord{
+		TradingAccountID: "hk-1", SpaceID: "space-1", Name: "港股", Exchange: string(exchange.ExchangeHKEX),
+		Markets: []string{string(exchange.MarketTypeEquity)}, ExecutionMode: string(exchange.ExecutionModePaper),
+		Environment: string(exchange.AccountEnvironmentPaper), SettlementAsset: "HKD", Status: string(exchange.AccountStatusEnabled), Ready: true,
+		PaperConfig: &store.PaperAccountConfigRecord{InitialBalance: "1000000", MakerFeeRate: "0.0003",
+			TakerFeeRate: "0.0003", SlippageBPS: "0"},
+		Snapshot: store.TradingAccountSnapshot{Balances: []store.AssetBalance{
+			{Wallet: string(exchange.WalletUnified), Asset: "HKD", Available: "1000000", Total: "1000000"},
+			{Wallet: string(exchange.WalletUnified), Asset: "00005.XHKG", Available: holding, Total: holding},
 		}},
 	}
 }

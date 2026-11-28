@@ -126,8 +126,8 @@ func (deterministicMarketData) GetQuote(context.Context, exchange.SymbolKey) (ex
 func TestEquitySamplerCoalescesAndPaperSimulationClosesE2E(t *testing.T) {
 	ctx := context.Background()
 	s := openUnifiedE2EStore(t)
-	service := &accountapp.Service{Store: accountapp.Repository{Store: s}}
-	created, err := service.CreatePaperAccount(ctx, accountapp.CreatePaperCommand{SpaceID: "space-1", AccountName: "account", LogicalAccountName: "logical", Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("1000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.MustDecimal("0.001"), SlippageBPS: shared.MustDecimal("5")})
+	service := &accountapp.Service{Store: s}
+	created, err := service.CreatePaperAccount(ctx, accountapp.CreatePaperCommand{SpaceID: "space-1", AccountName: "account", Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("1000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.MustDecimal("0.001"), SlippageBPS: shared.MustDecimal("5")})
 	require.NoError(t, err)
 	var mu sync.Mutex
 	var sampled []string
@@ -137,18 +137,15 @@ func TestEquitySamplerCoalescesAndPaperSimulationClosesE2E(t *testing.T) {
 		mu.Unlock()
 		return nil
 	}))
-	sampler.Enqueue(created.Account.TradingAccountID)
-	sampler.Enqueue(created.Account.TradingAccountID)
+	sampler.Enqueue(created.TradingAccountID)
+	sampler.Enqueue(created.TradingAccountID)
 	require.NoError(t, sampler.RunPending(ctx))
-	require.Equal(t, []string{created.Account.TradingAccountID}, sampled)
-	_, err = service.ClosePaperAccount(ctx, "space-1", created.Account.TradingAccountID)
+	require.Equal(t, []string{created.TradingAccountID}, sampled)
+	_, err = service.ClosePaperAccount(ctx, "space-1", created.TradingAccountID)
 	require.NoError(t, err)
-	account, err := s.GetTradingAccountByID(ctx, created.Account.TradingAccountID)
+	account, err := s.GetTradingAccountByID(ctx, created.TradingAccountID)
 	require.NoError(t, err)
 	require.Equal(t, "DISABLED", account.Status)
-	logical, err := s.GetLogicalAccount(ctx, "space-1", created.LogicalAccount.LogicalAccountID)
-	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logical.AutomationState)
 }
 
 type accountSamplerFunc func(context.Context, string) error

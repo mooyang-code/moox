@@ -154,7 +154,7 @@ func TestAttentionReportsMarginReduceOfAManualGroupOnlyWhileRecent(t *testing.T)
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "自主组合", ControlMode: "MANUAL",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "自主下单",
+			Environment: "PRODUCTION", SettlementAsset: "USDT",
 		})
 	}))
 	logical, err := tradeStore.GetLogicalAccount(ctx, "space-1", "logical-1")

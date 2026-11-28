@@ -201,7 +201,7 @@ func TestTimelinePlansLaunchesAndVerifies(t *testing.T) {
 	f.run(delistAt.Add(-24 * time.Hour))
 	rows := f.flattens(id)
 	require.Len(t, rows, 2, "每个持有组合一行")
-	require.Equal(t, ActionID(id, 1, "space-1", "logical-live"), rows[0].ActionID, "操作号确定")
+	require.Equal(t, ActionID(id, 1, "space-1", "logical-live"), rows[0].ActionID(), "操作号确定")
 	require.Len(t, f.launched, 2)
 	require.Equal(t, delistAt.UnixMilli(), f.launched[0].DeadlineAt)
 	require.Equal(t, "下架清仓：binance spot FOOUSDT（下架记录 "+id+"，第 1 轮）", f.launched[0].Reason)
@@ -211,17 +211,17 @@ func TestTimelinePlansLaunchesAndVerifies(t *testing.T) {
 	f.run(delistAt.Add(-23 * time.Hour))
 	require.Len(t, f.launched, 2, "动作在运行，不再发起")
 
-	f.setAction("space-1", rows[0].ActionID, "COMPLETED", f.now)
-	f.setAction("space-1", rows[1].ActionID, "COMPLETED", f.now)
+	f.setAction("space-1", rows[0].ActionID(), "COMPLETED", f.now)
+	f.setAction("space-1", rows[1].ActionID(), "COMPLETED", f.now)
 	f.hold("logical-live")
 	f.run(delistAt.Add(-2 * time.Hour))
 	require.Equal(t, 2, f.record(id).PlannedRound)
 	round2 := f.flattens(id)[2:]
 	require.Len(t, round2, 1)
-	require.NotEqual(t, rows[0].ActionID, round2[0].ActionID, "第 2 轮换新号")
+	require.NotEqual(t, rows[0].ActionID(), round2[0].ActionID(), "第 2 轮换新号")
 	require.Len(t, f.launched, 3)
 
-	f.setAction("space-1", round2[0].ActionID, "FAILED", delistAt.Add(-time.Hour))
+	f.setAction("space-1", round2[0].ActionID(), "FAILED", delistAt.Add(-time.Hour))
 	f.run(delistAt.Add(time.Minute))
 	require.Len(t, f.launched, 3, "T 之后不发起")
 
@@ -291,7 +291,7 @@ func TestTimelineRestartUsesTheSameActionID(t *testing.T) {
 	var count int64
 	require.NoError(t, f.store.DBForTest().Raw(`SELECT COUNT(*) FROM t_operator_actions`).Scan(&count).Error)
 	require.EqualValues(t, 1, count, "只有一个动作")
-	require.Equal(t, f.flattens(id)[0].ActionID, f.launched[0].ActionID)
+	require.Equal(t, f.flattens(id)[0].ActionID(), f.launched[0].ActionID)
 }
 
 // 8：第 1 轮动作还在跑时第 2 轮拿到忙、不建动作，满 30 分钟出现 delist_failed。
@@ -309,7 +309,7 @@ func TestTimelineBusyRowsRaiseAttentionAfterThirtyMinutes(t *testing.T) {
 	f.busy = false
 	f.run(delistAt.Add(-89 * time.Minute))
 	require.Len(t, f.launched, 2)
-	require.Equal(t, f.flattens(id)[1].ActionID, f.launched[1].ActionID)
+	require.Equal(t, f.flattens(id)[1].ActionID(), f.launched[1].ActionID)
 }
 
 // 9：FAILED 的动作不足 10 分钟不重发，满 10 分钟用同一个号重发并重新进入运行。
@@ -318,7 +318,7 @@ func TestTimelineRetriesFailedActionsWithTheSameID(t *testing.T) {
 	f.hold("logical-paper")
 	id := f.intake("evt-1", store.DelistScopeAll, delistAt, f.now).DelistID
 	f.run(delistAt.Add(-24 * time.Hour))
-	actionID := f.flattens(id)[0].ActionID
+	actionID := f.flattens(id)[0].ActionID()
 	failedAt := delistAt.Add(-23 * time.Hour)
 	f.setAction("space-1", actionID, "FAILED", failedAt)
 	require.Equal(t, []string{"binance spot FOOUSDT 第 1 轮组合 logical-paper 清仓失败"}, func() []string { f.now = failedAt; return f.attention() }())

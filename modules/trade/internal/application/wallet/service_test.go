@@ -50,7 +50,7 @@ func newEnvWithFund(t *testing.T, spot, futures, fund string) *env {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "setup",
+			Environment: "PRODUCTION", SettlementAsset: "USDT", PauseReason: "setup",
 			FundSettingsJSON: fund,
 		}); err != nil {
 			return err

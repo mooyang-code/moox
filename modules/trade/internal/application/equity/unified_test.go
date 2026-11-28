@@ -57,8 +57,8 @@ func TestUnifiedEquityFormulaOnStandardAccount(t *testing.T) {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: string(exchange.ExecutionModeLive),
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", Environment: string(exchange.AccountEnvironmentProduction),
+			SettlementAsset: "USDT", PauseReason: "test",
 			FundSettingsJSON: `{"margin_coins":{"ETH":"100"}}`,
 		}); err != nil {
 			return err
@@ -182,8 +182,8 @@ func seedUnifiedAccount(t *testing.T, tradeStore *store.Store, fundSettings stri
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: string(exchange.ExecutionModeLive),
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test", FundSettingsJSON: fundSettings,
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", Environment: string(exchange.AccountEnvironmentProduction),
+			SettlementAsset: "USDT", PauseReason: "test", FundSettingsJSON: fundSettings,
 		}); err != nil {
 			return err
 		}

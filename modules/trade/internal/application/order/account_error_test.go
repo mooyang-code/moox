@@ -140,13 +140,13 @@ func TestPlacePaperQuoteErrorHasAccountIdentity(t *testing.T) {
 	for _, cause := range []error{errors.New("quote source unavailable"), context.DeadlineExceeded} {
 		s, _, adapter := newTestService(t)
 		account := s.Validator.Accounts.(accountEligibilityStub).account
-		account.ExecutionMode = exchange.ExecutionModePaper
+		account.ExecutionMode = string(exchange.ExecutionModePaper)
 		s.Validator.Accounts = accountEligibilityStub{account: account}
 		s.Adapters = errorBoundarySource{adapter: errorBoundaryQuoteAdapter{adapterStub: adapter, err: cause}}
 		_, err := s.Place(context.Background(), "space-1", testSpec(s.now()))
 		var accountErr *AccountExecutionError
 		require.ErrorAs(t, err, &accountErr)
-		require.Equal(t, account.ID, accountErr.TradingAccountID)
+		require.Equal(t, account.TradingAccountID, accountErr.TradingAccountID)
 		require.ErrorIs(t, err, cause)
 		require.Equal(t, cause.Error(), err.Error())
 	}
@@ -199,7 +199,7 @@ func TestPaperMarginSnapshotErrorBoundary(t *testing.T) {
 	for _, infrastructure := range []bool{false, true} {
 		s, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 		account := s.Validator.Accounts.(accountEligibilityStub).account
-		account.ExecutionMode = exchange.ExecutionModePaper
+		account.ExecutionMode = string(exchange.ExecutionModePaper)
 		cause := errors.New("snapshot failed")
 		var snapshotErr error = cause
 		if infrastructure {
@@ -213,7 +213,7 @@ func TestPaperMarginSnapshotErrorBoundary(t *testing.T) {
 			require.False(t, errors.As(err, &accountErr))
 		} else {
 			require.ErrorAs(t, err, &accountErr)
-			require.Equal(t, account.ID, accountErr.TradingAccountID)
+			require.Equal(t, account.TradingAccountID, accountErr.TradingAccountID)
 			require.Equal(t, "snapshot", accountErr.Operation)
 		}
 	}

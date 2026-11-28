@@ -40,6 +40,9 @@ export function marketsToResolved(markets: string[]): ResolvedMarkets {
  * 执行账户没读到（tradingAccounts 为 null）时实盘只写“实盘”，不猜是测试网还是生产。
  */
 export function environmentPrefix(account: LogicalAccount, tradingAccounts: ReadonlyMap<string, TradingAccount> | null): string {
+  if (account.environment === 3) return environmentLabel("paper");
+  if (account.environment === 1) return environmentLabel("testnet");
+  if (account.environment === 2) return environmentLabel("prod");
   if (account.execution_mode === 1) return environmentLabel("paper");
   if (!tradingAccounts) return "实盘";
   return environmentLabel(logicalEnvironment(account, tradingAccounts));

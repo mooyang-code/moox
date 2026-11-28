@@ -118,19 +118,6 @@
         </a-form>
         <a-button type="primary" size="small" :loading="renaming" :disabled="!nameDirty" @click="renameCombo">保存</a-button>
       </SectionBlock>
-
-      <section v-if="paperRows.length" id="settings-danger" class="danger-zone">
-        <h3>危险操作</h3>
-        <div v-for="item in paperRows" :key="`dz-${item.account.trading_account_id}`" class="danger-row">
-          <div class="danger-text">
-            <strong>关闭模拟账户「{{ item.account.name }}」</strong>
-            <div class="tx-muted">
-              撤掉它的未完成订单，停用账户并移出组合，并暂停整个组合账户的自动执行。之后不能再下单，历史订单和成交保留。
-            </div>
-          </div>
-          <a-button status="danger" @click="openClosePaper(item.account)">关闭模拟账户</a-button>
-        </div>
-      </section>
     </div>
 
     <MemberDialog ref="memberDialog" :logical="logical" :candidates="candidates" :env="env" @saved="reload" />
@@ -201,8 +188,7 @@ import { detailContextKey } from "./context";
 import MemberDialog from "./member-dialog.vue";
 
 const router = useRouter();
-const { logical, accounts, allAccounts, env, strategy, snapshot, membersEditable, reload, openClosePaper } =
-  inject(detailContextKey)!;
+const { logical, accounts, allAccounts, env, strategy, snapshot, membersEditable, reload } = inject(detailContextKey)!;
 // 窄屏时右侧操作列不固定，不然会盖住数据列
 const { width: viewportWidth } = useWindowSize();
 const isNarrow = computed(() => viewportWidth.value < 768);
@@ -249,15 +235,12 @@ const hasStandardAccount = computed(() =>
   rows.value.some(item => item.account.exchange === "binance" && item.account.account_mode === "BINANCE_STANDARD")
 );
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
-// 模拟账户可以在这里关闭（会暂停整个组合）；实盘账户要先移出组合，再到执行账户页签停用
-const paperRows = computed(() => rows.value.filter(item => item.account.execution_mode === 1));
-// 左侧分段导航：危险操作只有模拟盘组合才有
+// 左侧分段导航：关闭模拟账户与停用实盘账户统一在「执行账户」页签（需先移出组合）
 const sections = computed(() => [
   { id: "settings-members", label: "成员" },
   { id: "settings-order", label: "下单设置" },
   { id: "settings-fund", label: "资金设置" },
-  { id: "settings-combo", label: "组合设置" },
-  ...(paperRows.value.length ? [{ id: "settings-danger", label: "危险操作" }] : [])
+  { id: "settings-combo", label: "组合设置" }
 ]);
 function scrollTo(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -286,7 +269,7 @@ function positionCountOf(accountId: string): number {
   return (
     snapshot.value.swapPositions.filter(item => item.trading_account_id === accountId).length +
     snapshot.value.spotHoldings.filter(
-      item => item.trading_account_id === accountId && item.instrument_id && Number(item.quantity) !== 0
+      item => item.trading_account_id === accountId && item.instrument_id && Number(item.signed_quantity) !== 0
     ).length
   );
 }

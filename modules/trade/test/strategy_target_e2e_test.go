@@ -244,9 +244,9 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount,
-			Name:          "E2E logical account",
-			ExecutionMode: account.ExecutionMode, SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Name:        "E2E logical account",
+			Environment: string(account.EffectiveEnvironment()), SettlementAsset: "USDT",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -256,12 +256,7 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(
-			testSpace,
-			testLogicalAccount,
-			"ACTIVE",
-			"",
-		)
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 }
 

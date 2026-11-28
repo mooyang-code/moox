@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/marginmonitor"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	positionapp "github.com/mooyang-code/moox/modules/trade/internal/application/position"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	walletapp "github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
@@ -34,7 +35,6 @@ import (
 	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	tradeobservability "github.com/mooyang-code/moox/modules/trade/internal/observability"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
@@ -121,7 +121,7 @@ func initialize(
 		RetryMin: time.Second, RetryMax: 30 * time.Second,
 	}
 	accounts := &accountapp.Service{
-		Store: accountapp.Repository{Store: tradeStore}, RawStore: tradeStore, Secrets: secrets,
+		Store: tradeStore, Secrets: secrets,
 		SessionState: manager, SymbolConfigs: manager, Exchanges: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 		Inspector: registry,
 	}
@@ -138,7 +138,7 @@ func initialize(
 			Quotes:           manager,
 		},
 	}
-	balanceMetrics, err := tradeobservability.DefaultBalanceMetrics()
+	balanceMetrics, err := telemetry.DefaultBalanceMetrics()
 	if err != nil {
 		return nil, fmt.Errorf("register trade balance metrics: %w", err)
 	}
@@ -508,8 +508,9 @@ func initialize(
 			},
 		},
 		&rpc.ExecutionServer{
-			Store: tradeStore,
-			Lanes: targetExecutor.LaneStatuses,
+			Store:     tradeStore,
+			Lanes:     targetExecutor.LaneStatuses,
+			Positions: &positionapp.Query{Store: tradeStore.ReadOnly(), Adapters: manager},
 			Submit: func(callCtx context.Context, command rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 				result, submitErr := operatorService.PlaceOrder(callCtx, operatorapp.ManualOrderCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
@@ -543,7 +544,6 @@ func initialize(
 			Exchanges:          registry,
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 			MatcherReady:       paperMatcherWorker.Ready,
-			Holdings:           &rpc.HoldingQuery{Store: tradeStore.ReadOnly(), Adapters: manager},
 			Adapters:           manager,
 			Delist:             delistService,
 			Lifecycle:          life,

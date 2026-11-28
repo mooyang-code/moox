@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { EquityPoint, Holding, LogicalAccountTarget, OperatorAction, Position, TradingAccount } from "@/api/trade";
+import type { EquityPoint, LogicalAccountTarget, OperatorAction, Position, TradingAccount } from "@/api/trade";
 import {
   equityChangeOf,
   equityDelta,
@@ -46,9 +46,9 @@ describe("详情页模型", () => {
         { trading_account_id: "b", signed_quantity: "1", mark_price: "5" }
       ] as Position[],
       spotHoldings: [
-        { trading_account_id: "a", instrument_id: "BTC-USDT-SPOT", quantity: "1", market_value: "30" },
-        { trading_account_id: "a", instrument_id: "", quantity: "100", market_value: "100" }
-      ] as Holding[]
+        { trading_account_id: "a", instrument_id: "BTC-USDT-SPOT", signed_quantity: "1", market_value: "30" },
+        { trading_account_id: "a", instrument_id: "", signed_quantity: "100", market_value: "100" }
+      ] as Position[]
     };
     expect(flattenPreview(snapshot)).toEqual({ positions: 3, value: 55 });
     expect(flattenPreview(snapshot, "a")).toEqual({ positions: 2, value: 50 });

@@ -126,7 +126,7 @@ function positionCountOf(accountId: string): number {
   return (
     snapshot.value.swapPositions.filter(item => item.trading_account_id === accountId).length +
     snapshot.value.spotHoldings.filter(
-      item => item.trading_account_id === accountId && item.instrument_id && Number(item.quantity) !== 0
+      item => item.trading_account_id === accountId && item.instrument_id && Number(item.signed_quantity) !== 0
     ).length
   );
 }

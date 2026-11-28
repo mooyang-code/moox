@@ -433,7 +433,7 @@ func (s *Service) createManualAction(
 	var action store.OperatorActionRecord
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if takeover {
-			if err := tx.SetLogicalAccountAutomation(command.SpaceID, command.LogicalAccountID, "PAUSED", strings.TrimSpace(command.Reason)); err != nil {
+			if err := tx.PauseLogicalAccount(command.SpaceID, command.LogicalAccountID, store.UserPause(strings.TrimSpace(command.Reason))); err != nil {
 				return err
 			}
 		}

@@ -44,8 +44,8 @@ func seedInspectionLogical(t *testing.T, tradeStore *store.Store, automation str
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "LIVE",
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "人工暂停",
+			Environment:     "TESTNET",
+			SettlementAsset: "USDT", PauseReason: "人工暂停",
 		}); err != nil {
 			return err
 		}
@@ -56,7 +56,7 @@ func seedInspectionLogical(t *testing.T, tradeStore *store.Store, automation str
 			return err
 		}
 		if automation == "ACTIVE" {
-			return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+			return tx.ResumeLogicalAccount("space-1", "logical-1")
 		}
 		return nil
 	}))

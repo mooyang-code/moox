@@ -9,9 +9,9 @@ import (
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 var (
@@ -35,7 +35,7 @@ type QuoteSource interface {
 }
 
 type AccountEligibility interface {
-	ExecutionEligibility(context.Context, string) (tradingaccount.Account, error)
+	ExecutionEligibility(context.Context, string) (store.TradingAccountRecord, error)
 }
 
 type InstrumentSource interface {
@@ -57,7 +57,7 @@ type AccountPositionSource interface {
 }
 
 type Validation struct {
-	Account           tradingaccount.Account
+	Account           store.TradingAccountRecord
 	Instrument        exchange.Instrument
 	Notional          shared.Decimal
 	Leverage          shared.Decimal
@@ -118,7 +118,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	if market == "" {
 		return Validation{}, fmt.Errorf("%w: 标的 %s 缺少市场后缀 -SPOT 或 -SWAP", ErrInstrumentDisabled, spec.InstrumentID)
 	}
-	if !account.SupportsMarket(market) {
+	if !account.SupportsMarket(string(market)) {
 		return Validation{}, fmt.Errorf("%w: 账户没有开通市场 %s", ErrInstrumentDisabled, market)
 	}
 	if err := spec.Validate(market, now, v.MaxReferenceAge); err != nil {
@@ -126,9 +126,9 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	}
 	var instrument exchange.Instrument
 	if scoped, ok := v.Instruments.(AccountInstrumentSource); ok {
-		instrument, err = scoped.GetInstrumentForAccount(ctx, account.ID, account.Exchange, market, spec.InstrumentID)
+		instrument, err = scoped.GetInstrumentForAccount(ctx, account.TradingAccountID, exchange.Exchange(account.Exchange), market, spec.InstrumentID)
 	} else {
-		instrument, err = v.Instruments.GetInstrument(ctx, account.Exchange, market, spec.InstrumentID)
+		instrument, err = v.Instruments.GetInstrument(ctx, exchange.Exchange(account.Exchange), market, spec.InstrumentID)
 	}
 	if err != nil {
 		return Validation{}, err
@@ -178,7 +178,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 
 	var adapter execution.ExecutionAdapter
 	if v.Quotes != nil {
-		if resolved, adapterErr := v.Quotes.Adapter(account.ID); adapterErr == nil {
+		if resolved, adapterErr := v.Quotes.Adapter(account.TradingAccountID); adapterErr == nil {
 			adapter = resolved
 		}
 	}
@@ -192,9 +192,9 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		Policy:     policy,
 	}
 	if rule := exchange.RuleFor(market); rule.UsesMargin {
-		leverage, found := account.LeverageSettings[spec.InstrumentID]
+		leverage, found := account.LeverageDecimal(spec.InstrumentID)
 		if !found {
-			leverage, found = account.LeverageSettings["*"]
+			leverage, found = account.LeverageDecimal(store.DefaultLeverageKey)
 		}
 		if !found {
 			leverage, found = policy.DefaultLeverage()
@@ -267,12 +267,12 @@ func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.Orde
 
 // oddLotSell 报告一笔不满足整手规则的卖单是不是合规的零股卖出：只对整手交易的市场（股票），
 // 卖出后余下的持仓要么为 0，要么本身满足整手规则——也就是不足一手的零股一次卖完。
-func oddLotSell(account tradingaccount.Account, market exchange.MarketType, instrument exchange.Instrument, spec orderdomain.OrderSpec) bool {
+func oddLotSell(account store.TradingAccountRecord, market exchange.MarketType, instrument exchange.Instrument, spec orderdomain.OrderSpec) bool {
 	if !exchange.RuleFor(market).BoardLot || spec.Side != exchange.SideSell || spec.Quantity.Cmp(shared.Zero()) <= 0 ||
 		!spec.Quantity.IsInteger() {
 		return false
 	}
-	remaining := totalBalance(account.Snapshot, instrument.BaseAsset).Sub(spec.Quantity)
+	remaining := totalBalance(account.Snapshot.ToExchange(), instrument.BaseAsset).Sub(spec.Quantity)
 	if remaining.IsNegative() {
 		return false
 	}
@@ -292,11 +292,11 @@ func totalBalance(snapshot exchange.AccountSnapshot, asset string) shared.Decima
 
 // checkPriceLimits 给报价带停牌和涨跌停的市场（股票）查实时报价：停牌返回 ErrInstrumentHalted，限价超出涨跌停价返回 ErrPriceLimit
 // （港股的报价没有涨跌停价，只查停牌）。
-func (v Validator) checkPriceLimits(ctx context.Context, account tradingaccount.Account, instrument exchange.Instrument, spec orderdomain.OrderSpec) error {
+func (v Validator) checkPriceLimits(ctx context.Context, account store.TradingAccountRecord, instrument exchange.Instrument, spec orderdomain.OrderSpec) error {
 	if v.Quotes == nil {
 		return nil
 	}
-	adapter, err := v.Quotes.Adapter(account.ID)
+	adapter, err := v.Quotes.Adapter(account.TradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -327,22 +327,23 @@ func validQuantity(quantity, step, minimum shared.Decimal) bool {
 
 // availableFunds 返回订单所在钱包里某个资产的可用资金。普通账户的现货、合约钱包分开算；
 // 统一账户的合约和 OKX、模拟盘共用一个钱包，保证金按账户级可用资金算；只开通合约的账户同样如此。
-func availableFunds(account tradingaccount.Account, market exchange.MarketType, asset string) shared.Decimal {
+func availableFunds(account store.TradingAccountRecord, market exchange.MarketType, asset string) shared.Decimal {
+	snapshot := account.Snapshot.ToExchange()
 	// 统一账户、OKX、模拟盘各市场共用一个资金池：开通了合约时结算币看账户级可用资金（已扣保证金），其他资产加总各钱包。
 	if account.SharesFundsAcrossMarkets() {
 		// 未核对（实盘前 V3 实测确认）：币安统一账户的现货（杠杆账户）买单是否只能用杠杆钱包里的结算币。
 		// 官方文档只写了 /papi/v1/asset-collection 把资产“从期货账户转到杠杆账户”，没有写明杠杆下单不能直接用 UM 钱包；
 		// 若实测确认只能用杠杆钱包，这里要改看杠杆钱包可用额，资金不足时先归集再下单。
 		if account.HasLeverageMarket() && asset == account.SettlementAsset {
-			return account.Snapshot.AvailableFunds
+			return snapshot.AvailableFunds
 		}
-		return availablePool(account.Snapshot, asset)
+		return availablePool(snapshot, asset)
 	}
-	wallet := account.WalletFor(market)
+	wallet := account.WalletFor(string(market))
 	if exchange.RuleFor(market).UsesMargin && (len(account.Markets) == 1 || wallet == exchange.WalletUnified) {
-		return account.Snapshot.AvailableFunds
+		return snapshot.AvailableFunds
 	}
-	return availableBalance(account.Snapshot, wallet, asset)
+	return availableBalance(snapshot, wallet, asset)
 }
 
 // availablePool 加总资产在各钱包的可用余额。

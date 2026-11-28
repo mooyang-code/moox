@@ -9,8 +9,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 )
 
-// ClosePaperAccount 原子关停一个模拟盘执行账户：撤消全部未结订单、刷新关闭后余额快照、
-// 停用执行账户，并暂停所属组合账户同时移除该成员关系。
+// ClosePaperAccount 原子关停一个模拟盘执行账户：撤消全部未结订单、刷新关闭后余额快照并停用账户。
+// 账户必须先移出组合才能停用（与实盘停用语义一致）。
 func (tx *Tx) ClosePaperAccount(spaceID, tradingAccountID string, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -21,6 +21,15 @@ func (tx *Tx) ClosePaperAccount(spaceID, tradingAccountID string, now time.Time)
 	}
 	if account.ExecutionMode != "PAPER" {
 		return fmt.Errorf("%w: only PAPER accounts can be closed by paper lifecycle", ErrInvalidRecord)
+	}
+	var membershipCount int64
+	if err := tx.db.Table("t_logical_account_members").
+		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID).
+		Count(&membershipCount).Error; err != nil {
+		return err
+	}
+	if membershipCount > 0 {
+		return fmt.Errorf("%w: paper account is still in a logical account", ErrConflict)
 	}
 	orders, err := tx.listOpenOrdersForAccount(spaceID, tradingAccountID)
 	if err != nil {
@@ -51,30 +60,7 @@ func (tx *Tx) ClosePaperAccount(spaceID, tradingAccountID string, now time.Time)
 	if err := tx.refreshClosedPaperBalances(account); err != nil {
 		return err
 	}
-	if err := tx.SetTradingAccountStatus(spaceID, tradingAccountID, "DISABLED"); err != nil {
-		return err
-	}
-	var logicalRows []struct {
-		LogicalAccountID string `gorm:"column:c_logical_account_id"`
-	}
-	if err := tx.db.Raw(sqlPaperAccountLogicalIDs, spaceID, tradingAccountID).Scan(&logicalRows).Error; err != nil {
-		return err
-	}
-	for _, row := range logicalRows {
-		logicalID := row.LogicalAccountID
-		if logicalID == "" {
-			continue
-		}
-		// 关闭模拟账户是用户的操作，组合按人工暂停记。
-		if err := tx.PauseLogicalAccount(spaceID, logicalID, UserPause("模拟账户已关闭，自动执行已暂停")); err != nil {
-			return err
-		}
-		// 关闭后账户不再持仓和下单，移出成员，组合账户里其他成员不受影响。
-		if err := tx.db.Exec(execRemovePaperMember, spaceID, logicalID, tradingAccountID).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	return tx.SetTradingAccountStatus(spaceID, tradingAccountID, "DISABLED")
 }
 
 func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
@@ -219,8 +205,4 @@ const (
 		WHERE c_space_id = ? AND c_trading_account_id = ?`
 	execSetTradingAccountStatus = `UPDATE t_trading_accounts SET c_status = ?, c_ready = 0, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_trading_account_id = ?`
-	sqlPaperAccountLogicalIDs = `SELECT c_logical_account_id FROM t_logical_account_members
-		WHERE c_space_id = ? AND c_trading_account_id = ?`
-	execRemovePaperMember = `DELETE FROM t_logical_account_members
-		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?`
 )

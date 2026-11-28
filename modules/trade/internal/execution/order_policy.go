@@ -9,11 +9,12 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 // ReservationRequest 描述计算订单预留与模拟成交参数所需的输入。
 type ReservationRequest struct {
-	Account          tradingaccount.Account
+	Account          store.TradingAccountRecord
 	Instrument       exchange.Instrument
 	OrderType        exchange.OrderType
 	Side             exchange.Side
@@ -37,7 +38,7 @@ type ReservationResult struct {
 
 // RepriceRequest 描述补取新鲜报价后重算市价单预留与执行价的输入。
 type RepriceRequest struct {
-	Account                tradingaccount.Account
+	Account                store.TradingAccountRecord
 	Instrument             exchange.Instrument
 	Side                   exchange.Side
 	Quantity               shared.Decimal
@@ -51,7 +52,7 @@ type RepriceRequest struct {
 
 // CapacityClampRequest 描述整手/阶梯费用市场按可用资金收紧下单容量的输入。
 type CapacityClampRequest struct {
-	Account        tradingaccount.Account
+	Account        store.TradingAccountRecord
 	Instrument     exchange.Instrument
 	OrderType      exchange.OrderType
 	Side           exchange.Side
@@ -74,7 +75,7 @@ type OrderPolicy interface {
 	// ConfirmsCancelLocally 报告撤单成功回执后是否由本地直接确认终态。
 	ConfirmsCancelLocally() bool
 	// NeedsMarginPoolSnapshot 报告该订单预留是否与合约保证金共用模拟盘单一资金池。
-	NeedsMarginPoolSnapshot(account tradingaccount.Account, reservedAsset string, reduceOnly bool) bool
+	NeedsMarginPoolSnapshot(account store.TradingAccountRecord, reservedAsset string, reduceOnly bool) bool
 	// MarginPoolAdjustment 按统一公式计算模拟盘单一资金池下的保证金可用额调整。
 	MarginPoolAdjustment(market exchange.MarketType, usedMargin, unrealizedPnL shared.Decimal) shared.Decimal
 	// ComputeReservation 按适配器的费率、滑点与保证金规则计算预留资产、预留数量与首撮参数。
@@ -88,8 +89,8 @@ type OrderPolicy interface {
 }
 
 // ResolveOrderPolicy 按账户执行模式返回对应的订单策略（实盘或模拟盘）。
-func ResolveOrderPolicy(adapter ExecutionAdapter, account tradingaccount.Account) OrderPolicy {
-	if account.ExecutionMode == exchange.ExecutionModePaper {
+func ResolveOrderPolicy(adapter ExecutionAdapter, account store.TradingAccountRecord) OrderPolicy {
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
 		return PaperOrderPolicy{Adapter: adapter}
 	}
 	return LiveOrderPolicy{Adapter: adapter}
@@ -176,7 +177,7 @@ func (p LiveOrderPolicy) ResolveExecutableQuote(ctx context.Context, key exchang
 
 func (LiveOrderPolicy) UsesLocalFundsLedger() bool  { return false }
 func (LiveOrderPolicy) ConfirmsCancelLocally() bool { return false }
-func (LiveOrderPolicy) NeedsMarginPoolSnapshot(tradingaccount.Account, string, bool) bool {
+func (LiveOrderPolicy) NeedsMarginPoolSnapshot(store.TradingAccountRecord, string, bool) bool {
 	return false
 }
 func (LiveOrderPolicy) MarginPoolAdjustment(exchange.MarketType, shared.Decimal, shared.Decimal) shared.Decimal {
@@ -236,7 +237,7 @@ func (p PaperOrderPolicy) ResolveExecutableQuote(ctx context.Context, key exchan
 func (PaperOrderPolicy) UsesLocalFundsLedger() bool  { return true }
 func (PaperOrderPolicy) ConfirmsCancelLocally() bool { return true }
 
-func (PaperOrderPolicy) NeedsMarginPoolSnapshot(account tradingaccount.Account, reservedAsset string, reduceOnly bool) bool {
+func (PaperOrderPolicy) NeedsMarginPoolSnapshot(account store.TradingAccountRecord, reservedAsset string, reduceOnly bool) bool {
 	return !reduceOnly && account.HasLeverageMarket() && reservedAsset == account.SettlementAsset
 }
 
@@ -255,8 +256,9 @@ func (PaperOrderPolicy) ComputeReservation(req ReservationRequest) (ReservationR
 		orderNotional = req.Quantity.Mul(*req.LimitPrice)
 	}
 	feeRate := req.DefaultFeeBuffer
-	if req.Account.Paper != nil {
-		feeRate = maxDecimal(req.Account.Paper.MakerFeeRate, req.Account.Paper.TakerFeeRate)
+	_, maker, taker, slippage, hasPaper := req.Account.PaperDecimals()
+	if hasPaper {
+		feeRate = maxDecimal(maker, taker)
 	}
 	result := ReservationResult{
 		Leverage:          req.Leverage,
@@ -264,8 +266,8 @@ func (PaperOrderPolicy) ComputeReservation(req ReservationRequest) (ReservationR
 	}
 	if req.OrderType == exchange.OrderTypeMarket {
 		execPrice := req.ReferencePrice
-		if req.Account.Paper != nil {
-			execPrice = ApplySlippage(execPrice, req.Side, req.Account.Paper.SlippageBPS)
+		if hasPaper {
+			execPrice = ApplySlippage(execPrice, req.Side, slippage)
 		}
 		result.ExecutionPrice = &execPrice
 	}
@@ -275,8 +277,8 @@ func (PaperOrderPolicy) ComputeReservation(req ReservationRequest) (ReservationR
 			reserveNotional := referenceNotional
 			if req.OrderType == exchange.OrderTypeLimit {
 				reserveNotional = orderNotional
-			} else if req.Account.Paper != nil {
-				reserveNotional = ApplySlippage(referenceNotional, req.Side, req.Account.Paper.SlippageBPS)
+			} else if hasPaper {
+				reserveNotional = ApplySlippage(referenceNotional, req.Side, slippage)
 			}
 			result.ReservedQuantity = paperBuyReservation(req.Account, req.Instrument.MarketType, reserveNotional, feeRate)
 		} else {
@@ -289,8 +291,8 @@ func (PaperOrderPolicy) ComputeReservation(req ReservationRequest) (ReservationR
 	reserveNotional := referenceNotional
 	if req.OrderType == exchange.OrderTypeLimit && req.LimitPrice != nil {
 		reserveNotional = orderNotional
-	} else if req.OrderType == exchange.OrderTypeMarket && req.Account.Paper != nil {
-		reserveNotional = ApplySlippage(referenceNotional, req.Side, req.Account.Paper.SlippageBPS)
+	} else if req.OrderType == exchange.OrderTypeMarket && hasPaper {
+		reserveNotional = ApplySlippage(referenceNotional, req.Side, slippage)
 	}
 	if req.ReduceOnly {
 		result.ReservedQuantity = reserveNotional.Mul(feeRate)
@@ -303,18 +305,19 @@ func (PaperOrderPolicy) ComputeReservation(req ReservationRequest) (ReservationR
 
 func (PaperOrderPolicy) RepriceMarketOrder(req RepriceRequest) (shared.Decimal, shared.Decimal, error) {
 	price := req.NewReferencePrice
+	_, maker, taker, slippage, hasPaper := req.Account.PaperDecimals()
 	if req.PreviousExecutionPrice != nil {
 		if req.OldReferencePrice.Cmp(shared.Zero()) <= 0 {
 			return shared.Decimal{}, shared.Decimal{}, errors.New("execution: invalid previous reference price")
 		}
 		// 保留建单时冻结的滑点比例，即使账户滑点参数之后变更也不漂移。
 		price = req.PreviousExecutionPrice.Mul(price).Div(req.OldReferencePrice)
-	} else if req.Account.Paper != nil {
-		price = ApplySlippage(price, req.Side, req.Account.Paper.SlippageBPS)
+	} else if hasPaper {
+		price = ApplySlippage(price, req.Side, slippage)
 	}
 	feeRate := req.DefaultFeeBuffer
-	if req.Account.Paper != nil {
-		feeRate = maxDecimal(req.Account.Paper.MakerFeeRate, req.Account.Paper.TakerFeeRate)
+	if hasPaper {
+		feeRate = maxDecimal(maker, taker)
 	}
 	notional := req.Quantity.Mul(price)
 	var reserved shared.Decimal
@@ -330,19 +333,20 @@ func (PaperOrderPolicy) RepriceMarketOrder(req RepriceRequest) (shared.Decimal, 
 }
 
 func (PaperOrderPolicy) ClampBuyCapacity(req CapacityClampRequest) shared.Decimal {
-	rule := exchange.RuleAt(req.Account.Exchange, req.Instrument.MarketType)
-	if req.Side != exchange.SideBuy || req.Account.Paper == nil || rule.Fee == nil {
+	rule := exchange.RuleAt(exchange.Exchange(req.Account.Exchange), req.Instrument.MarketType)
+	_, _, taker, slippage, hasPaper := req.Account.PaperDecimals()
+	if req.Side != exchange.SideBuy || !hasPaper || rule.Fee == nil {
 		return req.Quantity
 	}
 	unit := req.ReferencePrice
 	if req.OrderType == exchange.OrderTypeLimit && req.LimitPrice != nil {
 		unit = *req.LimitPrice
 	} else {
-		unit = ApplySlippage(unit, req.Side, req.Account.Paper.SlippageBPS)
+		unit = ApplySlippage(unit, req.Side, slippage)
 	}
 	quantity := req.Quantity
 	for quantity.Cmp(shared.Zero()) > 0 &&
-		rule.BuyCost(quantity.Mul(unit), req.Account.Paper.TakerFeeRate).Cmp(req.Available) > 0 {
+		rule.BuyCost(quantity.Mul(unit), taker).Cmp(req.Available) > 0 {
 		quantity = quantity.Sub(req.Step)
 	}
 	if quantity.IsNegative() {
@@ -351,9 +355,11 @@ func (PaperOrderPolicy) ClampBuyCapacity(req CapacityClampRequest) shared.Decima
 	return quantity
 }
 
-func paperBuyReservation(account tradingaccount.Account, market exchange.MarketType, notional, feeRate shared.Decimal) shared.Decimal {
-	if rule := exchange.RuleAt(account.Exchange, market); account.Paper != nil && rule.Fee != nil {
-		return rule.BuyCost(notional, account.Paper.TakerFeeRate)
+func paperBuyReservation(account store.TradingAccountRecord, market exchange.MarketType, notional, feeRate shared.Decimal) shared.Decimal {
+	if _, _, taker, _, ok := account.PaperDecimals(); ok {
+		if rule := exchange.RuleAt(exchange.Exchange(account.Exchange), market); rule.Fee != nil {
+			return rule.BuyCost(notional, taker)
+		}
 	}
 	return withFeeBuffer(notional, feeRate)
 }

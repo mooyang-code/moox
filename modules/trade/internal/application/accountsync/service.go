@@ -1660,10 +1660,7 @@ func (s *Service) pauseForExternalFact(
 	if err != nil {
 		return err
 	}
-	// 自主下单账户没有自动执行，用户在交易所手工成交是正常操作。
-	if logicalAccount.ControlMode == "MANUAL" {
-		return nil
-	}
+	// 自主下单组合没有自动执行，PauseLogicalAccount 对自主下单为空操作。
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		// 组合已经被系统自动暂停（例如保证金率风控）时保留原来的原因：
 		// 风控靠这个原因补做减仓、生成关注项，不能被外部订单的原因覆盖。

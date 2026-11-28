@@ -58,8 +58,8 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: "logical-other", Name: "Other logical account",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "PAPER", SettlementAsset: "USDT",
+			PauseReason: "configure",
 		})
 	}))
 	prices := &blockedTargetPrice{entered: make(chan struct{}), release: make(chan struct{})}
