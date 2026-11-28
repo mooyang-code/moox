@@ -170,7 +170,7 @@ func applyForm(pair ConfigPair, form ConfigForm) (config, secrets []byte, err er
 			return nil, nil, err
 		}
 	}
-	secretLines := strings.Split(string(pair.SecretsText), "\n")
+	secretLines := stripDeprecatedSecretLines(strings.Split(string(pair.SecretsText), "\n"))
 	setSecret := func(section, key, value string) { secretLines = putKey(secretLines, section, key, value) }
 	setSecret("admin", "username", tomlString(strings.TrimSpace(form.Admin.Username)))
 	setSecret("admin", "password", tomlString(form.Admin.Password))

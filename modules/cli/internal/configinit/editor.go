@@ -253,13 +253,13 @@ func (e *editorSession) update(w http.ResponseWriter, r *http.Request) {
 	e.write(w, r, state, config, secrets, !bytes.Equal(secrets, state.SecretsText))
 }
 
-// encrypt 把明文保存的秘密文件原样加密保存。
+// encrypt 把明文保存的秘密文件加密保存，并顺手清掉已废弃的 [notification] / [[exchange_keys]] 段。
 func (e *editorSession) encrypt(w http.ResponseWriter, r *http.Request) {
 	state, ok := e.current(w, r)
 	if !ok {
 		return
 	}
-	e.write(w, r, state, state.ConfigText, state.SecretsText, true)
+	e.write(w, r, state, state.ConfigText, stripDeprecatedSecretSections(state.SecretsText), true)
 }
 
 func (e *editorSession) write(w http.ResponseWriter, r *http.Request, before loaded, config, secrets []byte, sealSecrets bool) {
@@ -366,13 +366,29 @@ func EncryptFile(path string, keys configcrypt.KeyStore) (alreadyEncrypted bool,
 		return false, err
 	}
 	if configcrypt.IsEncrypted(raw) {
-		_, err := configcrypt.Decrypt(raw, keys)
-		return true, err
+		plain, err := configcrypt.Decrypt(raw, keys)
+		if err != nil {
+			return true, err
+		}
+		defer clear(plain)
+		cleaned := stripDeprecatedSecretSections(plain)
+		if !bytes.Equal(cleaned, plain) {
+			if _, err := topology.ParseSecrets(cleaned); err != nil {
+				return true, fmt.Errorf("当前的 moox.secrets.toml 校验没有通过，先修好再保存：%w", err)
+			}
+			sealed, err := configcrypt.Encrypt(cleaned, keys)
+			if err != nil {
+				return true, err
+			}
+			return true, replaceFile(path, sealed)
+		}
+		return true, nil
 	}
 	if _, err := topology.ParseSecrets(raw); err != nil {
 		return false, fmt.Errorf("当前的 moox.secrets.toml 校验没有通过，先修好再加密：%w", err)
 	}
-	sealed, err := configcrypt.Encrypt(raw, keys)
+	cleaned := stripDeprecatedSecretSections(raw)
+	sealed, err := configcrypt.Encrypt(cleaned, keys)
 	if err != nil {
 		return false, err
 	}

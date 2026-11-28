@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
@@ -449,4 +450,49 @@ secret_key = "cloud-test-secret"
 `))
 	require.NoError(t, err)
 	return &setupSnapshot{Manifest: &cfg, Secrets: &secrets}
+}
+
+func TestLoadSetupSnapshotAcceptsLegacySecretsFile(t *testing.T) {
+	restore := configcrypt.SetDefaultForTest(&configcrypt.MemoryStore{})
+	t.Cleanup(restore)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "moox.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`[hosts.control]
+address = "203.0.113.8"
+ssh = { port = 22, username = "ubuntu" }
+
+[deployments]
+control = ["admin", "eventbus", "storage-primary", "storage-view", "monitor"]
+`), 0o600))
+	legacySecrets := `[admin]
+username = "admin"
+password = "admin-test-password"
+
+[tencent_cloud]
+secret_id = "AKID-test-secret"
+secret_key = "cloud-test-secret"
+
+[notification]
+channel_type = "wecom"
+webhook_url = "https://example.com/hook"
+secret = ""
+
+[[exchange_keys]]
+name = "readonly"
+exchange = "binance"
+environment = "production"
+api_key = "ak"
+secret_key = "sk"
+readonly = true
+`
+	sealed, err := configcrypt.Encrypt([]byte(legacySecrets), configcrypt.Default())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, topology.SecretsFileName), sealed, 0o600))
+
+	snapshot, err := loadSetupSnapshot(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	assert.Equal(t, "admin", snapshot.Secrets.Admin.Username)
+	assert.Equal(t, "AKID-test-secret", snapshot.Secrets.TencentCloud.SecretID)
 }

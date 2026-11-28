@@ -527,3 +527,101 @@ func TestEditorAddsAndDropsTheArchiveObjectStoreSection(t *testing.T) {
 		t.Fatalf("关闭后 = %+v %v", cfg.ArchiveObjectStore, err)
 	}
 }
+
+// 旧版 moox.secrets.toml 带有 [notification] 与 [[exchange_keys]] 时，config edit 能正常打开并在保存时自动清掉这两段。
+func TestEditorLoadsAndStripsDeprecatedSecretSectionsOnSave(t *testing.T) {
+	rendered := sampleRendered(t)
+	legacy := string(rendered.Secrets) + `
+# 告警渠道的初始值
+[notification]
+channel_type = "wecom"
+webhook_url = "https://example.com/hook"
+secret = "s"
+
+# 交易所密钥
+[[exchange_keys]]
+name = "readonly"
+exchange = "binance"
+environment = "production"
+api_key = "ak"
+secret_key = "sk"
+readonly = true
+
+[[exchange_keys]]
+name = "main"
+exchange = "okx"
+environment = "production"
+api_key = "ak2"
+secret_key = "sk2"
+passphrase = "pp"
+`
+	rendered.Secrets = []byte(legacy)
+	h := startEditor(t, &rendered)
+
+	status, reply, text := h.call("config/form", struct{}{}, nil)
+	if status != http.StatusOK || reply.Form == nil {
+		t.Fatalf("读取旧秘密文件表单失败: %d %s", status, text)
+	}
+	// 不修改任何表单字段直接保存，也应把废弃的两段清掉并加密落盘。
+	status, saved, text := h.call("config/update", *reply.Form, nil)
+	if status != http.StatusOK || saved.Overview == nil || !saved.Overview.Encrypted {
+		t.Fatalf("保存旧秘密文件失败: %d %s", status, text)
+	}
+	after := h.plain()
+	for _, removed := range []string{"[notification]", "[[exchange_keys]]", "webhook_url", "api_key", "passphrase"} {
+		if strings.Contains(after, removed) {
+			t.Fatalf("保存后不应再包含 %q:\n%s", removed, after)
+		}
+	}
+	for _, kept := range []string{"[admin]", "[tencent_cloud]", "[logging.cls]", "# 腾讯云账号的管理密钥"} {
+		if !strings.Contains(after, kept) {
+			t.Fatalf("保存后应保留 %q:\n%s", kept, after)
+		}
+	}
+}
+
+// config encrypt 与 config set 保存旧秘密文件时同样自动清掉 [notification] 与 [[exchange_keys]]。
+func TestEncryptAndSetConfigStripDeprecatedSecretSections(t *testing.T) {
+	rendered := sampleRendered(t)
+	legacy := string(rendered.Secrets) + "\n[notification]\nchannel_type = \"wecom\"\nwebhook_url = \"\"\n\n[[exchange_keys]]\nname = \"main\"\nexchange = \"binance\"\n"
+
+	dir := t.TempDir()
+	secretsPath := filepath.Join(dir, topology.SecretsFileName)
+	if err := os.WriteFile(secretsPath, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keys := &configcrypt.MemoryStore{}
+	already, err := EncryptFile(secretsPath, keys)
+	if err != nil || already {
+		t.Fatalf("EncryptFile: %v %v", already, err)
+	}
+	raw, _ := os.ReadFile(secretsPath)
+	plain, err := configcrypt.Decrypt(raw, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "[notification]") || strings.Contains(string(plain), "[[exchange_keys]]") {
+		t.Fatalf("EncryptFile 应清掉废弃段:\n%s", plain)
+	}
+
+	// 已加密但带废弃段的文件执行 SetConfig 保存后同样清掉两段。
+	sealedLegacy, err := configcrypt.Encrypt([]byte(legacy), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretsPath, sealedLegacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := SetConfig(secretsPath, "admin.username", "ops", true, keys, func() time.Time { return time.Date(2026, 11, 28, 0, 0, 0, 0, time.UTC) })
+	if err != nil || !report.Written {
+		t.Fatalf("SetConfig: %+v %v", report, err)
+	}
+	raw, _ = os.ReadFile(secretsPath)
+	plain, err = configcrypt.Decrypt(raw, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "[notification]") || strings.Contains(string(plain), "[[exchange_keys]]") || !strings.Contains(string(plain), `username = "ops"`) {
+		t.Fatalf("SetConfig 应清掉废弃段并保留新值:\n%s", plain)
+	}
+}

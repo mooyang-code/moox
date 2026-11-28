@@ -197,6 +197,10 @@ func SetConfig(path, target, value string, write bool, keys configcrypt.KeyStore
 	if err != nil {
 		return report, fmt.Errorf("%w%s", err, secretSectionHint(path, target))
 	}
+	if isSecretsFile(path) {
+		_, _ = topology.ParseSecrets(plain)
+		edited = stripDeprecatedSecretSections(edited)
+	}
 	report.Changed = !bytes.Equal(edited, plain)
 	if isSecretsFile(path) {
 		_, err = topology.ParseSecrets(edited)

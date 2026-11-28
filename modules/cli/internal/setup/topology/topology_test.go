@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,13 +210,30 @@ func TestLoadAnyPathAndSecretsBeside(t *testing.T) {
 }
 
 func TestParseSecretsRules(t *testing.T) {
-	_, err := ParseSecrets([]byte(validSecrets + "\n[notification]\nchannel_type = \"wecom\"\nwebhook_url = \"\"\n"))
-	require.ErrorContains(t, err, "[notification] 已从秘密文件移除")
-	require.ErrorContains(t, err, "监控告警")
+	var notice bytes.Buffer
+	prevNotice := deprecatedSecretsNotice
+	deprecatedSecretsNotice = &notice
+	t.Cleanup(func() { deprecatedSecretsNotice = prevNotice })
 
-	_, err = ParseSecrets([]byte(validSecrets + "\n[[exchange_keys]]\nname = \"main\"\nexchange = \"okx\"\nenvironment = \"production\"\napi_key = \"k\"\nsecret_key = \"s\"\n"))
-	require.ErrorContains(t, err, "[[exchange_keys]] 已从秘密文件移除")
-	require.ErrorContains(t, err, "密钥管理")
+	// 旧秘密文件带 [notification] / [[exchange_keys]] 时容忍并忽略，同时在标准错误输出提示。
+	secrets, err := ParseSecrets([]byte(validSecrets + "\n[notification]\nchannel_type = \"wecom\"\nwebhook_url = \"\"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, "admin", secrets.Admin.Username)
+	assert.Contains(t, notice.String(), "[notification]")
+	assert.Contains(t, notice.String(), "已不再使用，交易所密钥与告警渠道请在管理台录入")
+
+	notice.Reset()
+	secrets, err = ParseSecrets([]byte(validSecrets + "\n[[exchange_keys]]\nname = \"main\"\nexchange = \"okx\"\nenvironment = \"production\"\napi_key = \"k\"\nsecret_key = \"s\"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, "secret-id", secrets.TencentCloud.SecretID)
+	assert.Contains(t, notice.String(), "[[exchange_keys]]")
+	assert.Contains(t, notice.String(), "已不再使用，交易所密钥与告警渠道请在管理台录入")
+
+	// 带废弃段的同时出现其他未知键时，仍然严格拒绝。
+	notice.Reset()
+	_, err = ParseSecrets([]byte(validSecrets + "\n[notification]\nchannel_type = \"wecom\"\n\n[unknown_extra]\nfoo = \"bar\"\n"))
+	require.ErrorContains(t, err, "unknown_extra")
+	assert.Empty(t, notice.String(), "解析报错时不应误报提示")
 
 	_, err = ParseSecrets([]byte(strings.Replace(validSecrets, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \"ap-guangzhou\"", 1)))
 	require.ErrorContains(t, err, "tencent_cloud.region 已删除")
@@ -228,13 +246,51 @@ func TestParseSecretsRules(t *testing.T) {
 	require.ErrorContains(t, err, "第 3 行")
 	assert.NotContains(t, err.Error(), "super-secret-value")
 
-	secrets, err := ParseSecrets([]byte(validSecrets))
+	secrets, err = ParseSecrets([]byte(validSecrets))
 	require.NoError(t, err)
 	cfg, err := Parse([]byte(validConfig + "\n[logging.cls]\nenabled = true\nendpoint = \"ap-guangzhou.cls.tencentcs.com\"\ntopic_id = \"topic\"\n"))
 	require.NoError(t, err)
 	require.ErrorContains(t, secrets.CheckFor(&cfg), "writer_secret_id")
 	secrets.Logging.CLS = CLSWriter{WriterSecretID: "id", WriterSecretKey: "key"}
 	require.NoError(t, secrets.CheckFor(&cfg))
+}
+
+func TestLoadSecretsToleratesLegacyNotificationAndExchangeKeys(t *testing.T) {
+	restore := configcrypt.SetDefaultForTest(memoryKeys{})
+	t.Cleanup(restore)
+	var notice bytes.Buffer
+	prevNotice := deprecatedSecretsNotice
+	deprecatedSecretsNotice = &notice
+	t.Cleanup(func() { deprecatedSecretsNotice = prevNotice })
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "moox.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte(validConfig), 0o600))
+	legacySecrets := validSecrets + `
+[notification]
+channel_type = "wecom"
+webhook_url = "https://example.com/hook"
+secret = ""
+
+[[exchange_keys]]
+name = "readonly"
+exchange = "binance"
+environment = "production"
+api_key = "k1"
+secret_key = "s1"
+readonly = true
+`
+	sealed, err := configcrypt.Encrypt([]byte(legacySecrets), configcrypt.Default())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, SecretsFileName), sealed, 0o600))
+
+	secrets, err := LoadSecrets(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, "admin", secrets.Admin.Username)
+	assert.Equal(t, "secret-id", secrets.TencentCloud.SecretID)
+	assert.Contains(t, notice.String(), "[notification]")
+	assert.Contains(t, notice.String(), "[[exchange_keys]]")
+	assert.Contains(t, notice.String(), "已不再使用，交易所密钥与告警渠道请在管理台录入")
 }
 
 // memoryKeys 是测试用的固定密钥。

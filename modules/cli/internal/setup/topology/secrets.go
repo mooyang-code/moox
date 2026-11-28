@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 )
+
+// deprecatedSecretsNotice 是读取到已废弃的 [notification] 或 [[exchange_keys]] 段时输出提示的目标，默认标准错误；测试可替换。
+var deprecatedSecretsNotice io.Writer = os.Stderr
 
 // Secrets 是 moox.secrets.toml 的内容：部署阶段所需的初始秘密（管理员、云账号与 CLS 写入密钥）。
 // setup init 只把腾讯云密钥写入管理台（固定 ID tencent-default，只建不改，之后以管理台为准）；
@@ -90,21 +95,33 @@ func ParseSecrets(plain []byte) (Secrets, error) {
 	if err != nil {
 		return Secrets{}, decodeError(SecretsFileName, err)
 	}
-	if keys := md.Undecoded(); len(keys) != 0 {
-		key := keys[0]
+	var hasNotification, hasExchangeKeys bool
+	for _, key := range md.Undecoded() {
+		if len(key) > 0 && key[0] == "notification" {
+			hasNotification = true
+			continue
+		}
+		if len(key) > 0 && key[0] == "exchange_keys" {
+			hasExchangeKeys = true
+			continue
+		}
 		if len(key) == 2 && key[0] == "tencent_cloud" && key[1] == "region" {
 			return Secrets{}, errors.New("config_invalid: tencent_cloud.region 已删除：腾讯云的默认地域取 moox.toml 里控制机的 region")
-		}
-		if key[0] == "notification" {
-			return Secrets{}, errors.New("config_invalid: [notification] 已从秘密文件移除：告警渠道请在安装完成后到管理台「资源与运维 › 监控告警」里配置")
-		}
-		if key[0] == "exchange_keys" {
-			return Secrets{}, errors.New("config_invalid: [[exchange_keys]] 已从秘密文件移除：交易所密钥请在安装完成后到管理台「系统设置 › 密钥管理」里配置")
 		}
 		return Secrets{}, fmt.Errorf("config_invalid: %s 里有不认识的键 %s（拓扑与部署参数写在 moox.toml 里）", SecretsFileName, key.String())
 	}
 	if err := secrets.validate(); err != nil {
 		return Secrets{}, err
+	}
+	if (hasNotification || hasExchangeKeys) && deprecatedSecretsNotice != nil {
+		var ignored []string
+		if hasNotification {
+			ignored = append(ignored, "[notification]")
+		}
+		if hasExchangeKeys {
+			ignored = append(ignored, "[[exchange_keys]]")
+		}
+		fmt.Fprintf(deprecatedSecretsNotice, "提示：%s 中的 %s 已不再使用，交易所密钥与告警渠道请在管理台录入\n", SecretsFileName, strings.Join(ignored, "、"))
 	}
 	return secrets, nil
 }
