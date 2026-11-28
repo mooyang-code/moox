@@ -184,6 +184,14 @@ func (s *Store) ApplySchema(sqlText string) error {
 	return sqlitedb.RecordFormat(s.path, "strategy", schema.AllSQL(), dataformat.LifecycleParts())
 }
 
+// ExecForTest 直接执行原始 SQL（仅测试里注入故障触发器或构造异常库状态使用，不走 schema 校验）。
+func (s *Store) ExecForTest(sqlText string) error {
+	if s == nil || s.db == nil {
+		return errors.New("策略数据库未打开")
+	}
+	return s.db.Exec(sqlText).Error
+}
+
 // Close 释放数据库连接。
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {

@@ -603,7 +603,7 @@ func TestHandleAcksEventsWithoutInstances(t *testing.T) {
 // 结果违反表约束等确定性写入错误不再无限重投：记一条不带明细的 skipped(config_error) 并 ACK，实例标记 degraded。
 func TestHandlePermanentWriteErrorRecordsConfigError(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
-	if err := h.repo.ApplySchema(`CREATE TRIGGER trg_test_reject_items
+	if err := h.repo.ExecForTest(`CREATE TRIGGER trg_test_reject_items
 BEFORE INSERT ON t_strategy_result_items
 FOR EACH ROW
 BEGIN
@@ -628,7 +628,7 @@ END;`); err != nil {
 // 结果与兜底的 skipped 都被约束拒绝时，重投不会成功：记一次模块失败后确认，不无限重投，也不写任何记录。
 func TestHandlePermanentFallbackFailureAcks(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
-	if err := h.repo.ApplySchema(`CREATE TRIGGER trg_test_reject_results
+	if err := h.repo.ExecForTest(`CREATE TRIGGER trg_test_reject_results
 BEFORE INSERT ON t_strategy_results
 FOR EACH ROW
 BEGIN

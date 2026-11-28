@@ -66,7 +66,7 @@ func TestCancelReplayMapsErrors(t *testing.T) {
 
 	other, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-04"), EndTime: ms("2026-09-05")})
 	requireOK(t, int32(other.GetRetInfo().GetCode()), other.GetRetInfo().GetMsg())
-	if err := h.service.Store.ApplySchema(`CREATE TRIGGER trg_test_cancel_fails BEFORE UPDATE ON t_strategy_replays BEGIN SELECT RAISE(ABORT, 'boom'); END;`); err != nil {
+	if err := h.service.Store.ExecForTest(`CREATE TRIGGER trg_test_cancel_fails BEFORE UPDATE ON t_strategy_replays BEGIN SELECT RAISE(ABORT, 'boom'); END;`); err != nil {
 		t.Fatal(err)
 	}
 	broken, _ := h.service.CancelReplay(h.ctx, &strategypb.CancelReplayReq{ReplayId: other.GetReplay().GetReplayId()})
