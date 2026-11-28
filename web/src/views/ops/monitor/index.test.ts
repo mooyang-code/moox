@@ -192,7 +192,7 @@ describe("monitor page", () => {
     // 说明紧跟在原因下面，在底部的分层标签与链接之前
     expect(html.indexOf("alert-line__reason")).toBeLessThan(html.indexOf("alert-line__note"));
     expect(html.indexOf("alert-line__note")).toBeLessThan(html.indexOf("alert-line__foot"));
-    expect(line.findAll(".alert-line__note p")).toHaveLength(4);
+    expect(line.findAll(".alert-line__note p")).toHaveLength(3);
     expect(line.find(".locator").attributes("href")).toBe("#/settings/secrets");
   });
 

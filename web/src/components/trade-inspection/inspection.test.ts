@@ -103,16 +103,19 @@ describe("测试连接请求", () => {
   });
 });
 
-describe("密钥 ID 的环境段与只读标记", () => {
-  it("exchange-<交易所>-<环境>-<名称> 读出环境，其他格式看不出来", () => {
-    expect(secretEnvironmentOf("exchange-binance-testnet-main")).toBe(1);
-    expect(secretEnvironmentOf("exchange-okx-production-a")).toBe(2);
-    expect(secretEnvironmentOf("sec_8f2c")).toBe(0);
+describe("密钥 extra_config 的环境与只读标记", () => {
+  it("从 extra_config 的 environment 字段读出环境，缺省或非法 JSON 返回 0", () => {
+    expect(secretEnvironmentOf('{"environment":"testnet"}')).toBe(1);
+    expect(secretEnvironmentOf('{"environment":"production"}')).toBe(2);
+    expect(secretEnvironmentOf('{"environment":"PRODUCTION"}')).toBe(2);
+    expect(secretEnvironmentOf('{"readonly":"true"}')).toBe(0);
+    expect(secretEnvironmentOf("not json")).toBe(0);
     expect(secretEnvironmentOf(undefined)).toBe(0);
   });
 
   it("extra_config 里 readonly 为 true 的是只读密钥，解析不了按普通密钥", () => {
     expect(isReadonlySecret('{"readonly":"true"}')).toBe(true);
+    expect(isReadonlySecret('{"readonly":true}')).toBe(true);
     expect(isReadonlySecret('{"passphrase":"***"}')).toBe(false);
     expect(isReadonlySecret("not json")).toBe(false);
     expect(isReadonlySecret(undefined)).toBe(false);

@@ -56,7 +56,19 @@
               <a-tag size="small" :color="categoryColor(record.category)">{{ categoryLabel(record.category) }}</a-tag>
             </template>
           </a-table-column>
-          <a-table-column title="提供方" data-index="provider" :width="110" />
+          <a-table-column title="提供方" :width="200">
+            <template #cell="{ record }">
+              <a-space size="mini" wrap>
+                <span>{{ record.provider || "-" }}</span>
+                <template v-if="record.category === 'exchange'">
+                  <a-tag size="small" :color="secretEnvironmentOf(record.extra_config) === 1 ? 'arcoblue' : 'green'">
+                    {{ secretEnvironmentOf(record.extra_config) === 1 ? "测试网" : "生产" }}
+                  </a-tag>
+                  <a-tag v-if="isReadonlySecret(record.extra_config)" size="small" color="gold">只读</a-tag>
+                </template>
+              </a-space>
+            </template>
+          </a-table-column>
           <a-table-column title="类型" data-index="secret_type" :width="110" />
           <a-table-column title="标识 (Key ID)" data-index="key_id" :width="200" :ellipsis="true" :tooltip="true" />
           <a-table-column title="密钥值" :width="140">
@@ -114,14 +126,29 @@
             <a-input v-model="form.name" placeholder="例如：交易所-生产环境" />
           </a-form-item>
           <a-form-item field="category" label="分类" required>
-            <a-select v-model="form.category" placeholder="选择分类">
+            <a-select v-model="form.category" placeholder="选择分类" @change="onCategoryChange">
               <a-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
             </a-select>
           </a-form-item>
-          <a-form-item field="provider" label="提供方">
-            <a-input v-model="form.provider" placeholder="例如：binance / okx / mysql" />
+          <a-form-item field="provider" :label="isExchangeCategory ? '交易所' : '提供方'" :required="isExchangeCategory">
+            <a-select v-if="isExchangeCategory" v-model="form.provider" allow-create placeholder="选择交易所">
+              <a-option value="binance">币安 (binance)</a-option>
+              <a-option value="okx">OKX (okx)</a-option>
+            </a-select>
+            <a-input v-else v-model="form.provider" placeholder="例如：tencent / s3 / mysql" />
           </a-form-item>
-          <a-form-item field="secret_type" label="类型">
+          <a-form-item v-if="isExchangeCategory" field="environment" label="环境" required>
+            <a-radio-group v-model="exchangeExtra.environment">
+              <a-radio value="production">生产环境</a-radio>
+              <a-radio value="testnet">测试网</a-radio>
+            </a-radio-group>
+          </a-form-item>
+          <a-form-item v-if="isExchangeCategory" field="readonly" label="用途">
+            <a-checkbox v-model="exchangeExtra.readonly">
+              只读密钥（仅用于行情与下架检测，不能建交易账户）
+            </a-checkbox>
+          </a-form-item>
+          <a-form-item v-if="!isExchangeCategory" field="secret_type" label="类型">
             <a-select v-model="form.secret_type" placeholder="选择类型">
               <a-option value="api_key">API 密钥对</a-option>
               <a-option value="password">密码</a-option>
@@ -131,17 +158,34 @@
               <a-option value="other">其他</a-option>
             </a-select>
           </a-form-item>
-          <a-form-item field="key_id" label="标识 (Key ID)">
-            <a-input v-model="form.key_id" placeholder="公开标识，如 SecretId / 用户名 / API Key" />
+          <a-form-item field="key_id" :label="isExchangeCategory ? 'API Key' : '标识 (Key ID)'" :required="isExchangeCategory">
+            <a-input
+              v-model="form.key_id"
+              :placeholder="isExchangeCategory ? '输入交易所 API Key' : '公开标识，如 SecretId / 用户名 / API Key'"
+            />
           </a-form-item>
-          <a-form-item field="secret_value" label="密钥值" :required="!editing">
+          <a-form-item field="secret_value" :label="isExchangeCategory ? 'Secret Key' : '密钥值'" :required="!editing">
             <a-input-password
               v-model="form.secret_value"
-              :placeholder="editing ? '留空表示不修改密钥值' : '输入密钥值'"
+              :placeholder="editing ? '留空表示不修改密钥值' : isExchangeCategory ? '输入交易所 Secret Key' : '输入密钥值'"
               allow-clear
             />
           </a-form-item>
-          <a-form-item field="extra_config" label="额外配置">
+          <a-form-item
+            v-if="isExchangeCategory && isOkxProvider"
+            field="passphrase"
+            label="Passphrase"
+            :required="!editing || !exchangeExtra.hasPassphrase"
+          >
+            <a-input-password
+              v-model="exchangeExtra.passphrase"
+              :placeholder="
+                editing && exchangeExtra.hasPassphrase ? '留空表示不修改 Passphrase' : '输入 OKX 创建 API 时设置的口令'
+              "
+              allow-clear
+            />
+          </a-form-item>
+          <a-form-item v-if="!isExchangeCategory" field="extra_config" label="额外配置">
             <a-textarea
               v-model="form.extra_config"
               :auto-size="{ minRows: 2, maxRows: 5 }"
@@ -160,6 +204,7 @@
         :secret-id="testSecret.secretId"
         :secret-name="testSecret.name"
         :provider="testSecret.provider"
+        :extra-config="testSecret.extraConfig"
       />
 
       <!-- 换了主机登录时用来安装 HTTPS 信任：下载根证书、核对指纹、各系统的安装命令 -->
@@ -251,9 +296,10 @@ import {
 import { reportError } from "@/api/http";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 import InspectionTestDialog from "@/components/trade-inspection/inspection-test-dialog.vue";
-import { canTestConnection } from "@/components/trade-inspection/inspection-request";
+import { canTestConnection, isReadonlySecret, secretEnvironmentOf } from "@/components/trade-inspection/inspection-request";
 import { defaultPagination } from "@/views/data/shared/metadata-utils";
 import { formatInstant } from "@/utils/time-zone";
+import { buildExchangeExtra, parseExchangeExtra, type ExchangeExtraState } from "./exchange-extra";
 import { secretDeleteText, secretToggleText } from "./secret-actions";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
 
@@ -272,8 +318,9 @@ const filters = reactive({
 });
 
 const categoryOptions = [
-  { label: "SSH 凭证", value: "ssh" },
   { label: "交易所", value: "exchange" },
+  { label: "云账号", value: "cloud" },
+  { label: "SSH 凭证", value: "ssh" },
   { label: "数据库", value: "database" },
   { label: "系统令牌", value: "jwt" },
   { label: "其他", value: "other" }
@@ -285,8 +332,9 @@ function categoryLabel(value: string) {
 
 function categoryColor(value: string) {
   const map: Record<string, string> = {
-    ssh: "cyan",
     exchange: "orange",
+    cloud: "blue",
+    ssh: "cyan",
     database: "purple",
     jwt: "red",
     other: "gray"
@@ -298,19 +346,35 @@ const form = reactive({
   secret_id: "",
   name: "",
   description: "",
-  category: "ssh",
-  provider: "",
+  category: "exchange",
+  provider: "binance",
   secret_type: "api_key",
   key_id: "",
   secret_value: "",
   extra_config: "{}"
 });
 
+const exchangeExtra = reactive<ExchangeExtraState>({
+  environment: "production",
+  readonly: false,
+  passphrase: "",
+  hasPassphrase: false,
+  other: {}
+});
+
+const isExchangeCategory = computed(() => form.category === "exchange");
+const isOkxProvider = computed(() => form.provider.trim().toLowerCase() === "okx");
+
 const testVisible = ref(false);
-const testSecret = reactive({ secretId: "", name: "", provider: "" });
+const testSecret = reactive({ secretId: "", name: "", provider: "", extraConfig: "" });
 
 function openTestConnection(record: Secret) {
-  Object.assign(testSecret, { secretId: record.secret_id ?? "", name: record.name, provider: record.provider ?? "" });
+  Object.assign(testSecret, {
+    secretId: record.secret_id ?? "",
+    name: record.name,
+    provider: record.provider ?? "",
+    extraConfig: record.extra_config ?? ""
+  });
   testVisible.value = true;
 }
 
@@ -342,13 +406,22 @@ function resetForm() {
     secret_id: "",
     name: "",
     description: "",
-    category: "ssh",
-    provider: "",
+    category: "exchange",
+    provider: "binance",
     secret_type: "api_key",
     key_id: "",
     secret_value: "",
     extra_config: "{}"
   });
+  Object.assign(exchangeExtra, parseExchangeExtra(undefined));
+}
+
+function onCategoryChange() {
+  if (form.category === "exchange") {
+    form.secret_type = "api_key";
+    if (!form.provider.trim()) form.provider = "binance";
+    Object.assign(exchangeExtra, parseExchangeExtra(form.extra_config));
+  }
 }
 
 function openCreate() {
@@ -363,13 +436,14 @@ function openEdit(record: Secret) {
     secret_id: record.secret_id || "",
     name: record.name || "",
     description: record.description || "",
-    category: record.category || "ssh",
+    category: record.category || "exchange",
     provider: record.provider || "",
     secret_type: record.secret_type || "api_key",
     key_id: record.key_id || "",
     secret_value: "",
     extra_config: record.extra_config || "{}"
   });
+  Object.assign(exchangeExtra, parseExchangeExtra(record.extra_config));
   visible.value = true;
 }
 
@@ -386,10 +460,36 @@ async function submit(): Promise<boolean> {
     Message.warning("请输入密钥值");
     return false;
   }
-  // JSON 校验
-  if (form.extra_config) {
+  let provider = form.provider.trim();
+  let secretType = form.secret_type;
+  let extraConfig = form.extra_config;
+  if (isExchangeCategory.value) {
+    provider = provider.toLowerCase();
+    if (!provider) {
+      Message.warning("请选择交易所");
+      return false;
+    }
+    if (!form.key_id.trim()) {
+      Message.warning("请输入 API Key");
+      return false;
+    }
+    if (provider === "okx" && (!editing.value || !exchangeExtra.hasPassphrase) && !exchangeExtra.passphrase.trim()) {
+      Message.warning("OKX 交易所密钥请填写 Passphrase");
+      return false;
+    }
+    secretType = "api_key";
+    extraConfig = buildExchangeExtra({
+      provider,
+      environment: exchangeExtra.environment,
+      readonly: exchangeExtra.readonly,
+      passphrase: exchangeExtra.passphrase,
+      hasPassphrase: exchangeExtra.hasPassphrase,
+      other: exchangeExtra.other
+    });
+  } else if (extraConfig) {
+    // 非交易所类别沿用 JSON 文本校验
     try {
-      JSON.parse(form.extra_config);
+      JSON.parse(extraConfig);
     } catch {
       Message.warning("额外配置不是有效的 JSON 格式");
       return false;
@@ -401,12 +501,12 @@ async function submit(): Promise<boolean> {
         secret_id: form.secret_id,
         name: form.name,
         description: form.description,
-        key_id: form.key_id,
+        key_id: form.key_id.trim(),
         secret_value: form.secret_value || undefined,
-        extra_config: form.extra_config,
+        extra_config: extraConfig,
         category: form.category,
-        provider: form.provider,
-        secret_type: form.secret_type
+        provider,
+        secret_type: secretType
       });
       Message.success("密钥已更新");
     } else {
@@ -414,11 +514,11 @@ async function submit(): Promise<boolean> {
         name: form.name,
         description: form.description,
         category: form.category,
-        provider: form.provider,
-        secret_type: form.secret_type,
-        key_id: form.key_id,
+        provider,
+        secret_type: secretType,
+        key_id: form.key_id.trim(),
         secret_value: form.secret_value,
-        extra_config: form.extra_config
+        extra_config: extraConfig
       });
       Message.success("密钥已创建");
     }
