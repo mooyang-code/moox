@@ -249,7 +249,7 @@ func isConsoleOnlyService(service Service) bool {
 
 func validateDoctor(component Component) error {
 	d := component.Doctor
-	if !slices.Contains([]string{"reporter", "host_snapshot", "delegated"}, d.Transport) || !slices.Contains([]string{"active", "deferred", "not_applicable"}, d.FunctionalObservability) {
+	if !slices.Contains([]string{"reporter", "host_snapshot", "delegated"}, d.Transport) || !slices.Contains([]string{"active", "not_applicable"}, d.FunctionalObservability) {
 		return fmt.Errorf("component %q has invalid doctor transport or observability", component.ID)
 	}
 	return nil
