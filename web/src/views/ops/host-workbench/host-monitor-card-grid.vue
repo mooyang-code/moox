@@ -30,13 +30,23 @@
         </div>
       </div>
       <div class="progress-list">
-        <a-progress :percent="ratio(row.cpuUsage)" :show-text="false" size="small" :color="progressColor(row.cpuUsage)" />
-        <a-progress :percent="ratio(row.memoryUsage)" :show-text="false" size="small" :color="progressColor(row.memoryUsage)" />
+        <a-progress
+          :percent="ratio(row.cpuUsage)"
+          :show-text="false"
+          size="small"
+          :color="progressColor(rawMetric(row, 'cpu'), thresholds?.cpu)"
+        />
+        <a-progress
+          :percent="ratio(row.memoryUsage)"
+          :show-text="false"
+          size="small"
+          :color="progressColor(rawMetric(row, 'memory'), thresholds?.memory)"
+        />
         <a-progress
           :percent="ratio(row.filesystemUsage)"
           :show-text="false"
           size="small"
-          :color="progressColor(row.filesystemUsage)"
+          :color="progressColor(rawMetric(row, 'disk'), thresholds?.disk)"
         />
       </div>
       <div class="network-row">
@@ -49,17 +59,36 @@
 </template>
 
 <script setup lang="ts">
-import { formatBytesPerSecond } from "@/api/modules/host-monitor";
+import {
+  formatBytesPerSecond,
+  maxAvailableFilesystemUsage,
+  metricValueAvailable,
+  type HostAlertThresholds
+} from "@/api/modules/host-monitor";
 import type { HostMonitorRow } from "./host-monitor-mapping";
 import { toInstantMs } from "@/utils/time-zone";
 
-defineProps<{ rows: HostMonitorRow[]; selectedKey: string }>();
+defineProps<{ rows: HostMonitorRow[]; selectedKey: string; thresholds?: HostAlertThresholds }>();
 defineEmits<{ select: [key: string] }>();
 
 const percent = (value: number | null) => (value === null ? "--" : `${value}%`);
 const ratio = (value: number | null) => (value === null ? 0 : value / 100);
-const progressColor = (value: number | null) =>
-  value !== null && value >= 80 ? "#dc2626" : value !== null && value >= 60 ? "#d97706" : "#16a34a";
+const rawMetric = (row: HostMonitorRow, kind: "cpu" | "memory" | "disk"): number | null => {
+  const monitor = row.monitor;
+  if (!monitor) return null;
+  if (kind === "cpu") return metricValueAvailable(monitor.status, monitor.cpu.usage_available) ? monitor.cpu.usage : null;
+  if (kind === "memory")
+    return metricValueAvailable(monitor.status, monitor.memory.percent_available) ? monitor.memory.percent : null;
+  const usage = maxAvailableFilesystemUsage(monitor.filesystems);
+  return metricValueAvailable(monitor.status, usage !== null) ? usage : null;
+};
+const progressColor = (value: number | null, threshold?: number) => {
+  const limit = threshold && threshold > 0 ? threshold : null;
+  if (value === null || limit === null) return "#16a34a";
+  if (value >= limit) return "#dc2626";
+  if (value >= limit * 0.9) return "#d97706";
+  return "#16a34a";
+};
 const stateText = (row: HostMonitorRow) => (row.state === "online" ? "在线" : row.state === "offline" ? "离线" : "未上报");
 const lastSeenText = (row: HostMonitorRow) => {
   if (!row.monitor) return "尚未收到主机指标";

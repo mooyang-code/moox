@@ -302,7 +302,14 @@ message HostAgentInfo {
   int64 stale_seconds = 7;
 }
 message ListHostAgentsReq {}
-message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; }
+message ListHostAgentsRsp {
+  common.RetInfo ret_info = 1;
+  repeated HostAgentInfo agents = 2;
+  // 主机资源告警阈值（百分比），与主机告警规则和 GetHealthOverview 的 HealthHost 一致。
+  double cpu_threshold = 3;
+  double memory_threshold = 4;
+  double disk_threshold = 5;
+}
 message HostMetricHistoryPoint {
   string host_id = 1;
   int64 observed_at = 2;

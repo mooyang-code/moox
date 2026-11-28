@@ -26,7 +26,13 @@ func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgent
 			Reachable: row.Reachable, StaleSeconds: row.StaleSeconds,
 		})
 	}
-	return &monitorpb.ListHostAgentsRsp{RetInfo: success(), Agents: out}, nil
+	return &monitorpb.ListHostAgentsRsp{
+		RetInfo:         success(),
+		Agents:          out,
+		CpuThreshold:    hostmetrics.MetricThreshold(hostmetrics.HostMetricCPU).Alert,
+		MemoryThreshold: hostmetrics.MetricThreshold(hostmetrics.HostMetricMemory).Alert,
+		DiskThreshold:   hostmetrics.MetricThreshold(hostmetrics.HostMetricFilesystemUsage).Alert,
+	}, nil
 }
 
 // historyClockSlack 是判断请求范围是否超出可查范围时容许的时钟差。

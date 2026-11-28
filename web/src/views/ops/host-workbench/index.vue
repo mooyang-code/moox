@@ -54,7 +54,7 @@ import SshFileManager from "./ssh-file-manager.vue";
 import HostMonitor from "./host-monitor.vue";
 import { listAllDeploymentHosts } from "@/api/admin/sysdeploy";
 import type { DeploymentHost } from "@/api/admin/types";
-import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
+import { getCurrentMetrics, type HostAlertThresholds, type HostMetrics } from "@/api/modules/host-monitor";
 import { createSSHSession, disconnectSSHSession } from "@/api/modules/ssh";
 import { buildHostMonitorRows } from "./host-monitor-mapping";
 
@@ -73,6 +73,7 @@ if (route.query.tab !== undefined && route.query.tab !== activeTab.value) {
 const monitorLoading = ref(false);
 const loadError = ref("");
 const monitors = ref<HostMetrics[]>([]);
+const thresholds = ref<HostAlertThresholds>();
 const hosts = ref<DeploymentHost[]>([]);
 const terminalVisible = ref(false);
 const terminalHostId = ref("");
@@ -86,7 +87,7 @@ const terminalTitle = computed(() => {
   if (!host) return "SSH 终端";
   return `SSH 终端 - ${host.label || host.host_id}（${host.address}）`;
 });
-const rows = computed(() => buildHostMonitorRows(hosts.value, monitors.value));
+const rows = computed(() => buildHostMonitorRows(hosts.value, monitors.value, thresholds.value));
 
 async function loadMonitorData() {
   monitorLoading.value = true;
@@ -94,8 +95,10 @@ async function loadMonitorData() {
   try {
     const results = await Promise.allSettled([getCurrentMetrics(), listAllDeploymentHosts()]);
     const [monitorRsp, hostRsp] = results;
-    if (monitorRsp.status === "fulfilled") monitors.value = monitorRsp.value.metrics;
-    else loadError.value = "资源监控暂不可用，仍可连接已登记 SSH 的主机。";
+    if (monitorRsp.status === "fulfilled") {
+      monitors.value = monitorRsp.value.metrics;
+      thresholds.value = monitorRsp.value.thresholds;
+    } else loadError.value = "资源监控暂不可用，仍可连接已登记 SSH 的主机。";
     if (hostRsp.status === "fulfilled") hosts.value = hostRsp.value;
     else loadError.value = `${loadError.value ? `${loadError.value} ` : ""}登记主机清单加载失败。`;
   } finally {
