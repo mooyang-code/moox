@@ -98,6 +98,9 @@ describe("replay form model", () => {
 
   it("requires a source and a task for every market in use", () => {
     expect(validateReplayForm({ ...base, strategy_id: "" }, strategies)).toContain("请选择定义");
+    expect(validateReplayForm({ ...base, strategy_id: "s3", tasks: {}, requirement_error: "后端超时" }, strategies)).toBe(
+      "读取策略要绑定的计算任务失败：后端超时"
+    );
     expect(validateReplayForm({ ...base, tasks: {} }, strategies)).toContain("每个市场");
     expect(validateReplayForm({ ...base, strategy_id: "s1", tasks: { spot: "a" } }, strategies)).toContain("每个市场");
     expect(validateReplayForm({ ...base, strategy_id: "s3" }, strategies)).toContain("先选任务所属的市场");

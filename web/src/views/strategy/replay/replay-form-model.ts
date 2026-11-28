@@ -29,6 +29,8 @@ export interface ReplayFormState {
   instance_strategy_id?: string;
   /** 后端按定义或 DSL 草稿推出的要绑定的任务（页面读回；从实例发起时按实例引用的定义）；还没读到时为空。 */
   requirement?: StrategyTaskRequirement | null;
+  /** 后端读取要绑定的任务失败时的错误说明；不从实例发起时用于提示读取失败而非“请选择计算任务”。 */
+  requirement_error?: string;
 }
 
 /** 回放对象三选一：实例会话固化的版本、已保存的定义，或未保存的 DSL 文本；都没选返回 null。 */
@@ -107,6 +109,7 @@ export function replayFactorTasks(form: ReplayFormState): Record<string, string>
 /** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的计算任务、区间、两个手续费与滑点的范围。 */
 export function validateReplayForm(form: ReplayFormState): string {
   if (!replaySourceOf(form)) return "请选择定义、粘贴 DSL 文本或从实例详情进入";
+  if (!form.instance_id && form.requirement_error) return `读取策略要绑定的计算任务失败：${form.requirement_error}`;
   const problems = form.instance_id ? [] : (form.requirement?.problems ?? []);
   if (problems.length) return `这份定义还不能回放：${problems.join("；")}`;
   const markets = replayMarkets(form);

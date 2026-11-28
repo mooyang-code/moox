@@ -37,10 +37,13 @@
       <span class="muted task-note">（按实例关联的任务，不能更改）</span>
     </a-form-item>
     <template v-else>
+      <a-alert v-if="requirementError" type="error" show-icon class="pool-alert"
+        >读取策略要绑定的计算任务失败：{{ requirementError }}<a-link @click="reloadRequirement">重试</a-link></a-alert
+      >
       <a-alert v-if="pool?.problems.length" type="warning" show-icon class="pool-alert"
         ><div v-for="item in pool.problems" :key="item">{{ item }}</div></a-alert
       >
-      <a-form-item v-if="!declared" label="任务所属的市场" required>
+      <a-form-item v-if="!requirementError && !declared" label="任务所属的市场" required>
         <a-radio-group v-model="form.single_market" type="button" size="small">
           <a-radio v-for="item in MARKET_ORDER" :key="item" :value="item">{{ marketLabel(item) }}</a-radio>
         </a-radio-group>
@@ -142,7 +145,11 @@ const zone = useDisplayZone();
 
 // 要读哪些市场的任务由后端按定义或 DSL 草稿推出（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
 // 从实例发起时任务已预填，按实例引用的定义读出参考市场（回放不读参考市场的任务）。
-const { requirement } = useTaskRequirement(
+const {
+  requirement,
+  error: requirementError,
+  reload: reloadRequirement
+} = useTaskRequirement(
   computed(() =>
     form.value.instance_id
       ? { strategyId: form.value.instance_strategy_id }
@@ -155,6 +162,13 @@ watch(
   requirement,
   next => {
     form.value.requirement = next;
+  },
+  { immediate: true }
+);
+watch(
+  requirementError,
+  next => {
+    form.value.requirement_error = next;
   },
   { immediate: true }
 );

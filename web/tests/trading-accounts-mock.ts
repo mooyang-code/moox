@@ -273,22 +273,27 @@ async function gateway(route: Route) {
               instrument_id: "DOGE-USDT-SWAP",
               signed_quantity: "-100",
               mark_price: "0.15"
-            }
-          ]
-        })
-      });
-    case "ListHoldings":
-      return route.fulfill({
-        json: ok({
-          holdings: [
+            },
             {
               trading_account_id: "ta-paper-1",
+              market_type: "spot",
               asset: "BTC",
               instrument_id: "BTC-USDT-SPOT",
-              quantity: "0.2",
+              signed_quantity: "0.2",
+              sellable: "0.2",
+              mark_price: "64000",
               market_value: "12800"
             },
-            { trading_account_id: "ta-paper-1", asset: "USDT", instrument_id: "", quantity: "88000", market_value: "88000" }
+            {
+              trading_account_id: "ta-paper-1",
+              market_type: "spot",
+              asset: "USDT",
+              instrument_id: "",
+              signed_quantity: "88000",
+              sellable: "88000",
+              mark_price: "1",
+              market_value: "88000"
+            }
           ]
         })
       });

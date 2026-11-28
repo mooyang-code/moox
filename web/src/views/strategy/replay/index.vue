@@ -505,7 +505,7 @@ async function loadStrategies() {
     await strategyStore.loadAllStrategies(200);
     errors.strategies = "";
   } catch (err) {
-    if (err instanceof StaleSpaceRequestError) return; // 切换空间造成的取消，空间监听会重新加载
+    if (err instanceof StaleSpaceRequestError) return; // 切换空间时主视图会整页重建，忽略旧实例的取消错误
     errors.strategies = `策略定义加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   }
 }
