@@ -111,7 +111,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil, nil, err
 	}
 	observer.SetStaleAlertPeriods(cfg.Params.StaleAlertPeriods)
-	// 首次历史补齐：每分钟向 Collector 取一次补齐中的数据集，补齐中的实例不求值、期望置“暂停（历史补齐中）”。
+	// 首次历史补齐：每分钟向 Collector 取一次补齐中的数据集，用于把补齐中的实例在监控期望里置“暂停（历史补齐中）”。
 	seedingTracker := seeding.New(seeding.GatewayLister{Gateway: gateway, Timeout: seedingListTimeout}, log.Warnf)
 	observer.SetSeeding(seedingTracker.Bound)
 
@@ -138,7 +138,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, ready, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure, Seeding: seedingTracker.Bound}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, ready, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure}
 		handlerRef.Store(handler)
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
