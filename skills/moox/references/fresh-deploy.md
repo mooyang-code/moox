@@ -24,7 +24,7 @@
 1. Trade 只有纸面账户：`moox-cli trade account list`、`trade order list --only-open` 看有没有实盘账户、持仓和未完成订单；有就停下来问用户。
 2. 四台主机（control、storage、overseas、factor）`setup validate` 都通过；控制机磁盘小，先确认有余量（部署盘可用空间不足 2 GB 时 `setup validate` 的 `warnings` 会提醒）。
 3. 记下要保留的东西：因子机 `/data/moox/import`（历史导入包，重新下载很贵，清空前挪到 `~/moox-import-keep`）。其余数据按用户说法全部删除。
-4. 管理台里后来改过或新加的密钥（交易所密钥、告警渠道、云账号）只在线上有，秘密文件里只是初始值：清空前让用户在管理台导出或记下来。
+4. 全部非系统密钥与告警渠道会在 `setup wipe` / `setup install --wipe` 清空前自动加密备份到同目录的 `moox.backup`（交易账户与组合账户不纳入备份），并在重装全部组件就绪后、完整初始化之前自动覆盖导入；也可以提前跑一次 `moox-cli setup backup` 做手动备份。
 5. 手工调过的组件配置应该已经写在 `moox.toml` 的 `[overrides]` 里（重装自动带上）；没写进去的手工改动清空后会丢，汇报时一并说明。保留期以 `[storage_retention]` 为准。
 
 ## 2. 构建二进制（清空之前做完）
@@ -86,8 +86,9 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
 | 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
-| 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验、自动为有限保留期的内置时序数据集建归档任务（这些要等 Collector、Monitor、ArchiveMgr 起来） |
-| 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入，同时为该空间新建的因子结果数据集自动建归档任务 |
+| 8 | 自动导入待恢复备份 | 若本机存在带“卸载后待导入”标记的 `moox.backup`，在完整初始化前按覆盖导入密钥（`SecretMgr.ImportSecrets`）与告警渠道（`MonitorMgr.ImportNotificationChannels`），成功后清掉标记；无备份则跳过并提示 |
+| 9 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验、自动为有限保留期的内置时序数据集建归档任务（这些要等 Collector、Monitor、ArchiveMgr 起来） |
+| 10 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入，同时为该空间新建的因子结果数据集自动建归档任务；验收通过后在控制机部署根写出完成标记 `install-complete.json` |
 
 - `setup init` 与 `setup start` 在部署了 `archive-mgr` 时会自动为所有已激活且有限保留期的时序数据集（内置原始 K 线数据集与默认因子结果数据集）幂等创建归档任务，全新安装完成后即覆盖归档、不会触发“未归档的数据集”告警；自己后续手工新建的采集任务或因子任务仍可在管理台“数据归档 › 归档任务”页或用 `moox-cli archive tasks create` 建归档任务。
 - 全新安装时数据集首次接入要补历史（crypto 两个 1m 数据集要几小时），补齐期间因子任务不计算：`setup verify` 把这些任务算通过，因子检查的说明写“补历史中，下游待生效”，不用为了验收先 `collector history-seed skip`。
@@ -298,8 +299,8 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 32. **升级与重跑**：
     - 改一行日志后重新构建，`$CLI setup deploy $SRC --host overseas --component trade`：只重启 Trade，`version.json` 更新，数据目录没动。
     - 给某个服务加一个方法后只部署该组件：这台主机的 `host-gateway` 被一起升级并重启。
-    - 再跑一次 `$CLI setup install $SRC --space-id crypto --yes`：不报错，没有组件被重启，操作电脑的 `~/.config/moox/moox-cli.key` 没有变（它会再执行一次 `setup start`，手工停用过的内置采集任务与默认因子任务成员会被重新启用；只升级用 `setup update`）。
-    - 在控制机第一次装完、存储机装到一半时中断安装，重跑同一条命令能接着装完。
+    - 在已装好系统上执行 `$CLI setup install $SRC --keep --yes`（不需要 `--space-id`）：不报错，只重启有变化的组件，不重跑初始化和 `setup start`，操作电脑的 `~/.config/moox/moox-cli.key` 没有变，控制机完成标记 `install-complete.json` 保留；不带 `--keep` / `--wipe` 直接 `--yes` 应被拒绝（`install_choice_required`）。
+    - 在控制机第一次装完、存储机装到一半时中断安装（状态 `incomplete`），带 `--keep --yes` 重跑 `setup install` 能接着装完并写出完成标记。
 33. **换电脑与清空预览**：另一台电脑上放两份配置文件、SSH 私钥、解密密钥（在系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`），`$CLI setup operator --register` 再 `$CLI setup deploy $SRC --host control`、`$CLI setup status` 成功，原电脑的调用被拒（先问用户，做完要在原电脑上重新登记）。
     `$CLI setup wipe` 的预览单独列出本地归档文件的大小，并提醒先导出管理台里的密钥。
 

@@ -50,7 +50,7 @@ View 自己跟随 Primary 的变更日志，落后时先按 [`view-catchup.md`](
 
 确认目标后在同一条命令末尾加 `--yes` 才执行。流程：
 
-1. 停掉 `storage-view`（`systemctl --user disable --now moox-storage-view`，和 `moox-cli setup stop` 是同一个操作；这是临时停止，下一次 `setup deploy` 或 `setup update` 会按 moox.toml 的声明重新拉起，所以重建期间不要部署这台主机）。
+1. 停掉 `storage-view`（`systemctl --user disable --now moox-storage-view`，和 `moox-cli setup stop` 是同一个操作；这是临时停止，下一次 `setup deploy` 或 `setup install --keep` 会按 moox.toml 的声明重新拉起，所以重建期间不要部署这台主机）。
 2. 删除这个数据集的 View 索引文件（输出 `view_indexes_removed`）。View 的已建状态只在索引文件里，元数据不用改，也不备份。
 3. 恢复 `storage-view`（`systemctl --user enable --now`），维护流程从 Primary 回填每个序列最近的行后接着跟随变更日志。
 

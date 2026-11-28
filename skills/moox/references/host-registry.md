@@ -29,7 +29,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 
 ## 启用、停用、移除
 
-启停与移除只在 `moox.toml` 里声明，再部署：每次 `setup deploy`、`setup update` 都按 `moox.toml` 整份覆盖 Admin 的主机与部署登记
+启停与移除只在 `moox.toml` 里声明，再部署：每次 `setup deploy`、`setup install` 都按 `moox.toml` 整份覆盖 Admin 的主机与部署登记
 （多出的主机与部署删除，签名公钥与 SSH 指纹保留），并按声明启停 systemd 单元。
 
 | 要做的事 | 改 `moox.toml` | 再执行 |

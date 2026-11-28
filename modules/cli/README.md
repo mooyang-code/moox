@@ -13,7 +13,7 @@ go test -count=1 ./modules/cli/...
 make test-deployment-packages
 ```
 
-`setup deploy --host <主机> [--component a,b]` 把一台主机部署成 `moox.toml` 描述的样子，`setup install` 按顺序装完整个系统，`setup update` 覆盖更新已装好的系统（数据保留），`setup wipe` 卸载；`setup package-components` 给发布脚本按服务目录打每个组件一个包。详见[命令行工具](../../docs/模块/命令行工具.md)与[部署与运维](../../docs/部署与运维.md)。
+`setup deploy --host <主机> [--component a,b]` 把一台主机部署成 `moox.toml` 描述的样子（始终保留数据，数据格式不兼容时拒绝），`setup install` 是统一整套部署入口（按控制机完成标记区分没装过/没装完/已装好，装过时必须明确选 `--keep` 或 `--wipe`），`setup backup` 手动备份密钥与告警渠道，`setup wipe` 单独卸载；`setup package-components` 给发布脚本按服务目录打每个组件一个包。详见[命令行工具](../../docs/模块/命令行工具.md)与[部署与运维](../../docs/部署与运维.md)。
 
 ## 配置
 

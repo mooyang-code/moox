@@ -146,7 +146,7 @@ cd moox-${VER}
 - 免密登录开通后，Agent 就能通过 `moox-cli` 登录这些服务器完成后续所有步骤。
 - MooX 密钥不是 OpenSSH 的默认身份文件。手工验证要写 `ssh -i ~/.ssh/moox_ed25519 <用户>@<IP>`，普通 `ssh` 询问密码不代表公钥没装上。
 
-## 3. 检测已有部署，选择方式：新安装、覆盖更新、卸载
+## 3. 检测已有部署，选择保留数据还是全部覆盖
 
 `config init` 一结束（用户填完各台机器）就运行，不用等用户开口：
 
@@ -154,38 +154,45 @@ cd moox-${VER}
 ./bin/moox-cli setup validate
 ```
 
-它校验两份配置和到各台服务器的连接，并只读检测每台机器（部署根、`version.json`、`moox-*` 用户服务、部署根里的进程），不改任何东西。输出的 `deployment` 里：
+它校验两份配置和到各台服务器的连接，并只读检测每台机器（部署根、`version.json`、控制机完成标记 `install-complete.json`、各组件数据格式 `data-format`、`moox-*` 用户服务、部署根里的进程），不改任何东西。输出的 `deployment` 里：
 
 | 字段 | 含义 | 怎么做 |
 | --- | --- | --- |
-| `modes` = `["install"]` | 每台机器的部署根（默认 `/data/moox`）下都没有 `version.json`，没装过（`route` = `fresh`） | 走**新安装**（第 4 节），不用询问清空 |
-| `modes` = `["update", "uninstall"]` | 至少一台机器装过（`route` = `installed`） | 把检测结果列给用户，让用户选**覆盖更新**或**卸载** |
+| `route` = `fresh`（`modes` = `["install"]`） | 每台机器都没有 `version.json` 与完成标记，没装过 | 直接走**新安装**（第 4 节），不用询问保留或覆盖 |
+| `route` = `incomplete` | 至少一台机器有 `version.json`，但控制机没有完成标记 `install-complete.json`（上次安装没装完） | 跑 `setup install` 预检，把结果给用户看，问清**保留数据续装（`--keep`）**还是**全部覆盖（`--wipe`）** |
+| `route` = `installed` | 控制机已有完成标记 `install-complete.json`（已装好） | 跑 `setup install` 预检，把结果给用户看，问清**保留数据更新（`--keep`）**还是**全部覆盖（`--wipe`）** |
+| `data_format` | 本版本与目标机上各组件的数据格式比对（`can_keep` 为 `false` 时，`incompatible` 列出格式变化或未知的组件） | `can_keep` 为 `false` 时 `--keep` 会被拒绝，必须走 `--wipe` 全部覆盖 |
 | `components` | 每台主机：`version`（这台装的版本）、`components`（`moox.toml` 要求的每个组件：`installed` 为 `version.json` 里有记录，`state` 为 `active` / `inactive` / `missing`；`extra: true` 是已不属于这台主机的组件） | 一个组件 `installed` 为 true 或 `state` 不是 `missing` 就算已部署 |
 | `notes` | 部分主机没装过、装过的主机缺组件（上次安装没做完，或 `moox.toml` 新加的主机、组件）；主机上有东西但没有 `version.json`（失败的部署尝试或别的文件） | 原样告诉用户 |
-| `manual_steps` | 要用户在目标机上自己做的事（需要 sudo），最常见的是开 linger | 把命令原样交给用户，做完再继续；没做完时安装和覆盖更新都会停下 |
+| `manual_steps` | 要用户在目标机上自己做的事（需要 sudo），最常见的是开 linger | 把命令原样交给用户，做完再继续；没做完时安装和更新都会停下 |
 | `warnings` | journald 没有持久化、磁盘余量小 | 告诉用户，不拦安装 |
 
 - **linger**：组件都是 systemd 用户服务，部署用户没开 linger 时登出后服务会被停掉。`manual_steps` 里是 `sudo loginctl enable-linger <用户>`，要用户在那台机器上执行。
 - **journald**：组件的标准输出与标准错误（崩溃信息、启动失败的原因）在 journald 里。没有持久化（`/var/log/journal` 不存在）时重启后看不到之前的输出，建议用户执行 `warnings` 里的命令。
 
-### 装过时这样问用户
+### 装过时：先跑预检，再问用户保留还是覆盖
+
+**CLI 不做交互式提问。** 检测到目标机装过（`route` 为 `incomplete` 或 `installed`）时，先运行一次不带 `--yes` 的只读预检：
+
+```bash
+./bin/moox-cli setup install                                 # 已装好时可不带 --space-id；没装完或要覆盖时也可先带上 --space-id <空间>
+```
 
 先确认配置来源：这台电脑上的 `moox.toml`、`moox.secrets.toml` 是不是当初装这套系统用的那两份（换电脑时从原电脑拷过来的也算）。
-刚在这台电脑上用 `config init` 重新生成的（例如换了电脑）就停下，按“保留数据与换电脑”取回原来的配置再回到这里：用新生成的配置覆盖更新会登记新的操作身份、按新配置重新渲染全部主机。
+刚在这台电脑上用 `config init` 重新生成的（例如换了电脑）就停下，按“保留数据与换电脑”取回原来的配置再回到这里：用新生成的配置保留更新会登记新的操作身份、按新配置重新渲染全部主机。
 
-再按 `components` 列一张表（主机、IP、版本、已部署的组件、没部署的组件），再问。选择对整套部署统一做，不逐台选：
+把预检输出的部署状态（`route`）、各主机组件、`data_format` 格式比对结果，以及并排列出的 `options.keep` 与 `options.wipe`（含将自动备份的密钥与告警渠道条数 `backup`、本地归档目录大小 `archive_kb`）完整给用户看，再问清选择（对整套部署统一选，不逐台选）：
 
-> 检测到这些机器上已经部署了 MooX：`<主机、IP、版本、已部署的组件>`。`<没部署的组件或主机>` 还没装。请选一种方式：
-> 1. **覆盖更新**：把这个版本的程序和配置按顺序重新部署到全部机器，K 线、因子、策略、交易记录、管理台账号等数据都保留；没装的组件和新加的主机会装上，`moox.toml` 里去掉的组件会停掉删除。
-> 2. **卸载**：停掉并删除这些机器上全部 MooX 服务和全部数据，删除后无法恢复（范围见下面的预览）。卸载完可以接着全新安装。
+> 检测到目标机已经装过 MooX（状态：`<没装完 / 已装好>`，涉及 `<主机、IP、版本、组件>`）。数据格式比对结果：`<全部兼容 / 以下组件格式已变化或未知：...>`。请确认选择哪种方式：
+> 1. **保留数据（`--keep`）**：`<若为已装好>`只换新版本的二进制与配置，K 线、因子、策略、交易记录、管理台账号等数据全部保留，不重新初始化，也不重新启用手工停掉的任务（需更新/新装/删掉的组件与换主机列表见预检 `options.keep.hosts` / `moves`）；`<若为没装完>`保留已有数据，接着跑完剩余安装步骤并验收；`<若 data_format.can_keep 为 false>`**本次不可选**，因格式已变化或未知。
+> 2. **全部覆盖（`--wipe`）**：先自动将全部非系统密钥与告警渠道加密备份到本机 `moox.backup`（预计备份 `<secret_count>` 把密钥、`<channel_count>` 个告警渠道；**交易账户与组合账户不纳入备份**），再清空全部主机的部署根——**归档文件（`archive/`，当前 `<大小>`）会一起清掉，它是唯一可能补不回来的数据**（外部 `[archive_object_store]` 远端桶不删）——然后全新安装，并在全部组件就绪后自动覆盖导入备份。
 
-- 用户选**覆盖更新**：走第 4 节的“覆盖更新”。
-- 用户选**卸载**：先取预览，按下面的话术确认后执行；执行完问用户要不要接着新安装，要的话回到第 4 节“新安装”（或者一开始就用 `setup install --wipe` 把卸载和新安装合成一次确认）。
-- `notes` 说部分主机没装过或缺组件时，先问用户是不是**上次 `setup install` 没做完**：是的话重跑同一条 `setup install --space-id <空间> --yes`（见第 4 节），不走覆盖更新——覆盖更新不做初始化和启动空间，会留下一套没装完的系统。
-  控制机或存储机没装过时 `setup update` 直接拒绝（`update_not_installed`）；所有主机都装全了、但安装停在初始化或启动空间之前的，覆盖更新之后的 `setup verify` 会报 `collection_not_started`，那时同样改为重跑 `setup install`。
-- 这个选择只在开始时问一次；同一次安装中途失败后照旧重跑同一条 `setup install`，不重新检测、不再问。
+- 用户选**保留数据**：带 `--keep --yes` 执行（`installed` 不要求 `--space-id`；`incomplete` 带 `--space-id <空间>`）。
+- 用户选**全部覆盖**：带 `--space-id <空间> --wipe <预检里的 wipe.digest> --yes` 执行；若清空前自动备份失败，命令会立即停下不清空任何主机，修好后重试，或经用户明确同意加 `--no-backup` 跳过在线备份（本机已有 `moox.backup` 时会自动沿用并打上待导入标记）。
+- 用户只想**单独卸载**（不马上重装）：走下面的 `setup wipe`。
+- 带 `--yes` 但既没给 `--keep` 也没给 `--wipe` 时，CLI 会直接报错（`install_choice_required`），不动任何主机。
 
-### 卸载
+### 卸载（单独卸载）
 
 先取预览（不会改动任何东西）：
 
@@ -193,65 +200,76 @@ cd moox-${VER}
 ./bin/moox-cli setup wipe
 ```
 
-再这样问用户，不能只问“要覆盖吗”。主机来自预览的 `plan.hosts`，其中 `archive_kb` 是归档文件的大小（-1 表示没有）；不会动的东西来自 `left_behind`：
+预览会输出清空范围（`plan.hosts`，含每台主机的 `archive_kb` 归档目录大小与 `plan.digest`）、不会动的东西（`left_behind`），以及清空前将自动备份的密钥与告警渠道条数（`backup`）。按以下内容向用户确认，不能只问“要覆盖吗”：
 
-> 卸载会停掉并删除这些机器上全部 MooX 服务：`<主机、IP>`，删除部署目录里的全部内容：程序、配置、K 线、因子、策略、任务、交易记录、管理台账号与操作记录，
-> 以及本地归档文件（`<大小>`；配了 `[archive_object_store]` 外部对象存储时，远端桶里的归档不删）。删除后无法恢复。
-> 管理台里后来改过或新加的密钥（交易所密钥、告警渠道、云账号）只在线上有，卸载前请先在管理台里导出或记下来。
+> 卸载会先自动把全部非系统密钥与告警渠道加密备份到本机 `moox.backup`（预计备份 `<secret_count>` 把密钥、`<channel_count>` 个告警渠道；交易账户与组合账户不纳入备份；若在线备份失败会停下不清，除非带 `--no-backup`）。
+> 随后停掉并删除这些机器上全部 MooX 服务：`<主机、IP>`，删除部署目录里的全部内容：程序、配置、K 线、因子、策略、任务、交易记录、管理台账号与操作记录，
+> 以及本地归档文件（`<大小>`；**它是唯一可能补不回来的数据**；配了 `[archive_object_store]` 外部对象存储时，远端桶里的归档不删）。删除后无法恢复。
 > 如果启用过云函数采集，请你到腾讯云控制台删除 `moox-fetch-plan-` 开头的函数（或者让我带 `--clean-functions` 一起删）；不删会继续运行并产生费用，以后启用云函数时同名函数也会创建失败。
 > 卸载不会动这些：`<left_behind>`，需要时你自己处理。
 
-- **用户同意卸载**：`./bin/moox-cli setup wipe --yes --expect <预览里的 plan.digest>`。卸载后马上重装的，也可以直接 `setup install` 带 `--wipe <预检里的 wipe.digest>`（见第 4 节），卸载和后面的安装都算在这次确认内。
+- **用户同意卸载**：`./bin/moox-cli setup wipe --yes --expect <预览里的 plan.digest>`。卸载后马上重装的，也可以直接用 `setup install --space-id <空间> --wipe <预检里的 wipe.digest> --yes`，卸载和重装合并在一次确认内。
+  - 卸载开始清空前会给 `moox.backup` 打上“卸载后待导入”标记（直到重装自动导入成功后才清掉）：标记在的时候，任何自动或手动备份都不会覆盖该文件，防止中途失败再卸载时用半成品盖掉完好备份。带 `--no-backup` 卸载时，本机已有的 `moox.backup` 同样会被打上该标记，下次重装自动导入的就是它。
   - 卸载会同时删掉这台电脑上的操作员身份（`~/.config/moox` 下 `moox-cli` 的签名私钥、控制机根证书与它的指纹）：重装的控制机会生成新的 CA，`moox-cli` 的密钥也在下一次安装的第一步重新生成。
   - 中途失败后再运行一次会接着清：重新取预览，范围变了要重新询问。
   - 云上的采集计划函数默认不删：同一云账号可能有其他环境。要清理时加 `--clean-functions` 预览，用户确认后再带 `--clean-functions --expect-functions <functions_digest>`。
 - 只拆掉一台机器（其余保留）不用卸载，按 [`host-registry.md`](host-registry.md) 移除主机。
 
-## 4. 部署
+## 4. 部署（统一入口 `setup install`）
 
-### 新安装
-
-**主线是一条命令，用户同意后后台运行：**
+**所有整套部署（新安装、没装完续装、已装好保留数据更新、清空全部覆盖）统一用 `setup install`，用户确认后后台运行：**
 
 ```bash
-./bin/moox-cli setup install --space-id <空间>              # 只读预检，把结果告诉用户
-./bin/moox-cli setup install --space-id <空间> --yes        # 执行
-./bin/moox-cli setup install --space-id <空间> --yes --wipe <预检里的 wipe.digest>   # 装过、用户确认卸载后重装
+# 1. 只读预检（把路线、数据格式比对与可选操作给用户看）
+./bin/moox-cli setup install --space-id <空间>
+./bin/moox-cli setup install                                                      # 已装好系统保留更新可不写 --space-id
+
+# 2. 按状态与用户选择执行
+./bin/moox-cli setup install --space-id <空间> --yes                              # 没装过（fresh）：全新安装
+./bin/moox-cli setup install --space-id <空间> --keep --yes                       # 没装完（incomplete）：保留数据续装
+./bin/moox-cli setup install --keep --yes                                         # 已装好（installed）：保留数据更新（不要求 --space-id）
+./bin/moox-cli setup install --space-id <空间> --wipe <wipe.digest> --yes         # 装过：自动备份 → 清空全部主机 → 全新安装 → 自动覆盖导入备份
 ```
 
-- 预检输出路线、安装步骤（`steps`，每一步带可以单独运行的命令）、`manual_steps`，装过时还有清空范围（`wipe`）。
-- 带 `--yes` 后按顺序执行，进度逐行输出到标准错误：
-  0. 准备这台电脑的操作身份（`setup operator`）：没有 `~/.config/moox/moox-cli.key` 就生成一把签名私钥，有就复用；它的公钥在下一步部署控制机时登记；
-  1. 放行防火墙端口；
-  2. 控制机先装 Admin、主机网关和 HostAgent（其余主机要向 Admin 要身份材料）；
-  3. 带 EventBus、Storage 的主机（默认是存储机）；
-  4. `setup init --stage storage`：业务空间、初始秘密、元数据（控制机上的 Collector 启动时要核对元数据）；
-  5. 控制机其余组件；
-  6. 其余主机，因子机排最后；
-  7. 统一等一次全部组件就绪；
-  8. `setup init`：云账号、日志服务、采集计划、告警渠道（这些要等 Collector、Monitor 起来）；
-  9. `setup start` 启动空间、`setup verify` 验收。
-- 每台主机的部署做的事：把登记同步到 Admin，目标机按产物包清单下载组件包（下载不了时由这台电脑下载再推送），向控制机要身份材料，
+### 全新安装 / 没装完续装 / `--wipe` 全部覆盖
+
+带 `--yes` 后按顺序执行，进度逐行输出到标准错误：
+
+0. （仅 `--wipe`）先自动备份全部非系统密钥与告警渠道到 `moox.backup` 并打上“卸载后待导入”标记（若已有待导入备份则保护不覆盖），再清空全部主机的部署根与本机操作员身份；
+1. 准备这台电脑的操作身份（`setup operator`）：没有 `~/.config/moox/moox-cli.key` 就生成一把签名私钥，有就复用；它的公钥在下一步部署控制机时登记；
+2. 放行防火墙端口；
+3. 控制机先装 Admin、主机网关和 HostAgent（其余主机要向 Admin 要身份材料）；
+4. 带 EventBus、Storage 的主机（默认是存储机）；
+5. `setup init --stage storage`：业务空间、初始秘密、元数据（控制机上的 Collector 启动时要核对元数据）；
+6. 控制机其余组件；
+7. 其余主机，因子机排最后；
+8. 统一等一次全部组件就绪；
+9. **自动导入待恢复备份**（在全部组件就绪之后、完整初始化之前）：若本机有带“卸载后待导入”标记的 `moox.backup`，按覆盖导入密钥（`SecretMgr.ImportSecrets`，保留原密钥 ID）与告警渠道（`MonitorMgr.ImportNotificationChannels`，按地址幂等覆盖），成功后清掉待导入标记；没有备份则提示去管理台录入；
+10. `setup init`：云账号、日志服务、采集计划、告警渠道核对（遇到已存在的密钥与渠道只建不改）；
+11. `setup start` 启动空间、`setup verify` 验收；验收通过后在控制机部署根下单独写出完成标记 `install-complete.json`。
+
+- 每台主机的部署做的事：把登记同步到 Admin，预检本机组件的数据格式，目标机按产物包清单下载组件包（下载不了时由这台电脑下载再推送），向控制机要身份材料，
   渲染配置、环境文件和单元文件，装好后按启动顺序重启有变化的组件，写 `version.json`，再等这次装的组件就绪。
   每台主机有一把签名私钥（`<部署根>/secrets/host.key`，本机组件共用）：例行部署不换它，只重新签发主机证书；私钥丢了或和控制机登记的对不上时会自动签发新的。
-- **中途失败修好后重跑同一条命令**：每一步都可以重做，没有变化的组件不会重启。报错里有“单独重跑这一步”的命令，也可以只重跑那一步再继续。
-- 装过的机器不带 `--wipe` 重跑就是接着装完，数据保留。但重跑会再执行一次 `setup start`：用户手工停用的内置采集任务与默认因子任务成员会被重新启用，
-  走云函数的空间会重建云函数。**已经装好的系统要换版本或改配置用覆盖更新**（`setup update`），不要重跑 `setup install`。
+- **中途失败修好后继续**：重新预检后带 `--keep --yes`（保留已有数据续装），或带 `--wipe <新 digest> --yes`（全部覆盖，不会覆盖之前已写好的待导入备份）。
 
-### 覆盖更新
+### 已装好系统的保留数据更新（`setup install --keep`）
+
+- 预检的 `options.keep.hosts` 按主机列出组件：`update` 是已部署、这次重新部署的；`install` 是 `moox.toml` 里新加的组件或新主机上的组件；`remove` 是 `moox.toml` 里已经去掉、这次会停掉并删除的。
+  `options.keep.moves` 是换了主机的组件：旧主机上停掉删除，新主机上从空数据开始，**数据不迁移**。把它们、`data_format` 结果和 `steps`、`note` 一起给用户确认；`remove`、`moves` 不为空时单独说明。
+- 只有 `data_format.can_keep` 为 `true` 时才能选 `--keep`；数据格式变化或未知时会拒绝并列出不兼容组件，改走 `--wipe`。
+- 执行步骤与安装顺序相同，但**不做初始化、不导入备份、不启动空间、不验收**：手工停用的任务保持停用，不重建云函数，数据目录（`data/`）与控制机完成标记 `install-complete.json` 都不碰；每台主机只重启二进制或配置有变化的组件，组件按 `moox.toml` 的声明启停（`setup stop` 临时停掉的会被重新拉起）。
+- 新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随保留更新到位；`moox.toml` 里新开了云函数采集（`[scf_plan]`）、日志服务或换了云账号也不会生效。需要时再运行一次 `setup init`（只建不改）。
+- 更新后对用户启动的空间跑一次 `setup verify --space-id <空间>` 验收。
+
+### 随时手动备份（`setup backup`）
 
 ```bash
-./bin/moox-cli setup update          # 只读预览：每台主机要更新（update）、新装（install）、删掉（remove）的组件和执行步骤
-./bin/moox-cli setup update --yes    # 用户确认后执行，后台运行
+./bin/moox-cli setup backup                    # 导出全部非系统密钥与告警渠道到 moox.backup（不设待导入标记）
+./bin/moox-cli setup backup --verify           # 写完后读回校验渠道解密并以 overwrite=false 验收密钥导入
 ```
 
-- 预览的 `hosts` 按主机列出组件：`update` 是已部署、这次重新部署的；`install` 是 `moox.toml` 里新加的组件或新主机上的组件；`remove` 是 `moox.toml` 里已经去掉、这次会停掉并删除的。
-  `moves` 是换了主机的组件：旧主机上停掉删除，新主机上从空数据开始，**数据不迁移**。把它们和 `steps`、`note` 一起作为更新计划给用户确认；`remove`、`moves` 不为空时单独说明。
-- 步骤和新安装的部署顺序相同：准备操作身份、放行防火墙、控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，然后控制机其余组件和其余主机（因子机最后），统一等一次全部就绪。
-- 不做初始化（不写业务空间、元数据、初始秘密和告警渠道），不启动空间（手工停用的任务保持停用，不重建云函数），数据目录（`data/`）不碰；每台主机只重启二进制或配置有变化的组件，组件按 `moox.toml` 的声明启停（`setup stop` 临时停掉的会被重新拉起）。
-- 新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随覆盖更新到位；`moox.toml` 里新开了云函数采集（`[scf_plan]`）、日志服务或换了云账号也不会生效。需要时再运行一次 `setup init`（只建不改；告警渠道的规则见第 2 节）。
-- 更新后对用户启动的空间跑一次 `setup verify --space-id <空间>` 验收；报 `collection_not_started` 说明之前的安装没做完（见第 3 节）。
-- 中途失败（`update_step_failed`）修好后重跑同一条 `setup update --yes`，报错里也有单独重跑那一步的命令；目标机都没装过，或控制机、存储机没装过时报 `update_not_installed`，改走（重跑）`setup install`。
+平时随时可以手动跑一次，防止 Admin 故障起不来时无备份可用；它不设“卸载后待导入”标记，不影响之后卸载时的自动备份。若当前已有未导入的待导入备份，手动备份会被拒绝覆盖（`backup_pending_import`）。
 
 **分步命令用于修复和日常运维：**
 
@@ -304,10 +322,10 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ## 保留数据与换电脑
 
-要保留线上数据时不卸载，用覆盖更新（`setup update`）。
+要保留线上数据时不卸载，用 `setup install --keep`（先不带 `--yes` 看预检与数据格式比对结果）。
 
 换了电脑时，从原电脑拷过来三样东西：`moox.toml`、`moox.secrets.toml`，以及解密秘密文件的密钥（在原电脑的系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`）。
-系统不再把配置备份到管理台；原电脑已经找不回这两份文件时，只能用 `config init` 重新生成，再按“装过时这样问用户”处理。如实告诉用户：
+系统不再把配置备份到管理台；原电脑已经找不回这两份文件时，只能用 `config init` 重新生成，再按“装过时：先跑预检，再问用户保留还是覆盖”处理。如实告诉用户：
 
 - `setup validate`、`setup status`、`setup logs`、`setup firewall` 这类只靠 SSH、云密钥的命令，拷过来就能用（SSH 密钥路径要重新核对）。
 - 经网关调用的命令（`doctor`、`collector`、`factor`、`trade` 等）和其余主机的 `setup deploy` 要这台电脑有操作员身份。新电脑上按顺序做两步（都要先问用户）：
@@ -320,19 +338,20 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ## 升级到新版本
 
-下载新版本的产物包与 CLI（同一版本），把原来的 `moox.toml` 和 `moox.secrets.toml` 放进新目录，然后覆盖更新：
+下载新版本的产物包与 CLI（同一版本），把原来的 `moox.toml` 和 `moox.secrets.toml` 放进新目录，然后运行 `setup install` 预检并按数据格式比对结果决定保留数据（`--keep`）还是全部覆盖（`--wipe`）：
 
 ```bash
-./bin/moox-cli setup validate                     # 看各主机现在的版本与组件
-./bin/moox-cli setup update                       # 预览，给用户确认
-./bin/moox-cli setup update --yes
+./bin/moox-cli setup validate                     # 看各主机现在的版本、组件与数据格式
+./bin/moox-cli setup install                      # 预检：把数据格式比对、--keep 与 --wipe 两个选项给用户确认
+./bin/moox-cli setup install --keep --yes         # 格式兼容、用户选择保留数据时执行（不要求 --space-id）
 ./bin/moox-cli setup verify --space-id <空间>
 ```
 
-- 只想更新一台主机时用 `setup deploy --host <主机>`（控制机先）。
+- 数据格式变化或未知时，`--keep` 会被拒绝并列出具体组件；让用户确认后改用 `./bin/moox-cli setup install --space-id <空间> --wipe <预检里的 wipe.digest> --yes`（清空前自动备份密钥与告警渠道，装完自动覆盖导入）。
+- 只想更新一台主机时用 `setup deploy --host <主机>`（控制机先；始终按保留数据预检，格式变化会拒绝并提示走全部覆盖）。
 - 每台主机只重启二进制或配置有变化的组件；整台部署总是带着主机网关，服务目录变化不需要另外处理。
-- 升级只动程序和配置，数据目录（`data/`）不碰。配置每次部署都从这个版本的模板重新渲染，手工调过的值要写在 `[overrides]` 里才会保留。
-- 回滚：用旧版本的产物包目录和 CLI 再部署一遍。数据库结构只增不减的版本可以这样回退；发布说明里写了“不可回退”的版本不行。
+- 保留更新只动程序和配置，数据目录（`data/`）不碰。配置每次部署都从这个版本的模板重新渲染，手工调过的值要写在 `[overrides]` 里才会保留。
+- 回滚：用旧版本的产物包目录和 CLI 再部署一遍。数据格式未变的版本可以这样回退；格式变化的版本不行。
 - 维护者从源码目录部署见 [`source-deploy.md`](source-deploy.md)。
 
 ## 常见问题
@@ -355,9 +374,13 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `binary_dir_required`、`binary_missing` | 在源码目录里部署，没给或缺编译好的 Linux 二进制 | 用户安装应在产物包目录里运行；维护者见 [`source-deploy.md`](source-deploy.md) |
 | `version_invalid` | 目标机的 `version.json` 损坏 | 告诉用户；确认后删掉它重跑（会把全部组件当成有变化重启一遍） |
 | `config_invalid: [overrides…]` | `[overrides]` 写错：组件没有这个配置文件，或键路径不存在 | 按报错改 `moox.toml`；键路径以渲染出的配置为准（目标机 `<部署根>/config/<组件>/`） |
-| `install_step_failed` | `setup install` 的某一步失败，后面是那一步的原因和单独重跑它的命令 | 按原因处理后重跑同一条 `setup install` |
-| `update_step_failed` | `setup update` 的某一步失败，后面是那一步的原因和单独重跑它的命令 | 按原因处理后重跑同一条 `setup update --yes` |
-| `update_not_installed` | 目标机都没装过，或控制机、存储机没装过（上次安装没做完） | 走新安装或重跑同一条 `setup install` |
+| `install_step_failed` | `setup install` 的某一步失败，后面是那一步的原因和单独重跑它的命令 | 按原因处理后重跑对应的 `setup install`（装过时带 `--keep --yes` 或 `--wipe <摘要> --yes`） |
+| `install_choice_required`、`install_choice_conflict` | 目标机装过（`incomplete` 或 `installed`）时带 `--yes` 却未明确选 `--keep` / `--wipe`，或两者同时指定 | 先不带 `--yes` 跑 `setup install` 看预检，把结果给用户确认后明确二选一 |
+| `data_format_incompatible` | 已有数据组件的格式与新版本不兼容或缺少 `data-format`（格式未知），拒绝保留数据 | 把不兼容组件列表给用户看，确认后走 `setup install --space-id <空间> --wipe <摘要> --yes` |
+| `backup_failed` | 清空前自动备份密钥与告警渠道失败，已中止且未清空任何主机 | 先排查 Admin/Monitor 连通性后重试；若旧服务已无法恢复，经用户确认后加 `--no-backup`（本机已有 `moox.backup` 会被沿用并标记待导入） |
+| `backup_pending_import` | 本机 `moox.backup` 带有“卸载后待导入”标记，拒绝被新备份覆盖 | 先完成安装导入该备份，防止半成品状态盖掉完好备份 |
+| `update_core_missing` | 已装好系统出现控制机或存储机缺少 `version.json`，拒绝只做保留更新 | 排查该主机或改走 `--wipe` 全部覆盖 |
+| `keep_not_needed` | 目标机没装过却带了 `--keep` | 去掉 `--keep` 直接运行 `setup install --space-id <空间> --yes` |
 | `start_prerequisite_missing` | crypto 缺 collector-stream 或出口代理，其他空间没配 `[scf_plan]` | 告诉用户缺什么，按 `setup validate` 处理 |
 | `no_collection_tasks` | 这个空间没有任何 K 线任务，`--space-id` 写错或种子没写入（任务都停用时验收跳过，不报错） | 核对空间，看 `collector task list`；不要手工改数据库 |
 | `verify_read_failed` | 到超时还读不到验收数据，组件没起来或连接不通 | 看错误里的组件，用 `setup logs` 查 |
