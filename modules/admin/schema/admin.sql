@@ -139,13 +139,6 @@ BEGIN
     UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 管理台已删除的初始密钥墓碑：防止 moox-cli setup init 将作废或泄露的初始密钥（tencent-default、[[exchange_keys]]）静默复活
--- 手工新建或导入同 c_secret_id 时清除对应记录
-CREATE TABLE IF NOT EXISTS t_deleted_initial_secrets (
-    c_secret_id TEXT NOT NULL PRIMARY KEY,
-    c_ctime INTEGER NOT NULL
-);
-
 -- 活动日志：各模块写入的、需要展示给用户的事件；永久保存，不清理；c_ctime 为 Unix 毫秒时间戳
 CREATE TABLE IF NOT EXISTS t_activity_logs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

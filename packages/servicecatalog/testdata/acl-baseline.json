@@ -2,10 +2,10 @@
   "note": "批 4 T0 记下的服务目录访问控制基线：callers 是 Allowed(调用方, 服务, 方法) 为真的“服务/方法”集合，principals 是 PrincipalAllowed 为真的集合；host-gateway 是每台主机的网关（签名主机另由签名头给出）。改服务目录后重新生成并人工看差异，访问控制不得变宽。",
   "summary": {
     "components": 16,
-    "services": 24,
-    "methods": 297,
-    "read_only_methods": 138,
-    "retryable_methods": 140,
+    "services": 23,
+    "methods": 296,
+    "read_only_methods": 137,
+    "retryable_methods": 139,
     "callers": 20,
     "principals": 2
   },
@@ -37,24 +37,6 @@
           "name": "PullSnapshot",
           "read_only": false,
           "retryable": false,
-          "timeout_ms": 5000
-        }
-      ]
-    },
-    {
-      "path": "trpc.moox.admin.Setup",
-      "component": "admin",
-      "methods": [
-        {
-          "name": "ApplySetup",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "GetSetupStatus",
-          "read_only": true,
-          "retryable": true,
           "timeout_ms": 5000
         }
       ]
@@ -1080,6 +1062,12 @@
         },
         {
           "name": "DeleteSecret",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "EnsureInitialSecret",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -2330,8 +2318,6 @@
     ],
     "moox-cli": [
       "trpc.moox.admin.ActivityLog/ListActivityLogs",
-      "trpc.moox.admin.Setup/ApplySetup",
-      "trpc.moox.admin.Setup/GetSetupStatus",
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
       "trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
@@ -2463,6 +2449,7 @@
       "trpc.moox.monitor.MonitorMgr/UnmuteAlerts",
       "trpc.moox.ops.SecretMgr/CreateSecret",
       "trpc.moox.ops.SecretMgr/DeleteSecret",
+      "trpc.moox.ops.SecretMgr/EnsureInitialSecret",
       "trpc.moox.ops.SecretMgr/ExportSecrets",
       "trpc.moox.ops.SecretMgr/GetSecret",
       "trpc.moox.ops.SecretMgr/GetSecretValue",

@@ -14,40 +14,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func TestValidateSetupListenerRequiresLoopback(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		address string
-		wantErr bool
-	}{
-		{name: "ipv4 loopback", address: "127.0.0.1"},
-		{name: "ipv6 loopback", address: "::1"},
-		{name: "all interfaces", address: "0.0.0.0", wantErr: true},
-		{name: "public address", address: "192.0.2.10", wantErr: true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "trpc_go.yaml")
-			body := "server:\n  service:\n    - name: trpc.moox.admin.Setup\n      ip: " + tt.address + "\n      port: 11110\n      network: tcp\n      protocol: trpc\n"
-			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-			err := validateSetupListener(path)
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "loopback")
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
-func TestValidateSetupListenerRequiresDedicatedService(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "trpc_go.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("server:\n  service: []\n"), 0o600))
-	err := validateSetupListener(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "trpc.moox.admin.Setup")
-}
-
 func TestLoadEncryptionKey_FromEnv_ShouldReturnKey(t *testing.T) {
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY_FILE", "")
@@ -103,11 +69,6 @@ console:
 `), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "trpc_go.yaml"), []byte(`server:
   service:
-    - name: trpc.moox.admin.Setup
-      ip: 127.0.0.1
-      port: 11110
-      network: tcp
-      protocol: trpc
     - name: trpc.moox.admin.GatewayControl
       ip: 127.0.0.1
       port: 11112
@@ -212,37 +173,6 @@ func TestGatewayControlListenerRequiresOneDedicatedLoopbackEndpoint(t *testing.T
 			}
 		})
 	}
-}
-
-func TestSetupListenerRejectsHTTP(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "trpc_go.yaml")
-	body := "server:\n  service:\n    - name: trpc.moox.admin.Setup\n      ip: 127.0.0.1\n      port: 11110\n      network: tcp\n      protocol: http\n"
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	require.ErrorContains(t, validateSetupListener(path), "tcp trpc")
-}
-
-// tRPC 优先使用 address / nic，Setup 没有鉴权，这两项覆盖会绕过 loopback 校验，必须拒绝。
-func TestValidateSetupListenerRejectsAddressAndNICOverrides(t *testing.T) {
-	for _, extra := range []string{"      address: 0.0.0.0:11110\n", "      nic: eth0\n"} {
-		path := filepath.Join(t.TempDir(), "trpc_go.yaml")
-		body := "server:\n  service:\n    - name: trpc.moox.admin.Setup\n      ip: 127.0.0.1\n      port: 11110\n      network: tcp\n      protocol: trpc\n" + extra
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-		require.ErrorContains(t, validateSetupListener(path), "must not override")
-	}
-}
-
-// tRPC 对重名服务以后者覆盖前者：前安全后不安全的重复配置必须被拒绝。
-func TestValidateSetupListenerRejectsDuplicateEntries(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "trpc_go.yaml")
-	entry := func(extra string) string {
-		return "    - name: trpc.moox.admin.Setup\n      ip: 127.0.0.1\n      port: 11110\n      network: tcp\n      protocol: trpc\n" + extra
-	}
-	body := "server:\n  service:\n" + entry("") + entry("      address: 0.0.0.0:11110\n")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	require.ErrorContains(t, validateSetupListener(path), "must not override")
-	body = "server:\n  service:\n" + entry("") + entry("")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	require.ErrorContains(t, validateSetupListener(path), "exactly one")
 }
 
 // loadConfigsForTest 让 tRPC 框架配置路径指向测试目录里的 config/trpc_go.yaml（生产由 -conf 指定）。

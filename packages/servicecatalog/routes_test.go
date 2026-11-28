@@ -146,7 +146,7 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 		routes  int
 		callers []string
 	}{
-		"control":  {164, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
+		"control":  {163, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
 		"storage":  {49, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
 		"overseas": {48, []string{"collector", "console", "moox-cli", "strategy"}},
 	}
@@ -772,7 +772,7 @@ func TestConsoleOnlyPortZeroServicesSkipPortsDirectoryAndRoutes(t *testing.T) {
 	if svc, ok := c.ConsoleService("ssh", "CreateSession"); !ok || svc.Path != "trpc.moox.ops.Ssh" || svc.Port != 0 {
 		t.Fatalf("ConsoleService(ssh, CreateSession) = %+v, %v", svc, ok)
 	}
-	if _, ok := c.ConsoleService("setup", "GetSetupStatus"); ok {
-		t.Fatal("Setup must not be exposed to console")
+	if _, ok := c.ConsoleService("secret", "EnsureInitialSecret"); ok {
+		t.Fatal("EnsureInitialSecret must not be exposed to console")
 	}
 }

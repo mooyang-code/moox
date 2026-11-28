@@ -8,7 +8,7 @@ import (
 	_ "github.com/glebarez/go-sqlite"
 )
 
-func TestAdminSchemaUsesHardDeleteAndInitialSecretTombstone(t *testing.T) {
+func TestAdminSchemaUsesHardDeleteWithoutInitialSecretTombstone(t *testing.T) {
 	raw := AdminSQL()
 	if strings.Contains(raw, "c_is_deleted") {
 		t.Fatalf("admin schema must not keep soft-delete column c_is_deleted")
@@ -16,9 +16,11 @@ func TestAdminSchemaUsesHardDeleteAndInitialSecretTombstone(t *testing.T) {
 	if strings.Contains(raw, "c_expected_hash") {
 		t.Fatalf("admin schema must not keep write-only column c_expected_hash")
 	}
+	if strings.Contains(raw, "t_deleted_initial_secrets") {
+		t.Fatalf("admin schema must not keep retired table t_deleted_initial_secrets")
+	}
 	for _, required := range []string{
 		"UNIQUE (c_secret_id)",
-		"t_deleted_initial_secrets",
 		"c_ctime INTEGER NOT NULL",
 		"ON DELETE CASCADE",
 	} {

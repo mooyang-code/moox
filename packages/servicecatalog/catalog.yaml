@@ -127,7 +127,8 @@ components:
           - name: ToggleSecretStatus
           - name: ExportSecrets
           - name: ImportSecrets
-          # Collector 只能读固定 ID 只读 Key 的公开标识：用专用方法授权，Collector 拿不到 Trade 的交易密钥。
+          # Collector 按属性（类别 exchange、提供方相符、状态 active、extra_config 标记 readonly 且生产环境）读只读 Key 的公开标识：
+          # 用专用方法授权，Collector 拿不到 Trade 的交易密钥。
           - name: GetReadonlyExchangeKey
             read_only: true
             callers: [collector]
@@ -138,6 +139,9 @@ components:
             read_only: true
             callers: [collector]
             operators: []
+          # 按固定 secret_id 只建不改地写入初始密钥（仅供 moox-cli setup init 写入默认云账号密钥）。
+          - name: EnsureInitialSecret
+            operators: [moox-cli]
       - path: trpc.moox.ops.SysDeploy
         port: 11109
         console_name: sysdeploy
@@ -157,16 +161,6 @@ components:
             read_only: true
           # 按 moox.toml 整份覆盖主机与部署的登记（setup deploy、setup install 部署每台主机前调用）。
           - name: SyncTopology
-            operators: [moox-cli]
-      - path: trpc.moox.admin.Setup
-        port: 11110
-        timeout_ms: 5000
-        max_body_bytes: 4194304
-        methods:
-          - name: ApplySetup
-            operators: [moox-cli]
-          - name: GetSetupStatus
-            read_only: true
             operators: [moox-cli]
       - path: trpc.moox.admin.ActivityLog
         port: 11113

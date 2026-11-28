@@ -5,6 +5,7 @@ package rpc
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -165,31 +166,163 @@ func componentCaller(ctx context.Context) string {
 	return ""
 }
 
-// ReadonlyExchangeKeyID 返回只读交易所 Key 的固定秘钥 ID：exchange-<交易所>-production-readonly（setup apply 按 moox.toml 的
-// [[exchange_keys]] readonly = true 写入）。
-func ReadonlyExchangeKeyID(exchange string) string {
-	return model.ExchangeSecretID(exchange, "production", "readonly")
-}
-
-// GetReadonlyExchangeKey 只返回只读交易所 Key 的公开标识 key_id，不返回秘钥值与额外配置。
+// GetReadonlyExchangeKey 按属性查找启用的交易所正式环境只读 Key，只返回其公开标识 key_id，
+// 不返回秘钥值与额外配置。
 // 它是给 Collector 的专用方法：靠服务目录“按方法授权”，Collector 只被放行这一个方法，拿不到 Trade 的交易密钥。
+// extra_config 是密文，不能用 SQL 过滤：先按类别与厂商列出并解密，再在内存判断。
 func (s *Service) GetReadonlyExchangeKey(ctx context.Context, req *pb.GetReadonlyExchangeKeyReq) (*pb.GetReadonlyExchangeKeyRsp, error) {
 	exchange := req.GetExchange()
 	if exchange != "binance" && exchange != "okx" {
 		return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "exchange 只能是 binance 或 okx")}, nil
 	}
-	record, err := s.store.FindByID(ctx, ReadonlyExchangeKeyID(exchange))
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "没有配置只读 Key")}, nil
+	for offset := 0; ; offset += exportPageSize {
+		records, total, err := s.store.List(ctx, offset, exportPageSize, &dao.SecretFilters{
+			Category: "exchange",
+			Provider: exchange,
+		})
+		if err != nil {
+			log.ErrorContextf(ctx, "[Secret] GetReadonlyExchangeKey failed: %v", err)
+			return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询只读 Key 失败")}, nil
 		}
-		log.ErrorContextf(ctx, "[Secret] GetReadonlyExchangeKey failed: %v", err)
-		return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询只读 Key 失败")}, nil
+		for i := range records {
+			if isMatchingReadonlyExchangeKey(&records[i], exchange) {
+				return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retOK(), KeyId: records[i].KeyID}, nil
+			}
+		}
+		if len(records) < exportPageSize || int64(offset+exportPageSize) >= total {
+			break
+		}
 	}
-	if (record.Status != "" && record.Status != "active") || record.KeyID == "" {
-		return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "没有配置只读 Key")}, nil
+	return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "没有配置只读 Key")}, nil
+}
+
+// isMatchingReadonlyExchangeKey 判断一条解密后的秘钥是否符合下架检测只读 Key 条件：
+// 类别为 exchange、提供方相符、启用、key_id 非空、extra_config 标记 readonly 为真、环境为 production 或缺省。
+func isMatchingReadonlyExchangeKey(record *model.Secret, exchange string) bool {
+	if record == nil || record.Category != "exchange" || !strings.EqualFold(strings.TrimSpace(record.Provider), exchange) {
+		return false
 	}
-	return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retOK(), KeyId: record.KeyID}, nil
+	if record.Status != "" && record.Status != "active" {
+		return false
+	}
+	if strings.TrimSpace(record.KeyID) == "" {
+		return false
+	}
+	object, err := decodeExtraConfig(record.ExtraConfig)
+	if err != nil || !extraConfigBool(object["readonly"]) {
+		return false
+	}
+	// 查找时缺环境这一项视为正式环境，确保从旧备份导回的只读密钥仍能被找到。
+	rawEnv, exists := object["environment"]
+	if !exists || rawEnv == nil {
+		return true
+	}
+	env, ok := rawEnv.(string)
+	if !ok {
+		return false
+	}
+	env = strings.ToLower(strings.TrimSpace(env))
+	return env == "" || env == "production"
+}
+
+func extraConfigBool(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+// EnsureInitialSecret 按固定 secret_id 只建不改地写入初始密钥（仅供 moox-cli setup init 使用）。
+// 不存在时按传入的固定 secret_id 创建；已存在时以管理台为准、不覆盖不报错（一致返回 unchanged，不一致返回 kept）。
+func (s *Service) EnsureInitialSecret(ctx context.Context, req *pb.EnsureInitialSecretReq) (*pb.EnsureInitialSecretRsp, error) {
+	secretRecord := secretPBToModel(req.GetSecret())
+	if secretRecord == nil {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥配置不能为空")}, nil
+	}
+	secretRecord.SecretID = strings.TrimSpace(secretRecord.SecretID)
+	secretRecord.Name = strings.TrimSpace(secretRecord.Name)
+	secretRecord.KeyID = strings.TrimSpace(secretRecord.KeyID)
+	if secretRecord.SecretID == "" {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
+	}
+	if secretRecord.Name == "" {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥名称不能为空")}, nil
+	}
+	if secretRecord.SecretValue == "" {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥值不能为空")}, nil
+	}
+	if isMaskedSecret(secretRecord.SecretValue) {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥值疑似脱敏后的值，请输入明文")}, nil
+	}
+	if !validCategories[secretRecord.Category] {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥分类无效")}, nil
+	}
+	if secretRecord.SecretType != "" && !validSecretTypes[secretRecord.SecretType] {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥类型无效")}, nil
+	}
+	if secretRecord.Status != "" && secretRecord.Status != "active" && secretRecord.Status != "inactive" {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "状态值无效，仅支持 active/inactive")}, nil
+	}
+	if secretRecord.EnvironmentBound() {
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "不允许通过初始密钥接口写入系统或本环境秘钥")}, nil
+	}
+	if secretRecord.SecretType == "" {
+		secretRecord.SecretType = "api_key"
+	}
+	if secretRecord.Status == "" {
+		secretRecord.Status = "active"
+	}
+	if strings.TrimSpace(secretRecord.ExtraConfig) == "" {
+		secretRecord.ExtraConfig = "{}"
+	}
+	if strings.TrimSpace(secretRecord.Creator) == "" {
+		secretRecord.Creator = "setup"
+	}
+
+	if existing, err := s.store.FindByID(ctx, secretRecord.SecretID); err == nil {
+		return &pb.EnsureInitialSecretRsp{
+			RetInfo:  retOK(),
+			Action:   initialSecretExistingAction(existing, secretRecord),
+			SecretId: existing.SecretID,
+		}, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		log.ErrorContextf(ctx, "[Secret] EnsureInitialSecret lookup failed: %v", err)
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询初始秘钥失败")}, nil
+	}
+
+	if err := s.store.Create(ctx, secretRecord); err != nil {
+		// 并发写入撞唯一约束时再读一次，已存在则按只建不改语义返回。
+		if existing, findErr := s.store.FindByID(ctx, secretRecord.SecretID); findErr == nil {
+			return &pb.EnsureInitialSecretRsp{
+				RetInfo:  retOK(),
+				Action:   initialSecretExistingAction(existing, secretRecord),
+				SecretId: existing.SecretID,
+			}, nil
+		}
+		log.ErrorContextf(ctx, "[Secret] EnsureInitialSecret create failed: %v", err)
+		if errors.Is(err, dao.ErrMaskedValue) {
+			return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥值疑似脱敏后的值，请输入明文")}, nil
+		}
+		return &pb.EnsureInitialSecretRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "写入初始秘钥失败")}, nil
+	}
+	return &pb.EnsureInitialSecretRsp{RetInfo: retOK(), Action: "created", SecretId: secretRecord.SecretID}, nil
+}
+
+func initialSecretExistingAction(existing, desired *model.Secret) string {
+	metadataMatches := existing.Name == desired.Name &&
+		existing.Category == desired.Category &&
+		existing.Provider == desired.Provider &&
+		existing.SecretType == desired.SecretType &&
+		existing.KeyID == desired.KeyID &&
+		existing.Status == desired.Status
+	if metadataMatches && subtle.ConstantTimeCompare([]byte(existing.SecretValue), []byte(desired.SecretValue)) == 1 {
+		return "unchanged"
+	}
+	return "kept"
 }
 
 // GetCloudCredential 按秘钥 ID 返回调腾讯云用的云账号密钥明文，只放行类别 cloud、厂商 tencent、状态 active 的秘钥。

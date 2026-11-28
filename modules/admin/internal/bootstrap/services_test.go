@@ -36,7 +36,6 @@ func TestCreateCoreServices_ValidDB_ShouldCreateServices(t *testing.T) {
 	require.NotNil(t, services)
 	require.NotNil(t, services.SSHService)
 	require.NotNil(t, services.SecretDAO)
-	require.NotNil(t, services.Setup)
 	require.NotNil(t, services.SysDeploy)
 	require.NotNil(t, services.ActivityLog)
 }

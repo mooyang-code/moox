@@ -134,7 +134,7 @@ verify: verify-ci-core verify-ci-contracts verify-ci-storage test verify-ci-web
 
 verify-custom-setup:
 	(cd packages/cloudprovider && go test -count=1 ./...)
-	(cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
+	(cd modules/admin && go test -count=1 ./internal/service/secret/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
 	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
 	bash skills/moox/scripts/test-private-network-contract.sh
 
