@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -13,22 +12,22 @@ import (
 func TestLogicalAccountTargetWeightRequiresModernIdentity(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*tradeeventpb.LogicalAccountTargetWeightRequested)
+		mutate func(*eventpb.LogicalAccountTargetWeightRequested)
 	}{
-		{name: "target", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.TargetId = "" }},
-		{name: "logical account", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.LogicalAccountId = "" }},
-		{name: "instance", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.InstanceId = "" }},
-		{name: "session", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.SessionId = "" }},
-		{name: "strategy", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.StrategyId = "" }},
-		{name: "session started at missing", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.SessionStartedAt = 0 }},
-		{name: "session started at negative", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.SessionStartedAt = -1 }},
-		{name: "bar end", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.BarEndTime = 0 }},
-		{name: "valid until", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.ValidUntil = 0 }},
-		{name: "market missing", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "" }},
-		{name: "market unknown", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "FUTURES" }},
-		{name: "market uppercase", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "SPOT" }},
-		{name: "duplicate instrument and market", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) {
-			value.Targets = append(value.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "BTC-USDT", TargetWeight: "0.1", MarketType: "spot"})
+		{name: "target", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.TargetId = "" }},
+		{name: "logical account", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.LogicalAccountId = "" }},
+		{name: "instance", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.InstanceId = "" }},
+		{name: "session", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.SessionId = "" }},
+		{name: "strategy", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.StrategyId = "" }},
+		{name: "session started at missing", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.SessionStartedAt = 0 }},
+		{name: "session started at negative", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.SessionStartedAt = -1 }},
+		{name: "bar end", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.BarEndTime = 0 }},
+		{name: "valid until", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.ValidUntil = 0 }},
+		{name: "market missing", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "" }},
+		{name: "market unknown", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "FUTURES" }},
+		{name: "market uppercase", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "SPOT" }},
+		{name: "duplicate instrument and market", mutate: func(value *eventpb.LogicalAccountTargetWeightRequested) {
+			value.Targets = append(value.Targets, &eventpb.InstrumentWeightTarget{InstrumentId: "BTC-USDT", TargetWeight: "0.1", MarketType: "spot"})
 		}},
 	}
 	registry, err := DefaultRegistry()
@@ -51,10 +50,10 @@ func TestLogicalAccountTargetWeightRejectsLegacyRunnerAndSequenceFallback(t *tes
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 	// Target and account identity alone cannot authorize automatic execution.
-	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
+	payload := &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId:         "target-1",
 		LogicalAccountId: "logical-1",
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{
+		Targets: []*eventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT-SPOT",
 			TargetWeight: "1",
 		}},
@@ -104,10 +103,10 @@ func TestLogicalAccountTargetWeightSubjectUsesLogicalAccountID(t *testing.T) {
 	require.Equal(t, want, encoded.Subject)
 }
 
-func validLogicalAccountTargetWeight() *tradeeventpb.LogicalAccountTargetWeightRequested {
+func validLogicalAccountTargetWeight() *eventpb.LogicalAccountTargetWeightRequested {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	bar := now.UnixMilli()
-	return &tradeeventpb.LogicalAccountTargetWeightRequested{
+	return &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId:         "target-1",
 		InstanceId:       "instance-1",
 		SessionId:        "session-1",
@@ -116,7 +115,7 @@ func validLogicalAccountTargetWeight() *tradeeventpb.LogicalAccountTargetWeightR
 		LogicalAccountId: "logical-1",
 		BarEndTime:       bar,
 		ValidUntil:       now.Add(time.Hour).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{
+		Targets: []*eventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT",
 			TargetWeight: "1.25",
 			MarketType:   "spot",
@@ -128,7 +127,7 @@ func TestLogicalAccountTargetWeightAllowsSameInstrumentInSpotAndSwap(t *testing.
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 	payload := validLogicalAccountTargetWeight()
-	payload.Targets = append(payload.Targets, &tradeeventpb.InstrumentWeightTarget{
+	payload.Targets = append(payload.Targets, &eventpb.InstrumentWeightTarget{
 		InstrumentId: "BTC-USDT", TargetWeight: "-0.5", MarketType: "swap",
 	})
 	_, err = registry.Encode(

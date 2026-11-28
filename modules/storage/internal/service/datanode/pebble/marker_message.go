@@ -12,7 +12,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -34,7 +33,7 @@ func BuildLedgerPeriodCompletedMessage(spaceID string, completed *LedgerPeriodCo
 	if completed == nil {
 		return nil, "", invalid("ledger period completion is required")
 	}
-	payload := &storageeventpb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: completed.DatasetID, Frequency: completed.Frequency, PeriodTime: completed.PeriodTime,
 		Status: completed.Status, Source: "ledger", SnapshotRef: completed.SnapshotRef,
 		UniverseSubjectIds: normalizedIDs(completed.UniverseSubjectIDs),
@@ -56,7 +55,7 @@ func BuildProducerPeriodCompletedMessage(spaceID string, marker *pb.DatasetPerio
 	if marker == nil {
 		return nil, "", invalid("dataset period marker is required")
 	}
-	payload := &storageeventpb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
 		Status: marker.GetStatus(), Source: "producer",
 		UniverseSubjectIds: append([]string(nil), marker.GetUniverseSubjectIds()...),

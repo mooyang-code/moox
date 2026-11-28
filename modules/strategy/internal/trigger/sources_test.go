@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
@@ -61,7 +60,7 @@ func newSourceHarnessWith(t *testing.T, dslYaml string) *harness {
 }
 
 // dailyEvent 构造日线来源的就绪事件：period_time 是收盘于 alignedBar 的那根日线的 bar_start（bar0）。
-func (h *harness) dailyEvent(status, hash string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
+func (h *harness) dailyEvent(status, hash string) (*eventpb.EventMessage, *eventpb.ViewDataReady) {
 	message, payload := h.event(0, map[string]string{"g": hash}, status)
 	payload.DatasetId, payload.Frequency, payload.PeriodTime = dailyView, "1d", bar0.Unix()
 	message.EventId = fmt.Sprintf("%s-%s-%s", dailyView, status, hash)

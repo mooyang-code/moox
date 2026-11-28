@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	nats "github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -41,7 +41,7 @@ type ConsumerConfig struct {
 	// Params 非空时在开算每一期之前取参；为空时全部按成员自己的参数计算。
 	Params trigger.ParamSelector
 	// OnBackfilled 非空时另建一个持久消费者订阅 K 线补写事件，每条事件调用一次（只更新内存状态，不返回错误）。
-	OnBackfilled func(spaceID string, payload *storagepb.CollectorKlineBackfilled)
+	OnBackfilled func(spaceID string, payload *eventpb.CollectorKlineBackfilled)
 }
 
 // ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
@@ -204,7 +204,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 // backfilledHandler 把 K 线补写事件交给引擎；事件只更新内存里的状态，解码不了的直接终止，其余一律 ACK。
 type backfilledHandler struct {
 	registry *events.Registry
-	notify   func(spaceID string, payload *storagepb.CollectorKlineBackfilled)
+	notify   func(spaceID string, payload *eventpb.CollectorKlineBackfilled)
 }
 
 // Handle 实现 jetstream.DeliveryHandler。
@@ -213,7 +213,7 @@ func (h backfilledHandler) Handle(_ context.Context, delivery *jetstream.Deliver
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("K 线补写事件无法解码")}
 	}
 	message, value, err := events.DecodeRaw(h.registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
-	payload, ok := value.(*storagepb.CollectorKlineBackfilled)
+	payload, ok := value.(*eventpb.CollectorKlineBackfilled)
 	if err != nil || message == nil || !ok {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("拒绝 K 线补写事件: %v", err)}
 	}

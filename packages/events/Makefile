@@ -1,6 +1,6 @@
 PROTO_DIR := proto
 MODULE := github.com/mooyang-code/moox/packages/events
-PROTO_FILES := eventpb/event_message.proto
+PROTO_FILES := eventpb/event_message.proto eventpb/storage_events.proto eventpb/trade_events.proto
 
 .PHONY: all clean
 

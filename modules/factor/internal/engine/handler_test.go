@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +38,7 @@ func periodDelivery(t *testing.T, datasetID string) *jetstream.Delivery {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: datasetID, Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
 		Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: []string{"BTC"}, CompletedAt: period.Add(time.Minute).UnixMilli(),

@@ -3,11 +3,11 @@ package primarystore
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -44,7 +44,7 @@ func (s *Service) GetDatasetPeriodCompleted(ctx context.Context, req *pb.GetData
 	if !found {
 		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Success("success")}, nil
 	}
-	payload := &storageeventpb.DatasetPeriodCompleted{}
+	payload := &eventpb.DatasetPeriodCompleted{}
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}

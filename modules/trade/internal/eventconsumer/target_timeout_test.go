@@ -3,19 +3,19 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
-type targetResolverFunc func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
+type targetResolverFunc func(context.Context, *eventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
 
-func (f targetResolverFunc) Resolve(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
+func (f targetResolverFunc) Resolve(ctx context.Context, request *eventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
 	return f(ctx, request, space)
 }
 
@@ -25,7 +25,7 @@ func TestTargetResolutionHasDeadlineAndTimeoutDoesNotAccept(t *testing.T) {
 	now := time.Now().UTC()
 	opts := targetOptions(tradeStore, now)
 	opts.ResolveTimeout = 20 * time.Millisecond
-	opts.WeightResolver = targetResolverFunc(func(ctx context.Context, _ *tradeeventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
+	opts.WeightResolver = targetResolverFunc(func(ctx context.Context, _ *eventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
 		if _, ok := ctx.Deadline(); !ok {
 			return targetapp.WeightConversion{}, errors.New("resolver context has no deadline")
 		}

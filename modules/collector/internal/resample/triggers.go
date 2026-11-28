@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -109,7 +109,7 @@ type PeriodTrigger struct {
 }
 
 // OnPeriod 处理一个源周期完成事件。
-func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *storagepb.DatasetPeriodCompleted) error {
+func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *eventpb.DatasetPeriodCompleted) error {
 	if t.Metrics != nil {
 		t.Metrics.Events.Inc()
 	}
@@ -138,7 +138,7 @@ func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *s
 
 // periodSubjects 由周期完成事件算出可以合成的标的：全集减去失败的标的。不按 tag 过滤：源任务换过主来源、tag 变了的标的
 // 照样交给 RunBucket，它按任务的 SourceSeriesTag 读源行，读不到就按“源窗口不完整”跳过（不写、不等待）。
-func periodSubjects(payload *storagepb.DatasetPeriodCompleted) []string {
+func periodSubjects(payload *eventpb.DatasetPeriodCompleted) []string {
 	failed := make(map[string]struct{}, len(payload.GetFailedSubjects()))
 	for _, subject := range payload.GetFailedSubjects() {
 		failed[subject] = struct{}{}
@@ -164,7 +164,7 @@ type BackfillTrigger struct {
 }
 
 // OnBackfilled 处理一个补采完成事件；eventID 作为作业的 request_id，重复投递不会重复建作业。
-func (t *BackfillTrigger) OnBackfilled(ctx context.Context, spaceID, eventID string, payload *storagepb.CollectorKlineBackfilled) error {
+func (t *BackfillTrigger) OnBackfilled(ctx context.Context, spaceID, eventID string, payload *eventpb.CollectorKlineBackfilled) error {
 	tasks, err := t.Index.Match(ctx, spaceID, payload.GetDatasetId(), payload.GetFrequency())
 	if err != nil {
 		return err

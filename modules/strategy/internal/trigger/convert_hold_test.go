@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"encoding/json"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 // 保持标记要贯穿 targets_json 与发往 Trade 的目标事件，Trade 才不会把保持标的当作目标权重去调仓。
@@ -53,11 +53,11 @@ func TestHoldFlagReachesTargetsJSONAndTradeEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	targets := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested).GetTargets()
+	targets := payload.(*eventpb.LogicalAccountTargetWeightRequested).GetTargets()
 	if len(targets) != 2 || !targets[0].GetHold() || targets[1].GetHold() || targets[0].GetTargetWeight() != "0.5" {
 		t.Fatalf("事件里的保持标记不符：%v", targets)
 	}
-	if got := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested).GetSessionStartedAt(); got != 1_000 {
+	if got := payload.(*eventpb.LogicalAccountTargetWeightRequested).GetSessionStartedAt(); got != 1_000 {
 		t.Fatalf("事件里的会话开始时刻 = %d，期望 1000", got)
 	}
 }
@@ -95,7 +95,7 @@ func TestSpotAndSwapTargetsOfSameInstrumentReachTradeEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	targets := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested).GetTargets()
+	targets := payload.(*eventpb.LogicalAccountTargetWeightRequested).GetTargets()
 	if len(targets) != 2 || targets[0].GetInstrumentId() != "BTC-USDT" || targets[0].GetMarketType() != "spot" || targets[1].GetInstrumentId() != "BTC-USDT" || targets[1].GetMarketType() != "swap" || targets[1].GetTargetWeight() != "-0.3" {
 		t.Fatalf("事件里的两项目标不符：%v", targets)
 	}

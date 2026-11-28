@@ -3,13 +3,13 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +28,7 @@ func delistDelivery(t *testing.T, delistAt, occurredAt time.Time) *jetstream.Del
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	subjectID := events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, "FOOUSDT")
-	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
+	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, &eventpb.InstrumentDelistScheduled{
 		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: delistAt.UnixMilli(),
 		Source: events.DelistSourceManual, FirstSeenAt: occurredAt.UnixMilli(), Scope: events.DelistScopePaperOnly,
 	}, events.PublishOptions{EventID: "delist-1", OccurredAt: occurredAt, SpaceID: events.SystemSpaceID, SubjectID: subjectID})

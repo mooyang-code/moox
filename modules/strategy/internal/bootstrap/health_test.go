@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 func openStore(t *testing.T) *store.Store {
@@ -118,9 +117,9 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	bar := now.UnixMilli()
-	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", SessionStartedAt: 1_000, LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1"}},
+		Targets: []*eventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "r1", OccurredAt: now, SpaceID: "crypto", SubjectID: "acct"})
 	if err != nil {
 		t.Fatal(err)

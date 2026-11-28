@@ -2,6 +2,7 @@ package eventconsumer
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +29,7 @@ func closeViaTrade(t *testing.T, db *store.Store, sessionID string) int64 {
 // closedTargetOptions 是关闭之后的投递选项：被结束的目标不能进入换算、不能唤醒执行器。
 func closedTargetOptions(t *testing.T, db *store.Store, now time.Time) TargetOptions {
 	opts := targetOptions(db, now)
-	opts.WeightResolver = targetResolverFunc(func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
+	opts.WeightResolver = targetResolverFunc(func(context.Context, *eventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
 		t.Error("已关闭会话的目标不能进入换算")
 		return targetapp.WeightConversion{}, nil
 	})
@@ -53,7 +53,7 @@ func requireCurrentTarget(t *testing.T, db *store.Store, targetID string) store.
 	return current
 }
 
-var oneBTC = []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}}
+var oneBTC = []*eventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}}
 
 // 关闭后同会话更晚一根的目标按 superseded 结束（同会话按 bar 先后本该接受，关闭把它挡在第 3 步）。
 func TestCloseTargetSessionEndsLaterBarOfSameSession(t *testing.T) {

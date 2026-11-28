@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -14,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,7 +80,7 @@ func periodDelivery(t *testing.T, eventID string, period time.Time, universe, fa
 	if len(failed) > 0 {
 		status = "degraded"
 	}
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: status, Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: universe, FailedSubjects: failed,
 		CompletedAt: period.Add(time.Minute).UnixMilli(),

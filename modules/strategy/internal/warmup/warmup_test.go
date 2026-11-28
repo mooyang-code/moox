@@ -21,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
@@ -439,7 +438,7 @@ func checkFirstLiveMatchesLongRun(t *testing.T, poolYaml string, memberIDs ...st
 		t.Fatal(err)
 	}
 	message := &eventpb.EventMessage{EventId: "event-100", EventName: "event.storage.view.data_ready", SpaceId: "crypto"}
-	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1h", PeriodTime: origin.Add(100 * time.Hour).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
+	payload := &eventpb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1h", PeriodTime: origin.Add(100 * time.Hour).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
 	if err := handler.Handle(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
 	}

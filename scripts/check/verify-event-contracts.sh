@@ -29,7 +29,7 @@ reject 'streamcalc|TickReceived|MarketKlineClosed' \
 reject 'packages/dlqpb|PublishRejected|MOOX_DLQ|dlq\.message\.rejected' \
   "shared EventBus DLQ remains" "${production[@]}" modules packages
 reject 'TradeOrder|\bTradeExecution\b|TradeFill|TradeReconciliation|TradeRebalanceCompleted|TradeRebalanceRequested|RebalanceRequested|RebalanceTarget|trade\.rebalance\.requested|TradingSignal|t_trade_outbox|withTradeDLQ' \
-  "Trade self-consumption contract remains" "${production[@]}" modules/trade modules/strategy packages/events packages/tradeeventpb
+  "Trade self-consumption contract remains" "${production[@]}" modules/trade modules/strategy packages/events
 reject 'events\.EventType|EventDefinition|EventSchema|AllEventTypes' \
   "legacy event registry API remains" "${production[@]}" modules packages
 # View 跟随 PrimaryStore 的变更日志，不再有行事件、同步点和已提交位置。
@@ -58,7 +58,7 @@ reject 'strategy_run_id|strategy_result_id|execution_id|execution_binding_id|exc
   modules/strategy/internal/rpc/service.go \
   packages/events/registry.go \
   packages/events/validation.go \
-  packages/tradeeventpb/trade_events.proto
+  packages/events/proto/eventpb/trade_events.proto
 reject 'strategy_run_id|strategy_result_id|execution_id|execution_binding_id|data_revision|not_after|TargetIntent|TargetPosition|TradeTarget|TradeTargetRequested|target_quantity' \
   "Trade target consumer or persisted LogicalAccount target still uses the obsolete target contract" \
   "${production[@]}" \

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"reflect"
 	"sort"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
@@ -180,7 +180,7 @@ func ucState(status string, failedSubjects []string) *factorpb.FactorPeriodState
 	return &factorpb.FactorPeriodState{MemberKey: "f", MemberKind: "fixed", FactorId: "f", Status: status, DefinitionHash: "h1", FailedSubjects: failedSubjects}
 }
 
-func ucEvent(datasetID string, universe []string, state *factorpb.FactorPeriodState) *storagepb.ViewDataReady {
+func ucEvent(datasetID string, universe []string, state *factorpb.FactorPeriodState) *eventpb.ViewDataReady {
 	raw, err := proto.Marshal(&factorpb.PeriodDetail{Factors: []*factorpb.FactorPeriodState{state}})
 	if err != nil {
 		panic(err)
@@ -192,11 +192,11 @@ func ucEvent(datasetID string, universe []string, state *factorpb.FactorPeriodSt
 	if universe == nil {
 		universe = []string{}
 	}
-	return &storagepb.ViewDataReady{DatasetId: datasetID, Frequency: "1h", PeriodTime: ucBar.Unix(), Status: status, UniverseSubjectIds: universe, DetailType: readiness.PeriodDetailType, Detail: raw}
+	return &eventpb.ViewDataReady{DatasetId: datasetID, Frequency: "1h", PeriodTime: ucBar.Unix(), Status: status, UniverseSubjectIds: universe, DetailType: readiness.PeriodDetailType, Detail: raw}
 }
 
 // build 生成 Storage 替身、任务与各市场的就绪事件。
-func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*storagepb.ViewDataReady) {
+func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*eventpb.ViewDataReady) {
 	t.Helper()
 	mode := parseMode(t, w.dsl)
 	client := &ucStorage{views: map[string]upstream.ViewInfo{}, datasets: map[string]upstream.DatasetInfo{}, subjects: map[string][]upstream.Subject{}, tags: map[string][]string{},
@@ -208,7 +208,7 @@ func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*storagep
 		client.datasets[dataset] = upstream.DatasetInfo{DatasetID: dataset, Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": source}, SubjectTags: tagIDs}
 		client.datasets[source] = upstream.DatasetInfo{DatasetID: source, Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: tagIDs}
 	}
-	events := map[string]*storagepb.ViewDataReady{}
+	events := map[string]*eventpb.ViewDataReady{}
 	var tasks []string
 	client.rows = func(query upstream.Query) []upstream.Row {
 		var markets []string

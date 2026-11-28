@@ -2,11 +2,11 @@ package engine
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -57,7 +57,7 @@ func advanceAll(ctx context.Context, taskIDs []string, budget time.Duration, adv
 // onBackfilled 处理源 K 线补写事件（event.collector.kline.backfilled：补采分块确认、合成补写）：
 // 记下补采确认行情源没有的标的或序列，标记这段周期已补齐（上游失败的待办不再等 Settle），唤醒追赶与跳过恢复。
 // 被补写的行本身由本地数据跟随 Storage 变更日志取回并触发失效重算，这里不重复做。
-func (r *Runtime) onBackfilled(spaceID string, payload *storagepb.CollectorKlineBackfilled) {
+func (r *Runtime) onBackfilled(spaceID string, payload *eventpb.CollectorKlineBackfilled) {
 	// 同一个源数据集上的每个任务（各策略实例的私有任务）都要知道这段周期已补齐。
 	sets, err := r.catalog.EnabledTasksByDataset(context.Background(), spaceID, payload.GetDatasetId(), payload.GetFrequency())
 	if err != nil {

@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 type runtimeTestStore struct {
@@ -86,9 +85,9 @@ func strategyEventData(id string) ([]byte, error) {
 	now := time.Now().UTC()
 	bar := now.UnixMilli()
 	validUntil := now.Add(time.Hour).UnixMilli()
-	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: id, InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", SessionStartedAt: 1_000, LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: validUntil,
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{
+		Targets: []*eventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1",
 		}},
 	}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "logical-1"})

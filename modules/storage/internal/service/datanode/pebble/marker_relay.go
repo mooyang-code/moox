@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -143,7 +143,7 @@ func (s *Store) MarkerPublishable(raw []byte) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("%w：%v", ErrInvalidMarker, err)
 	}
-	payload := &storageeventpb.DatasetPeriodCompleted{}
+	payload := &eventpb.DatasetPeriodCompleted{}
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 		return false, fmt.Errorf("%w：%v", ErrInvalidMarker, err)
 	}

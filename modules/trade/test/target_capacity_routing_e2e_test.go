@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -16,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -154,11 +154,11 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 	}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "capacity-target", LogicalAccountId: testLogicalAccount,
 		InstanceId: "capacity-instance", SessionId: "capacity-session", SessionStartedAt: 1_000, StrategyId: "capacity-strategy",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, MarketType: "spot", TargetWeight: "1"}},
+		Targets: []*eventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, MarketType: "spot", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "capacity-target", OccurredAt: testNow, SpaceID: testSpace, SubjectID: testLogicalAccount})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)

@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/period"
@@ -143,10 +142,10 @@ func (p *periodContext) eventUniverses() map[string][]string {
 
 // gather 汇合本期各 View 的就绪事件，返回各市场的事件与是否到齐（设计 3.2.1 第 2～4 步）。绑定两个任务的实例先把到达的
 // 这条事件幂等地记下，再检查本期的两个 View 是否都到了；之后把更早还不会再等到齐的期补记为 skipped。
-func (h *Handler) gather(ctx context.Context, p *periodContext, payload *storagepb.ViewDataReady, taskKey string, periodTime time.Time) (map[string]*storagepb.ViewDataReady, bool, error) {
+func (h *Handler) gather(ctx context.Context, p *periodContext, payload *eventpb.ViewDataReady, taskKey string, periodTime time.Time) (map[string]*eventpb.ViewDataReady, bool, error) {
 	resolved := p.runtime.resolved
 	if !resolved.Gathers() {
-		return map[string]*storagepb.ViewDataReady{taskKey: payload}, true, nil
+		return map[string]*eventpb.ViewDataReady{taskKey: payload}, true, nil
 	}
 	if err := h.putArrival(ctx, p.instance, p.runtime.sessionID, p.boundary.BarEnd, p.eventID, payload); err != nil {
 		return nil, false, err
@@ -155,7 +154,7 @@ func (h *Handler) gather(ctx context.Context, p *periodContext, payload *storage
 	if err != nil {
 		return nil, false, err
 	}
-	events := make(map[string]*storagepb.ViewDataReady, len(records))
+	events := make(map[string]*eventpb.ViewDataReady, len(records))
 	arrived := make([]string, 0, len(records))
 	for _, record := range records {
 		recordKey, source, reference, ok := resolved.RoleOfDataset(record.DatasetID)
@@ -163,7 +162,7 @@ func (h *Handler) gather(ctx context.Context, p *periodContext, payload *storage
 			continue
 		}
 		recordKey = dsl.TaskKey(source, recordKey)
-		event := &storagepb.ViewDataReady{}
+		event := &eventpb.ViewDataReady{}
 		if err := proto.Unmarshal(record.Payload, event); err != nil {
 			h.logf("实例 %s 的到达记录 %s 无法解析：%v", p.instance.InstanceID, record.DatasetID, err)
 			return nil, false, fmt.Errorf("解析 View %s 的到达记录：%w", record.DatasetID, err)
@@ -204,7 +203,7 @@ func arrivedAll(resolved input.Resolved, barEnd time.Time, arrived []string) (bo
 // sourceArrival 处理附加来源的就绪事件：按来源的日历与周期换算出它的收盘时刻，就是要汇合的那根主帧的 bar_end（只有收盘时刻对齐的
 // 那一根才等来源）。事件记为这根主帧的到达记录；主帧这一根已经到了时，用主帧的事件重新走一遍处理（这时就会汇合求值），否则等主帧。
 // 这一根已经处理过（例如来源超期、已补记 market_missing）时直接确认。
-func (h *Handler) sourceArrival(ctx context.Context, loader Loader, instance store.Instance, rt *runtime, message *eventpb.EventMessage, payload *storagepb.ViewDataReady, name string, periodTime time.Time) error {
+func (h *Handler) sourceArrival(ctx context.Context, loader Loader, instance store.Instance, rt *runtime, message *eventpb.EventMessage, payload *eventpb.ViewDataReady, name string, periodTime time.Time) error {
 	barEnd, err := h.arrivalBarEnd(rt, payload.GetDatasetId(), periodTime)
 	if err != nil {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
@@ -230,7 +229,7 @@ func (h *Handler) sourceArrival(ctx context.Context, loader Loader, instance sto
 	if !ok {
 		return nil
 	}
-	event := &storagepb.ViewDataReady{}
+	event := &eventpb.ViewDataReady{}
 	if err := proto.Unmarshal(main.Payload, event); err != nil {
 		return fmt.Errorf("解析 View %s 的到达记录：%w", main.DatasetID, err)
 	}
@@ -279,7 +278,7 @@ func (h *Handler) arrivalBarEnd(rt *runtime, datasetID string, periodTime time.T
 }
 
 // putArrival 幂等地记下一个 View 的就绪事件（原始 ViewDataReady 按字节保存）。
-func (h *Handler) putArrival(ctx context.Context, instance store.Instance, sessionID string, barEnd time.Time, eventID string, payload *storagepb.ViewDataReady) error {
+func (h *Handler) putArrival(ctx context.Context, instance store.Instance, sessionID string, barEnd time.Time, eventID string, payload *eventpb.ViewDataReady) error {
 	raw, err := proto.Marshal(payload)
 	if err != nil {
 		return err
@@ -292,7 +291,7 @@ func (h *Handler) putArrival(ctx context.Context, instance store.Instance, sessi
 }
 
 // recordArrival 在门禁返回等待时把到达的事件记下（尽力而为，失败只记日志；事件本身会重投）。
-func (h *Handler) recordArrival(ctx context.Context, instance store.Instance, rt *runtime, message *eventpb.EventMessage, payload *storagepb.ViewDataReady, periodTime time.Time) {
+func (h *Handler) recordArrival(ctx context.Context, instance store.Instance, rt *runtime, message *eventpb.EventMessage, payload *eventpb.ViewDataReady, periodTime time.Time) {
 	if rt == nil || rt.sessionID == "" || (!rt.resolved.Gathers() && rt.pool == nil) || rt.resolved.Calendar == "" {
 		return
 	}
@@ -335,7 +334,7 @@ func (h *Handler) processPending(ctx context.Context, loader Loader, instance st
 		if !ok {
 			continue
 		}
-		event := &storagepb.ViewDataReady{}
+		event := &eventpb.ViewDataReady{}
 		if err := proto.Unmarshal(record.Payload, event); err != nil {
 			return fmt.Errorf("解析 View %s 的到达记录：%w", record.DatasetID, err)
 		}

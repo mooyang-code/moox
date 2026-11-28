@@ -5,12 +5,12 @@ package readiness
 
 import (
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sort"
 	"strings"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/factorname"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -69,7 +69,7 @@ type Result struct {
 }
 
 // Check 按设计文档 3.3 的表格顺序判定：因子缺失 → 事件指纹变化 → 上一根版本证据 → 因子跳过 → 降级标的。
-func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Result {
+func Check(binding Binding, adjacent *Record, event *eventpb.ViewDataReady) Result {
 	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{}}
 	states, err := indexFactors(event)
 	if err != nil && len(binding.Factors) > 0 {
@@ -152,7 +152,7 @@ func EncodeDetail(factors []*factorpb.FactorPeriodState) (string, []byte, error)
 
 // indexFactors 解码事件 detail 里的因子周期明细，按成员键索引因子状态（同一因子可以用不同参数出现多次）。
 // 不带因子明细的事件（K 线 View）返回空表。
-func indexFactors(event *storagepb.ViewDataReady) (map[string]*factorpb.FactorPeriodState, error) {
+func indexFactors(event *eventpb.ViewDataReady) (map[string]*factorpb.FactorPeriodState, error) {
 	if event.GetDetailType() != PeriodDetailType || len(event.GetDetail()) == 0 {
 		return map[string]*factorpb.FactorPeriodState{}, nil
 	}

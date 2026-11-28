@@ -2,13 +2,13 @@ package events
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -51,7 +51,7 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 		{
 			name: "ledger route", event: DatasetPeriodCompleted, subjectID: "dataset",
 			payload: validLedgerPeriodCompleted(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).DatasetId = "other" },
+			mutate:  func(value proto.Message) { value.(*eventpb.DatasetPeriodCompleted).DatasetId = "other" },
 		},
 		{
 			name: "ledger failed subject subset", event: DatasetPeriodCompleted, subjectID: "dataset",
@@ -62,40 +62,40 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 				return payload
 			}(),
 			mutate: func(value proto.Message) {
-				value.(*storagepb.DatasetPeriodCompleted).FailedSubjects = []string{"ETH-USDT"}
+				value.(*eventpb.DatasetPeriodCompleted).FailedSubjects = []string{"ETH-USDT"}
 			},
 		},
 		{
 			name: "complete has no failed subjects", event: DatasetPeriodCompleted, subjectID: "dataset",
 			payload: validLedgerPeriodCompleted(now),
 			mutate: func(value proto.Message) {
-				value.(*storagepb.DatasetPeriodCompleted).FailedSubjects = []string{"BTC-USDT"}
+				value.(*eventpb.DatasetPeriodCompleted).FailedSubjects = []string{"BTC-USDT"}
 			},
 		},
 		{
 			name: "ledger needs snapshot_ref", event: DatasetPeriodCompleted, subjectID: "dataset",
 			payload: validLedgerPeriodCompleted(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).SnapshotRef = "" },
+			mutate:  func(value proto.Message) { value.(*eventpb.DatasetPeriodCompleted).SnapshotRef = "" },
 		},
 		{
 			name: "producer needs cause_event_id", event: DatasetPeriodCompleted, subjectID: "dataset_result",
 			payload: validProducerPeriodCompleted(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).CauseEventId = "" },
+			mutate:  func(value proto.Message) { value.(*eventpb.DatasetPeriodCompleted).CauseEventId = "" },
 		},
 		{
 			name: "unknown source", event: DatasetPeriodCompleted, subjectID: "dataset_result",
 			payload: validProducerPeriodCompleted(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).Source = "collector" },
+			mutate:  func(value proto.Message) { value.(*eventpb.DatasetPeriodCompleted).Source = "collector" },
 		},
 		{
 			name: "detail needs a type", event: DatasetPeriodCompleted, subjectID: "dataset_result",
 			payload: validProducerPeriodCompleted(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).DetailType = "" },
+			mutate:  func(value proto.Message) { value.(*eventpb.DatasetPeriodCompleted).DetailType = "" },
 		},
 		{
 			name: "view data ready route", event: ViewDataReady, subjectID: "dataset",
 			payload: validViewDataReady(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.ViewDataReady).DatasetId = "other" },
+			mutate:  func(value proto.Message) { value.(*eventpb.ViewDataReady).DatasetId = "other" },
 		},
 	}
 
@@ -243,13 +243,13 @@ func TestEventTimesRejectZeroAndNegative(t *testing.T) {
 		}{
 			"period completed_at": {DatasetPeriodCompleted, "dataset", func() proto.Message { p := validLedgerPeriodCompleted(now); p.CompletedAt = at; return p }()},
 			"view ready_at":       {ViewDataReady, "dataset", func() proto.Message { p := validViewDataReady(now); p.ReadyAt = at; return p }()},
-			"backfilled confirmed_at": {CollectorKlineBackfilled, "dataset_src", &storagepb.CollectorKlineBackfilled{
+			"backfilled confirmed_at": {CollectorKlineBackfilled, "dataset_src", &eventpb.CollectorKlineBackfilled{
 				DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: 1792576800, End: 1792580400, Origin: "auto", ConfirmedAt: at,
 			}},
-			"delist delist_at": {InstrumentDelistScheduled, InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT"), &storagepb.InstrumentDelistScheduled{
+			"delist delist_at": {InstrumentDelistScheduled, InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT"), &eventpb.InstrumentDelistScheduled{
 				Exchange: "binance", Market: DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: at, FirstSeenAt: now, Source: DelistSourceManual, Scope: DelistScopeAll,
 			}},
-			"delist first_seen_at": {InstrumentDelistScheduled, InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT"), &storagepb.InstrumentDelistScheduled{
+			"delist first_seen_at": {InstrumentDelistScheduled, InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT"), &eventpb.InstrumentDelistScheduled{
 				Exchange: "binance", Market: DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: now, FirstSeenAt: at, Source: DelistSourceManual, Scope: DelistScopeAll,
 			}},
 		}

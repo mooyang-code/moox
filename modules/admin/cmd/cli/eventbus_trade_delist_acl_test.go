@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
@@ -76,7 +76,7 @@ func TestGeneratedACLLetsTradeConsumeDelistEvents(t *testing.T) {
 	publisher, err := events.NewPublisher(collectorClient, registry)
 	require.NoError(t, err)
 	delistAt := time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)
-	_, err = publisher.Publish(ctx, events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
+	_, err = publisher.Publish(ctx, events.InstrumentDelistScheduled, &eventpb.InstrumentDelistScheduled{
 		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: delistAt.UnixMilli(),
 		Source: events.DelistSourceManual, FirstSeenAt: delistAt.Add(-time.Hour).UnixMilli(), Scope: events.DelistScopeAll,
 	}, events.PublishOptions{

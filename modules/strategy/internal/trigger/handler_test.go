@@ -20,8 +20,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
@@ -222,7 +220,7 @@ func (h *harness) frame(n int, rows map[string]map[string]float64) {
 	h.loader.frames[barStart(n).Unix()] = rows
 }
 
-func (h *harness) event(n int, hashes map[string]string, statuses ...string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
+func (h *harness) event(n int, hashes map[string]string, statuses ...string) (*eventpb.EventMessage, *eventpb.ViewDataReady) {
 	status := "complete"
 	if len(statuses) > 0 {
 		status = statuses[0]
@@ -240,7 +238,7 @@ func (h *harness) event(n int, hashes map[string]string, statuses ...string) (*e
 	if err != nil {
 		panic(err)
 	}
-	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
+	payload := &eventpb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
 	return message, payload
 }
 
@@ -514,7 +512,7 @@ func TestHandleBuildsValidTargetEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("目标事件不符合契约：%v", err)
 	}
-	target, ok := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	target, ok := payload.(*eventpb.LogicalAccountTargetWeightRequested)
 	if !ok || decoded.GetEventId() != result.ResultID || target.GetSessionId() != h.session || target.GetLogicalAccountId() != account || target.GetStrategyId() != "s1" {
 		t.Fatalf("事件内容不符：%+v", payload)
 	}

@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,7 +18,6 @@ import (
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -286,7 +286,7 @@ func targetDeliveryForMarket(
 		now,
 		targetID,
 		sequence,
-		[]*tradeeventpb.InstrumentWeightTarget{{
+		[]*eventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT",
 			MarketType:   string(market),
 			TargetWeight: quantity,
@@ -299,7 +299,7 @@ func targetDeliveryWithTargets(
 	now time.Time,
 	targetID string,
 	sequence int64,
-	targets []*tradeeventpb.InstrumentWeightTarget,
+	targets []*eventpb.InstrumentWeightTarget,
 ) *jetstream.Delivery {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
@@ -309,7 +309,7 @@ func targetDeliveryWithTargets(
 	bar := now.Add(time.Duration(sequence-3) * time.Millisecond)
 	encoded, err := registry.Encode(
 		events.LogicalAccountTargetWeightRequested,
-		&tradeeventpb.LogicalAccountTargetWeightRequested{
+		&eventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: testRunner,
 			SessionId: "session-e2e", SessionStartedAt: 1_000, StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,

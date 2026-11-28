@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
@@ -28,7 +27,7 @@ rules:
 	periodStart := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC) // 日期键
 	h.now = time.Date(2026, 10, 9, 15, 5, 0, 0, shanghai)
 	message := &eventpb.EventMessage{EventId: "event-stock", EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: periodStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
+	payload := &eventpb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: periodStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	barEnd := time.Date(2026, 10, 9, 15, 0, 0, 0, shanghai)
 	result, found, err := h.repo.ResultAtBar(context.Background(), "i1", h.session, barEnd)

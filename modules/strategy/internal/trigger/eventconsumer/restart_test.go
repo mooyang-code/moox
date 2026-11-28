@@ -3,6 +3,7 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -16,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
@@ -122,7 +122,7 @@ func TestConsumerRecoversAfterEventBusRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &storagepb.ViewDataReady{
+	payload := &eventpb.ViewDataReady{
 		DatasetId: "view_a", Frequency: "1h", PeriodTime: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix(), Status: "complete", ReadyAt: time.Now().UnixMilli(),
 		CompletionEventId: "collector-1"}
 	encoded, err := registry.Encode(events.ViewDataReady, payload, events.PublishOptions{EventID: "ready-after-restart", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "view_a"})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -11,16 +12,15 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
-func shadowDelivery(t *testing.T, now time.Time, targetID string, targets []*tradeeventpb.InstrumentWeightTarget) *jetstream.Delivery {
+func shadowDelivery(t *testing.T, now time.Time, targetID string, targets []*eventpb.InstrumentWeightTarget) *jetstream.Delivery {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: targetID, InstanceId: "runner-1", SessionId: "session-1", SessionStartedAt: testSessionStartedAt("session-1"), StrategyId: "strategy-1", LogicalAccountId: "logical-1",
 		Targets:    targets,
 		BarEndTime: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
@@ -40,7 +40,7 @@ func TestHandleShadowTargetRecordsWithoutAccepting(t *testing.T) {
 	opts := targetOptions(tradeStore, now)
 	opts.Wake = func() { t.Error("影子目标不能唤醒执行器") }
 	opts.WakeTarget = func(string, string) { t.Error("影子目标不能唤醒执行器") }
-	delivery := shadowDelivery(t, now, "shadow-1", []*tradeeventpb.InstrumentWeightTarget{
+	delivery := shadowDelivery(t, now, "shadow-1", []*eventpb.InstrumentWeightTarget{
 		{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1.5"},
 	})
 
@@ -69,11 +69,11 @@ func TestHandleShadowTargetRejectsUnsupportedInstrumentLikeRealTarget(t *testing
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	now := time.Now().UTC()
 	opts := targetOptions(tradeStore, now)
-	opts.WeightResolver = targetResolverFunc(func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
+	opts.WeightResolver = targetResolverFunc(func(context.Context, *eventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
 		t.Error("不支持的标的不能进入换算")
 		return targetapp.WeightConversion{}, nil
 	})
-	targets := []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "ETH-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}}
+	targets := []*eventpb.InstrumentWeightTarget{{InstrumentId: "ETH-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}}
 
 	shadow := HandleTarget(context.Background(), shadowDelivery(t, now, "shadow-unsupported", targets), opts)
 	formal := HandleTarget(context.Background(), logicalTargetDelivery(t, now, "real-unsupported", "runner-1", "logical-1", targets), opts)
@@ -98,7 +98,7 @@ func TestHandleShadowTargetHoldsDelistedInstrument(t *testing.T) {
 	opts := targetOptions(tradeStore, now)
 	opts.WeightResolver = resolver
 
-	result := HandleTarget(context.Background(), shadowDelivery(t, now, "shadow-delist", []*tradeeventpb.InstrumentWeightTarget{
+	result := HandleTarget(context.Background(), shadowDelivery(t, now, "shadow-delist", []*eventpb.InstrumentWeightTarget{
 		{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "0.5"},
 		{InstrumentId: "FOO-USDT-SPOT", MarketType: "spot", TargetWeight: "0.3"},
 	}), opts)
@@ -123,10 +123,10 @@ func TestHandleShadowTargetNotesPersistentConversionFailure(t *testing.T) {
 	opts := targetOptions(tradeStore, now)
 	// 关注项是进程内全局记录，原因带上本次的时间，重复运行（-count）时互不影响。
 	reason := fmt.Sprintf("影子换算取价失败 %d", now.UnixNano())
-	opts.WeightResolver = targetResolverFunc(func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
+	opts.WeightResolver = targetResolverFunc(func(context.Context, *eventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
 		return targetapp.WeightConversion{}, errors.New(reason)
 	})
-	delivery := shadowDelivery(t, now, "shadow-conversion", []*tradeeventpb.InstrumentWeightTarget{
+	delivery := shadowDelivery(t, now, "shadow-conversion", []*eventpb.InstrumentWeightTarget{
 		{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"},
 	})
 	noted := func() bool {
@@ -149,7 +149,7 @@ func TestHandleShadowTargetNotesPersistentConversionFailure(t *testing.T) {
 // 试运行目标被拒时，投递报告和关注项都带试运行标记，和正式目标分得开。
 func TestTargetActionReportMarksShadowRejection(t *testing.T) {
 	now := time.Now().UTC()
-	targets := []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "ETH-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}}
+	targets := []*eventpb.InstrumentWeightTarget{{InstrumentId: "ETH-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}}
 	result := targetRejection("unsupported_instrument", errors.New("没有启用的成员支持标的"))
 	noted := func(detail string) bool {
 		for _, item := range telemetry.Recent(telemetry.AttentionTargetRejected, time.Now(), time.Minute) {

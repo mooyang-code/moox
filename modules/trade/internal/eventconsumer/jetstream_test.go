@@ -3,6 +3,7 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +38,7 @@ func TestRunTargetRetryDoesNotHoldBackOtherAccounts(t *testing.T) {
 	now := time.Now().UTC()
 	// 启动消费者之前两条都已进流，重投的那条排在前面，原来的批量拉取会把两条拉进同一批。
 	stuck := logicalTargetDelivery(t, now, "target-stuck", "runner-2", "logical-2",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}})
+		[]*eventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}})
 	normal := logicalTargetDelivery(t, now, "target-normal", "runner-1", "logical-1", nil)
 	for _, delivery := range []*jetstream.Delivery{stuck, normal} {
 		_, err = client.PublishRaw(ctx, delivery.Subject, delivery.RawMessageID, delivery.RawData, delivery.ContentType)
@@ -101,7 +101,7 @@ func TestRunTargetSlowRetriesDoNotStarveOtherAccounts(t *testing.T) {
 
 	options := targetOptions(tradeStore, now)
 	options.Client, options.ConsumerName = client, "target-slow-retry-isolation"
-	options.WeightResolver = targetResolverFunc(func(resolveCtx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
+	options.WeightResolver = targetResolverFunc(func(resolveCtx context.Context, request *eventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
 		if request.GetLogicalAccountId() == "logical-1" {
 			return testWeightResolver{}.Resolve(resolveCtx, request, space)
 		}

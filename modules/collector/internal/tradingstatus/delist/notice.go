@@ -7,12 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // Notice 是一条下架通知。
@@ -91,7 +91,7 @@ func (r *Registrar) Register(ctx context.Context, notice Notice) (created bool, 
 		if revision > 0 {
 			eventID = fmt.Sprintf("%s-r%d", eventID, revision)
 		}
-		raw, err := r.Registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
+		raw, err := r.Registry.MarshalMessage(events.InstrumentDelistScheduled, &eventpb.InstrumentDelistScheduled{
 			Exchange: notice.Exchange, Market: notice.Market, ExchangeSymbol: notice.Symbol, DelistAt: delistAt.UnixMilli(),
 			Source: notice.Source, FirstSeenAt: now.UnixMilli(), Scope: notice.Scope,
 		}, events.PublishOptions{EventID: eventID, OccurredAt: now, SpaceID: events.SystemSpaceID, SubjectID: subject})

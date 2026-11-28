@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -110,7 +109,7 @@ func TestHandleTargetClassifiesInvalidBusinessContract(t *testing.T) {
 	delivery := logicalTargetDelivery(t, now, "target-contract", "instance-contract", "logical-1", nil)
 	message := new(eventpb.EventMessage)
 	require.NoError(t, proto.Unmarshal(delivery.RawData, message))
-	request := new(tradeeventpb.LogicalAccountTargetWeightRequested)
+	request := new(eventpb.LogicalAccountTargetWeightRequested)
 	require.NoError(t, proto.Unmarshal(message.Payload, request))
 	request.SessionId = ""
 	var err error

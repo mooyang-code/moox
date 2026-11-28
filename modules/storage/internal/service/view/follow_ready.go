@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
@@ -31,7 +30,7 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref datasetRef, chang
 		return errors.New("View 就绪事件发布器尚未就绪")
 	}
 	message := &eventpb.EventMessage{}
-	payload := &storageeventpb.DatasetPeriodCompleted{}
+	payload := &eventpb.DatasetPeriodCompleted{}
 	if err := proto.Unmarshal(change.GetMarker(), message); err != nil {
 		log.Errorf("storage view 跳过无法解析的完成标记 view=%s/%s 序号=%d：%v", ref.spaceID, ref.datasetID, change.GetSequence(), err)
 		return nil
@@ -88,8 +87,8 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref datasetRef, chang
 
 // followReadyEvent 由完成标记组装 ViewDataReady 与它的事件 ID（下游按事件 ID 去重）。
 // View 只读一个数据集，账本判定的完成直接就是 View 的就绪；事件的 subject_id 是数据集 ID。
-func followReadyEvent(ref datasetRef, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCompleted) (*storageeventpb.ViewDataReady, string, bool) {
-	ready := &storageeventpb.ViewDataReady{
+func followReadyEvent(ref datasetRef, message *eventpb.EventMessage, payload *eventpb.DatasetPeriodCompleted) (*eventpb.ViewDataReady, string, bool) {
+	ready := &eventpb.ViewDataReady{
 		CompletionEventId: message.GetEventId(), DatasetId: ref.datasetID, Status: payload.GetStatus(),
 		Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 		FailedSubjects: uniqueSortedStrings(payload.GetFailedSubjects()),

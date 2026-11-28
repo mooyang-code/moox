@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -15,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,7 +121,7 @@ type fakeWeightResolver struct{ testTargetWeightResolver }
 
 func (r fakeWeightResolver) Resolve(
 	ctx context.Context,
-	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	request *eventpb.LogicalAccountTargetWeightRequested,
 	spaceID string,
 ) (targetapp.WeightConversion, error) {
 	conversion, err := r.testTargetWeightResolver.Resolve(ctx, request, spaceID)
@@ -244,7 +244,7 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	}
 	deliver := func(id string, sequence int64, quantity string) jetstream.HandlerDecision {
 		result := eventconsumer.HandleTarget(ctx, targetDeliveryWithTargets(t, now, id, sequence,
-			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, MarketType: "equity", TargetWeight: quantity}},
+			[]*eventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, MarketType: "equity", TargetWeight: quantity}},
 		), options)
 		return result.Decision
 	}

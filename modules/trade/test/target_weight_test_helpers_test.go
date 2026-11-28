@@ -2,12 +2,12 @@ package test
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 // testTargetWeightResolver keeps the test fixtures focused on the event and
@@ -17,7 +17,7 @@ type testTargetWeightResolver struct{}
 
 func (testTargetWeightResolver) Resolve(
 	_ context.Context,
-	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	request *eventpb.LogicalAccountTargetWeightRequested,
 	_ string,
 ) (targetapp.WeightConversion, error) {
 	signalTime := request.GetBarEndTime()

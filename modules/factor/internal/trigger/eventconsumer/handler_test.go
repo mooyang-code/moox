@@ -3,6 +3,7 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -18,7 +19,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -388,7 +388,7 @@ func collectorDelivery(t *testing.T, eventID string) *jetstream.Delivery {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: "degraded",
 		Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
@@ -512,7 +512,7 @@ func stockDelivery(t *testing.T, eventID string, period time.Time) *jetstream.De
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: "stock_bars", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
 		Source: "ledger", SnapshotRef: "scope-1", UniverseSubjectIds: []string{"600000.SH"},
 		CompletedAt: period.Add(5 * time.Minute).UnixMilli(),

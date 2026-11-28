@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,12 +19,11 @@ import (
 	paperexec "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
-	"github.com/mooyang-code/moox/packages/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -36,10 +36,10 @@ func hkTargetDelivery(t *testing.T, now time.Time, logicalID, targetID string, s
 	bar := now.Add(time.Duration(sequence-10) * time.Millisecond)
 	encoded, err := registry.Encode(
 		events.LogicalAccountTargetWeightRequested,
-		&tradeeventpb.LogicalAccountTargetWeightRequested{
+		&eventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: "dual_ma_hk_5m", SessionId: "session-hk", SessionStartedAt: 1_000, StrategyId: "default_dual_ma_hk_5m",
 			LogicalAccountId: logicalID,
-			Targets:          []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: instrumentID, MarketType: "equity", TargetWeight: weight}},
+			Targets:          []*eventpb.InstrumentWeightTarget{{InstrumentId: instrumentID, MarketType: "equity", TargetWeight: weight}},
 			BarEndTime:       bar.UnixMilli(), ValidUntil: bar.Add(time.Hour).UnixMilli(),
 		},
 		events.PublishOptions{EventID: targetID, OccurredAt: now, SpaceID: testSpace, SubjectID: logicalID},

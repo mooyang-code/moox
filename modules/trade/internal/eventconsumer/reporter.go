@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"strings"
 	"time"
 	"unicode"
@@ -15,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"gorm.io/gorm"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -137,7 +137,7 @@ func makeTargetActionReport(ctx context.Context, delivery *jetstream.Delivery, r
 	if err != nil {
 		return report
 	}
-	request, ok := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	request, ok := payload.(*eventpb.LogicalAccountTargetWeightRequested)
 	if ok {
 		report.TargetID, report.LogicalAccount = reportIdentifier(request.GetTargetId()), reportIdentifier(request.GetLogicalAccountId())
 		report.InstanceID, report.SessionID = reportIdentifier(request.GetInstanceId()), reportIdentifier(request.GetSessionId())

@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -87,7 +87,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	}
 
 	occurredAt := time.Now().UTC()
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: "dataset_binance_kline_1m", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 		CauseEventId: "cause-e2e", CompletedAt: occurredAt.UnixMilli(),
 	}

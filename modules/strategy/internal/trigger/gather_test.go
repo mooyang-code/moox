@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 )
@@ -49,7 +48,7 @@ func newDualHarness(t *testing.T) *harness {
 }
 
 // viewEvent 构造某个 View 某一期的就绪事件；status 是因子成员状态，hash 是事件里的成员定义哈希。
-func (h *harness) viewEvent(view string, n int, status, hash string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
+func (h *harness) viewEvent(view string, n int, status, hash string) (*eventpb.EventMessage, *eventpb.ViewDataReady) {
 	message, payload := h.event(n, map[string]string{"f": hash}, status)
 	payload.DatasetId = view
 	message.EventId = fmt.Sprintf("%s-%d", view, n)

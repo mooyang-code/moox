@@ -28,8 +28,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -99,7 +97,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_e2e", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, DetailType: detailType, Detail: detail}
+	payload := &eventpb.ViewDataReady{DatasetId: "dataset_factor_e2e", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, DetailType: detailType, Detail: detail}
 	require.NoError(t, handler.Handle(ctx, message, payload))
 	result, found, err := repo.LatestOk(ctx, "instance-e2e", session)
 	require.NoError(t, err)
@@ -125,7 +123,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	// 发布器默认压缩信封，按消费端的同一个入口解码（解压、核对主题与消息 ID、校验载荷）。
 	_, payloadMessage, err := events.DecodeRaw(registry, raw.Data, raw.Subject, raw.Header.Get(nats.MsgIdHdr), raw.Header.Get("Content-Type"))
 	require.NoError(t, err)
-	target, ok := payloadMessage.(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	target, ok := payloadMessage.(*eventpb.LogicalAccountTargetWeightRequested)
 	require.True(t, ok, "载荷类型不符：%T", payloadMessage)
 	barEnd := barStart.Add(time.Hour)
 	require.Equal(t, result.ResultID, target.GetTargetId())

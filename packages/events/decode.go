@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -77,17 +76,17 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 }
 
 // DecodeDatasetPeriodCompleted validates and decodes a dataset period completion event.
-func DecodeDatasetPeriodCompleted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCompleted, error) {
+func DecodeDatasetPeriodCompleted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *eventpb.DatasetPeriodCompleted, error) {
 	return DecodeDatasetPeriodCompletedWithContentType(registry, raw, subject, messageID, ContentType)
 }
 
 // DecodeDatasetPeriodCompletedWithContentType also validates broker content type.
-func DecodeDatasetPeriodCompletedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCompleted, error) {
+func DecodeDatasetPeriodCompletedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *eventpb.DatasetPeriodCompleted, error) {
 	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, DatasetPeriodCompleted)
 	if err != nil {
 		return message, nil, err
 	}
-	storagePayload, ok := payload.(*storagepb.DatasetPeriodCompleted)
+	storagePayload, ok := payload.(*eventpb.DatasetPeriodCompleted)
 	if !ok {
 		return message, nil, fmt.Errorf("dataset period completed payload has type %T", payload)
 	}
@@ -95,17 +94,17 @@ func DecodeDatasetPeriodCompletedWithContentType(registry *Registry, raw []byte,
 }
 
 // DecodeViewDataReady validates and decodes a View readiness event.
-func DecodeViewDataReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.ViewDataReady, error) {
+func DecodeViewDataReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *eventpb.ViewDataReady, error) {
 	return DecodeViewDataReadyWithContentType(registry, raw, subject, messageID, ContentType)
 }
 
 // DecodeViewDataReadyWithContentType also validates broker content type.
-func DecodeViewDataReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.ViewDataReady, error) {
+func DecodeViewDataReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *eventpb.ViewDataReady, error) {
 	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, ViewDataReady)
 	if err != nil {
 		return message, nil, err
 	}
-	ready, ok := payload.(*storagepb.ViewDataReady)
+	ready, ok := payload.(*eventpb.ViewDataReady)
 	if !ok {
 		return message, nil, fmt.Errorf("view data ready payload has type %T", payload)
 	}

@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // 港股 5m 的实例能求值：11:55 那根（bar_end 12:00，午休前最后一根）在 12:00 过后求值成功，目标按股票市场（STOCK）
@@ -31,7 +30,7 @@ func TestHKIntradayEvaluatesAcrossLunchBreak(t *testing.T) {
 	}
 	h.now = time.Date(2026, 11, 17, 12, 0, 6, 0, hk)
 	message := &eventpb.EventMessage{EventId: "event-hk-1155", EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_hk_5m", Frequency: "5m", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"00700.XHKG", "00005.XHKG", "09988.XHKG"}}
+	payload := &eventpb.ViewDataReady{DatasetId: "dataset_factor_hk_5m", Frequency: "5m", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"00700.XHKG", "00005.XHKG", "09988.XHKG"}}
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	result, found, err := h.repo.ResultAtBar(context.Background(), "i1", h.session, time.Date(2026, 11, 17, 12, 0, 0, 0, hk))
 	if err != nil || !found {

@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/period"
 	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
@@ -119,7 +118,7 @@ func (h *Handler) WaitIdle(ctx context.Context) error {
 
 // Handle 处理一条事件。返回 nil 表示所有绑定实例的本期终态都已落库，可以 ACK；
 // 返回错误表示至少一个实例需要重投；ErrInvalidEvent 表示事件本身不可处理。
-func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, payload *storagepb.ViewDataReady) error {
+func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, payload *eventpb.ViewDataReady) error {
 	if h == nil || h.Store == nil || h.Loader == nil || message == nil || payload == nil {
 		return fmt.Errorf("%w：处理器未配置或事件为空", ErrInvalidEvent)
 	}
@@ -201,7 +200,7 @@ type periodContext struct {
 	// after 是处理本期时实例已处理到的那一期（零值表示没有）：补记与补处理只看它之后的期。
 	after time.Time
 	// events 是本期各市场 View 的就绪事件（市场 → 事件）：只绑一个任务的实例就是到达的这一条，绑定两个任务的实例是汇合后的两条。
-	events     map[string]*storagepb.ViewDataReady
+	events     map[string]*eventpb.ViewDataReady
 	boundary   period.PeriodBoundaries
 	validUntil time.Time
 	input      store.InputRecord
@@ -231,7 +230,7 @@ func (h *Handler) mode(instanceID string) Mode {
 	return h.Gate(instanceID)
 }
 
-func (h *Handler) process(ctx context.Context, loader Loader, instance store.Instance, message *eventpb.EventMessage, payload *storagepb.ViewDataReady) error {
+func (h *Handler) process(ctx context.Context, loader Loader, instance store.Instance, message *eventpb.EventMessage, payload *eventpb.ViewDataReady) error {
 	// 没有处于预热或运行的实例不求值、不发新目标（持仓不动）；这一期不留记录，恢复后从下一期继续。
 	mode := h.mode(instance.InstanceID)
 	if mode == ModeOff {
@@ -471,7 +470,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 }
 
 // evaluate 读取输入并求值。返回 nil 决策表示本期已作为 skipped 落库。
-func (h *Handler) evaluate(ctx context.Context, p *periodContext, payload *storagepb.ViewDataReady, ready mergedReadiness) (*engine.Decision, input.Loaded, error) {
+func (h *Handler) evaluate(ctx context.Context, p *periodContext, payload *eventpb.ViewDataReady, ready mergedReadiness) (*engine.Decision, input.Loaded, error) {
 	rt := p.runtime
 	key := p.eventID + "\x00" + p.instance.InstanceID
 	if detail, done := h.exhausted[key]; done {
@@ -605,7 +604,7 @@ func (h *Handler) loadInput(ctx context.Context, p *periodContext, key string, r
 
 // advanceState 对不发目标的迟到周期（追赶、有效期已过）求值并只记录推进后的规则状态，记为 skipped(reason)。
 // 求值没有给出 ok 决策时与原来一致，只记 skipped(reason)。
-func (h *Handler) advanceState(ctx context.Context, p *periodContext, payload *storagepb.ViewDataReady, ready mergedReadiness, reason, detail string) error {
+func (h *Handler) advanceState(ctx context.Context, p *periodContext, payload *eventpb.ViewDataReady, ready mergedReadiness, reason, detail string) error {
 	decision, loaded, err := h.evaluate(ctx, p, payload, ready)
 	if err != nil || decision == nil {
 		return err
@@ -760,7 +759,7 @@ func (h *Handler) observe(ctx context.Context, instance store.Instance, bar stri
 
 // logTiming 记录一期的分段耗时。“就绪等待”是 View 数据就绪到本实例开始处理（含排队与事件投递），
 // “K 线至就绪”是 K 线结束到 View 数据就绪（上游因子计算、写入与 View 刷新）。
-func (h *Handler) logTiming(p *periodContext, payload *storagepb.ViewDataReady, status string, steps []input.Step) {
+func (h *Handler) logTiming(p *periodContext, payload *eventpb.ViewDataReady, status string, steps []input.Step) {
 	var wait, upstream time.Duration
 	if ready := payload.GetReadyAt(); ready > 0 {
 		readyAt := time.UnixMilli(ready)
@@ -801,7 +800,7 @@ func (h *Handler) logf(format string, args ...any) {
 
 // eventUniverse 返回事件的标的名单。ViewDataReady 总是携带名单，protobuf 解码会把空列表变成 nil，
 // 这里改回空列表：空名单表示本期没有任何标的，按 no_data 跳过，而不是退化为数据集的全部标的。
-func eventUniverse(payload *storagepb.ViewDataReady) []string {
+func eventUniverse(payload *eventpb.ViewDataReady) []string {
 	if universe := payload.GetUniverseSubjectIds(); universe != nil {
 		return universe
 	}

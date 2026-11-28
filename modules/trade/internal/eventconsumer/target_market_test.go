@@ -2,18 +2,18 @@ package eventconsumer
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeTargetRequestAcceptsSameInstrumentInSpotAndSwap(t *testing.T) {
-	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
-		Targets: []*tradeeventpb.InstrumentWeightTarget{
+	request := &eventpb.LogicalAccountTargetWeightRequested{
+		Targets: []*eventpb.InstrumentWeightTarget{
 			{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5"},
 			{InstrumentId: "BTC-USDT", MarketType: "swap", TargetWeight: "-0.2"},
 		},
@@ -30,8 +30,8 @@ func TestNormalizeTargetRequestAcceptsSameInstrumentInSpotAndSwap(t *testing.T) 
 func TestNormalizeTargetRequestRejectsMarketOutsideTradableSet(t *testing.T) {
 	for name, market := range map[string]string{"空市场": "", "组合没开通的市场": "swap"} {
 		t.Run(name, func(t *testing.T) {
-			request := &tradeeventpb.LogicalAccountTargetWeightRequested{
-				Targets: []*tradeeventpb.InstrumentWeightTarget{
+			request := &eventpb.LogicalAccountTargetWeightRequested{
+				Targets: []*eventpb.InstrumentWeightTarget{
 					{InstrumentId: "BTC-USDT", MarketType: market, TargetWeight: "0.5"},
 				},
 			}
@@ -45,8 +45,8 @@ func TestNormalizeTargetRequestRejectsMarketOutsideTradableSet(t *testing.T) {
 
 func TestNormalizeTargetRequestRejectsDuplicateAfterNormalization(t *testing.T) {
 	// 带后缀与不带后缀的写法在事件契约层看是两个标的，标准化后是同一个内部 ID。
-	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
-		Targets: []*tradeeventpb.InstrumentWeightTarget{
+	request := &eventpb.LogicalAccountTargetWeightRequested{
+		Targets: []*eventpb.InstrumentWeightTarget{
 			{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5"},
 			{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "0.1"},
 		},
@@ -64,7 +64,7 @@ func TestHandleTargetRejectsMarketTheLogicalAccountCannotTrade(t *testing.T) {
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-swap", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{{
+		[]*eventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT", MarketType: "swap", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))

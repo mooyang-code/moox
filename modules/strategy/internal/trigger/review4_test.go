@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // rebindStock 把实例换到一个 A 股日线会话上（停用 → 写会话 → 挂会话 → 启用）。
@@ -40,7 +39,7 @@ func TestHandleLogsUnmappablePeriods(t *testing.T) {
 	h.handler.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
 	deliver := func(day time.Time) error {
 		message := &eventpb.EventMessage{EventId: "event-" + day.Format("0102"), EventName: "event.storage.view.data_ready", SpaceId: "space"}
-		payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: day.Unix(), Status: "complete", UniverseSubjectIds: []string{"A"}}
+		payload := &eventpb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: day.Unix(), Status: "complete", UniverseSubjectIds: []string{"A"}}
 		return h.handler.Handle(context.Background(), message, payload)
 	}
 	// 国庆假期不是交易日：无法确定周期边界。

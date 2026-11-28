@@ -12,7 +12,6 @@ import (
 	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -58,14 +57,14 @@ func recordRow(spaceID, datasetID, recordID, version string) *pb.Row {
 }
 
 // markerPayload 解出完成标记条目内嵌的周期完成事件。
-func markerPayload(t *testing.T, change *pb.DatasetChange) (*eventpb.EventMessage, *storageeventpb.DatasetPeriodCompleted) {
+func markerPayload(t *testing.T, change *pb.DatasetChange) (*eventpb.EventMessage, *eventpb.DatasetPeriodCompleted) {
 	t.Helper()
 	require.NotEmpty(t, change.GetMarker())
 	require.Empty(t, change.GetRanges())
 	require.Empty(t, change.GetRecords())
 	message := &eventpb.EventMessage{}
 	require.NoError(t, proto.Unmarshal(change.GetMarker(), message))
-	payload := &storageeventpb.DatasetPeriodCompleted{}
+	payload := &eventpb.DatasetPeriodCompleted{}
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
 	return message, payload
 }

@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -60,7 +58,7 @@ func TestRegistryRejectsEventWithoutPrefix(t *testing.T) {
 		version:    1,
 		stream:     "MOOX_STORAGE",
 		owner:      "storage",
-		newPayload: func() proto.Message { return &storagepb.DatasetPeriodCompleted{} },
+		newPayload: func() proto.Message { return &eventpb.DatasetPeriodCompleted{} },
 		validate:   func(*eventpb.EventMessage, proto.Message) error { return nil },
 	}})
 	require.EqualError(t, err, "event name \"storage.dataset.period.completed\" must start with event.")
@@ -173,8 +171,8 @@ func TestLogicalAccountTargetWeightRequestedContract(t *testing.T) {
 		event.Owner() != "strategy" {
 		t.Fatalf("unexpected trade target event: name=%q stream=%q owner=%q", event.Name(), event.Stream(), event.Owner())
 	}
-	if _, ok := event.NewPayload().(*tradeeventpb.LogicalAccountTargetWeightRequested); !ok {
-		t.Fatalf("payload type = %T, want *tradeeventpb.LogicalAccountTargetWeightRequested", event.NewPayload())
+	if _, ok := event.NewPayload().(*eventpb.LogicalAccountTargetWeightRequested); !ok {
+		t.Fatalf("payload type = %T, want *eventpb.LogicalAccountTargetWeightRequested", event.NewPayload())
 	}
 	subject, err := registry.RenderSubject(event, "space", "logical-1")
 	if err != nil {
@@ -191,8 +189,8 @@ func TestLogicalAccountTargetWeightRequestedContract(t *testing.T) {
 	}
 }
 
-func validLedgerPeriodCompleted(now int64) *storagepb.DatasetPeriodCompleted {
-	return &storagepb.DatasetPeriodCompleted{
+func validLedgerPeriodCompleted(now int64) *eventpb.DatasetPeriodCompleted {
+	return &eventpb.DatasetPeriodCompleted{
 		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "ledger",
 		SnapshotRef:        "series-hash-1",
 		UniverseSubjectIds: []string{"BTC-USDT"},
@@ -200,8 +198,8 @@ func validLedgerPeriodCompleted(now int64) *storagepb.DatasetPeriodCompleted {
 	}
 }
 
-func validViewDataReady(now int64) *storagepb.ViewDataReady {
-	return &storagepb.ViewDataReady{
+func validViewDataReady(now int64) *eventpb.ViewDataReady {
+	return &eventpb.ViewDataReady{
 		CompletionEventId: "period-completed-1",
 		DatasetId:         "dataset", Status: "complete",
 		Frequency: "1m", PeriodTime: 1786032000,
@@ -210,8 +208,8 @@ func validViewDataReady(now int64) *storagepb.ViewDataReady {
 }
 
 // validProducerPeriodCompleted 是写入方自己报告的完成：明细是不透明字节，Storage 只要求带类型。
-func validProducerPeriodCompleted(now int64) *storagepb.DatasetPeriodCompleted {
-	return &storagepb.DatasetPeriodCompleted{
+func validProducerPeriodCompleted(now int64) *eventpb.DatasetPeriodCompleted {
+	return &eventpb.DatasetPeriodCompleted{
 		DatasetId: "dataset_result", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 		UniverseSubjectIds: []string{"BTC-USDT"}, CauseEventId: "period-completed-1", CompletedAt: now,
 		DetailType: "test.Detail.v1", Detail: []byte("opaque"),
@@ -222,7 +220,7 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 	start := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
-	payload := &storagepb.CollectorKlineBackfilled{
+	payload := &eventpb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC", "ETH"},
 		Start: start.Unix(), End: start.Add(time.Hour).Unix(),
 		Origin: "auto", JobId: "job-1", ConfirmedAt: start.Add(2 * time.Hour).UnixMilli(),
@@ -235,13 +233,13 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, subject, "moox.event.collector.kline.backfilled.v1.")
 	require.Equal(t, "MOOX_COLLECTOR", CollectorKlineBackfilled.Stream())
-	decoded := new(storagepb.CollectorKlineBackfilled)
+	decoded := new(eventpb.CollectorKlineBackfilled)
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), decoded))
 	require.Equal(t, int64(1792576800), decoded.GetStart(), "start 是 Unix 秒")
 	require.Equal(t, start.Add(time.Hour).Unix(), decoded.GetEnd())
 
 	for _, origin := range []string{"auto", "manual", "force", "resample", "seed", "catchup", "close_refetch"} {
-		candidate := proto.Clone(payload).(*storagepb.CollectorKlineBackfilled)
+		candidate := proto.Clone(payload).(*eventpb.CollectorKlineBackfilled)
 		candidate.Origin = origin
 		encoded, err := registry.Encode(CollectorKlineBackfilled, candidate, PublishOptions{EventID: "batch-" + origin, OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
 		require.NoError(t, err, "origin=%s 应通过校验", origin)
@@ -249,17 +247,17 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 		require.NoError(t, err, "origin=%s 消息校验应通过", origin)
 	}
 
-	for name, mutate := range map[string]func(*storagepb.CollectorKlineBackfilled){
-		"dataset mismatch": func(p *storagepb.CollectorKlineBackfilled) { p.DatasetId = "other" },
-		"no subjects":      func(p *storagepb.CollectorKlineBackfilled) { p.SubjectIds = nil },
-		"empty range":      func(p *storagepb.CollectorKlineBackfilled) { p.End = p.Start },
-		"zero start":       func(p *storagepb.CollectorKlineBackfilled) { p.Start = 0 },
-		"bad absent range": func(p *storagepb.CollectorKlineBackfilled) {
-			p.Absent = []*storagepb.CollectorKlineAbsent{{SubjectId: "BTC", Start: p.End, End: p.Start}}
+	for name, mutate := range map[string]func(*eventpb.CollectorKlineBackfilled){
+		"dataset mismatch": func(p *eventpb.CollectorKlineBackfilled) { p.DatasetId = "other" },
+		"no subjects":      func(p *eventpb.CollectorKlineBackfilled) { p.SubjectIds = nil },
+		"empty range":      func(p *eventpb.CollectorKlineBackfilled) { p.End = p.Start },
+		"zero start":       func(p *eventpb.CollectorKlineBackfilled) { p.Start = 0 },
+		"bad absent range": func(p *eventpb.CollectorKlineBackfilled) {
+			p.Absent = []*eventpb.CollectorKlineAbsent{{SubjectId: "BTC", Start: p.End, End: p.Start}}
 		},
-		"bad origin": func(p *storagepb.CollectorKlineBackfilled) { p.Origin = "other" },
+		"bad origin": func(p *eventpb.CollectorKlineBackfilled) { p.Origin = "other" },
 	} {
-		broken := proto.Clone(payload).(*storagepb.CollectorKlineBackfilled)
+		broken := proto.Clone(payload).(*eventpb.CollectorKlineBackfilled)
 		mutate(broken)
 		_, err := registry.Encode(CollectorKlineBackfilled, broken, PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
 		require.Error(t, err, name)

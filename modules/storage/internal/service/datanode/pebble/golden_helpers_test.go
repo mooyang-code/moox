@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/seriesset"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -112,7 +111,7 @@ func goldenStoredClose(t *testing.T, store *Store, key *pb.RowKey) (float64, boo
 
 type goldenMarker struct {
 	message *eventpb.EventMessage
-	payload *storageeventpb.DatasetPeriodCompleted
+	payload *eventpb.DatasetPeriodCompleted
 }
 
 // listMarkerChanges 列出变更日志里的全部完成标记条目，也就是转发协程要发的全部事件，按提交顺序。
@@ -141,7 +140,7 @@ func goldenMarkers(t *testing.T, store *Store, spaceID, datasetID string) []gold
 		if message.GetEventName() != events.DatasetPeriodCompleted.Name() || message.GetSpaceId() != spaceID || message.GetSubjectId() != datasetID {
 			continue
 		}
-		payload := &storageeventpb.DatasetPeriodCompleted{}
+		payload := &eventpb.DatasetPeriodCompleted{}
 		require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
 		out = append(out, goldenMarker{message: message, payload: payload})
 	}

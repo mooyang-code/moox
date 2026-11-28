@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package trpc.moox.storage.event;
+package trpc.moox.events;
 
-option go_package = "github.com/mooyang-code/moox/packages/storagepb;storagepb";
+option go_package = "github.com/mooyang-code/moox/packages/events/eventpb;eventpb";
 
 // DatasetPeriodCompleted 表示数据集的某一期已经完成。source 只描述“这一期是怎么判定完成的”，不是业务分类：
 //   - ledger：DataNode 按登记的序列快照与截止时间判定（采集、重采样走序列账本）；

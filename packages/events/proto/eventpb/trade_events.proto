@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package trpc.moox.trade.event;
+package trpc.moox.events;
 
-option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeventpb";
+option go_package = "github.com/mooyang-code/moox/packages/events/eventpb;eventpb";
 
 message InstrumentWeightTarget {
   string instrument_id = 1;

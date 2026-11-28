@@ -3,23 +3,23 @@ package eventconsumer
 import (
 	"context"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 )
 
 // capturingResolver 记下换算器收到的目标，用来确认被跳过的标的已经改成“保持”。
 type capturingResolver struct {
 	testWeightResolver
-	received []*tradeeventpb.InstrumentWeightTarget
+	received []*eventpb.InstrumentWeightTarget
 }
 
-func (c *capturingResolver) Resolve(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (targetapp.WeightConversion, error) {
+func (c *capturingResolver) Resolve(ctx context.Context, request *eventpb.LogicalAccountTargetWeightRequested, spaceID string) (targetapp.WeightConversion, error) {
 	c.received = request.GetTargets()
 	return c.testWeightResolver.Resolve(ctx, request, spaceID)
 }
@@ -53,7 +53,7 @@ func TestHandleTargetSkipsBlockedUntradableInstrumentInsteadOfRejecting(t *testi
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-delist", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{
+		[]*eventpb.InstrumentWeightTarget{
 			{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "0.5"},
 			{InstrumentId: "FOO-USDT-SPOT", MarketType: "spot", TargetWeight: "0.3"},
 		},
@@ -76,7 +76,7 @@ func TestHandleTargetStillRejectsUntradableInstrumentOutsideTheList(t *testing.T
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-untradable", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "FOO-USDT-SPOT", MarketType: "spot", TargetWeight: "0.3"}},
+		[]*eventpb.InstrumentWeightTarget{{InstrumentId: "FOO-USDT-SPOT", MarketType: "spot", TargetWeight: "0.3"}},
 	), targetOptions(tradeStore, now))
 
 	require.Equal(t, jetstream.TERM, result.Decision)

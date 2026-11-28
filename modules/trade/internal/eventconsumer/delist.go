@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sync"
 	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -129,7 +129,7 @@ func HandleDelist(ctx context.Context, delivery *jetstream.Delivery, intake Deli
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
-	scheduled, ok := payload.(*storagepb.InstrumentDelistScheduled)
+	scheduled, ok := payload.(*eventpb.InstrumentDelistScheduled)
 	if !ok || message.GetEventName() != events.InstrumentDelistScheduled.Name() {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("trade delist: unexpected event payload %T", payload)}
 	}
