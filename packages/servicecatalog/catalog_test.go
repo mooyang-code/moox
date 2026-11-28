@@ -475,7 +475,7 @@ func TestExternalProgramComponents(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string]map[string][]string{
 		"factor-engine":  {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}, "trpc.moox.factor.FactorEngine": {"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress", "GetTaskParams", "GetUdfModule"}},
-		"archive-worker": {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns"}, "trpc.moox.archive.ArchiveWorker": {"ArchiveWorkerHeartbeat", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}},
+		"archive-worker": {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns"}, "trpc.moox.archive.ArchiveWorker": {"ArchiveWorkerHeartbeat", "ListFollowTasks", "ReportFollowResult", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}},
 	}
 	for _, id := range []string{"factor-engine", "archive-worker"} {
 		component, ok := c.Component(id)
@@ -588,7 +588,6 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	for _, tc := range []struct{ path, method string }{
 		{"trpc.moox.ops.SysDeploy", "SyncTopology"},
 		{"trpc.moox.archive.ArchiveMgr", "StartArchiveImport"},
-		{"trpc.moox.archive.ArchiveMgr", "ClearArchiveUnrecoverable"},
 	} {
 		if c.Allowed("console", tc.path, tc.method) {
 			t.Fatalf("console can call %s/%s", tc.path, tc.method)
@@ -608,14 +607,14 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	}
 }
 
-// 模块生命周期（设计 3.7）：六个模块的服务都有 GetLifecycle、ControlLifecycle，读给管理台与 moox-cli、写只给 moox-cli，没有机器调用方；
+// 模块生命周期（设计 3.7）：五个模块的服务都有 GetLifecycle、ControlLifecycle，读给管理台与 moox-cli、写只给 moox-cli，没有机器调用方；
 // ControlLifecycle 要等在途操作结束（采集最长 5 分钟，策略、Trade、因子引擎最长 30 秒），所以路由超时与模块的 tRPC 服务端超时
 // 都不能短于收敛时限，否则暂停会被网关或服务端先截断（H4）。
 func TestLifecycleMethodsAndTimeoutsCoverQuiesce(t *testing.T) {
 	c := mustCatalog(t)
 	quiesce := map[string]int64{
 		"trpc.moox.collector.CollectMgr": 300000, "trpc.moox.strategy.StrategyMgr": 30000, "trpc.moox.trade.TradeConsoleService": 30000,
-		"trpc.moox.factor.EngineControl": 30000, "trpc.moox.factor.FactorMgr": 0, "trpc.moox.archive.ArchiveMgr": 0,
+		"trpc.moox.factor.EngineControl": 30000, "trpc.moox.factor.FactorMgr": 0,
 	}
 	serverTimeouts := map[string]int64{}
 	files, err := filepath.Glob("../../modules/*/config/trpc_go*.yaml")

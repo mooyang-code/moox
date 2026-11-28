@@ -35,6 +35,15 @@
             >
               {{ lastFollowText(record, zone) }}
             </div>
+            <div v-if="rescanProgressText(record, zone)" class="sub tone-warn" :title="rescanProgressText(record, zone)">
+              {{ rescanProgressText(record, zone) }}
+            </div>
+            <div v-if="record.last_follow_error" class="sub tone-bad ellipsis" :title="record.last_follow_error">
+              最近失败：{{ record.last_follow_error }}
+            </div>
+            <div v-else-if="record.last_follow_message" class="sub ellipsis" :title="record.last_follow_message">
+              {{ record.last_follow_message }}
+            </div>
           </template>
         </a-table-column>
         <a-table-column title="已归档范围" :width="260">
@@ -85,7 +94,7 @@
               <a-button
                 size="mini"
                 :loading="busy[record.dataset_id]"
-                title="重读线上保留期内的全部数据；排队中的跟随会被取消、让位给它"
+                title="重读线上保留期内的全部数据，之后由每分钟的本地跟随分段读完"
                 @click="emit('run', record)"
                 >整段重读</a-button
               >
@@ -94,7 +103,7 @@
                 <a-button size="mini">更多</a-button>
                 <template #content>
                   <a-doption value="backfill">补拉区间</a-doption>
-                  <a-doption value="toggle">{{ record.status === "paused" ? "启用" : "停用" }}</a-doption>
+                  <a-doption value="toggle">{{ record.status === "disabled" ? "启用" : "停用" }}</a-doption>
                   <a-doption
                     value="remove"
                     :disabled="(record.partition_count || 0) > 0"
@@ -122,6 +131,7 @@ import {
   followText,
   kindLabel,
   lastFollowText,
+  rescanProgressText,
   runDurationText,
   runStatusLabel,
   runTone,

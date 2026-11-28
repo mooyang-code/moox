@@ -38,7 +38,6 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.strategy.StrategyMgr/GetLifecycle":      "lifecycle status",
 	"trpc.moox.trade.TradeConsoleService/GetLifecycle": "lifecycle status",
 	"trpc.moox.factor.FactorMgr/GetLifecycle":          "lifecycle status",
-	"trpc.moox.archive.ArchiveMgr/GetLifecycle":        "lifecycle status",
 
 	"trpc.moox.storage.Metadata/AddTagMembers":    "metadata tag members",
 	"trpc.moox.storage.Metadata/RemoveTagMembers": "metadata tag members",
@@ -60,7 +59,6 @@ var cliOnlyCoverage = map[string]string{
 	"trpc.moox.strategy.StrategyMgr/ControlLifecycle":      "lifecycle pause",
 	"trpc.moox.trade.TradeConsoleService/ControlLifecycle": "lifecycle pause",
 	"trpc.moox.factor.FactorMgr/ControlLifecycle":          "lifecycle pause",
-	"trpc.moox.archive.ArchiveMgr/ControlLifecycle":        "lifecycle pause",
 	"trpc.moox.factor.EngineControl/GetLifecycle":          "lifecycle status",
 	"trpc.moox.factor.EngineControl/ControlLifecycle":      "lifecycle pause",
 	"trpc.moox.factor.EngineControl/CheckTask":             "factor task status",

@@ -315,7 +315,7 @@ const displayName = (task: ArchiveTask) => datasetNames.value[task.dataset_id ||
 
 function toggleTask(task: ArchiveTask) {
   const id = task.dataset_id || "";
-  if (task.status === "paused") {
+  if (task.status === "disabled") {
     void withBusy(id, async () => {
       try {
         await updateArchiveTask({ dataset_id: id, status: "enabled" });
@@ -336,7 +336,7 @@ function toggleTask(task: ArchiveTask) {
     cancelText: "取消",
     onBeforeOk: async () => {
       try {
-        await updateArchiveTask({ dataset_id: id, status: "paused" });
+        await updateArchiveTask({ dataset_id: id, status: "disabled" });
       } catch (error) {
         reportError(error);
         return false;

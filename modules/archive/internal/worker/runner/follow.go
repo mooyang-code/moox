@@ -281,18 +281,15 @@ func (s *runState) segmentEnd(from time.Time) time.Time {
 	return end
 }
 
-// followMessage 是 follow、manual 成功时的消息：整段重读进行中带上进度（任务列表的最近运行据此显示首次运行的进度，
-// mgr 的健康规则据此跳过“到期未导出”）；变更日志一页没读完时带上还剩几段（这时每轮都成功，积压只在这里看得见）。
-func (s *runState) followMessage(ctx context.Context, lead string) string {
+// followMessage 是 follow、manual 成功时的附加说明：变更日志一页没读完时带上还剩几段（这时每轮都成功，积压只在这里看得见），
+// 再加上上传失败或取回说明；整段重读进度已由 Outcome.RescanFrom/RescanUntil 显式上报，不再混写进文本消息。
+func (s *runState) followMessage(_ context.Context, lead string) string {
 	var parts []string
 	if lead != "" {
 		parts = append(parts, lead)
 	}
 	if s.page != nil && len(s.page.segments) > 0 {
 		parts = append(parts, fmt.Sprintf("变更日志这一页还剩 %d 段没读（从 %s 起），下一轮接着读", len(s.page.segments), s.page.segments[0].Start.Format(time.RFC3339)))
-	}
-	if from, until, ok, err := s.r.Staging.Rescan(ctx, s.task.SpaceID, s.task.DatasetID); err == nil && ok {
-		parts = append(parts, fmt.Sprintf("%s：已读到 %s，截止 %s", schedule.RescanProgressLabel, from.Format(time.RFC3339), until.Format(time.RFC3339)))
 	}
 	if extra := s.successMessage(); extra != "" {
 		parts = append(parts, extra)

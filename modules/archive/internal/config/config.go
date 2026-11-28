@@ -24,8 +24,7 @@ type Config struct {
 	Database      DatabaseConfig           `yaml:"database"`
 	Run           RunConfig                `yaml:"run"`
 	// AllowedLateness 是分区收盘后再等多久才导出（允许迟到的写入）。
-	AllowedLateness time.Duration   `yaml:"allowed_lateness"`
-	Retention       RetentionConfig `yaml:"retention"`
+	AllowedLateness time.Duration `yaml:"allowed_lateness"`
 	// StagingRetention 是 worker 暂存区保留最近多久的数据，之后分区定稿。
 	StagingRetention time.Duration `yaml:"staging_retention"`
 }
@@ -34,16 +33,12 @@ type DatabaseConfig struct {
 	Path string `yaml:"path"`
 }
 
-// RunConfig 控制运行的租约。
+// RunConfig 控制运行（manual、range、import）的租约与记录保留期。
 type RunConfig struct {
 	// LeaseTTL 是运行租约的有效期，进度上报时续租。
 	LeaseTTL time.Duration `yaml:"lease_ttl"`
-}
-
-// RetentionConfig 是 mgr 库中运行记录的保留期：Other 是 manual、range、import 与失败、取消的运行
-// （follow 的保留期是代码常量：成功 24 小时，失败与取消 7 天）。
-type RetentionConfig struct {
-	Other time.Duration `yaml:"other"`
+	// Retention 是 mgr 库中运行记录（manual、range、import）的保留期。
+	Retention time.Duration `yaml:"retention"`
 }
 
 // Load 读取并校验配置文件；未知字段与多文档都会被拒绝。
@@ -79,9 +74,8 @@ func Default() *Config {
 	return &Config{
 		GatewayClient:    gatewayclient.FileConfig{Caller: Caller, KeyFile: "../../secrets/host.key"},
 		Database:         DatabaseConfig{Path: "./data/archive-mgr/archive.db"},
-		Run:              RunConfig{LeaseTTL: 10 * time.Minute},
+		Run:              RunConfig{LeaseTTL: 10 * time.Minute, Retention: 90 * 24 * time.Hour},
 		AllowedLateness:  15 * time.Minute,
-		Retention:        RetentionConfig{Other: 90 * 24 * time.Hour},
 		StagingRetention: 72 * time.Hour,
 	}
 }
@@ -109,11 +103,11 @@ func (c *Config) Validate() error {
 	if c.Run.LeaseTTL < time.Minute {
 		return fmt.Errorf("run.lease_ttl 不能小于 1 分钟")
 	}
+	if c.Run.Retention < 7*24*time.Hour {
+		return fmt.Errorf("run.retention 不能小于 7 天")
+	}
 	if c.AllowedLateness < 15*time.Minute {
 		return fmt.Errorf("allowed_lateness 不能小于 15 分钟")
-	}
-	if c.Retention.Other < 7*24*time.Hour {
-		return fmt.Errorf("retention.other 不能小于 7 天")
 	}
 	if c.StagingRetention < 24*time.Hour {
 		return fmt.Errorf("staging_retention 不能小于 1 天")

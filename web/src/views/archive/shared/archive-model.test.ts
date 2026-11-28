@@ -18,6 +18,7 @@ import {
   pauseSafeDays,
   remoteStateLabel,
   rescanConfirmText,
+  rescanProgressText,
   runDurationText,
   runMessageLines,
   runStatusLabel,
@@ -42,15 +43,15 @@ describe("文案", () => {
   });
 
   it("运行类型、状态、健康等级、分区状态", () => {
-    expect(["follow", "manual", "range", "import"].map(kindLabel)).toEqual(["跟随", "整段重读", "补拉区间", "导入"]);
-    expect(["queued", "running", "succeeded", "failed", "canceled"].map(runStatusLabel)).toEqual([
+    expect(["manual", "range", "import"].map(kindLabel)).toEqual(["整段重读", "补拉区间", "导入"]);
+    expect(["queued", "running", "succeeded", "failed", "cancelled"].map(runStatusLabel)).toEqual([
       "排队中",
       "运行中",
       "成功",
       "失败",
       "已取消"
     ]);
-    expect(["ok", "warning", "error", "paused"].map(healthLabel)).toEqual(["正常", "需关注", "异常", "已停用"]);
+    expect(["ok", "warning", "error", "disabled"].map(healthLabel)).toEqual(["正常", "需关注", "异常", "已停用"]);
     expect(["open", "exported", "final"].map(partitionStatusLabel)).toEqual(["暂存中", "已导出", "已定稿"]);
   });
 
@@ -67,15 +68,22 @@ describe("文案", () => {
 describe("跟随", () => {
   const task = (over: Partial<ArchiveTask>): ArchiveTask => ({ freq: "1m", status: "enabled", ...over });
 
-  it("启用写每分钟跟随，停用写已停用；最近成功到分钟、带空间时区后缀", () => {
+  it("启用写每分钟跟随，停用写已停用；最近成功与整段重读进度到分钟、带空间时区后缀", () => {
     expect(followText(task({}))).toBe("每分钟跟随变更日志");
-    expect(followText(task({ status: "paused" }))).toBe("已停用");
+    expect(followText(task({ status: "disabled" }))).toBe("已停用");
     expect(lastFollowText(task({ last_success_at: String(Date.parse("2026-11-07T04:41:25Z")) }), "Asia/Shanghai")).toBe(
       "最近成功 2026-11-07 12:41 UTC+8"
     );
     expect(lastFollowText(task({}), "UTC")).toBe("还没有成功的跟随");
     // 没有时 Admin 给 "0"
     expect(lastFollowText(task({ last_success_at: "0" }), "UTC")).toBe("还没有成功的跟随");
+    expect(
+      rescanProgressText(
+        { rescan_from: "2026-11-01T00:00:00Z", rescan_until: "2026-11-07T04:00:00Z" },
+        "UTC"
+      )
+    ).toBe("整段重读：已读到 2026-11-01 00:00 UTC，截止 2026-11-07 04:00 UTC");
+    expect(rescanProgressText({}, "UTC")).toBe("");
   });
 
   it("整段重读的确认写明重读线上保留期与耗时", () => {
@@ -173,21 +181,19 @@ describe("分区预览 CSV", () => {
 
 describe("URL 状态", () => {
   it("非法值规范化", () => {
-    expect(parseArchiveQuery({ tab: "x", status: "bad", rpage: "0", from: "2026-13", follow: "yes" })).toMatchObject({
+    expect(parseArchiveQuery({ tab: "x", status: "bad", rpage: "0", from: "2026-13" })).toMatchObject({
       tab: "runs",
       status: "",
       rpage: 1,
-      from: "",
-      follow: false
+      from: ""
     });
   });
 
   it("往返一致，默认值不写进 URL，没打开详情时不写详情参数", () => {
-    const runs = { task: "ds_1m", tab: "runs", status: "failed", follow: true, rpage: 2 } as const;
+    const runs = { task: "ds_1m", tab: "runs", status: "failed", rpage: 2 } as const;
     expect(archiveQueryFor(parseArchiveQuery(archiveQueryFor(runs) as never))).toEqual({
       task: "ds_1m",
       status: "failed",
-      follow: "1",
       rpage: "2"
     });
     const parts = {

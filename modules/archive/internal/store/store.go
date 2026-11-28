@@ -12,15 +12,13 @@ import (
 	"time"
 
 	archiveschema "github.com/mooyang-code/moox/modules/archive/schema"
-	"github.com/mooyang-code/moox/packages/dataformat"
-	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 var (
 	// ErrNotFound 表示记录不存在。
 	ErrNotFound = errors.New("archive record not found")
-	// ErrConflict 表示唯一性或状态冲突（例如数据集已有任务、运行已结束）。
+	// ErrConflict 表示唯一性或状态冲突（例如数据集已有任务、运行已结束、任务 ID 不匹配）。
 	ErrConflict = errors.New("archive store conflict")
 	// ErrHasPartitions 表示任务已有分区登记，不能删除。
 	ErrHasPartitions = errors.New("archive task has partitions")
@@ -34,19 +32,17 @@ func (e *DirNameTakenError) Error() string {
 }
 
 const (
-	StatusEnabled = "enabled"
-	StatusPaused  = "paused"
+	StatusEnabled  = "enabled"
+	StatusDisabled = "disabled"
 
 	RunQueued    = "queued"
 	RunRunning   = "running"
 	RunSucceeded = "succeeded"
 	RunFailed    = "failed"
-	RunCanceled  = "canceled"
+	RunCancelled = "cancelled"
 
-	// KindFollow 是 mgr 每分钟生成的跟随运行（按 Storage 变更日志读改动过的行并导出定稿）；
 	// KindManual 是整段重读线上保留期；KindRange 是补拉区间；
 	// KindImport 是 moox-cli import 的归档目标（经 worker 数据端口写入暂存区，不推进位点、不更新最近成功时间）。
-	KindFollow = "follow"
 	KindManual = "manual"
 	KindRange  = "range"
 	KindImport = "import"
@@ -70,7 +66,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开归档管理数据库失败：%w", err)
 	}
-	if err := sqlitedb.EnsureSchemaSQL(context.Background(), db, path, "archive-mgr", archiveschema.AllSQL(), dataformat.LifecycleParts(), lifecycle.StateFileForDB(path)); err != nil {
+	if err := sqlitedb.EnsureSchemaSQL(context.Background(), db, path, "archive-mgr", archiveschema.AllSQL(), nil); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

@@ -237,7 +237,6 @@ func TestAcceptanceEventPayloadAndLifecycleVersionSensitivity(t *testing.T) {
 	}
 	slices.Sort(gotLifeChanged)
 	require.Equal(t, []string{
-		"archive-mgr",
 		"collector",
 		"factor-engine",
 		"factor-mgr",

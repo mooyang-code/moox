@@ -83,8 +83,8 @@ func TestHourQuietWindowOnlyExportsAndManualOnlyRegistersTheRescan(t *testing.T)
 	if out.Status != "succeeded" || !ok || !from.Equal(time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)) || !until.Equal(e.now) {
 		t.Fatalf("manual 应登记 [最早分区, 现在): %v %v %v out=%+v", from, until, ok, out)
 	}
-	if e.pace.waits != waits || e.src.headCalls != heads+1 || len(e.src.requests) != 0 || !strings.Contains(out.Message, schedule.RescanProgressLabel) {
-		t.Fatalf("manual 不等窗口、不读行: waits %d→%d heads %d→%d requests=%d msg=%q", waits, e.pace.waits, heads, e.src.headCalls, len(e.src.requests), out.Message)
+	if e.pace.waits != waits || e.src.headCalls != heads+1 || len(e.src.requests) != 0 || !out.RescanFrom.Equal(from) || !out.RescanUntil.Equal(until) {
+		t.Fatalf("manual 不等窗口、不读行并带回重读进度: waits %d→%d heads %d→%d requests=%d rescan=%v~%v msg=%q", waits, e.pace.waits, heads, e.src.headCalls, len(e.src.requests), out.RescanFrom, out.RescanUntil, out.Message)
 	}
 	if changeCursor(t, e) != uint64(len(e.src.changeLog)) {
 		t.Fatal("manual 把位点重设到日志头部")
@@ -148,8 +148,11 @@ func TestRescanExportsOnlyPartitionsBeforeTheProgress(t *testing.T) {
 				t.Fatalf("第 %d 轮：重读还没读完的分区 %s 不应导出或定稿: %+v（rescan_from %s）", rounds, p.Key, p, from)
 			}
 		}
-		if ok && !strings.Contains(out.Message, schedule.RescanProgressLabel) {
-			t.Fatalf("重读进行中运行消息应带进度: %q", out.Message)
+		if ok && (!out.RescanFrom.Equal(from) || out.RescanUntil.IsZero()) {
+			t.Fatalf("重读进行中结果应带重读进度: out=%v~%v want from=%v", out.RescanFrom, out.RescanUntil, from)
+		}
+		if !ok && (!out.RescanFrom.IsZero() || !out.RescanUntil.IsZero()) {
+			t.Fatalf("重读完成后进度字段应为空: out=%v~%v", out.RescanFrom, out.RescanUntil)
 		}
 		if !ok {
 			break
@@ -487,7 +490,7 @@ func TestManySubjectsRewrittenForADayAreReadInSegments(t *testing.T) {
 	e.src.rows = append(rows("S000", d0, 1440, 1), rows("S099", d0, 1440, 2)...)
 	e.src.requests = nil
 	e.src.onRead = func(source.Range) { e.now = e.now.Add(25 * time.Second) }
-	var last *archivepb.PartitionReport
+	var last *archivepb.ArchivePartition
 	for i := 0; i < 5 && len(e.src.requests) < 5; i++ {
 		e.now = e.now.Add(time.Minute)
 		if got := report(e.run(2000, nil, nil), "2026-10-16"); got != nil {
@@ -584,9 +587,9 @@ func TestChangesBeforeTheBackfillOrTheRetentionAreNotRead(t *testing.T) {
 	})
 	t.Run("早于保留期", func(t *testing.T) {
 		e := newEnv(t)
-		old := &archivepb.PartitionReport{PartitionKey: "2026-10-05", RangeStart: "2026-10-05T00:00:00Z", RangeEnd: "2026-10-06T00:00:00Z", Status: "final",
+		old := &archivepb.ArchivePartition{PartitionKey: "2026-10-05", RangeStart: "2026-10-05T00:00:00Z", RangeEnd: "2026-10-06T00:00:00Z", Status: "final",
 			FilePath: "crypto/collect/kline-1m/2026/20261005.csv", FileSha256: "x", ExportedAt: rfcMillis("2026-10-06T00:20:00Z"), RowCount: 1, SubjectCount: 1}
-		registered := func(a *archivepb.RunAssignment) { a.RegisteredPartitions = []*archivepb.PartitionReport{old} }
+		registered := func(a *archivepb.RunAssignment) { a.RegisteredPartitions = []*archivepb.ArchivePartition{old} }
 		e.run(2000, func(a *archivepb.RunAssignment) { registered(a); a.BackfillFrom = "2026-10-05T00:00:00Z" }, nil)
 		retention := e.now.Add(-168 * time.Hour)
 		if !e.src.requests[0].Start.Equal(retention) {

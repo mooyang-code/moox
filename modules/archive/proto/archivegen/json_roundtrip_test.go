@@ -18,8 +18,8 @@ func TestArchiveTRPCJSONRoundTrip(t *testing.T) {
 	assertTRPCJSONRoundTrip(t, &ListArchiveRunsRsp{Runs: []*ArchiveRun{run}}, new(ListArchiveRunsRsp), map[string]int64{
 		"runs.0.scheduled_at": at, "runs.0.started_at": at + 1, "runs.0.finished_at": at + 2, "runs.0.lease_until": at + 3,
 	})
-	assertTRPCJSONRoundTrip(t, &ListArchiveTasksRsp{Tasks: []*ArchiveTask{{DatasetId: "d", LastSuccessAt: at, CreatedAt: at + 1, UpdatedAt: at + 2, LastRun: run}}},
-		new(ListArchiveTasksRsp), map[string]int64{"tasks.0.last_success_at": at, "tasks.0.created_at": at + 1, "tasks.0.updated_at": at + 2, "tasks.0.last_run.started_at": at + 1})
+	assertTRPCJSONRoundTrip(t, &ListArchiveTasksRsp{Tasks: []*ArchiveTask{{DatasetId: "d", LastFollowAt: at - 1, LastSuccessAt: at, CreatedAt: at + 1, UpdatedAt: at + 2, LastRun: run}}},
+		new(ListArchiveTasksRsp), map[string]int64{"tasks.0.last_follow_at": at - 1, "tasks.0.last_success_at": at, "tasks.0.created_at": at + 1, "tasks.0.updated_at": at + 2, "tasks.0.last_run.started_at": at + 1})
 	assertTRPCJSONRoundTrip(t, &ListArchivePartitionsRsp{Partitions: []*ArchivePartition{{PartitionKey: "2026-10-16", LastChangedAt: at, ExportedAt: at + 1,
 		FinalizedAt: at + 2, RemoteUploadedAt: at + 3, RemoteVerifiedAt: at + 4}}}, new(ListArchivePartitionsRsp), map[string]int64{
 		"partitions.0.last_changed_at": at, "partitions.0.exported_at": at + 1, "partitions.0.finalized_at": at + 2,
@@ -27,11 +27,19 @@ func TestArchiveTRPCJSONRoundTrip(t *testing.T) {
 	})
 	assertTRPCJSONRoundTrip(t, &GetArchiveOverviewRsp{Worker: &ArchiveWorkerInfo{WorkerId: "w", LastHeartbeatAt: at, ObjectStore: &ObjectStoreInfo{UnavailableSince: at + 1}}},
 		new(GetArchiveOverviewRsp), map[string]int64{"worker.last_heartbeat_at": at, "worker.object_store.unavailable_since": at + 1})
+	assertTRPCJSONRoundTrip(t, &ListFollowTasksRsp{Tasks: []*FollowTask{{SpaceId: "crypto", DatasetId: "d", TaskId: "1", LastSuccessAt: at,
+		RegisteredPartitions: []*ArchivePartition{{PartitionKey: "2026-10-16", FinalizedAt: at + 1}}}}}, new(ListFollowTasksRsp), map[string]int64{
+		"tasks.0.last_success_at": at, "tasks.0.registered_partitions.0.finalized_at": at + 1,
+	})
+	assertTRPCJSONRoundTrip(t, &ReportFollowResultReq{SpaceId: "crypto", DatasetId: "d", TaskId: "1", StartedAt: at, FinishedAt: at + 1,
+		Partitions: []*ArchivePartition{{PartitionKey: "2026-10-16", LastChangedAt: at + 2}}}, new(ReportFollowResultReq), map[string]int64{
+		"started_at": at, "finished_at": at + 1, "partitions.0.last_changed_at": at + 2,
+	})
 	assertTRPCJSONRoundTrip(t, &PullArchiveRunRsp{Runs: []*RunAssignment{{RunId: "r", ScheduledAt: at, StartedAt: at + 1, LastSuccessAt: at + 2,
-		RegisteredPartitions: []*PartitionReport{{PartitionKey: "2026-10-16", FinalizedAt: at + 3}}}}}, new(PullArchiveRunRsp), map[string]int64{
+		RegisteredPartitions: []*ArchivePartition{{PartitionKey: "2026-10-16", FinalizedAt: at + 3}}}}}, new(PullArchiveRunRsp), map[string]int64{
 		"runs.0.scheduled_at": at, "runs.0.started_at": at + 1, "runs.0.last_success_at": at + 2, "runs.0.registered_partitions.0.finalized_at": at + 3,
 	})
-	assertTRPCJSONRoundTrip(t, &CompleteArchiveRunReq{RunId: "r", Partitions: []*PartitionReport{{PartitionKey: "2026-10-16", LastChangedAt: at, ExportedAt: at + 1,
+	assertTRPCJSONRoundTrip(t, &CompleteArchiveRunReq{RunId: "r", Partitions: []*ArchivePartition{{PartitionKey: "2026-10-16", LastChangedAt: at, ExportedAt: at + 1,
 		FinalizedAt: at + 2, RemoteUploadedAt: at + 3, RemoteVerifiedAt: at + 4}}}, new(CompleteArchiveRunReq), map[string]int64{
 		"partitions.0.last_changed_at": at, "partitions.0.exported_at": at + 1, "partitions.0.finalized_at": at + 2,
 		"partitions.0.remote_uploaded_at": at + 3, "partitions.0.remote_verified_at": at + 4,

@@ -104,11 +104,10 @@ func TestMethodSpacePolicyThreeTierMatrix(t *testing.T) {
 		{"factor-mgr", "RecalcFactors", servicecatalog.SpacePolicyRequired},
 		{"factor-mgr", "PreviewFactor", servicecatalog.SpacePolicyRequired},
 
-		// Archive 全局 / space_required
-		{"archive", "GetLifecycle", servicecatalog.SpacePolicyGlobal},
-		{"archive", "ControlLifecycle", servicecatalog.SpacePolicyGlobal},
+		// Archive space_required
 		{"archive", "GetArchiveOverview", servicecatalog.SpacePolicyRequired},
 		{"archive", "ListArchiveTasks", servicecatalog.SpacePolicyRequired},
+		{"archive", "ClearArchiveUnrecoverable", servicecatalog.SpacePolicyRequired},
 	}
 
 	for _, tc := range cases {

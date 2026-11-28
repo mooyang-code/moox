@@ -40,6 +40,8 @@ func check(info *commonpb.RetInfo) error {
 		return nil
 	case commonpb.ErrorCode_CONFLICT:
 		return fmt.Errorf("%w: %s", manager.ErrConflict, info.GetMsg())
+	case commonpb.ErrorCode_NOT_FOUND:
+		return fmt.Errorf("%w: %s", manager.ErrNotFound, info.GetMsg())
 	default:
 		return fmt.Errorf("%s", info.GetMsg())
 	}
@@ -47,6 +49,20 @@ func check(info *commonpb.RetInfo) error {
 
 func (p *inProcess) Heartbeat(ctx context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
 	rsp, _ := p.svc.ArchiveWorkerHeartbeat(ctx, req)
+	return rsp, check(rsp.GetRetInfo())
+}
+func (p *inProcess) ListFollowTasks(ctx context.Context, req *archivepb.ListFollowTasksReq) (*archivepb.ListFollowTasksRsp, error) {
+	rsp, _ := p.svc.ListFollowTasks(ctx, req)
+	p.lastSynced = len(req.GetSyncedTasks())
+	if len(rsp.GetTasks()) > 0 {
+		p.lastRegs = len(rsp.GetTasks()[0].GetRegisteredPartitions())
+	} else {
+		p.lastRegs = 0
+	}
+	return rsp, check(rsp.GetRetInfo())
+}
+func (p *inProcess) ReportFollowResult(ctx context.Context, req *archivepb.ReportFollowResultReq) (*archivepb.ReportFollowResultRsp, error) {
+	rsp, _ := p.svc.ReportFollowResult(ctx, req)
 	return rsp, check(rsp.GetRetInfo())
 }
 func (p *inProcess) Pull(ctx context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error) {
@@ -163,18 +179,20 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	worker := newWorker()
 
-	// 1. 创建任务（回补起点在昨天 20:00）：下一次检查生成 follow，首次运行从回补起点整段重读。
+	// 1. 创建任务（回补起点在昨天 20:00）：worker 本地循环每分钟拉取启用任务，首次运行从回补起点整段重读。
 	created, _ := svc.Mgr().CreateArchiveTask(ctx, &archivepb.CreateArchiveTaskReq{
 		SpaceId: "crypto", DatasetId: "ds_1m", BackfillFrom: yesterday.Format(time.RFC3339),
 	})
 	if created.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		t.Fatalf("create = %v", created.GetRetInfo())
 	}
-	if err := svc.Trigger(ctx); err != nil {
-		t.Fatal(err)
-	}
 
-	// 2. worker 心跳取得租约、领取、执行（同步等待结束）。
+	// 2. worker 心跳、本地跟随一轮（同步等待完成）以及拉取一次性运行（manual/range/import）。
+	followOnce := func() {
+		t.Helper()
+		worker.HeartbeatOnce(ctx)
+		worker.FollowOnce(ctx)
+	}
 	runOnce := func() {
 		t.Helper()
 		worker.HeartbeatOnce(ctx)
@@ -187,12 +205,12 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	runOnce()
+	followOnce()
 
-	// 3. mgr 侧：运行成功，分区已登记；昨天的分区在 00:34:25 已过 收盘 + 15 分钟，应已导出。
-	runs, _ := svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto", IncludeFollow: true})
-	if len(runs.GetRuns()) != 1 || runs.GetRuns()[0].GetKind() != "follow" || runs.GetRuns()[0].GetStatus() != "succeeded" || runs.GetRuns()[0].GetRowsRead() != 2*4*60 || runs.GetRuns()[0].GetPartitionsExported() != 1 {
-		t.Fatalf("runs = %v", runs.GetRuns())
+	// 3. mgr 侧：本地跟随不写 t_archive_runs，直接推进任务与分区登记；昨天的分区在 00:34:25 已过 收盘 + 15 分钟，应已导出。
+	runs, _ := svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto"})
+	if len(runs.GetRuns()) != 0 {
+		t.Fatalf("本地跟随不应写运行表: %v", runs.GetRuns())
 	}
 	parts, _ := svc.Mgr().ListArchivePartitions(ctx, &archivepb.ListArchivePartitionsReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	if len(parts.GetPartitions()) != 1 {
@@ -213,42 +231,29 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	list, _ := svc.Mgr().ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
 	task := list.GetTasks()[0]
-	if task.GetLastSuccessAt() != now.UnixMilli() || task.GetPartitionCount() != 1 || task.GetFileCount() != 1 || task.GetTotalRows() != 480 || task.GetHealth() != "ok" {
+	if task.GetLastSuccessAt() != now.UnixMilli() || task.GetLastFollowAt() != now.UnixMilli() || task.GetLastFollowError() != "" ||
+		task.GetPartitionCount() != 1 || task.GetFileCount() != 1 || task.GetTotalRows() != 480 || task.GetHealth() != "ok" {
 		t.Fatalf("task = %v", task)
 	}
 
-	// 3b. 下一分钟的 follow：变更日志没有新条目，不读行；成功的 follow 默认不在运行列表里，最近成功时间前进。
+	// 3b. 下一分钟的本地跟随：变更日志没有新条目，不读行；携带 synced_tasks 且 mgr 不重传 registered_partitions，最近成功时间前进。
 	now = time.Date(2026, 10, 17, 0, 35, 25, 0, time.UTC)
-	if err := svc.Trigger(ctx); err != nil {
-		t.Fatal(err)
-	}
 	requestsBefore := len(storage.requests)
-	runOnce()
+	followOnce()
 	if link.lastSynced != 1 || link.lastRegs != 0 {
 		t.Fatalf("稳态 follow 应携带 synced_tasks 且 mgr 不重传 registered_partitions: synced=%d regs=%d", link.lastSynced, link.lastRegs)
 	}
-	if hidden, _ := svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto"}); len(hidden.GetRuns()) != 0 {
-		t.Fatalf("成功的 follow 默认不列出: %v", hidden.GetRuns())
-	}
-	follows, _ := svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto", IncludeFollow: true})
-	if len(follows.GetRuns()) != 2 || follows.GetRuns()[0].GetStatus() != "succeeded" || len(storage.requests) != requestsBefore {
-		t.Fatalf("follow runs = %v requests=%d", follows.GetRuns(), len(storage.requests)-requestsBefore)
+	if len(storage.requests) != requestsBefore {
+		t.Fatalf("无变更时不应读行: requests=%d", len(storage.requests)-requestsBefore)
 	}
 	list, _ = svc.Mgr().ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
-	if list.GetTasks()[0].GetLastSuccessAt() != now.UnixMilli() {
+	if list.GetTasks()[0].GetLastSuccessAt() != now.UnixMilli() || list.GetTasks()[0].GetLastFollowAt() != now.UnixMilli() {
 		t.Fatalf("follow 后的任务 = %v", list.GetTasks()[0])
 	}
 
-	// 4. 一小时后的 follow：没有新数据，不重写文件。
+	// 4. 一小时后的本地跟随：没有新数据，不重写文件。
 	now = time.Date(2026, 10, 17, 1, 34, 25, 0, time.UTC)
-	if err := svc.Trigger(ctx); err != nil {
-		t.Fatal(err)
-	}
-	runOnce()
-	runs, _ = svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto", Status: "succeeded", IncludeFollow: true})
-	if len(runs.GetRuns()) != 3 {
-		t.Fatalf("应有三次成功运行: %v", runs.GetRuns())
-	}
+	followOnce()
 	again, _ := svc.Mgr().GetArchivePartition(ctx, &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
 	if again.GetPartition().GetExportCount() != 1 || again.GetPartition().GetFileSha256() != p.GetFileSha256() {
 		t.Fatalf("没有变化不应重写: %v", again.GetPartition())
@@ -268,10 +273,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	worker = newWorker()
 	storage.rows = append(storage.rows, staging.Row{SubjectID: "XRP-USDT", DataTime: yesterday.Add(2 * time.Hour), Values: []any{3.0, 4.0}})
 	now = now.Add(time.Hour)
-	if err := svc.Trigger(ctx); err != nil {
-		t.Fatal(err)
-	}
-	runOnce()
+	followOnce()
 	if link.lastSynced != 0 || link.lastRegs != 1 {
 		t.Fatalf("暂存库丢失后应按需下发全部已登记分区: synced=%d regs=%d", link.lastSynced, link.lastRegs)
 	}
@@ -279,17 +281,10 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	if rp := rebuilt.GetPartition(); rp.GetRowCount() != 481 || rp.GetSubjectCount() != 3 || rp.GetExportCount() != 2 || rp.GetFilePath() != p.GetFilePath() {
 		t.Fatalf("暂存库重建后: %v", rp)
 	}
-	runs, _ = svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto", Status: "succeeded", IncludeFollow: true})
-	if len(runs.GetRuns()) != 4 {
-		t.Fatalf("重建后的运行应成功: %v", runs.GetRuns())
-	}
 
 	// 5. 三天之后：分区过了暂存保留期，被定稿，mgr 的定稿边界前进，文件仍在。
 	now = time.Date(2026, 10, 20, 1, 34, 25, 0, time.UTC)
-	if err := svc.Trigger(ctx); err != nil {
-		t.Fatal(err)
-	}
-	runOnce()
+	followOnce()
 	final, _ := svc.Mgr().GetArchivePartition(ctx, &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
 	if final.GetPartition().GetStatus() != "final" || final.GetPartition().GetFinalizedAt() == 0 || final.GetPartition().GetRowCount() != 481 {
 		t.Fatalf("final = %v", final.GetPartition())
@@ -299,7 +294,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 		t.Fatalf("final_until = %s", list.GetTasks()[0].GetFinalUntil())
 	}
 
-	// 6. 补拉区间：读回已定稿的文件、写入晚到的行、重新导出，登记里的行数和导出次数同步更新。
+	// 6. 补拉区间：读回已定稿的文件、写入晚到的行、重新导出，登记里的行数和导出次数同步更新，并在运行表留一条 range 记录。
 	storage.rows = append(storage.rows, staging.Row{SubjectID: "SOL-USDT", DataTime: yesterday.Add(time.Hour), Values: []any{1.0, 2.0}})
 	now = now.Add(time.Hour)
 	backfill, _ := svc.Mgr().BackfillArchiveRange(ctx, &archivepb.BackfillArchiveRangeReq{SpaceId: "crypto", DatasetId: "ds_1m", RangeStart: "2026-10-16T20:00:00Z", RangeEnd: "2026-10-17T00:00:00Z"})
@@ -307,6 +302,10 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 		t.Fatalf("backfill = %v", backfill.GetRetInfo())
 	}
 	runOnce()
+	runs, _ = svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto"})
+	if len(runs.GetRuns()) != 1 || runs.GetRuns()[0].GetKind() != "range" || runs.GetRuns()[0].GetStatus() != "succeeded" {
+		t.Fatalf("range runs = %v", runs.GetRuns())
+	}
 	reopened, _ := svc.Mgr().GetArchivePartition(ctx, &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
 	rp := reopened.GetPartition()
 	if rp.GetStatus() != "final" || rp.GetRowCount() != 482 || rp.GetSubjectCount() != 4 || rp.GetExportCount() != 3 || rp.GetFileSha256() == p.GetFileSha256() {

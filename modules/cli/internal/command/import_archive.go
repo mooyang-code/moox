@@ -312,7 +312,7 @@ func (t *importArchiveTarget) start(ctx context.Context) error {
 func (t *importArchiveTarget) blocking(ctx context.Context) string {
 	rsp := &archivepb.ListArchiveRunsRsp{}
 	if err := archiveCall(ctx, t.gateway, "ListArchiveRuns", &archivepb.ListArchiveRunsReq{
-		SpaceId: t.space, DatasetId: t.dataset, Status: "running", IncludeFollow: true, Page: &commonpb.Page{Page: 1, Size: 5},
+		SpaceId: t.space, DatasetId: t.dataset, Status: "running", Page: &commonpb.Page{Page: 1, Size: 5},
 	}, rsp, rsp.GetRetInfo); err != nil || len(rsp.GetRuns()) == 0 {
 		return "worker 一直没有领取（用 moox-cli archive overview 查看 worker 是否在线、是否在每天维护）"
 	}

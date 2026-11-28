@@ -54,17 +54,17 @@ func (p Partition) Replicated() bool {
 
 const partitionColumns = `c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status, c_row_count, c_subject_count,
 c_min_data_time, c_max_data_time, c_file_path, c_file_bytes, c_file_sha256, c_columns_json, c_preview, c_export_count,
-c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id, c_ctime, c_mtime,
-c_remote_key, c_remote_sha256, c_remote_etag, c_remote_uploaded_at, c_remote_verified_at, c_remote_error`
+c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id,
+c_remote_key, c_remote_sha256, c_remote_etag, c_remote_uploaded_at, c_remote_verified_at, c_remote_error, c_ctime, c_mtime`
 
 func scanPartition(row rowScanner) (Partition, error) {
 	var p Partition
-	var rangeStart, rangeEnd, minTime, maxTime, changed, exported, finalized, created, updated, uploaded, verified timeValue
+	var rangeStart, rangeEnd, minTime, maxTime, changed, exported, finalized, uploaded, verified, created, updated timeValue
 	var columns string
 	err := row.Scan(&p.SpaceID, &p.DatasetID, &p.PartitionKey, &rangeStart, &rangeEnd, &p.Status, &p.RowCount, &p.SubjectCount,
 		&minTime, &maxTime, &p.FilePath, &p.FileBytes, &p.FileSHA256, &columns, &p.Preview, &p.ExportCount,
-		&changed, &exported, &finalized, &p.LastRunID, &created, &updated,
-		&p.Remote.Key, &p.Remote.SHA256, &p.Remote.ETag, &uploaded, &verified, &p.Remote.Error)
+		&changed, &exported, &finalized, &p.LastRunID,
+		&p.Remote.Key, &p.Remote.SHA256, &p.Remote.ETag, &uploaded, &verified, &p.Remote.Error, &created, &updated)
 	if err != nil {
 		return Partition{}, err
 	}
@@ -167,7 +167,7 @@ FROM t_archive_partitions WHERE (? = '' OR c_space_id = ?) GROUP BY c_space_id, 
 	return out, rows.Err()
 }
 
-// CompleteRequest 是 worker 上报的运行结果。
+// CompleteRequest 是 worker 上报的手动、补拉区间或导入运行结果。
 type CompleteRequest struct {
 	RunID         string
 	LeaseToken    string
@@ -177,15 +177,20 @@ type CompleteRequest struct {
 	Unrecoverable []Unrecoverable
 	Partitions    []Partition
 	FinalUntil    time.Time
+	RescanFrom    time.Time
+	RescanUntil   time.Time
 	Now           time.Time
 }
 
-// CompleteRun 在一个事务里更新运行状态、分区登记、任务的最近成功时间与定稿边界。
-// 运行已被用户取消（canceled）时仍接受统计与分区登记，状态保持 canceled；已处于其他终态的运行返回 ErrConflict。
+// CompleteRun 在一个事务里更新运行状态、分区登记、任务的最近成功时间、整段重读进度与定稿边界。
+// 运行已被用户取消（cancelled）时仍接受统计与分区登记，状态保持 cancelled；已处于其他终态的运行返回 ErrConflict。
 // 上报里有分区的行数或标的数比已登记的少（已有文件时）就整次拒绝：运行记为失败，不更新分区与任务，返回 ErrPartitionRegression。
 func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
-	if req.Status != RunSucceeded && req.Status != RunFailed && req.Status != RunCanceled {
+	if req.Status != RunSucceeded && req.Status != RunFailed && req.Status != RunCancelled {
 		return fmt.Errorf("invalid completion status %q", req.Status)
+	}
+	if req.RescanFrom.IsZero() != req.RescanUntil.IsZero() {
+		return errors.New("rescan_from 与 rescan_until 必须同时为空或同时非空")
 	}
 	var regression error
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -199,12 +204,12 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 		if run.LeaseToken != req.LeaseToken {
 			return ErrConflict
 		}
-		if run.Status != RunRunning && run.Status != RunCanceled {
+		if run.Status != RunRunning && run.Status != RunCancelled {
 			return ErrConflict
 		}
 		status, message := req.Status, req.Message
-		if run.Status == RunCanceled {
-			status = RunCanceled
+		if run.Status == RunCancelled {
+			status = RunCancelled
 			if message == "" {
 				message = run.Message
 			}
@@ -215,7 +220,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 		}
 		if reason != "" {
 			regression = fmt.Errorf("%w：%s", ErrPartitionRegression, reason)
-			// 只记下失败原因，分区与任务都不动；worker 收到冲突不清待上报标记，下次运行还会报、还会被拒，健康等级一直显示失败。
+			// 只记下失败原因，分区与任务都不动；worker 收到冲突不清待上报标记，下次运行或跟随还会报、还会被拒，健康等级一直显示异常。
 			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'failed', c_finished_at = ?, c_message = ?, c_lease_until = 0, c_lease_token = '' WHERE c_run_id = ?`,
 				millisOf(req.Now), reason, req.RunID); err != nil {
 				return err
@@ -243,11 +248,22 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 				return err
 			}
 		}
-		// 被取消的运行即使 worker 上报成功也不推进任务状态；最近成功时间只前进不回退。
-		if status == RunSucceeded && (run.Kind == KindFollow || run.Kind == KindManual) {
+		// 被取消的运行即使 worker 上报成功也不推进任务状态；manual 成功时同步推进最近跟随与重读进度。
+		if status == RunSucceeded && run.Kind == KindManual {
 			started := millisOf(run.StartedAt)
-			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_last_success_at = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_last_success_at = 0 OR c_last_success_at < ?)`,
-				started, run.SpaceID, run.DatasetID, started); err != nil {
+			finished := millisOf(req.Now)
+			if finished == 0 {
+				finished = started
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks
+SET c_last_follow_at = CASE WHEN c_last_follow_at < ? THEN ? ELSE c_last_follow_at END,
+    c_last_success_at = CASE WHEN c_last_success_at = 0 OR c_last_success_at < ? THEN ? ELSE c_last_success_at END,
+    c_last_follow_error = '',
+    c_last_follow_message = ?,
+    c_rescan_from = ?,
+    c_rescan_until = ?
+WHERE c_space_id = ? AND c_dataset_id = ?`,
+				finished, finished, started, started, message, millisOf(req.RescanFrom), millisOf(req.RescanUntil), run.SpaceID, run.DatasetID); err != nil {
 				return err
 			}
 		}
@@ -260,6 +276,122 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 			final := millisOf(req.FinalUntil)
 			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_final_until = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_final_until = 0 OR c_final_until < ?)`,
 				final, run.SpaceID, run.DatasetID, final); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return regression
+}
+
+// FollowReport 是 worker 上报一轮本地跟随结果的参数。
+type FollowReport struct {
+	SpaceID       string
+	DatasetID     string
+	TaskID        int64
+	Status        string
+	StartedAt     time.Time
+	FinishedAt    time.Time
+	Message       string
+	Unrecoverable []Unrecoverable
+	Partitions    []Partition
+	FinalUntil    time.Time
+	RescanFrom    time.Time
+	RescanUntil   time.Time
+}
+
+// ReportFollow 在一个事务里按任务 ID 校验并写入本地跟随结果（成功时刻、错误、分区登记、定稿边界与整段重读进度）。
+// 任务不存在返回 ErrNotFound；任务已删除重建导致 TaskID 不符返回 ErrConflict；分区倒退记入阻塞原因并返回 ErrPartitionRegression。
+func (s *Store) ReportFollow(ctx context.Context, req FollowReport) error {
+	if req.Status != RunSucceeded && req.Status != RunFailed && req.Status != RunCancelled {
+		return fmt.Errorf("invalid follow status %q", req.Status)
+	}
+	if req.RescanFrom.IsZero() != req.RescanUntil.IsZero() {
+		return errors.New("rescan_from 与 rescan_until 必须同时为空或同时非空")
+	}
+	var regression error
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		task, err := scanTask(tx.QueryRowContext(ctx, queryTasks1, req.SpaceID, req.DatasetID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if task.ID != req.TaskID {
+			return fmt.Errorf("%w：任务 ID 不匹配（上报 %d，当前 %d）", ErrConflict, req.TaskID, task.ID)
+		}
+		started := millisOf(req.StartedAt)
+		finished := millisOf(req.FinishedAt)
+		if finished == 0 {
+			finished = started
+		}
+		reason, err := findRegression(ctx, tx, req.SpaceID, req.DatasetID, req.Partitions)
+		if err != nil {
+			return err
+		}
+		if reason != "" {
+			regression = fmt.Errorf("%w：%s", ErrPartitionRegression, reason)
+			_, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks
+SET c_blocked_reason = ?,
+    c_last_follow_at = CASE WHEN c_last_follow_at < ? THEN ? ELSE c_last_follow_at END,
+    c_last_follow_error = ?,
+    c_last_follow_message = ''
+WHERE c_id = ?`, reason, finished, finished, reason, task.ID)
+			return err
+		}
+		if len(req.Partitions) > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = '' WHERE c_id = ? AND c_blocked_reason != ''`, task.ID); err != nil {
+				return err
+			}
+		}
+		for _, partition := range req.Partitions {
+			partition.SpaceID, partition.DatasetID, partition.LastRunID = req.SpaceID, req.DatasetID, ""
+			if err := upsertPartition(ctx, tx, partition); err != nil {
+				return err
+			}
+		}
+		switch req.Status {
+		case RunSucceeded:
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks
+SET c_last_follow_at = CASE WHEN c_last_follow_at < ? THEN ? ELSE c_last_follow_at END,
+    c_last_success_at = CASE WHEN c_last_success_at = 0 OR c_last_success_at < ? THEN ? ELSE c_last_success_at END,
+    c_last_follow_error = '',
+    c_last_follow_message = ?,
+    c_rescan_from = ?,
+    c_rescan_until = ?
+WHERE c_id = ?`,
+				finished, finished, started, started, req.Message, millisOf(req.RescanFrom), millisOf(req.RescanUntil), task.ID); err != nil {
+				return err
+			}
+		case RunFailed:
+			errMsg := strings.TrimSpace(req.Message)
+			if errMsg == "" {
+				errMsg = "跟随失败"
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks
+SET c_last_follow_at = CASE WHEN c_last_follow_at < ? THEN ? ELSE c_last_follow_at END,
+    c_last_follow_error = ?,
+    c_last_follow_message = ''
+WHERE c_id = ?`,
+				finished, finished, errMsg, task.ID); err != nil {
+				return err
+			}
+		case RunCancelled:
+			// 被取消的跟随只登记已导出分区，不推进成功时间也不覆盖失败信息或重读进度。
+		}
+		if len(req.Unrecoverable) > 0 {
+			if err := accumulateUnrecoverable(ctx, tx, req.SpaceID, req.DatasetID, req.Unrecoverable); err != nil {
+				return err
+			}
+		}
+		if req.Status == RunSucceeded && !req.FinalUntil.IsZero() {
+			final := millisOf(req.FinalUntil)
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_final_until = ? WHERE c_id = ? AND (c_final_until = 0 OR c_final_until < ?)`,
+				final, task.ID, final); err != nil {
 				return err
 			}
 		}

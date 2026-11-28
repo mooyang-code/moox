@@ -15,7 +15,6 @@ import (
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
-	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
@@ -29,11 +28,9 @@ const (
 	healthService   = "trpc.moox.archive.Health"
 	mgrService      = "trpc.moox.archive.ArchiveMgr"
 	workerService   = "trpc.moox.archive.ArchiveWorker"
-	triggerService  = "trpc.moox.archive.mgr.trigger.timer"
 	maintainService = "trpc.moox.archive.mgr.maintain.timer"
 	metricsService  = "trpc.moox.archive.mgr.metrics.timer"
 
-	triggerTimeout  = 20 * time.Second
 	maintainTimeout = 50 * time.Second
 	metricsTimeout  = 10 * time.Second
 )
@@ -47,7 +44,7 @@ type Runtime struct {
 	err     error
 }
 
-// Initialize 组装 mgr：打开 SQLite 与网关客户端，注册两个 RPC 服务、三个定时器（触发、维护、指标上报）和健康服务。
+// Initialize 组装 mgr：打开 SQLite 与网关客户端，注册两个 RPC 服务、两个定时器（维护、指标上报）和健康服务。
 func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *Runtime, err error) {
 	if ctx == nil || s == nil || cfg == nil {
 		return nil, errors.New("archive context, server and config are required")
@@ -55,7 +52,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	for _, name := range []string{healthService, mgrService, workerService, triggerService, maintainService, metricsService} {
+	for _, name := range []string{healthService, mgrService, workerService, maintainService, metricsService} {
 		if s.Service(name) == nil {
 			return nil, fmt.Errorf("archive service %q is required", name)
 		}
@@ -74,24 +71,16 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err != nil {
 		return nil, fmt.Errorf("open archive Storage gateway client: %w", err)
 	}
-	life, err := newArchiveLifecycle(cfg.Database.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open archive lifecycle: %w", err)
-	}
-	svc, err := service.New(runtime.store, cfg, newGatewayDatasets(runtime.gateway), service.WithLifecycle(life))
+	svc, err := service.New(runtime.store, cfg, newGatewayDatasets(runtime.gateway))
 	if err != nil {
 		return nil, err
 	}
-	go life.Run(ctx, lifecycleRefreshEvery)
 	archivepb.RegisterArchiveMgrService(s.Service(mgrService), svc.Mgr())
 	archivepb.RegisterArchiveWorkerService(s.Service(workerService), svc.Worker())
-	if err := registerTimer(s, triggerService, "archive_trigger", triggerTimeout, gated(life, "archive_trigger", svc.Trigger)); err != nil {
+	if err := registerTimer(s, maintainService, "archive_maintain", maintainTimeout, svc.Maintain); err != nil {
 		return nil, err
 	}
-	if err := registerTimer(s, maintainService, "archive_maintain", maintainTimeout, gated(life, "archive_maintain", svc.Maintain)); err != nil {
-		return nil, err
-	}
-	if err := registerMetricsReporter(s, svc, healthz.Readiness(runtime.health.Snapshot), life); err != nil {
+	if err := registerMetricsReporter(s, svc, healthz.Readiness(runtime.health.Snapshot)); err != nil {
 		return nil, err
 	}
 	runtime.health.SnapshotFunc = runtime.healthSnapshot()
@@ -112,14 +101,13 @@ func registerTimer(s *server.Server, service, name string, timeout time.Duration
 }
 
 // registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态、对象存储可用状态、任务异常状态与自动补齐失败状态并上报关注项，Monitor 据此告警。
-// 上报同时带上 archive-mgr 自己的就绪判断与模块级生命周期，以及代归档 worker 上报的一行（worker 只给管理端发心跳）。
-func registerMetricsReporter(s *server.Server, svc *service.Service, readiness func(context.Context) (bool, string), life *lifecycle.Controller) error {
+// 上报同时带上 archive-mgr 自己的就绪判断，以及代归档 worker 上报的一行（worker 只给管理端发心跳）。
+func registerMetricsReporter(s *server.Server, svc *service.Service, readiness func(context.Context) (bool, string)) error {
 	handler, err := report.NewHandler(report.DefaultConfig("archive", "archive-mgr"))
 	if err != nil {
 		return fmt.Errorf("create archive metrics reporter: %w", err)
 	}
 	handler.SetReadiness(readiness)
-	handler.SetLifecycle(life.ReportState)
 	handler.SetDelegates(func(ctx context.Context) []*metricspb.DelegatedReport {
 		worker, err := svc.DelegatedWorkerReport(ctx)
 		if err != nil {

@@ -28,7 +28,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AllowedLateness != 15*time.Minute || cfg.Run.LeaseTTL != 10*time.Minute ||
+	if cfg.AllowedLateness != 15*time.Minute || cfg.Run.LeaseTTL != 10*time.Minute || cfg.Run.Retention != 90*24*time.Hour ||
 		cfg.StagingRetention != 72*time.Hour || cfg.Database.Path != "./data/archive-mgr/archive.db" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
@@ -36,14 +36,15 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 func TestLoadRejectsUnknownKeysMultipleDocumentsAndBadValues(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown key":   minimal + "mystery: 1\n",
-		"legacy spaces": minimal + "spaces:\n  stockcn:\n    local_close: \"15:00\"\n",
-		"two documents": minimal + "---\ndatabase:\n  path: x\n",
-		"wrong caller":  strings.Replace(minimal, "archive-mgr", "someone", 1),
-		"short lease":   minimal + "run:\n  lease_ttl: 10s\n",
-		"low lateness":  minimal + "allowed_lateness: 5m\n",
-		"bad retention": minimal + "retention:\n  other: 24h\n",
-		"short staging": minimal + "staging_retention: 1h\n",
+		"unknown key":      minimal + "mystery: 1\n",
+		"legacy spaces":    minimal + "spaces:\n  stockcn:\n    local_close: \"15:00\"\n",
+		"legacy retention": minimal + "retention:\n  other: 2160h\n",
+		"two documents":    minimal + "---\ndatabase:\n  path: x\n",
+		"wrong caller":     strings.Replace(minimal, "archive-mgr", "someone", 1),
+		"short lease":      minimal + "run:\n  lease_ttl: 10s\n",
+		"short retention":  minimal + "run:\n  retention: 24h\n",
+		"low lateness":     minimal + "allowed_lateness: 5m\n",
+		"short staging":    minimal + "staging_retention: 1h\n",
 	} {
 		if _, err := Load(writeConfig(t, body)); err == nil {
 			t.Fatalf("%s: Load 应报错", name)

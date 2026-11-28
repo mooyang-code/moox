@@ -35,7 +35,7 @@ func projectLifecycle(l *lifecycleSource) *commonpb.LifecycleSnapshot {
 }
 
 // lifecycleModules 是提供生命周期接口的模块（组件 ID）。
-var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true, "factor-mgr": true, "monitor": true, "archive-mgr": true}
+var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true, "factor-mgr": true, "monitor": true}
 
 // systemPausable 是系统级暂停（moox-cli system pause）覆盖的模块（组件 ID）。
 var systemPausable = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true}

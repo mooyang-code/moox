@@ -122,7 +122,6 @@ func TestConsoleThreeTierSpacePolicyRouting(t *testing.T) {
 		{"collector CreateCloudAccount no space", "/api/admin/collector/CreateCloudAccount", "", `{"account":{"account_id":"a1"}}`, http.StatusOK, true, ""},
 		{"collector DeleteCloudAccount no space", "/api/admin/collector/DeleteCloudAccount", "", `{"account_id":"a1"}`, http.StatusOK, true, ""},
 		{"collector GetLifecycle no space", "/api/admin/collector/GetLifecycle", "", `{}`, http.StatusOK, true, ""},
-		{"archive GetLifecycle no space", "/api/admin/archive/GetLifecycle", "", `{}`, http.StatusOK, true, ""},
 		{"storage ListSpaces no space", "/api/admin/storage/ListSpaces", "", `{}`, http.StatusOK, true, ""},
 		{"storage CreateSpace strips stray header space", "/api/admin/storage/CreateSpace", "crypto", `{"space":{"space_id":"stockcn"}}`, http.StatusOK, true, ""},
 		{"factor CreateFactor no space", "/api/admin/factor-mgr/CreateFactor", "", `{}`, http.StatusOK, true, ""},

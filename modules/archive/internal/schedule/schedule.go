@@ -1,6 +1,6 @@
 // Package schedule 计算归档任务的分区范围、收盘时间与读取避让窗口（纯函数）。
 //
-// mgr 每分钟第 25 秒给每个启用任务生成一条 follow 运行；避让规则写死两个窗口：每分钟只在第 25～55 秒读取的秒窗口
+// worker 每分钟按启用的任务循环跟随 Storage 变更日志；避让规则写死两个窗口：每分钟只在第 25～55 秒读取的秒窗口
 // 与整点窗口 :58～:04（UTC），都由 worker 的 pacing 执行，导出与定稿不读 Storage、不受它们约束。
 package schedule
 
@@ -19,9 +19,6 @@ const (
 	// HourQuietFrom、HourQuietUntil：每小时 [:58:00, :04:00)（UTC，跨整点，小时内的秒偏移）不读取，避开 1h 及以上数据集在整点的集中收盘。
 	HourQuietFrom  = 58 * 60
 	HourQuietUntil = 4 * 60
-
-	// RescanProgressLabel 是 worker 在整段重读进行中写进 follow、manual 运行消息的标记；mgr 的健康规则据此判断重读是否进行中。
-	RescanProgressLabel = "整段重读进度"
 )
 
 // InHourQuiet 报告 t 是否落在整点窗口 [:58:00, :04:00) 里（UTC）。

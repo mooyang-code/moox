@@ -12,8 +12,10 @@ const ctx = vi.hoisted(() => ({
 const api = vi.hoisted(() => ({
   getArchiveOverview: vi.fn(),
   listArchiveTasks: vi.fn(),
+  listArchiveRuns: vi.fn(async () => ({ runs: [], page_result: { total: 0 } })),
   listDatasets: vi.fn(),
   deleteArchiveTask: vi.fn(async () => ({})),
+  clearArchiveUnrecoverable: vi.fn(async () => ({ removed: [] })),
   invalidateArchiveCoverage: vi.fn(),
   listDeployments: vi.fn(),
   listAllDeploymentHosts: vi.fn()
@@ -26,7 +28,9 @@ vi.mock("@/api/archive", async importOriginal => ({
   ...(await importOriginal<typeof import("@/api/archive")>()),
   getArchiveOverview: api.getArchiveOverview,
   listArchiveTasks: api.listArchiveTasks,
-  deleteArchiveTask: api.deleteArchiveTask
+  listArchiveRuns: api.listArchiveRuns,
+  deleteArchiveTask: api.deleteArchiveTask,
+  clearArchiveUnrecoverable: api.clearArchiveUnrecoverable
 }));
 vi.mock("../shared/archive-coverage", async importOriginal => ({
   ...(await importOriginal<typeof import("../shared/archive-coverage")>()),
@@ -179,10 +183,26 @@ describe("归档任务页", () => {
     expect(api.invalidateArchiveCoverage).toHaveBeenCalledTimes(1);
   });
 
-  it("?task= 指向存在的任务时打开详情", async () => {
+  it("?task= 指向存在的任务时打开详情，并经 ClearArchiveUnrecoverable 清空无法补齐区间", async () => {
+    api.listArchiveTasks.mockResolvedValue({
+      tasks: [
+        task({
+          unrecoverable: [{ start_time: "2026-10-01T00:00:00Z", end_time: "2026-10-02T00:00:00Z" }]
+        })
+      ]
+    });
+    api.clearArchiveUnrecoverable.mockClear();
     ctx.route.query = { task: "ds_1m" };
     await mountPage();
     expect(document.querySelector(".arco-drawer")?.textContent).toContain("ds_1m");
+    const clearBtn = [...document.querySelectorAll<HTMLElement>(".arco-drawer button")].find(
+      item => item.textContent?.trim() === "清除这些记录"
+    )!;
+    clearBtn.click();
+    await flushPromises();
+    (document.querySelector(".arco-modal-footer .arco-btn-status-danger") as HTMLElement).click();
+    await flushPromises();
+    expect(api.clearArchiveUnrecoverable).toHaveBeenCalledWith({ dataset_id: "ds_1m" });
   });
 });
 
@@ -213,11 +233,25 @@ describe("任务表", () => {
     expect(wrapper.emitted("remove")).toBeUndefined();
   });
 
-  it("跟随列写每分钟跟随；最近成功到分钟、悬停看到秒，都带后缀", async () => {
-    wrapper = mount(TaskTable, { props: { ...props, tasks: [task()] }, global: { plugins: [ArcoVue] } });
+  it("跟随列写每分钟跟随、最近成功、整段重读进度与最近失败原因", async () => {
+    wrapper = mount(TaskTable, {
+      props: {
+        ...props,
+        tasks: [
+          task({
+            rescan_from: "2026-11-01T00:00:00Z",
+            rescan_until: "2026-11-07T04:00:00Z",
+            last_follow_error: "storage timeout"
+          })
+        ]
+      },
+      global: { plugins: [ArcoVue] }
+    });
     await flushPromises();
     expect(wrapper.text()).toContain("每分钟跟随变更日志");
     expect(wrapper.text()).toContain("最近成功 2026-11-07 04:41 UTC");
+    expect(wrapper.text()).toContain("整段重读：已读到 2026-11-01 00:00 UTC，截止 2026-11-07 04:00 UTC");
+    expect(wrapper.text()).toContain("最近失败：storage timeout");
     expect(wrapper.find('[title="2026-11-07 04:41:25 UTC"]').exists()).toBe(true);
     expect(wrapper.text()).toContain("整段重读");
   });

@@ -121,7 +121,7 @@ func TestProjectSystemPausePhases(t *testing.T) {
 		return &metricspb.ModuleLifecycle{Stage: "paused", Reason: reason, PauseKind: kind, PausedSince: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC).UnixMilli()}
 	}
 	all := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: paused("system")}, moduleReport{id: "strategy", lifecycle: paused("system")},
-		moduleReport{id: "collector", lifecycle: paused("system")}, moduleReport{id: "trade", lifecycle: paused("system")}, moduleReport{id: "archive-mgr", lifecycle: stage("running")})
+		moduleReport{id: "collector", lifecycle: paused("system")}, moduleReport{id: "trade", lifecycle: paused("system")}, moduleReport{id: "monitor", lifecycle: stage("running")})
 	require.Equal(t, "paused", all.Phase)
 	require.Equal(t, "orange", all.Color)
 	require.Equal(t, "healthy", all.Health)

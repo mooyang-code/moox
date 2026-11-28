@@ -9,12 +9,7 @@
         <a-option value="">全部状态</a-option>
         <a-option v-for="status in RUN_STATUSES" :key="status" :value="status">{{ runStatusLabel(status) }}</a-option>
       </a-select>
-      <a-checkbox
-        :model-value="query.follow"
-        @change="(value: unknown) => emit('update:query', { follow: Boolean(value), rpage: 1 })"
-        >显示成功的跟随运行</a-checkbox
-      >
-      <span class="sub">每分钟一条，默认只看整段重读、补拉、导入与异常</span>
+      <span class="sub">记录整段重读、补拉区间与导入运行（每分钟本地跟随进度见任务跟随列）</span>
     </div>
     <div v-if="error" class="load-error">
       读取运行记录失败：{{ error }}<template v-if="runs.length">（下面是上次读到的）</template> ·
@@ -143,7 +138,7 @@ import {
 } from "../shared/archive-model";
 
 /**
- * 运行记录页签：状态筛选、是否列出成功的跟随运行、页码都在 URL 里。
+ * 运行记录页签：状态筛选、页码都在 URL 里。
  * 有排队或运行中的运行时每 10 秒刷新，其余 30 秒；轮询请求不弹全局错误。时刻都到秒。
  */
 const PAGE_SIZE = 50;
@@ -176,7 +171,6 @@ async function load() {
     const rsp = await listArchiveRuns({
       dataset_id: props.datasetId,
       status: props.query.status,
-      include_follow: props.query.follow,
       page: { page: props.query.rpage, size: PAGE_SIZE }
     });
     if (!token.isLatest()) return;
@@ -194,7 +188,7 @@ async function load() {
 
 // 逐项比较：props.query 每次路由变化都是新对象，不能整体依赖它
 watch(
-  [() => props.datasetId, () => props.query.status, () => props.query.follow, () => props.query.rpage, () => props.refreshKey],
+  [() => props.datasetId, () => props.query.status, () => props.query.rpage, () => props.refreshKey],
   () => {
     loaded.value = false;
     void load();

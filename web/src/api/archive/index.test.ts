@@ -23,16 +23,17 @@ describe("归档接口封装", () => {
         { dataset_id: "ds", dir_name: "binance-spot-1m" }
       ],
       [
-        () => archive.createArchiveTask({ dataset_id: "ds", backfill_from: "", paused: false, dir_name: "" }),
+        () => archive.createArchiveTask({ dataset_id: "ds", backfill_from: "", disabled: false, dir_name: "" }),
         "CreateArchiveTask",
-        { dataset_id: "ds", backfill_from: "", paused: false, dir_name: "" }
+        { dataset_id: "ds", backfill_from: "", disabled: false, dir_name: "" }
       ],
       [
-        () => archive.updateArchiveTask({ dataset_id: "ds", status: "paused" }),
+        () => archive.updateArchiveTask({ dataset_id: "ds", status: "disabled" }),
         "UpdateArchiveTask",
-        { dataset_id: "ds", status: "paused" }
+        { dataset_id: "ds", status: "disabled" }
       ],
       [() => archive.deleteArchiveTask("ds"), "DeleteArchiveTask", { dataset_id: "ds" }],
+      [() => archive.clearArchiveUnrecoverable({ dataset_id: "ds" }), "ClearArchiveUnrecoverable", { dataset_id: "ds" }],
       [() => archive.runArchiveTaskNow("ds"), "RunArchiveTaskNow", { dataset_id: "ds" }],
       [
         () => archive.backfillArchiveRange({ dataset_id: "ds", range_start: "a", range_end: "b" }),
@@ -41,9 +42,9 @@ describe("归档接口封装", () => {
       ],
       [() => archive.cancelArchiveRun("r1"), "CancelArchiveRun", { run_id: "r1" }],
       [
-        () => archive.listArchiveRuns({ dataset_id: "ds", include_follow: true, page: { page: 1, size: 50 } }),
+        () => archive.listArchiveRuns({ dataset_id: "ds", status: "cancelled", page: { page: 1, size: 50 } }),
         "ListArchiveRuns",
-        { dataset_id: "ds", include_follow: true, page: { page: 1, size: 50 } }
+        { dataset_id: "ds", status: "cancelled", page: { page: 1, size: 50 } }
       ],
       [
         () => archive.listArchivePartitions({ dataset_id: "ds", from_month: "2026-10", page: { page: 1, size: 50 } }),
@@ -56,7 +57,7 @@ describe("归档接口封装", () => {
         { dataset_id: "ds", partition_key: "2026-11-07" }
       ]
     ];
-    expect(cases).toHaveLength(13);
+    expect(cases).toHaveLength(14);
     for (const [run, method, body] of cases) {
       await run();
       const [service, called, req] = lastCall();

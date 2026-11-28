@@ -1,5 +1,5 @@
-// Package app is the archive worker's main loop: heartbeats, pulling runs, executing them with bounded
-// concurrency, reporting progress and results to the manager, and the daily maintenance.
+// Package app is the archive worker's main loop: heartbeats, local follow loop, pulling manual/range/import runs,
+// executing them with bounded concurrency, reporting progress and results to the manager, and the daily maintenance.
 package app
 
 import (
@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
+	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/dataapi"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
@@ -27,7 +29,7 @@ const (
 	progressEvery   = 30 * time.Second
 	rpcTimeout      = 15 * time.Second
 	completeRetries = 6
-	// maintenanceWait 是每天维护最多等待进行中的运行结束多久。
+	// maintenanceWait 是每天维护最多等待进行中的运行与跟随结束多久。
 	maintenanceWait = 30 * time.Minute
 	// probeEvery 是对象存储可用性探测的间隔。
 	probeEvery = time.Minute
@@ -64,6 +66,13 @@ type activeRun struct {
 	finishOnce sync.Once
 }
 
+type activeFollow struct {
+	task   *archivepb.FollowTask
+	cancel context.CancelFunc
+	ctx    context.Context
+	stop   atomic.Bool
+}
+
 var _ dataapi.ImportSink = (*App)(nil)
 
 // App 是 worker。
@@ -74,18 +83,25 @@ type App struct {
 	lastHeartbeatOK time.Time
 	lastError       string
 	maintaining     bool
-	// diskInsufficient：可用空间低于 worker.min_free_bytes，停止领取新运行。
+	// diskInsufficient：可用空间低于 worker.min_free_bytes，停止跟随与领取新运行。
 	diskInsufficient bool
 	// diskTotal、diskUsed、diskFree 是最近一次成功读到的磁盘用量；读取失败时心跳照报它们，与 diskInsufficient 的依据一致。
 	diskTotal uint64
 	diskUsed  uint64
 	diskFree  uint64
 	running   map[string]*activeRun
-	// pulling 是正在进行中的领取调用数：维护要等它们登记完运行之后再开始，否则对账时会漏掉在途的运行。
-	pulling int
-	// datasetSlots 让同一个数据集的运行在本地串行：mgr 取消一个运行后会立刻允许创建新运行，
-	// 但旧运行要等下一次心跳才知道被取消，两个运行同时改写同一个暂存表和分区文件会丢行。
-	datasetSlots  map[string]chan struct{}
+	// following 记录本地正在执行的跟随（键为 "space/dataset"），计入总并发槽与读 Storage 并发占用。
+	following map[string]*activeFollow
+	// lastFollowStart 记录每个任务最近一次本地跟随的开始时刻，用于在多任务争抢读 Storage 名额时按最久未跟随优先轮转。
+	lastFollowStart map[string]time.Time
+	// pulling、followListing 是正在进行中的领取与拉取跟随清单调用数：维护要等它们登记完之后再开始，否则对账时会漏掉在途任务。
+	pulling       int
+	followListing int
+	// datasetSlots 让同一个数据集的执行（本地跟随与手动、补拉、导入运行）在本地串行：
+	// 领到的手动运行等当轮跟随让出数据集，等待期间续租定时器照常续租，不会空耗租约。
+	datasetSlots map[string]chan struct{}
+	// slotFreed 在任意运行或跟随结束、或进入维护/磁盘不足时通知等待并发槽的 followOnce。
+	slotFreed     chan struct{}
 	progressEvery time.Duration
 	// probeError 是最近一次对象存储探测失败的原因，unavailableSince 是连续不可用的起点；可用时都为空。
 	probeError       string
@@ -110,7 +126,15 @@ func New(opts Options) *App {
 			}
 		}
 	}
-	return &App{opts: opts, running: map[string]*activeRun{}, datasetSlots: map[string]chan struct{}{}, progressEvery: progressEvery}
+	return &App{
+		opts:            opts,
+		running:         map[string]*activeRun{},
+		following:       map[string]*activeFollow{},
+		lastFollowStart: map[string]time.Time{},
+		datasetSlots:    map[string]chan struct{}{},
+		slotFreed:       make(chan struct{}, 1),
+		progressEvery:   progressEvery,
+	}
 }
 
 // Start 启动时的清理：残留的 .partial 文件。
@@ -125,7 +149,7 @@ func (a *App) Start() error {
 	return nil
 }
 
-// Run 运行主循环，直到 ctx 结束；退出时取消进行中的运行并等待它们收尾。
+// Run 运行主循环，直到 ctx 结束；退出时取消进行中的运行与跟随并等待它们收尾。
 func (a *App) Run(ctx context.Context) error {
 	if err := a.Start(); err != nil {
 		return err
@@ -152,31 +176,57 @@ func (a *App) Run(ctx context.Context) error {
 	loops.Add(1)
 	go func() {
 		defer loops.Done()
+		a.followLoop(ctx)
+	}()
+	loops.Add(1)
+	go func() {
+		defer loops.Done()
 		a.maintenanceLoop(ctx)
 	}()
 	<-ctx.Done()
-	loops.Wait()
 	a.cancelAll()
+	loops.Wait()
 	a.wg.Wait()
 	return nil
 }
 
 func (a *App) cancelAll() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	for _, r := range a.running {
 		r.stop.Store(true)
 		r.cancel()
+	}
+	for _, f := range a.following {
+		f.stop.Store(true)
+		f.cancel()
+	}
+	a.mu.Unlock()
+	a.notifySlot()
+}
+
+func (a *App) notifySlot() {
+	select {
+	case a.slotFreed <- struct{}{}:
+	default:
+	}
+}
+
+func (a *App) waitSlot(ctx context.Context) error {
+	select {
+	case <-a.slotFreed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
 // ---- 心跳 ----
 
-// busy 报告是否还有进行中的运行或在途的领取。
+// busy 报告是否还有进行中的运行、本地跟随或在途的领取/拉取。
 func (a *App) busy() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.running) > 0 || a.pulling > 0
+	return len(a.running) > 0 || len(a.following) > 0 || a.pulling > 0 || a.followListing > 0
 }
 
 func (a *App) runningIDs() []string {
@@ -189,14 +239,39 @@ func (a *App) runningIDs() []string {
 	return ids
 }
 
+// busyStorageRunsLocked 返回当前占用读 Storage 并发名额的执行数（本地跟随 + 非 import 运行）；须在持有 a.mu 时调用。
+func (a *App) busyStorageRunsLocked() int {
+	busy := len(a.following)
+	for _, r := range a.running {
+		// 导入不读 Storage 时序数据（只取一次列信息），不计入读 Storage 的并发占用（与 mgr 领取时的口径一致）。
+		if r.assignment.GetKind() != "import" {
+			busy++
+		}
+	}
+	return busy
+}
+
+// hasActiveRunLocked 报告指定数据集是否已有正在执行的手动、补拉或导入运行；须在持有 a.mu 时调用。
+func (a *App) hasActiveRunLocked(key string) bool {
+	for _, r := range a.running {
+		if r.assignment.GetSpaceId()+"/"+r.assignment.GetDatasetId() == key {
+			return true
+		}
+	}
+	return false
+}
+
 // HeartbeatOnce 发送一次常规心跳（主循环按配置的间隔调用；测试也直接调用）。
 func (a *App) HeartbeatOnce(ctx context.Context) { a.heartbeatOnce(ctx, false) }
 
 // MaintainOnce 执行一次维护（同上）。
 func (a *App) MaintainOnce(ctx context.Context) { a.maintainOnce(ctx) }
 
-// PullOnce 领取并启动一次运行（同上）。
+// PullOnce 领取并启动一次手动/区间/导入运行（同上）。
 func (a *App) PullOnce(ctx context.Context) { a.pullOnce(ctx) }
+
+// FollowOnce 拉取启用任务清单并执行一轮本地跟随，等待本轮全部任务完成后返回（主循环每分钟调用；测试也直接调用）。
+func (a *App) FollowOnce(ctx context.Context) { a.followOnce(ctx) }
 
 // ProbeOnce 探测一次对象存储（同上）。
 func (a *App) ProbeOnce(ctx context.Context) { a.probeOnce(ctx) }
@@ -228,6 +303,7 @@ func (a *App) heartbeatOnce(ctx context.Context, includeTasks bool) map[string]s
 	cfg := a.opts.Config
 	total, used, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
 	a.mu.Lock()
+	prevInsufficient := a.diskInsufficient
 	if derr == nil {
 		a.diskTotal, a.diskUsed, a.diskFree = total, used, free
 		a.diskInsufficient = int64(free) < int64(cfg.Worker.MinFreeBytes)
@@ -236,7 +312,11 @@ func (a *App) heartbeatOnce(ctx context.Context, includeTasks bool) map[string]s
 	}
 	total, used, free = a.diskTotal, a.diskUsed, a.diskFree
 	maintaining := a.maintaining
+	nowInsufficient := a.diskInsufficient
 	a.mu.Unlock()
+	if nowInsufficient && !prevInsufficient {
+		a.notifySlot()
+	}
 	pacingJSON := a.pacingJSON()
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
@@ -279,20 +359,244 @@ func (a *App) pacingJSON() string {
 	return string(raw)
 }
 
-// ---- 领取与执行 ----
+// ---- 本地跟随循环 ----
+
+func (a *App) followLoop(ctx context.Context) {
+	for {
+		if a.opts.Sleep(ctx, a.untilNextFollow()) != nil {
+			return
+		}
+		a.followOnce(ctx)
+	}
+}
+
+// untilNextFollow 返回距离下一个每分钟第 AllowFromSecond 秒（25 秒）的时长，对齐秒窗口起点。
+func (a *App) untilNextFollow() time.Duration {
+	now := a.opts.Now().UTC()
+	next := now.Truncate(time.Minute).Add(schedule.AllowFromSecond * time.Second)
+	if !next.After(now) {
+		next = next.Add(time.Minute)
+	}
+	return next.Sub(now)
+}
+
+func (a *App) syncedTaskRefs(ctx context.Context) []*archivepb.TaskRef {
+	synced, err := a.opts.Staging.SyncedTasks(ctx)
+	if err != nil {
+		log.Warnf("archive worker list synced tasks failed: %v", err)
+	}
+	refs := make([]*archivepb.TaskRef, 0, len(synced))
+	for _, t := range synced {
+		refs = append(refs, &archivepb.TaskRef{SpaceId: t.SpaceID, DatasetId: t.DatasetID, TaskId: t.TaskID})
+	}
+	return refs
+}
+
+// followOnce 从 mgr 拉取当前全部启用且可跟随的任务，按最久未跟随优先顺序在并发与读 Storage 上限内执行一轮跟随并上报结果。
+func (a *App) followOnce(ctx context.Context) {
+	cfg := a.opts.Config
+	a.mu.Lock()
+	if a.maintaining || a.diskInsufficient || a.lastHeartbeatOK.IsZero() {
+		a.mu.Unlock()
+		return
+	}
+	a.followListing++
+	a.mu.Unlock()
+	listingDone := false
+	finishListing := func() {
+		if !listingDone {
+			listingDone = true
+			a.mu.Lock()
+			a.followListing--
+			a.mu.Unlock()
+		}
+	}
+	defer finishListing()
+
+	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	refs := a.syncedTaskRefs(callCtx)
+	rsp, err := a.opts.Manager.ListFollowTasks(callCtx, &archivepb.ListFollowTasksReq{SyncedTasks: refs})
+	cancel()
+	if err != nil {
+		log.Warnf("archive worker list follow tasks failed: %v", err)
+		return
+	}
+	tasks := append([]*archivepb.FollowTask(nil), rsp.GetTasks()...)
+	if len(tasks) == 0 {
+		return
+	}
+	// 按上次本地跟随的开始时刻从早到晚排，未跟随过的排最前，防止长重读任务饿死其余短任务。
+	a.mu.Lock()
+	lastStart := make(map[string]time.Time, len(tasks))
+	for _, task := range tasks {
+		key := task.GetSpaceId() + "/" + task.GetDatasetId()
+		lastStart[key] = a.lastFollowStart[key]
+	}
+	a.mu.Unlock()
+	sort.Slice(tasks, func(i, j int) bool {
+		ki := tasks[i].GetSpaceId() + "/" + tasks[i].GetDatasetId()
+		kj := tasks[j].GetSpaceId() + "/" + tasks[j].GetDatasetId()
+		ti, tj := lastStart[ki], lastStart[kj]
+		if !ti.Equal(tj) {
+			return ti.Before(tj)
+		}
+		return ki < kj
+	})
+
+	var roundWG sync.WaitGroup
+dispatch:
+	for _, task := range tasks {
+		key := task.GetSpaceId() + "/" + task.GetDatasetId()
+		for {
+			a.mu.Lock()
+			if a.maintaining || a.diskInsufficient || ctx.Err() != nil {
+				a.mu.Unlock()
+				break dispatch
+			}
+			if _, busyFollow := a.following[key]; busyFollow || a.hasActiveRunLocked(key) {
+				a.mu.Unlock()
+				continue dispatch
+			}
+			totalBusy := len(a.running) + len(a.following) + a.pulling
+			storageBusy := a.busyStorageRunsLocked()
+			if totalBusy < cfg.Pacing.MaxConcurrentRuns && storageBusy < cfg.Pacing.MaxStorageRuns {
+				followCtx, cancel := context.WithCancel(ctx)
+				f := &activeFollow{task: task, cancel: cancel, ctx: followCtx}
+				a.following[key] = f
+				a.lastFollowStart[key] = a.opts.Now().UTC()
+				a.mu.Unlock()
+				roundWG.Add(1)
+				a.launchFollow(key, f, &roundWG)
+				continue dispatch
+			}
+			a.mu.Unlock()
+			if a.waitSlot(ctx) != nil {
+				break dispatch
+			}
+			// 等到槽位释放后，先让 pullOnce 试领一次排队中的手动/区间/导入运行，避免连续多轮重读饿死手动运行。
+			a.pullOnce(ctx)
+		}
+	}
+	finishListing()
+	roundWG.Wait()
+}
+
+func (a *App) launchFollow(key string, f *activeFollow, roundWG *sync.WaitGroup) {
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		defer roundWG.Done()
+		defer f.cancel()
+		a.executeFollow(f.ctx, f)
+		a.mu.Lock()
+		delete(a.following, key)
+		a.mu.Unlock()
+		a.notifySlot()
+	}()
+}
+
+// followAssignment 把 mgr 下发的 FollowTask 组装成 runner.Execute 使用的输入。
+func followAssignment(task *archivepb.FollowTask, startedAt time.Time) *archivepb.RunAssignment {
+	return &archivepb.RunAssignment{
+		Kind:                    "follow",
+		SpaceId:                 task.GetSpaceId(),
+		DatasetId:               task.GetDatasetId(),
+		TaskId:                  task.GetTaskId(),
+		Purpose:                 task.GetPurpose(),
+		DirName:                 task.GetDirName(),
+		Freq:                    task.GetFreq(),
+		PartitionUnit:           task.GetPartitionUnit(),
+		Retention:               task.GetRetention(),
+		AllowedLatenessSeconds:  task.GetAllowedLatenessSeconds(),
+		SpaceTz:                 task.GetSpaceTz(),
+		LocalClose:              task.GetLocalClose(),
+		StagingRetentionSeconds: task.GetStagingRetentionSeconds(),
+		StartedAt:               startedAt.UTC().UnixMilli(),
+		BackfillFrom:            task.GetBackfillFrom(),
+		DatasetMetaJson:         task.GetDatasetMetaJson(),
+		LastSuccessAt:           task.GetLastSuccessAt(),
+		RegisteredPartitions:    task.GetRegisteredPartitions(),
+	}
+}
+
+func (a *App) executeFollow(ctx context.Context, f *activeFollow) {
+	task := f.task
+	release, err := a.acquireDataset(ctx, task.GetSpaceId(), task.GetDatasetId())
+	if err != nil {
+		return
+	}
+	defer release()
+	startedAt := a.opts.Now().UTC()
+	assignment := followAssignment(task, startedAt)
+	report := func(runner.Progress) bool { return f.stop.Load() }
+	outcome, execErr := a.opts.Runner.Execute(ctx, assignment, report, nil)
+	req := &archivepb.ReportFollowResultReq{
+		SpaceId:    task.GetSpaceId(),
+		DatasetId:  task.GetDatasetId(),
+		TaskId:     task.GetTaskId(),
+		StartedAt:  startedAt.UnixMilli(),
+		FinishedAt: a.opts.Now().UTC().UnixMilli(),
+	}
+	var reported []string
+	if execErr != nil || outcome == nil {
+		req.Status, req.Message = "failed", fmt.Sprintf("%v", execErr)
+	} else {
+		req.Status, req.Message = outcome.Status, outcome.Message
+		req.Partitions, req.Unrecoverable = outcome.Partitions, outcome.Unrecoverable
+		reported = outcome.ReportedKeys
+		if !outcome.FinalUntil.IsZero() {
+			req.FinalUntil = outcome.FinalUntil.UTC().Format(time.RFC3339)
+		}
+		if !outcome.RescanFrom.IsZero() && !outcome.RescanUntil.IsZero() {
+			req.RescanFrom = outcome.RescanFrom.UTC().Format(time.RFC3339)
+			req.RescanUntil = outcome.RescanUntil.UTC().Format(time.RFC3339)
+		}
+	}
+	confirmed := a.reportFollow(ctx, req)
+	if confirmed && len(reported) > 0 {
+		// mgr 确认登记之后才清除待上报标记；上报失败时分区留在待上报里，下一轮跟随会再带上。
+		if err := a.opts.Staging.MarkReported(context.WithoutCancel(ctx), task.GetSpaceId(), task.GetDatasetId(), reported); err != nil {
+			log.Warnf("archive worker mark reported follow=%s/%s: %v", task.GetSpaceId(), task.GetDatasetId(), err)
+		}
+	}
+}
+
+// reportFollow 上报一轮本地跟随的结果：暂时失败时退避重试；mgr 返回冲突（任务重建、分区倒退）或不存在时放弃。返回 true 表示 mgr 已确认。
+func (a *App) reportFollow(ctx context.Context, req *archivepb.ReportFollowResultReq) bool {
+	for attempt := 0; attempt < completeRetries; attempt++ {
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rpcTimeout)
+		_, err := a.opts.Manager.ReportFollowResult(callCtx, req)
+		cancel()
+		if err == nil {
+			return true
+		}
+		if errors.Is(err, manager.ErrConflict) || errors.Is(err, manager.ErrNotFound) {
+			log.Warnf("archive worker follow report rejected task=%s/%s#%s: %v", req.GetSpaceId(), req.GetDatasetId(), req.GetTaskId(), err)
+			return false
+		}
+		log.Warnf("archive worker follow report failed task=%s/%s attempt=%d: %v", req.GetSpaceId(), req.GetDatasetId(), attempt+1, err)
+		if ctx.Err() != nil && attempt >= 1 {
+			return false
+		}
+		if attempt+1 < completeRetries {
+			backoff := time.Duration(1<<attempt) * time.Second
+			if a.opts.Sleep(context.WithoutCancel(ctx), backoff) != nil {
+				return false
+			}
+		}
+	}
+	log.Errorf("archive worker gave up reporting follow task=%s/%s; partitions stay pending for the next round", req.GetSpaceId(), req.GetDatasetId())
+	return false
+}
+
+// ---- 领取与执行（manual、range、import） ----
 
 func (a *App) pullOnce(ctx context.Context) {
 	cfg := a.opts.Config
 	a.mu.Lock()
-	free := cfg.Pacing.MaxConcurrentRuns - len(a.running) - a.pulling
+	free := cfg.Pacing.MaxConcurrentRuns - len(a.running) - len(a.following) - a.pulling
 	blocked := a.maintaining || a.diskInsufficient
-	var busy uint32
-	for _, r := range a.running {
-		// 导入不读 Storage 时序数据（只取一次列信息），不计入读 Storage 的并发占用（与 mgr 领取时的口径一致）。
-		if r.assignment.GetKind() != "import" {
-			busy++
-		}
-	}
+	busy := uint32(a.busyStorageRunsLocked())
 	if free > 0 && !blocked && !a.lastHeartbeatOK.IsZero() {
 		// 与维护的「开始」在同一把锁里决定：登记了 pulling 之后，维护会等这次领取登记完运行才继续。
 		a.pulling++
@@ -311,14 +615,7 @@ func (a *App) pullOnce(ctx context.Context) {
 	}()
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	synced, err := a.opts.Staging.SyncedTasks(callCtx)
-	if err != nil {
-		log.Warnf("archive worker list synced tasks failed: %v", err)
-	}
-	syncedRefs := make([]*archivepb.TaskRef, 0, len(synced))
-	for _, t := range synced {
-		syncedRefs = append(syncedRefs, &archivepb.TaskRef{SpaceId: t.SpaceID, DatasetId: t.DatasetID, TaskId: t.TaskID})
-	}
+	syncedRefs := a.syncedTaskRefs(callCtx)
 	rsp, err := a.opts.Manager.Pull(callCtx, &archivepb.PullArchiveRunReq{
 		FreeSlots:      uint32(free),
 		MaxStorageRuns: uint32(cfg.Pacing.MaxStorageRuns), BusyStorageRuns: busy,
@@ -357,12 +654,14 @@ func (a *App) launch(run *activeRun) {
 		a.mu.Lock()
 		delete(a.running, run.assignment.GetRunId())
 		a.mu.Unlock()
+		a.notifySlot()
 	}()
 }
 
-// acquireDataset 等到同一个数据集没有其他运行在本地执行；等待期间由运行的续租定时器照常续租。
-func (a *App) acquireDataset(ctx context.Context, run *activeRun) (release func(), err error) {
-	key := run.assignment.GetSpaceId() + "/" + run.assignment.GetDatasetId()
+// acquireDataset 等到同一个数据集没有其他执行（本地跟随或手动、补拉、导入运行）在本地进行；
+// 手动运行等待期间由它的续租定时器照常续租，不会空耗租约。
+func (a *App) acquireDataset(ctx context.Context, spaceID, datasetID string) (release func(), err error) {
+	key := spaceID + "/" + datasetID
 	a.mu.Lock()
 	slot, ok := a.datasetSlots[key]
 	if !ok {
@@ -378,7 +677,7 @@ func (a *App) acquireDataset(ctx context.Context, run *activeRun) (release func(
 	}
 }
 
-// execute 执行一次运行并上报结果。
+// execute 执行一次手动、补拉区间或导入运行并上报结果。
 func (a *App) execute(ctx context.Context, run *activeRun) {
 	assignment := run.assignment
 	var latest atomic.Pointer[runner.Progress]
@@ -394,12 +693,12 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 		switch {
 		case err != nil:
 			log.Warnf("archive worker progress report failed run=%s: %v", assignment.GetRunId(), err)
-		case rsp.GetCanceled():
+		case rsp.GetCancelled():
 			run.stop.Store(true)
 			run.cancel()
 		}
 	}
-	// 续租与进度由独立的定时器负责，不依赖「读完一页」：导出、定稿和整点避让等待期间也要续租。
+	// 续租与进度由独立的定时器负责，不依赖「读完一页」：等待本地跟随让出数据集、导出、定稿和整点避让等待期间也要续租。
 	tickCtx, stopTicker := context.WithCancel(ctx)
 	var ticker sync.WaitGroup
 	ticker.Add(1)
@@ -428,13 +727,13 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 
 	req := &archivepb.CompleteArchiveRunReq{RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken()}
 	var reported []string
-	// 同数据集的串行保护延续到完成上报和确认清理之后：否则取消的旧运行的迟到上报可能覆盖新运行刚登记的分区。
-	release, err := a.acquireDataset(ctx, run)
+	// 同数据集的串行保护延续到完成上报和确认清理之后：否则取消的旧运行或跟随的迟到上报可能覆盖新运行刚登记的分区。
+	release, err := a.acquireDataset(ctx, assignment.GetSpaceId(), assignment.GetDatasetId())
 	if err == nil {
 		defer release()
 	}
 	if err != nil {
-		req.Status, req.Message = "canceled", "运行在等待同一数据集的上一个运行时被取消"
+		req.Status, req.Message = "cancelled", "运行在等待同一数据集的上一次执行时被取消"
 	} else {
 		report := func(p runner.Progress) bool {
 			cp := p
@@ -458,12 +757,16 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 			if !outcome.FinalUntil.IsZero() {
 				req.FinalUntil = outcome.FinalUntil.UTC().Format(time.RFC3339)
 			}
+			if !outcome.RescanFrom.IsZero() && !outcome.RescanUntil.IsZero() {
+				req.RescanFrom = outcome.RescanFrom.UTC().Format(time.RFC3339)
+				req.RescanUntil = outcome.RescanUntil.UTC().Format(time.RFC3339)
+			}
 		}
 	}
 	stopTick()
 	confirmed := a.complete(ctx, req)
 	if confirmed && len(reported) > 0 {
-		// mgr 确认登记之后才清除待上报标记；上报失败时分区留在待上报里，下一次运行会再带上。
+		// mgr 确认登记之后才清除待上报标记；上报失败时分区留在待上报里，下一次运行或跟随会再带上。
 		if err := a.opts.Staging.MarkReported(context.WithoutCancel(ctx), assignment.GetSpaceId(), assignment.GetDatasetId(), reported); err != nil {
 			log.Warnf("archive worker mark reported run=%s: %v", assignment.GetRunId(), err)
 		}
@@ -528,7 +831,7 @@ func (a *App) Finish(runID string) error {
 	return nil
 }
 
-// complete 上报结果：暂时失败时退避重试；mgr 返回冲突（运行已结束或令牌失效）时放弃。返回 true 表示 mgr 已确认。
+// complete 上报结果：暂时失败时退避重试；mgr 返回冲突（运行已结束或令牌失效）或不存在时放弃。返回 true 表示 mgr 已确认。
 // 进程退出（ctx 取消）时用一个独立的短超时再试一次，让被取消的运行也能登记已导出的分区。
 func (a *App) complete(ctx context.Context, req *archivepb.CompleteArchiveRunReq) bool {
 	for attempt := 0; attempt < completeRetries; attempt++ {
@@ -538,7 +841,7 @@ func (a *App) complete(ctx context.Context, req *archivepb.CompleteArchiveRunReq
 		if err == nil {
 			return true
 		}
-		if errors.Is(err, manager.ErrConflict) {
+		if errors.Is(err, manager.ErrConflict) || errors.Is(err, manager.ErrNotFound) {
 			log.Warnf("archive worker complete rejected run=%s: %v", req.GetRunId(), err)
 			return false
 		}
@@ -553,7 +856,7 @@ func (a *App) complete(ctx context.Context, req *archivepb.CompleteArchiveRunReq
 			}
 		}
 	}
-	log.Errorf("archive worker gave up reporting run=%s; the manager will mark it failed when its lease expires and the partitions stay pending for the next run", req.GetRunId())
+	log.Errorf("archive worker gave up reporting run=%s; the manager will mark it failed when its lease expires and the partitions stay pending for the next round", req.GetRunId())
 	return false
 }
 
@@ -582,12 +885,13 @@ func (a *App) untilMaintenance() time.Duration {
 	return next.Sub(now)
 }
 
-// maintainOnce 执行一次维护：先停止领取并等进行中的运行结束，再发一次心跳取当前全部任务做对账
+// maintainOnce 执行一次维护：先停止跟随与领取并等进行中的执行结束，再发一次心跳取当前全部任务做对账
 // （拿不到任务列表就跳过对账），最后回收暂存库空闲页并截断 WAL。
 func (a *App) maintainOnce(ctx context.Context) {
 	a.mu.Lock()
 	a.maintaining = true
 	a.mu.Unlock()
+	a.notifySlot()
 	defer func() {
 		a.mu.Lock()
 		a.maintaining = false
@@ -596,7 +900,7 @@ func (a *App) maintainOnce(ctx context.Context) {
 	deadline := a.opts.Now().Add(maintenanceWait)
 	for a.busy() {
 		if a.opts.Now().After(deadline) || ctx.Err() != nil {
-			log.Warnf("archive worker maintenance skipped: runs are still active")
+			log.Warnf("archive worker maintenance skipped: runs or follows are still active")
 			return
 		}
 		if a.opts.Sleep(ctx, 10*time.Second) != nil {
@@ -643,8 +947,9 @@ func unixMilli(t time.Time) int64 {
 type Snapshot struct {
 	Ready       bool
 	Running     int
+	Following   int
 	Maintaining bool
-	// DiskInsufficient：可用空间低于下限，已停止领取新运行。
+	// DiskInsufficient：可用空间低于下限，已停止跟随与领取新运行。
 	DiskInsufficient bool
 	DiskFree         uint64
 	LastError        string
@@ -655,7 +960,12 @@ func (a *App) Snapshot() Snapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return Snapshot{
-		Ready:   !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < 3*a.opts.Config.Worker.HeartbeatInterval,
-		Running: len(a.running), Maintaining: a.maintaining, DiskInsufficient: a.diskInsufficient, DiskFree: a.diskFree, LastError: a.lastError,
+		Ready:            !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < 3*a.opts.Config.Worker.HeartbeatInterval,
+		Running:          len(a.running),
+		Following:        len(a.following),
+		Maintaining:      a.maintaining,
+		DiskInsufficient: a.diskInsufficient,
+		DiskFree:         a.diskFree,
+		LastError:        a.lastError,
 	}
 }

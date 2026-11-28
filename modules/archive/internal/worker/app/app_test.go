@@ -22,25 +22,36 @@ import (
 )
 
 type fakeManager struct {
-	mu            sync.Mutex
-	heartbeat     *archivepb.ArchiveWorkerHeartbeatRsp
-	heartbeatErr  error
-	assignments   []*archivepb.RunAssignment
-	pullErr       error
-	progressStop  bool
-	completeErrs  []error
-	heartbeats    []*archivepb.ArchiveWorkerHeartbeatReq
-	pulls         []*archivepb.PullArchiveRunReq
-	progresses    []*archivepb.ReportArchiveRunProgressReq
-	completes     []*archivepb.CompleteArchiveRunReq
-	completeCalls int
-	completed     chan struct{}
-	pullGate      chan struct{} // 非空时 Pull 阻塞到它被关闭
-	pullEntered   chan struct{} // Pull 进入时发出信号
+	mu                sync.Mutex
+	heartbeat         *archivepb.ArchiveWorkerHeartbeatRsp
+	heartbeatErr      error
+	followTasks       []*archivepb.FollowTask
+	listFollowErr     error
+	listFollowReqs    []*archivepb.ListFollowTasksReq
+	followReports     []*archivepb.ReportFollowResultReq
+	reportFollowErrs  []error
+	reportFollowCalls int
+	followReported    chan struct{}
+	assignments       []*archivepb.RunAssignment
+	pullErr           error
+	progressStop      bool
+	completeErrs      []error
+	heartbeats        []*archivepb.ArchiveWorkerHeartbeatReq
+	pulls             []*archivepb.PullArchiveRunReq
+	progresses        []*archivepb.ReportArchiveRunProgressReq
+	completes         []*archivepb.CompleteArchiveRunReq
+	completeCalls     int
+	completed         chan struct{}
+	pullGate          chan struct{} // 非空时 Pull 阻塞到它被关闭
+	pullEntered       chan struct{} // Pull 进入时发出信号
 }
 
 func newFakeManager() *fakeManager {
-	return &fakeManager{heartbeat: &archivepb.ArchiveWorkerHeartbeatRsp{}, completed: make(chan struct{}, 16)}
+	return &fakeManager{
+		heartbeat:      &archivepb.ArchiveWorkerHeartbeatRsp{},
+		completed:      make(chan struct{}, 16),
+		followReported: make(chan struct{}, 16),
+	}
 }
 
 func (f *fakeManager) Heartbeat(_ context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
@@ -48,6 +59,35 @@ func (f *fakeManager) Heartbeat(_ context.Context, req *archivepb.ArchiveWorkerH
 	defer f.mu.Unlock()
 	f.heartbeats = append(f.heartbeats, req)
 	return f.heartbeat, f.heartbeatErr
+}
+
+func (f *fakeManager) ListFollowTasks(_ context.Context, req *archivepb.ListFollowTasksReq) (*archivepb.ListFollowTasksRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listFollowReqs = append(f.listFollowReqs, req)
+	if f.listFollowErr != nil {
+		return nil, f.listFollowErr
+	}
+	return &archivepb.ListFollowTasksRsp{Tasks: append([]*archivepb.FollowTask(nil), f.followTasks...)}, nil
+}
+
+func (f *fakeManager) ReportFollowResult(_ context.Context, req *archivepb.ReportFollowResultReq) (*archivepb.ReportFollowResultRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reportFollowCalls++
+	if len(f.reportFollowErrs) > 0 {
+		err := f.reportFollowErrs[0]
+		f.reportFollowErrs = f.reportFollowErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	f.followReports = append(f.followReports, req)
+	select {
+	case f.followReported <- struct{}{}:
+	default:
+	}
+	return &archivepb.ReportFollowResultRsp{}, nil
 }
 
 func (f *fakeManager) Pull(_ context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error) {
@@ -75,7 +115,7 @@ func (f *fakeManager) Progress(_ context.Context, req *archivepb.ReportArchiveRu
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.progresses = append(f.progresses, req)
-	return &archivepb.ReportArchiveRunProgressRsp{Canceled: f.progressStop}, nil
+	return &archivepb.ReportArchiveRunProgressRsp{Cancelled: f.progressStop}, nil
 }
 
 func (f *fakeManager) Complete(_ context.Context, req *archivepb.CompleteArchiveRunReq) (*archivepb.CompleteArchiveRunRsp, error) {
@@ -442,8 +482,8 @@ func TestIndependentProgressTimerRenewsTheLeaseAndHonorsCancellation(t *testing.
 	h.app.heartbeatOnce(ctx, false)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
-	if req.GetStatus() != "canceled" {
-		t.Fatalf("mgr 在进度上报里要求取消时应以 canceled 收尾: %v", req)
+	if req.GetStatus() != "cancelled" {
+		t.Fatalf("mgr 在进度上报里要求取消时应以 cancelled 收尾: %v", req)
 	}
 	h.mgr.mu.Lock()
 	defer h.mgr.mu.Unlock()
@@ -786,6 +826,111 @@ func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 	}
 	h.app.cancelAll()
 	h.idle()
+}
+
+func followTask(dataset string, mutate func(*archivepb.FollowTask)) *archivepb.FollowTask {
+	t := &archivepb.FollowTask{
+		SpaceId: "crypto", DatasetId: dataset, TaskId: "1", Purpose: "collect", DirName: "kline-" + strings.ReplaceAll(dataset, "_", "-"),
+		Freq: "1m", PartitionUnit: "day", Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
+	}
+	if mutate != nil {
+		mutate(t)
+	}
+	return t
+}
+
+func TestFollowOnceListsExecutesReportsAndMarksReportedAfterAck(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 10; i++ {
+		h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day.Add(time.Duration(i) * time.Minute), Values: []any{float64(i)}})
+	}
+	h.mgr.followTasks = []*archivepb.FollowTask{followTask("ds_1m", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) })}
+
+	// 首次心跳成功之前不执行跟随。
+	h.app.FollowOnce(ctx)
+	if len(h.mgr.listFollowReqs) != 0 {
+		t.Fatalf("未心跳前不应拉取跟随清单: %d", len(h.mgr.listFollowReqs))
+	}
+
+	h.app.heartbeatOnce(ctx, false)
+	// 上报被拒绝（ErrConflict，例如任务重建）时停止重试，分区留在待上报里。
+	h.mgr.reportFollowErrs = []error{errors.Join(manager.ErrConflict, errors.New("stale task_id"))}
+	h.app.FollowOnce(ctx)
+	if h.mgr.reportFollowCalls != 1 {
+		t.Fatalf("冲突不应重试: calls=%d", h.mgr.reportFollowCalls)
+	}
+	if pending, _ := h.store.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 1 {
+		t.Fatalf("未确认时分区应留在待上报: %v", pending)
+	}
+
+	// 第二轮上报成功：清除待上报标记，并携带 synced_tasks。
+	h.now = h.now.Add(time.Minute)
+	h.app.FollowOnce(ctx)
+	if len(h.mgr.followReports) != 1 {
+		t.Fatalf("followReports = %d", len(h.mgr.followReports))
+	}
+	rep := h.mgr.followReports[0]
+	if rep.GetStatus() != "succeeded" || rep.GetTaskId() != "1" || len(rep.GetPartitions()) != 1 || rep.GetPartitions()[0].GetRowCount() != 10 {
+		t.Fatalf("report = %v", rep)
+	}
+	if pending, _ := h.store.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 0 {
+		t.Fatalf("确认后应清除待上报标记: %v", pending)
+	}
+	if synced := h.mgr.listFollowReqs[1].GetSyncedTasks(); len(synced) != 1 || synced[0].GetTaskId() != "1" {
+		t.Fatalf("第二轮 ListFollowTasks 应携带 synced_tasks: %v", synced)
+	}
+}
+
+func TestLocalFollowCountsAgainstBusyStorageRunsAndSerializesWithManualRun(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 3, 2
+	h.app.progressEvery = 10 * time.Millisecond
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day, Values: []any{1.0}})
+	h.src.delay = 120 * time.Millisecond
+	h.mgr.followTasks = []*archivepb.FollowTask{followTask("ds_1m", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) })}
+	h.app.heartbeatOnce(ctx, false)
+
+	followDone := make(chan struct{})
+	go func() {
+		h.app.FollowOnce(ctx)
+		close(followDone)
+	}()
+	// 等待本地跟随启动并占住数据集。
+	deadline := time.Now().Add(5 * time.Second)
+	for h.app.Snapshot().Following == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("本地跟随没有启动")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// 跟随进行中拉取一次性运行：busy_storage_runs 必须包含本地跟随，且同数据集的 manual 运行等待跟随结束并在等待期间续租。
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("run_manual", func(a *archivepb.RunAssignment) {
+		a.Kind = "manual"
+		a.BackfillFrom = day.Format(time.RFC3339)
+	})}
+	h.app.pullOnce(ctx)
+	if len(h.mgr.pulls) != 1 || h.mgr.pulls[0].GetBusyStorageRuns() != 1 || h.mgr.pulls[0].GetFreeSlots() != 2 {
+		t.Fatalf("本地跟随期间 pull 请求应计入 busy_storage_runs 与占用槽位: %v", h.mgr.pulls)
+	}
+	<-followDone
+	req := h.waitComplete()
+	h.idle()
+	if req.GetRunId() != "run_manual" || req.GetStatus() != "succeeded" {
+		t.Fatalf("manual complete = %v", req)
+	}
+	if h.src.maxAct != 1 {
+		t.Fatalf("本地跟随与 manual 运行不能并发读写同一数据集: maxAct=%d", h.src.maxAct)
+	}
+	h.mgr.mu.Lock()
+	renewed := len(h.mgr.progresses) > 0
+	h.mgr.mu.Unlock()
+	if !renewed {
+		t.Fatal("manual 运行等待本地跟随期间应照常续租")
+	}
 }
 
 func (f *fakeSource) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {

@@ -585,7 +585,6 @@ func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/api/admin/sysdeploy/SyncTopology",
 		"/api/admin/archive/StartArchiveImport",
-		"/api/admin/archive/ClearArchiveUnrecoverable",
 	} {
 		store, current := setupSessionTest(t)
 		gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })

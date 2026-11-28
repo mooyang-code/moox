@@ -78,11 +78,10 @@ func TestLifecyclePauseForExpiry(t *testing.T) {
 	require.ErrorContains(t, runLifecycleCommand(ctx, lifecycleOptions{Module: "trade", ExpiresIn: time.Hour}, lifecycle.CmdResume, &out), "--for")
 }
 
-// factor-mgr、archive-mgr 不参与系统暂停，但可以单独暂停、恢复（经各自服务的两个方法）；没有部署、不认识的模块直接报错。
+// factor-mgr 不参与系统暂停，但可以单独暂停、恢复（经服务的两个方法）；没有部署、不认识的模块（含已移除模块暂停的 archive-mgr）直接报错。
 func TestLifecycleManagersAndUnknownModules(t *testing.T) {
 	gateway := newLifecycleGateway()
 	mgr := gateway.add(t, "factor-mgr", lifecycle.Hooks{})
-	archive := gateway.add(t, "archive-mgr", lifecycle.Hooks{})
 	gateway.use(t)
 	ctx := context.Background()
 	var out bytes.Buffer
@@ -91,11 +90,10 @@ func TestLifecycleManagersAndUnknownModules(t *testing.T) {
 	require.True(t, mgr.Halted())
 	require.NoError(t, runLifecycleCommand(ctx, lifecycleOptions{Module: "factor-mgr", By: "ops"}, lifecycle.CmdResume, &out))
 	require.True(t, mgr.Running(), "没有要追赶的数据，恢复即放行")
-	require.NoError(t, runLifecycleCommand(ctx, lifecycleOptions{Module: "archive-mgr", By: "ops"}, lifecycle.CmdPause, &out))
-	require.True(t, archive.Halted())
-	require.Equal(t, []string{"factor-mgr:pause", "factor-mgr:resume", "archive-mgr:pause"}, gateway.snapshot())
+	require.Equal(t, []string{"factor-mgr:pause", "factor-mgr:resume"}, gateway.snapshot())
 
 	require.ErrorContains(t, runLifecycleStatus(ctx, lifecycleOptions{Module: "strategy"}, &out), "没有部署")
+	require.ErrorContains(t, runLifecycleStatus(ctx, lifecycleOptions{Module: "archive-mgr"}, &out), "未知的模块")
 	require.ErrorContains(t, runLifecycleStatus(ctx, lifecycleOptions{Module: "monitor"}, &out), "未知的模块")
 }
 
