@@ -279,7 +279,7 @@ func (s *Service) RunAll(ctx context.Context) error {
 
 // RunLogicalAccount 对一个组合账户检查一遍：先把上次触发后还没做完的归集做完，再判断这一轮要不要触发。
 func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAccountRecord) error {
-	if logical.ExecutionMode != string(exchange.ExecutionModeLive) {
+	if logical.ExecutionMode() != string(exchange.ExecutionModeLive) {
 		return nil
 	}
 	settings, err := s.Store.ResolveFundSettings(logical)
@@ -421,7 +421,7 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 	_, err := s.Reduce(ctx, logical.SpaceID, actionID, logical.LogicalAccountID, settings.MarginReduceRatio, store.MarginPause(store.MarginReduced))
 	if errors.Is(err, operatorapp.ErrLogicalAccountBusy) {
 		// 减仓排不进去（有下架清仓在跑，或拿不到组合锁）：先把组合暂停停住，下一轮再试减仓。
-		if logical.AutomationState == "ACTIVE" && s.Pause != nil {
+		if logical.IsActive() && s.Pause != nil {
 			// 只在组合仍在自动执行时暂停：读到组合之后用户可能已经人工暂停，不覆盖人工原因。
 			paused, pauseErr := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, store.Pause{}, store.MarginPause(store.MarginReducePending))
 			if pauseErr != nil || !paused {

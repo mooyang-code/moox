@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -16,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -42,8 +42,8 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "Live capacity routing",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "TESTNET", SettlementAsset: "USDT",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 	_, accepted, err := storetest.AcceptTarget(ctx, f.store, store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "live-target",
@@ -114,8 +114,8 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "Capacity routing",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "PAPER", SettlementAsset: "USDT",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -127,7 +127,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 	account, err = f.store.GetTradingAccountByID(ctx, second)
 	require.NoError(t, err)
@@ -154,11 +154,11 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 	}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "capacity-target", LogicalAccountId: testLogicalAccount,
 		InstanceId: "capacity-instance", SessionId: "capacity-session", SessionStartedAt: 1_000, StrategyId: "capacity-strategy",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, MarketType: "spot", TargetWeight: "1"}},
+		Targets: []*eventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, MarketType: "spot", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "capacity-target", OccurredAt: testNow, SpaceID: testSpace, SubjectID: testLogicalAccount})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)
@@ -235,15 +235,15 @@ func TestTargetRejectionDoesNotLoopE2E(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "reject",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "TESTNET", SettlementAsset: "USDT",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TradingAccountID: testAccount, Enabled: true}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 	_, accepted, err := storetest.AcceptTarget(ctx, f.store, store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "reject-target",

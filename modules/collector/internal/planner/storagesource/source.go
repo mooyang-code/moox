@@ -105,7 +105,7 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 		DataSourceID: strings.TrimSpace(dataset.GetDataSourceId()),
 		DataKind:     dataset.GetDataKind(),
 		Status:       strings.ToLower(strings.TrimSpace(dataset.GetStatus())),
-		Freq:         dataset.GetFreq(),
+		Freq:         dataset.GetFrequency(),
 		Alignment:    strings.TrimSpace(dataset.GetAlignment()),
 		SubjectTags:  append([]string(nil), dataset.GetSubjectTags()...),
 		Attributes:   cloneAttributes(dataset.GetAttributes()),

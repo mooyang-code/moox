@@ -19,7 +19,7 @@ func writeConfig(t *testing.T, content string) string {
 }
 
 func TestLoadAppliesSafeDefaults(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "database: ./strategy.sqlite\n"))
+	cfg, err := Load(writeConfig(t, "database:\n  path: ./strategy.sqlite\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,8 @@ func TestLoadAppliesSafeDefaults(t *testing.T) {
 }
 
 func TestLoadReadsAppendedSections(t *testing.T) {
-	cfg, err := Load(writeConfig(t, `database: ./strategy.sqlite
+	cfg, err := Load(writeConfig(t, `database:
+  path: ./strategy.sqlite
 evaluation:
   attempt_budget: 7
 retention:
@@ -61,7 +62,7 @@ replay:
 		"replay:\n  chunk_bars: -5\n",
 		"eventbus:\n  relay_interval: -1s\n",
 	} {
-		if _, err := Load(writeConfig(t, "database: ./strategy.sqlite\n"+invalid)); err == nil {
+		if _, err := Load(writeConfig(t, "database:\n  path: ./strategy.sqlite\n"+invalid)); err == nil {
 			t.Fatalf("非法配置应被拒绝：%s", invalid)
 		}
 	}
@@ -80,7 +81,7 @@ func TestLoadRejectsLegacyGatewayFieldsAndWrongCaller(t *testing.T) {
 		"旧的 trade 网关地址":  "trade:\n  gateway_url: https://127.0.0.1:9\n  target_node: n1\n",
 		"旧的 storage 目标":  "storage:\n  target: ip://127.0.0.1:11003\n",
 		"调用方不是 strategy": "gateway_client:\n  caller: factor\n  key_file: /secrets/host.key\n",
-		"两个 YAML 文档":     "database: a\n---\ndatabase: b\n",
+		"两个 YAML 文档":     "database:\n  path: a\n---\ndatabase:\n  path: b\n",
 	} {
 		if _, err := Load(writeConfig(t, content)); err == nil {
 			t.Errorf("%s 应被拒绝", name)

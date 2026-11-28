@@ -15,13 +15,13 @@ import (
 // DatasetsCSVName 是归档根目录下的数据集对照表：每个任务目录一行，方便从目录名找回数据集。
 const DatasetsCSVName = "datasets.csv"
 
-var datasetsCSVHeader = []string{"space_id", "purpose", "dir_name", "dataset_id", "name", "freq"}
+var datasetsCSVHeader = []string{"space_id", "purpose", "dir_name", "dataset_id", "name", "frequency"}
 
 // datasetsCSVMu 让同一进程里刷新对照表的调用串行（Files 是值类型，锁放在包级）。
 var datasetsCSVMu sync.Mutex
 
 // WriteDatasetsCSV 扫描 <root>/<space>/<purpose>/<dir_name>/dataset.json（各级都跳过点开头的目录，如 .state），
-// 生成根目录的 datasets.csv（列 space_id,purpose,dir_name,dataset_id,name,freq，按前三列排序）；内容没变时不重写。
+// 生成根目录的 datasets.csv（列 space_id,purpose,dir_name,dataset_id,name,frequency，按前三列排序）；内容没变时不重写。
 // 先写唯一的临时文件（.partial 结尾，残留由 CleanPartials 清掉）再改名。对照表只在本地，不上传对象存储。
 func (f Files) WriteDatasetsCSV() error {
 	datasetsCSVMu.Lock()
@@ -103,7 +103,7 @@ func (f Files) scanDatasetJSON() ([][]string, error) {
 				if len(meta.Dataset) > 0 {
 					_ = json.Unmarshal(meta.Dataset, &dataset)
 				}
-				rows = append(rows, []string{space, purpose, dir, meta.DatasetID, dataset.Name, meta.Freq})
+				rows = append(rows, []string{space, purpose, dir, meta.DatasetID, dataset.Name, meta.Frequency})
 			}
 		}
 	}

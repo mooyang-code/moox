@@ -555,7 +555,7 @@ func baselineLiveRun(t *testing.T) [][]string {
 		plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
 			Set: fx.set.Set, Members: fx.set.Members, PeriodTime: at(minute),
 			UniverseSubjects: universe, UpstreamFailed: upstreamFailed,
-			CarryColumns: []string{"close", "volume"}, TriggerEventID: fmt.Sprintf("evt-%d", minute),
+			CarryColumns: []string{"close", "volume"},
 		})
 		require.NoError(t, err)
 		outcome, err := fx.runner.Run(context.Background(), plan)

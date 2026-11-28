@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // A 股 5m：11:25 那根（bar_end 11:30）的有效期往后推 ValidBars=2 根，跨午休到 13:10，而不是按墙钟的 11:40。
@@ -25,7 +24,7 @@ func TestStockIntradayValidityCrossesLunchBreak(t *testing.T) {
 	h := newHarnessWith(t, rankDSL, nil, resolved)
 	h.now = time.Date(2026, 10, 8, 14, 0, 0, 0, shanghai)
 	message := &eventpb.EventMessage{EventId: "event-1125", EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "5m", PeriodTime: time.Date(2026, 10, 8, 11, 25, 0, 0, shanghai).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
+	payload := &eventpb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "5m", PeriodTime: time.Date(2026, 10, 8, 11, 25, 0, 0, shanghai).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	result, found, err := h.repo.ResultAtBar(context.Background(), "i1", h.session, time.Date(2026, 10, 8, 11, 30, 0, 0, shanghai))
 	if err != nil || !found {

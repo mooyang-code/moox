@@ -63,13 +63,18 @@ type ReplayConfig struct {
 	MissingPriceLiquidateBars int `yaml:"missing_price_liquidate_bars"`
 }
 
+// DatabaseConfig 是 SQLite 数据库配置。
+type DatabaseConfig struct {
+	Path string `yaml:"path"`
+}
+
 // Config 是 config/app.yaml 的结构。
 type Config struct {
 	// GatewayClient 是访问 Storage、FactorMgr 与 Trade 的 gatewayclient 配置（strategy 身份）。
 	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
 	// sourcePath 是读取的配置文件绝对路径：网关客户端的相对路径（密钥、目录缓存）以它为基准。
 	sourcePath string            `yaml:"-"`
-	Database   string            `yaml:"database"`
+	Database   DatabaseConfig    `yaml:"database"`
 	Trade      tradeowner.Config `yaml:"trade"`
 	InstanceID string            `yaml:"instance_id"`
 	EventBus   EventBusConfig    `yaml:"eventbus"`
@@ -205,5 +210,5 @@ func (c Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, 
 	if c.GatewayClient.Caller != "strategy" {
 		return nil, errors.New("gateway_client.caller 必须是 strategy")
 	}
-	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database), onRefreshError)
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

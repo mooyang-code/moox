@@ -37,8 +37,8 @@ func sourceFields(rules []FieldRule) []string {
 // resample worker; rewriting the same bucket simply overwrites it. The interface is intentionally small for deterministic
 // unit tests and to keep the remote adapter independent of control-plane state.
 type PrimaryStorage interface {
-	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
-	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
+	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.Row, error)
+	UpsertFields(context.Context, []*storagepb.Row) error
 }
 
 // ViewWaiter 是合成用到的 DataView 方法：建目标时等查询索引的列建好。
@@ -62,11 +62,11 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 
 func rowKey(spaceID, datasetID, subjectID, frequency string, at time.Time, seriesTag string) *storagepb.RowKey {
 	return &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-		SubjectId: subjectID, Freq: frequency, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
+		SubjectId: subjectID, Frequency: frequency, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
 	}}}
 }
 
-func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
+func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.Row {
 	fields := make([]*storagepb.FieldValue, 0, len(spec.Rules))
 	for _, rule := range spec.Rules {
 		val, ok := result.Values[rule.Name]
@@ -81,7 +81,7 @@ func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 			fields = append(fields, doubleField(rule.Name, val.Float))
 		}
 	}
-	return &storagepb.RowFieldUpsert{
+	return &storagepb.Row{
 		Key:    rowKey(result.SpaceID, result.DatasetID, result.SubjectID, result.Frequency, result.DataTime, result.SeriesTag),
 		Fields: fields,
 		Attributes: map[string]*storagepb.TypedValue{
@@ -94,7 +94,7 @@ func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 	}
 }
 
-func decodeSourceBar(row *storagepb.RowFieldValues, rules []FieldRule) (SourceBar, error) {
+func decodeSourceBar(row *storagepb.Row, rules []FieldRule) (SourceBar, error) {
 	if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
 		return SourceBar{}, fmt.Errorf("source row key is invalid")
 	}
@@ -126,14 +126,14 @@ func decodeSourceBar(row *storagepb.RowFieldValues, rules []FieldRule) (SourceBa
 		SpaceID:   row.GetKey().GetSpaceId(),
 		DatasetID: row.GetKey().GetDatasetId(),
 		SubjectID: k.GetSubjectId(),
-		Frequency: k.GetFreq(),
+		Frequency: k.GetFrequency(),
 		DataTime:  at.UTC(),
 		SeriesTag: k.GetSeriesTag(),
 		Values:    values,
 	}, nil
 }
 
-func decodeDoubleField(row *storagepb.RowFieldValues, rule FieldRule) (FieldValue, error) {
+func decodeDoubleField(row *storagepb.Row, rule FieldRule) (FieldValue, error) {
 	value, ok := fieldValue(row, rule.Name)
 	if !ok || value == nil {
 		if rule.Nullable {
@@ -157,7 +157,7 @@ func decodeDoubleField(row *storagepb.RowFieldValues, rule FieldRule) (FieldValu
 	return FieldValue{Float: v}, nil
 }
 
-func decodeIntField(row *storagepb.RowFieldValues, rule FieldRule) (FieldValue, error) {
+func decodeIntField(row *storagepb.Row, rule FieldRule) (FieldValue, error) {
 	value, ok := fieldValue(row, rule.Name)
 	if !ok || value == nil {
 		if rule.Nullable {
@@ -177,7 +177,7 @@ func decodeIntField(row *storagepb.RowFieldValues, rule FieldRule) (FieldValue, 
 	return FieldValue{Int: value.GetIntValue()}, nil
 }
 
-func fieldValue(row *storagepb.RowFieldValues, name string) (*storagepb.TypedValue, bool) {
+func fieldValue(row *storagepb.Row, name string) (*storagepb.TypedValue, bool) {
 	for _, field := range row.GetFields() {
 		if field == nil {
 			continue

@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,15 +11,21 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
+	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )
 
+type localRowsFake struct{}
+
+func (localRowsFake) RealRowsAt(context.Context, domain.FactorTask, []string, time.Time) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
 type periodStoreFake struct{}
 
-func (periodStoreFake) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (periodStoreFake) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 
@@ -30,7 +38,7 @@ func periodDelivery(t *testing.T, datasetID string) *jetstream.Delivery {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: datasetID, Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
 		Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: []string{"BTC"}, CompletedAt: period.Add(time.Minute).UnixMilli(),
@@ -46,7 +54,12 @@ func periodDelivery(t *testing.T, datasetID string) *jetstream.Delivery {
 
 func newCatalogHandler(t *testing.T, cache *CatalogCache, runner *planRecorder) *eventconsumer.Handler {
 	t.Helper()
-	handler := eventconsumer.NewHandler(cache, periodStoreFake{}, runner, setlock.New(), eventconsumer.HandlerConfig{})
+	wm, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
+	require.NoError(t, err)
+	cont, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: wm, Local: localRowsFake{}})
+	require.NoError(t, err)
+	handler, err := eventconsumer.NewHandler(cache, periodStoreFake{}, runner, setlock.New(), eventconsumer.HandlerConfig{Continuity: cont})
+	require.NoError(t, err)
 	t.Cleanup(handler.Close)
 	return handler
 }

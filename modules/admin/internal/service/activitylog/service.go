@@ -116,7 +116,7 @@ func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogs
 		size = defaultPageSize
 	}
 	size = min(size, maxPageSize)
-	rsp := &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_SUCCESS, "ok"), Page: &pb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: int64(page*size) < total}}
+	rsp := &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_SUCCESS, "ok"), PageResult: &pb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: int64(page*size) < total}}
 	for _, item := range items {
 		rsp.Items = append(rsp.Items, &pb.ActivityLogItem{
 			Id: item.ID, SpaceId: item.SpaceID, Source: item.Source, Category: item.Category, Level: item.Level, Title: item.Title,

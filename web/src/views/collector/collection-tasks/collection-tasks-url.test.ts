@@ -10,16 +10,14 @@ const ctx = vi.hoisted(() => ({
 const api = vi.hoisted(() => ({
   GetTaskList: vi.fn(),
   GetTaskDetail: vi.fn(),
-  GetDataTypeConfigs: vi.fn(async () => ({ configs: [] })),
-  GetDataTypeConfigWithFields: vi.fn(async () => ({ detail: {} }))
+  GetDataTypeConfigs: vi.fn(async () => ({ configs: [] }))
 }));
 vi.mock("vue-router", () => ({ useRoute: () => ctx.route, useRouter: () => ({ replace: ctx.replace, push: ctx.replace }) }));
 vi.mock("@/api/collector", async importOriginal => ({
   ...(await importOriginal<typeof import("@/api/collector")>()),
   GetTaskList: api.GetTaskList,
   GetTaskDetail: api.GetTaskDetail,
-  GetDataTypeConfigs: api.GetDataTypeConfigs,
-  GetDataTypeConfigWithFields: api.GetDataTypeConfigWithFields
+  GetDataTypeConfigs: api.GetDataTypeConfigs
 }));
 vi.mock("@/api/storage/metadata", () => ({
   getDataset: vi.fn(),
@@ -55,7 +53,7 @@ beforeEach(() => {
       string
     >;
   });
-  api.GetTaskList.mockReset().mockResolvedValue({ tasks: [task("t1")], page: { total: 1 } });
+  api.GetTaskList.mockReset().mockResolvedValue({ tasks: [task("t1")], page_result: { total: 1 } });
   api.GetTaskDetail.mockReset().mockResolvedValue({ task: task("t9") });
 });
 afterEach(() => {

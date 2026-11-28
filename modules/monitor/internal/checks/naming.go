@@ -1,0 +1,190 @@
+package checks
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
+	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
+)
+
+// PassStatus 把通过与否换成检查状态。
+func PassStatus(passed bool) string {
+	if passed {
+		return domain.CheckStatusOK
+	}
+	return domain.CheckStatusDown
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// datasetSubject 是数据集检查所看的对象：有名称（生产者上报的或 Storage 登记的）时用名称，否则用数据集 ID 加频率。
+func datasetSubject(name, datasetID, freq string) string {
+	if strings.TrimSpace(name) != "" {
+		return name
+	}
+	return datasetID + "（" + alerttext.Frequency(freq) + "）"
+}
+
+// datasetCheckName 按产出数据的环节给数据集新鲜度检查起名。
+func datasetCheckName(producer, subject string) string {
+	switch producer {
+	case "collector":
+		return checkName(subject, "采集")
+	case "storage":
+		return checkName(subject, "写入存储")
+	case "storage_view":
+		return checkName(subject, "结果视图")
+	case "factor":
+		return checkName(subject, "因子计算")
+	case "strategy":
+		return checkName(subject, "策略结果")
+	default:
+		return checkName(subject, producer)
+	}
+}
+
+func klineCheckName(subject string) string { return checkName(subject, "K线结果") }
+
+// checkName 用「对象 · 环节」给检查起名；对象以全角括号结尾时省掉括号后的空格（「market_kline（1分钟）· 采集」）。
+func checkName(subject, stage string) string {
+	if strings.HasSuffix(subject, "）") {
+		return subject + "· " + stage
+	}
+	return subject + " · " + stage
+}
+
+func reporterCheckName(service, node string) string {
+	return checkName(alerttext.Service(service)+"（"+alerttext.Node(node)+"）", "运行指标上报")
+}
+
+// reporterReasonText 把服务指标上报状态转成人可读的原因说明。
+func reporterReasonText(status string) string {
+	switch status {
+	case "healthy":
+		return "运行指标正常上报"
+	case "stale":
+		return "运行指标已中断：服务可能卡住、重启中，或无法连接消息总线"
+	case "missing":
+		return "没有收到该服务的运行指标：服务可能未启动，或无法连接消息总线"
+	default:
+		return "还没有收到该服务的运行指标"
+	}
+}
+
+// klineReasonText 把 K 线新鲜度评估结果转成人可读的原因说明；机器诊断留在检查结果的详情字段中。
+func klineReasonText(report kline.KlineFreshnessReport, now time.Time) string {
+	switch report.Reason {
+	case "fresh":
+		return "数据按时更新"
+	case "new_subjects_pending":
+		return pendingSubjectsText(report)
+	case "first_bar_pending":
+		return "等待第一根 K 线（数据集刚建好，休市或未开盘）"
+	case "no_observation":
+		return "还没有收到任何结果数据：请确认采集任务在运行、结果视图已生成"
+	case "subject_catalog_unavailable":
+		return "无法读取采集对象清单，暂时无法判断哪些对象落后"
+	case "task_result_error":
+		return "采集任务的结果状态异常，请检查采集任务"
+	case kline.KlineReasonTaskResultPrepareStalled:
+		return fmt.Sprintf("任务已启用但数据准备一直未完成（已持续 %s），请检查采集任务准备状态与结果视图", alerttext.Duration(report.StaleAge))
+	case "calendar_not_covered":
+		return "日历未覆盖：交易日历没有覆盖到当前日期，无法判断应收的最新一根K线，请更新交易日历"
+	case "calendar_unknown":
+		return "该市场没有可用的交易日历，无法判断应收的最新一根K线"
+	case "alignment_unconfirmed":
+		return "周期对齐未确认：这个周期的K线按什么时刻对齐还没有确认，暂不判断"
+	case "calendar_error":
+		return "无法按交易日历识别最新一根K线：" + report.Diagnostic
+	case kline.KlineReasonSeedingViewCatchingUp:
+		view := "还没有输出"
+		if !report.OldestDataTime.IsZero() {
+			view = "只更新到 " + alerttext.Time(report.OldestDataTime)
+		}
+		return fmt.Sprintf("首次接入的历史补齐中或刚补齐：结果视图在追补齐写入的历史行，%s；采集已完成到 %s 这一期，按时，不告警",
+			view, alerttext.Time(report.Rule.LatestCompletedPeriod))
+	case kline.KlineReasonSeedingSubjectsCatchingUp:
+		var counts []string
+		if lagging := report.StaleCount - report.MissingCount; lagging > 0 {
+			counts = append(counts, fmt.Sprintf("%d 个落后", lagging))
+		}
+		if report.MissingCount > 0 {
+			counts = append(counts, fmt.Sprintf("%d 个没有数据", report.MissingCount))
+		}
+		return "首次接入的历史补齐中或刚补齐：补齐按时间先后写历史行，按对象统计的" + strings.Join(counts, "、") + "是补齐过程中的假象；结果视图整体按时更新，不告警"
+	case "view_behind_latest_completed_period":
+		if report.OldestDataTime.IsZero() {
+			return fmt.Sprintf("采集已完成到 %s 这一期，但还没有看到该结果的数据（这一根已过收线 %s）",
+				alerttext.Time(report.Rule.LatestCompletedPeriod), alerttext.Duration(report.StaleAge))
+		}
+		return fmt.Sprintf("采集已完成到 %s 这一期，但结果只更新到 %s，之后的一根已过收线 %s",
+			alerttext.Time(report.Rule.LatestCompletedPeriod), alerttext.Time(report.OldestDataTime), alerttext.Duration(report.StaleAge))
+	case "business_data_stale":
+		if report.ViewStale {
+			return fmt.Sprintf("整体停止更新：最新数据停在 %s，下一根K线已逾期 %s", alerttext.Time(report.OldestDataTime), alerttext.Duration(report.StaleAge))
+		}
+		var parts []string
+		if lagging := report.StaleCount - report.MissingCount; lagging > 0 {
+			part := fmt.Sprintf("%d 个对象数据落后", lagging)
+			if names := alerttext.Subjects(report.StaleSubjects, lagging); names != "" {
+				part += "（" + names + "）"
+			}
+			if report.StaleAge > 0 {
+				part += "，最久已逾期 " + alerttext.Duration(report.StaleAge)
+			}
+			parts = append(parts, part)
+		}
+		if report.MissingCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个对象没有任何数据", report.MissingCount))
+		}
+		if len(parts) == 0 {
+			return "部分对象数据落后"
+		}
+		if report.PendingCount > 0 {
+			parts = append(parts, "另有"+pendingSubjectsText(report))
+		}
+		return strings.Join(parts, "；")
+	default:
+		return report.Reason
+	}
+}
+
+// pendingSubjectsText 说明新上线对象还在等首根 K 线：不是故障，宽限期过了仍没有数据才会告警。
+func pendingSubjectsText(report kline.KlineFreshnessReport) string {
+	return fmt.Sprintf("%d 个新上线对象等待首根K线（%s 前到，过了仍没有会告警）", report.PendingCount, alerttext.Time(report.PendingUntil))
+}
+
+// datasetReasonText 把数据集新鲜度状态转成人可读的原因说明（带北京时间）。
+func datasetReasonText(dataset monitorobservability.DatasetFrequencyStatus, now time.Time) string {
+	switch {
+	case dataset.Status == "healthy" && dataset.OutputWatermarkAt.IsZero():
+		return "运行正常，本周期没有产出数据"
+	case dataset.Status == "healthy":
+		return "数据按时更新"
+	case dataset.Reason == "run stale":
+		return fmt.Sprintf("已 %s没有运行（上次运行 %s）", alerttext.Duration(now.Sub(dataset.LastRunAt)), alerttext.Time(dataset.LastRunAt))
+	case dataset.Reason == "success stale":
+		return fmt.Sprintf("一直运行失败：已 %s没有成功（上次成功 %s）", alerttext.Duration(now.Sub(dataset.LastSuccessAt)), alerttext.Time(dataset.LastSuccessAt))
+	case dataset.Reason == "inventory_stale":
+		return "数据生产服务超过 10 分钟没有更新数据集清单，可能已停止"
+	case dataset.Reason == "尚未上报":
+		return "还没有收到任何运行记录"
+	case dataset.Reason == monitorobservability.DatasetReasonWarming:
+		return "数据积累中：结果暂不完整（预热中或历史不足），数据攒够后自动恢复"
+	case dataset.Reason == "尚无成功运行":
+		return "已在运行，但还没有成功过"
+	default:
+		return dataset.Reason
+	}
+}

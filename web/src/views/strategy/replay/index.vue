@@ -54,7 +54,7 @@
               <a-space>
                 <a-button size="small" :loading="rerunning" @click="rerunWithConfig">按此配置重新发起</a-button>
                 <a-button
-                  v-if="(selected.status === 'pending' || selected.status === 'running') && selected.replay_id === selectedId"
+                  v-if="(selected.status === 'queued' || selected.status === 'running') && selected.replay_id === selectedId"
                   class="cancel-replay"
                   status="warning"
                   :loading="cancelling"
@@ -295,7 +295,7 @@ import { Message, Modal } from "@arco-design/web-vue";
 import type VChart from "@visactor/vchart";
 import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getInstance, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
-import type { PageResult } from "@/api/strategy";
+import type { PagedList } from "@/api/strategy";
 import type { InstrumentWeight, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportError, serverNow } from "@/api/http";
 import { listAllFactorTasks } from "@/api/factor";
@@ -505,7 +505,7 @@ async function loadStrategies() {
     await strategyStore.loadAllStrategies(200);
     errors.strategies = "";
   } catch (err) {
-    if (err instanceof StaleSpaceRequestError) return; // 切换空间造成的取消，空间监听会重新加载
+    if (err instanceof StaleSpaceRequestError) return; // 切换空间时主视图会整页重建，忽略旧实例的取消错误
     errors.strategies = `策略定义加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   }
 }
@@ -514,7 +514,7 @@ async function loadStrategies() {
  * 应用一次列表响应：已有更新的响应、页码已变或空间已切换时丢弃，返回是否应用。
  * 还没有选中回放时选中第一条：手动加载与轮询哪个先应用都会触发，选择在后台进行，不拖住列表的加载态。
  */
-function applyReplayList(gen: number, seq: number, page: number, result: PageResult<Replay>): boolean {
+function applyReplayList(gen: number, seq: number, page: number, result: PagedList<Replay>): boolean {
   if (gen !== generation || seq <= listApplied || page !== replayPage.value) return false;
   listApplied = seq;
   readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
@@ -721,7 +721,7 @@ function selectedNeedsRefresh(): boolean {
   const current = selected.value;
   if (!current || current.replay_id !== selectedId.value) return false;
   return (
-    current.status === "pending" ||
+    current.status === "queued" ||
     current.status === "running" ||
     awaitingShown.value ||
     tableRefreshPending === current.replay_id
@@ -745,7 +745,7 @@ async function refreshSelected() {
     series.value = all;
     await renderChart(false);
   }
-  maybeAwaitMetrics(replay, current.status === "pending" || current.status === "running");
+  maybeAwaitMetrics(replay, current.status === "queued" || current.status === "running");
   const lastPage = Math.max(1, Math.ceil(all.length / tablePageSize));
   // 表格没有落后、停在较早的页、状态也没变化时不用刷新。
   if (tableRefreshPending !== replayId && tablePage.value < lastPage - 1 && replay.status === current.status) return;
@@ -815,13 +815,13 @@ function timeLabel(time: unknown): string {
 }
 
 async function start() {
-  errors.start = validateReplayForm(form, strategyStore.strategyCatalog);
+  errors.start = validateReplayForm(form);
   const source = replaySourceOf(form);
   if (errors.start || !source || !form.range) return;
   const [startTime, endTime] = form.range;
   const gen = generation;
   const picks = userPicks;
-  const fundingColumn = replayFundingColumn(form, strategyStore.strategyCatalog);
+  const fundingColumn = replayFundingColumn(form);
   starting.value = true;
   try {
     const started = await startReplay({
@@ -947,7 +947,7 @@ async function pollTick() {
   clock.value = Date.now();
   if (awaitingMetrics.value && clock.value > awaitingMetrics.value.until) awaitingMetrics.value = null;
   // 所选回放不在当前列表页时也要刷新：轮询条件看列表与所选回放两处。
-  if (!replays.value.some(item => item.status === "pending" || item.status === "running") && !selectedNeedsRefresh()) return;
+  if (!replays.value.some(item => item.status === "queued" || item.status === "running") && !selectedNeedsRefresh()) return;
   {
     const gen = generation;
     const seq = ++listSeq;
@@ -967,11 +967,10 @@ async function pollTick() {
 usePolling(pollTick, 5000);
 
 onMounted(() => {
-  // 策略定义按空间授权：空间尚未初始化时请求会被拒绝，由下面的空间监听在就绪后补载。
-  if (spaceStore.selectedSpaceId) {
-    loadStrategies();
-    applyRouteSelection();
-  }
+  // 空间内页面在空间初始化或切换时由主视图整页重建；无已选空间时不发起空间内请求。
+  if (!spaceStore.selectedSpaceId) return;
+  loadStrategies();
+  applyRouteSelection();
   loadTasks();
   loadReplays();
 });
@@ -1005,45 +1004,6 @@ watch(
   }
 );
 
-watch(
-  () => spaceStore.selectedSpaceId,
-  (next, previous) => {
-    generation += 1;
-    selectRequest += 1;
-    tableRequest += 1;
-    selectedId.value = "";
-    selected.value = null;
-    detailLoading.value = false;
-    awaitingMetrics.value = null;
-    // 策略定义按空间授权，随空间切换重新加载；各来源的错误随空间切换清空。
-    for (const key of Object.keys(errors) as (keyof typeof errors)[]) errors[key] = "";
-    if (next) void loadStrategies();
-    replays.value = [];
-    replayTotal.value = 0;
-    series.value = [];
-    tableRows.value = [];
-    tableTotal.value = 0;
-    tasks.value = [];
-    // 空间初始化（无 → 有）只是首次加载，保留深链接与预填；真正的 A → B 切换才清空对象、分页、创建上下文。
-    if (previous) {
-      form.tasks = {};
-      form.single_market = "";
-      form.instance_id = "";
-      replayPage.value = 1;
-      writeQuery({ replayId: "", page: 1, barPage: 1, create: false });
-    }
-    listLoading.value = false;
-    tasksLoading.value = false;
-    tableLoading.value = false;
-    pollFailures.value = 0;
-    chart?.release();
-    chart = null;
-    loadTasks();
-    loadReplays();
-    // 只有空间初始化才按 URL 恢复深链接选择；真实切换时旧空间的 replay_id 不属于新空间，由新列表自动选择。
-    if (next && !previous) applyRouteSelection();
-  }
-);
 onBeforeUnmount(() => {
   // 作废进行中的请求：返回后不再翻页读取、不再渲染图表。
   generation += 1;

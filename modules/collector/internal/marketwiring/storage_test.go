@@ -20,7 +20,7 @@ func TestHandlerStorageFactoryNeedsOnlyGateway(t *testing.T) {
 
 type timerHandlerStorage struct{}
 
-func (timerHandlerStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
+func (timerHandlerStorage) UpsertFields(context.Context, []*storagepb.Row) error {
 	return nil
 }
 

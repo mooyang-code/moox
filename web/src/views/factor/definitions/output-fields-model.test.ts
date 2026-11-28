@@ -34,7 +34,7 @@ const tasks: FactorTaskInfo[] = [
       task_id: "ftask_swap_1m",
       space_id: "crypto",
       source_dataset_id: "ds_swap_1m",
-      freq: "1m",
+      frequency: "1m",
       name: "合约一分钟",
       result_dataset_id: "dataset_factor_swap_1m",
       status: "enabled"
@@ -71,7 +71,7 @@ const tasks: FactorTaskInfo[] = [
       task_id: "ftask_spot_1m",
       space_id: "crypto",
       source_dataset_id: "ds_spot_1m",
-      freq: "1m",
+      frequency: "1m",
       name: "现货一分钟",
       result_dataset_id: "dataset_factor_spot_1m",
       status: "enabled"
@@ -94,7 +94,7 @@ const tasks: FactorTaskInfo[] = [
 
 describe("output-fields-model", () => {
   it("expands single-output, multi-output, and fallback output columns from tasks", () => {
-    const rows = expandFactorOutputFields(tasks, categories, t => `${t.name} · ${t.freq}`);
+    const rows = expandFactorOutputFields(tasks, categories, t => `${t.name} · ${t.frequency}`);
     expect(rows.map(r => r.column_name)).toEqual(["ma__5", "boll__var__mid", "boll__var__up", "boll__var__low", "rank_ret"]);
     expect(rows[0]).toMatchObject({
       factor_id: "ma",
@@ -120,7 +120,7 @@ describe("output-fields-model", () => {
   });
 
   it("builds category sidebar items skipping empty categories and tracking filtered counts", () => {
-    const rows = expandFactorOutputFields(tasks, categories, t => `${t.name} · ${t.freq}`);
+    const rows = expandFactorOutputFields(tasks, categories, t => `${t.name} · ${t.frequency}`);
     const filtered = filterFactorOutputFields(rows, {
       category: "",
       taskId: "ftask_swap_1m",
@@ -136,7 +136,7 @@ describe("output-fields-model", () => {
   });
 
   it("filters by task, kind, status, category, and keyword", () => {
-    const rows = expandFactorOutputFields(tasks, categories, t => `${t.name} · ${t.freq}`);
+    const rows = expandFactorOutputFields(tasks, categories, t => `${t.name} · ${t.frequency}`);
     const empty = { category: "", taskId: "", kind: "" as const, status: "" as const, keyword: "" };
     expect(filterFactorOutputFields(rows, { ...empty, kind: "var" }).length).toBe(3);
     expect(filterFactorOutputFields(rows, { ...empty, status: "disabled" }).map(r => r.column_name)).toEqual(["rank_ret"]);

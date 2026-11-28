@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -146,7 +146,7 @@ func (p *NoticePublisher) sealGroup(ctx context.Context, group *noticeGroup) err
 	// 数据集里每个标的只有一条序列，事件按标的给出范围。
 	now := p.now()
 	var err error
-	payload := &storagepb.CollectorKlineBackfilled{
+	payload := &eventpb.CollectorKlineBackfilled{
 		DatasetId: group.datasetID, Frequency: group.frequency, SubjectIds: subjects,
 		Start: group.start.Unix(), End: group.end.Unix(), Origin: group.origin, JobId: group.jobID,
 		ConfirmedAt: now.UnixMilli(),
@@ -175,7 +175,7 @@ type LatestAbsenceSource interface {
 
 // absent 取出这批补采范围内全部标的已确认“行情源没有”的 K 线（不限于这批被补写的标的：因子判断某一期能否放行时
 // 要看到这一期所有确认缺失的标的），截到 [start, end) 之内。合成来源的通知没有确认缺失。
-func (p *NoticePublisher) absent(ctx context.Context, group *noticeGroup) ([]*storagepb.CollectorKlineAbsent, error) {
+func (p *NoticePublisher) absent(ctx context.Context, group *noticeGroup) ([]*eventpb.CollectorKlineAbsent, error) {
 	if p.Absences == nil || group.origin == store.NoticeOriginResample {
 		return nil, nil
 	}
@@ -192,7 +192,7 @@ func (p *NoticePublisher) absent(ctx context.Context, group *noticeGroup) ([]*st
 		log.WarnContextf(ctx, "[Collector] backfilled event carries only the latest %d source absences dataset=%s job=%s", limit, group.datasetID, group.jobID)
 		absences = absences[:limit]
 	}
-	out := make([]*storagepb.CollectorKlineAbsent, 0, len(absences))
+	out := make([]*eventpb.CollectorKlineAbsent, 0, len(absences))
 	for _, absence := range absences {
 		from, to := absence.From, absence.To
 		if from.Before(group.start) {
@@ -201,7 +201,7 @@ func (p *NoticePublisher) absent(ctx context.Context, group *noticeGroup) ([]*st
 		if to.After(group.end) {
 			to = group.end
 		}
-		out = append(out, &storagepb.CollectorKlineAbsent{SubjectId: absence.SubjectID, Start: from.Unix(), End: to.Unix()})
+		out = append(out, &eventpb.CollectorKlineAbsent{SubjectId: absence.SubjectID, Start: from.Unix(), End: to.Unix()})
 	}
 	return out, nil
 }

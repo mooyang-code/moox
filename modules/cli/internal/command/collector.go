@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
@@ -17,7 +16,6 @@ import (
 
 type collectorPackageOptions struct {
 	CollectorRoot string
-	SpaceID       string
 	Version       string
 	Out           string
 	Entrypoint    string
@@ -37,7 +35,7 @@ var collectorCmd = &cobra.Command{
 
 var collectorFunctionCmd = &cobra.Command{
 	Use:   "function",
-	Short: "采集云函数：代码包构建与上传、云上状态、删除、出口探测",
+	Short: "采集云函数：代码包构建与上传、云上状态、删除、出口探测与直调诊断",
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
 	},
@@ -61,7 +59,6 @@ func init() {
 	collectorCmd.AddCommand(collectorFunctionCmd)
 	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd)
 	addCollectorPackageFlags(collectorFunctionPackageCmd, &collectorPackageFlags)
-	collectorFunctionPackageCmd.Flags().StringVar(&collectorPackageFlags.SpaceID, "space-id", "", "space id; used to name the output zip when --out is omitted")
 }
 
 func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions) {
@@ -82,11 +79,7 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	}
 	outPath := opts.Out
 	if outPath == "" {
-		spaceID := strings.TrimSpace(opts.SpaceID)
-		if spaceID == "" {
-			return nil, fmt.Errorf("--space-id is required when --out is omitted")
-		}
-		outPath = filepath.Join(collectorRoot, fmt.Sprintf("collector-scf-%s-%s.zip", spaceID, version))
+		outPath = filepath.Join(collectorRoot, fmt.Sprintf("collector-scf-%s.zip", version))
 	}
 	binaryPath := filepath.Join(os.TempDir(), fmt.Sprintf("moox-collector-scf-%d", time.Now().UnixNano()), "main")
 	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {

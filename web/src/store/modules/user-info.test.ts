@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { getUserInfoAPI, logoutAPI } from "@/api/modules/user/index";
-import { expireBrowserSession } from "@/api/admin/space-client";
+import { expireBrowserSession } from "@/api/admin/session-expiry";
 import { useUserInfoStore } from "./user-info";
 
 vi.mock("@/api/modules/user/index", () => ({

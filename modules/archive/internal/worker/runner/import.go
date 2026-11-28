@@ -131,8 +131,8 @@ func (s *runState) batchRows(req *storagepb.PrimaryUpsertFieldsReq, columns map[
 		if strings.TrimSpace(ts.GetSubjectId()) == "" {
 			return nil, fmt.Errorf("第 %d 行没有标的", i+1)
 		}
-		if ts.GetFreq() != "" && ts.GetFreq() != s.a.GetFreq() {
-			return nil, fmt.Errorf("第 %d 行的频率 %s 与任务频率 %s 不符", i+1, ts.GetFreq(), s.a.GetFreq())
+		if ts.GetFrequency() != "" && ts.GetFrequency() != s.a.GetFrequency() {
+			return nil, fmt.Errorf("第 %d 行的频率 %s 与任务频率 %s 不符", i+1, ts.GetFrequency(), s.a.GetFrequency())
 		}
 		at, err := time.Parse(time.RFC3339Nano, ts.GetDataTime())
 		if err != nil {

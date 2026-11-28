@@ -62,7 +62,7 @@ func TestDatasetCache_GetListAndFilters(t *testing.T) {
 		datasets: []*pb.Dataset{
 			{
 				SpaceId: "crypto", DatasetId: "dataset_kline_5m", DataSourceId: "binance",
-				Name: "K线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Revision: 7,
+				Name: "K线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "5m", Status: "active", Revision: 7,
 			},
 			{
 				SpaceId: "crypto", DatasetId: "dataset_record_a", DataSourceId: "internal",
@@ -70,7 +70,7 @@ func TestDatasetCache_GetListAndFilters(t *testing.T) {
 			},
 			{
 				SpaceId: "stockcn", DatasetId: "dataset_kline_1d", DataSourceId: "baostock",
-				Name: "A股日线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1d", Status: "active", Revision: 3,
+				Name: "A股日线", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1d", Status: "active", Revision: 3,
 			},
 		},
 		columns: []*pb.DatasetColumn{
@@ -182,14 +182,16 @@ func TestDatasetCache_ConcurrentRefreshAndReads(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
-				snap := cache.RequestSnapshot()
+				snap := cache.Snapshot()
 				require.NotNil(t, snap)
 				ds, ok := snap.GetDataset("crypto", "dataset_kline_5m")
 				require.True(t, ok)
 				require.NotNil(t, ds)
-				cols, _, err := snap.ListDatasetColumns("crypto", "dataset_kline_5m", nil)
-				require.NoError(t, err)
+				cols := snap.DatasetColumns("crypto", "dataset_kline_5m")
 				require.Len(t, cols, 1)
+				col, ok := snap.GetDatasetColumn("crypto", "dataset_kline_5m", cols[0].GetColumnName())
+				require.True(t, ok)
+				require.Same(t, cols[0], col)
 				require.True(t, cache.HasDataset("crypto", "dataset_kline_5m"))
 				_, err = cache.GetDataset(ctx, "crypto", "dataset_kline_5m")
 				require.NoError(t, err)

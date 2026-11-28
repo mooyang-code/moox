@@ -103,7 +103,7 @@ type fakeUniverse struct {
 	err      error
 }
 
-func (f fakeUniverse) ComputedUniverse(context.Context, string, string, string, int64) (storageio.Universe, bool, error) {
+func (f fakeUniverse) ComputedUniverse(context.Context, string, string, int64) (storageio.Universe, bool, error) {
 	return storageio.Universe{Subjects: f.subjects}, f.found, f.err
 }
 
@@ -133,14 +133,14 @@ func newGapFixture(t *testing.T, universe fakeUniverse, factors ...domain.Factor
 	return f
 }
 
-func (f *gapFixture) record(t *testing.T, at time.Time, subject string, minute int, trigger string, factors ...domain.FactorDef) {
+func (f *gapFixture) record(t *testing.T, at time.Time, subject string, minute int, _ string, factors ...domain.FactorDef) {
 	t.Helper()
 	saved := f.now
 	f.now = at
 	var entries []pipeline.GapEntry
 	for _, factor := range factors {
 		entries = append(entries, pipeline.GapEntry{TaskID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
-			Member: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger})
+			Member: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor)})
 	}
 	require.NoError(t, f.ledger.RecordGaps(context.Background(), entries))
 	f.now = saved
@@ -261,12 +261,12 @@ func TestGapFillerSkipsWhenNotActive(t *testing.T) {
 	require.Equal(t, 1, f.ledger.PendingCount())
 }
 
-func (f *gapFixture) recordWarming(t *testing.T, subject string, minute int, trigger string, factors ...domain.FactorDef) {
+func (f *gapFixture) recordWarming(t *testing.T, subject string, minute int, _ string, factors ...domain.FactorDef) {
 	t.Helper()
 	var entries []pipeline.GapEntry
 	for _, factor := range factors {
 		entries = append(entries, pipeline.GapEntry{TaskID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
-			Member: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger, Reason: pipeline.SkipReasonWarming})
+			Member: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), Reason: pipeline.SkipReasonWarming})
 	}
 	saved := f.now
 	f.now = gapT0

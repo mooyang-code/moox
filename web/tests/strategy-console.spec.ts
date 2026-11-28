@@ -148,6 +148,7 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
     name: "Paper 组合",
     control_mode: 1,
     execution_mode: 1,
+    environment: 3,
     markets: ["spot"],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
@@ -178,15 +179,18 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
   await page.route("**/api/admin/trade/GetLogicalAccount", route =>
     route.fulfill({ json: ok({ logical_account: logicalAccount }) })
   );
-  await page.route("**/api/admin/trade/ListHoldings", route =>
+  await page.route("**/api/admin/trade/ListPositions", route =>
     route.fulfill({
       json: ok({
-        holdings: [
+        positions: [
           {
             trading_account_id: "binance-paper",
+            market_type: "spot",
             asset: "ETH",
             instrument_id: "ETH-USDT-SPOT",
-            quantity: "1.8",
+            signed_quantity: "1.8",
+            sellable: "1.8",
+            mark_price: "2000",
             market_value: "3600"
           }
         ]

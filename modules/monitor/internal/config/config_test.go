@@ -43,8 +43,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Metrics.MaxNewSeriesPerHour != 2000 || cfg.Metrics.MaxNewSeriesPerDay != 10000 {
 		t.Fatalf("new series limits = %d/%d", cfg.Metrics.MaxNewSeriesPerHour, cfg.Metrics.MaxNewSeriesPerDay)
 	}
-	if !cfg.Observability.Enabled || len(cfg.Observability.EventBusURLs) == 0 {
-		t.Fatalf("observability defaults = %+v", cfg.Observability)
+	if !cfg.Observability.Enabled || len(cfg.EventBus.URLs) == 0 {
+		t.Fatalf("observability/eventbus defaults = %+v %+v", cfg.Observability, cfg.EventBus)
 	}
 	if cfg.MarketCanary.ClosedBarMinCoverage != 0.99 {
 		t.Fatalf("closed bar minimum coverage = %v", cfg.MarketCanary.ClosedBarMinCoverage)
@@ -105,12 +105,12 @@ instance:
 }
 
 func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "observability:\n  credential_file: \"\"\n"))
+	cfg, err := Load(writeConfig(t, "eventbus:\n  credential_file: \"\"\n"))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Observability.CredentialFile != "" {
-		t.Fatalf("explicit empty observability credential was replaced: %q", cfg.Observability.CredentialFile)
+	if cfg.EventBus.CredentialFile != "" {
+		t.Fatalf("explicit empty eventbus credential was replaced: %q", cfg.EventBus.CredentialFile)
 	}
 }
 
@@ -214,9 +214,6 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(app.yaml) error = %v", err)
 	}
-	if !cfg.KlineFreshness.Enabled {
-		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
-	}
 	freshness, ok := app["kline_freshness"].(map[string]any)
 	if !ok {
 		t.Fatal("kline freshness configuration is missing")
@@ -224,7 +221,7 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if _, exists := freshness["collector_gateway_url"]; exists {
 		t.Fatal("obsolete Collector HTTP route remains")
 	}
-	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
+	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute ||
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 {
 		t.Fatalf("dynamic kline freshness inventory = %+v", cfg.KlineFreshness)
 	}
@@ -242,11 +239,29 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	}
 }
 
-func TestMonitorDefaultDatasetHealthPolicyPathExistsFromModuleWorkingDirectory(t *testing.T) {
-	moduleRoot := filepath.Join("..", "..")
+func TestMonitorConfigDatasetHealthPolicyDefaultsAndRejection(t *testing.T) {
 	cfg := Default()
-	if _, err := os.Stat(filepath.Join(moduleRoot, cfg.Metrics.DatasetHealthPolicyPath)); err != nil {
-		t.Fatalf("dataset_health_policy_path %q is not usable from modules/monitor: %v", cfg.Metrics.DatasetHealthPolicyPath, err)
+	if cfg.Metrics.DatasetHealth.Defaults.RunMissedIntervals != 2 ||
+		cfg.Metrics.DatasetHealth.Defaults.SuccessMissedIntervals != 3 ||
+		cfg.Metrics.DatasetHealth.Defaults.MinuteLateness != 10*time.Second ||
+		cfg.Metrics.DatasetHealth.Defaults.HourLateness != 20*time.Second {
+		t.Fatalf("默认数据集健康策略不符：%+v", cfg.Metrics.DatasetHealth.Defaults)
+	}
+	if _, err := Load(writeConfig(t, "metrics:\n  dataset_health_policy_path: old.yaml\n")); err == nil {
+		t.Fatal("已删除的 dataset_health_policy_path 不应被接受")
+	}
+	if _, err := Load(writeConfig(t, "metrics:\n  dataset_health:\n    defaults:\n      minute_lateness: 0s\n")); err == nil {
+		t.Fatal("非法数据集健康阈值不应被接受")
+	}
+	loaded, err := Load(writeConfig(t, "metrics:\n  dataset_health:\n    overrides:\n      - space_id: crypto\n        dataset_id: ds_1m\n        frequency: 1m\n        lateness: 30s\n"))
+	if err != nil {
+		t.Fatalf("合法 frequency 覆盖项应被接受：%v", err)
+	}
+	if len(loaded.Metrics.DatasetHealth.Overrides) != 1 || loaded.Metrics.DatasetHealth.Overrides[0].Frequency != "1m" {
+		t.Fatalf("overrides = %+v", loaded.Metrics.DatasetHealth.Overrides)
+	}
+	if _, err := Load(writeConfig(t, "metrics:\n  dataset_health:\n    overrides:\n      - space_id: crypto\n        dataset_id: ds_1m\n        freq: 1m\n        lateness: 30s\n")); err == nil {
+		t.Fatal("旧字段 freq 不应被接受")
 	}
 }
 
@@ -258,6 +273,7 @@ func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
 		"observability:\n  stream: MOOX_OBSERVABILITY\n",
 		"observability:\n  consumer: another-consumer\n",
 		"observability:\n  filter_subject: moox.event.observability.>\n",
+		"observability:\n  eventbus_urls:\n    - nats://old:4222\n",
 	} {
 		if _, err := Load(writeConfig(t, content)); err == nil {
 			t.Fatalf("Load() accepted retired config: %s", content)
@@ -308,13 +324,12 @@ func TestMonitorConfigValidatesStockCNMarketCanaryFrequency(t *testing.T) {
 func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
 	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 ||
-		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
+		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute ||
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 ||
 		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, registeredMarketIDs()) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
 	cfg.Deployment.Enabled = false
-	cfg.KlineFreshness.Enabled = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
 	}
@@ -327,7 +342,6 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		{"empty Space ID", func(c *Config) { c.KlineFreshness.SpaceIDs = []string{""} }},
 		{"duplicate Space ID", func(c *Config) { c.KlineFreshness.SpaceIDs = []string{"crypto", " crypto "} }},
 		{"refresh interval unbounded", func(c *Config) { c.KlineFreshness.InventoryRefreshInterval = 11 * time.Minute }},
-		{"page size out of range", func(c *Config) { c.KlineFreshness.InventoryPageSize = 101 }},
 		{"inventory cap out of range", func(c *Config) { c.KlineFreshness.InventoryMaxEntries = 1001 }},
 		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
 	}
@@ -343,9 +357,14 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 }
 
 func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
-	_, err := Load(writeConfig(t, "kline_freshness:\n  enabled: true\n  typo_interval: 30s\n"))
-	if err == nil {
-		t.Fatal("Load() accepted unknown kline freshness field")
+	for _, raw := range []string{
+		"kline_freshness:\n  typo_interval: 30s\n",
+		"kline_freshness:\n  enabled: true\n",
+		"kline_freshness:\n  inventory_page_size: 100\n",
+	} {
+		if _, err := Load(writeConfig(t, raw)); err == nil {
+			t.Fatalf("Load(%q) accepted unknown or removed kline freshness field", raw)
+		}
 	}
 }
 

@@ -2,7 +2,6 @@ import type { ExtraFieldOption, OutputFieldOption } from "@/api/collector";
 import type { Dataset, DatasetColumn } from "@/api/storage/types";
 import { isTimeSeriesDataKind, normalizeFieldValueType, type CanonicalFieldValueType } from "@/views/data/shared/metadata-utils";
 import { marketLabel } from "@/views/data/shared/series-market";
-import { extraFieldProviderName } from "./extra-field-sources";
 
 export type FieldCatalogCategory = "base" | "extra" | "dataset";
 export type FieldLandedFilter = "" | "landed" | "spec_only";
@@ -167,15 +166,18 @@ export function mergeFieldCatalog(input: {
     const providerId = (option.provider_id || "").trim();
     if (providerId) {
       const normalizedProvider = providerId.toLowerCase();
+      const providerName = (option.provider_name || "").trim();
       let scope = item.extra_scopes.find(s => s.provider_id.toLowerCase() === normalizedProvider);
       if (!scope) {
         scope = {
           provider_id: providerId,
-          provider_name: extraFieldProviderName(providerId),
+          provider_name: providerName || providerId,
           instrument_types: [],
           frequencies: []
         };
         item.extra_scopes.push(scope);
+      } else if (scope.provider_name === scope.provider_id && providerName) {
+        scope.provider_name = providerName;
       }
       addUnique(scope.instrument_types, option.instrument_type || "");
       for (const freq of option.frequencies || []) addUnique(scope.frequencies, freq);
@@ -235,7 +237,7 @@ export function mergeFieldCatalog(input: {
           dataset_id: dataset.dataset_id,
           dataset_name: dataset.name?.trim() || dataset.dataset_id,
           data_kind: dataKind,
-          freq: (dataset.freq || "").trim(),
+          freq: (dataset.frequency || "").trim(),
           dataset_status: (dataset.status || "active").trim(),
           column_status: columnStatus,
           required: Boolean(column.required),

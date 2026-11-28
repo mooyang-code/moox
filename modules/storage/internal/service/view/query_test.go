@@ -21,7 +21,7 @@ import (
 type queryEngine struct {
 	mu        sync.Mutex
 	spec      viewindex.QuerySpec
-	rows      []*pb.RowFieldValues
+	rows      []*pb.Row
 	stats     viewindex.ViewIndexStats
 	statErr   error
 	calls     int
@@ -58,7 +58,7 @@ func (e *queryEngine) Write(_ context.Context, indexID string, _ viewindex.ViewI
 	e.writes[indexID]++
 	return e.writeErrs[indexID]
 }
-func (e *queryEngine) Query(_ context.Context, _ string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (e *queryEngine) Query(_ context.Context, _ string, spec viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	e.mu.Lock()
 	e.calls++
 	e.spec = spec
@@ -119,7 +119,7 @@ func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T
 	spec := freshnessSpec()
 
 	newer := "2026-09-08T10:05:00Z"
-	rows := []*pb.RowFieldUpsert{
+	rows := []*pb.Row{
 		viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:04:00Z"),
 		viewFreshnessRow("BTC-USDT", "1m", "venue:binance", newer),
 		viewFreshnessRow("SOL-USDT", "1m", "venue:binance", "2026-09-08T09:50:00Z"),
@@ -131,7 +131,7 @@ func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T
 	assertViewSubjects(t, registry, "1m", 2, map[string]string{"SOL-USDT": "2026-09-08T09:50:00Z"})
 	assertViewSubjects(t, registry, "5m", 1, map[string]string{})
 
-	svc.observeViewWatermark(spec, []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")})
+	svc.observeViewWatermark(spec, []*pb.Row{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")})
 	assertViewSubjects(t, registry, "1m", 2, map[string]string{"SOL-USDT": "2026-09-08T09:50:00Z"})
 }
 
@@ -144,7 +144,7 @@ func TestViewDatasetFreshnessIgnoresMissingIdentity(t *testing.T) {
 	}
 	svc := queryTestService(&existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}, true)
 	svc.metrics = metrics
-	svc.observeViewWatermark(freshnessSpec(), []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")})
+	svc.observeViewWatermark(freshnessSpec(), []*pb.Row{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")})
 	assertNoViewSubjects(t, registry)
 }
 
@@ -153,9 +153,9 @@ func freshnessSpec() *viewSpec {
 	return timeSeriesSpec("space", "market_prices", "1m", "close")
 }
 
-func viewFreshnessRow(subject, frequency, seriesTag, dataTime string) *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
-		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market_prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: frequency, SeriesTag: seriesTag, DataTime: dataTime}}},
+func viewFreshnessRow(subject, frequency, seriesTag, dataTime string) *pb.Row {
+	return &pb.Row{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market_prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Frequency: frequency, SeriesTag: seriesTag, DataTime: dataTime}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}
 }
@@ -231,7 +231,7 @@ func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testi
 				SpaceId:   "space",
 				DatasetId: "market",
 				Selectors: []*pb.TimeSeriesSelector{{
-					SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: tc.tag,
+					SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: tc.tag,
 				}},
 			})
 			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -247,7 +247,7 @@ func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testi
 				t.Fatalf("rows=%d want=%d", len(rsp.GetRows()), len(tc.wantTags))
 			}
 			for i, row := range rsp.GetRows() {
-				if got := row.GetKey().GetSeriesTag(); got != tc.wantTags[i] {
+				if got := row.GetKey().GetTimeSeries().GetSeriesTag(); got != tc.wantTags[i] {
 					t.Fatalf("row %d tag=%q want=%q", i, got, tc.wantTags[i])
 				}
 			}
@@ -255,7 +255,7 @@ func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testi
 	}
 }
 
-func TestQueryTimeSeriesRowsValidatesSelectorScope(t *testing.T) {
+func TestQueryTimeSeriesRowsValidatesSelectors(t *testing.T) {
 	engine := &queryEngine{}
 	svc := queryTestService(engine, true)
 	cases := []struct {
@@ -263,9 +263,8 @@ func TestQueryTimeSeriesRowsValidatesSelectorScope(t *testing.T) {
 		selector *pb.TimeSeriesSelector
 	}{
 		{name: "nil selector"},
-		{name: "missing subject", selector: &pb.TimeSeriesSelector{SpaceId: "space", DatasetId: "market", Freq: "1m"}},
-		{name: "wrong space", selector: &pb.TimeSeriesSelector{SpaceId: "other", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
-		{name: "wrong dataset", selector: &pb.TimeSeriesSelector{SpaceId: "space", DatasetId: "other", SubjectId: "BTC-USDT", Freq: "1m"}},
+		{name: "missing subject", selector: &pb.TimeSeriesSelector{Frequency: "1m"}},
+		{name: "missing freq", selector: &pb.TimeSeriesSelector{SubjectId: "BTC-USDT"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -292,16 +291,16 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 	cases := []struct {
 		name     string
 		active   bool
-		rows     []*pb.RowFieldValues
+		rows     []*pb.Row
 		stats    viewindex.ViewIndexStats
 		statErr  error
 		complete bool
 		noRange  bool
 	}{
-		{name: "valid coverage", active: true, rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: validStats, complete: true},
+		{name: "valid coverage", active: true, rows: []*pb.Row{{Key: timeSeriesTestRowKey("")}}, stats: validStats, complete: true},
 		{name: "empty rows", active: true, stats: validStats, complete: true},
-		{name: "stat failure", active: true, rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: validStats, statErr: errors.New("stat failed")},
-		{name: "no valid coverage", active: true, rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, noRange: true},
+		{name: "stat failure", active: true, rows: []*pb.Row{{Key: timeSeriesTestRowKey("")}}, stats: validStats, statErr: errors.New("stat failed")},
+		{name: "no valid coverage", active: true, rows: []*pb.Row{{Key: timeSeriesTestRowKey("")}}, noRange: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -309,7 +308,7 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 			svc := queryTestService(engine, tc.active)
 			req := &pb.QueryTimeSeriesRowsReq{
 				SpaceId: "space", DatasetId: "market",
-				Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 				TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 			}
 			if tc.noRange {
@@ -331,7 +330,7 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 	svc := queryTestService(&queryEngine{stats: validStats}, false)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market",
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
@@ -344,7 +343,7 @@ func TestQueryTimeSeriesRowsRejectsActiveIndexMismatchBeforeQuery(t *testing.T) 
 	svc := queryTestService(engine, true)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market", Pin: &pb.IndexVersion{IndexId: "prices-old"},
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
@@ -361,7 +360,7 @@ func TestQueryTimeSeriesRowsRejectsInPlaceRevisionMismatch(t *testing.T) {
 	svc.runtimeOf(marketRef).revision.Store(8)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market", Pin: &pb.IndexVersion{IndexId: marketIndexID, Revision: 6},
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
@@ -378,7 +377,7 @@ func TestQueryTimeSeriesRowsUsesRuntimeStatsForNoTotal(t *testing.T) {
 		IndexedFrom: "2026-07-29T00:00:00Z",
 		IndexedTo:   "2026-07-29T00:01:00Z",
 	}
-	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: stats}
+	engine := &queryEngine{rows: []*pb.Row{{Key: timeSeriesTestRowKey("")}}, stats: stats}
 	svc := queryTestService(engine, true)
 	runtime := svc.runtimeOf(marketRef)
 	runtime.hasStats = true
@@ -387,7 +386,7 @@ func TestQueryTimeSeriesRowsUsesRuntimeStatsForNoTotal(t *testing.T) {
 
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market", TotalMode: pb.TotalMode_NONE,
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -408,7 +407,7 @@ func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing
 		IndexedTo:   "2026-07-29T00:01:00Z",
 	}
 	engine := &queryEngine{
-		rows:    []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}},
+		rows:    []*pb.Row{{Key: timeSeriesTestRowKey("")}},
 		stats:   stats,
 		statErr: errors.New("stat failed"),
 	}
@@ -420,7 +419,7 @@ func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing
 
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market",
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -464,7 +463,7 @@ func TestQueryTimeSeriesRowsCoverageUsesHalfOpenNanosecondBoundary(t *testing.T)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := &queryEngine{
-				rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}},
+				rows: []*pb.Row{{Key: timeSeriesTestRowKey("")}},
 				stats: viewindex.ViewIndexStats{
 					Exists: true, EntryCount: 1,
 					IndexedFrom: "2026-07-29T00:00:00Z",
@@ -474,7 +473,7 @@ func TestQueryTimeSeriesRowsCoverageUsesHalfOpenNanosecondBoundary(t *testing.T)
 			svc := queryTestService(engine, true)
 			rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 				SpaceId: "space", DatasetId: "market",
-				Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+				Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 				TimeRange: tc.rng,
 			})
 			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -506,15 +505,15 @@ func timeSeriesTestRowKey(tag string) *pb.RowKey {
 	return &pb.RowKey{
 		SpaceId: "space", DatasetId: "market",
 		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-29T00:00:00Z", SeriesTag: tag,
+			SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-07-29T00:00:00Z", SeriesTag: tag,
 		}},
 	}
 }
 
-func rowsForTags(tags []string) []*pb.RowFieldValues {
-	rows := make([]*pb.RowFieldValues, 0, len(tags))
+func rowsForTags(tags []string) []*pb.Row {
+	rows := make([]*pb.Row, 0, len(tags))
 	for _, tag := range tags {
-		rows = append(rows, &pb.RowFieldValues{Key: timeSeriesTestRowKey(tag)})
+		rows = append(rows, &pb.Row{Key: timeSeriesTestRowKey(tag)})
 	}
 	return rows
 }
@@ -579,7 +578,7 @@ func (e *metadataCountingEngine) StatMetadata(context.Context, string) (viewinde
 	return viewindex.ViewIndexStats{Exists: true, UpdatedAt: "2026-11-27T00:00:00Z"}, nil
 }
 
-func (e *metadataCountingEngine) Query(ctx context.Context, indexID string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (e *metadataCountingEngine) Query(ctx context.Context, indexID string, spec viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	if e.onQuery != nil {
 		e.onQuery()
 	}
@@ -597,12 +596,12 @@ func TestQueryTimeSeriesRowsUsesMonotonicAtomicRevisionWithoutStatMetadata(t *te
 		t.Fatalf("初始修订号应为非零偶数且步长至少为 2：r1=%d r2=%d", v1, v2)
 	}
 
-	engine := &metadataCountingEngine{queryEngine: &queryEngine{rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}}}
+	engine := &metadataCountingEngine{queryEngine: &queryEngine{rows: []*pb.Row{{Key: timeSeriesTestRowKey("")}}}}
 	svc := queryTestService(engine, true)
 	req := func(pin *pb.IndexVersion) *pb.QueryTimeSeriesRowsReq {
 		return &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "space", DatasetId: "market", TotalMode: pb.TotalMode_NONE, Pin: pin,
-			Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		}
 	}
 
@@ -686,7 +685,7 @@ func (e *seqlockHookEngine) Write(ctx context.Context, indexID string, batch vie
 	return e.queryEngine.Write(ctx, indexID, batch)
 }
 
-func (e *seqlockHookEngine) Query(ctx context.Context, indexID string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (e *seqlockHookEngine) Query(ctx context.Context, indexID string, spec viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	e.qCalls.Add(1)
 	if e.onQuery != nil {
 		e.onQuery()
@@ -707,13 +706,13 @@ func (e *seqlockHookEngine) ExtendColumns(context.Context, string, viewindex.Vie
 // 3. 索引切换路径保持偶数递增并与 gate 下的奇偶不变式正交；
 // 4. 查询期间写入刚开始尚未结束（仍处于奇数）即可被检出撕裂读。
 func TestViewRevisionSeqlockWriteInProgressFailureAndSwitching(t *testing.T) {
-	engine := &seqlockHookEngine{queryEngine: &queryEngine{rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}}}
+	engine := &seqlockHookEngine{queryEngine: &queryEngine{rows: []*pb.Row{{Key: timeSeriesTestRowKey("")}}}}
 	svc := queryTestService(engine, true)
 	rt := svc.runtimeOf(marketRef)
 	queryReq := func() *pb.QueryTimeSeriesRowsReq {
 		return &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "space", DatasetId: "market", TotalMode: pb.TotalMode_NONE,
-			Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		}
 	}
 	sampleBatch := viewindex.ViewIndexWriteBatch{
@@ -934,11 +933,11 @@ func (e *seqlockConcurrentEngine) Write(_ context.Context, _ string, _ viewindex
 }
 
 // Query 读两阶段状态并主动 yield，将 (a, b) 编码进 SeriesTag 供外层校验是否出现撕裂读。
-func (e *seqlockConcurrentEngine) Query(_ context.Context, _ string, _ viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (e *seqlockConcurrentEngine) Query(_ context.Context, _ string, _ viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	a := e.verA.Load()
 	runtime.Gosched()
 	b := e.verB.Load()
-	return []*pb.RowFieldValues{{Key: timeSeriesTestRowKey(fmt.Sprintf("%d:%d", a, b))}}, 1, nil
+	return []*pb.Row{{Key: timeSeriesTestRowKey(fmt.Sprintf("%d:%d", a, b))}}, 1, nil
 }
 
 // 并发读写压测（配合 -race）：验证任何返回 SUCCESS 的查询绝不会读到撕裂状态 (verA != verB) 或奇数修订号。
@@ -951,7 +950,7 @@ func TestViewRevisionSeqlockConcurrentReadWriteNeverReturnsTornSnapshot(t *testi
 	}
 	req := &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "space", DatasetId: "market", TotalMode: pb.TotalMode_NONE,
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 	}
 
 	const totalWrites = 300
@@ -982,7 +981,7 @@ func TestViewRevisionSeqlockConcurrentReadWriteNeverReturnsTornSnapshot(t *testi
 						t.Errorf("期望 1 行，实际=%d", len(rsp.GetRows()))
 						return
 					}
-					tag := rsp.GetRows()[0].GetKey().GetSeriesTag()
+					tag := rsp.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag()
 					var a, b uint64
 					if _, scanErr := fmt.Sscanf(tag, "%d:%d", &a, &b); scanErr != nil || a != b {
 						t.Errorf("检测到并发撕裂读！tag=%q revision=%d", tag, rev)
@@ -1016,7 +1015,7 @@ func TestViewRevisionSeqlockConcurrentReadWriteNeverReturnsTornSnapshot(t *testi
 		t.Fatalf("写入结束后最终查询失败：rsp=%v err=%v", finalRsp, err)
 	}
 	wantTag := fmt.Sprintf("%d:%d", totalWrites, totalWrites)
-	if got := finalRsp.GetRows()[0].GetKey().GetSeriesTag(); got != wantTag {
+	if got := finalRsp.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag(); got != wantTag {
 		t.Fatalf("最终快照不一致：got=%q want=%q", got, wantTag)
 	}
 }
@@ -1116,5 +1115,54 @@ func TestViewRuntimePhaseTransitions(t *testing.T) {
 	rt.mu.Unlock()
 	if rt.queryState().phase != viewPhaseEmpty || rt.needsRebuild() || rt.queryState().hasStats {
 		t.Fatalf("清空后应回到 Empty 且无缓存统计：state=%+v", rt.queryState())
+	}
+}
+
+// 验证 SearchRecordRows 使用内层 RecordRowKey（空间与数据集取自请求顶层，version 可为空表示按范围）并返回不带 attributes 的 Row。
+func TestSearchRecordRowsUsesInnerRecordRowKeysAndOmitsAttributes(t *testing.T) {
+	recordKey := &pb.RowKey{
+		SpaceId: "space", DatasetId: "records",
+		Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v2"}},
+	}
+	engine := &queryEngine{
+		rows: []*pb.Row{{
+			Key:    recordKey,
+			Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "hello"}}}},
+			Attributes: map[string]*pb.TypedValue{
+				"should_omit": {Value: &pb.TypedValue_StringValue{StringValue: "x"}},
+			},
+		}},
+		stats: viewindex.ViewIndexStats{Exists: true},
+	}
+	svc := newTestService(map[string]viewindex.Engine{"bleve": engine})
+	spec := recordSpec("space", "records", "title")
+	schema := viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "h1", Columns: spec.Columns}
+	prepareActiveIndex(t, svc, spec, schema)
+
+	rsp, err := svc.SearchRecordRows(context.Background(), &pb.SearchRecordRowsReq{
+		SpaceId:   "space",
+		DatasetId: "records",
+		Keys: []*pb.RecordRowKey{
+			{RecordId: "r1", Version: "v2"},
+			{RecordId: "r2"},
+		},
+		VersionRange: &pb.VersionRange{StartVersion: "v1", EndVersion: "v9"},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("SearchRecordRows rsp=%v err=%v", rsp, err)
+	}
+	if len(engine.spec.Keys) != 2 {
+		t.Fatalf("spec.Keys=%d want 2", len(engine.spec.Keys))
+	}
+	if engine.spec.Keys[0].GetSpaceId() != "space" || engine.spec.Keys[0].GetDatasetId() != "records" ||
+		engine.spec.Keys[0].GetRecord().GetRecordId() != "r1" || engine.spec.Keys[0].GetRecord().GetVersion() != "v2" {
+		t.Fatalf("first key=%v", engine.spec.Keys[0])
+	}
+	if engine.spec.Keys[1].GetSpaceId() != "space" || engine.spec.Keys[1].GetDatasetId() != "records" ||
+		engine.spec.Keys[1].GetRecord().GetRecordId() != "r2" || engine.spec.Keys[1].GetRecord().GetVersion() != "" {
+		t.Fatalf("second key=%v", engine.spec.Keys[1])
+	}
+	if len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetRecord().GetRecordId() != "r1" || len(rsp.GetRows()[0].GetAttributes()) != 0 {
+		t.Fatalf("rows=%v", rsp.GetRows())
 	}
 }

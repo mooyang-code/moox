@@ -48,6 +48,7 @@ import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { useQueryTab } from "@/hooks/useQueryTab";
 import SshHosts from "./ssh-hosts.vue";
 import SshTerminal from "./ssh-terminal.vue";
 import SshFileManager from "./ssh-file-manager.vue";
@@ -65,8 +66,11 @@ const tabs = [
   { key: "hosts", label: "主机列表" },
   { key: "monitor", label: "主机监控" }
 ] as const;
-const normalizeTab = (value: unknown): HostTab => (value === "monitor" ? value : "hosts");
-const activeTab = ref<HostTab>(normalizeTab(route.query.tab));
+const { activeTab, setTab: onTabChange } = useQueryTab<HostTab>({
+  tabs: ["hosts", "monitor"],
+  omitDefault: false,
+  buildQuery: (tab, currentQuery) => ({ ...currentQuery, tab })
+});
 if (route.query.tab !== undefined && route.query.tab !== activeTab.value) {
   void router.replace({ query: { ...route.query, tab: activeTab.value } });
 }
@@ -104,11 +108,6 @@ async function loadMonitorData() {
   } finally {
     monitorLoading.value = false;
   }
-}
-
-function onTabChange(value: string | number) {
-  activeTab.value = normalizeTab(value);
-  void router.replace({ query: { ...route.query, tab: activeTab.value } });
 }
 
 function openTerminal(hostId: string) {
@@ -152,13 +151,6 @@ function closeFileManager() {
   fileManagerSessionId.value = "";
   if (sessionId) void disconnectSSHSession(sessionId).catch(() => undefined);
 }
-
-watch(
-  () => route.query.tab,
-  value => {
-    activeTab.value = normalizeTab(value);
-  }
-);
 
 // 主机列表只在“主机列表”页签读取，每次进入这个页签都刷新；“主机监控”页签由子组件自己读，外层不再重复读一遍。
 // 终端只在点击时打开：URL 里的 host_id 只用来定位主机，挂载、刷新、切页签都不会建立 SSH 连接（O4）

@@ -86,8 +86,6 @@ type TradeConsoleServiceService interface {
 
 	QueryEquityCurve(ctx context.Context, req *QueryEquityCurveReq) (*QueryEquityCurveRsp, error)
 
-	ListHoldings(ctx context.Context, req *ListHoldingsReq) (*ListHoldingsRsp, error)
-
 	ListAccountLedger(ctx context.Context, req *ListAccountLedgerReq) (*ListAccountLedgerRsp, error)
 
 	FlattenTradingAccount(ctx context.Context, req *FlattenTradingAccountReq) (*FlattenTradingAccountRsp, error)
@@ -703,24 +701,6 @@ func TradeConsoleServiceService_QueryEquityCurve_Handler(svr interface{}, ctx co
 	return rsp, nil
 }
 
-func TradeConsoleServiceService_ListHoldings_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListHoldingsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).ListHoldings(ctx, reqbody.(*ListHoldingsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func TradeConsoleServiceService_ListAccountLedger_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListAccountLedgerReq{}
 	filters, err := f(req)
@@ -1039,10 +1019,6 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_QueryEquityCurve_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.TradeConsoleService/ListHoldings",
-			Func: TradeConsoleServiceService_ListHoldings_Handler,
-		},
-		{
 			Name: "/trpc.moox.trade.TradeConsoleService/ListAccountLedger",
 			Func: TradeConsoleServiceService_ListAccountLedger_Handler,
 		},
@@ -1195,9 +1171,6 @@ func (s *UnimplementedTradeConsoleService) ListTradableInstruments(ctx context.C
 func (s *UnimplementedTradeConsoleService) QueryEquityCurve(ctx context.Context, req *QueryEquityCurveReq) (*QueryEquityCurveRsp, error) {
 	return nil, errors.New("rpc QueryEquityCurve of service TradeConsoleService is not implemented")
 }
-func (s *UnimplementedTradeConsoleService) ListHoldings(ctx context.Context, req *ListHoldingsReq) (*ListHoldingsRsp, error) {
-	return nil, errors.New("rpc ListHoldings of service TradeConsoleService is not implemented")
-}
 func (s *UnimplementedTradeConsoleService) ListAccountLedger(ctx context.Context, req *ListAccountLedgerReq) (*ListAccountLedgerRsp, error) {
 	return nil, errors.New("rpc ListAccountLedger of service TradeConsoleService is not implemented")
 }
@@ -1306,8 +1279,6 @@ type TradeConsoleServiceClientProxy interface {
 	ListTradableInstruments(ctx context.Context, req *ListTradableInstrumentsReq, opts ...client.Option) (rsp *ListTradableInstrumentsRsp, err error)
 
 	QueryEquityCurve(ctx context.Context, req *QueryEquityCurveReq, opts ...client.Option) (rsp *QueryEquityCurveRsp, err error)
-
-	ListHoldings(ctx context.Context, req *ListHoldingsReq, opts ...client.Option) (rsp *ListHoldingsRsp, err error)
 
 	ListAccountLedger(ctx context.Context, req *ListAccountLedgerReq, opts ...client.Option) (rsp *ListAccountLedgerRsp, err error)
 
@@ -1993,26 +1964,6 @@ func (c *TradeConsoleServiceClientProxyImpl) QueryEquityCurve(ctx context.Contex
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &QueryEquityCurveRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeConsoleServiceClientProxyImpl) ListHoldings(ctx context.Context, req *ListHoldingsReq, opts ...client.Option) (*ListHoldingsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ListHoldings")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("ListHoldings")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListHoldingsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

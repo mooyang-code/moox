@@ -1,4 +1,4 @@
-import type { EquityPoint, LogicalAccountTarget, OperatorAction, TradingAccount } from "@/api/trade";
+import type { LogicalAccount, LogicalAccountTarget, OperatorAction, TradingAccount } from "@/api/trade";
 import type { PositionSnapshot } from "../shared/position-snapshot";
 
 export const detailTabs = [
@@ -21,19 +21,42 @@ function num(value: string | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function optionalNum(value: string | undefined): number | null {
+  if (value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 组合权益合计：直接读后端汇总的 total_equity；未同步时为空，区分于权益为零。 */
+export function logicalEquity(logical: Pick<LogicalAccount, "total_equity"> | null | undefined): number | null {
+  return optionalNum(logical?.total_equity);
+}
+
+export interface DayChangeSummary {
+  amount: number;
+  ratio: number | null;
+}
+
+/** 近 24 小时权益变化：直接读后端汇总的 equity_change_24h 与 equity_change_pct_24h。 */
+export function logicalDayChange(
+  logical: Pick<LogicalAccount, "equity_change_24h" | "equity_change_pct_24h"> | null | undefined
+): DayChangeSummary | null {
+  const amount = optionalNum(logical?.equity_change_24h);
+  if (amount === null) return null;
+  return { amount, ratio: optionalNum(logical?.equity_change_pct_24h) };
+}
+
 export interface MemberTotals {
-  equity: number | null;
   available: number | null;
   margin: number;
   unrealizedPnl: number;
 }
 
-/** 启用成员的资金合计。没有任何成员给出权益时，权益和可用资金为 null。 */
+/** 启用成员的可用资金、保证金与未实现盈亏合计（总权益直接使用后端汇总的 logical.total_equity）。 */
 export function memberTotals(accounts: readonly TradingAccount[]): MemberTotals {
-  // 后端总会带 snapshot，首次同步前里面的权益是空串：这种按没读到算，不能当成 0
-  const withSnapshot = accounts.filter(item => item.snapshot?.equity);
+  // 后端总会带 snapshot，首次同步前里面的可用资金与权益为空串：按没读到算，不当成 0
+  const withSnapshot = accounts.filter(item => item.snapshot?.available_funds || item.snapshot?.equity);
   return {
-    equity: withSnapshot.length ? withSnapshot.reduce((sum, item) => sum + num(item.snapshot?.equity), 0) : null,
     available: withSnapshot.length ? withSnapshot.reduce((sum, item) => sum + num(item.snapshot?.available_funds), 0) : null,
     margin: withSnapshot.reduce((sum, item) => sum + num(item.snapshot?.used_margin), 0),
     unrealizedPnl: withSnapshot.reduce((sum, item) => sum + num(item.snapshot?.unrealized_pnl), 0)
@@ -51,26 +74,11 @@ export function equityChangeOf(equity: number | null, initial: number | null): n
   return equity === null || !initial ? null : equity - initial;
 }
 
-export interface EquityDelta {
-  amount: number;
-  ratio: number;
-}
-
-/** 一段时间内的权益变化：资金曲线第一个点到最后一个点。不足两个点或起点权益为 0 时返回 null。 */
-export function equityDelta(points: readonly EquityPoint[]): EquityDelta | null {
-  const sorted = [...points].sort((a, b) => Number(a.bucket_time) - Number(b.bucket_time));
-  if (sorted.length < 2) return null;
-  const first = Number(sorted[0].equity);
-  const last = Number(sorted[sorted.length - 1].equity);
-  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return null;
-  return { amount: last - first, ratio: last / first - 1 };
-}
-
 /** 清仓预览：要平掉的持仓个数和价值（永续取标记价，现货取估值）。accountId 为空表示整个组合。 */
 export function flattenPreview(snapshot: PositionSnapshot, accountId?: string) {
   const swaps = snapshot.swapPositions.filter(item => !accountId || item.trading_account_id === accountId);
   const spots = snapshot.spotHoldings.filter(
-    item => item.instrument_id && Number(item.quantity) !== 0 && (!accountId || item.trading_account_id === accountId)
+    item => item.instrument_id && Number(item.signed_quantity) !== 0 && (!accountId || item.trading_account_id === accountId)
   );
   const value =
     swaps.reduce((sum, item) => sum + Math.abs(num(item.signed_quantity) * num(item.mark_price)), 0) +

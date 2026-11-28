@@ -65,7 +65,9 @@ describe("replay model helpers", () => {
       }
     ]);
     expect(series).toHaveLength(1);
+    expect(replayStatusLabel("queued")).toBe("排队中");
     expect(replayStatusLabel("running")).toBe("运行中");
+    expect(replayStatusLabel("succeeded")).toBe("已完成");
   });
 
   it("keeps annualized return optional", () => {

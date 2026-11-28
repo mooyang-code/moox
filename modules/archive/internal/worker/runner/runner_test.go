@@ -189,7 +189,7 @@ func (e *env) runner(pageRows int) *Runner {
 
 func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: "run_1", LeaseToken: "tok", Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
+		RunId: "run_1", LeaseToken: "tok", Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Frequency: "1m", PartitionUnit: "day",
 		Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: e.now.UnixMilli(), ScheduledAt: e.now.UnixMilli(),
 	}
@@ -216,7 +216,7 @@ func rows(subject string, from time.Time, n int, base float64) []staging.Row {
 	return out
 }
 
-func report(out *Outcome, key string) *archivepb.PartitionReport {
+func report(out *Outcome, key string) *archivepb.ArchivePartition {
 	for _, p := range out.Partitions {
 		if p.GetPartitionKey() == key {
 			return p
@@ -469,7 +469,7 @@ func TestCancellationLeavesStagedBatchesAndKeepsTheRescanProgress(t *testing.T) 
 	e.src.rows = rows("BTC", day, 60, 1) // 00:00–00:59
 	backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = day.Format(time.RFC3339) }
 	out := e.run(20, backfill, func(p Progress) bool { return p.RowsRead >= 40 })
-	if out.Status != "canceled" || out.Progress.RowsRead != 40 {
+	if out.Status != "cancelled" || out.Progress.RowsRead != 40 {
 		t.Fatalf("out = %+v", out)
 	}
 	if from, _, ok, _ := e.store.Rescan(context.Background(), "crypto", "ds_1m"); !ok || !from.Equal(day) {
@@ -537,7 +537,7 @@ func TestStockCNPartitionWaitsForTheLocalCloseAndMonthPartitionsUseTheTwelveHour
 	}
 	m.now = time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	out = m.run(2000, func(a *archivepb.RunAssignment) {
-		a.Freq, a.PartitionUnit, a.Retention = "1d", "month", "forever"
+		a.Frequency, a.PartitionUnit, a.Retention = "1d", "month", "forever"
 		a.BackfillFrom = "2026-09-25T00:00:00Z"
 	}, nil)
 	oct, sep := report(out, "2026-10"), report(out, "2026-09")
@@ -558,7 +558,7 @@ func TestExecuteRejectsBadAssignmentsAndMissingColumns(t *testing.T) {
 		"bad range":          func(a *archivepb.RunAssignment) { a.Kind, a.RangeStart, a.RangeEnd = "range", "x", "y" },
 		"bad backfill":       func(a *archivepb.RunAssignment) { a.BackfillFrom = "later" },
 		"bad retention":      func(a *archivepb.RunAssignment) { a.Retention = "soon" },
-		"bad freq":           func(a *archivepb.RunAssignment) { a.Freq = "7x" },
+		"bad freq":           func(a *archivepb.RunAssignment) { a.Frequency = "7x" },
 		"no dir name":        func(a *archivepb.RunAssignment) { a.DirName = "" },
 		"no purpose":         func(a *archivepb.RunAssignment) { a.Purpose = "" },
 		"unsafe dir":         func(a *archivepb.RunAssignment) { a.DirName = "../x" },
@@ -670,7 +670,7 @@ func TestLostStagingIsRebuiltFromTheManagerRegistrationWithoutLosingRows(t *test
 	e.now = e.now.Add(time.Hour)
 	out = e.run(2000, func(a *archivepb.RunAssignment) {
 		a.LastSuccessAt = lastSuccess.UnixMilli()
-		a.RegisteredPartitions = []*archivepb.PartitionReport{registered}
+		a.RegisteredPartitions = []*archivepb.ArchivePartition{registered}
 	}, nil)
 	if out.Status != "succeeded" {
 		t.Fatalf("out = %+v", out)

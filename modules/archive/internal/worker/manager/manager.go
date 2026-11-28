@@ -11,12 +11,18 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
-// ErrConflict 表示 mgr 返回冲突（令牌失效或运行已结束）。
-var ErrConflict = errors.New("archive manager conflict")
+var (
+	// ErrConflict 表示 mgr 返回冲突（令牌失效、运行已结束、任务 ID 不匹配或分区行数倒退）。
+	ErrConflict = errors.New("archive manager conflict")
+	// ErrNotFound 表示目标任务或运行已不存在。
+	ErrNotFound = errors.New("archive manager record not found")
+)
 
 // Client 是 ArchiveWorker 服务的调用接口。
 type Client interface {
 	Heartbeat(ctx context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error)
+	ListFollowTasks(ctx context.Context, req *archivepb.ListFollowTasksReq) (*archivepb.ListFollowTasksRsp, error)
+	ReportFollowResult(ctx context.Context, req *archivepb.ReportFollowResultReq) (*archivepb.ReportFollowResultRsp, error)
 	Pull(ctx context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error)
 	Progress(ctx context.Context, req *archivepb.ReportArchiveRunProgressReq) (*archivepb.ReportArchiveRunProgressRsp, error)
 	Complete(ctx context.Context, req *archivepb.CompleteArchiveRunReq) (*archivepb.CompleteArchiveRunRsp, error)
@@ -39,6 +45,8 @@ func call[Rsp any](ctx context.Context, g *gateway, method string, req any, rsp 
 		return rsp, nil
 	case commonpb.ErrorCode_CONFLICT:
 		return nil, fmt.Errorf("%s: %w: %s", method, ErrConflict, info.GetMsg())
+	case commonpb.ErrorCode_NOT_FOUND:
+		return nil, fmt.Errorf("%s: %w: %s", method, ErrNotFound, info.GetMsg())
 	default:
 		return nil, fmt.Errorf("%s: %s", method, info.GetMsg())
 	}
@@ -46,6 +54,14 @@ func call[Rsp any](ctx context.Context, g *gateway, method string, req any, rsp 
 
 func (g *gateway) Heartbeat(ctx context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
 	return call(ctx, g, "ArchiveWorkerHeartbeat", req, &archivepb.ArchiveWorkerHeartbeatRsp{}, (*archivepb.ArchiveWorkerHeartbeatRsp).GetRetInfo)
+}
+
+func (g *gateway) ListFollowTasks(ctx context.Context, req *archivepb.ListFollowTasksReq) (*archivepb.ListFollowTasksRsp, error) {
+	return call(ctx, g, "ListFollowTasks", req, &archivepb.ListFollowTasksRsp{}, (*archivepb.ListFollowTasksRsp).GetRetInfo)
+}
+
+func (g *gateway) ReportFollowResult(ctx context.Context, req *archivepb.ReportFollowResultReq) (*archivepb.ReportFollowResultRsp, error) {
+	return call(ctx, g, "ReportFollowResult", req, &archivepb.ReportFollowResultRsp{}, (*archivepb.ReportFollowResultRsp).GetRetInfo)
 }
 
 func (g *gateway) Pull(ctx context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error) {

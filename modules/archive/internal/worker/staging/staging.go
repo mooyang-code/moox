@@ -19,6 +19,9 @@ import (
 	"time"
 
 	_ "github.com/glebarez/go-sqlite"
+	archiveschema "github.com/mooyang-code/moox/modules/archive/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 // 列类型：与 Storage 的 FieldValueType 对应。
@@ -188,7 +191,7 @@ type Store struct {
 	opts Options
 }
 
-// Open 打开（必要时创建）暂存库，并创建任务状态与分区状态两张永久表。
+// Open 打开（必要时创建）暂存库，校验并创建任务状态与分区状态两张固定表，校验通过后写入数据格式文件。
 func Open(path string, opts Options) (*Store, error) {
 	if opts.CacheBytes == 0 {
 		opts.CacheBytes = 256 << 20
@@ -199,71 +202,62 @@ func Open(path string, opts Options) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
+	hadData := false
+	if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() && info.Size() > 0 {
+		hadData = true
+	}
 	db, err := openDB(path, opts)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, path: path, opts: opts}
-	for _, ddl := range []string{taskStateDDL, partitionStateDDL} {
-		if _, err := db.Exec(ddl); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("create staging state tables: %w", err)
-		}
+	ctx := context.Background()
+	schemaSQL := archiveschema.StagingSQL()
+	// 仅校验 task_state / partition_state 两张固定表，放行运行时动态生成的 staged_* 暂存表。
+	if err := sqlitedb.ValidateTablesSQL(ctx, db, "archive-worker", schemaSQL, true); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
-	return s, nil
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("开启暂存库建表事务失败：%w", err)
+	}
+	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		return nil, fmt.Errorf("创建暂存库固定状态表失败：%w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("提交暂存库固定状态表失败：%w", err)
+	}
+	if err := sqlitedb.ValidateTablesSQL(ctx, db, "archive-worker", schemaSQL, false); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := recordStagingFormat(path, schemaSQL, hadData); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db, path: path, opts: opts}, nil
 }
 
-// 两张永久表。task_state.purpose、dir_name 是任务的用途与目录名（绑定任务时记下）；change_store_id、change_sequence 是
-// Storage 变更日志的位点；rescan_from、rescan_until（纳秒）是整段重读的进度，只在重读期间有值，表示 [rescan_from, rescan_until) 还没读；
-// task_state.meta_remote_sha256 是已上传到对象存储的 dataset.json 的 sha256；partition_state.remote_* 是分区的远端副本，
-// remote_sha256 = file_sha256 且 remote_verified_at 非空时远端是当前版本（“已复制”，与 mgr 同一个口径）。
-const (
-	taskStateDDL = `
-CREATE TABLE IF NOT EXISTS task_state (
-    space_id TEXT NOT NULL,
-    dataset_id TEXT NOT NULL,
-    task_id TEXT NOT NULL DEFAULT '',
-    purpose TEXT NOT NULL DEFAULT '',
-    dir_name TEXT NOT NULL DEFAULT '',
-    meta_remote_sha256 TEXT NOT NULL DEFAULT '',
-    change_store_id TEXT NOT NULL DEFAULT '',
-    change_sequence INTEGER NOT NULL DEFAULT 0,
-    rescan_from INTEGER,
-    rescan_until INTEGER,
-    partitions_synced INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (space_id, dataset_id)
-) WITHOUT ROWID`
-	partitionStateDDL = `
-CREATE TABLE IF NOT EXISTS partition_state (
-    space_id TEXT NOT NULL,
-    dataset_id TEXT NOT NULL,
-    partition_key TEXT NOT NULL,
-    range_start INTEGER NOT NULL,
-    range_end INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'open',
-    last_changed_at INTEGER NOT NULL,
-    exported_at INTEGER,
-    file_path TEXT NOT NULL DEFAULT '',
-    file_sha256 TEXT NOT NULL DEFAULT '',
-    export_count INTEGER NOT NULL DEFAULT 0,
-    row_count INTEGER NOT NULL DEFAULT 0,
-    subject_count INTEGER NOT NULL DEFAULT 0,
-    min_data_time INTEGER,
-    max_data_time INTEGER,
-    finalized_at INTEGER,
-    report_pending INTEGER NOT NULL DEFAULT 1,
-    remote_key TEXT NOT NULL DEFAULT '',
-    remote_sha256 TEXT NOT NULL DEFAULT '',
-    remote_etag TEXT NOT NULL DEFAULT '',
-    remote_uploaded_at INTEGER,
-    remote_verified_at INTEGER,
-    remote_error TEXT NOT NULL DEFAULT '',
-    remote_attempts INTEGER NOT NULL DEFAULT 0,
-    remote_retry_at INTEGER,
-    CHECK (status IN ('open', 'exported', 'final')),
-    PRIMARY KEY (space_id, dataset_id, partition_key)
-) WITHOUT ROWID`
-)
+func recordStagingFormat(path, schemaSQL string, hadData bool) error {
+	if strings.TrimSpace(path) == "" || sqlitedb.IsMemoryPath(path) || strings.HasPrefix(path, "file:") {
+		return nil
+	}
+	hash, err := sqlitedb.SchemaHash(schemaSQL)
+	if err != nil {
+		return err
+	}
+	rec, err := dataformat.Build("archive-worker", map[string]string{
+		dataformat.PartStagingSchema: hash,
+	})
+	if err != nil {
+		return err
+	}
+	return dataformat.VerifyOrWriteDir(filepath.Dir(path), rec, hadData)
+}
 
 func openDB(path string, opts Options) (*sql.DB, error) {
 	pragmas := []string{

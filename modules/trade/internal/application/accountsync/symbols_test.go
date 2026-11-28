@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -104,7 +104,7 @@ func TestFillsBeforeAccountCreationOnlyAdvanceCursor(t *testing.T) {
 	}}}
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter}, SessionState: readySessionState(true),
-		Fills: &consumer.Reducer{Store: tradeStore}, Now: func() time.Time { return time.UnixMilli(6_000) },
+		Fills: &fillreduce.Reducer{Store: tradeStore}, Now: func() time.Time { return time.UnixMilli(6_000) },
 	}
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestStalePrivateUpdateKeepsBalanceButClosesAdmission(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: idleSyncAdapter{noOpenOrdersAdapter{&syncAdapter{}}}}, SessionState: readySessionState(true),
-		Fills: &consumer.Reducer{Store: tradeStore}, Now: func() time.Time { return time.UnixMilli(4_000) },
+		Fills: &fillreduce.Reducer{Store: tradeStore}, Now: func() time.Time { return time.UnixMilli(4_000) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestTwoKeysOnSameExchangeSyncIndependently(t *testing.T) {
 	}))
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: idleSyncAdapter{noOpenOrdersAdapter{&syncAdapter{}}}},
-		SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
+		SessionState: readySessionState(true), Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now: func() time.Time { return time.UnixMilli(3_000) },
 	}
 	for _, accountID := range []string{"account-1", "account-2"} {
@@ -194,7 +194,7 @@ func TestTwoKeysOnSameExchangeSyncIndependently(t *testing.T) {
 func TestManualAccountKeepsPauseReasonOnExternalFact(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
-	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'`).Error)
+	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''`).Error)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true,

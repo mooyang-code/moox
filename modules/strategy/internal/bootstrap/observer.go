@@ -20,6 +20,9 @@ import (
 	"github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const (
@@ -31,8 +34,8 @@ const (
 // 数据重置、新建因子任务之后必然出现一段，数据攒够自动恢复。只要还在积累期上限之内，这类跳过记为 partial（Monitor 显示“积累中”，
 // 不告警，也不计模块失败）；超过上限仍然不足，说明不是在积累（例如 min_age_bars 超过 View 保留根数），回到失败处理。
 var accumulatingReasons = map[string]bool{
-	input.SkipHistoryInsufficient: true,
-	readiness.ReasonFactorSkipped: true,
+	upstream.SkipHistoryInsufficient: true,
+	readiness.ReasonFactorSkipped:    true,
 }
 
 // minAccumulationLimit 是积累期上限的下限：上游因子的回看窗口可达两三天（1h 因子任务），min_age_bars 对应的时长更短时也要给足。
@@ -47,10 +50,10 @@ const (
 // failureReasons 是计入模块健康检查失败的跳过原因；其余跳过是业务上的"本期不能求值"，只通过实例的数据集新鲜度告警。
 // market_missing（绑定两个因子任务的实例里另一个市场的数据没到）属于后者：数据未到，不是模块故障。
 var failureReasons = map[string]bool{
-	trigger.SkipInfraRetryExhausted: true,
-	input.SkipConfigError:           true,
-	input.SkipHistoryInsufficient:   true,
-	input.SkipAmbiguousSeries:       true,
+	trigger.SkipInfraRetryExhausted:  true,
+	upstream.SkipConfigError:         true,
+	upstream.SkipHistoryInsufficient: true,
+	upstream.SkipAmbiguousSeries:     true,
 }
 
 var metricLabelPattern = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
@@ -365,13 +368,13 @@ func (o *instanceObserver) restoreObservations(id string, point *restorePoint, k
 	if processed.IsZero() {
 		return []report.DatasetObservation{grace}
 	}
-	period, err := input.ClosedPeriod(calendar, bar, point.enabledAt)
+	closed, err := period.ClosedPeriod(calendar, bar, point.enabledAt)
 	if err != nil {
 		o.log("计算实例 %s 启用时刻的周期失败，不补报观测：%v", id, err)
 		return nil
 	}
-	if period.BarEnd.After(processed) {
-		grace.OutputWatermark = period.StorageStart
+	if closed.BarEnd.After(processed) {
+		grace.OutputWatermark = closed.StorageStart
 		return []report.DatasetObservation{grace}
 	}
 	if point.seenBar.After(point.processed.BarEnd) {
@@ -380,7 +383,7 @@ func (o *instanceObserver) restoreObservations(id string, point *restorePoint, k
 	okInSession := !point.ok.BarEnd.IsZero() && point.ok.SessionID == point.session
 	var out []report.DatasetObservation
 	mark := func(item store.ResultMark, result string) {
-		boundary, err := input.FromBarEnd(calendar, bar, item.BarEnd)
+		boundary, err := period.FromBarEnd(calendar, bar, item.BarEnd)
 		if err != nil {
 			o.log("计算实例 %s 周期 %s 的起点失败，不补报：%v", id, item.BarEnd.Format(time.RFC3339), err)
 			return
@@ -399,8 +402,8 @@ func (o *instanceObserver) restoreObservations(id string, point *restorePoint, k
 		mark(point.ok, "success")
 	}
 	if !okInSession {
-		if !point.ok.BarEnd.IsZero() && period.BarEnd.After(point.ok.BarEnd) {
-			grace.OutputWatermark = period.StorageStart
+		if !point.ok.BarEnd.IsZero() && closed.BarEnd.After(point.ok.BarEnd) {
+			grace.OutputWatermark = closed.StorageStart
 		}
 		out = append(out, grace)
 	}
@@ -414,7 +417,7 @@ func (o *instanceObserver) restoreObservations(id string, point *restorePoint, k
 	return out
 }
 
-// 与 config/setup/dataset-health-policy.yaml 一致：Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行
+// 与 Monitor 配置（modules/monitor/config/app.yaml 的 metrics.dataset_health）一致：Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行
 // 报 run stale，在最近一次成功之后 success_missed_intervals 个间隔没有新的成功报 success stale。
 const (
 	runMissedIntervals     = 2
@@ -426,16 +429,16 @@ const (
 // 两者取较大者——Monitor 的两种滞后都乘同一个间隔，只按运行口径时，周末后第一根跳过会让间隔缩短、立即报 success
 // stale。还没处理过时以最近闭合一根的上一根为基准（偏宽），还没有 ok 时成功口径与运行口径同一基准。调用方持有 o.mu。
 func (o *instanceObserver) runIntervalLocked(instanceID, calendar, bar string, nominal time.Duration) time.Duration {
-	if !input.SessionCalendar(calendar) {
+	if !period.SessionCalendar(calendar) {
 		return nominal
 	}
 	reference, ok := o.lastBarEnd[instanceID]
 	if !ok {
-		period, err := input.ClosedPeriod(calendar, bar, o.now())
+		closed, err := period.ClosedPeriod(calendar, bar, o.now())
 		if err != nil {
 			return nominal
 		}
-		if reference, err = input.AdvanceBarEnd(calendar, bar, period.BarEnd, -1); err != nil {
+		if reference, err = period.AdvanceBarEnd(calendar, bar, closed.BarEnd, -1); err != nil {
 			return nominal
 		}
 	}
@@ -444,10 +447,10 @@ func (o *instanceObserver) runIntervalLocked(instanceID, calendar, bar string, n
 		success = reference
 	}
 	interval := nominal
-	if after, err := input.AdvanceBarEnd(calendar, bar, reference, runMissedIntervals); err == nil {
+	if after, err := period.AdvanceBarEnd(calendar, bar, reference, runMissedIntervals); err == nil {
 		interval = max(interval, after.Sub(reference)/runMissedIntervals)
 	}
-	if after, err := input.AdvanceBarEnd(calendar, bar, success, successMissedIntervals); err == nil {
+	if after, err := period.AdvanceBarEnd(calendar, bar, success, successMissedIntervals); err == nil {
 		interval = max(interval, after.Sub(success)/successMissedIntervals)
 	}
 	return interval
@@ -543,9 +546,9 @@ func (o *instanceObserver) accumulatingLocked(instance store.Instance, bar strin
 			limit = max(limit, warmupPeriods*expectation.Interval)
 		}
 		// 股票市场攒够 warmupPeriods 根要跨午休、隔夜或周末：按交易日历往后数，而不是按墙钟。
-		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && input.SessionCalendar(resolved.Calendar) {
-			if period, err := input.ClosedPeriod(resolved.Calendar, bar, since); err == nil {
-				if after, err := input.AdvanceBarEnd(resolved.Calendar, bar, period.BarEnd, warmupPeriods); err == nil {
+		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && period.SessionCalendar(resolved.Calendar) {
+			if closed, err := period.ClosedPeriod(resolved.Calendar, bar, since); err == nil {
+				if after, err := period.AdvanceBarEnd(resolved.Calendar, bar, closed.BarEnd, warmupPeriods); err == nil {
 					limit = max(limit, after.Sub(since))
 				}
 			}

@@ -1,5 +1,5 @@
 import { call } from "@/api/http";
-import type { Page, PageResult } from "@/api/storage/types";
+import type { Page, PageResult } from "@/api/page";
 
 export interface Secret {
   id?: number;

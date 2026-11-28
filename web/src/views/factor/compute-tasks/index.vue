@@ -154,9 +154,7 @@
 
 <script setup lang="ts">
 import { useDisplayZone } from "@/hooks/useDisplayZone";
-import { selectedSpaceGeneration } from "@/api/admin/space-header";
-import { useSpaceStore } from "@/store/modules/space";
-import { computed, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { createFactorTask, deleteFactorTask, setFactorTaskStatus } from "@/api/factor";
@@ -212,14 +210,14 @@ const rows = computed(() =>
     info,
     label: store.taskLabel(info.factor_task),
     sourceName: store.datasetNames[info.factor_task.source_dataset_id] || info.factor_task.source_dataset_id,
-    freq: info.factor_task.freq,
+    freq: info.factor_task.frequency,
     boundInstance: info.factor_task.bound_instance_id || "",
     members: memberCountText(info),
     statusTag: taskStatusTag(info.factor_task.status),
     action: taskActionKind(info.factor_task),
     remove: deleteState(info),
     lastPeriod: info.last_run?.last_period_time ? formatPeriod(info.last_run.last_period_time, displayZone.value) : "-",
-    lag: barLagText(info.factor_task.freq, info.last_run)
+    lag: barLagText(info.factor_task.frequency, info.last_run)
   }))
 );
 
@@ -239,14 +237,15 @@ function closeDetail() {
   void navigate({ detail: undefined });
 }
 
-const spaceStore = useSpaceStore();
+let unmounted = false;
+onBeforeUnmount(() => {
+  unmounted = true;
+});
 
 async function onCreated(taskId: string) {
-  // 刷新期间切换空间：创建的任务属于原空间，不能把它的 ID 写进新空间的详情路由
-  const createdSpaceId = spaceStore.selectedSpaceId;
-  const createdGeneration = selectedSpaceGeneration();
   await store.reload({ silent: false });
-  if (spaceStore.selectedSpaceId !== createdSpaceId || selectedSpaceGeneration() !== createdGeneration) return;
+  // 刷新期间页面卸载（含切空间重建）：不再把旧空间任务 ID 写进详情路由
+  if (unmounted) return;
   if (!store.tasks.some((item: FactorTaskInfo) => item.factor_task.task_id === taskId)) return;
   // 刷新期间用户又打开了新的创建弹窗：这时再打开详情抽屉会盖住正在填写的新草稿
   if (createVisible.value) return;
@@ -286,7 +285,7 @@ function retryActivation(set: FactorTask) {
         name: set.name,
         space_id: set.space_id,
         source_dataset_id: set.source_dataset_id,
-        freq: set.freq,
+        frequency: set.frequency,
         result_dataset_id: set.result_dataset_id
       }),
     "已重新提交激活",

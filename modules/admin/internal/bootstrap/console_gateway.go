@@ -70,7 +70,7 @@ func newConsoleGateway(db *gorm.DB, topology *sysdeploy.TopologyDAO, hostID, key
 	}
 	return gatewayclient.New(gatewayclient.Config{Serialization: codec.SerializationTypePB,
 		Mode: gatewayclient.Internal, Credentials: gatewayauth.Credentials{Caller: servicecatalog.OperatorConsole, Host: hostID, Key: key}, LocalHostID: hostID,
-		CAFile:         filepath.Join(newCertificateWatchFromEnvironment(db).PKIDir, "ca.crt"),
+		CAFile:         filepath.Join(adminPKIDir(), "ca.crt"),
 		Source:         adminDirectorySource{topology: topology},
 		OnRefreshError: func(err error) { log.Warnf("console directory refresh failed: %v", err) },
 	})

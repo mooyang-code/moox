@@ -32,50 +32,14 @@ type FactStore interface {
 	ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error)
 }
 
-// PublicMarketData 是模拟盘用的公共行情。能查资金费率（execution.FundingRatesOf）时，永续持仓按它结算资金费。
-type PublicMarketData interface {
-	execution.MarketDataSource
-	execution.ReferencePriceSource
-}
-
-// 编译期确认模拟盘适配器实现了会话按类型断言使用的可选能力与订单策略边界。
+// 编译期确认模拟盘适配器实现了会话按类型断言使用的可选能力。
 var (
 	_ execution.ExecutionAdapter = (*Adapter)(nil)
 	_ execution.SymbolConfigurer = (*Adapter)(nil)
 	_ execution.LedgerSource     = (*Adapter)(nil)
 	_ execution.QuotePrefetcher  = (*Adapter)(nil)
 	_ execution.ExchangeIdentity = (*Adapter)(nil)
-	_ execution.OrderPolicy      = (*Adapter)(nil)
 )
-
-func (a *Adapter) orderPolicy() execution.PaperOrderPolicy {
-	return execution.PaperOrderPolicy{Adapter: a}
-}
-
-func (a *Adapter) NeedsExecutableQuote() bool { return a.orderPolicy().NeedsExecutableQuote() }
-func (a *Adapter) ResolveExecutableQuote(ctx context.Context, key exchange.SymbolKey, side exchange.Side, now time.Time, maxAge time.Duration) (shared.Decimal, time.Time, error) {
-	return a.orderPolicy().ResolveExecutableQuote(ctx, key, side, now, maxAge)
-}
-func (a *Adapter) UsesLocalFundsLedger() bool  { return a.orderPolicy().UsesLocalFundsLedger() }
-func (a *Adapter) ConfirmsCancelLocally() bool { return a.orderPolicy().ConfirmsCancelLocally() }
-func (a *Adapter) NeedsMarginPoolSnapshot(account tradingaccount.Account, reservedAsset string, reduceOnly bool) bool {
-	return a.orderPolicy().NeedsMarginPoolSnapshot(account, reservedAsset, reduceOnly)
-}
-func (a *Adapter) MarginPoolAdjustment(market exchange.MarketType, usedMargin, unrealizedPnL shared.Decimal) shared.Decimal {
-	return a.orderPolicy().MarginPoolAdjustment(market, usedMargin, unrealizedPnL)
-}
-func (a *Adapter) ComputeReservation(req execution.ReservationRequest) (execution.ReservationResult, error) {
-	return a.orderPolicy().ComputeReservation(req)
-}
-func (a *Adapter) RepriceMarketOrder(req execution.RepriceRequest) (shared.Decimal, shared.Decimal, error) {
-	return a.orderPolicy().RepriceMarketOrder(req)
-}
-func (a *Adapter) ClampBuyCapacity(req execution.CapacityClampRequest) shared.Decimal {
-	return a.orderPolicy().ClampBuyCapacity(req)
-}
-func (a *Adapter) DefaultLeverage() (shared.Decimal, bool) {
-	return a.orderPolicy().DefaultLeverage()
-}
 
 // Exchange 返回模拟账户所在的场所，报价新鲜度按这个场所的交易时段判断。
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.Exchange(a.Account.Exchange) }
@@ -103,10 +67,8 @@ func (a *Adapter) lastPriceFresh(maxAge time.Duration) func(time.Time) bool {
 type Adapter struct {
 	Account store.TradingAccountRecord
 	Store   FactStore
-	// MarketData is the unauthenticated production public adapter. Paper never
-	// invokes its private or order methods; it is only used for instruments and
-	// reference quotes.
-	MarketData PublicMarketData
+	// MarketData 是无需密钥的生产公共行情源，只用于标的列表、报价、参考价与资金费率。
+	MarketData execution.PublicMarketData
 	// Exchanges 提供场所的交易时段：A 股时段外估值报价按收盘价判断新鲜度；为空时全天按时段内处理。
 	Exchanges   execution.ExchangeCatalog
 	Wake        func()

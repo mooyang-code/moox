@@ -11,17 +11,9 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 )
 
-// Snapshot assembles the enabled sets with their enabled member definitions
-// (including source) and hashes them. When knownHash matches, notModified is
-// true and sets is nil.
-func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, error) {
-	hash, notModified, sets, _, err := h.SnapshotWithExisting(ctx, knownHash)
-	return hash, notModified, sets, err
-}
-
-// SnapshotWithExisting 组装已启用任务快照、库中当前存在的全部任务 ID（含停用与待创建）以及目录指纹。
+// Snapshot 组装已启用任务快照、库中当前存在的全部任务 ID（含停用与待创建）以及目录指纹。
 // knownHash 一致时 notModified 为 true，sets 与 existingTaskIDs 均为空。
-func (h *Hub) SnapshotWithExisting(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, []string, error) {
+func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, []string, error) {
 	all, err := h.store.ListTasks(ctx)
 	if err != nil {
 		return "", false, nil, nil, fmt.Errorf("list factor tasks: %w", err)
@@ -46,7 +38,7 @@ func (h *Hub) SnapshotWithExisting(ctx context.Context, knownHash string) (strin
 	}
 	sort.Strings(existing)
 	sort.Slice(sets, func(i, j int) bool { return sets[i].Set.TaskID < sets[j].Set.TaskID })
-	hash, err := CatalogHashWithExisting(sets, existing)
+	hash, err := CatalogHash(sets, existing)
 	if err != nil {
 		return "", false, nil, nil, err
 	}
@@ -84,21 +76,10 @@ type hashedMember struct {
 	UDFs []string `json:"udfs,omitempty"`
 }
 
-// CatalogHash fingerprints everything the engine computes with. Timestamps are
-// excluded so that a write without a semantic change does not force a resync;
-// the spec is covered by its content hash and the computation by definition_hash.
-func CatalogHash(sets []domain.EngineTask) (string, error) {
-	existing := make([]string, 0, len(sets))
-	for _, set := range sets {
-		existing = append(existing, set.Set.TaskID)
-	}
-	return CatalogHashWithExisting(sets, existing)
-}
-
-// CatalogHashWithExisting 把已启用任务与管理端库中当前存在的全部任务 ID 一并计入目录指纹：
+// CatalogHash 把已启用任务与管理端库中当前存在的全部任务 ID 一并计入目录指纹（忽略时间戳，避免无语义写入触发重同步）：
 // 即使任务先停用再删除（启用任务集合未变），existingTaskIDs 缩短也会改变目录指纹，
 // 使引擎在下一次同步时及时清理已删除任务的本地 watermark 与 gapledger。
-func CatalogHashWithExisting(sets []domain.EngineTask, existingTaskIDs []string) (string, error) {
+func CatalogHash(sets []domain.EngineTask, existingTaskIDs []string) (string, error) {
 	hashed := make([]hashedSet, 0, len(sets))
 	for _, set := range sets {
 		members := make([]hashedMember, 0, len(set.Members))

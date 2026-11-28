@@ -81,3 +81,18 @@ func UnionMarkets(sets ...[]MarketType) []MarketType {
 	}
 	return result
 }
+
+// CoinOf 按币种或股票代码归一内部标的 ID：去掉 -SPOT/-SWAP 后缀后取第一段；股票代码没有分隔符则原样返回。
+// 组合列表的批量持仓计数与实际持仓查询共用同一口径。
+func CoinOf(instrumentID string) string {
+	trimmed := strings.TrimSpace(instrumentID)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.TrimSuffix(trimmed, "-SPOT")
+	trimmed = strings.TrimSuffix(trimmed, "-SWAP")
+	if idx := strings.IndexByte(trimmed, '-'); idx > 0 {
+		return trimmed[:idx]
+	}
+	return trimmed
+}

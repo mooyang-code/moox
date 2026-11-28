@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-func writeMeta(t *testing.T, files Files, space, purpose, dir, dataset, name, freq string) {
+func writeMeta(t *testing.T, files Files, space, purpose, dir, dataset, name, frequency string) {
 	t.Helper()
 	meta := files.BuildDatasetMeta(DatasetMetaInput{
-		SpaceID: space, DatasetID: dataset, Purpose: purpose, DirName: dir, Freq: freq, PartitionUnit: "day", Timezone: "UTC",
+		SpaceID: space, DatasetID: dataset, Purpose: purpose, DirName: dir, Frequency: frequency, PartitionUnit: "day", Timezone: "UTC",
 		DatasetJSON: fmt.Sprintf(`{"name":%q}`, name),
 	}, time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC))
 	if err := files.WriteDatasetJSON(meta); err != nil {
@@ -36,7 +36,7 @@ func TestDatasetsCSVListsEveryTaskDirectorySortedAndSkipsDotDirectories(t *testi
 		if err := os.MkdirAll(filepath.Dir(stray), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(stray, []byte(`{"dataset_id":"stray","freq":"1m"}`), 0o644); err != nil {
+		if err := os.WriteFile(stray, []byte(`{"dataset_id":"stray","frequency":"1m"}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -48,7 +48,7 @@ func TestDatasetsCSVListsEveryTaskDirectorySortedAndSkipsDotDirectories(t *testi
 		t.Fatal(err)
 	}
 	want := strings.Join([]string{
-		"space_id,purpose,dir_name,dataset_id,name,freq",
+		"space_id,purpose,dir_name,dataset_id,name,frequency",
 		`crypto,collect,binance-spot-kline-1m,dataset_dasftksvjhj2jom4vhd0,"现货分钟K线, 含逗号",1m`,
 		"crypto,factor,binance-spot-1m,dataset_factor_spot_1m,现货一分钟,1m",
 		"stockcn,collect,hs300-kline-5m,dataset_dasftksvjhj2jom4vhh0,A股5分钟K线,5m",
@@ -84,7 +84,7 @@ func TestDatasetsCSVConcurrentWritesStayConsistent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			meta := files.BuildDatasetMeta(DatasetMetaInput{
-				SpaceID: "crypto", DatasetID: fmt.Sprintf("ds_%02d", i), Purpose: "collect", DirName: fmt.Sprintf("d-%02d", i), Freq: "1m",
+				SpaceID: "crypto", DatasetID: fmt.Sprintf("ds_%02d", i), Purpose: "collect", DirName: fmt.Sprintf("d-%02d", i), Frequency: "1m",
 				PartitionUnit: "day", Timezone: "UTC",
 			}, time.Now())
 			errs <- files.WriteDatasetJSON(meta)

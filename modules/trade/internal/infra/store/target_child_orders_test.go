@@ -17,8 +17,7 @@ func seedTargetChildren(t *testing.T, s *Store, children map[string][2]string) s
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}

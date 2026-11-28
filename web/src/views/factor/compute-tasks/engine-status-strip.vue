@@ -59,7 +59,7 @@ async function loadJobs() {
   try {
     const results = await Promise.all(
       ids.map(taskId =>
-        listRecalcJobs({ task_id: taskId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } })
+        listRecalcJobs({ task_id: taskId, statuses: ["queued", "running", "failed"], page: { page: 1, size: 20 } })
       )
     );
     if (!token.isLatest()) return;

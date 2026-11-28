@@ -30,8 +30,6 @@ type KlineBatch struct {
 	Market  PlanMarket
 	Dataset PlanDataset
 	Period  time.Time
-	// Symbols 把标的映射到交易所 symbol（provider_symbol 字段），与计划一致。
-	Symbols func(subjectID string) string
 	Bars    []marketdata.NormalizedKline
 	Origin  string
 }
@@ -69,12 +67,12 @@ func (c *KlineCommitter) CommitPeriod(ctx context.Context, batch KlineBatch) (Kl
 	if len(rows) == 0 {
 		return result, nil
 	}
-	_, _, writeErr := c.writeDatasets(ctx, req, map[string][]*storagepb.RowFieldUpsert{batch.Dataset.DatasetID: rows})
+	_, _, writeErr := c.writeDatasets(ctx, req, map[string][]*storagepb.Row{batch.Dataset.DatasetID: rows})
 	return result, writeErr
 }
 
 // periodRows 构造周期提交的请求与行；导出给测试比较 SCF 与 stream 写出的行。
-func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.RowFieldUpsert, KlineCommitResult, error) {
+func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row, KlineCommitResult, error) {
 	var result KlineCommitResult
 	selected, ok := batch.Dataset.SelectCopy(batch.Period)
 	if !ok {
@@ -82,7 +80,7 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 	}
 	dataset := batch.Dataset
 	dataset.Copies = []PlanCopy{selected}
-	plan := &Plan{V: 1, Market: batch.Market, Datasets: []PlanDataset{dataset}}
+	plan := &Plan{V: 1, Executor: PlanExecutorStreaming, Market: batch.Market, Datasets: []PlanDataset{dataset}}
 	frequency, err := marketdata.ParseFrequency(dataset.Frequency)
 	if err != nil {
 		return Request{}, nil, result, err
@@ -103,7 +101,7 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 		return req, nil, result, err
 	}
 	seen := make(map[string]struct{}, len(batch.Bars))
-	var rows []*storagepb.RowFieldUpsert
+	var rows []*storagepb.Row
 	for _, bar := range batch.Bars {
 		subject := strings.ToUpper(strings.TrimSpace(bar.SubjectID))
 		item, planned := itemsBySubject[subject]
@@ -115,8 +113,12 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 			continue
 		}
 		seen[subject] = struct{}{}
-		if batch.Symbols != nil {
-			bar.ProviderSymbol = batch.Symbols(subject)
+		if strings.TrimSpace(bar.ProviderSymbol) == "" {
+			symbol, symbolErr := ProviderSymbol(batch.Market, subject)
+			if symbolErr != nil {
+				return req, nil, result, fmt.Errorf("subject %s: %w", subject, symbolErr)
+			}
+			bar.ProviderSymbol = symbol
 		}
 		if strings.TrimSpace(bar.RequestID) == "" {
 			bar.RequestID = batch.BatchID
@@ -129,7 +131,7 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 		if _, ok := bar.Extra[domain.FieldFundingRate]; !ok && domain.HasOutputField(dataset.OutputFields, domain.FieldFundingRate) {
 			return req, nil, result, fmt.Errorf("标的 %s 缺资金费率，不能提交", subject)
 		}
-		expanded, missing, _ := expandTargetRows(req, item, []*storagepb.RowFieldUpsert{row}, bar.Extra, nil)
+		expanded, missing, _ := expandTargetRows(req, item, []*storagepb.Row{row}, bar.Extra, nil)
 		if len(missing) > 0 {
 			return req, nil, result, fmt.Errorf("subject %s has no supported output fields", subject)
 		}
@@ -146,7 +148,7 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 	return req, rows, result, nil
 }
 
-func sortRows(rows []*storagepb.RowFieldUpsert) {
+func sortRows(rows []*storagepb.Row) {
 	sort.Slice(rows, func(i, j int) bool {
 		left, right := rows[i].GetKey().GetTimeSeries(), rows[j].GetKey().GetTimeSeries()
 		if left.GetSubjectId() == right.GetSubjectId() {
@@ -160,19 +162,16 @@ func sortRows(rows []*storagepb.RowFieldUpsert) {
 // extra 是这些行带的附加字段（只在目标显式选中时写入）；failed 是没取到的附加字段：
 // 选了其中任何一个的目标，这一项整体失败（failedTargets），其他目标不受影响。
 // 周期提交请求里某个目标一行都没有时，返回该目标的失败结果（missingTargets）。
-func expandTargetRows(req Request, item domain.CollectionItem, itemRows []*storagepb.RowFieldUpsert, extra map[string]marketdata.FieldValue, failed map[string]error) (rows []*storagepb.RowFieldUpsert, missingTargets, failedTargets []domain.TargetResult) {
-	if len(req.Targets) == 0 {
-		return itemRows, nil, nil
-	}
+func expandTargetRows(req Request, item domain.CollectionItem, itemRows []*storagepb.Row, extra map[string]marketdata.FieldValue, failed map[string]error) (rows []*storagepb.Row, missingTargets, failedTargets []domain.TargetResult) {
 	for _, target := range itemTargets(req, item) {
 		fields := targetOutputFields(item, target)
 		if fieldID, cause := failedField(fields, failed); cause != nil {
 			failedTargets = append(failedTargets, domain.TargetResult{WriteTargetID: target.ID, DatasetID: target.DatasetID, Status: "failed", ErrorSummary: fmt.Sprintf("附加字段 %s 取数失败", fieldID)})
 			continue
 		}
-		var targetRows []*storagepb.RowFieldUpsert
+		var targetRows []*storagepb.Row
 		for _, sourceRow := range itemRows {
-			row, ok := proto.Clone(sourceRow).(*storagepb.RowFieldUpsert)
+			row, ok := proto.Clone(sourceRow).(*storagepb.Row)
 			if !ok || row.GetKey() == nil {
 				continue
 			}
@@ -205,7 +204,7 @@ func itemTargets(req Request, item domain.CollectionItem) []domain.WriteTarget {
 }
 
 // writeDatasets 逐个数据集写入：周期提交请求走 CommitTimeSeriesBatch，其余走普通写入。一个数据集失败不影响其他数据集。
-func (c *KlineCommitter) writeDatasets(ctx context.Context, req Request, targetRows map[string][]*storagepb.RowFieldUpsert) (map[string]domain.TargetResult, int, error) {
+func (c *KlineCommitter) writeDatasets(ctx context.Context, req Request, targetRows map[string][]*storagepb.Row) (map[string]domain.TargetResult, int, error) {
 	var writeErr error
 	writeSuccesses := 0
 	targetStatus := make(map[string]domain.TargetResult)
@@ -243,7 +242,7 @@ func (c *KlineCommitter) writeDatasets(ctx context.Context, req Request, targetR
 	return targetStatus, writeSuccesses, writeErr
 }
 
-func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {
+func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.Row, error) {
 	if strings.TrimSpace(req.Frequency) != "" {
 		requestedFrequency, err := marketdata.ParseFrequency(req.Frequency)
 		if err != nil {
@@ -302,9 +301,9 @@ func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, rou
 		stringValue("provider_symbol", bar.ProviderSymbol),
 	)
 	fields = append(fields, extraFieldValues(bar.Extra)...)
-	return &storagepb.RowFieldUpsert{
+	return &storagepb.Row{
 		Key: &storagepb.RowKey{SpaceId: req.SpaceID, DatasetId: req.DatasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-			SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
+			SubjectId: bar.SubjectID, Frequency: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
 		}}},
 		Fields: fields,
 	}, nil

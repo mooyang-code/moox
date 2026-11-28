@@ -33,7 +33,7 @@ func (e *fakeManagedEngine) Prepare(_ context.Context, id string, _ viewindex.Vi
 func (*fakeManagedEngine) Write(context.Context, string, viewindex.ViewIndexWriteBatch) error {
 	return nil
 }
-func (*fakeManagedEngine) Query(context.Context, string, viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (*fakeManagedEngine) Query(context.Context, string, viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	return nil, 0, nil
 }
 func (e *fakeManagedEngine) Stat(_ context.Context, id string) (viewindex.ViewIndexStats, error) {

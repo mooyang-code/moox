@@ -3,7 +3,7 @@ import type { Dataset } from "@/api/storage/types";
 export const ownerModules = ["collector", "factor", "trade", "manual", "system"] as const;
 export type OwnerModule = (typeof ownerModules)[number];
 
-export const datasetRoles = ["raw_collection", "factor_result", "import", "analysis", "manual"] as const;
+export const datasetRoles = ["raw_collection", "kline_resample_result", "factor_result"] as const;
 export type DatasetRole = (typeof datasetRoles)[number];
 
 export interface AttributionFilter {
@@ -30,16 +30,8 @@ export function datasetMatchesAttribution(dataset: Dataset, filter: AttributionF
   return includes(filter.ownerModules, owner) && includes(filter.datasetRoles, role);
 }
 
-export function isLikelyFactorResultDataset(dataset: Dataset) {
+/** 仅按后端写入的数据集归属属性判断是否为因子结果数据集，不再按数据集 ID 后缀猜测。 */
+export function isFactorResultDataset(dataset: Dataset) {
   const attrs = dataset.attributes || {};
-  return (
-    clean(attrs.owner_module) === "factor" ||
-    clean(attrs.dataset_role) === "factor_result" ||
-    isLikelyFactorResultDatasetId(dataset.dataset_id)
-  );
-}
-
-export function isLikelyFactorResultDatasetId(datasetId: string | undefined) {
-  const normalized = clean(datasetId).toLowerCase();
-  return normalized.endsWith("_factor") || /_f[0-9a-f]{4}$/.test(normalized);
+  return clean(attrs.owner_module) === "factor" || clean(attrs.dataset_role) === "factor_result";
 }

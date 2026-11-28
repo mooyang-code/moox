@@ -42,11 +42,11 @@ func TestStockCalendarWarning(t *testing.T) {
 
 // 回放个数上限不合法时，提示里说清是 replays_max。
 func TestLoadRejectsInvalidReplaysMax(t *testing.T) {
-	_, err := Load(writeConfig(t, "database: ./strategy.sqlite\nretention:\n  replays_max: -1\n"))
+	_, err := Load(writeConfig(t, "database:\n  path: ./strategy.sqlite\nretention:\n  replays_max: -1\n"))
 	if err == nil || !strings.Contains(err.Error(), "replays_max") {
 		t.Fatalf("replays_max 不合法应被拒绝并点名：%v", err)
 	}
-	cfg, err := Load(writeConfig(t, "database: ./strategy.sqlite\n"))
+	cfg, err := Load(writeConfig(t, "database:\n  path: ./strategy.sqlite\n"))
 	if err != nil || cfg.Retention.ReplaysMax != 50 || cfg.EventBus.PublishTimeout != 10*time.Second {
 		t.Fatalf("默认值不符：%+v %+v err=%v", cfg.Retention, cfg.EventBus, err)
 	}

@@ -9,14 +9,13 @@ import (
 	"testing"
 	"time"
 
-	strategyhealth "github.com/mooyang-code/moox/modules/strategy/internal/health"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 func openStore(t *testing.T) *store.Store {
@@ -81,7 +80,7 @@ func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	state := strategyhealth.New("strategy", "strategy", "", "")
+	state := healthz.NewState("strategy", "strategy", "", "")
 	state.SetReady(true)
 	response := strategyHealthSnapshot(repo, runtime, state, nil)(context.Background())
 	if response.Ready {
@@ -118,9 +117,9 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	bar := now.UnixMilli()
-	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", SessionStartedAt: 1_000, LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1"}},
+		Targets: []*eventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "r1", OccurredAt: now, SpaceID: "crypto", SubjectID: "acct"})
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +127,7 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 	stale := now.Add(-10 * time.Minute)
 	insert := fmt.Sprintf(`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime)
 		VALUES ('r1', 'i1', 'i1-session', %d, %d, 'ok', '{}', '[]', '{}', X'%x', 'pending', '%s');`, now.UnixMilli(), now.Add(time.Hour).UnixMilli(), data, stale.Format("2006-01-02 15:04:05.999999999-07:00"))
-	if err := repo.ApplySchema(insert); err != nil {
+	if err := repo.ExecForTest(insert); err != nil {
 		t.Fatal(err)
 	}
 	runtime, err := strategyoutbox.NewRuntime(strategyoutbox.RuntimeConfig{
@@ -147,7 +146,7 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 	for !runtime.Connected() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	state := strategyhealth.New("strategy", "strategy", "", "")
+	state := healthz.NewState("strategy", "strategy", "", "")
 	state.SetReady(true)
 	response := strategyHealthSnapshot(repo, runtime, state, nil)(context.Background())
 	if response.Ready || response.Details["outbox_stalled"] != true || response.Details["eventbus_connected"] != true {

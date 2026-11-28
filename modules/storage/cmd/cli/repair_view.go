@@ -14,9 +14,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 // defaultRepairTimeout 是 repair-view 的整体时限。要明显大于 storage-view 单元的 TimeoutStopSec（120 秒）：
@@ -198,7 +197,7 @@ func inspectRepairDataset(ctx context.Context, dbPath, spaceID, datasetID string
 	if _, err := os.Stat(dbPath); err != nil {
 		return "", fmt.Errorf("metadata DB %s: %w", dbPath, err)
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sqlitedb.OpenSQL(sqlitedb.Options{Path: dbPath, ReadOnly: true})
 	if err != nil {
 		return "", err
 	}

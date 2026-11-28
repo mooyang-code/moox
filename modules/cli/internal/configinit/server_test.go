@@ -354,16 +354,16 @@ func TestUnknownFieldsAreRejectedEvenWhenTheRestIsValid(t *testing.T) {
 func TestInvalidContentIsExplainedWithoutEchoingSecretsAndKeepsTheTokenUsable(t *testing.T) {
 	h := start(t, time.Minute)
 	request := sampleRequest()
-	request.Notification.WebhookURL = "https://evil.example/hook"
+	request.Admin.Password = "Adm1n-P@ss-" + strings.Repeat("x", 70)
 	body, _ := json.Marshal(request)
 	resp, text := h.request(http.MethodPost, "submit", nil, body)
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("状态 %d，应为 422", resp.StatusCode)
 	}
-	if !strings.Contains(text, "webhook") {
+	if !strings.Contains(text, "password") {
 		t.Fatalf("要告诉用户哪里不对: %s", text)
 	}
-	for _, secret := range []string{"Adm1n-P@ss", "key-example", "pw-control", "pw-storage", "pw-compute", "evil.example"} {
+	for _, secret := range []string{"Adm1n-P@ss", "key-example", "pw-control", "pw-storage", "pw-compute"} {
 		if strings.Contains(text, secret) {
 			t.Fatalf("错误响应泄露了 %q: %s", secret, text)
 		}
@@ -431,7 +431,7 @@ func TestSubmitWritesTheFileAndEndsTheSession(t *testing.T) {
 	if configcrypt.IsEncrypted(config) || !configcrypt.IsEncrypted(raw) {
 		t.Fatal("moox.toml 应明文保存，moox.secrets.toml 应加密保存")
 	}
-	for _, secret := range []string{"Adm1n-P@ss", "key-example", "AKIDexample", "webhook/send?key=abc", "[admin]"} {
+	for _, secret := range []string{"Adm1n-P@ss", "key-example", "AKIDexample", "[admin]"} {
 		if strings.Contains(string(config), secret) || strings.Contains(string(raw), secret) {
 			t.Fatalf("文件里出现了明文秘密 %q", secret)
 		}

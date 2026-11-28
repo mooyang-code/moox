@@ -145,7 +145,7 @@ func serveHealth(addr string, worker *app.App) (func() error, error) {
 		}
 		return healthz.Response{
 			Module: "archive-worker", Ready: snap.Ready, Status: status, Time: time.Now().UTC(),
-			Details: map[string]any{"running": snap.Running, "maintaining": snap.Maintaining, "disk_insufficient": snap.DiskInsufficient, "disk_free_bytes": snap.DiskFree, "reasons": reasons},
+			Details: map[string]any{"running": snap.Running, "following": snap.Following, "maintaining": snap.Maintaining, "disk_insufficient": snap.DiskInsufficient, "disk_free_bytes": snap.DiskFree, "reasons": reasons},
 		}
 	}
 	state.SetReady(true)

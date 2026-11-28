@@ -30,7 +30,7 @@ func (*fakeStore) WriteRows(context.Context, string, string, []storageio.ResultR
 	return nil
 }
 func (*fakeStore) ReportComputed(context.Context, storageio.PeriodMarker) error { return nil }
-func (*fakeStore) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (*fakeStore) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 

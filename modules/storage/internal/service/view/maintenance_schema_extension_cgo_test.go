@@ -38,7 +38,7 @@ func prepareBuiltExtensionIndex(t *testing.T, ctx context.Context, svc *Service)
 		t.Fatal(err)
 	}
 	rowKey := &pb.RowKey{SpaceId: "space", DatasetId: extensionDatasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-10-04T00:00:00Z",
+		SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-10-04T00:00:00Z",
 	}}}
 	if err := engine.Write(ctx, indexID, viewindex.ViewIndexWriteBatch{
 		ViewRevision: 1, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite,
@@ -94,7 +94,7 @@ func TestDatasetColumnAddExtendsIndexWithoutRebuild(t *testing.T) {
 		t.Fatalf("GetViewState 应返回新列：%v", state)
 	}
 	rows, _, err := engine.Query(ctx, indexID, viewindex.QuerySpec{
-		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: extensionDatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
+		Selectors: []viewindex.TimeSeriesSelector{{SubjectID: "BTC-USDT", Freq: "1m"}},
 		Includes:  []string{"bias_20"},
 	})
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 || rows[0].GetFields()[0].GetValue().GetNullValue() != pb.NullValue_NULL_VALUE_NULL {

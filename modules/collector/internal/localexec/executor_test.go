@@ -18,12 +18,12 @@ import (
 
 type nopStorage struct{}
 
-func (nopStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }
+func (nopStorage) UpsertFields(context.Context, []*storagepb.Row) error { return nil }
 
 func backfillEvent(t *testing.T) []byte {
 	t.Helper()
 	from := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
-	item := domain.CollectionItem{InstanceID: "backfill|1m|BTC-USDT", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", StartTime: from.Format(time.RFC3339), EndTime: from.Add(10 * time.Minute).Format(time.RFC3339), BarLimit: 10,
+	item := domain.CollectionItem{InstanceID: "backfill|1m|BTC-USDT", SubjectID: "BTC-USDT", StartTime: from.Format(time.RFC3339), EndTime: from.Add(10 * time.Minute).Format(time.RFC3339), BarLimit: 10,
 		Provider: "binance", SourceID: "spot_http", MarketID: "crypto", InstrumentType: "spot", MarketType: "spot", DataType: "kline", DatasetID: "bars_1m", Frequency: "1m"}
 	request := marketfetch.Request{BatchID: "bf|1", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", MarketID: "crypto", InstrumentType: "spot", DatasetID: "bars_1m", Frequency: "1m",
 		Provider: "binance", SourceID: "spot_http", MarketType: "spot", NodeID: "n", FunctionName: "n", RequestID: "bf|1", PlanRequest: true, Concurrency: 1,

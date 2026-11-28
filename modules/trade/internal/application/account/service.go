@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 var (
@@ -41,19 +41,6 @@ type ExchangeSecret struct {
 	ExtraConfig string
 }
 
-type Store interface {
-	Create(context.Context, tradingaccount.Account) error
-	Get(context.Context, string) (tradingaccount.Account, error)
-	Update(context.Context, UpdateCommand) error
-	SetLeverage(context.Context, string, string, shared.Decimal) error
-	// ListEnabled 返回全部启用的执行账户。
-	ListEnabled(context.Context) ([]tradingaccount.Account, error)
-	// SetInspection 写入复查的结果（账户类型和检测结果）。
-	SetInspection(ctx context.Context, id, credentialSecretID string, mode exchange.AccountMode, inspectionJSON string) error
-	// LogicalAccountName 返回执行账户所属组合账户的名称（启用或停用成员都算），不属于任何组合时返回空串。
-	LogicalAccountName(ctx context.Context, spaceID, tradingAccountID string) (string, error)
-}
-
 type SecretSource interface {
 	GetExchangeSecret(context.Context, string) (ExchangeSecret, error)
 }
@@ -65,13 +52,11 @@ type SymbolConfigs interface {
 }
 
 type SessionState interface {
-	ReadyFor(tradingaccount.Account) bool
+	ReadyFor(store.TradingAccountRecord) bool
 }
 
 type Service struct {
-	Store Store
-	// RawStore 用于模拟账户的原子建户/关停事务；未显式设置时自动从 Repository 提取。
-	RawStore           *store.Store
+	Store              *store.Store
 	NewID              func() string
 	Secrets            SecretSource
 	SessionState       SessionState
@@ -99,166 +84,212 @@ type UpdateCommand struct {
 
 func (s *Service) Create(
 	ctx context.Context,
-	value tradingaccount.Account,
-) (tradingaccount.Account, error) {
+	value store.TradingAccountRecord,
+) (store.TradingAccountRecord, error) {
 	if s == nil || s.Store == nil {
-		return tradingaccount.Account{}, ErrServiceNotConfigured
+		return store.TradingAccountRecord{}, ErrServiceNotConfigured
 	}
 	// 场所校验在前：A 股实盘先报“QMT 执行端尚未接入”，不让用户先碰到凭据、检测之类的错误。
-	if err := execution.ValidateAccount(s.Exchanges, value.Exchange, value.Markets, value.SettlementAsset, value.ExecutionMode); err != nil {
-		return tradingaccount.Account{}, fmt.Errorf("%w: %v", tradingaccount.ErrInvalidAccount, err)
+	if err := execution.ValidateAccount(
+		s.Exchanges,
+		exchange.Exchange(value.Exchange),
+		value.MarketTypes(),
+		value.SettlementAsset,
+		exchange.ExecutionMode(value.ExecutionMode),
+	); err != nil {
+		return store.TradingAccountRecord{}, fmt.Errorf("%w: %v", tradingaccount.ErrInvalidAccount, err)
 	}
 	if err := value.Validate(); err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
-	if value.ExecutionMode == exchange.ExecutionModeLive &&
-		liveEnvironment(value) == exchange.AccountEnvironmentProduction &&
+	if value.ExecutionMode == string(exchange.ExecutionModeLive) &&
+		value.EffectiveEnvironment() == exchange.AccountEnvironmentProduction &&
 		!s.LiveTradingEnabled {
-		return tradingaccount.Account{}, ErrLiveTradingDisabled
+		return store.TradingAccountRecord{}, ErrLiveTradingDisabled
 	}
 	if err := s.validateCredential(ctx, value); err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
 	if err := s.rejectDuplicateCredential(ctx, value); err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
 	// 必须先检测通过：账户类型和权限靠检测得到，不靠手填。
 	value, err := s.inspectForSave(ctx, value)
 	if err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
-	if err := s.Store.Create(ctx, value); err != nil {
-		return tradingaccount.Account{}, err
+	if value.ExecutionMode == string(exchange.ExecutionModePaper) {
+		value.Environment = string(exchange.AccountEnvironmentPaper)
+		if value.PaperConfig != nil {
+			cfg := *value.PaperConfig
+			cfg.SpaceID, cfg.TradingAccountID = value.SpaceID, value.TradingAccountID
+			value.PaperConfig = &cfg
+		}
 	}
-	return value, nil
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(value)
+	}); err != nil {
+		return store.TradingAccountRecord{}, err
+	}
+	return s.getAccount(ctx, value.TradingAccountID)
 }
 
 func (s *Service) Update(
 	ctx context.Context,
 	command UpdateCommand,
-) (tradingaccount.Account, *logicalaccount.Account, error) {
+) (store.TradingAccountRecord, error) {
 	if s == nil || s.Store == nil {
-		return tradingaccount.Account{}, nil, ErrServiceNotConfigured
+		return store.TradingAccountRecord{}, ErrServiceNotConfigured
 	}
 	if strings.TrimSpace(command.TradingAccountID) == "" {
-		return tradingaccount.Account{}, nil, tradingaccount.ErrInvalidAccount
+		return store.TradingAccountRecord{}, tradingaccount.ErrInvalidAccount
 	}
-	current, err := s.Store.Get(ctx, command.TradingAccountID)
+	current, err := s.getAccount(ctx, command.TradingAccountID)
 	if err != nil {
-		return tradingaccount.Account{}, nil, err
+		return store.TradingAccountRecord{}, err
 	}
-	if current.ExecutionMode == exchange.ExecutionModePaper {
+	if current.ExecutionMode == string(exchange.ExecutionModePaper) {
 		if command.Name != nil || command.CredentialSecretID != nil ||
 			command.SettlementAsset != nil || command.MarginMode != nil ||
 			(command.Status != nil && *command.Status != exchange.AccountStatusDisabled) {
-			return tradingaccount.Account{}, nil, ErrPaperAccountImmutable
+			return store.TradingAccountRecord{}, ErrPaperAccountImmutable
 		}
 		closing := command.Status != nil && *command.Status == exchange.AccountStatusDisabled
 		if closing && command.OrderRetentionDays != nil {
-			return tradingaccount.Account{}, nil, fmt.Errorf("%w: 关闭模拟账户时不能同时修改订单保留天数", tradingaccount.ErrInvalidAccount)
+			return store.TradingAccountRecord{}, fmt.Errorf("%w: 关闭模拟账户时不能同时修改订单保留天数", tradingaccount.ErrInvalidAccount)
 		}
 		if command.OrderRetentionDays != nil {
 			if !tradingaccount.ValidOrderRetentionDays(*command.OrderRetentionDays) {
-				return tradingaccount.Account{}, nil, ErrInvalidOrderRetention
+				return store.TradingAccountRecord{}, ErrInvalidOrderRetention
 			}
-			retentionOnly := UpdateCommand{
-				TradingAccountID:   command.TradingAccountID,
-				OrderRetentionDays: command.OrderRetentionDays,
+			unlock, lockErr := s.Store.LockTradingAccountContext(ctx, current.TradingAccountID)
+			if lockErr != nil {
+				return store.TradingAccountRecord{}, lockErr
 			}
-			if err := s.Store.Update(ctx, retentionOnly); err != nil {
-				return tradingaccount.Account{}, nil, err
-			}
-		}
-		var affectedLogical *logicalaccount.Account
-		if closing {
-			closed, err := s.ClosePaperAccount(ctx, current.SpaceID, current.ID)
+			err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+				return tx.SetPaperOrderRetentionDays(current.SpaceID, current.TradingAccountID, *command.OrderRetentionDays)
+			})
+			unlock()
 			if err != nil {
-				return tradingaccount.Account{}, nil, err
-			}
-			if closed.LogicalAccount.LogicalAccountID != "" {
-				affectedLogical = &logicalaccount.Account{
-					ControlMode:     logicalaccount.ControlMode(closed.LogicalAccount.ControlMode),
-					SpaceID:         closed.LogicalAccount.SpaceID,
-					ID:              closed.LogicalAccount.LogicalAccountID,
-					Name:            closed.LogicalAccount.Name,
-					ExecutionMode:   exchange.ExecutionMode(closed.LogicalAccount.ExecutionMode),
-					SettlementAsset: closed.LogicalAccount.SettlementAsset,
-					AutomationState: logicalaccount.AutomationState(closed.LogicalAccount.AutomationState),
-					PauseReason:     closed.LogicalAccount.PauseReason,
-				}
+				return store.TradingAccountRecord{}, err
 			}
 		}
-		updated, err := s.Store.Get(ctx, command.TradingAccountID)
-		return updated, affectedLogical, err
+		if closing {
+			return s.ClosePaperAccount(ctx, current.SpaceID, current.TradingAccountID)
+		}
+		return s.getAccount(ctx, command.TradingAccountID)
 	}
 	if command.OrderRetentionDays != nil {
-		return tradingaccount.Account{}, nil, ErrOrderRetentionPaperOnly
+		return store.TradingAccountRecord{}, ErrOrderRetentionPaperOnly
 	}
 	projected := current
 	applyUpdate(&projected, command)
 	if err := projected.Validate(); err != nil {
-		return tradingaccount.Account{}, nil, err
+		return store.TradingAccountRecord{}, err
 	}
 	if command.SettlementAsset != nil {
-		if err := execution.ValidateAccount(s.Exchanges, projected.Exchange, projected.Markets, projected.SettlementAsset, projected.ExecutionMode); err != nil {
-			return tradingaccount.Account{}, nil, fmt.Errorf("%w: %v", tradingaccount.ErrInvalidAccount, err)
+		if err := execution.ValidateAccount(
+			s.Exchanges,
+			exchange.Exchange(projected.Exchange),
+			projected.MarketTypes(),
+			projected.SettlementAsset,
+			exchange.ExecutionMode(projected.ExecutionMode),
+		); err != nil {
+			return store.TradingAccountRecord{}, fmt.Errorf("%w: %v", tradingaccount.ErrInvalidAccount, err)
 		}
 	}
-	if current.Status == exchange.AccountStatusEnabled && projected.Status != exchange.AccountStatusEnabled {
-		name, err := s.Store.LogicalAccountName(ctx, current.SpaceID, current.ID)
+	if current.Status == string(exchange.AccountStatusEnabled) && projected.Status != string(exchange.AccountStatusEnabled) {
+		name, err := s.logicalAccountName(ctx, current.SpaceID, current.TradingAccountID)
 		if err != nil {
-			return tradingaccount.Account{}, nil, err
+			return store.TradingAccountRecord{}, err
 		}
 		if name != "" {
-			return tradingaccount.Account{}, nil, fmt.Errorf("%w（组合账户 %s）", ErrAccountInLogicalAccount, name)
+			return store.TradingAccountRecord{}, fmt.Errorf("%w（组合账户 %s）", ErrAccountInLogicalAccount, name)
 		}
 	}
-	if current.Status != exchange.AccountStatusEnabled &&
-		projected.Status == exchange.AccountStatusEnabled &&
-		projected.ExecutionMode == exchange.ExecutionModeLive &&
-		liveEnvironment(projected) == exchange.AccountEnvironmentProduction &&
+	if current.Status != string(exchange.AccountStatusEnabled) &&
+		projected.Status == string(exchange.AccountStatusEnabled) &&
+		projected.ExecutionMode == string(exchange.ExecutionModeLive) &&
+		projected.EffectiveEnvironment() == exchange.AccountEnvironmentProduction &&
 		!s.LiveTradingEnabled {
-		return tradingaccount.Account{}, nil, ErrLiveTradingDisabled
+		return store.TradingAccountRecord{}, ErrLiveTradingDisabled
 	}
 	if command.CredentialSecretID != nil ||
 		(command.Status != nil && *command.Status == exchange.AccountStatusEnabled) {
 		if err := s.validateCredential(ctx, projected); err != nil {
-			return tradingaccount.Account{}, nil, err
+			return store.TradingAccountRecord{}, err
 		}
 		if err := s.rejectDuplicateCredential(ctx, projected); err != nil {
-			return tradingaccount.Account{}, nil, err
+			return store.TradingAccountRecord{}, err
 		}
 		// 换密钥或重新启用：必须重新检测通过才保存，账户类型随之更新。
 		inspected, err := s.inspectForSave(ctx, projected)
 		if err != nil {
-			return tradingaccount.Account{}, nil, err
+			return store.TradingAccountRecord{}, err
 		}
-		if projected.ExecutionMode == exchange.ExecutionModeLive {
-			command.AccountMode, command.InspectionJSON = &inspected.AccountMode, &inspected.InspectionJSON
+		if projected.ExecutionMode == string(exchange.ExecutionModeLive) {
+			mode := exchange.AccountMode(inspected.AccountMode)
+			command.AccountMode, command.InspectionJSON = &mode, &inspected.InspectionJSON
 		}
 	}
-	if err := s.Store.Update(ctx, command); err != nil {
-		return tradingaccount.Account{}, nil, err
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, command.TradingAccountID)
+	if lockErr != nil {
+		return store.TradingAccountRecord{}, lockErr
 	}
-	updated, err := s.Store.Get(ctx, command.TradingAccountID)
-	return updated, nil, err
+	defer unlock()
+	latest, err := s.getAccount(ctx, command.TradingAccountID)
+	if err != nil {
+		return store.TradingAccountRecord{}, err
+	}
+	applyUpdate(&latest, command)
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.UpdateTradingAccountConfiguration(
+			latest.SpaceID,
+			latest.TradingAccountID,
+			store.TradingAccountConfiguration{
+				Name:               latest.Name,
+				CredentialSecretID: latest.CredentialSecretID,
+				SettlementAsset:    latest.SettlementAsset,
+				MarginMode:         latest.MarginMode,
+				Status:             latest.Status,
+			},
+		); err != nil {
+			return err
+		}
+		// 换密钥或重新启用时在同一个事务里写入重新检测的结果，检测通过才保存。
+		if command.InspectionJSON != nil {
+			return tx.SetTradingAccountInspection(
+				latest.SpaceID,
+				latest.TradingAccountID,
+				latest.CredentialSecretID,
+				latest.AccountMode,
+				latest.InspectionJSON,
+			)
+		}
+		return nil
+	}); err != nil {
+		return store.TradingAccountRecord{}, err
+	}
+	return s.getAccount(ctx, command.TradingAccountID)
 }
 
 // rejectDuplicateCredential 保证一把密钥（交易所、环境、密钥 ID）全局只有一个启用的执行账户：
 // 两个会话看到同一批订单，会互相当成外部订单，组合账户被自动暂停。
 // 账户同时做现货和合约，所以不管市场是否相同都冲突；表上的唯一索引兜底并发。
-func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingaccount.Account) error {
-	if value.ExecutionMode != exchange.ExecutionModeLive || value.Status != exchange.AccountStatusEnabled {
+func (s *Service) rejectDuplicateCredential(ctx context.Context, value store.TradingAccountRecord) error {
+	if value.ExecutionMode != string(exchange.ExecutionModeLive) || value.Status != string(exchange.AccountStatusEnabled) {
 		return nil
 	}
-	accounts, err := s.Store.ListEnabled(ctx)
+	accounts, err := s.Store.ListEnabledTradingAccounts(ctx)
 	if err != nil {
 		return err
 	}
 	for _, other := range accounts {
-		if other.ID != value.ID && other.ExecutionMode == exchange.ExecutionModeLive &&
-			other.Exchange == value.Exchange && liveEnvironment(other) == liveEnvironment(value) &&
-			credentialSecret(other) == credentialSecret(value) {
+		if other.TradingAccountID != value.TradingAccountID &&
+			other.ExecutionMode == string(exchange.ExecutionModeLive) &&
+			other.Exchange == value.Exchange &&
+			other.EffectiveEnvironment() == value.EffectiveEnvironment() &&
+			other.CredentialSecretID == value.CredentialSecretID {
 			return fmt.Errorf("%w: 账户“%s”已在使用这把密钥，一把密钥只能对应一个执行账户", tradingaccount.ErrInvalidAccount, other.Name)
 		}
 	}
@@ -285,17 +316,26 @@ func (s *Service) SetLeverage(
 		leverage.Cmp(shared.Zero()) <= 0 {
 		return tradingaccount.ErrInvalidAccount
 	}
-	current, err := s.Store.Get(ctx, tradingAccountID)
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
+	current, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return err
 	}
 	if !current.HasLeverageMarket() {
 		return tradingaccount.ErrInvalidAccount
 	}
-	if current.ExecutionMode == exchange.ExecutionModePaper {
+	if current.ExecutionMode == string(exchange.ExecutionModePaper) {
 		return ErrPaperAccountImmutable
 	}
-	if err := s.Store.SetLeverage(ctx, tradingAccountID, leverageKey, leverage); err != nil {
+	settings := cloneLeverage(current.LeverageSettings)
+	settings[leverageKey] = leverage.String()
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetTradingAccountLeverage(current.SpaceID, current.TradingAccountID, settings)
+	}); err != nil {
 		return err
 	}
 	// 不重启会话，只让该标的下次开仓前重新设置。
@@ -312,85 +352,134 @@ func (s *Service) SetLeverage(
 func (s *Service) ExecutionEligibility(
 	ctx context.Context,
 	tradingAccountID string,
-) (tradingaccount.Account, error) {
+) (store.TradingAccountRecord, error) {
 	if s == nil || s.Store == nil {
-		return tradingaccount.Account{}, ErrServiceNotConfigured
+		return store.TradingAccountRecord{}, ErrServiceNotConfigured
 	}
 	if s.SessionState == nil {
-		return tradingaccount.Account{}, ErrServiceNotConfigured
+		return store.TradingAccountRecord{}, ErrServiceNotConfigured
 	}
-	current, err := s.Store.Get(ctx, tradingAccountID)
+	current, err := s.getAccount(ctx, tradingAccountID)
 	if err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
 	// 持久化的同步状态与当前会话状态必须同时就绪：私有流的持仓/成交更新会把持久化状态置为“等待完整同步”，
 	// 此时会话仍然就绪，不能让会话状态把它覆盖回可交易（否则会用尚未同步的资金信息通过准入）。
 	current.Ready = current.Ready && s.SessionState.ReadyFor(current)
 	if err := current.ExecutionEligibility(); err != nil {
-		return tradingaccount.Account{}, err
+		return store.TradingAccountRecord{}, err
 	}
-	if liveEnvironment(current) == exchange.AccountEnvironmentProduction &&
+	if current.ExecutionMode == string(exchange.ExecutionModeLive) &&
+		current.EffectiveEnvironment() == exchange.AccountEnvironmentProduction &&
 		!s.LiveTradingEnabled {
-		return tradingaccount.Account{}, ErrLiveTradingDisabled
+		return store.TradingAccountRecord{}, ErrLiveTradingDisabled
 	}
 	return current, nil
 }
 
+func (s *Service) getAccount(ctx context.Context, id string) (store.TradingAccountRecord, error) {
+	record, err := s.Store.GetTradingAccountByID(ctx, id)
+	if err != nil {
+		return store.TradingAccountRecord{}, err
+	}
+	if record.ExecutionMode == string(exchange.ExecutionModePaper) && record.PaperConfig == nil {
+		if cfg, cfgErr := s.Store.GetPaperAccountConfig(ctx, record.SpaceID, record.TradingAccountID); cfgErr == nil {
+			record.PaperConfig = &cfg
+		}
+	}
+	return record, nil
+}
+
+func (s *Service) logicalAccountName(ctx context.Context, spaceID, tradingAccountID string) (string, error) {
+	logical, _, err := s.Store.FindLogicalAccountMembership(ctx, spaceID, tradingAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return logical.Name, nil
+}
+
+func (s *Service) setInspection(ctx context.Context, id, credentialSecretID string, mode exchange.AccountMode, inspectionJSON string) error {
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, id)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
+	current, err := s.Store.GetTradingAccountByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetTradingAccountInspection(current.SpaceID, current.TradingAccountID, credentialSecretID, string(mode), inspectionJSON)
+	})
+}
+
 func (s *Service) validateCredential(
 	ctx context.Context,
-	value tradingaccount.Account,
+	value store.TradingAccountRecord,
 ) error {
-	if value.ExecutionMode == exchange.ExecutionModePaper {
+	if value.ExecutionMode == string(exchange.ExecutionModePaper) {
 		return nil
 	}
 	if s.Secrets == nil {
 		return ErrServiceNotConfigured
 	}
-	secretID := credentialSecret(value)
-	secret, err := s.Secrets.GetExchangeSecret(ctx, secretID)
+	secret, err := s.Secrets.GetExchangeSecret(ctx, value.CredentialSecretID)
 	if err != nil {
 		return err
 	}
-	if secret.SecretID != secretID ||
+	if secret.SecretID != value.CredentialSecretID ||
 		secret.Category != "exchange" ||
-		secret.Exchange != value.Exchange ||
+		secret.Exchange != exchange.Exchange(value.Exchange) ||
 		secret.Status != "active" {
 		return ErrInvalidCredential
 	}
 	return nil
 }
 
-func applyUpdate(value *tradingaccount.Account, command UpdateCommand) {
+func applyUpdate(value *store.TradingAccountRecord, command UpdateCommand) {
 	if command.Name != nil {
 		value.Name = *command.Name
 	}
 	if command.CredentialSecretID != nil {
 		value.CredentialSecretID = *command.CredentialSecretID
-		// 实盘账户的凭据同时存在于 Live 配置里，落库读取的是 Live 的值：两处必须一起更新，否则换凭据成功返回却仍保存旧凭据
-		if value.Live != nil {
-			live := *value.Live
-			live.CredentialSecretID = *command.CredentialSecretID
-			value.Live = &live
-		}
 	}
 	if command.SettlementAsset != nil {
 		value.SettlementAsset = *command.SettlementAsset
 	}
 	if command.MarginMode != nil {
-		value.MarginMode = *command.MarginMode
+		value.MarginMode = string(*command.MarginMode)
 	}
 	if command.Status != nil {
-		value.Status = *command.Status
+		value.Status = string(*command.Status)
 	}
-	if command.OrderRetentionDays != nil && value.Paper != nil {
-		paper := *value.Paper
+	if command.OrderRetentionDays != nil && value.PaperConfig != nil {
+		paper := *value.PaperConfig
 		paper.OrderRetentionDays = *command.OrderRetentionDays
-		value.Paper = &paper
+		value.PaperConfig = &paper
 	}
 	if command.AccountMode != nil {
-		value.AccountMode = *command.AccountMode
+		value.AccountMode = string(*command.AccountMode)
 	}
 	if command.InspectionJSON != nil {
 		value.InspectionJSON = *command.InspectionJSON
 	}
+}
+
+func cloneLeverage(values store.LeverageSettings) store.LeverageSettings {
+	cloned := make(store.LeverageSettings, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func marketStrings(markets []exchange.MarketType) []string {
+	result := make([]string, len(markets))
+	for i, market := range markets {
+		result[i] = string(market)
+	}
+	return result
 }

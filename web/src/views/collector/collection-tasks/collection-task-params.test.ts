@@ -38,9 +38,9 @@ describe("collection task params", () => {
     });
 
     expect(params).toEqual({
-      subject_tags: ["binance_spot"],
       frequency: "1h"
     });
+    expect(params).not.toHaveProperty("subject_tags");
     expect(params).not.toHaveProperty("target_dataset_id");
   });
 
@@ -211,7 +211,7 @@ describe("collection task params", () => {
       data_type: "kline_resample",
       tag_ids: ["source_tag"],
       enabled: "false",
-      collect_params: '{"provider":"moox","market_type":"spot","target_frequency":"5m"}',
+      collect_params: '{"target_frequency":"5m"}',
       result: { dataset_id: "dataset-1", status: "ready" }
     });
 
@@ -248,7 +248,7 @@ describe("collection task result label", () => {
 });
 
 describe("附加输出字段", () => {
-  // 与后端 GetDataTypeConfigWithFields 的 extra_fields 同形：资金费率只有加密永续、1h/1d；A 股附加字段只有股票日线。
+  // 与后端 GetDataTypeConfigs 的 extra_fields 同形：资金费率只有加密永续、1h/1d；A 股附加字段只有股票日线。
   const options = [
     { field_id: "funding_rate", market_id: "crypto", instrument_type: "swap", frequencies: ["1h", "1d"], provider_id: "binance" },
     { field_id: "adj_factor", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "sina_hfq" },
@@ -289,7 +289,7 @@ describe("附加输出字段", () => {
     expect(available("crypto", "1h", [swap], "kline_resample")).toEqual([]);
   });
 
-  // 基础输出字段来自 GetDataTypeConfigWithFields 的 base_output_fields
+  // 基础输出字段来自 GetDataTypeConfigs 的 base_output_fields
   const base = baseOutputFieldIds([
     { field_id: "open", display_name: "开盘价" },
     { field_id: "close", display_name: "收盘价" },

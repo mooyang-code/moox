@@ -43,7 +43,7 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 {
 		t.Fatalf("query: rsp=%v err=%v", rsp, err)
 	}
-	if rsp.GetRows()[0].GetKey().GetSubjectId() != "ETH" || rsp.GetRows()[0].GetFields()[0].GetValue().GetDoubleValue() != 200 {
+	if rsp.GetRows()[0].GetKey().GetTimeSeries().GetSubjectId() != "ETH" || rsp.GetRows()[0].GetFields()[0].GetValue().GetDoubleValue() != 200 {
 		t.Fatalf("unexpected first page: %v", rsp.GetRows()[0])
 	}
 	if rsp.GetPageResult().GetTotal() != 2 || !rsp.GetPageResult().GetHasMore() {
@@ -53,7 +53,7 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 
 func viewRow(subject, dataTime string, close float64, volume int64) viewindex.RowWrite {
 	return viewindex.RowWrite{
-		Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: "1m", DataTime: dataTime}}}},
+		Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Frequency: "1m", DataTime: dataTime}}}},
 		Fields: []*pb.FieldValue{
 			{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: close}}},
 			{FieldId: "volume", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: volume}}},
@@ -93,7 +93,7 @@ func attachPrebuiltView(t *testing.T, service *viewservice.Service, spaceID, dat
 	for _, column := range columns {
 		items = append(items, &pb.DatasetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: column.ColumnName, DisplayName: column.ColumnName, ValueType: column.ValueType, Status: "active"})
 	}
-	metadata.addDataset(&pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active", CreatedAt: followEnvDatasetCreatedAt}, items...)
+	metadata.addDataset(&pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "active", CreatedAt: followEnvDatasetCreatedAt}, items...)
 	if err := service.RestoreActiveViews(context.Background(), viewservice.MaintenanceOptions{Metadata: metadata}); err != nil {
 		t.Fatal(err)
 	}

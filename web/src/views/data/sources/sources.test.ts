@@ -20,8 +20,7 @@ vi.mock("vue-router", async () => {
 
 const api = vi.hoisted(() => ({
   listDataSources: vi.fn(async () => ({ data_sources: [], page_result: { total: 0 } })),
-  createDataSource: vi.fn(async () => ({})),
-  updateDataSource: vi.fn(async () => ({})),
+  upsertDataSource: vi.fn(async () => ({})),
   listAllDatasets: vi.fn(async () => [
     {
       space_id: "crypto",
@@ -29,7 +28,7 @@ const api = vi.hoisted(() => ({
       data_source_id: "binance",
       name: "现货 1m",
       data_kind: "DATA_KIND_TIME_SERIES",
-      freq: "1m",
+      frequency: "1m",
       status: "active",
       attributes: { owner_module: "collector", dataset_role: "raw_collection" }
     },
@@ -47,7 +46,7 @@ const api = vi.hoisted(() => ({
       data_source_id: "factor",
       name: "因子结果",
       data_kind: "DATA_KIND_TIME_SERIES",
-      freq: "1m",
+      frequency: "1m",
       status: "active",
       attributes: { owner_module: "factor", dataset_role: "factor_result" }
     }
@@ -94,37 +93,43 @@ const api = vi.hoisted(() => ({
 vi.mock("@/api/storage/metadata", () => api);
 
 const collector = vi.hoisted(() => ({
-  GetDataTypeConfigWithFields: vi.fn(async () => ({
-    detail: {
-      base_output_fields: [
-        { field_id: "open", display_name: "开盘价", group: "行情价格", value_type: "double" },
-        { field_id: "close", display_name: "收盘价", group: "行情价格", value_type: "double" }
-      ],
-      extra_fields: [
-        {
-          field_id: "funding_rate",
-          display_name: "资金费率",
-          group: "合约指标",
-          market_id: "crypto",
-          instrument_type: "swap",
-          frequencies: ["1h", "1d"],
-          provider_id: "binance",
-          value_type: "double",
-          fill: "zero"
-        },
-        {
-          field_id: "adj_factor",
-          display_name: "后复权因子",
-          group: "复权",
-          market_id: "stockcn",
-          instrument_type: "equity",
-          frequencies: ["1d"],
-          provider_id: "sina_hfq",
-          value_type: "double",
-          fill: "prev"
-        }
-      ]
-    }
+  GetDataTypeConfigs: vi.fn(async () => ({
+    configs: [
+      {
+        data_type: "kline",
+        type_name: "K 线",
+        base_output_fields: [
+          { field_id: "open", display_name: "开盘价", group: "行情价格", value_type: "double" },
+          { field_id: "close", display_name: "收盘价", group: "行情价格", value_type: "double" }
+        ],
+        extra_fields: [
+          {
+            field_id: "funding_rate",
+            display_name: "资金费率",
+            group: "合约指标",
+            market_id: "crypto",
+            instrument_type: "swap",
+            frequencies: ["1h", "1d"],
+            provider_id: "binance",
+            provider_name: "Binance",
+            value_type: "double",
+            fill: "zero"
+          },
+          {
+            field_id: "adj_factor",
+            display_name: "后复权因子",
+            group: "复权",
+            market_id: "stockcn",
+            instrument_type: "equity",
+            frequencies: ["1d"],
+            provider_id: "sina_hfq",
+            provider_name: "新浪复权因子",
+            value_type: "double",
+            fill: "prev"
+          }
+        ]
+      }
+    ]
   }))
 }));
 vi.mock("@/api/collector", () => collector);
@@ -161,7 +166,7 @@ beforeEach(() => {
   routeMocks.replace.mockReset().mockImplementation(async ({ query }: { query: Record<string, string> }) => {
     routeMocks.route!.query = query;
   });
-  api.createDataSource.mockReset().mockResolvedValue({});
+  api.upsertDataSource.mockReset().mockResolvedValue({});
   api.listAllDatasetColumns.mockClear();
 });
 afterEach(() => {
@@ -198,7 +203,7 @@ describe("数据源弹窗", () => {
     const vm = await openCreateDialog();
     vm.form.name = "币安";
     await clickOk();
-    expect(api.createDataSource).not.toHaveBeenCalled();
+    expect(api.upsertDataSource).not.toHaveBeenCalled();
     expect(vm.visible).toBe(true);
     expect(vm.form.name).toBe("币安");
   });
@@ -206,14 +211,18 @@ describe("数据源弹窗", () => {
   it("保存失败时弹窗不关，填的内容还在；成功后才关", async () => {
     const vm = await openCreateDialog();
     Object.assign(vm.form, { data_source_id: "binance", name: "币安" });
-    api.createDataSource.mockRejectedValueOnce(new Error("服务不可用"));
+    api.upsertDataSource.mockRejectedValueOnce(new Error("服务不可用"));
     await clickOk();
-    expect(api.createDataSource).toHaveBeenCalledTimes(1);
+    expect(api.upsertDataSource).toHaveBeenCalledTimes(1);
+    expect(api.upsertDataSource).toHaveBeenLastCalledWith(
+      expect.objectContaining({ space_id: "crypto", data_source_id: "binance", name: "币安" }),
+      true
+    );
     expect(vm.visible).toBe(true);
     expect(vm.form.data_source_id).toBe("binance");
 
     await clickOk();
-    expect(api.createDataSource).toHaveBeenCalledTimes(2);
+    expect(api.upsertDataSource).toHaveBeenCalledTimes(2);
     expect(vm.visible).toBe(false);
   });
 });
@@ -226,7 +235,8 @@ describe("附加字段来源与字段定义页签", () => {
       market_id: "stockcn",
       instrument_type: "equity",
       frequencies: ["1d"],
-      provider_id: "sina_hfq"
+      provider_id: "sina_hfq",
+      provider_name: "新浪复权因子"
     },
     {
       field_id: "sw_l1",
@@ -234,7 +244,8 @@ describe("附加字段来源与字段定义页签", () => {
       market_id: "stockcn",
       instrument_type: "equity",
       frequencies: ["1d"],
-      provider_id: "swsresearch"
+      provider_id: "swsresearch",
+      provider_name: "申万行业分类"
     },
     { field_id: "sw_l2", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "swsresearch" },
     {
@@ -250,22 +261,23 @@ describe("附加字段来源与字段定义页签", () => {
       market_id: "crypto",
       instrument_type: "swap",
       frequencies: ["1h", "1d"],
-      provider_id: "binance"
+      provider_id: "binance",
+      provider_name: "Binance"
     }
   ];
 
-  it("按提供方归并当前空间的附加字段，带中文名和各自的字段", () => {
+  it("按提供方归并当前空间的附加字段，直接使用接口的提供方显示名并在缺失时回落为 ID", () => {
     expect(buildExtraFieldSources(options, "stockcn")).toEqual([
       {
         provider_id: "sina_hfq",
-        name: "复权因子（新浪）",
+        name: "新浪复权因子",
         instruments: "股票",
         frequencies: "1d",
         fields: [{ field_id: "adj_factor", name: "后复权因子" }]
       },
       {
         provider_id: "swsresearch",
-        name: "申万行业",
+        name: "申万行业分类",
         instruments: "股票",
         frequencies: "1d",
         fields: [
@@ -275,14 +287,14 @@ describe("附加字段来源与字段定义页签", () => {
       },
       {
         provider_id: "sina_finance",
-        name: "财务报表（新浪）",
+        name: "sina_finance",
         instruments: "股票",
         frequencies: "1d",
         fields: [{ field_id: "fin_revenue", name: "fin_revenue" }]
       }
     ]);
     expect(buildExtraFieldSources(options, "crypto").map(row => [row.name, row.instruments, row.frequencies])).toEqual([
-      ["资金费率（币安）", "永续", "1h、1d"]
+      ["Binance", "永续", "1h、1d"]
     ]);
     expect(buildExtraFieldSources(options, "other")).toEqual([]);
   });
@@ -291,7 +303,7 @@ describe("附加字段来源与字段定义页签", () => {
     await mountSourcesPage("crypto");
     const section = wrapper.find(".extra-sources");
     expect(section.exists()).toBe(true);
-    expect(section.text()).toContain("资金费率（币安）");
+    expect(section.text()).toContain("Binance");
     expect(section.text()).toContain("共 1 个字段");
     expect(section.text()).not.toContain("复权因子");
 
@@ -301,7 +313,7 @@ describe("附加字段来源与字段定义页签", () => {
     await flushPromises();
 
     expect(routeMocks.route!.query).toEqual({ tab: "fields", provider: "binance" });
-    expect(wrapper.text()).toContain("来源：资金费率（币安）");
+    expect(wrapper.text()).toContain("来源：Binance");
     expect(wrapper.text()).toContain("funding_rate");
     expect(wrapper.text()).not.toContain("open");
   });
@@ -333,20 +345,13 @@ describe("附加字段来源与字段定义页签", () => {
     expect(wrapper.find(".field-total").text()).toContain("共 1 个字段");
   });
 
-  it("keep-alive 缓存后切空间并从附加字段来源跳入字段定义，保留提供方筛选并加载新空间字段", async () => {
+  it("切空间重建页面后从附加字段来源跳入字段定义，保留提供方筛选并加载新空间字段", async () => {
     await mountSourcesPage("crypto", { tab: "fields" });
     expect(wrapper.text()).toContain("资金费率");
 
-    // 切回数据源页签，使 FieldsTab 进入 keep-alive 失活态
-    const sourceTabBtn = wrapper.findAll("[role='tab']").find(btn => btn.text().includes("数据源"));
-    expect(sourceTabBtn).toBeDefined();
-    await sourceTabBtn!.trigger("click");
-    await flushPromises();
-
-    // 在数据源页签切换到 stockcn 空间
-    const spaceStore = useSpaceStore();
-    spaceStore.setSelectedSpace("stockcn");
-    await flushPromises();
+    // 模拟主视图切空间重建：旧页面（含内部 keep-alive）卸载，按新空间重新挂载
+    wrapper.unmount();
+    await mountSourcesPage("stockcn", {});
 
     // 点击 stockcn 的附加字段来源「查看 →」跳入字段定义页签
     const viewLink = wrapper
@@ -358,7 +363,7 @@ describe("附加字段来源与字段定义页签", () => {
     await flushPromises();
 
     expect(routeMocks.route!.query).toEqual({ tab: "fields", provider: "sina_hfq" });
-    expect(wrapper.text()).toContain("来源：复权因子（新浪）");
+    expect(wrapper.text()).toContain("来源：新浪复权因子");
     expect(wrapper.text()).toContain("后复权因子");
     expect(wrapper.text()).not.toContain("开盘价");
   });
@@ -397,7 +402,7 @@ describe("附加字段来源与字段定义页签", () => {
     expect(wrapper.find(".field-total").text()).toContain("共 4 个字段");
     wrapper.unmount();
 
-    collector.GetDataTypeConfigWithFields.mockRejectedValueOnce(new Error("collector down"));
+    collector.GetDataTypeConfigs.mockRejectedValueOnce(new Error("collector down"));
     api.listAllDatasets.mockRejectedValueOnce(new Error("storage down"));
     await mountSourcesPage("crypto", { tab: "fields" });
     expect(wrapper.find(".field-warning-alert").text()).toContain("采集字段规格与当前空间数据集列均加载失败");

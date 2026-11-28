@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -14,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -34,7 +34,7 @@ func queueDelist(t *testing.T, db *store.Store, registry *events.Registry, symbo
 	delistAt := time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)
 	eventID := events.InstrumentDelistEventID("binance", events.DelistMarketSpot, symbol, events.DelistScopeAll, delistAt)
 	subject := events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, symbol)
-	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
+	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, &eventpb.InstrumentDelistScheduled{
 		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: symbol, DelistAt: delistAt.UnixMilli(),
 		Source: events.DelistSourceManual, FirstSeenAt: delistAt.Add(-time.Hour).UnixMilli(), Scope: events.DelistScopeAll,
 	}, events.PublishOptions{EventID: eventID, OccurredAt: delistAt.Add(-time.Hour), SpaceID: events.SystemSpaceID, SubjectID: subject})

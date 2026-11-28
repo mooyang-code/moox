@@ -1,4 +1,5 @@
 import { call, type CallOptions } from "@/api/http";
+import type { Page, PageResult } from "@/api/page";
 
 export type HealthLevel = "ok" | "warn" | "error";
 
@@ -115,6 +116,7 @@ export interface IngestMode {
   task_id?: string;
   ingest?: string;
   effective_periods?: Record<string, string>;
+  enabled?: boolean;
 }
 
 /** 一个数据集（某个频率）首次接入时的历史补齐记录；补齐期间下游因子不计算、策略不求值。 */
@@ -174,11 +176,11 @@ export interface KlineBackfillJob {
   /** Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
-  pending?: number;
+  queued?: number;
   running?: number;
   succeeded?: number;
   failed?: number;
-  canceled?: number;
+  cancelled?: number;
 }
 
 export interface KlineBackfillChunk {
@@ -240,10 +242,11 @@ export function getCollectorStatus(spaceId: string, options: CallOptions = {}) {
 }
 
 export function listKlineBackfills(spaceId: string, filter: BackfillJobFilter, page = 1, size = 20) {
-  return call<
-    { space_id: string; page: { page: number; size: number } } & BackfillJobFilter,
-    { items?: KlineBackfillJob[]; page?: { total?: number; has_more?: boolean } }
-  >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size }, ...filter });
+  return call<{ space_id: string; page: Page } & BackfillJobFilter, { items?: KlineBackfillJob[]; page_result?: PageResult }>(
+    "collector",
+    "ListKlineBackfills",
+    { space_id: spaceId, page: { page, size }, ...filter }
+  );
 }
 
 export function getKlineBackfill(spaceId: string, jobId: string) {

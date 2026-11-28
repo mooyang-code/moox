@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/resample"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -100,25 +102,26 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 		if !task.Enabled {
 			continue
 		}
-		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		params, err := domain.ParseCollectParams(task.CollectParams, task.DataType)
 		if err != nil {
 			i.registry.ObserveInventoryRefreshError()
 			return fmt.Errorf("parse collector task %q: %w", task.TaskID, err)
 		}
+		targetDatasetID := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID).DatasetID
+		dataType := strings.ToLower(strings.TrimSpace(task.DataType))
 		var validateErr error
-		if params.Collector.DataType == "kline_resample" {
-			validateErr = resample.ValidateTaskParamsBasic(params)
+		if dataType == "kline_resample" {
+			validateErr = resample.ValidateTaskParamsBasic(params, targetDatasetID)
+		} else if dataType == domain.DataTypeKline {
+			validateErr = params.ValidateKline()
 		} else {
-			// Direct collection tasks derive Provider/market routing from their
-			// selected Tags. The task definition itself must therefore be valid
-			// without task-level exchange/market fields.
-			validateErr = params.ValidateTaskDefinition()
+			validateErr = fmt.Errorf("unsupported collector data_type: %s", task.DataType)
 		}
 		if validateErr != nil {
 			i.registry.ObserveInventoryRefreshError()
 			return fmt.Errorf("validate collector task %q: %w", task.TaskID, validateErr)
 		}
-		if params.Collector.DataType == "kline_resample" {
+		if dataType == "kline_resample" {
 			if !i.resampleEnabled {
 				continue
 			}
@@ -131,30 +134,25 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 				return fmt.Errorf("parse resample task %q frequency %q: %w", task.TaskID, params.TargetFrequency, err)
 			}
 			interval := parsed.NominalDuration()
-			key := report.DatasetKey{SpaceID: task.SpaceID, DatasetID: params.TargetDatasetID, Freq: string(parsed)}
+			key := report.DatasetKey{SpaceID: task.SpaceID, DatasetID: targetDatasetID, Freq: string(parsed)}
 			if previous, ok := expected[key]; !ok || interval < previous {
 				expected[key] = interval
 			}
 			continue
 		}
-		if params.Collector.DataType != "kline" {
-			continue
-		}
-		interval, err := domain.ParseScheduleInterval(params.Schedule.Interval)
+		interval, err := domain.ParseScheduleInterval(params.Frequency)
 		if err != nil {
 			i.registry.ObserveInventoryRefreshError()
 			return fmt.Errorf("parse collector task %q schedule: %w", task.TaskID, err)
 		}
-		for _, freq := range params.Collector.Intervals {
-			canonicalFreq, err := frequencypkg.Normalize(freq)
-			if err != nil {
-				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("parse collector task %q frequency %q: %w", task.TaskID, freq, err)
-			}
-			key := report.DatasetKey{SpaceID: task.SpaceID, DatasetID: params.Target.DatasetID, Freq: canonicalFreq}
-			if previous, ok := expected[key]; !ok || interval < previous {
-				expected[key] = interval
-			}
+		canonicalFreq, err := frequencypkg.Normalize(params.Frequency)
+		if err != nil {
+			i.registry.ObserveInventoryRefreshError()
+			return fmt.Errorf("parse collector task %q frequency %q: %w", task.TaskID, params.Frequency, err)
+		}
+		key := report.DatasetKey{SpaceID: task.SpaceID, DatasetID: targetDatasetID, Freq: canonicalFreq}
+		if previous, ok := expected[key]; !ok || interval < previous {
+			expected[key] = interval
 		}
 	}
 

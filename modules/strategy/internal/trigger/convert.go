@@ -3,12 +3,12 @@ package trigger
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"strconv"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 // TargetJSON 是 targets_json 中一个元素的结构。
@@ -95,12 +95,12 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, sessionSta
 	if err != nil {
 		return nil, err
 	}
-	payloadTargets := make([]*tradeeventpb.InstrumentWeightTarget, 0, len(targets))
+	payloadTargets := make([]*eventpb.InstrumentWeightTarget, 0, len(targets))
 	for _, target := range targets {
 		// 策略的市场写法（spot、swap、equity）就是 Trade 事件契约的写法，原样传。
-		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Hold: target.Hold, MarketType: target.Market})
+		payloadTargets = append(payloadTargets, &eventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Hold: target.Hold, MarketType: target.Market})
 	}
-	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
+	payload := &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: *instance.LogicalAccountID,
 		SessionId: result.SessionID, SessionStartedAt: sessionStartedAt, StrategyId: instance.StrategyID,
 		BarEndTime: result.BarEndTime.UnixMilli(), ValidUntil: result.ValidUntil.UnixMilli(),

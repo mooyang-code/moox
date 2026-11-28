@@ -6,7 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,7 +17,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
-	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
@@ -27,11 +29,13 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/dataformat"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -72,7 +76,7 @@ type Runtime struct {
 	// sources 判断数据源当前能不能计算，运行时就是本地数据层 data。
 	sources sourceGate
 	admit   *memadmit.Admitter
-	health  *factorhealth.State
+	health  *healthz.State
 	life    *lifecycle.Controller
 	checks  taskChecks
 	writes  *inflight
@@ -110,7 +114,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r := &Runtime{
 		writes: newInflight(), cfg: cfg, identity: domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: bootID, Version: version},
 		runs: newRunTracker(), monitor: NewHealth(cfg.Pipeline.PeriodBudgetMax), locks: setlock.New(),
-		lease: &leaseState{}, health: factorhealth.New("factor-engine", cfg.Engine.ID, version, ""),
+		lease: &leaseState{}, health: healthz.NewState("factor-engine", cfg.Engine.ID, version, ""),
 	}
 	appCtx, cancel := context.WithCancel(ctx)
 	r.appCtx = appCtx
@@ -150,6 +154,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}
 	r.udf.reclaim = r.reclaimModules
 	r.udf.Host().SetObserver(r.observeUDF)
+	// 打开本地状态前先核对或写入数据格式文件：已有旧格式数据时拒绝启动，不触碰旧状态文件。
+	if err := recordFactorEngineFormat(cfg.SeriesStore.Dir, factorEngineHasData(cfg)); err != nil {
+		return nil, fmt.Errorf("核对或写入因子引擎数据格式文件失败：%w", err)
+	}
 	if r.series, err = seriesstore.Open(seriesstore.Options{Dir: cfg.SeriesStore.Dir, BlockCacheBytes: int64(cfg.SeriesStore.BlockCache)}); err != nil {
 		return nil, fmt.Errorf("open factor series store: %w", err)
 	}
@@ -236,7 +244,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks),
 		recalcexec.WithWatermark(committedThrough{r.continuity}.CommittedThrough),
-		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
+		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)), recalcexec.WithHistory(r.data))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
@@ -283,7 +291,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, func(ctx context.Context) { r.runTaskChecks(ctx, cfg.Lifecycle.Interval) })
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service(healthService), healthz.StandardMux(r.health.Snapshot, promhttp.Handler())); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
 	factorpb.RegisterEngineControlService(s.Service(engineControlService), r.controlService())
@@ -296,6 +304,44 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 // active reports whether this engine may compute: it has a catalog and no
 // other engine holds the lease.
 func (r *Runtime) active() bool { return r.catalog.Loaded() && !r.lease.Conflict() }
+
+// factorEngineHasData 报告因子引擎数据目录是否已有持久化本地状态（与部署预检同口径：不含可重拉的 catalog.json 与 udf/）。
+func factorEngineHasData(cfg *Config) bool {
+	if cfg == nil {
+		return false
+	}
+	paths := []string{
+		cfg.Watermark.StateFile,
+		cfg.Params.CacheFile,
+		cfg.Lifecycle.StateFile,
+	}
+	if dir := strings.TrimSpace(cfg.SeriesStore.Dir); dir != "" {
+		paths = append(paths, filepath.Join(dir, "CURRENT"))
+	}
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return dataformat.DirHasEntries(cfg.Gap.LedgerDir)
+}
+
+func recordFactorEngineFormat(seriesStoreDir string, hadData bool) error {
+	if strings.TrimSpace(seriesStoreDir) == "" {
+		return nil
+	}
+	rec, err := dataformat.Build("factor-engine", map[string]string{
+		dataformat.PartFactorEngineState: strconv.Itoa(dataformat.FactorEngineStateVersion),
+		dataformat.PartLifecycle:         strconv.Itoa(dataformat.LifecycleStateVersion),
+	})
+	if err != nil {
+		return err
+	}
+	return dataformat.VerifyOrWriteDir(filepath.Dir(seriesStoreDir), rec, hadData)
+}
 
 // onCatalogApplied 在每次目录同步成功（含 NotModified）后执行：先清理已删除任务的本地状态，再回收不再引用的自定义算子模块。
 func (r *Runtime) onCatalogApplied() {
@@ -440,7 +486,7 @@ func (r *Runtime) reconcileConsumer() {
 		consumer, err := eventconsumer.NewConsumer(context.Background(), eventconsumer.ConsumerConfig{
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
-			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
+			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity,
 			OnBackfilled: r.onBackfilled,
 			// 模块在运行、任务还没就绪（窗口载入中、检查未通过）时到达的周期只记追赶目标（算过的任务）；暂停期间不记。
 			NoteWhenClosed: func(string) bool { return r.moduleRunning() },

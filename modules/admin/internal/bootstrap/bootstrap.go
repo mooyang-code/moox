@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -47,12 +48,16 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		log.ErrorContextf(ctx, "注册TRPC服务失败: %v", err)
 		return nil, err
 	}
-	// 4. 浏览器入口（9527）：启动时检查或签发网页证书，之后随证书巡检每天检查一次。
+	// 4. 浏览器入口（9527）：启动时检查或签发网页证书，之后随证书巡检每分钟检查一次。
 	web, err := webserver.New(cfg.Web, services.consoleHandler, webui.FS())
 	if err != nil {
 		return nil, err
 	}
-	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB()), web); err != nil {
+	attention, err := report.NewAttention(prometheus.DefaultRegisterer, adminAttentionKinds)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Admin 关注项指标失败: %w", err)
+	}
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB(), attention), web); err != nil {
 		return nil, err
 	}
 	registerMetricsReporter(s)
@@ -90,7 +95,7 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-// certificateRenewer 是浏览器入口：每天随证书巡检检查一次网页证书，剩余不足 30 天就重签。
+// certificateRenewer 是浏览器入口：随证书巡检定期检查网页证书（幂等判断，有效且剩余不少于 30 天时无副作用），剩余不足 30 天时重签。
 type certificateRenewer interface {
 	RefreshCertificate(context.Context) error
 }

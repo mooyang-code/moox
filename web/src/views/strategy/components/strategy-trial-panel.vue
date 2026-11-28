@@ -72,7 +72,7 @@
           <ResultItems :result="result.trial" :items="result.trial_items" />
         </a-tab-pane>
         <a-tab-pane v-if="result.resolved_json" key="binding" title="绑定解析"
-          ><ResolvedTable :resolved-json="result.resolved_json" :pool="pool"
+          ><ResolvedTable :resolved-json="result.resolved_json"
         /></a-tab-pane>
       </a-tabs>
     </template>

@@ -9,6 +9,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/trade/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -39,8 +40,8 @@ func TestReadOnlyView(t *testing.T) {
 
 	err = ro.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other", ExecutionMode: "PAPER",
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "测试",
+			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other", Environment: "PAPER",
+			SettlementAsset: "USDT", PauseReason: "测试",
 		})
 	})
 	require.ErrorContains(t, err, "readonly", "经只读视图写库会被拒绝")
@@ -253,6 +254,11 @@ func TestOpenAcceptsCurrentSchemaOnReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "current.db")
 	first, err := Open(path)
 	require.NoError(t, err)
+	rec, err := dataformat.ReadFile(filepath.Join(filepath.Dir(path), dataformat.FileName))
+	require.NoError(t, err)
+	require.Equal(t, "trade", rec.Component)
+	require.NotEmpty(t, rec.Parts[dataformat.PartSQLiteSchema])
+	require.NotEmpty(t, rec.Parts[dataformat.PartLifecycle])
 	require.NoError(t, first.Close())
 
 	second, err := Open(path)

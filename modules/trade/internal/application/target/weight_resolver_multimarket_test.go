@@ -2,6 +2,7 @@ package target
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,8 +39,8 @@ func newMixedResolverStore(t *testing.T, fundSettings string) *store.Store {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+			Environment:     "PAPER",
+			SettlementAsset: "USDT", PauseReason: "configure",
 			FundSettingsJSON: fundSettings,
 		}); err != nil {
 			return err
@@ -65,21 +65,21 @@ func newMixedResolverStore(t *testing.T, fundSettings string) *store.Store {
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	return tradeStore
 }
 
-func mixedRequest(targets ...*tradeeventpb.InstrumentWeightTarget) *tradeeventpb.LogicalAccountTargetWeightRequested {
-	return &tradeeventpb.LogicalAccountTargetWeightRequested{
+func mixedRequest(targets ...*eventpb.InstrumentWeightTarget) *eventpb.LogicalAccountTargetWeightRequested {
+	return &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
 		BarEndTime: time.UnixMilli(1000).UnixMilli(), ValidUntil: time.UnixMilli(61000).UnixMilli(),
 		Targets: targets,
 	}
 }
 
-func weightTarget(instrumentID, market, weight string) *tradeeventpb.InstrumentWeightTarget {
-	return &tradeeventpb.InstrumentWeightTarget{InstrumentId: instrumentID, MarketType: market, TargetWeight: weight}
+func weightTarget(instrumentID, market, weight string) *eventpb.InstrumentWeightTarget {
+	return &eventpb.InstrumentWeightTarget{InstrumentId: instrumentID, MarketType: market, TargetWeight: weight}
 }
 
 func quantityOf(t *testing.T, conversion WeightConversion, instrumentID string) store.InstrumentQuantity {

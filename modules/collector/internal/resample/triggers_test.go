@@ -3,13 +3,13 @@ package resample
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,8 +23,8 @@ func TestPeriodTriggerResamplesBucketOnLastSourcePeriodOnly(t *testing.T) {
 	for at := utc("2026-10-21T10:00:00Z"); at.Before(utc("2026-10-21T10:30:00Z")); at = at.Add(5 * time.Minute) {
 		storage.putSource("crypto", "dataset_src", "XRP", "5m", "venue:okx", at, 1, 2, 0.5, 1, 1, 1, 1)
 	}
-	payload := func(period time.Time, status string, failed ...string) *storagepb.DatasetPeriodCompleted {
-		return &storagepb.DatasetPeriodCompleted{
+	payload := func(period time.Time, status string, failed ...string) *eventpb.DatasetPeriodCompleted {
+		return &eventpb.DatasetPeriodCompleted{
 			DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: status,
 			UniverseSubjectIds: []string{"BTC", "ETH", "SOL", "XRP"}, FailedSubjects: failed,
 			Source: "ledger", SnapshotRef: "snapshot", CompletedAt: period.Add(6 * time.Minute).UnixMilli(),
@@ -53,7 +53,7 @@ func TestBackfillTriggerSubmitsSourceBackfillJobWithSettleDelay(t *testing.T) {
 		Index: &TaskIndex{Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC"}}}, State: mgr.Resample(), SettleAfter: time.Minute,
 		Now: func() time.Time { return utc("2026-10-21T12:00:00Z") },
 	}
-	payload := &storagepb.CollectorKlineBackfilled{
+	payload := &eventpb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: utc("2026-10-21T10:03:00Z").Unix(), End: utc("2026-10-21T10:20:00Z").Unix(),
 		Origin: "auto", ConfirmedAt: confirmed.UnixMilli(),
 	}
@@ -88,7 +88,7 @@ func (b brokenSource) GetDataset(ctx context.Context, spaceID, datasetID string)
 func TestTaskIndexSkipsTaskWhoseSourceDatasetIsUnavailable(t *testing.T) {
 	mgr := openState(t)
 	seedTask(t, mgr, newFakeStorage(), nil, time.Time{}, time.Time{})
-	params := `{"source_dataset_id":"dataset_gone","source_frequency":"5m","source_series_tag":"venue:binance","target_dataset_id":"dataset_orphan","target_frequency":"15m"}`
+	params := `{"source_dataset_id":"dataset_gone","source_frequency":"5m","source_series_tag":"venue:binance","target_frequency":"15m"}`
 	require.NoError(t, mgr.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "orphan", DataType: "kline_resample", CollectParams: params, Enabled: true,
 		ResultDatasetID: "dataset_orphan", PrepareState: domain.PrepareStateReady,

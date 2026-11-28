@@ -1,6 +1,6 @@
-// Package policysync 每分钟从 Monitor 拉取主机策略（全部告警渠道），写入 <部署根>/data/host-agent/host-policy.json；
-// 同一次调用带上这一分钟采到的主机快照。本机的对端检查与证书巡检只读这个文件；拉取失败时保留旧文件，控制面不可用也不影响主机侧告警。
-// 拉取的结果同时是非控制机对控制机与 Monitor 的直推依据（见 Watch）。
+// Package policysync 每分钟调用 MonitorMgr.SyncHostAgent 上报这一分钟采到的主机快照并拉取全部告警渠道，
+// 写入 <部署根>/data/host-agent/host-policy.json；拉取失败时保留旧文件，控制面不可用也不影响非控制机直推告警。
+// 同步结果同时是非控制机对控制机与 Monitor 的直推依据（见 Watch）。
 package policysync
 
 import (
@@ -18,9 +18,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Fetcher 调用 MonitorMgr.GetHostPolicy。拉取由 HostAgent 的采样定时器驱动（启动时一次，之后每分钟一次）：
+// Fetcher 调用 MonitorMgr.SyncHostAgent。同步由 HostAgent 的采样定时器驱动（启动时一次，之后每分钟一次）：
 // 连续 3 次失败即推送“控制机或 Monitor 不可达”（Watch）。
-type Fetcher func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error)
+type Fetcher func(context.Context, *monitorpb.SyncHostAgentReq) (*monitorpb.SyncHostAgentRsp, error)
 
 // Result 是一次同步的结果：written（内容变化，已写入）、unchanged（与缓存一致）。
 type Result string
@@ -87,13 +87,13 @@ func (s *Syncer) SyncOnce(ctx context.Context, report *monitorpb.HostReport) (Re
 // syncOnce 拉取并写入一次；startedAt 是 Monitor 在响应里给出的进程启动时刻（毫秒，拉取失败时为 0）。
 // fetchErr 只在没能从 Monitor 拿到策略时非空，err 还包括本机写缓存的失败。
 func (s *Syncer) syncOnce(ctx context.Context, report *monitorpb.HostReport) (result Result, startedAt int64, fetchErr, err error) {
-	rsp, err := s.fetch(ctx, &monitorpb.GetHostPolicyReq{Host: report})
+	rsp, err := s.fetch(ctx, &monitorpb.SyncHostAgentReq{Host: report})
 	if err != nil {
-		err = fmt.Errorf("fetch host policy: %w", err)
+		err = fmt.Errorf("同步主机快照与告警渠道失败: %w", err)
 		return "", 0, err, err
 	}
 	if code := rsp.GetRetInfo().GetCode(); code != commonpb.ErrorCode_SUCCESS {
-		err = fmt.Errorf("fetch host policy: %s %s", code, rsp.GetRetInfo().GetMsg())
+		err = fmt.Errorf("同步主机快照与告警渠道失败: %s %s", code, rsp.GetRetInfo().GetMsg())
 		return "", 0, err, err
 	}
 	result, err = s.write(rsp)
@@ -101,7 +101,7 @@ func (s *Syncer) syncOnce(ctx context.Context, report *monitorpb.HostReport) (re
 }
 
 // write 校验并写入主机策略；内容相同不重写。
-func (s *Syncer) write(rsp *monitorpb.GetHostPolicyRsp) (Result, error) {
+func (s *Syncer) write(rsp *monitorpb.SyncHostAgentRsp) (Result, error) {
 	policy := fromResponse(rsp, s.now().UTC())
 	if err := policy.Validate(); err != nil {
 		return "", fmt.Errorf("monitor returned an invalid host policy: %w", err)
@@ -127,7 +127,7 @@ func (s *Syncer) write(rsp *monitorpb.GetHostPolicyRsp) (Result, error) {
 	return Written, nil
 }
 
-func fromResponse(rsp *monitorpb.GetHostPolicyRsp, now time.Time) hostpolicy.Policy {
+func fromResponse(rsp *monitorpb.SyncHostAgentRsp, now time.Time) hostpolicy.Policy {
 	policy := hostpolicy.Policy{FetchedAt: now, NotificationChannels: []hostpolicy.Channel{}}
 	for _, channel := range rsp.GetChannels() {
 		policy.NotificationChannels = append(policy.NotificationChannels, hostpolicy.Channel{Type: channel.GetChannelType(), WebhookURL: channel.GetWebhookUrl(), Secret: channel.GetSecret()})

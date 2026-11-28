@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -24,28 +23,19 @@ func (discardReadyPublisher) Publish(context.Context, events.Event, proto.Messag
 	return &jetstream.PublishAck{}, nil
 }
 
-// recordSnapshot 只登记一个记录型数据集。
-type recordSnapshot struct{ dataset *pb.Dataset }
-
-func (s recordSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	return s.dataset, spaceID == s.dataset.GetSpaceId() && datasetID == s.dataset.GetDatasetId()
-}
-
-func (s recordSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
-}
-
 // 记录型 View（Bleve）建成后为空，只跟随之后的写入：按记录键回读整条记录写进索引。
 func TestRecordViewFollowsRecordWrites(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	snapshot := recordSnapshot{dataset: &pb.Dataset{SpaceId: readyBenchSpace, DatasetId: "notes", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"}}
+	notesDataset := &pb.Dataset{SpaceId: readyBenchSpace, DatasetId: "notes", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active", CreatedAt: followEnvDatasetCreatedAt}
+	titleColumn := &pb.DatasetColumn{SpaceId: readyBenchSpace, DatasetId: "notes", ColumnName: "title", DisplayName: "标题", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"}
+	datasets := newTestDatasetCache(t, []*pb.Dataset{notesDataset}, []*pb.DatasetColumn{titleColumn})
 	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "pebble")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	primary, err := primarystore.New(primarystore.Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return snapshot }})
+	primary, err := primarystore.New(primarystore.Options{Store: store, Datasets: datasets})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +52,7 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 	defer stop()
 	// 记录型数据集建好后不调任何 View 接口：维护流程为它建 Bleve 索引。
 	meta := &followEnvMetadata{}
-	meta.addDataset(&pb.Dataset{SpaceId: readyBenchSpace, DatasetId: "notes", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active", CreatedAt: followEnvDatasetCreatedAt},
-		&pb.DatasetColumn{SpaceId: readyBenchSpace, DatasetId: "notes", ColumnName: "title", DisplayName: "标题", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"})
+	meta.addDataset(notesDataset, titleColumn)
 	stopMaintainer, err := view.StartViewMaintainerAsync(ctx, viewservice.MaintenanceOptions{Metadata: meta, PrimaryRange: reader, Interval: 100 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
@@ -80,14 +69,14 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	record := func(id, version, title string) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
+	record := func(id, version, title string) *pb.Row {
+		return &pb.Row{
 			Key:    &pb.RowKey{SpaceId: readyBenchSpace, DatasetId: "notes", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: id, Version: version}}},
 			Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: title}}}},
 		}
 	}
 	rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{SpaceId: readyBenchSpace, DatasetId: "notes",
-		Rows: []*pb.RowFieldUpsert{record("r1", "1", "first note"), record("r2", "1", "second note")}})
+		Rows: []*pb.Row{record("r1", "1", "first note"), record("r2", "1", "second note")}})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("写入记录：rsp=%v err=%v", rsp, err)
 	}

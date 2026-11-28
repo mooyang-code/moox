@@ -1,10 +1,10 @@
 package events
 
 import (
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -14,7 +14,7 @@ func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	seen := time.Date(2026, 11, 4, 8, 0, 0, 0, time.UTC)
 	delistAt := seen.Add(7 * 24 * time.Hour)
-	payload := &storagepb.InstrumentDelistScheduled{
+	payload := &eventpb.InstrumentDelistScheduled{
 		Exchange: "binance", Market: DelistMarketSpot, ExchangeSymbol: "FOOUSDT",
 		DelistAt: delistAt.UnixMilli(), Source: DelistSourceBinanceSpotSchedule,
 		FirstSeenAt: seen.UnixMilli(), Scope: DelistScopeAll,
@@ -35,23 +35,23 @@ func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
 	require.Contains(t, natsSubject, "moox.event.collector.instrument.delist_scheduled.v1.")
 	require.Equal(t, "MOOX_COLLECTOR", InstrumentDelistScheduled.Stream())
 
-	for name, mutate := range map[string]func(*storagepb.InstrumentDelistScheduled){
-		"subject mismatch": func(p *storagepb.InstrumentDelistScheduled) { p.ExchangeSymbol = "BARUSDT" },
-		"upper exchange":   func(p *storagepb.InstrumentDelistScheduled) { p.Exchange = "BINANCE" },
-		"bad market":       func(p *storagepb.InstrumentDelistScheduled) { p.Market = "FUTURES" },
-		"no delist time":   func(p *storagepb.InstrumentDelistScheduled) { p.DelistAt = 0 },
-		"no first seen":    func(p *storagepb.InstrumentDelistScheduled) { p.FirstSeenAt = 0 },
-		"bad source":       func(p *storagepb.InstrumentDelistScheduled) { p.Source = "OTHER" },
-		"bad scope":        func(p *storagepb.InstrumentDelistScheduled) { p.Scope = "" },
+	for name, mutate := range map[string]func(*eventpb.InstrumentDelistScheduled){
+		"subject mismatch": func(p *eventpb.InstrumentDelistScheduled) { p.ExchangeSymbol = "BARUSDT" },
+		"upper exchange":   func(p *eventpb.InstrumentDelistScheduled) { p.Exchange = "BINANCE" },
+		"bad market":       func(p *eventpb.InstrumentDelistScheduled) { p.Market = "FUTURES" },
+		"no delist time":   func(p *eventpb.InstrumentDelistScheduled) { p.DelistAt = 0 },
+		"no first seen":    func(p *eventpb.InstrumentDelistScheduled) { p.FirstSeenAt = 0 },
+		"bad source":       func(p *eventpb.InstrumentDelistScheduled) { p.Source = "OTHER" },
+		"bad scope":        func(p *eventpb.InstrumentDelistScheduled) { p.Scope = "" },
 	} {
-		broken := proto.Clone(payload).(*storagepb.InstrumentDelistScheduled)
+		broken := proto.Clone(payload).(*eventpb.InstrumentDelistScheduled)
 		mutate(broken)
 		_, err := registry.Encode(InstrumentDelistScheduled, broken, opts)
 		require.Error(t, err, name)
 	}
 
 	// 交易所代码必须是大写：subject 也一起改成小写，这样只有大写校验能拦住它（不是靠 subject 对不上）。
-	lower := proto.Clone(payload).(*storagepb.InstrumentDelistScheduled)
+	lower := proto.Clone(payload).(*eventpb.InstrumentDelistScheduled)
 	lower.ExchangeSymbol = "foousdt"
 	lowerOpts := opts
 	lowerOpts.SubjectID = InstrumentDelistSubjectID("binance", DelistMarketSpot, "foousdt")

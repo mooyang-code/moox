@@ -83,12 +83,13 @@
 import { collectionTaskResultLabel } from "@/views/collector/collection-tasks/collection-task-params";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
-import { computed, onActivated, onDeactivated, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { RequestError } from "@/api/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import { useRoute, useRouter } from "vue-router";
 import { GetTaskDetail, GetTaskList, listKlineResampleJobs, type CollectorTask } from "@/api/collector";
+import { readAllPages } from "@/api/read-all-pages";
 import { frequencyMinutes } from "@/utils/frequency";
 import { useSpaceStore } from "@/store/modules/space";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
@@ -125,7 +126,6 @@ const activeTaskId = ref(queryTaskId(route.query.resultTask));
 const TASK_PAGE_SIZE = 100;
 let loadSequence = 0;
 let detailSequence = 0;
-let loadedSpaceId = "";
 let pageActive = true;
 
 const permanentTaskDetailErrorCodes = new Set<unknown>([2, 3, 5, "2", "3", "5", "NO_AUTH", "NO_PERMISSION", "NOT_FOUND"]);
@@ -207,15 +207,15 @@ function clearTaskResultCache(taskId: string) {
 }
 
 /** 读取当前空间的全部采集任务（按页读完，不再分页展示）。 */
-async function fetchAllTasks(spaceId: string) {
-  const all: CollectorTask[] = [];
-  for (let page = 1; ; page += 1) {
+function fetchAllTasks(spaceId: string) {
+  let loaded = 0;
+  return readAllPages(async page => {
     const response = await GetTaskList({ space_id: spaceId, page: { page, size: TASK_PAGE_SIZE } });
-    const batch = response.tasks || [];
-    all.push(...batch);
-    const total = response.page?.total ?? all.length;
-    if (!batch.length || all.length >= total) return all;
-  }
+    const items = response.tasks || [];
+    loaded += items.length;
+    const total = response.page_result?.total ?? loaded;
+    return { items, hasMore: response.page_result?.has_more ?? loaded < total };
+  });
 }
 
 async function load() {
@@ -231,20 +231,12 @@ async function load() {
     loading.value = false;
     return;
   }
-  if (loadedSpaceId !== spaceId) {
-    loadedSpaceId = spaceId;
-    tasks.value = [];
-    taskDetails.value = {};
-    lastStatusReadAtByTask.value = {};
-    readableDatasetIdsByTask.value = {};
-    activeTaskId.value = queryTaskId(route.query.resultTask);
-  }
 
   loading.value = true;
   loadError.value = "";
   try {
     const listTasks = await fetchAllTasks(spaceId);
-    if (sequence !== loadSequence || spaceId !== selectedSpaceId.value) return;
+    if (sequence !== loadSequence) return;
     tasks.value = listTasks;
     // 没有指定 resultTask 时，?dataset=&freq=（告警等处跳进来）按结果数据集选任务
     const requestedTaskId =
@@ -279,7 +271,7 @@ async function loadTaskDetail(taskId: string, options: { includeInTabs?: boolean
   detailError.value = "";
   try {
     const response = await GetTaskDetail({ space_id: spaceId, task_id: taskId });
-    if (sequence !== detailSequence || spaceId !== selectedSpaceId.value || taskId !== activeTaskId.value) return false;
+    if (sequence !== detailSequence || taskId !== activeTaskId.value) return false;
     const task = response.task;
     if (!task || task.task_id !== taskId) throw new TaskDetailIdentityError("任务结果身份与请求不一致");
     const state = getTaskResultState(task);
@@ -370,27 +362,23 @@ function goToTaskDetail() {
   });
 }
 
-// 页面被 keep-alive 缓存、停用期间不响应空间切换，否则会把路由写回结果页；重新激活时再补载。
+onMounted(() => {
+  void load();
+});
+
 onActivated(() => {
   pageActive = true;
-  if (selectedSpaceId.value && loadedSpaceId !== selectedSpaceId.value) void load();
 });
+
 onDeactivated(() => {
   pageActive = false;
 });
 
-watch(
-  selectedSpaceId,
-  () => {
-    // 停用期间只记下要重读：结果浏览切空间时已清空，切走又切回原空间也要在激活时重新读取。
-    if (!pageActive) {
-      loadedSpaceId = "";
-      return;
-    }
-    void load();
-  },
-  { immediate: true }
-);
+onBeforeUnmount(() => {
+  pageActive = false;
+  loadSequence += 1;
+  detailSequence += 1;
+});
 
 watch(
   () => [route.query.tab, route.query.resultTask] as const,

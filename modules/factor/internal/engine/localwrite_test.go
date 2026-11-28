@@ -55,7 +55,7 @@ func newTestWriter(t *testing.T) (*localWriter, *seriesstore.Store) {
 
 func wireRequest(minutes ...int) *factorpb.WriteSeriesReq {
 	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	req := &factorpb.WriteSeriesReq{SpaceId: "crypto", DatasetId: "spot", Freq: "1m", SubjectId: "BTC",
+	req := &factorpb.WriteSeriesReq{SpaceId: "crypto", DatasetId: "spot", Frequency: "1m", SubjectId: "BTC",
 		Cols: map[string]*factorpb.SeriesColumn{"close": {}, "trades": {}, "note": {}}}
 	req.From = t0.Add(time.Duration(minutes[0]) * time.Minute).Format(time.RFC3339)
 	req.To = t0.Add(time.Duration(minutes[len(minutes)-1]+1) * time.Minute).Format(time.RFC3339)
@@ -106,12 +106,12 @@ func TestLocalWriteStoresRowsAndReportsBounds(t *testing.T) {
 	out = post(t, w, wireRequest(3, 4))
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, out.GetRetInfo().GetCode(), out.GetRetInfo().GetMsg())
 
-	bounds, err := control(w).GetSeriesBounds(context.Background(), &factorpb.GetSeriesBoundsReq{SpaceId: "crypto", DatasetId: "spot", Freq: "1m", SubjectId: "BTC"})
+	bounds, err := control(w).GetSeriesBounds(context.Background(), &factorpb.GetSeriesBoundsReq{SpaceId: "crypto", DatasetId: "spot", Frequency: "1m", SubjectId: "BTC"})
 	require.NoError(t, err)
 	require.True(t, bounds.GetExists())
 	require.Equal(t, "2026-10-01T00:04:00Z", bounds.GetLatest())
 
-	bounds, err = control(w).GetSeriesBounds(context.Background(), &factorpb.GetSeriesBoundsReq{SpaceId: "crypto", DatasetId: "spot", Freq: "1m", SubjectId: "ETH"})
+	bounds, err = control(w).GetSeriesBounds(context.Background(), &factorpb.GetSeriesBoundsReq{SpaceId: "crypto", DatasetId: "spot", Frequency: "1m", SubjectId: "ETH"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, bounds.GetRetInfo().GetCode())
 	require.False(t, bounds.GetExists())
@@ -195,7 +195,7 @@ func TestLocalWriteStoresEveryColumnType(t *testing.T) {
 	data := localdata.New(localdata.Config{Store: store, Storage: contractStorage{}})
 	w := newLocalWriter(data, contractStorage{})
 	out := post(t, w, &factorpb.WriteSeriesReq{
-		SpaceId: "crypto", DatasetId: "spot", Freq: "1m", SubjectId: "BTCUSDT", From: "2026-10-01T00:00:00Z", To: "2026-10-01T00:02:00Z",
+		SpaceId: "crypto", DatasetId: "spot", Frequency: "1m", SubjectId: "BTCUSDT", From: "2026-10-01T00:00:00Z", To: "2026-10-01T00:02:00Z",
 		AllowMissing: true, RecordPending: true, Reason: "import", Times: []int64{1790812800, 1790812860}, Tags: []string{"", ""},
 		Cols: map[string]*factorpb.SeriesColumn{
 			"close":  {Null: []bool{false, true}, F: []float64{100.5, 0}},
@@ -222,7 +222,7 @@ func TestLocalWriteStoresEveryColumnType(t *testing.T) {
 func TestSeriesFieldsAndSubjectMethods(t *testing.T) {
 	w, _ := newTestWriter(t)
 	ctx := context.Background()
-	fields, err := control(w).GetSeriesFields(ctx, &factorpb.GetSeriesFieldsReq{SpaceId: "crypto", DatasetId: "spot", Freq: "1m"})
+	fields, err := control(w).GetSeriesFields(ctx, &factorpb.GetSeriesFieldsReq{SpaceId: "crypto", DatasetId: "spot", Frequency: "1m"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, fields.GetRetInfo().GetCode())
 	var got []string

@@ -37,10 +37,13 @@
       <span class="muted task-note">（按实例关联的任务，不能更改）</span>
     </a-form-item>
     <template v-else>
+      <a-alert v-if="requirementError" type="error" show-icon class="pool-alert"
+        >读取策略要绑定的计算任务失败：{{ requirementError }}<a-link @click="reloadRequirement">重试</a-link></a-alert
+      >
       <a-alert v-if="pool?.problems.length" type="warning" show-icon class="pool-alert"
         ><div v-for="item in pool.problems" :key="item">{{ item }}</div></a-alert
       >
-      <a-form-item v-if="!declared" label="任务所属的市场" required>
+      <a-form-item v-if="!requirementError && !declared" label="任务所属的市场" required>
         <a-radio-group v-model="form.single_market" type="button" size="small">
           <a-radio v-for="item in MARKET_ORDER" :key="item" :value="item">{{ marketLabel(item) }}</a-radio>
         </a-radio-group>
@@ -54,7 +57,7 @@
           :placeholder="`选择${marketLabel(market)}计算任务`"
         >
           <a-option v-for="task in taskChoices(market)" :key="task.task_id" :value="task.task_id"
-            >{{ task.name || task.task_id }}（{{ task.task_id }} · {{ task.freq || "无周期" }}）</a-option
+            >{{ task.name || task.task_id }}（{{ task.task_id }} · {{ task.frequency || "无周期" }}）</a-option
           >
         </a-select>
         <template v-if="market === markets[0]" #extra
@@ -142,7 +145,11 @@ const zone = useDisplayZone();
 
 // 要读哪些市场的任务由后端按定义或 DSL 草稿推出（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
 // 从实例发起时任务已预填，按实例引用的定义读出参考市场（回放不读参考市场的任务）。
-const { requirement } = useTaskRequirement(
+const {
+  requirement,
+  error: requirementError,
+  reload: reloadRequirement
+} = useTaskRequirement(
   computed(() =>
     form.value.instance_id
       ? { strategyId: form.value.instance_strategy_id }
@@ -158,14 +165,21 @@ watch(
   },
   { immediate: true }
 );
+watch(
+  requirementError,
+  next => {
+    form.value.requirement_error = next;
+  },
+  { immediate: true }
+);
 const pool = computed(() => replayPool(form.value));
-// 资金费列与说明看回放对象是不是策略池（从池实例发起时按实例引用的定义判断）：池的资金费写在池 DSL 里。
-const pooled = computed(() => replayIsPool(form.value, props.strategies));
+// 资金费列与说明看回放对象是不是策略池（读后端 requirement.pool）：池的资金费写在池 DSL 里。
+const pooled = computed(() => replayIsPool(form.value));
 const declared = computed(() => replayDeclared(form.value));
-const driftHint = computed(() => replayDriftHint(form.value, props.strategies));
+const driftHint = computed(() => replayDriftHint(form.value));
 const markets = computed(() => replayMarkets(form.value));
 // 声明了 factor_params 的策略只能用因子现算（可变成员的参数随策略逐期变化）：选中这种策略时自动切过去；策略池只能读结果 View。
-const tuned = computed(() => replayTuned(form.value, props.strategies));
+const tuned = computed(() => replayTuned(form.value));
 watch(
   [tuned, pooled],
   ([isTuned, isPool]) => {

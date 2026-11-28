@@ -301,9 +301,6 @@ type KlineRequest struct {
 	RequestID      string
 	// Adaptive 为真时，该行情源的每秒请求数按压力信号自适应调节（补采、追赶、缺口修复用），配置里的每秒上限是最大值。
 	Adaptive bool
-	// RateBudgetRatio limits this invocation's share of the
-	// provider limiter budget. Zero means the normal provider budget (1.0).
-	RateBudgetRatio float64
 }
 
 func (r KlineRequest) FrequencyValue() (Frequency, error) {
@@ -325,9 +322,6 @@ func (r KlineRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.RequestID) == "" {
 		return fmt.Errorf("%w: request_id is required", ErrInvalidRequest)
-	}
-	if math.IsNaN(r.RateBudgetRatio) || math.IsInf(r.RateBudgetRatio, 0) || r.RateBudgetRatio < 0 || r.RateBudgetRatio > 1 {
-		return fmt.Errorf("%w: rate_budget_ratio must be between 0 and 1", ErrInvalidRequest)
 	}
 	return nil
 }

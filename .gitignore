@@ -53,9 +53,7 @@ docs/计划/
 # Local Cursor MCP config contains the remote bearer token.
 .cursor/mcp.json
 
-# Local skill credentials and production live probes. Never commit.
-skills/moox/config/data-access.yaml
-skills/moox/config/.moox-skill-keys/
+# Production live probes. Never commit.
 modules/cli/internal/command/live_factor_read_test.go
 
 # infra 真实部署值覆盖文件（唯一存放真实 IP/凭证处），不入库

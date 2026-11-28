@@ -19,10 +19,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
+	setupbackup "github.com/mooyang-code/moox/modules/cli/internal/setup/backup"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	setupdataformat "github.com/mooyang-code/moox/modules/cli/internal/setup/dataformat"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	pkgdataformat "github.com/mooyang-code/moox/packages/dataformat"
+	core "github.com/mooyang-code/moox/packages/doctor"
 )
 
 // fourHostSnapshot 是示例拓扑：控制机、存储机（带 EventBus）、海外机、只能出站的因子机。
@@ -64,7 +69,7 @@ secret_key = "cloud-test-secret"
 	return &setupSnapshot{Manifest: &cfg, Secrets: &secrets}
 }
 
-// installHarness 把部署、初始化、启动和验收都换成记录调用；reports 是只读检测的结果，清空后变成空机。
+// installHarness 把部署、初始化、启动、验收、备份与完成标记都换成记录调用；reports 是只读检测的结果，清空后变成空机。
 type installHarness struct {
 	t        *testing.T
 	snapshot *setupSnapshot
@@ -75,6 +80,17 @@ type installHarness struct {
 	reports  []deployscan.HostReport
 	operator string
 	source   string
+	// file 是临时目录里的 moox.toml 路径，保证测试写 moox.backup 不污染仓库工作区。
+	file string
+	// previewSecrets/previewChannels/previewBackupErr 控制清空前备份预览行为。
+	previewSecrets   int
+	previewChannels  int
+	previewBackupErr error
+	// backupBeforeWipeErr 控制清空前自动备份失败。
+	backupBeforeWipeErr error
+	// restoreSecretsErr/restoreChannelsErr 控制安装自动导入密钥/告警渠道失败。
+	restoreSecretsErr  error
+	restoreChannelsErr error
 	// seedDirs 是读种子用过的目录，initSources 是完整初始化收到的源目录。
 	seedDirs, initSources []string
 	// stderr 是最近一次 run 的标准错误（进度行在这里）。
@@ -83,7 +99,18 @@ type installHarness struct {
 
 func newInstallHarness(t *testing.T) *installHarness {
 	t.Helper()
-	h := &installHarness{t: t, snapshot: fourHostSnapshot(t), operator: t.TempDir()}
+	restoreKeys := configcrypt.SetDefaultForTest(&configcrypt.MemoryStore{})
+	t.Cleanup(restoreKeys)
+
+	workDir := t.TempDir()
+	h := &installHarness{
+		t:               t,
+		snapshot:        fourHostSnapshot(t),
+		operator:        t.TempDir(),
+		file:            filepath.Join(workDir, "moox.toml"),
+		previewSecrets:  3,
+		previewChannels: 2,
+	}
 	// setup start 要读源码目录里的内置采集任务与因子种子。
 	h.source = startRepository(t)
 	seedDir := filepath.Join(h.source, "config", "setup")
@@ -102,7 +129,8 @@ func newInstallHarness(t *testing.T) *installHarness {
 		return nil
 	}
 	h.deps = setupDeps{
-		load: func(string) (*setupSnapshot, error) { return h.snapshot, nil },
+		load:            func(string) (*setupSnapshot, error) { return h.snapshot, nil },
+		preflightRender: func(*setupSnapshot, string) error { return nil },
 		loadInitBundle: func(dir string) (setupInitBundle, error) {
 			h.seedDirs = append(h.seedDirs, dir)
 			return setupInitBundle{}, nil
@@ -126,7 +154,9 @@ func newInstallHarness(t *testing.T) *installHarness {
 			defer h.mu.Unlock()
 			for i := range h.reports {
 				if h.reports[i].Host == host.Name {
-					h.reports[i].Entries, h.reports[i].Units, h.reports[i].Active, h.reports[i].Installed, h.reports[i].Version = nil, nil, nil, false, nil
+					h.reports[i].Entries, h.reports[i].Units, h.reports[i].Active = nil, nil, nil
+					h.reports[i].Installed, h.reports[i].InstallComplete, h.reports[i].Version = false, false, nil
+					h.reports[i].DataFormats = nil
 				}
 			}
 			return deployscan.HostResult{Host: host.Name}, nil
@@ -147,15 +177,118 @@ func newInstallHarness(t *testing.T) *installHarness {
 		initMetadata: func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error) {
 			return setupInitStorageSummary{}, record("init-metadata")
 		},
-		initStorage: func(_ context.Context, _ *setupSnapshot, _, sourceRoot string, _ setupInitBundle) (setupInitSummary, error) {
+		initStorage: func(_ context.Context, snapshot *setupSnapshot, _, sourceRoot string, _ setupInitBundle) (setupInitSummary, error) {
 			h.initSources = append(h.initSources, sourceRoot)
-			return setupInitSummary{}, record("init")
+			console := describeSetupConsoleLinks(snapshot)
+			return setupInitSummary{
+				Notification: &setupNotificationSummary{
+					Status:  notificationEmpty,
+					Warning: fmt.Sprintf("尚未配置告警通知渠道，系统异常时不会推送通知；请打开管理台「资源与运维 › 监控告警」添加：%s", console.MonitorURL),
+				},
+				Console: console,
+			}, record("init")
 		},
 		openInitFactor: func(context.Context, *setupSnapshot) (setupInitFactor, error) { return &fakeSetupInitFactor{}, nil },
-		ensureArchiveTasks: func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error) {
-			return &setupArchiveTasksSummary{Enabled: true}, nil
+		runDoctor:      func(context.Context, string, *setupSnapshot) error { return record("doctor") },
+		verifySpace:    func(context.Context, string, *setupSnapshot, string) error { return record("verify") },
+		markInstallComplete: func(_ context.Context, _ *setupSnapshot, _ string) error {
+			if err := record("mark-complete"); err != nil {
+				return err
+			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			for i := range h.reports {
+				if h.reports[i].Host == "control" {
+					h.reports[i].InstallComplete = true
+				}
+			}
+			return nil
 		},
-		verifySpace: func(context.Context, string, *setupSnapshot, string) error { return record("verify") },
+		previewBackup: func(context.Context, string, *setupSnapshot) (int, int, error) {
+			if h.previewBackupErr != nil {
+				return 0, 0, h.previewBackupErr
+			}
+			return h.previewSecrets, h.previewChannels, nil
+		},
+		backupBeforeWipe: func(_ context.Context, _ string, _ *setupSnapshot, backupPath string, overwritePending bool) (setupBackupOutput, error) {
+			if err := record("backup-before-wipe"); err != nil {
+				return setupBackupOutput{}, err
+			}
+			if h.backupBeforeWipeErr != nil {
+				return setupBackupOutput{}, h.backupBeforeWipeErr
+			}
+			creds, err := setupbackup.DeriveCredentials(configcrypt.Default(), true)
+			if err != nil {
+				return setupBackupOutput{}, err
+			}
+			defer creds.Clear()
+			channels := make([]setupbackup.Channel, h.previewChannels)
+			for i := range channels {
+				channels[i] = setupbackup.Channel{ChannelType: "wecom", WebhookURL: fmt.Sprintf("https://example.com/hook/%d", i)}
+			}
+			sealed, err := setupbackup.Seal(`{"format":"moox.secrets/v1","ciphertext":"auto"}`, h.previewSecrets, channels, creds, time.Now())
+			if err != nil {
+				return setupBackupOutput{}, err
+			}
+			if overwritePending {
+				if err := setupbackup.WriteAtomic(backupPath, sealed); err != nil {
+					return setupBackupOutput{}, err
+				}
+			} else {
+				if err := setupbackup.WriteGuarded(backupPath, sealed); err != nil {
+					return setupBackupOutput{}, err
+				}
+			}
+			return setupBackupOutput{Path: backupPath, SecretCount: h.previewSecrets, ChannelCount: h.previewChannels}, nil
+		},
+		restoreBackupSecrets: func(_ context.Context, file string, snapshot *setupSnapshot) (*setupRestoreBackupSummary, error) {
+			if err := record("restore-secrets"); err != nil {
+				return nil, err
+			}
+			if h.restoreSecretsErr != nil {
+				return nil, h.restoreSecretsErr
+			}
+			backupPath := setupBackupPath(file, snapshot.Manifest)
+			meta, exists, err := setupbackup.ReadMetadata(backupPath)
+			if err != nil {
+				return nil, err
+			}
+			if !exists || !meta.PendingImport {
+				return &setupRestoreBackupSummary{Status: "no_backup", Path: backupPath, Note: "无待导入备份，请到管理台录入"}, nil
+			}
+			// 仅导入密钥，不清除 pending_import 标记（留到告警渠道导入完成后再清）。
+			return &setupRestoreBackupSummary{
+				Status:         "secrets_imported",
+				Path:           backupPath,
+				SecretsCreated: int32(meta.Secrets.Count),
+				Note:           fmt.Sprintf("已导入 %d 把密钥", meta.Secrets.Count),
+			}, nil
+		},
+		restoreBackupChannels: func(_ context.Context, file string, snapshot *setupSnapshot) (*setupRestoreBackupSummary, error) {
+			if err := record("restore-channels"); err != nil {
+				return nil, err
+			}
+			if h.restoreChannelsErr != nil {
+				return nil, h.restoreChannelsErr
+			}
+			backupPath := setupBackupPath(file, snapshot.Manifest)
+			meta, exists, err := setupbackup.ReadMetadata(backupPath)
+			if err != nil {
+				return nil, err
+			}
+			if !exists || !meta.PendingImport {
+				return &setupRestoreBackupSummary{Status: "no_backup", Path: backupPath, Note: "无待导入备份，请到管理台录入"}, nil
+			}
+			if err := setupbackup.MarkImported(backupPath, time.Now()); err != nil {
+				return nil, err
+			}
+			return &setupRestoreBackupSummary{
+				Status:          "imported",
+				Path:            backupPath,
+				ChannelsCreated: int32(meta.NotificationChannels.Count),
+				Note:            fmt.Sprintf("已导入 %d 个告警渠道", meta.NotificationChannels.Count),
+			}, nil
+		},
 		openStart: func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error) {
 			if err := record("start"); err != nil {
 				return nil, nil, err
@@ -168,6 +301,10 @@ func newInstallHarness(t *testing.T) *installHarness {
 	return h
 }
 
+func (h *installHarness) backupPath() string {
+	return topology.BackupPathFor(h.file)
+}
+
 // run 执行一条 setup 子命令；install、deploy、wipe 另带上临时的操作员身份目录。
 func (h *installHarness) run(args ...string) (string, error) {
 	h.t.Helper()
@@ -175,11 +312,11 @@ func (h *installHarness) run(args ...string) (string, error) {
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
-	args = append(args, "--file", "moox.toml")
-	if slices.Contains([]string{"install", "update", "deploy", "wipe"}, args[0]) {
+	args = append(args, "--file", h.file)
+	if slices.Contains([]string{"install", "deploy", "wipe"}, args[0]) {
 		args = append(args, "--operator-dir", h.operator)
 	}
-	if slices.Contains([]string{"install", "update", "deploy"}, args[0]) {
+	if slices.Contains([]string{"install", "deploy"}, args[0]) {
 		args = append(args, "--source-dir", h.source)
 	}
 	cmd.SetArgs(args)
@@ -198,11 +335,21 @@ func (h *installHarness) report(host string) *deployscan.HostReport {
 	return nil
 }
 
-func (h *installHarness) markInstalled() {
+// markIncomplete 把各主机标记为有 version.json 但控制机无完成标记（没装完状态）。
+func (h *installHarness) markIncomplete() {
 	for i := range h.reports {
-		h.reports[i].Installed, h.reports[i].Version = true, json.RawMessage(`{"version":"v0.0.1"}`)
+		h.reports[i].Installed = true
+		h.reports[i].InstallComplete = false
+		h.reports[i].Version = json.RawMessage(`{"version":"v0.0.1"}`)
 		h.reports[i].Entries, h.reports[i].Units = []string{"bin", "version.json"}, []string{"moox-host-gateway.service"}
 	}
+}
+
+// markInstalled 把各主机标记为已装好（控制机带有 install-complete.json 完成标记）。
+func (h *installHarness) markInstalled() {
+	h.markIncomplete()
+	h.report("control").InstallComplete = true
+	h.report("control").Entries = append(h.report("control").Entries, deploy.InstallCompleteFile)
 }
 
 // 真实入口用的依赖不能有空函数：测试里注入假依赖时看不出这个问题，到真机上才空指针崩溃。
@@ -213,52 +360,166 @@ func TestDefaultSetupDepsHaveNoNilFunction(t *testing.T) {
 	}
 }
 
-func TestSetupInstallPreviewChangesNothing(t *testing.T) {
+// 三种状态（fresh、incomplete、installed）各自的预检内容。
+func TestSetupInstallPreviewCoversThreeStatesAndFormatComparison(t *testing.T) {
 	h := newInstallHarness(t)
+
+	// 1. fresh（没装过）：直接展示新安装步骤，无 wipe 选项，不动任何主机。
 	out, err := h.run("install", "--space-id", "crypto")
 	require.NoError(t, err)
 	preview := parsePreview(t, out)
 	require.Equal(t, "install", preview["action"])
 	require.Equal(t, deployscan.RouteFresh, preview["route"])
 	require.NotContains(t, preview, "wipe", "没装过时没有清空范围")
+	require.NotContains(t, preview, "options")
 	require.Empty(t, h.calls, "预检不改任何东西")
 
-	// 装过时预检带上清空范围（含归档目录的大小）与提醒。
-	h.markInstalled()
+	// 2. incomplete（没装完）：并排列出 keep（resume）与 wipe，带数据格式比对与备份条数。
+	h.markIncomplete()
 	h.report("factor").ArchiveKB = 2048
 	out, err = h.run("install", "--space-id", "crypto")
 	require.NoError(t, err)
 	preview = parsePreview(t, out)
+	require.Equal(t, deployscan.RouteIncomplete, preview["route"])
+	opts := preview["options"].(map[string]any)
+	keepOpt := opts["keep"].(map[string]any)
+	wipeOpt := opts["wipe"].(map[string]any)
+	require.Equal(t, true, keepOpt["available"])
+	require.Equal(t, "resume", keepOpt["mode"])
+	require.Equal(t, true, wipeOpt["available"])
+	wipeBackup := wipeOpt["backup"].(map[string]any)
+	require.Equal(t, "will_backup", wipeBackup["status"])
+	require.EqualValues(t, 3, wipeBackup["secret_count"])
+	require.EqualValues(t, 2, wipeBackup["channel_count"])
+	require.Contains(t, preview["note"], "归档文件")
+	require.Contains(t, preview["note"], "唯一可能补不回来")
+	require.Empty(t, h.calls)
+
+	// 3. installed（已装好）：不带 --space-id 也能预检，keep 走 update 视图（含 hosts/moves/update 步骤），wipe 带备份与清空摘要。
+	h.markInstalled()
+	*h.report("factor") = deployscan.HostReport{Host: "factor", Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20, ArchiveKB: -1}
+	control := h.report("control")
+	control.Version = json.RawMessage(`{"version":"v0.0.1","components":{"admin":{},"host-gateway":{}}}`)
+	control.Units = []string{"moox-admin.service", "moox-host-gateway.service", "moox-old.service"}
+	h.report("storage").Units = append(h.report("storage").Units, "moox-collector.service")
+
+	out, err = h.run("install")
+	require.NoError(t, err)
+	preview = parsePreview(t, out)
 	require.Equal(t, deployscan.RouteInstalled, preview["route"])
-	wipe := preview["wipe"].(map[string]any)
-	require.NotEmpty(t, wipe["digest"])
-	require.Equal(t, deployscan.Notice, wipe["notice"])
+	opts = preview["options"].(map[string]any)
+	keepOpt = opts["keep"].(map[string]any)
+	require.Equal(t, true, keepOpt["available"])
+	require.Equal(t, "update", keepOpt["mode"])
+	hosts := map[string]map[string]any{}
+	for _, host := range keepOpt["hosts"].([]any) {
+		hosts[host.(map[string]any)["host"].(string)] = host.(map[string]any)
+	}
+	require.Equal(t, "v0.0.1", hosts["control"]["version"])
+	require.Contains(t, hosts["control"]["update"], "admin")
+	require.Contains(t, hosts["control"]["install"], "monitor")
+	require.Equal(t, []any{"old"}, hosts["control"]["remove"])
+	require.Equal(t, []any{map[string]any{"component": "collector", "from": "storage", "to": "control"}}, keepOpt["moves"])
+	for _, step := range keepOpt["steps"].([]any) {
+		require.Contains(t, updateStepKinds, step.(map[string]any)["kind"], "已装好保留更新不初始化、不导入备份、不启动空间、不验收")
+	}
 	require.Empty(t, h.calls)
 }
 
-// 顺序：控制机先装 Admin 与主机级组件，再装带 EventBus、Storage 的主机，导入元数据，控制机其余组件，其余主机（因子机最后），
-// 统一等一次全部就绪，然后才是完整初始化（告警渠道要等 Monitor 起来）、启动、验收。
-func TestSetupInstallRunsStepsInDependencyOrder(t *testing.T) {
+// 装过的目标机带 --yes 但未选 --keep 或 --wipe 时直接拒绝，且不动任何主机；同时传两者也拒绝。
+func TestSetupInstallRejectsAmbiguousChoiceWhenInstalledOrIncomplete(t *testing.T) {
+	for _, state := range []string{"incomplete", "installed"} {
+		t.Run(state, func(t *testing.T) {
+			h := newInstallHarness(t)
+			if state == "incomplete" {
+				h.markIncomplete()
+			} else {
+				h.markInstalled()
+			}
+			_, err := h.run("install", "--space-id", "crypto", "--yes")
+			require.ErrorContains(t, err, "install_choice_required")
+			require.Empty(t, h.calls, "未作选择时不得触碰任何主机")
+
+			_, err = h.run("install", "--space-id", "crypto", "--yes", "--keep", "--wipe", "sha256:abc")
+			require.ErrorContains(t, err, "install_choice_conflict")
+			require.Empty(t, h.calls)
+		})
+	}
+}
+
+// 数据格式有变化或未知时：预检标出不兼容组件且 keep.available=false，--keep --yes 被拒绝且不动任何主机。
+func TestSetupInstallKeepRejectedOnDataFormatMismatch(t *testing.T) {
+	staleRec, err := pkgdataformat.Build("admin", map[string]string{pkgdataformat.PartSQLiteSchema: "sha256:old"})
+	require.NoError(t, err)
+	staleRaw, err := json.Marshal(staleRec)
+	require.NoError(t, err)
+
+	for name, formats := range map[string]map[string]deployscan.ComponentDataFormat{
+		"changed": {"admin": {HasData: true, FormatText: string(staleRaw)}},
+		"unknown": {"monitor": {HasData: true, FormatText: ""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newInstallHarness(t)
+			h.markInstalled()
+			h.report("control").DataFormats = formats
+
+			out, err := h.run("install")
+			require.NoError(t, err)
+			preview := parsePreview(t, out)
+			df := preview["data_format"].(map[string]any)
+			require.Equal(t, false, df["can_keep"])
+			require.NotEmpty(t, df["incompatible"])
+			keepOpt := preview["options"].(map[string]any)["keep"].(map[string]any)
+			require.Equal(t, false, keepOpt["available"])
+			require.Contains(t, keepOpt["reject_reason"], "data_format_incompatible")
+
+			_, err = h.run("install", "--keep", "--yes")
+			require.ErrorContains(t, err, "data_format_incompatible")
+			if name == "changed" {
+				require.ErrorContains(t, err, "control/admin")
+			} else {
+				require.ErrorContains(t, err, "control/monitor")
+			}
+			require.Empty(t, h.calls, "格式不兼容拒绝保留时不得触碰任何主机")
+		})
+	}
+}
+
+// 顺序：控制机先装 Admin 与主机级组件，Admin 就绪后立即覆盖导入待恢复密钥备份（确保后续部署 archive-worker 等组件时能读到对象存储密钥），
+// 再装带 EventBus、Storage 的主机，导入元数据，控制机其余组件，其余主机（因子机最后），
+// 统一等一次全部就绪，自动导入待恢复告警渠道备份并清除待导入标记（在完整初始化之前！），然后是完整初始化、启动、自检、验收，最后在控制机写完成标记。
+func TestSetupInstallFreshRunsStepsInDependencyOrderAndMarksComplete(t *testing.T) {
 	h := newInstallHarness(t)
 	out, err := h.run("install", "--space-id", "crypto", "--yes")
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"installed"`)
+	require.Contains(t, out, `"mode":"fresh"`)
+	require.Contains(t, out, `"url":"https://203.0.113.10:9527"`)
+	require.Contains(t, out, `"secrets_url":"https://203.0.113.10:9527/#/settings/secrets"`)
+	require.Contains(t, out, `"monitor_url":"https://203.0.113.10:9527/#/ops/monitor"`)
+	require.Contains(t, h.stderr, "https://203.0.113.10:9527/#/settings/secrets")
+	require.Contains(t, h.stderr, "https://203.0.113.10:9527/#/ops/monitor")
+	require.Contains(t, h.stderr, "尚未配置告警通知渠道")
 	ready := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "ready:") })
 	require.Len(t, ready, 4, "最后对四台主机各等一次就绪")
 	sequence := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return strings.HasPrefix(call, "ready:") })
 	require.Equal(t, []string{
 		"firewall",
 		"deploy:control:admin,host-gateway,host-agent",
+		"restore-secrets",
 		"deploy:storage",
 		"init-metadata",
 		"deploy:control",
 		"deploy:overseas",
 		"deploy:factor",
+		"restore-channels",
 		"init",
 		"start",
+		"doctor",
 		"verify",
+		"mark-complete",
 	}, sequence)
-	// 全部部署完之后才等就绪，完整初始化在等就绪之后。
+	// 密钥导入在控制机 Admin 起来之后、其余主机部署之前；告警渠道导入在全部就绪之后、完整初始化之前。
 	last := func(prefix string) int {
 		at := -1
 		for i, call := range h.calls {
@@ -268,52 +529,120 @@ func TestSetupInstallRunsStepsInDependencyOrder(t *testing.T) {
 		}
 		return at
 	}
+	require.Less(t, slices.Index(h.calls, "deploy:control:admin,host-gateway,host-agent"), slices.Index(h.calls, "restore-secrets"))
+	require.Less(t, slices.Index(h.calls, "restore-secrets"), slices.Index(h.calls, "deploy:factor"))
 	require.Less(t, last("deploy:"), slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "ready:") }))
-	require.Less(t, last("ready:"), slices.Index(h.calls, "init"))
+	require.Less(t, last("ready:"), slices.Index(h.calls, "restore-channels"))
+	require.Less(t, slices.Index(h.calls, "restore-channels"), slices.Index(h.calls, "init"))
+	require.True(t, h.report("control").InstallComplete, "验收通过后应在控制机写出完成标记")
 }
 
-// 单机拓扑：控制机第一次就要带上 EventBus 与 Storage，否则导入元数据时 Storage 还不在。
+// 单机拓扑：控制机第一次就要带上 EventBus 与 Storage，否则导入元数据时 Storage 还不在；密钥备份导入紧接其后、在导入元数据与部署其余组件之前。
 func TestSetupInstallStepsKeepDependenciesOnControlInFirstPass(t *testing.T) {
 	snapshot := testSetupSnapshot(t)
 	steps := setupInstallSteps(snapshot.Manifest, "stockcn")
 	require.Equal(t, installOperator, steps[0].Kind, "第一步准备这台电脑的 moox-cli 签名私钥，控制机 bootstrap 时登记它的公钥")
 	require.Equal(t, installDeploy, steps[2].Kind)
 	require.Equal(t, []string{"admin", "host-gateway", "host-agent", "eventbus", "storage-primary"}, steps[2].Components)
-	require.Equal(t, installInitMetadata, steps[3].Kind)
+	require.Equal(t, installRestoreSecrets, steps[3].Kind)
+	require.Equal(t, installInitMetadata, steps[4].Kind)
 }
 
-// 重跑：已经装过时不带 --wipe 就是原地再做一遍，每一步照常执行、不出错，也不清空。
-func TestSetupInstallRerunRepeatsStepsWithoutWiping(t *testing.T) {
+// 没装完（incomplete）时选 --keep：接着跑完安装流程并写出完成标记，数据保留不清空，复用操作员密钥。
+func TestSetupInstallIncompleteKeepResumesAndMarksComplete(t *testing.T) {
 	h := newInstallHarness(t)
 	h.fail = "deploy:overseas"
 	_, err := h.run("install", "--space-id", "crypto", "--yes")
 	require.ErrorContains(t, err, "install_step_failed")
 	require.ErrorContains(t, err, "moox-cli setup deploy --host overseas", "给出单独重跑这一步的命令")
 	require.NotContains(t, h.calls, "init", "失败之后的步骤不执行")
+	require.NotContains(t, h.calls, "mark-complete", "失败时不能写完成标记")
 
-	// 第一步生成了这台电脑的 moox-cli 私钥；重跑复用同一把，否则控制机上登记的公钥就对不上了。
 	keyFile := filepath.Join(h.operator, identitybundle.OperatorKeyFile)
 	firstKey, err := os.ReadFile(keyFile)
 	require.NoError(t, err)
 
-	h.fail, h.calls = "", nil
-	h.markInstalled()
-	_, err = h.run("install", "--space-id", "crypto", "--yes")
+	// 模拟首次部署在 control 完成后中断，Admin 已有匹配格式的数据。
+	expected, err := setupdataformat.Expected()
 	require.NoError(t, err)
+	adminFmt, err := json.Marshal(expected["admin"])
+	require.NoError(t, err)
+	h.fail, h.calls = "", nil
+	h.markIncomplete()
+	h.report("control").DataFormats = map[string]deployscan.ComponentDataFormat{
+		"admin": {HasData: true, FormatText: string(adminFmt)},
+	}
+
+	out, err := h.run("install", "--space-id", "crypto", "--keep", "--yes")
+	require.NoError(t, err)
+	require.Contains(t, out, `"status":"installed"`)
+	require.Contains(t, out, `"mode":"resume"`)
 	again, err := os.ReadFile(keyFile)
 	require.NoError(t, err)
-	require.Equal(t, firstKey, again, "重跑不换 moox-cli 的密钥")
+	require.Equal(t, firstKey, again, "续装不换 moox-cli 的密钥")
 	require.Contains(t, h.calls, "deploy:control:admin,host-gateway,host-agent")
+	require.Contains(t, h.calls, "restore-secrets")
+	require.Contains(t, h.calls, "restore-channels")
 	require.Contains(t, h.calls, "verify")
+	require.Contains(t, h.calls, "mark-complete")
 	for _, call := range h.calls {
-		require.False(t, strings.HasPrefix(call, "wipe:"), "不带 --wipe 不清空")
+		require.False(t, strings.HasPrefix(call, "wipe:"), "选 --keep 不清空")
 	}
 }
 
-func TestSetupInstallWipesOnlyWithMatchingDigest(t *testing.T) {
+// 已装好（installed）时选 --keep：不需要 --space-id，只换二进制与配置（不初始化、不导入备份、不启动空间、不验收、不重写完成标记）。
+func TestSetupInstallInstalledKeepUpdatesWithoutSpaceIDOrInit(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
-	// 上一套部署留下的操作员身份：moox-cli 的私钥、控制机根证书与它的指纹。
+
+	out, err := h.run("install", "--keep", "--yes")
+	require.NoError(t, err)
+	require.Contains(t, out, `"status":"updated"`)
+	require.Contains(t, out, `"mode":"keep"`)
+	progress := slices.DeleteFunc(strings.Split(strings.TrimSpace(h.stderr), "\n"), func(line string) bool { return !strings.HasPrefix(line, "[") })
+	require.Len(t, progress, 8)
+	for i, line := range progress {
+		require.True(t, strings.HasPrefix(line, fmt.Sprintf("[%d/8] ", i+1)), line)
+	}
+	ready := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "ready:") })
+	require.Len(t, ready, 4, "最后对四台主机各等一次就绪")
+	sequence := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return strings.HasPrefix(call, "ready:") })
+	require.Equal(t, []string{
+		"firewall",
+		"deploy:control:admin,host-gateway,host-agent",
+		"deploy:storage",
+		"deploy:control",
+		"deploy:overseas",
+		"deploy:factor",
+	}, sequence)
+	require.NotContains(t, h.calls, "init-metadata")
+	require.NotContains(t, h.calls, "restore-secrets")
+	require.NotContains(t, h.calls, "restore-channels")
+	require.NotContains(t, h.calls, "init")
+	require.NotContains(t, h.calls, "start")
+	require.NotContains(t, h.calls, "doctor")
+	require.NotContains(t, h.calls, "verify")
+	require.NotContains(t, h.calls, "mark-complete")
+
+	// 一步失败时停下，报错带错误码和单独重跑这一步的命令。
+	h.calls, h.fail = nil, "deploy:overseas"
+	_, err = h.run("install", "--keep", "--yes")
+	require.ErrorContains(t, err, "install_step_failed")
+	require.ErrorContains(t, err, "moox-cli setup deploy --host overseas")
+	require.NotContains(t, h.calls, "deploy:factor")
+
+	// 没开 linger 时什么都不做。
+	h.calls, h.fail = nil, ""
+	h.report("storage").Linger = false
+	_, err = h.run("install", "--keep", "--yes")
+	require.ErrorContains(t, err, "manual_steps_required")
+	require.Empty(t, h.calls)
+}
+
+// 全部覆盖（--wipe）：校验摘要、先自动备份并打待导入标记、清空全部主机与操作员身份、全新安装、在就绪后且完整初始化前自动导入并清标记。
+func TestSetupInstallWipesBacksUpAndAutoRestores(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
 	oldKey, _, err := identitybundle.EnsureSigningKeyFile(filepath.Join(h.operator, identitybundle.OperatorKeyFile))
 	require.NoError(t, err)
 	for _, name := range []string{identitybundle.OperatorPinFile, identitybundle.OperatorCAFile} {
@@ -326,22 +655,309 @@ func TestSetupInstallWipesOnlyWithMatchingDigest(t *testing.T) {
 	out, err := h.run("install", "--space-id", "crypto")
 	require.NoError(t, err)
 	digest := parsePreview(t, out)["wipe"].(map[string]any)["digest"].(string)
+
+	// 备份失败时停下不清任何主机。
+	h.backupBeforeWipeErr = errors.New("admin down")
 	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest)
+	require.ErrorContains(t, err, "backup_failed")
+	require.Equal(t, []string{"backup-before-wipe"}, h.calls, "备份失败后不得清空任何主机")
+	h.backupBeforeWipeErr, h.calls = nil, nil
+
+	// 正常 --wipe：自动备份 → 清空 → 全新安装 → 自动导入 → 写完成标记。
+	out, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest)
 	require.NoError(t, err)
+	require.Contains(t, out, `"status":"installed"`)
+	require.Contains(t, out, `"mode":"wipe"`)
+	require.Contains(t, out, `"status":"imported"`)
 	wiped := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "wipe:") })
 	require.Len(t, wiped, 4)
+	require.Less(t, slices.Index(h.calls, "backup-before-wipe"), slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "wipe:") }))
 	require.Less(t, slices.IndexFunc(h.calls, func(call string) bool { return strings.HasPrefix(call, "wipe:") }), slices.Index(h.calls, "firewall"))
-	// 清空之后删掉这台电脑上的操作员身份；紧接着的安装第一步生成一把新的 moox-cli 私钥。
+	require.Less(t, slices.Index(h.calls, "restore-secrets"), slices.Index(h.calls, "deploy:factor"))
+	require.Less(t, slices.Index(h.calls, "restore-channels"), slices.Index(h.calls, "init"))
+	require.Contains(t, h.calls, "mark-complete")
+
+	// 备份已清掉待导入标记并记下 imported_at。
+	meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.False(t, meta.PendingImport)
+	require.NotEmpty(t, meta.ImportedAt)
+
+	// 清空之后删掉旧操作员身份并生成新的 moox-cli 私钥。
 	require.NoFileExists(t, filepath.Join(h.operator, identitybundle.OperatorPinFile))
 	require.NoFileExists(t, filepath.Join(h.operator, identitybundle.OperatorCAFile))
 	newKey, err := identitybundle.ReadOperatorKey(h.operator)
 	require.NoError(t, err)
 	require.NotEqual(t, identitybundle.PublicKey(oldKey), identitybundle.PublicKey(newKey))
 
-	// 没装过时带 --wipe 是多余的，直接拒绝。
+	// 没装过时带 --wipe 与 --keep 都拒绝。
 	h.calls = nil
+	for i := range h.reports {
+		h.reports[i].Installed, h.reports[i].InstallComplete, h.reports[i].Version = false, false, nil
+		h.reports[i].Entries, h.reports[i].Units = nil, nil
+	}
 	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest)
 	require.ErrorContains(t, err, "wipe_not_needed")
+	_, err = h.run("install", "--space-id", "crypto", "--yes", "--keep")
+	require.ErrorContains(t, err, "keep_not_needed")
+}
+
+// 2C-6 防误覆盖：卸载 → 安装中途失败 → 再卸载，不得用半成品覆盖已有待导入备份；
+// 且 --no-backup 卸载时会给本机已有手动备份打上待导入标记，重装后自动导入。
+func TestSetupWipePendingBackupProtectionAndNoBackupMarksExisting(t *testing.T) {
+	t.Run("mid_install_failure_then_rewipe_preserves_good_backup", func(t *testing.T) {
+		h := newInstallHarness(t)
+		h.markInstalled()
+		h.previewSecrets, h.previewChannels = 5, 2
+
+		out, err := h.run("install", "--space-id", "crypto")
+		require.NoError(t, err)
+		digest := parsePreview(t, out)["wipe"].(map[string]any)["digest"].(string)
+
+		// 第一次全部覆盖：备份成功写下 5 把密钥、2 个渠道，清空完成，安装中途在 overseas 失败。
+		h.fail = "deploy:overseas"
+		_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest)
+		require.ErrorContains(t, err, "install_step_failed")
+
+		// 备份文件仍带有待导入标记，且内容是完好的 5 把密钥、2 个渠道。
+		meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.True(t, meta.PendingImport)
+		require.Equal(t, 5, meta.Secrets.Count)
+
+		// 模拟安装中途已经把 control 装了一半（Admin 里只剩 1 把腾讯云密钥），再次 --wipe。
+		h.fail, h.calls = "", nil
+		h.markIncomplete()
+		h.previewSecrets, h.previewChannels = 1, 0
+
+		out, err = h.run("install", "--space-id", "crypto")
+		require.NoError(t, err)
+		preview := parsePreview(t, out)
+		backupPreview := preview["backup"].(map[string]any)
+		require.Equal(t, "reuse_pending", backupPreview["status"])
+		require.EqualValues(t, 5, backupPreview["secret_count"], "预览应显示将沿用原 5 把密钥的待导入备份")
+		digest2 := preview["wipe"].(map[string]any)["digest"].(string)
+
+		out, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest2)
+		require.NoError(t, err)
+		require.NotContains(t, h.calls, "backup-before-wipe", "已有待导入备份时再卸载绝不能重新导出覆盖")
+		require.Contains(t, out, `"secrets_created":5`)
+		require.Contains(t, out, `"channels_created":2`)
+
+		// 导入成功后标记清除。
+		meta, exists, err = setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.False(t, meta.PendingImport)
+	})
+
+	t.Run("no_backup_wipe_marks_existing_manual_backup_for_auto_import", func(t *testing.T) {
+		h := newInstallHarness(t)
+		h.markInstalled()
+
+		// 先写一份没有待导入标记的手动备份。
+		creds, err := setupbackup.DeriveCredentials(configcrypt.Default(), true)
+		require.NoError(t, err)
+		defer creds.Clear()
+		manualRaw, err := setupbackup.Seal(`{"format":"moox.secrets/v1","ciphertext":"manual"}`, 4, []setupbackup.Channel{
+			{ChannelType: "feishu", WebhookURL: "https://open.feishu.cn/hook/manual", Secret: "sec"},
+		}, creds, time.Now())
+		require.NoError(t, err)
+		require.NoError(t, setupbackup.WriteAtomic(h.backupPath(), manualRaw))
+
+		// Admin 起不来时预览依然成功（给出 digest 和 unavailable 说明），再带 --no-backup 卸载。
+		h.previewBackupErr = errors.New("admin unreachable")
+		out, err := h.run("wipe")
+		require.NoError(t, err)
+		preview := parsePreview(t, out)
+		require.Equal(t, "unavailable", preview["backup"].(map[string]any)["status"])
+		digest := preview["plan"].(map[string]any)["digest"].(string)
+
+		out, err = h.run("wipe", "--yes", "--expect", digest, "--no-backup")
+		require.NoError(t, err)
+		require.Contains(t, out, `"status":"wiped"`)
+		require.Contains(t, out, `"status":"marked_existing"`)
+		require.NotContains(t, h.calls, "backup-before-wipe")
+
+		// 本机已有备份被打上了待导入标记。
+		meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.True(t, meta.PendingImport)
+		require.Equal(t, 4, meta.Secrets.Count)
+
+		// 随后全新安装会自动导入这份已有备份并清标记。
+		h.calls = nil
+		out, err = h.run("install", "--space-id", "crypto", "--yes")
+		require.NoError(t, err)
+		require.Contains(t, out, `"secrets_created":4`)
+		require.Contains(t, out, `"channels_created":1`)
+		meta, exists, err = setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.False(t, meta.PendingImport)
+	})
+
+	t.Run("pending_flag_deferred_until_wipe_and_stale_when_installed", func(t *testing.T) {
+		h := newInstallHarness(t)
+		h.markInstalled()
+		h.previewSecrets, h.previewChannels = 5, 2
+
+		// 拦截 backupBeforeWipe 与 wipeHost，确认写出备份时不带 pending_import，真正开始清空主机时才打上标记。
+		origBackup := h.deps.backupBeforeWipe
+		origWipe := h.deps.wipeHost
+		var pendingRightAfterExport, pendingWhenWipeStarts bool
+		h.deps.backupBeforeWipe = func(ctx context.Context, file string, snapshot *setupSnapshot, backupPath string, overwritePending bool) (setupBackupOutput, error) {
+			out, err := origBackup(ctx, file, snapshot, backupPath, overwritePending)
+			if err == nil {
+				meta, exists, readErr := setupbackup.ReadMetadata(backupPath)
+				require.NoError(t, readErr)
+				require.True(t, exists)
+				pendingRightAfterExport = meta.PendingImport
+			}
+			return out, err
+		}
+		h.deps.wipeHost = func(ctx context.Context, host topology.Host, root string) (deployscan.HostResult, error) {
+			meta, exists, readErr := setupbackup.ReadMetadata(h.backupPath())
+			require.NoError(t, readErr)
+			require.True(t, exists)
+			h.mu.Lock()
+			if meta.PendingImport {
+				pendingWhenWipeStarts = true
+			}
+			h.mu.Unlock()
+			return origWipe(ctx, host, root)
+		}
+
+		// 模拟卸载清空 control 时失败（control 仍有 install-complete.json，系统仍处于已装好状态），但备份已打上待导入标记。
+		out, err := h.run("wipe")
+		require.NoError(t, err)
+		digest := parsePreview(t, out)["plan"].(map[string]any)["digest"].(string)
+		h.fail = "wipe:control"
+		_, err = h.run("wipe", "--yes", "--expect", digest)
+		require.ErrorContains(t, err, "boom wipe:control")
+		require.False(t, pendingRightAfterExport, "备份刚写出时不得带待导入标记")
+		require.True(t, pendingWhenWipeStarts, "真正开始清空主机前必须已打上待导入标记")
+
+		// 恢复其余主机状态、保留 control 的完成标记，模拟用户此时处于已装好状态却残留了 pending_import=true 的旧备份。
+		h.fail, h.calls = "", nil
+		h.markInstalled()
+		meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists && meta.PendingImport)
+
+		// 1) 控制机仍是 installed 时，待导入标记视为过期：下次卸载预览显示 will_backup，执行会重新导出并覆盖旧备份。
+		h.previewSecrets, h.previewChannels = 7, 3
+		out, err = h.run("wipe")
+		require.NoError(t, err)
+		preview := parsePreview(t, out)
+		backupPreview := preview["backup"].(map[string]any)
+		require.Equal(t, "will_backup", backupPreview["status"], "已装好状态下过期的待导入备份应重新导出覆盖")
+		require.EqualValues(t, 7, backupPreview["secret_count"])
+		digestNext := preview["plan"].(map[string]any)["digest"].(string)
+
+		// 2) 用户改走 --keep 保留数据更新：更新成功后应清掉过期的待导入标记。
+		out, err = h.run("install", "--keep", "--yes")
+		require.NoError(t, err)
+		require.Contains(t, out, `"status":"updated"`)
+		require.Contains(t, h.stderr, "已清除本机备份")
+		meta, exists, err = setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.False(t, meta.PendingImport, "--keep 更新成功后必须清掉过期的待导入标记")
+
+		// 3) 再次打上过期标记后走卸载：应重新导出（7 把密钥、3 个渠道）覆盖旧备份（5 把密钥）。
+		_, _, err = setupbackup.MarkPendingImport(h.backupPath())
+		require.NoError(t, err)
+		h.calls = nil
+		out, err = h.run("wipe", "--yes", "--expect", digestNext)
+		require.NoError(t, err)
+		require.Contains(t, out, `"status":"backed_up"`)
+		require.Contains(t, h.calls, "backup-before-wipe")
+		meta, exists, err = setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists && meta.PendingImport)
+		require.Equal(t, 7, meta.Secrets.Count, "已装好状态下过期的待导入备份应被新导出覆盖")
+		require.Equal(t, 3, meta.NotificationChannels.Count)
+	})
+
+	t.Run("reuse_existing_backup_checks_key_fingerprint_before_wipe", func(t *testing.T) {
+		// 用另一把钥匙串主密钥生成一份备份文件。
+		otherStore := &configcrypt.MemoryStore{}
+		otherCreds, err := setupbackup.DeriveCredentials(otherStore, true)
+		require.NoError(t, err)
+		defer otherCreds.Clear()
+		foreignRaw, err := setupbackup.Seal(`{"format":"moox.secrets/v1","ciphertext":"foreign"}`, 3, []setupbackup.Channel{
+			{ChannelType: "feishu", WebhookURL: "https://open.feishu.cn/hook/foreign", Secret: "s"},
+		}, otherCreds, time.Now())
+		require.NoError(t, err)
+
+		// 路径 1：incomplete 状态下沿用待导入备份，钥匙串指纹不符时预览提示且清空前报错不动主机。
+		h1 := newInstallHarness(t)
+		h1.markIncomplete()
+		require.NoError(t, setupbackup.WriteAtomic(h1.backupPath(), foreignRaw))
+		_, _, err = setupbackup.MarkPendingImport(h1.backupPath())
+		require.NoError(t, err)
+
+		out, err := h1.run("wipe")
+		require.NoError(t, err)
+		preview := parsePreview(t, out)
+		require.Equal(t, "key_mismatch", preview["backup"].(map[string]any)["status"])
+		digest1 := preview["plan"].(map[string]any)["digest"].(string)
+
+		_, err = h1.run("wipe", "--yes", "--expect", digest1)
+		require.ErrorContains(t, err, "backup_key_mismatch")
+		require.Empty(t, h1.calls, "指纹不符时不得清空任何主机")
+
+		// 路径 2：installed 状态下带 --no-backup 沿用本机已有备份，钥匙串指纹不符时预览提示且清空前报错不动主机。
+		h2 := newInstallHarness(t)
+		h2.markInstalled()
+		require.NoError(t, setupbackup.WriteAtomic(h2.backupPath(), foreignRaw))
+
+		out, err = h2.run("wipe", "--no-backup")
+		require.NoError(t, err)
+		preview = parsePreview(t, out)
+		require.Equal(t, "key_mismatch", preview["backup"].(map[string]any)["status"])
+		digest2 := preview["plan"].(map[string]any)["digest"].(string)
+
+		_, err = h2.run("wipe", "--yes", "--expect", digest2, "--no-backup")
+		require.ErrorContains(t, err, "backup_key_mismatch")
+		require.Empty(t, h2.calls, "带 --no-backup 沿用不匹配备份时不得清空任何主机")
+	})
+
+	t.Run("fresh_route_with_residual_data_allows_wipe", func(t *testing.T) {
+		h := newInstallHarness(t)
+		// 主机没有 version.json（route=fresh），但部署根留有没有格式文件的数据目录。
+		h.report("control").Entries = []string{"data"}
+		h.report("control").DataFormats = map[string]deployscan.ComponentDataFormat{
+			"admin": {HasData: true, FormatText: ""},
+		}
+
+		// 预检应输出 data_format 与 wipe 摘要。
+		out, err := h.run("install", "--space-id", "crypto")
+		require.NoError(t, err)
+		preview := parsePreview(t, out)
+		require.Equal(t, deployscan.RouteFresh, preview["route"])
+		require.Contains(t, preview, "data_format")
+		require.Contains(t, preview, "wipe")
+		digest := preview["wipe"].(map[string]any)["digest"].(string)
+		require.NotEmpty(t, digest)
+
+		// 直接新装会因格式未知被拒并提示 --wipe。
+		_, err = h.run("install", "--space-id", "crypto", "--yes")
+		require.ErrorContains(t, err, "data_format_incompatible")
+		require.Empty(t, h.calls)
+
+		// 带 --wipe <digest> --no-backup --yes 不再报 wipe_not_needed，可正常清残留并全新安装。
+		out, err = h.run("install", "--space-id", "crypto", "--wipe", digest, "--no-backup", "--yes")
+		require.NoError(t, err)
+		require.Contains(t, out, `"status":"installed"`)
+		require.Contains(t, out, `"mode":"wipe"`)
+		require.Contains(t, h.calls, "wipe:control")
+		require.Contains(t, h.calls, "mark-complete")
+	})
 }
 
 func TestSetupInstallStopsBeforeAnythingWhenLingerIsOff(t *testing.T) {
@@ -367,102 +983,12 @@ func TestSetupInstallFailsWhenComponentsNeverBecomeReady(t *testing.T) {
 	}
 	_, err := h.run("install", "--space-id", "crypto", "--yes")
 	require.ErrorContains(t, err, "overseas/trade（readyz 503）")
+	require.Contains(t, h.calls, "restore-secrets", "密钥导入在控制机 Admin 起来后即执行，早于部署其余主机与等就绪")
+	require.NotContains(t, h.calls, "restore-channels", "组件未就绪时不得导入告警渠道")
 	require.NotContains(t, h.calls, "init")
 }
 
-// 覆盖更新：没装过时拒绝；预览按主机列出要更新、新装、删掉的组件，不动任何东西。
-func TestSetupUpdatePreviewsPerHostComponents(t *testing.T) {
-	h := newInstallHarness(t)
-	_, err := h.run("update")
-	require.ErrorContains(t, err, "update_not_installed")
-	_, err = h.run("update", "--yes")
-	require.ErrorContains(t, err, "update_not_installed")
-	require.Empty(t, h.calls)
-
-	h.markInstalled()
-	// 因子机是新加的主机；控制机上还留着 moox.toml 里已经去掉的组件。
-	*h.report("factor") = deployscan.HostReport{Host: "factor", Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20, ArchiveKB: -1}
-	control := h.report("control")
-	control.Version = json.RawMessage(`{"version":"v0.0.1","components":{"admin":{},"host-gateway":{}}}`)
-	control.Units = []string{"moox-admin.service", "moox-host-gateway.service", "moox-old.service"}
-	// collector 从存储机挪到了控制机。
-	h.report("storage").Units = append(h.report("storage").Units, "moox-collector.service")
-	out, err := h.run("update")
-	require.NoError(t, err)
-	require.Empty(t, h.calls, "预览不改任何东西")
-	preview := parsePreview(t, out)
-	require.Equal(t, "update", preview["action"])
-	hosts := map[string]map[string]any{}
-	for _, host := range preview["hosts"].([]any) {
-		hosts[host.(map[string]any)["host"].(string)] = host.(map[string]any)
-	}
-	require.Equal(t, "v0.0.1", hosts["control"]["version"])
-	require.Contains(t, hosts["control"]["update"], "admin")
-	require.Contains(t, hosts["control"]["install"], "monitor")
-	require.Equal(t, []any{"old"}, hosts["control"]["remove"])
-	require.Empty(t, hosts["factor"]["update"])
-	require.Contains(t, hosts["factor"]["install"], "factor-engine")
-	require.Contains(t, hosts["storage"]["remove"], "collector")
-	require.Equal(t, []any{map[string]any{"component": "collector", "from": "storage", "to": "control"}}, preview["moves"], "换主机的组件单列：数据不迁移")
-	notes := preview["notes"].([]any)
-	require.Contains(t, notes[len(notes)-1], "主机 factor 还没装过")
-	require.Contains(t, preview["note"], "setup init")
-	for _, step := range preview["steps"].([]any) {
-		kind := step.(map[string]any)["kind"]
-		require.Contains(t, updateStepKinds, kind, "覆盖更新不初始化、不启动空间、不验收")
-	}
-}
-
-// 覆盖更新的执行顺序与安装一致，但没有初始化、启动空间与验收，也不清空。
-func TestSetupUpdateDeploysInInstallOrderWithoutInitOrStart(t *testing.T) {
-	h := newInstallHarness(t)
-	h.markInstalled()
-	out, err := h.run("update", "--yes")
-	require.NoError(t, err)
-	require.Contains(t, out, `"status":"updated"`)
-	progress := slices.DeleteFunc(strings.Split(strings.TrimSpace(h.stderr), "\n"), func(line string) bool { return !strings.HasPrefix(line, "[") })
-	require.Len(t, progress, 8)
-	for i, line := range progress {
-		require.True(t, strings.HasPrefix(line, fmt.Sprintf("[%d/8] ", i+1)), line)
-	}
-	ready := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "ready:") })
-	require.Len(t, ready, 4, "最后对四台主机各等一次就绪")
-	sequence := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return strings.HasPrefix(call, "ready:") })
-	require.Equal(t, []string{
-		"firewall",
-		"deploy:control:admin,host-gateway,host-agent",
-		"deploy:storage",
-		"deploy:control",
-		"deploy:overseas",
-		"deploy:factor",
-	}, sequence)
-
-	// 一步失败时停下，报错带错误码和单独重跑这一步的命令。
-	h.calls, h.fail = nil, "deploy:overseas"
-	_, err = h.run("update", "--yes")
-	require.ErrorContains(t, err, "update_step_failed")
-	require.ErrorContains(t, err, "moox-cli setup deploy --host overseas")
-	require.NotContains(t, h.calls, "deploy:factor")
-
-	// 存储机没装过：是安装没做完，不覆盖更新。
-	h.calls, h.fail = nil, ""
-	storage := *h.report("storage")
-	*h.report("storage") = deployscan.HostReport{Host: "storage", Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20}
-	_, err = h.run("update", "--yes")
-	require.ErrorContains(t, err, "update_not_installed")
-	require.ErrorContains(t, err, "setup install")
-	require.Empty(t, h.calls)
-	*h.report("storage") = storage
-
-	// 没开 linger 时什么都不做。
-	h.calls, h.fail = nil, ""
-	h.report("storage").Linger = false
-	_, err = h.run("update", "--yes")
-	require.ErrorContains(t, err, "manual_steps_required")
-	require.Empty(t, h.calls)
-}
-
-func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
+func TestSetupWipePreviewsBackupAndClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
 	h.report("factor").ArchiveKB = 2048
@@ -476,6 +1002,10 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	preview := parsePreview(t, out)
 	plan := preview["plan"].(map[string]any)
 	require.Equal(t, deployscan.Notice, plan["notice"])
+	backupPreview := preview["backup"].(map[string]any)
+	require.Equal(t, "will_backup", backupPreview["status"])
+	require.EqualValues(t, 3, backupPreview["secret_count"])
+	require.EqualValues(t, 2, backupPreview["channel_count"])
 	hosts := plan["hosts"].([]any)
 	require.Len(t, hosts, 4)
 	at := slices.IndexFunc(hosts, func(host any) bool { return host.(map[string]any)["host"] == "factor" })
@@ -483,7 +1013,7 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	factor := hosts[at].(map[string]any)
 	require.EqualValues(t, 2048, factor["archive_kb"], "预览里单独列出归档目录的大小")
 	require.Empty(t, h.calls, "预览不清空")
-	require.Contains(t, preview["note"], "主机 overseas 上有 Trade：清空会删除 Trade 库，先确认没有持仓和挂单")
+	require.Contains(t, preview["note"], "主机 overseas 上有 Trade：清空会删除 Trade 库")
 	require.Contains(t, preview["left_behind"], "云上的采集计划函数（moox-fetch-plan- 开头；要删加 --clean-functions）", "预览列出卸载不会动的东西")
 	require.Contains(t, preview["left_behind"], "COS 桶里的云函数代码包（带 --clean-functions 也不删）")
 	require.FileExists(t, filepath.Join(h.operator, identitybundle.OperatorKeyFile))
@@ -494,18 +1024,30 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	require.ErrorContains(t, err, "wipe_scope_changed")
 	require.Empty(t, h.calls)
 
+	// 备份失败时停下不清任何主机。
+	h.backupBeforeWipeErr = errors.New("gateway refused")
+	_, err = h.run("wipe", "--yes", "--expect", plan["digest"].(string))
+	require.ErrorContains(t, err, "backup_failed")
+	require.Equal(t, []string{"backup-before-wipe"}, h.calls)
+	h.backupBeforeWipeErr, h.calls = nil, nil
+
 	out, err = h.run("wipe", "--yes", "--expect", plan["digest"].(string))
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"wiped"`)
-	require.ElementsMatch(t, []string{"wipe:control", "wipe:storage", "wipe:overseas", "wipe:factor"}, h.calls)
-	// moox-cli 的私钥、控制机根证书与它的指纹都删掉：重装的控制机是新的 CA，操作身份也重新生成。
+	require.Contains(t, out, `"status":"backed_up"`)
+	require.Equal(t, "backup-before-wipe", h.calls[0], "清空前必须先备份")
+	require.ElementsMatch(t, []string{"backup-before-wipe", "wipe:control", "wipe:storage", "wipe:overseas", "wipe:factor"}, h.calls)
 	for _, name := range operatorFiles {
 		require.NoFileExists(t, filepath.Join(h.operator, name))
 	}
 	require.FileExists(t, filepath.Join(h.operator, "unrelated.txt"), "只删操作员身份")
+	meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.True(t, meta.PendingImport, "卸载写入的备份应带待导入标记")
 }
 
-// 一台清空失败时报错并保留操作员身份，重跑接着清。
+// 一台清空失败时报错并保留操作员身份，重跑接着清且不覆盖已写好的待导入备份。
 func TestSetupWipeReportsFailedHostAndKeepsOperatorIdentity(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
@@ -517,6 +1059,9 @@ func TestSetupWipeReportsFailedHostAndKeepsOperatorIdentity(t *testing.T) {
 	_, err = h.run("wipe", "--yes", "--expect", digest)
 	require.ErrorContains(t, err, "boom wipe:storage")
 	require.FileExists(t, filepath.Join(h.operator, identitybundle.OperatorKeyFile))
+	meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+	require.NoError(t, err)
+	require.True(t, exists && meta.PendingImport)
 }
 
 func TestSetupDeployPassesHostComponentsAndSources(t *testing.T) {
@@ -645,8 +1190,8 @@ func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 	require.NotContains(t, waited, "factor", "停用的主机整台不等")
 }
 
-// 停用的主机上仍留着 host-gateway 等部署：清空照样清它；覆盖更新的预检跳过它（它只写登记，可能连不上）。
-func TestSetupWipeIncludesDisabledHostButUpdateSkipsIt(t *testing.T) {
+// 停用的主机上仍留着 host-gateway 等部署：清空照样清它；保留更新的预检与执行跳过它（即使停用主机连不上）。
+func TestSetupWipeIncludesDisabledHostButKeepUpdateSkipsIt(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
 	disabled := false
@@ -655,12 +1200,31 @@ func TestSetupWipeIncludesDisabledHostButUpdateSkipsIt(t *testing.T) {
 	h.snapshot.Manifest.HostCatalog["factor"] = factor
 	require.False(t, h.snapshot.Manifest.HostByID("factor").Enabled)
 
-	out, err := h.run("update")
-	require.NoError(t, err)
-	for _, host := range parsePreview(t, out)["hosts"].([]any) {
-		require.NotEqual(t, "factor", host.(map[string]any)["host"], "覆盖更新的预检不检测停用的主机")
+	// 停用主机连不上时：setup install 预览仍成功，keep 可用、wipe 标为不可用；--keep --yes 照常执行。
+	origScan := h.deps.scanDeployment
+	h.deps.scanDeployment = func(ctx context.Context, snapshot *setupSnapshot, options deployscan.Options) ([]deployscan.HostReport, error) {
+		if options.Wipe {
+			return nil, errors.New("ssh unreachable factor")
+		}
+		return origScan(ctx, snapshot, options)
 	}
+	out, err := h.run("install")
+	require.NoError(t, err)
+	opts := parsePreview(t, out)["options"].(map[string]any)
+	keepOpt := opts["keep"].(map[string]any)
+	wipeOpt := opts["wipe"].(map[string]any)
+	require.Equal(t, true, keepOpt["available"])
+	require.Equal(t, false, wipeOpt["available"])
+	for _, host := range keepOpt["hosts"].([]any) {
+		require.NotEqual(t, "factor", host.(map[string]any)["host"], "保留更新的预检不检测停用的主机")
+	}
+	out, err = h.run("install", "--keep", "--yes")
+	require.NoError(t, err)
+	require.Contains(t, out, `"status":"updated"`)
 
+	// 停用主机恢复可达时，setup wipe 照常包含并清空它。
+	h.deps.scanDeployment = origScan
+	h.calls = nil
 	out, err = h.run("wipe")
 	require.NoError(t, err)
 	plan := parsePreview(t, out)["plan"].(map[string]any)
@@ -668,4 +1232,119 @@ func TestSetupWipeIncludesDisabledHostButUpdateSkipsIt(t *testing.T) {
 	_, err = h.run("wipe", "--yes", "--expect", plan["digest"].(string))
 	require.NoError(t, err)
 	require.Contains(t, h.calls, "wipe:factor")
+}
+
+// 2E-6：安装末尾先自检再验收；自检失败时不得进入 setup verify，也不得写完成标记；
+// 仅 Monitor 侧上报延迟时自检在时限内轮询等待，本机探测失败则立即返回。
+func TestSetupInstallDoctorStepOrderAndPolling(t *testing.T) {
+	h := newInstallHarness(t)
+	h.fail = "doctor"
+	_, err := h.run("install", "--space-id", "crypto", "--yes")
+	require.ErrorContains(t, err, "install_step_failed")
+	require.ErrorContains(t, err, "moox-cli doctor bootstrap --node control")
+	require.ErrorContains(t, err, "moox-cli doctor bootstrap --node factor")
+	require.Contains(t, h.calls, "doctor")
+	require.NotContains(t, h.calls, "verify", "自检失败后不得继续跑按空间验收")
+	require.NotContains(t, h.calls, "mark-complete", "自检失败后不得写完成标记")
+
+	// 仅 monitor.* 未通过时，等待 Monitor 首轮上报就位后通过。
+	attempts := 0
+	err = runSetupDoctorHost(t.Context(), "control", 200*time.Millisecond, 10*time.Millisecond, func(context.Context) (core.Report, error) {
+		attempts++
+		if attempts < 2 {
+			return core.Report{
+				Conclusion: core.ConclusionUnhealthy,
+				Checks: []core.CheckResult{
+					{ID: "service.health:monitor@control", Status: core.StatusPass},
+					{ID: "monitor.component:monitor@control", Status: core.StatusFail, Summary: "尚未收到监控上报"},
+				},
+			}, nil
+		}
+		return core.Report{
+			Conclusion: core.ConclusionHealthy,
+			Checks: []core.CheckResult{
+				{ID: "service.health:monitor@control", Status: core.StatusPass},
+				{ID: "monitor.component:monitor@control", Status: core.StatusPass},
+			},
+		}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts)
+
+	// 本机事实探测失败立即返回，不空等轮询。
+	localAttempts := 0
+	err = runSetupDoctorHost(t.Context(), "control", time.Second, 10*time.Millisecond, func(context.Context) (core.Report, error) {
+		localAttempts++
+		return core.Report{
+			Conclusion: core.ConclusionUnhealthy,
+			Checks: []core.CheckResult{
+				{ID: "service.health:monitor@control", Status: core.StatusFail, Summary: "本机 /readyz 未就绪"},
+			},
+		}, nil
+	})
+	require.ErrorContains(t, err, "service.health:monitor@control")
+	require.Equal(t, 1, localAttempts)
+}
+
+// 预检阶段对全部主机与组件试渲染一次（含 overrides 应用）：配置旧键在清空主机或触碰任何主机之前直接报错。
+func TestSetupInstallPreflightRenderRejectsObsoleteOverridesBeforeWipe(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	h.source = filepath.Join("..", "..", "..", "..")
+	h.deps.preflightRender = defaultSetupPreflightRender
+	h.snapshot.Manifest.Overrides = map[string]map[string]map[string]any{
+		"monitor": {
+			"app.yaml": {
+				"metrics.dataset_health_policy_path": "/tmp/policy.yaml",
+			},
+		},
+	}
+
+	// 1. 预览阶段即拒绝。
+	_, err := h.run("install", "--space-id", "crypto")
+	require.ErrorContains(t, err, "config_invalid")
+	require.ErrorContains(t, err, "metrics.dataset_health_policy_path")
+	require.Empty(t, h.calls)
+
+	// 2. 直接执行 --wipe --yes 也在备份与清空之前拒绝，不触碰任何主机。
+	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", "sha256:dummy")
+	require.ErrorContains(t, err, "config_invalid")
+	require.Empty(t, h.calls)
+}
+
+// 密钥导入成功后、部署因子机失败：待导入标记仍保留；--keep 续装时幂等重导密钥，等全部就绪导入告警渠道后才清除标记。
+func TestSetupInstallSplitRestoreKeepsPendingOnFactorFailureAndResumesIdempotently(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	h.previewSecrets, h.previewChannels = 4, 2
+
+	out, err := h.run("install", "--space-id", "crypto")
+	require.NoError(t, err)
+	digest := parsePreview(t, out)["wipe"].(map[string]any)["digest"].(string)
+
+	h.fail = "deploy:factor"
+	_, err = h.run("install", "--space-id", "crypto", "--yes", "--wipe", digest)
+	require.ErrorContains(t, err, "install_step_failed")
+	require.Contains(t, h.calls, "restore-secrets", "部署因子机之前已导入密钥")
+	require.NotContains(t, h.calls, "restore-channels")
+
+	meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+	require.NoError(t, err)
+	require.True(t, exists && meta.PendingImport, "仅导入密钥后中途失败，pending_import 必须保留")
+
+	// --keep 续装：幂等再导一次密钥，随后成功部署因子机并导入告警渠道，最终清除 pending_import。
+	h.fail, h.calls = "", nil
+	h.markIncomplete()
+	out, err = h.run("install", "--space-id", "crypto", "--keep", "--yes")
+	require.NoError(t, err)
+	require.Contains(t, h.calls, "restore-secrets")
+	require.Contains(t, h.calls, "restore-channels")
+	require.Less(t, slices.Index(h.calls, "restore-secrets"), slices.Index(h.calls, "deploy:factor"))
+	require.Contains(t, out, `"secrets_created":4`)
+	require.Contains(t, out, `"channels_created":2`)
+
+	meta, exists, err = setupbackup.ReadMetadata(h.backupPath())
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.False(t, meta.PendingImport, "密钥与告警渠道全部导入后应清除 pending_import")
 }

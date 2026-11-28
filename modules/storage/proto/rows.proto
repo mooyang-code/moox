@@ -7,22 +7,22 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 import "moox_common.proto";
 import "common.proto";
 
-// TimeSeriesRowKey identifies one time-series row. An empty series_tag is the
-// default series for the subject, frequency, and timestamp.
+// TimeSeriesRowKey 标识一行时序数据。series_tag 为空表示该标的与频率下的默认序列。
 message TimeSeriesRowKey {
   string subject_id = 1;
-  string freq = 2;
+  string frequency = 2;
   string data_time = 3;
   string series_tag = 4;
 }
 
-// RecordRowKey identifies one immutable record version.
+// RecordRowKey 标识一条记录数据的一个版本。
+// 写入时 version 必填；精确读与搜索时 version 可为空（精确读取最大版本，搜索按 version_range 范围匹配）。
 message RecordRowKey {
   string record_id = 1;
   string version = 2;
 }
 
-// RowKey is the only key accepted by Pebble field operations.
+// RowKey 是 Storage 唯一的行键消息，覆盖时序行与记录行。
 message RowKey {
   string space_id = 1;
   string dataset_id = 2;
@@ -32,60 +32,28 @@ message RowKey {
   }
 }
 
-// FieldValue is a typed value owned by a Dataset Field.
+// FieldValue 是属于数据集列的一个带类型字段值。
 message FieldValue {
   string field_id = 1;
   TypedValue value = 2;
 }
 
-// RowFieldUpsert is a partial row update. Omitted fields are left unchanged.
-message RowFieldUpsert {
+// Row 是 Storage 读写共用的行消息。
+// 写入时作为字段级增量更新（省略的字段与属性保持不变）；
+// PrimaryStore.ReadRows 按请求返回字段与属性；
+// PrimaryStore.ReadTimeSeriesRows 与 DataView 的查询响应不带 attributes（View 索引不保存行属性）。
+message Row {
   RowKey key = 1;
   repeated FieldValue fields = 2;
   map<string, TypedValue> attributes = 3;
 }
 
-message RowFieldValues {
-	RowKey key = 1;
-	repeated FieldValue fields = 2;
-	map<string, TypedValue> attributes = 3;
-}
-
-// Query key views are retained as read-only query contracts. Pebble writes
-// use RowKey above and never accept these request wrappers.
-message TimeSeriesKey {
-  string space_id = 1;
-  string dataset_id = 2;
-  string subject_id = 3;
-  string freq = 4;
-  string data_time = 5;
-  string series_tag = 6;
-}
-
+// TimeSeriesSelector 是时序范围查询条件（空间与数据集由外层请求指定）。
+// series_tag 为 optional：未设置表示匹配该标的与频率下的全部序列，显式设为空串表示只要默认序列。
 message TimeSeriesSelector {
-  string space_id = 1;
-  string dataset_id = 2;
-  string subject_id = 3;
-  string freq = 4;
-  optional string series_tag = 5;
-}
-
-message RecordKey {
-  string space_id = 1;
-  string dataset_id = 2;
-  string record_id = 3;
-  string version = 4;
-}
-
-message TimeSeriesRow {
-  TimeSeriesKey key = 1;
-  repeated FieldValue fields = 2;
-}
-
-message RecordRow {
-  RecordKey key = 1;
-  repeated FieldValue fields = 2;
-  map<string, string> attributes = 3;
+  string subject_id = 1;
+  string frequency = 2;
+  optional string series_tag = 3;
 }
 
 // ReadTimeSeriesRowsReq 读取时序事实，由主服务的 Pebble 存储回答，所有调用方的结果一致。
@@ -95,7 +63,7 @@ message RecordRow {
 message ReadTimeSeriesRowsReq {
   string space_id = 2;
   string dataset_id = 3;
-  // selectors 最多 100 个；每个带 subject_id 与 freq，series_tag 可选（不带表示该标的全部序列）。
+  // selectors 最多 100 个；每个带 subject_id 与 frequency，series_tag 可选（不带表示该标的全部序列）。
   repeated TimeSeriesSelector selectors = 4;
   // column_names 必填，返回这些列的值。
   repeated string column_names = 5;
@@ -112,7 +80,7 @@ message ReadTimeSeriesRowsReq {
 message CountTimeSeriesRowsReq {
   string space_id = 2;
   string dataset_id = 3;
-  // selectors 需要 subject_id 与 freq，同一请求属于同一数据集。
+  // selectors 需要 subject_id 与 frequency，同一请求属于同一数据集。
   repeated TimeSeriesSelector selectors = 4;
   TimeRange time_range = 5;
 }
@@ -139,7 +107,7 @@ message DatasetChangeCursor {
 // DatasetChangeRange 是一个时间序列标的在一次写入里受影响的时间点范围（含两端，RFC3339Nano UTC）。
 message DatasetChangeRange {
   string subject_id = 1;
-  string freq = 2;
+  string frequency = 2;
   string start_time = 3;
   string end_time = 4;
 }
@@ -189,7 +157,8 @@ message ReadDatasetChangesRsp {
 
 message ReadTimeSeriesRowsRsp {
   common.RetInfo ret_info = 1;
-  repeated TimeSeriesRow rows = 2;
+  // rows 是读取到的时序数据行（不带 attributes）。
+  repeated Row rows = 2;
   // page_result.next_cursor 非空表示还有下一页，原样放进下一次请求的 page.cursor。
   common.PageResult page_result = 3;
 }

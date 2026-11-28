@@ -1,6 +1,7 @@
 package configinit
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -43,12 +44,10 @@ func TestGetConfigMasksSecretsUnlessRevealed(t *testing.T) {
 	require.ErrorContains(t, err, "加 --file "+secretsPath)
 }
 
-// 秘密文件默认整份打码，只有用来辨认是哪一项的键（用户名、渠道类型、交易所密钥的名称、交易所、环境、只读）看得见：
-// 告警 Webhook 地址里带着企业微信的 key、钉钉的 access_token，不能明文打到终端或 Agent 对话里。
+// 秘密文件默认整份打码，只有用来辨认是哪一项的键（用户名）看得见；其余密码、密钥在加 --reveal 后才明文返回。
 func TestGetConfigMasksTheWholeSecretsFileExceptIdentifyingKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, topology.SecretsFileName)
-	const webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=wecom-key-123"
 	plain := `[admin]
 username = "admin"
 password = "Adm1n-P@ss"
@@ -57,17 +56,9 @@ password = "Adm1n-P@ss"
 secret_id = "AKIDexample"
 secret_key = "sk-example"
 
-[notification]
-channel_type = "wecom"
-webhook_url = "` + webhook + `"
-
-[[exchange_keys]]
-name = "main"
-exchange = "binance"
-environment = "production"
-api_key = "api-example"
-secret_key = "secret-example"
-readonly = true
+[logging.cls]
+writer_secret_id = "AKIDwriter"
+writer_secret_key = "sk-writer"
 `
 	require.NoError(t, os.WriteFile(path, []byte(plain), 0o600))
 	keys := &configcrypt.MemoryStore{}
@@ -76,22 +67,19 @@ readonly = true
 	require.NoError(t, err)
 	encoded, err := json.Marshal(whole)
 	require.NoError(t, err)
-	for _, secret := range []string{webhook, "wecom-key-123", "Adm1n-P@ss", "AKIDexample", "sk-example", "api-example", "secret-example"} {
+	for _, secret := range []string{"Adm1n-P@ss", "AKIDexample", "sk-example", "AKIDwriter", "sk-writer"} {
 		require.NotContains(t, string(encoded), secret)
 	}
-	notification, err := GetConfig(path, "notification", false, keys)
+	admin, err := GetConfig(path, "admin", false, keys)
 	require.NoError(t, err)
-	require.Equal(t, map[string]any{"channel_type": "wecom", "webhook_url": MaskedValue}, notification)
-	url, err := GetConfig(path, "notification.webhook_url", false, keys)
+	require.Equal(t, map[string]any{"username": "admin", "password": MaskedValue}, admin)
+	cls, err := GetConfig(path, "logging.cls", false, keys)
 	require.NoError(t, err)
-	require.Equal(t, MaskedValue, url)
-	exchange, err := GetConfig(path, "exchange_keys.0", false, keys)
-	require.NoError(t, err)
-	require.Equal(t, map[string]any{"name": "main", "exchange": "binance", "environment": "production", "api_key": MaskedValue, "secret_key": MaskedValue, "readonly": true}, exchange)
+	require.Equal(t, map[string]any{"writer_secret_id": MaskedValue, "writer_secret_key": MaskedValue}, cls)
 
-	url, err = GetConfig(path, "notification.webhook_url", true, keys)
+	writerKey, err := GetConfig(path, "logging.cls.writer_secret_key", true, keys)
 	require.NoError(t, err)
-	require.Equal(t, webhook, url, "--reveal 才明文")
+	require.Equal(t, "sk-writer", writerKey, "--reveal 才明文")
 }
 
 // config 各命令读秘密文件用 CLI 同一套校验：符号链接、不属于本人的文件都拒绝。
@@ -195,4 +183,39 @@ func TestSetConfigTypesAndRefusals(t *testing.T) {
 	require.Equal(t, `"240d"`, tomlScalar("240d"))
 	require.Equal(t, `  # 说明`, trailingComment(`"a"  # 说明`))
 	require.Equal(t, "", trailingComment(`"a#b"`))
+}
+
+// 含废弃段的旧秘密文件执行 SetConfig 时只校验一次 ParseSecrets，最多打印一行提示（校验失败时不误打提示）。
+func TestSetConfigDeprecatedSecretsNoticePrintedOnce(t *testing.T) {
+	var notice bytes.Buffer
+	restore := topology.SetDeprecatedSecretsNoticeForTest(&notice)
+	t.Cleanup(restore)
+
+	dir := t.TempDir()
+	secretsPath := filepath.Join(dir, topology.SecretsFileName)
+	legacy := `[admin]
+username = "admin"
+password = "Adm1n-Password-123"
+
+[tencent_cloud]
+secret_id = "AKIDexample"
+secret_key = "sk-example"
+
+["notification"]
+channel_type = "wecom"
+webhook_url = "https://example.com/hook"
+`
+	require.NoError(t, os.WriteFile(secretsPath, []byte(legacy), 0o600))
+	keys := &configcrypt.MemoryStore{}
+
+	report, err := SetConfig(secretsPath, "admin.username", "ops", false, keys, nil)
+	require.NoError(t, err)
+	require.True(t, report.Valid)
+	require.Equal(t, 1, strings.Count(notice.String(), "已不再使用"), "提示只能打印一次，实际：%q", notice.String())
+
+	// 改写后的配置校验失败时不应打印废弃段提示。
+	notice.Reset()
+	_, err = SetConfig(secretsPath, "admin.password", "", false, keys, nil)
+	require.ErrorContains(t, err, "校验没有通过")
+	require.Empty(t, notice.String())
 }

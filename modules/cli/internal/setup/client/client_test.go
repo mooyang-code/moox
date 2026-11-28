@@ -12,6 +12,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -27,8 +28,7 @@ func (f *fakeForwarder) Invoke(ctx context.Context, service, method string, req,
 	return (testfixture.HandlerGateway{Handler: f.handler}).Invoke(ctx, service, method, req, rsp)
 }
 
-// clientSecrets 是测试用的秘密文件内容，extra 可以在后面追加一段 TOML（例如 [[exchange_keys]]）。
-func clientSecrets(t *testing.T, extra string) *topology.Secrets {
+func clientSecrets(t *testing.T) *topology.Secrets {
 	t.Helper()
 	secrets, err := topology.ParseSecrets([]byte(`[admin]
 username = "admin"
@@ -37,7 +37,7 @@ password = "recognizable-admin-password"
 [tencent_cloud]
 secret_id = "recognizable-secret-id"
 secret_key = "recognizable-secret-key"
-` + extra))
+`))
 	require.NoError(t, err)
 	return &secrets
 }
@@ -63,42 +63,56 @@ compute = []
 	return &cfg
 }
 
-func TestApplyUsesCommandGateway(t *testing.T) {
+func TestApplyUsesSecretMgrEnsureInitialSecret(t *testing.T) {
 	var capturedPath string
-	var capturedRequest pb.ApplySetupReq
+	var capturedBody []byte
+	var capturedRequest pb.EnsureInitialSecretReq
 	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		capturedPath = request.URL.Path
-		body, _ := io.ReadAll(request.Body)
-		_ = protojson.Unmarshal(body, &capturedRequest)
-		response, _ := protojson.Marshal(&pb.ApplySetupRsp{
-			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created", Users: 1, Secrets: 1,
+		capturedBody, _ = io.ReadAll(request.Body)
+		_ = protojson.Unmarshal(capturedBody, &capturedRequest)
+		response, _ := protojson.Marshal(&pb.EnsureInitialSecretRsp{
+			RetInfo:  &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+			Action:   "created",
+			SecretId: tencentDefaultSecretID,
 		})
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).Apply(context.Background(), clientSecrets(t, ""))
+	result, err := New(forwarder).Apply(context.Background(), clientSecrets(t))
 	require.NoError(t, err)
 	assert.Equal(t, "created", result.Action)
-	assert.Equal(t, "trpc.moox.admin.Setup", forwarder.remote)
-	assert.Equal(t, "/trpc.moox.admin.Setup/ApplySetup", capturedPath)
-	assert.Equal(t, "recognizable-secret-key", capturedRequest.GetTencentCloud().GetSecretKey())
+	assert.Equal(t, tencentDefaultSecretID, result.SecretID)
+	assert.Empty(t, result.Kept)
+	assert.Equal(t, secretMgrService, forwarder.remote)
+	assert.Equal(t, "/api/admin/secret/EnsureInitialSecret", capturedPath)
+	assert.Equal(t, tencentDefaultSecretID, capturedRequest.GetSecret().GetSecretId())
+	assert.Equal(t, "cloud", capturedRequest.GetSecret().GetCategory())
+	assert.Equal(t, "tencent", capturedRequest.GetSecret().GetProvider())
+	assert.Equal(t, "recognizable-secret-id", capturedRequest.GetSecret().GetKeyId())
+	assert.Equal(t, "recognizable-secret-key", capturedRequest.GetSecret().GetSecretValue())
+	assert.NotContains(t, string(capturedBody), "recognizable-admin-password", "初始化密钥 RPC 不得发送管理员明文密码")
+
+	raw, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "recognizable-secret-key")
+	assert.NotContains(t, string(raw), "recognizable-secret-id")
 }
 
-func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
-	var capturedRequest pb.GetSetupStatusReq
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		body, _ := io.ReadAll(request.Body)
-		_ = protojson.Unmarshal(body, &capturedRequest)
-		response, _ := protojson.Marshal(&pb.GetSetupStatusRsp{
-			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed", Users: 1, Secrets: 1,
+func TestApplyReportsKeptWhenConsoleSecretDiffers(t *testing.T) {
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response, _ := protojson.Marshal(&pb.EnsureInitialSecretRsp{
+			RetInfo:  &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+			Action:   "kept",
+			SecretId: tencentDefaultSecretID,
 		})
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).Status(context.Background(), clientSecrets(t, ""))
+	result, err := New(forwarder).Apply(context.Background(), clientSecrets(t))
 	require.NoError(t, err)
-	assert.Equal(t, "completed", result.State)
-	assert.Equal(t, "recognizable-admin-password", capturedRequest.GetAdmin().GetPassword())
+	assert.Equal(t, "kept", result.Action)
+	assert.Equal(t, []string{"tencent_cloud"}, result.Kept)
 }
 
 func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
@@ -113,114 +127,11 @@ func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 			forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, tt.body)
 			})}
-			_, err := New(forwarder).Apply(context.Background(), clientSecrets(t, ""))
+			_, err := New(forwarder).Apply(context.Background(), clientSecrets(t))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 			assert.NotContains(t, err.Error(), "recognizable-secret-key")
 			assert.NotContains(t, err.Error(), "recognizable-admin-password")
 		})
 	}
-}
-
-func TestApplyAndStatusCarryExchangeKeysBothWays(t *testing.T) {
-	extra := `
-[[exchange_keys]]
-name = "readonly"
-exchange = "binance"
-environment = "production"
-api_key = "recognizable-api-key"
-secret_key = "recognizable-exchange-secret"
-readonly = true
-
-[[exchange_keys]]
-name = "main"
-exchange = "okx"
-environment = "testnet"
-api_key = "okx-key"
-secret_key = "okx-secret"
-passphrase = "recognizable-passphrase"
-`
-	snapshot := clientSecrets(t, extra)
-	var applyRequest pb.ApplySetupReq
-	var statusRequest pb.GetSetupStatusReq
-	results := []*pb.SetupExchangeKeyResult{
-		{SecretId: "exchange-binance-production-readonly", State: "created", Readonly: true},
-		{SecretId: "exchange-okx-testnet-main", State: "deleted"},
-	}
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		body, _ := io.ReadAll(request.Body)
-		var response []byte
-		if request.URL.Path == "/trpc.moox.admin.Setup/ApplySetup" {
-			_ = protojson.Unmarshal(body, &applyRequest)
-			response, _ = protojson.Marshal(&pb.ApplySetupRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created", Users: 1, Secrets: 3, ExchangeKeys: results})
-		} else {
-			_ = protojson.Unmarshal(body, &statusRequest)
-			response, _ = protojson.Marshal(&pb.GetSetupStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed", Users: 1, Secrets: 3, ExchangeKeys: results})
-		}
-		_, _ = w.Write(response)
-	})}
-
-	applied, err := New(forwarder).Apply(context.Background(), snapshot)
-	require.NoError(t, err)
-	require.Len(t, applyRequest.GetExchangeKeys(), 2)
-	first := applyRequest.GetExchangeKeys()[0]
-	assert.Equal(t, "readonly", first.GetName())
-	assert.Equal(t, "binance", first.GetExchange())
-	assert.Equal(t, "production", first.GetEnvironment())
-	assert.Equal(t, "recognizable-api-key", first.GetApiKey())
-	assert.Equal(t, "recognizable-exchange-secret", first.GetSecretKey())
-	assert.True(t, first.GetReadonly())
-	assert.Equal(t, "recognizable-passphrase", applyRequest.GetExchangeKeys()[1].GetPassphrase())
-	assert.Equal(t, 3, applied.Secrets)
-	assert.Equal(t, []ExchangeKeyResult{
-		{SecretID: "exchange-binance-production-readonly", State: "created", ReadOnly: true, Note: "已写入密钥管理"},
-		{SecretID: "exchange-okx-testnet-main", State: "deleted", Note: "已在管理台删除，未重建"},
-	}, applied.ExchangeKeys)
-
-	status, err := New(forwarder).Status(context.Background(), snapshot)
-	require.NoError(t, err)
-	assert.Len(t, statusRequest.GetExchangeKeys(), 2, "状态查询也要带上密钥，Admin 才能按固定 ID 判断")
-	assert.Equal(t, "completed", status.State)
-	assert.Equal(t, "deleted", status.ExchangeKeys[1].State)
-
-	// 打印出来的结果里没有密钥值。
-	raw, err := json.Marshal(applied)
-	require.NoError(t, err)
-	for _, value := range []string{"recognizable-api-key", "recognizable-exchange-secret", "recognizable-passphrase"} {
-		assert.NotContains(t, string(raw), value)
-	}
-}
-
-// 旧的 Admin 不认识 exchange_keys 字段，会静默丢掉它并返回成功：CLI 要能发现，不能让用户以为密钥已经写入。
-func TestApplyAndStatusFailWhenAdminIgnoresExchangeKeys(t *testing.T) {
-	extra := `
-[[exchange_keys]]
-name = "readonly"
-exchange = "binance"
-environment = "production"
-api_key = "k"
-secret_key = "s"
-readonly = true
-`
-	snapshot := clientSecrets(t, extra)
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		var response []byte
-		if request.URL.Path == "/trpc.moox.admin.Setup/ApplySetup" {
-			response, _ = protojson.Marshal(&pb.ApplySetupRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created", Users: 1, Secrets: 1})
-		} else {
-			response, _ = protojson.Marshal(&pb.GetSetupStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed", Users: 1, Secrets: 1})
-		}
-		_, _ = w.Write(response)
-	})}
-	_, err := New(forwarder).Apply(context.Background(), snapshot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "先升级管理后台")
-	_, err = New(forwarder).Status(context.Background(), snapshot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "setup_admin_outdated")
-
-	// 没有交易所密钥时不受影响。
-	plain := clientSecrets(t, "")
-	_, err = New(forwarder).Apply(context.Background(), plain)
-	require.NoError(t, err)
 }

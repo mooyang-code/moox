@@ -14,8 +14,7 @@ import (
 type Metadata interface {
 	GetTag(context.Context, *storagepb.GetTagReq, ...client.Option) (*storagepb.GetTagRsp, error)
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
-	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
-	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
+	UpsertDataset(context.Context, *storagepb.UpsertDatasetReq, ...client.Option) (*storagepb.UpsertDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 	ResolveSubjects(context.Context, *storagepb.ResolveSubjectsReq, ...client.Option) (*storagepb.ResolveSubjectsRsp, error)
@@ -23,7 +22,6 @@ type Metadata interface {
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 	ApplyTagSnapshot(context.Context, *storagepb.ApplyTagSnapshotReq, ...client.Option) (*storagepb.ApplyTagSnapshotRsp, error)
 	UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error)
-	GetDataSource(context.Context, *storagepb.GetDataSourceReq, ...client.Option) (*storagepb.GetDataSourceRsp, error)
 	ListSubjects(context.Context, *storagepb.ListSubjectsReq, ...client.Option) (*storagepb.ListSubjectsRsp, error)
 }
 
@@ -72,12 +70,8 @@ func (c *Client) GetDataset(ctx context.Context, request *storagepb.GetDatasetRe
 	return invoke[storagepb.GetDatasetRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "GetDataset", request, options)
 }
 
-func (c *Client) CreateDataset(ctx context.Context, request *storagepb.CreateDatasetReq, options ...client.Option) (*storagepb.CreateDatasetRsp, error) {
-	return invoke[storagepb.CreateDatasetRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "CreateDataset", request, options)
-}
-
-func (c *Client) UpdateDataset(ctx context.Context, request *storagepb.UpdateDatasetReq, options ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
-	return invoke[storagepb.UpdateDatasetRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpdateDataset", request, options)
+func (c *Client) UpsertDataset(ctx context.Context, request *storagepb.UpsertDatasetReq, options ...client.Option) (*storagepb.UpsertDatasetRsp, error) {
+	return invoke[storagepb.UpsertDatasetRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpsertDataset", request, options)
 }
 
 func (c *Client) DeleteDataset(ctx context.Context, request *storagepb.DeleteDatasetReq, options ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
@@ -114,10 +108,6 @@ func (c *Client) ListTagMembers(ctx context.Context, request *storagepb.ListTagM
 
 func (c *Client) SetTagMemberTradingStatus(ctx context.Context, request *storagepb.SetTagMemberTradingStatusReq, options ...client.Option) (*storagepb.SetTagMemberTradingStatusRsp, error) {
 	return invoke[storagepb.SetTagMemberTradingStatusRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "SetTagMemberTradingStatus", request, options)
-}
-
-func (c *Client) GetDataSource(ctx context.Context, request *storagepb.GetDataSourceReq, options ...client.Option) (*storagepb.GetDataSourceRsp, error) {
-	return invoke[storagepb.GetDataSourceRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "GetDataSource", request, options)
 }
 
 func (c *Client) ListSubjects(ctx context.Context, request *storagepb.ListSubjectsReq, options ...client.Option) (*storagepb.ListSubjectsRsp, error) {

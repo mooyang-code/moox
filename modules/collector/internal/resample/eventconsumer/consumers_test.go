@@ -3,6 +3,7 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sync"
 	"testing"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +22,7 @@ type fakeTriggers struct {
 	periodErrs int
 }
 
-func (f *fakeTriggers) OnPeriod(_ context.Context, spaceID string, payload *storagepb.DatasetPeriodCompleted) error {
+func (f *fakeTriggers) OnPeriod(_ context.Context, spaceID string, payload *eventpb.DatasetPeriodCompleted) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.periodErrs > 0 {
@@ -33,7 +33,7 @@ func (f *fakeTriggers) OnPeriod(_ context.Context, spaceID string, payload *stor
 	return nil
 }
 
-func (f *fakeTriggers) OnBackfilled(_ context.Context, spaceID, eventID string, payload *storagepb.CollectorKlineBackfilled) error {
+func (f *fakeTriggers) OnBackfilled(_ context.Context, spaceID, eventID string, payload *eventpb.CollectorKlineBackfilled) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.backfills = append(f.backfills, spaceID+"/"+eventID+"/"+payload.GetDatasetId())
@@ -80,21 +80,21 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 	publisher := publisherFor(t, server, registry)
 
 	period := time.Date(2026, 10, 21, 10, 10, 0, 0, time.UTC)
-	_, err = publisher.Publish(context.Background(), events.DatasetPeriodCompleted, &storagepb.DatasetPeriodCompleted{
+	_, err = publisher.Publish(context.Background(), events.DatasetPeriodCompleted, &eventpb.DatasetPeriodCompleted{
 		DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
 		UniverseSubjectIds: []string{"BTC"},
 		Source:             "ledger", SnapshotRef: "snapshot", CompletedAt: period.Add(6 * time.Minute).UnixMilli(),
 	}, events.PublishOptions{EventID: "evt-period", OccurredAt: period.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
 	// 通配消费者同时接收任意自定义空间的事件。
-	_, err = publisher.Publish(context.Background(), events.DatasetPeriodCompleted, &storagepb.DatasetPeriodCompleted{
+	_, err = publisher.Publish(context.Background(), events.DatasetPeriodCompleted, &eventpb.DatasetPeriodCompleted{
 		DatasetId: "dataset_ext", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
 		UniverseSubjectIds: []string{"SYM"},
 		Source:             "ledger", SnapshotRef: "snapshot", CompletedAt: period.Add(6 * time.Minute).UnixMilli(),
 	}, events.PublishOptions{EventID: "evt-period-sandbox", OccurredAt: period.Add(5 * time.Minute), SpaceID: "sandbox", SubjectID: "dataset_ext"})
 	require.NoError(t, err)
 	confirmed := period.Add(time.Hour)
-	_, err = publisher.Publish(context.Background(), events.CollectorKlineBackfilled, &storagepb.CollectorKlineBackfilled{
+	_, err = publisher.Publish(context.Background(), events.CollectorKlineBackfilled, &eventpb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: period.Unix(), End: period.Add(5 * time.Minute).Unix(),
 		Origin: "auto", ConfirmedAt: confirmed.UnixMilli(),
 	}, events.PublishOptions{EventID: "kbf-1", OccurredAt: confirmed, SpaceID: "sandbox", SubjectID: "dataset_src"})

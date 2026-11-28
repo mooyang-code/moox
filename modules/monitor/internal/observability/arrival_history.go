@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 )
@@ -181,7 +182,7 @@ func arrivalStage(row monmetrics.BarArrival, sourceID, factorID string) string {
 }
 
 // arrivalPoint 按市场交易日历算出这一根的收线时间、延迟与跳过的根数。日历算不出时按名义周期推算收线、不数跳过的根。
-func arrivalPoint(clock monmetrics.MarketClock, freq frequencypkg.Frequency, record monmetrics.BarArrival) ArrivalPoint {
+func arrivalPoint(clock marketclock.MarketClock, freq frequencypkg.Frequency, record monmetrics.BarArrival) ArrivalPoint {
 	point := ArrivalPoint{Close: record.BarAt.Add(freq.NominalDuration())}
 	bar, err := clock.BarAt(record.BarAt, freq)
 	if err == nil {

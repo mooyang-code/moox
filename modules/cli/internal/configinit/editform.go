@@ -13,7 +13,7 @@ import (
 )
 
 // ConfigForm 是配置页「修改配置」里可以改的项：只放常用设置，用中文表单呈现，不暴露配置文件原文。
-// 账号、云密钥、告警渠道与交易所密钥写回 moox.secrets.toml，其余写回 moox.toml；
+// 账号与云密钥写回 moox.secrets.toml，其余写回 moox.toml；
 // 其余高级设置（云函数计划、出口代理、路径、覆盖项等）保存时原样保留。
 type ConfigForm struct {
 	Admin struct {
@@ -24,17 +24,10 @@ type ConfigForm struct {
 		SecretID  string `json:"secret_id"`
 		SecretKey string `json:"secret_key"`
 	} `json:"tencent"`
-	Notification struct {
-		ChannelType string `json:"channel_type"`
-		WebhookURL  string `json:"webhook_url"`
-		Secret      string `json:"secret"`
-	} `json:"notification"`
 	// ArchiveObjectStore 是 [archive_object_store]：关闭时整段删除。
 	ArchiveObjectStore FormObjectStore `json:"archive_object_store"`
-	// ExchangeKeys 是交易所密钥的完整列表：保存时整体替换配置里的全部 [[exchange_keys]]；不带这个字段（nil）则不改。
-	ExchangeKeys []ExchangeKeyEntry `json:"exchange_keys"`
-	Hosts        []FormHost         `json:"hosts"`
-	Retention    FormRetention      `json:"retention"`
+	Hosts              []FormHost      `json:"hosts"`
+	Retention          FormRetention   `json:"retention"`
 }
 
 // FormObjectStore 是归档对象存储一组：标准 S3 接口的连接参数与管理台密钥的 secret_id（不含密钥值）。
@@ -101,7 +94,6 @@ func formFrom(pair ConfigPair) ConfigForm {
 	m, sec := pair.Config, pair.Secrets
 	form.Admin.Username, form.Admin.Password = sec.Admin.Username, sec.Admin.Password
 	form.Tencent.SecretID, form.Tencent.SecretKey = sec.TencentCloud.SecretID, sec.TencentCloud.SecretKey
-	form.Notification.ChannelType, form.Notification.WebhookURL, form.Notification.Secret = sec.Notification.ChannelType, sec.Notification.WebhookURL, sec.Notification.Secret
 	// 没配时给出常用的默认值（低频存储、虚拟主机风格、HTTPS），开关关着。
 	form.ArchiveObjectStore = FormObjectStore{Prefix: "moox-archive/", URLStyle: "virtual", UseTLS: true, StorageClass: "STANDARD_IA"}
 	if s := m.ArchiveObjectStore; s != nil {
@@ -110,7 +102,6 @@ func formFrom(pair ConfigPair) ConfigForm {
 			UseTLS: s.TLS(), StorageClass: s.StorageClass, SecretID: s.SecretID,
 		}
 	}
-	form.ExchangeKeys = exchangeKeyEntries(sec)
 	for _, server := range describeServers(m) {
 		host := m.HostCatalog[server.ID]
 		form.Hosts = append(form.Hosts, FormHost{
@@ -174,30 +165,17 @@ func applyForm(pair ConfigPair, form ConfigForm) (config, secrets []byte, err er
 	for _, field := range []struct{ name, value string }{
 		{"管理员用户名", form.Admin.Username}, {"管理员密码", form.Admin.Password},
 		{"腾讯云 SecretId", form.Tencent.SecretID}, {"腾讯云 SecretKey", form.Tencent.SecretKey},
-		{"告警渠道", form.Notification.ChannelType}, {"告警 Webhook 地址", form.Notification.WebhookURL},
-		{"告警渠道的密钥", form.Notification.Secret},
 	} {
 		if err := checkText(field.name, field.value, false); err != nil {
 			return nil, nil, err
 		}
 	}
-	secretLines := strings.Split(string(pair.SecretsText), "\n")
+	secretLines := stripDeprecatedSecretLines(strings.Split(string(pair.SecretsText), "\n"))
 	setSecret := func(section, key, value string) { secretLines = putKey(secretLines, section, key, value) }
 	setSecret("admin", "username", tomlString(strings.TrimSpace(form.Admin.Username)))
 	setSecret("admin", "password", tomlString(form.Admin.Password))
 	setSecret("tencent_cloud", "secret_id", tomlString(strings.TrimSpace(form.Tencent.SecretID)))
 	setSecret("tencent_cloud", "secret_key", tomlString(form.Tencent.SecretKey))
-	setSecret("notification", "channel_type", tomlString(strings.TrimSpace(form.Notification.ChannelType)))
-	setSecret("notification", "webhook_url", tomlString(strings.TrimSpace(form.Notification.WebhookURL)))
-	setSecret("notification", "secret", tomlString(strings.TrimSpace(form.Notification.Secret)))
-	// 表单没有带交易所密钥列表（nil）时保持原样；带了空列表（[]）才表示全部删除，免得漏传字段把密钥清掉。
-	if form.ExchangeKeys != nil {
-		entries, err := normalizeExchangeKeyEntries(form.ExchangeKeys)
-		if err != nil {
-			return nil, nil, err
-		}
-		secretLines = replaceExchangeKeys(secretLines, entries)
-	}
 
 	lines := strings.Split(string(pair.ConfigText), "\n")
 	set := func(section, key, value string) { lines = putKey(lines, section, key, value) }

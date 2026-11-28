@@ -23,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func newBootstrapFixture(t *testing.T) bootstrapOptions {
@@ -35,17 +36,17 @@ func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	return opts
 }
 
-func bootstrapFixtureTopology() hostbundle.Topology {
-	return hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
-		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "collector"}},
-		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-view"}},
-		{HostID: "overseas", Address: "192.0.2.3", Components: []string{"egress-proxy", "trade"}},
+func bootstrapFixtureTopology() *pb.SyncTopologyReq {
+	return &pb.SyncTopologyReq{Hosts: []*pb.SyncTopologyHost{
+		{HostId: "control", Enabled: true, Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", ComponentIds: []string{"admin", "collector"}},
+		{HostId: "storage", Enabled: true, Address: "192.0.2.2", ComponentIds: []string{"storage-primary", "storage-view"}},
+		{HostId: "overseas", Enabled: true, Address: "192.0.2.3", ComponentIds: []string{"egress-proxy", "trade"}},
 	}}
 }
 
-func writeBootstrapTopology(t *testing.T, opts bootstrapOptions, topology hostbundle.Topology) {
+func writeBootstrapTopology(t *testing.T, opts bootstrapOptions, topology *pb.SyncTopologyReq) {
 	t.Helper()
-	raw, err := json.Marshal(topology)
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(topology)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(opts.topologyFile, raw, 0o600))
 }
@@ -205,8 +206,8 @@ func TestBootstrapRetryKeepsKeysMasterCAAndTakesStatesFromTopology(t *testing.T)
 	master, err := os.ReadFile(opts.masterFile)
 	require.NoError(t, err)
 	declared := bootstrapFixtureTopology()
-	declared.Hosts[1].Disabled = true
-	declared.Hosts[2].DisabledComponents = []string{"trade"}
+	declared.Hosts[1].Enabled = false
+	declared.Hosts[2].DisabledComponentIds = []string{"trade"}
 	writeBootstrapTopology(t, opts, declared)
 
 	opts.current = currentKeys{host: first.SignPublicKey, scfCollector: first.SCFCollectorPublicKey}
@@ -261,17 +262,19 @@ func TestBootstrapReissuesWhenTargetKeyIsMissingOrDifferent(t *testing.T) {
 }
 
 func TestBootstrapRejectsInvalidTopologyBeforeCreatingTrustMaterial(t *testing.T) {
-	for _, mutate := range []func(*hostbundle.Topology){
-		func(t *hostbundle.Topology) { t.Hosts[1].Components = append(t.Hosts[1].Components, "collector") },
-		func(t *hostbundle.Topology) { t.Hosts[0].Components = []string{"collector"} },
-		func(t *hostbundle.Topology) { t.Hosts[1].HostID = t.Hosts[0].HostID },
-		func(t *hostbundle.Topology) { t.Hosts[1].Address = "http://invalid" },
-		func(t *hostbundle.Topology) { t.Hosts[1].Components = []string{"host-gateway"} },
+	for _, mutate := range []func(*pb.SyncTopologyReq){
+		func(req *pb.SyncTopologyReq) {
+			req.Hosts[1].ComponentIds = append(req.Hosts[1].ComponentIds, "collector")
+		},
+		func(req *pb.SyncTopologyReq) { req.Hosts[0].ComponentIds = []string{"collector"} },
+		func(req *pb.SyncTopologyReq) { req.Hosts[1].HostId = req.Hosts[0].HostId },
+		func(req *pb.SyncTopologyReq) { req.Hosts[1].Address = "http://invalid" },
+		func(req *pb.SyncTopologyReq) { req.Hosts[1].ComponentIds = []string{"host-gateway"} },
 	} {
 		opts := newBootstrapFixture(t)
-		topology, err := readBootstrapTopology(opts.topologyFile)
+		topology, _, err := readBootstrapTopology(opts.topologyFile)
 		require.NoError(t, err)
-		mutate(&topology)
+		mutate(topology)
 		writeBootstrapTopology(t, opts, topology)
 		var out bytes.Buffer
 		require.Error(t, runBootstrapCommand(bootstrapArguments(opts), &out, nil))
@@ -280,9 +283,11 @@ func TestBootstrapRejectsInvalidTopologyBeforeCreatingTrustMaterial(t *testing.T
 			_, err := os.Lstat(path)
 			require.True(t, os.IsNotExist(err), path)
 		}
-		hosts, identities := registeredKeys(t, opts)
-		require.Empty(t, hosts)
-		require.Empty(t, identities)
+		if _, err := os.Lstat(opts.dbPath); err == nil {
+			hosts, identities := registeredKeys(t, opts)
+			require.Empty(t, hosts)
+			require.Empty(t, identities)
+		}
 	}
 }
 
@@ -401,9 +406,9 @@ func TestBootstrapRejectsFlagsAndStrictInputBeforeDatabaseCreation(t *testing.T)
 		require.True(t, os.IsNotExist(err))
 	}
 	for _, raw := range []string{
-		`{"version":1,"control_host_id":"control","hosts":[],"ssh_password":"fixture-do-not-echo"}`,
-		`{"version":1,"control_host_id":"control","hosts":[{"host_id":"storage"}]}`,
-		`{"version":2,"control_host_id":"control","hosts":[]}`,
+		`{"hosts":[],"ssh_password":"fixture-do-not-echo"}`,
+		`{"hosts":[{"host_id":"storage","enabled":true}]}`,
+		`{"hosts":[]}`,
 		`{} {}`,
 		strings.Repeat(" ", (1<<20)+1),
 	} {

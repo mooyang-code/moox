@@ -8,8 +8,8 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 // 订单保留天数：创建模拟账户不传取 5 天，传 0 存 0；更新只有模拟账户能改、能改成 0，越界和实盘账户都拒绝；
@@ -19,7 +19,7 @@ func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	accounts := &AccountServer{
 		Accounts: &accountapp.Service{
-			Store: accountapp.Repository{Store: tradeStore}, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
+			Store: tradeStore, Secrets: secretSourceStub{}, Inspector: inspectorStub{},
 		},
 		Store: tradeStore, NewID: func() string { return "live-1" },
 	}

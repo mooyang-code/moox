@@ -115,32 +115,20 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 	if p.Now != nil {
 		started = p.Now()
 	}
-	if req.BatchKind == domain.BatchKindRealtime && !req.RequirePeriodCommit {
-		shouldCollect, err := latestClosedIsTradingBar(marketID, frequency, started, p.SettleDelay)
-		if err != nil {
-			return nil, err
-		}
-		if !shouldCollect {
-			results := make([]domain.ItemResult, len(req.Items))
-			for index, item := range req.Items {
-				results[index] = successResult(item)
-			}
-			return buildCompletion(req, results, started, 0), nil
-		}
-	}
 	// 股票行带标的名称，其余品种的行没有这一项。
 	instrumentNames := map[string]string(nil)
 	if instrumentType == marketdata.InstrumentEquity {
 		instrumentNames = loadInstrumentNames(ctx, p.Storage, spaceID, req.Items)
 	}
 	results := make([]domain.ItemResult, len(req.Items))
-	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
+	rows := make([]*storagepb.Row, 0, len(req.Items)*MaxRealtimeRows)
 	routerSession := p.Router.NewSession()
 	marketdata.TakeUsedWeight() // 丢弃上一批次残留，批次结束时读到的就是本批次内的最大值
+	timeoutFloor := attemptTimeoutFloor(req.FetchLimits)
 	if deadline, ok := ctx.Deadline(); ok {
 		// 记录本次取数窗口，便于判断行情源延迟尖峰是否吃光了预算。
 		log.InfoContextf(ctx, "market_fetch_pipeline_budget frequency=%s items=%d window_ms=%d chain=%d attempts_per_provider=%d request_timeout_ms=%d",
-			req.Frequency, len(req.Items), time.Until(deadline).Milliseconds(), len(chain), klineProviderAttemptBudget, attemptTimeoutFloor().Milliseconds())
+			req.Frequency, len(req.Items), time.Until(deadline).Milliseconds(), len(chain), klineProviderAttemptBudget, timeoutFloor.Milliseconds())
 	}
 	concurrency := req.Concurrency
 	if concurrency <= 0 {
@@ -227,7 +215,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 			}
 			fetchStarted := time.Now()
 			trace := &httpclient.Trace{}
-			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithTrace(ctx, trace), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, Adaptive: adaptiveBatch(req.BatchKind)}, itemChain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithTrace(ctx, trace), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(req.RequestID, req.BatchID), Adaptive: adaptiveBatch(req.BatchKind)}, itemChain, item.CandidateIndex, timeoutFloor)
 			timings[index] = itemTiming{
 				Recorded: true, Subject: item.SubjectID, Symbol: providerSymbol, Provider: selectedProvider,
 				Queue: fetchStarted.Sub(queueStarted), Fetch: time.Since(fetchStarted), StartedAt: fetchStarted,
@@ -237,7 +225,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 				timings[index].Outcome = classifyError(err)
 				item.CandidateIndex = nextCandidateIndex
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
-				p.reportItemFailure(req, results[index], selectedProvider, attempts, time.Since(fetchStarted), coverageStart, coverageEnd, err)
+				p.reportItemFailure(req, results[index], providerSymbol, selectedProvider, attempts, time.Since(fetchStarted), coverageStart, coverageEnd, err)
 				return
 			}
 			if err := bindKlineSource(fetched, selectedProvider, ""); err != nil {
@@ -255,13 +243,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 				maps.Copy(failedFields, outcome.failed)
 			}
 			extraFields := fetchedFieldIDs(fieldFetches)
-			if len(req.Targets) == 0 {
-				if fieldID, cause := failedField(item.OutputFields, failedFields); cause != nil {
-					results[index] = fieldFailure(item, fieldID, cause)
-					return
-				}
-			}
-			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
+			itemRows := make([]*storagepb.Row, 0, len(fetched))
 			for _, bar := range fetched {
 				if req.RequirePeriodCommit && !bar.BarStart.UTC().Equal(requiredTarget.UTC()) {
 					continue
@@ -287,13 +269,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 				if rowErr != nil {
 					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", rowErr)
 					return
-				}
-				if len(req.Targets) == 0 {
-					row.Fields = selectOutputFields(row.Fields, item.OutputFields, extraFields)
-					if len(row.Fields) == 0 {
-						results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("selected output fields contain no fields supported by the kline dataset"))
-						return
-					}
 				}
 				itemRows = append(itemRows, row)
 			}
@@ -350,7 +325,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 	if len(rows) > 0 {
 		// Write each destination independently. A failed target must not prevent
 		// successful targets of the same shared acquisition from committing.
-		targetRows := make(map[string][]*storagepb.RowFieldUpsert)
+		targetRows := make(map[string][]*storagepb.Row)
 		for _, row := range rows {
 			if row.GetKey() != nil {
 				targetRows[row.GetKey().GetDatasetId()] = append(targetRows[row.GetKey().GetDatasetId()], row)
@@ -404,7 +379,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 	return buildCompletion(req, results, completed, completed.Sub(started)), nil
 }
 
-func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.RowFieldUpsert) (*storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, bool, error) {
+func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row) (*storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, bool, error) {
 	if !req.RequirePeriodCommit {
 		return nil, nil, false, nil
 	}
@@ -417,12 +392,6 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 	bindings := make(map[string]binding)
 	for _, item := range req.Items {
 		seriesTag := CollectionItemSeriesTag(req.SpaceID, item)
-		if len(req.Targets) == 0 {
-			if item.DatasetID == datasetID && item.SeriesHash != "" && item.ExpectedCount > 0 {
-				bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: item.SeriesIndex, hash: item.SeriesHash, count: item.ExpectedCount, targetTime: item.TargetDataTime}
-			}
-			continue
-		}
 		for _, target := range req.Targets {
 			if target.DatasetID != datasetID || target.SeriesHash == "" || target.ExpectedCount == 0 {
 				continue
@@ -434,10 +403,7 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 		}
 	}
 	if len(bindings) == 0 {
-		if req.RequirePeriodCommit {
-			return nil, nil, false, fmt.Errorf("dataset %s requires period bindings but none are available", datasetID)
-		}
-		return nil, nil, false, nil
+		return nil, nil, false, fmt.Errorf("dataset %s requires period bindings but none are available", datasetID)
 	}
 	items := make([]*storagepb.TimeSeriesBatchRow, 0, len(rows))
 	var expectation *storagepb.DatasetPeriodExpectation
@@ -454,11 +420,9 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 		if err != nil {
 			return nil, nil, false, fmt.Errorf("dataset %s target_data_time is invalid: %w", datasetID, err)
 		}
-		if req.RequirePeriodCommit {
-			rowTime, timeErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(ts.GetDataTime()))
-			if timeErr != nil || !rowTime.UTC().Equal(target.UTC()) {
-				return nil, nil, false, fmt.Errorf("dataset %s row %s does not cover target_data_time", datasetID, ts.GetDataTime())
-			}
+		rowTime, timeErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(ts.GetDataTime()))
+		if timeErr != nil || !rowTime.UTC().Equal(target.UTC()) {
+			return nil, nil, false, fmt.Errorf("dataset %s row %s does not cover target_data_time", datasetID, ts.GetDataTime())
 		}
 		if expectation == nil {
 			if _, err := marketdata.ParseFrequency(req.Frequency); err != nil {
@@ -483,7 +447,7 @@ func periodRowBindingKey(datasetID, subjectID, seriesTag string) string {
 // 链上某个来源只是取不了这个区间（没登记、超出回看、返回证明不了覆盖）时，它的错误不盖掉前面来源的错误：
 // 补采按最终错误判断“行情源确认没有这根”（ErrNoClosedBar），主源确认没有、而只能取当天的备源（港股腾讯）取不了时，
 // 要保留主源的结论，否则这类分块每轮都记失败，自动补采的水位停住。
-func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, int, error) {
+func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int, timeoutFloor time.Duration) ([]marketdata.NormalizedKline, string, int, int, error) {
 	var lastErr error
 	// noteRangeErr 记下“取不了这个区间”的错误，前面已经有错误时不覆盖。
 	noteRangeErr := func(err error) {
@@ -517,7 +481,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 				// 每次尝试至少有一个完整的请求超时：行情源在整分钟、整五分钟前后常有数百毫秒到数秒的延迟尖峰，
 				// 按剩余预算平均切成零点几秒会把本来能成功的慢响应全部掐断。
 				attemptTimeout := remaining / time.Duration(attemptsLeft)
-				if floor := min(remaining, attemptTimeoutFloor()); attemptTimeout < floor {
+				if floor := min(remaining, timeoutFloor); attemptTimeout < floor {
 					attemptTimeout = floor
 				}
 				attemptCtx, cancel = context.WithTimeout(ctx, attemptTimeout)
@@ -664,7 +628,7 @@ func adaptiveBatch(kind domain.BatchKind) bool {
 	return kind == domain.BatchKindBackfill
 }
 
-func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {
+func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.Row, error) {
 	return p.committer().rowFor(bar, req, routeID, routeRank, instrumentName...)
 }
 
@@ -702,21 +666,6 @@ func defaultMarketSeriesTag(provider, source, market string) string {
 	return strings.Join(parts, "|")
 }
 
-// latestClosedIsTradingBar 判断实时批此刻对应的那根（结算延迟之后刚收盘的一根）是不是该市场的交易桶：
-// 连续交易的市场总是；交易时段市场在午休、收盘后、非交易日不是，这时不取数。
-func latestClosedIsTradingBar(marketID string, frequency marketdata.Frequency, now time.Time, settleDelay time.Duration) (bool, error) {
-	step := frequency.Duration()
-	if step <= 0 {
-		return true, nil
-	}
-	target := now.UTC().Add(-max(settleDelay, 0)).Truncate(step).Add(-step)
-	trading, err := markets.TradingBar(marketID, string(frequency), target)
-	if err != nil {
-		return false, fmt.Errorf("交易日历：%w", err)
-	}
-	return trading, nil
-}
-
 // equityRowKey 是股票行的行键与所属市场：成交额单位、交易日期的时区按 MarketID 从市场取。
 type equityRowKey struct {
 	SpaceID   string
@@ -726,7 +675,7 @@ type equityRowKey struct {
 }
 
 // equityKlineRow 构造股票（equity）的 K 线行，各股票市场共用。
-func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
+func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID string, routeRank int, instrumentName string) (*storagepb.Row, error) {
 	if strings.TrimSpace(key.DatasetID) == "" {
 		return nil, fmt.Errorf("股票 K 线行缺少目标数据集")
 	}
@@ -771,11 +720,11 @@ func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID st
 		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
 	}
 	fields = append(fields, extraFieldValues(bar.Extra)...)
-	return &storagepb.RowFieldUpsert{
+	return &storagepb.Row{
 		Key: &storagepb.RowKey{
 			SpaceId: key.SpaceID, DatasetId: strings.TrimSpace(key.DatasetID),
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: key.SeriesTag,
+				SubjectId: bar.SubjectID, Frequency: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: key.SeriesTag,
 			}},
 		},
 		Fields: fields,

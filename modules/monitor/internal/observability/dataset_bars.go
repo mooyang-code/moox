@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -15,7 +17,7 @@ import (
 
 // spaceClock 是一个空间的市场时钟；err 非空时说明为什么无法按交易日历判断。
 type spaceClock struct {
-	clock monmetrics.MarketClock
+	clock marketclock.MarketClock
 	err   error
 }
 
@@ -30,7 +32,7 @@ func (b Builder) spaceClocks(ctx context.Context, now time.Time) map[string]spac
 	if err != nil {
 		return out
 	}
-	chosen := make(map[string]monmetrics.TaskResultInventoryEntry)
+	chosen := make(map[string]kline.TaskResultInventoryEntry)
 	for _, entry := range snapshot.Entries {
 		current, ok := chosen[entry.SpaceID]
 		if !ok || strings.TrimSpace(current.CalendarID) == "" && strings.TrimSpace(entry.CalendarID) != "" {
@@ -38,7 +40,7 @@ func (b Builder) spaceClocks(ctx context.Context, now time.Time) map[string]spac
 		}
 	}
 	for spaceID, entry := range chosen {
-		clock, err := monmetrics.MarketClockFor(entry.MarketID, entry.CalendarID, entry.Timezone, entry.Sessions)
+		clock, err := marketclock.MarketClockFor(entry.MarketID, entry.CalendarID, entry.Timezone, entry.Sessions)
 		if errors.Is(err, barclock.ErrUnknownMarket) {
 			err = fmt.Errorf("%w：%w", unknownMarketError{marketID: entry.MarketID}, err)
 		}
@@ -61,7 +63,7 @@ type barFacts struct {
 	delay      time.Duration
 	delayKnown bool
 	// expected 是预期 K 线：此刻应已收线的最新一根。
-	expected monmetrics.Bar
+	expected marketclock.Bar
 	// waiting 是应收却还没到的根数，waitingSince 是其中最早一根的收线时间（应到时间），overdue 是它已晚多久（当前时间 − 应到时间）。
 	waiting      int
 	waitingSince time.Time
@@ -153,11 +155,11 @@ func waitingSinceRun(sc spaceClock, freqRaw string, output, lastRun time.Time, f
 // 本来就不判断到达延迟，不给提示。
 func clockIssueText(err error) string {
 	switch {
-	case err == nil, errors.Is(err, monmetrics.ErrNoTradingCalendar):
+	case err == nil, errors.Is(err, marketclock.ErrNoTradingCalendar):
 		return ""
-	case errors.Is(err, monmetrics.ErrCalendarNotCovered):
-		return "日历未覆盖：" + strings.TrimPrefix(err.Error(), monmetrics.ErrCalendarNotCovered.Error()+"：")
-	case errors.Is(err, monmetrics.ErrAlignmentUnconfirmed):
+	case errors.Is(err, marketclock.ErrCalendarNotCovered):
+		return "日历未覆盖：" + strings.TrimPrefix(err.Error(), marketclock.ErrCalendarNotCovered.Error()+"：")
+	case errors.Is(err, marketclock.ErrAlignmentUnconfirmed):
 		return "周期对齐未确认，暂不判断"
 	default:
 		var unknown unknownMarketError

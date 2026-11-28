@@ -3,14 +3,14 @@ import type { HistorySeed } from "@/api/collector/runtime-status";
 import { ACTIVITY_CATEGORY_LABELS } from "@/components/activity-log/activity-log";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview, LifecycleColor } from "@/api/monitor";
-import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
+import type { StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { seedEtaText } from "@/views/collector/runtime-status/runtime-status-model";
 import { freqSeconds, runBarLag, taskHealth } from "@/views/factor/shared/health";
 import { statusLabel } from "@/views/ops/monitor/health-display";
-import { resultsLink, type StrategyLink } from "@/views/strategy/links";
+import { collectorTasksPath, factorTasksPath, opsHostsPath, opsMonitorPath } from "@/router/links";
+import { detailLink, instancesLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
-import { pendingItems, stateOf } from "@/views/strategy/attention-model";
-import { sortInstancesForResults } from "@/views/strategy/results/results-model";
+import { pendingItems, sortInstancesByPriority, stateOf } from "@/views/strategy/attention-model";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
 import { formatInstant, marketTime, toInstantMs } from "@/utils/time-zone";
 
@@ -138,16 +138,16 @@ export function freshnessRows(overview: HealthOverview | undefined, names: NameB
       // 数据已写到的最近一根的收线时刻，由后端按交易日历算出。
       const closeMs = tone === "idle" ? null : toMillis(item.latest_bar_close_at);
       const row: FreshnessRow = {
-        key: `${producer}/${item.space_id}/${id}/${item.freq}`,
+        key: `${producer}/${item.space_id}/${id}/${item.frequency}`,
         datasetId: id,
         stage: STAGE_LABELS[producer] || stage.name || producer,
         name: names.datasets[id] || id,
-        freq: item.freq || "",
+        freq: item.frequency || "",
         lag: behind === null ? "—" : waiting > 0 ? `等待 ${humanizeDuration(behind)}` : "已追平",
         tone,
         status: statusLabel(item.status),
         reason: item.reason || "",
-        path: producer === "factor" ? "/factor/tasks?tab=results" : "/collector/tasks?tab=results",
+        path: producer === "factor" ? factorTasksPath({ tab: "results" }) : collectorTasksPath({ tab: "results" }),
         seconds: behind,
         closeMs
       };
@@ -185,14 +185,14 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
     .map(info => {
       const set = info.factor_task;
       const health = taskHealth(set, info.last_run);
-      const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
+      const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.frequency, info.last_run).seconds : null;
       // last_period_time 是数据坐标的 Unix 秒
       const periodOpenSeconds = toSeconds(info.last_run?.last_period_time);
       const periodOpenMs = periodOpenSeconds ? periodOpenSeconds * 1000 : null;
-      const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
+      const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.frequency) * 1000;
       return {
         taskId: set.task_id,
-        label: `${set.name || names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`,
+        label: `${set.name || names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.frequency}`,
         factors: (info.members || []).filter(member => member.status === "enabled").length,
         health,
         tone: FACTOR_TONE[health.key] || "idle",
@@ -200,7 +200,7 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
         lag: behindSeconds === null ? "—" : behindText(behindSeconds),
         behindSeconds,
         periodEndMs,
-        path: `/factor/tasks?tab=results&task=${encodeURIComponent(set.task_id)}`
+        path: factorTasksPath({ tab: "results", task: set.task_id })
       };
     })
     .sort((a, b) => TONE_RANK[a.tone] - TONE_RANK[b.tone] || a.label.localeCompare(b.label));
@@ -232,11 +232,10 @@ const HOLDING_LIMIT = 4;
 export function strategyRows(
   instances: StrategyInstance[],
   targets: Record<string, StrategyTargetSnapshot>,
-  catalog: Strategy[],
   nowMs: number,
   zone = "UTC"
 ): StrategyRow[] {
-  return sortInstancesForResults(instances).map(instance => {
+  return sortInstancesByPriority(instances).map(instance => {
     const state = stateOf(instance, targets, nowMs);
     const snapshot = targets[instance.instance_id];
     const ranked = snapshot ? rankTargets(snapshot.targets) : [];
@@ -256,7 +255,7 @@ export function strategyRows(
               : "idle";
     return {
       instanceId: instance.instance_id,
-      name: catalog.find(item => item.strategy_id === instance.strategy_id)?.name || instance.strategy_id,
+      name: instance.strategy_name || instance.strategy_id,
       enabled: instance.enabled,
       health: instance.health,
       state: instance.enabled ? targetStateTag(state) : { label: "已停用", color: "gray" },
@@ -273,7 +272,7 @@ export function strategyRows(
       cash: snapshot && instance.enabled ? { text: percent(cashRatio, 1), ratio: barMax > 0 ? cashRatio / barMax : 0 } : null,
       lastBar: relativeMs(toInstantMs(snapshot?.bar_end_time), nowMs, zone),
       lastBarTitle: toInstantMs(snapshot?.bar_end_time) === null ? "" : formatInstant(snapshot?.bar_end_time, zone),
-      link: resultsLink(instance.instance_id)
+      link: detailLink(instance.instance_id)
     };
   });
 }
@@ -299,7 +298,7 @@ function alertTone(alert: HealthAlert): "warn" | "bad" {
 /** 待处理：监控告警、策略实例与计算任务的问题合在一起，严重的在前。 */
 export function attentionItems(input: {
   alerts: HealthAlert[];
-  strategy: { instances: StrategyInstance[]; targets: Record<string, StrategyTargetSnapshot>; catalog: Strategy[] };
+  strategy: { instances: StrategyInstance[]; targets: Record<string, StrategyTargetSnapshot> };
   factors: FactorRow[];
   freshness: FreshnessRow[];
   names: NameBook;
@@ -338,7 +337,7 @@ export function attentionItems(input: {
   const alerted = new Set(
     input.alerts
       .filter(alert => alert.object?.type === "dataset")
-      .map(alert => `${alert.object?.dataset_id}/${alert.object?.freq}`)
+      .map(alert => `${alert.object?.dataset_id}/${alert.object?.frequency}`)
   );
   for (const row of input.freshness) {
     if (row.tone !== "warn" && row.tone !== "bad") continue;
@@ -401,7 +400,7 @@ export function hostRows(hosts: HealthHost[]): HostRow[] {
       memory: percentText(host.memory_percent, host.memory_available),
       disk: percentText(host.disk_percent, host.disk_available),
       hot,
-      path: `/ops/hosts?tab=monitor&host_id=${encodeURIComponent(host.host_id || "")}`
+      path: opsHostsPath({ tab: "monitor", hostId: host.host_id || undefined })
     };
   });
 }
@@ -673,7 +672,7 @@ export function kpiCards(input: {
         : !enabled.length
           ? "没有运行中的实例"
           : `${holdings} 个标的${only && only.gross !== null ? ` · ${Math.round(only.gross * 100)}% 仓位` : ""}`,
-      target: resultsLink()
+      target: instancesLink()
     },
     {
       key: "factor",
@@ -688,7 +687,7 @@ export function kpiCards(input: {
           ? `${factorBad} 个异常 · 收盘 ${factorTime}`
           : `${factorCount} 个因子 · 收盘 ${factorTime}`,
       hint: "计算任务最近一个已计算周期的收盘时间；有异常的任务时是异常最重的那一个",
-      target: "/factor/tasks?tab=results"
+      target: factorTasksPath({ tab: "results" })
     },
     {
       key: "freshness",
@@ -705,7 +704,7 @@ export function kpiCards(input: {
             ? `${stale} 条落后 · 收盘 ${dataTime}`
             : `收盘 ${dataTime}`,
       hint: "数据链路已写到的最近一根 K 线的收盘时间；有落后的数据集时是落后最多的那一个",
-      target: "/collector/tasks?tab=results"
+      target: collectorTasksPath({ tab: "results" })
     },
     {
       key: "alerts",
@@ -715,7 +714,7 @@ export function kpiCards(input: {
       value: monitorDown || input.alertCount === undefined ? "—" : String(input.alertCount),
       unit: "",
       note: monitorDown ? "监控数据暂不可用" : "组件、数据与主机",
-      target: "/ops/monitor"
+      target: opsMonitorPath()
     }
   ];
 }

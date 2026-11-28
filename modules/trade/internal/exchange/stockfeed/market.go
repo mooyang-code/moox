@@ -25,8 +25,6 @@ const (
 var (
 	// ErrListPending 表示标的列表还没有加载完（库里也没有），会话稍后重试。
 	ErrListPending = errors.New("标的列表还没有加载完，稍后重试")
-	// ErrNoOrders 表示公共行情适配器不能下单：模拟盘由 Trade 撮合，实盘要另接执行通道。
-	ErrNoOrders = errors.New("公共行情适配器只提供行情，不能下单")
 )
 
 // ListSource 读场所完整的标的列表，已经换成带交易规则（每手股数、价格步长、结算资产）的标的。
@@ -302,13 +300,14 @@ func (m *Market) GetReferencePrice(ctx context.Context, key exchange.SymbolKey) 
 	return exchange.ReferencePrice{Price: quote.Last, UpdatedAt: quote.SourceTime}, nil
 }
 
-// Adapter 是一个股票账户绑定的公共行情适配器：行情、参考价、标的都来自共用的 Market，不下单、不查私有数据。
+// Adapter 是一个股票场所绑定的公共行情适配器：行情、参考价、标的都来自共用的 Market，只实现公共行情接口。
 type Adapter struct {
 	market *Market
 }
 
 var (
-	_ execution.ExecutionAdapter = (*Adapter)(nil)
+	_ execution.PublicMarketData = (*Adapter)(nil)
+	_ execution.ExchangeIdentity = (*Adapter)(nil)
 	_ execution.QuotePrefetcher  = (*Adapter)(nil)
 )
 
@@ -331,34 +330,4 @@ func (a *Adapter) GetReferencePrice(ctx context.Context, key exchange.SymbolKey)
 
 func (a *Adapter) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) error {
 	return a.market.PrefetchQuotes(ctx, keys)
-}
-
-func (a *Adapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
-	return exchange.AccountSnapshot{}, ErrNoOrders
-}
-
-func (a *Adapter) ListPositionSnapshots(context.Context) ([]exchange.Position, error) {
-	return nil, ErrNoOrders
-}
-
-func (a *Adapter) ListOpenOrders(context.Context) ([]exchange.Order, error) { return nil, ErrNoOrders }
-
-func (a *Adapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
-	return nil, "", ErrNoOrders
-}
-
-func (a *Adapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
-	return exchange.Order{}, ErrNoOrders
-}
-
-func (a *Adapter) GetOrderByExchangeID(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
-	return exchange.Order{}, ErrNoOrders
-}
-
-func (a *Adapter) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
-	return exchange.Order{}, ErrNoOrders
-}
-
-func (a *Adapter) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
-	return exchange.Order{}, ErrNoOrders
 }

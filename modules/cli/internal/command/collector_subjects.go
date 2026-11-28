@@ -23,7 +23,7 @@ var collectorSubjectsSyncFlagsValue collectorSubjectsSyncFlags
 
 var collectorSubjectsCmd = &cobra.Command{
 	Use:   "subjects",
-	Short: "标的同步工具",
+	Short: "标的同步与采集名单排除",
 }
 
 var collectorSubjectsSyncCmd = &cobra.Command{

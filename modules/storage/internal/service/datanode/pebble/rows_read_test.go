@@ -22,17 +22,17 @@ func openReadStore(t *testing.T) *Store {
 	return store
 }
 
-func tsRow(subject, tag string, at time.Time, close float64) *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func tsRow(subject, tag string, at time.Time, close float64) *pb.Row {
+	return &pb.Row{
 		Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: subject, Freq: "1m", DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: tag,
+			SubjectId: subject, Frequency: "1m", DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: tag,
 		}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: close}}}},
 	}
 }
 
 func sel(subject string) *pb.TimeSeriesSelector {
-	return &pb.TimeSeriesSelector{SpaceId: "s", DatasetId: "d", SubjectId: subject, Freq: "1m"}
+	return &pb.TimeSeriesSelector{SubjectId: subject, Frequency: "1m"}
 }
 
 func selTag(subject, tag string) *pb.TimeSeriesSelector {
@@ -53,7 +53,7 @@ func readAll(t *testing.T, store *Store, req *pb.ReadTimeSeriesRowsReq, pageSize
 		require.NoError(t, err)
 		pages++
 		for _, row := range rsp.GetRows() {
-			k := row.GetKey()
+			k := row.GetKey().GetTimeSeries()
 			ids = append(ids, k.GetDataTime()+"|"+k.GetSubjectId()+"|"+k.GetSeriesTag())
 		}
 		cursor = rsp.GetPageResult().GetNextCursor()
@@ -69,7 +69,7 @@ func readAll(t *testing.T, store *Store, req *pb.ReadTimeSeriesRowsReq, pageSize
 func seedRangeData(t *testing.T, store *Store) (start time.Time, expected []string) {
 	t.Helper()
 	start = time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
-	var rows []*pb.RowFieldUpsert
+	var rows []*pb.Row
 	for minute := 0; minute < 30; minute++ {
 		at := start.Add(time.Duration(minute) * time.Minute)
 		for _, series := range []struct{ subject, tag string }{{"A", ""}, {"A", "venue:x"}, {"B", ""}, {"C", "venue:x"}} {
@@ -192,7 +192,7 @@ func TestRangeReadRejectsInvalidShapes(t *testing.T) {
 		"inverted range": func(r *pb.ReadTimeSeriesRowsReq) {
 			r.TimeRange.StartTime, r.TimeRange.EndTime = r.TimeRange.EndTime, r.TimeRange.StartTime
 		},
-		"selector no subj": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = []*pb.TimeSeriesSelector{{Freq: "1m"}} },
+		"selector no subj": func(r *pb.ReadTimeSeriesRowsReq) { r.Selectors = []*pb.TimeSeriesSelector{{Frequency: "1m"}} },
 	}
 	for name, mutate := range cases {
 		req := base()
@@ -205,7 +205,7 @@ func TestRangeReadRejectsInvalidShapes(t *testing.T) {
 func seedLatestData(t *testing.T, store *Store, bars int) time.Time {
 	t.Helper()
 	start := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
-	var rows []*pb.RowFieldUpsert
+	var rows []*pb.Row
 	for i := 0; i < bars; i++ {
 		at := start.Add(time.Duration(i) * time.Minute)
 		for _, series := range []struct{ subject, tag string }{{"A", ""}, {"A", "venue:b"}, {"B", ""}, {"C", "venue:a"}, {"C", "venue:b"}, {"D", ""}} {
@@ -336,7 +336,7 @@ func TestCountTimeSeriesRowsCountsDistinctTimePointsPerSubject(t *testing.T) {
 func TestReadRowsSkipsMissingKeysAndKeepsRequestOrder(t *testing.T) {
 	store := openReadStore(t)
 	at := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{
+	require.NoError(t, upsertTestRows(store, context.Background(), []*pb.Row{
 		tsRow("A", "", at, 1), tsRow("B", "", at, 2),
 		{Key: tsRow("C", "", at, 0).Key, Attributes: map[string]*pb.TypedValue{"source": {Value: &pb.TypedValue_StringValue{StringValue: "x"}}}},
 	}))
@@ -364,7 +364,7 @@ func TestReadRowsHandlesMoreThanTenThousandRowsOverTheKeyLimit(t *testing.T) {
 func TestRangeReadReturnsMoreThanTenThousandRowsWithFewColumns(t *testing.T) {
 	store := openReadStore(t)
 	start := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
-	var rows []*pb.RowFieldUpsert
+	var rows []*pb.Row
 	for i := 0; i < 2500; i++ {
 		for _, subject := range []string{"A", "B", "C", "D", "E"} {
 			rows = append(rows, tsRow(subject, "", start.Add(time.Duration(i)*time.Minute), float64(i)))

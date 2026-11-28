@@ -16,6 +16,8 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/report"
@@ -127,8 +129,6 @@ type Builder struct {
 	Policy   report.RealtimeTimeSeriesPolicy
 	// Inventory 是采集任务清单，用来确定每个空间的市场交易日历（市场、日历、时区、交易时段）。
 	Inventory InventorySource
-	// Datasets 列出应当有归档任务的数据集，用于“未归档的数据集”检查；为空时不做这项检查。
-	Datasets ArchivableDatasets
 	// Seeding 记下最近仍有数据集“待生效（上游历史补齐中）”的空间：补齐中与结束后一段时间内，storage-view 上报的
 	// “View 跟随数据变更落后”不告警。为空时只按本轮有没有待生效数据集判断。多个 Builder 共用同一个，重启后重新记。
 	Seeding *SeedingMemory
@@ -224,9 +224,9 @@ func formatGrace(grace time.Duration) string {
 	return fmt.Sprintf("%d 小时", int(grace/time.Hour))
 }
 
-// InventorySource 提供最近一份有效的采集任务清单；monmetrics.TaskResultInventoryCache 实现它。
+// InventorySource 提供最近一份有效的采集任务清单；kline.TaskResultInventoryCache 实现它。
 type InventorySource interface {
-	GetAllowStale(ctx context.Context, now time.Time) (monmetrics.TaskResultInventorySnapshot, bool, error)
+	GetAllowStale(ctx context.Context, now time.Time) (kline.TaskResultInventorySnapshot, bool, error)
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -255,7 +255,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 }
 
 // BusinessChecks 按指标算出本轮的业务检查，只在检查评估里调用（页面读检查表里上一轮评估的结果）：各服务上报的关注项，
-// 以及 Monitor 自己的两项——指标序列限额、未归档的数据集。每项都带检查 ID、名称（关注项另带级别）。
+// 以及 Monitor 自己的指标序列限额检查。每项都带检查 ID、名称（关注项另带级别）。
 func (b Builder) BusinessChecks(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
 	attention, err := b.buildAttentionStatuses(ctx, now)
 	if err != nil {
@@ -266,11 +266,7 @@ func (b Builder) BusinessChecks(ctx context.Context, now time.Time) ([]BusinessS
 	if err != nil {
 		return nil, err
 	}
-	coverage, err := b.buildArchiveCoverage(ctx, now)
-	if err != nil {
-		return nil, err
-	}
-	return append(append(attention, seriesLimit...), coverage...), nil
+	return append(attention, seriesLimit...), nil
 }
 
 // buildSeriesLimitHealth 检查指标目录的新序列增长：新序列被限额丢弃，或近 1 小时 / 24 小时的新增数接近上限，都视为异常。
@@ -642,7 +638,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 	for identity, current := range aggregated {
 		clock, ok := clocks[current.key.spaceID]
 		if !ok {
-			clock = spaceClock{err: monmetrics.ErrNoTradingCalendar}
+			clock = spaceClock{err: marketclock.ErrNoTradingCalendar}
 		}
 		item := datasetStatus(now, current.key, current.value, b.Policy, clock)
 		item.DisplayName = displayNames[identity]
@@ -959,7 +955,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "degraded", "尚无成功运行"
 	case !marketIdle && successLag > 0 && now.Sub(successFrom) > successLag:
 		item.Status, item.Reason = "degraded", "success stale"
-	case errors.Is(bars.issue, monmetrics.ErrCalendarNotCovered):
+	case errors.Is(bars.issue, marketclock.ErrCalendarNotCovered):
 		// 日历覆盖不到就无法判断应收哪一根：不推测，报出来让人更新交易日历。
 		item.Status, item.Reason = "unknown", item.ClockIssue
 	case item.LateConfirmed:

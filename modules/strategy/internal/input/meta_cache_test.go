@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // datasetCountingClient 在 countingClient 之上统计 GetDataset 与 GetTag 的读取次数。
@@ -15,17 +17,17 @@ type datasetCountingClient struct {
 	datasets, tags int
 }
 
-func (c *datasetCountingClient) GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error) {
+func (c *datasetCountingClient) GetDataset(ctx context.Context, spaceID, datasetID string) (upstream.DatasetInfo, error) {
 	c.datasets++
 	return c.countingClient.GetDataset(ctx, spaceID, datasetID)
 }
 
-func (c *datasetCountingClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo, error) {
+func (c *datasetCountingClient) GetTag(ctx context.Context, spaceID, tagID string) (upstream.TagInfo, error) {
 	c.tags++
 	return c.countingClient.GetTag(ctx, spaceID, tagID)
 }
 
-func readEventMetadata(t *testing.T, loader Loader) []Subject {
+func readEventMetadata(t *testing.T, loader Loader) []upstream.Subject {
 	t.Helper()
 	event := loader.ForEvent()
 	revalidator := event.Client.(interface {
@@ -98,7 +100,7 @@ func TestMetaCacheRevalidateFailureIsReturned(t *testing.T) {
 	err := event.Client.(interface {
 		Revalidate(ctx context.Context, spaceID, datasetID string) error
 	}).Revalidate(context.Background(), "space", "ds_missing")
-	if err == nil || errors.Is(err, ErrStale) {
+	if err == nil || errors.Is(err, upstream.ErrStale) {
 		t.Fatalf("数据集不存在应返回读取错误：%v", err)
 	}
 }
@@ -110,7 +112,7 @@ func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake.rows = func(query Query) ([]Row, uint64, error) {
+	fake.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 9, nil
 	}
 	client := &datasetCountingClient{countingClient: &countingClient{fakeClient: fake}}
@@ -160,7 +162,7 @@ func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		if len(query.Columns) == 1 && query.Columns[0] == ageProbeColumn {
 			// 探针查询：全部候选都有窗口内的行。
 			return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 1}, "ETH-USDT": {"close": 1}, "SOL-USDT": {"close": 1}}), 11, nil
@@ -221,7 +223,7 @@ func TestAgeProbePersistsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		if len(query.Columns) == 1 && query.Columns[0] == ageProbeColumn {
 			return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 1}, "ETH-USDT": {"close": 1}, "SOL-USDT": {"close": 1}}), 11, nil
 		}

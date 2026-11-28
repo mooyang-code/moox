@@ -11,13 +11,16 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/factorname"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // barSource 是回放主帧的输入来源：给出一段连续 bar 的行与年龄判定所需的历史，返回值按市场分。主循环、evaluateBar 与账本
 // 不关心来源。View 来源（viewSource）一次返回一整段，每个市场一个 View；
 // nextParams 是上一根策略求出的参数，留给按参数现算的来源，View 来源不用它。
 type barSource interface {
-	Load(ctx context.Context, bars []input.PeriodBoundaries, nextParams engine.ParamSet) (map[string]marketSegment, error)
+	Load(ctx context.Context, bars []period.PeriodBoundaries, nextParams engine.ParamSet) (map[string]marketSegment, error)
 	// End 是当前有效的终点（不含）：来源在读取过程中可能截短它（例如 View 重建了索引，按新索引复查剩余区间）。
 	End() time.Time
 	// Applied 是这一根（bar_start 的 Unix 秒）因子实际生效的、由回放逐期提交的可变成员参数，写进每期记录；
@@ -37,18 +40,18 @@ type marketSegment struct {
 
 // ageProber 给出一根 bar 判定 n 根年龄的探针：View 来源按读到的历史行（presence），“因子现算”来源按引擎给的根数（engineAges）。
 type ageProber interface {
-	probe(n int, bar input.PeriodBoundaries) input.AgeProbe
+	probe(n int, bar period.PeriodBoundaries) input.AgeProbe
 }
 
 // replayMarket 是回放的一个市场：市场名、数据集的全部标的绑定（含已停用，回放中都视为活跃）与列出的标的（年龄判定用，
 // 构造时算一次）。与输入来源无关，求值与估值只用它。
 type replayMarket struct {
 	market   string
-	subjects []input.Subject
+	subjects []upstream.Subject
 	listed   map[string]struct{}
 }
 
-func newReplayMarket(market string, subjects []input.Subject) *replayMarket {
+func newReplayMarket(market string, subjects []upstream.Subject) *replayMarket {
 	listed := make(map[string]struct{}, len(subjects))
 	for _, subject := range subjects {
 		listed[subject.SubjectID] = struct{}{}
@@ -106,7 +109,7 @@ func mainColumns(program *dsl.Program) []string {
 
 // newViewSource 构造单策略回放的 View 来源：每个市场一个行读取器与一个年龄判定的历史读取器，加上附加来源与参考市场的读取器。
 // 计资金费时永续的行另读费率列。
-func (r *Runner) newViewSource(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, views map[string]input.ViewInfo,
+func (r *Runner) newViewSource(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, views map[string]upstream.ViewInfo,
 	markets []*replayMarket, end time.Time, acc *accumulator, abort func(context.Context) error) (*viewSource, error) {
 	columns := mainColumns(program)
 	columnsOf := func(market string) []string {
@@ -165,7 +168,7 @@ func (s *viewSource) usesTask(taskKey string) bool {
 
 // switchView 把任务键（市场）taskKey 的行与历史读取器切到新索引的 View，并清掉它的年龄判定结果：年龄证明属于旧索引，与实时的
 // 缓存一致，换代后重新判定。
-func (s *viewSource) switchView(taskKey string, view input.ViewInfo) {
+func (s *viewSource) switchView(taskKey string, view upstream.ViewInfo) {
 	for _, market := range s.markets {
 		if market.market == taskKey {
 			market.rows.View, market.history.View = view, view
@@ -175,7 +178,7 @@ func (s *viewSource) switchView(taskKey string, view input.ViewInfo) {
 }
 
 // Load 读一段 bar（View 来源不用 nextParams）。
-func (s *viewSource) Load(ctx context.Context, segment []input.PeriodBoundaries, _ engine.ParamSet) (map[string]marketSegment, error) {
+func (s *viewSource) Load(ctx context.Context, segment []period.PeriodBoundaries, _ engine.ParamSet) (map[string]marketSegment, error) {
 	readFrom := segment[0].StorageStart
 	if s.program.UsesPreviousBar && !segment[0].PreviousStart.IsZero() {
 		readFrom = segment[0].PreviousStart
@@ -247,11 +250,11 @@ reload:
 
 // attachSources 给每个市场的读取器加上各附加来源的行读取器：来源 View 是这个市场的来源任务，标的与主帧相同
 // （不带 series_tag，读全部序列），只读策略引用的来源列。
-func attachSources(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved, program *dsl.Program, markets []*viewMarket, abort func(context.Context) error) error {
+func attachSources(ctx context.Context, client upstream.Client, spaceID string, resolved input.Resolved, program *dsl.Program, markets []*viewMarket, abort func(context.Context) error) error {
 	if !resolved.HasSources() {
 		return nil
 	}
-	views := map[string]input.ViewInfo{}
+	views := map[string]upstream.ViewInfo{}
 	for _, reader := range markets {
 		reader.sources = map[string]*input.RangeLoader{}
 		for _, name := range resolved.SourceNames() {
@@ -268,7 +271,7 @@ func attachSources(ctx context.Context, client input.Client, spaceID string, res
 				}
 				views[task.DatasetID] = view
 			}
-			subjects := make([]input.Subject, 0, len(reader.subjects))
+			subjects := make([]upstream.Subject, 0, len(reader.subjects))
 			for _, subject := range reader.subjects {
 				subject.SeriesTag = ""
 				subjects = append(subjects, subject)
@@ -281,7 +284,7 @@ func attachSources(ctx context.Context, client input.Client, spaceID string, res
 
 // loadSourceSegment 读一段 bar 要用到的来源行：从第一根主帧应读的来源 bar 的前一根（多取一根）到最后一根主帧应读的那一根。
 // 来源 View 在回放过程中换了索引时直接失败（不跟随换代），请重新发起回放。
-func loadSourceSegment(ctx context.Context, resolved input.Resolved, reader *viewMarket, segment []input.PeriodBoundaries) (map[string]input.RangeRows, error) {
+func loadSourceSegment(ctx context.Context, resolved input.Resolved, reader *viewMarket, segment []period.PeriodBoundaries) (map[string]input.RangeRows, error) {
 	if len(reader.sources) == 0 {
 		return nil, nil
 	}
@@ -314,7 +317,7 @@ func loadSourceSegment(ctx context.Context, resolved input.Resolved, reader *vie
 }
 
 // referenceReaders 构造参考市场的读取器：只读年龄判定所需的 close 历史，列出的标的取参考数据集的全部标的绑定（回放中都视为活跃）。
-func referenceReaders(ctx context.Context, client input.Client, job store.Replay, resolved input.Resolved, abort func(context.Context) error) ([]*viewMarket, error) {
+func referenceReaders(ctx context.Context, client upstream.Client, job store.Replay, resolved input.Resolved, abort func(context.Context) error) ([]*viewMarket, error) {
 	refs := make([]*viewMarket, 0, len(resolved.References))
 	for _, market := range sortedNames(resolved.References) {
 		task := resolved.References[market]
@@ -326,7 +329,7 @@ func referenceReaders(ctx context.Context, client input.Client, job store.Replay
 		if err != nil {
 			return nil, err
 		}
-		subjects := make([]input.Subject, 0, len(bindings))
+		subjects := make([]upstream.Subject, 0, len(bindings))
 		for _, subject := range bindings {
 			subject.Active = true
 			subjects = append(subjects, subject)

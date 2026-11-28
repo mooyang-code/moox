@@ -5,9 +5,7 @@
     }}</a-alert>
     <a-alert v-else-if="instance.enabled && targetState === 'expired'" type="warning" show-icon class="results-alert">
       目标已过期：最近一期之后没有产出新结果，多半是上游计算任务没有产出。查看计算任务：
-      <a-link v-for="taskId in upstreamTasks" :key="taskId" :href="`#/factor/tasks?detail=${encodeURIComponent(taskId)}`">{{
-        taskId
-      }}</a-link>
+      <a-link v-for="taskId in upstreamTasks" :key="taskId" :href="factorTaskDetailHref(taskId)">{{ taskId }}</a-link>
     </a-alert>
     <div class="results-card">
       <TargetTable :targets="snapshot?.targets || []" :snapshot="snapshot" :state="targetState" :loading="initialLoading" />
@@ -35,6 +33,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
+import { factorTaskDetailHref } from "@/router/links";
 import PoolDetail from "@/views/strategy/components/strategy-pool-detail.vue";
 import ResultTimeline from "@/views/strategy/components/strategy-result-table.vue";
 import TargetTable from "@/views/strategy/components/strategy-target-table.vue";

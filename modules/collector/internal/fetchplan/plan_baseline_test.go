@@ -60,11 +60,7 @@ func planBaselineDump(t *testing.T, r *PlanReconciler, content *FetchPlanContent
 	var out []planBaselineFunction
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		executor := function.Executor
-		if function.IsSCF() {
-			executor = marketfetch.PlanExecutorSCF
-		}
-		item := planBaselineFunction{Name: name, Region: function.Region, Executor: executor, Push: function.Push, Create: function.Create, Retired: function.Target == nil, Cron: function.Cron}
+		item := planBaselineFunction{Name: name, Region: function.Region, Executor: function.Executor, Push: function.Push, Create: function.Create, Retired: function.Target == nil, Cron: function.Cron}
 		if function.Target != nil {
 			if function.IsSCF() {
 				environment, err := r.functionEnvironment(function.Region, function.Target)

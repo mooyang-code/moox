@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -86,7 +86,7 @@ func TestExchangeSessionNeverBecomesReadyAfterDisconnectDuringStartup(t *testing
 		Adapter: adapter,
 		Sync: &accountsync.Service{
 			Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
-			Fills: &consumer.Reducer{Store: tradeStore},
+			Fills: &fillreduce.Reducer{Store: tradeStore},
 		},
 	}
 	done := make(chan error, 1)
@@ -193,7 +193,7 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 	}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		// 生产环境里同步服务的会话状态由 Manager 提供；激活前缓冲的持仓事件会让持久化状态等待排队的完整同步确认。
 		SessionState: readySessionState(true),
 	}
@@ -302,7 +302,7 @@ func TestSessionHandlerPersistsReadyAfterLateBufferedPosition(t *testing.T) {
 		Account: account,
 		Sync: &accountsync.Service{
 			Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
-			Fills: &consumer.Reducer{Store: tradeStore},
+			Fills: &fillreduce.Reducer{Store: tradeStore},
 		},
 	}
 	handler := newSessionHandler(session.applyEvent)
@@ -369,7 +369,7 @@ func TestSessionHandlerPostActivationPositionRequiresFullSync(t *testing.T) {
 	}}
 	session.Sync = &accountsync.Service{
 		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: manager,
+		Fills: &fillreduce.Reducer{Store: tradeStore}, SessionState: manager,
 	}
 	handler := newSessionHandler(session.applyEvent)
 	require.NoError(t, handler.activate(ctx, func() error {
@@ -435,7 +435,7 @@ func TestSessionHandlerKeepsAdmissionClosedAfterBufferedAccountEvent(t *testing.
 		Account: account,
 		Sync: &accountsync.Service{
 			Store: tradeStore, Adapters: sessionAdapterSource{adapter: &scriptedSessionAdapter{}},
-			Fills: &consumer.Reducer{Store: tradeStore},
+			Fills: &fillreduce.Reducer{Store: tradeStore},
 		},
 	}
 	handler := newSessionHandler(session.applyEvent)
@@ -465,7 +465,7 @@ func TestExchangeSessionWithoutPrivateStreamBecomesReadyByPolling(t *testing.T) 
 	adapter := pollingSessionAdapter{ExecutionAdapter: scripted}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
+		Fills: &fillreduce.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
 	}
 	session := &ExchangeSession{Account: account, Adapter: adapter, Sync: syncService, SyncInterval: time.Hour}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -558,8 +558,8 @@ func TestExchangeSessionStartsWithDelistedInstrumentOrder(t *testing.T) {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "LIVE",
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", Environment: "TESTNET",
+			SettlementAsset: "USDT", PauseReason: "test",
 		}); err != nil {
 			return err
 		}
@@ -585,7 +585,7 @@ func TestExchangeSessionStartsWithDelistedInstrumentOrder(t *testing.T) {
 	adapter := goneFillsSessionAdapter{&scriptedSessionAdapter{disconnect: make(chan error, 1)}}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
+		Fills: &fillreduce.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
 	}
 	// 订单更新报了部分成交、明细没入账：留下成交缺口，标的下架后再也补不上。
 	orderLimit := shared.MustDecimal("1")

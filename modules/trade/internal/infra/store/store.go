@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"reflect"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/cache"
 	"github.com/mooyang-code/moox/modules/trade/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -39,7 +39,7 @@ const (
 var (
 	ErrConflict           = errors.New("数据已经被修改，刷新后再试")
 	ErrInvalidRecord      = errors.New("数据不合法")
-	ErrIncompatibleSchema = errors.New("trade store: incompatible schema")
+	ErrIncompatibleSchema = sqlitedb.ErrIncompatibleSchema
 )
 
 type Store struct {
@@ -107,23 +107,18 @@ type Tx struct {
 }
 
 func Open(path string) (*Store, error) {
-	dsn := fmt.Sprintf(
-		"%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(%d)",
-		path,
-		sqliteBusyTimeoutMS,
-	)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLogger})
+	db, err := sqlitedb.OpenGORM(sqlitedb.Options{
+		Path:          path,
+		BusyTimeoutMS: sqliteBusyTimeoutMS,
+		Logger:        gormLogger,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("open trade store: %w", err)
+		return nil, fmt.Errorf("打开交易数据库失败：%w", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("access trade database: %w", err)
-	}
-	sqlDB.SetMaxOpenConns(1)
-	err = db.Transaction(initializeTradeStore)
-	if err != nil {
-		_ = sqlDB.Close()
+	if err := sqlitedb.EnsureSchemaGORM(db, path, "trade", schema.AllSQL(), dataformat.LifecycleParts(), lifecycle.StateFileForDB(path)); err != nil {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
 		return nil, err
 	}
 	s := &Store{
@@ -132,42 +127,25 @@ func Open(path string) (*Store, error) {
 		identities:     &cache.Memo[accountKey, tradingAccountIdentity]{},
 	}
 	// 内存库每个连接各是一个独立的库，只读查询直接用读写连接。
-	if path == ":memory:" {
+	if sqlitedb.IsMemoryPath(path) {
 		return s, nil
 	}
-	readDB, err := openReadOnly(path)
+	readDB, err := sqlitedb.OpenGORM(sqlitedb.Options{
+		Path:          path,
+		ReadOnly:      true,
+		BusyTimeoutMS: sqliteBusyTimeoutMS,
+		MaxOpenConns:  readOnlyConns,
+		MaxIdleConns:  readOnlyConns,
+		Logger:        gormLogger,
+	})
 	if err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		return nil, fmt.Errorf("打开交易库只读连接失败：%w", err)
 	}
 	s.readOnly = &Store{db: readDB, instrumentSets: s.instrumentSets, identities: s.identities}
 	return s, nil
-}
-
-// openReadOnly 在同一个库文件上打开只读连接池：query_only 拒绝一切写入；WAL 模式已经记在库文件里，不用再设。
-func openReadOnly(path string) (*gorm.DB, error) {
-	dsn := fmt.Sprintf("%s?_pragma=query_only(1)&_pragma=busy_timeout(%d)", path, sqliteBusyTimeoutMS)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLogger})
-	if err != nil {
-		return nil, fmt.Errorf("打开交易库只读连接：%w", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("取交易库只读连接：%w", err)
-	}
-	sqlDB.SetMaxOpenConns(readOnlyConns)
-	sqlDB.SetMaxIdleConns(readOnlyConns)
-	return db, nil
-}
-
-func initializeTradeStore(db *gorm.DB) error {
-	if err := validateExistingTradeSchema(db); err != nil {
-		return err
-	}
-	if err := db.Exec(schema.AllSQL()).Error; err != nil {
-		return fmt.Errorf("apply trade schema: %w", err)
-	}
-	return nil
 }
 
 // A background scan can defer a busy account without waiting behind its sync.
@@ -191,151 +169,6 @@ func (s *Store) LockLogicalAccount(spaceID string, logicalAccountID string) func
 func (s *Store) LockLogicalAccountContext(ctx context.Context, spaceID, logicalAccountID string) (func(), error) {
 	value, _ := s.logicalLocks.LoadOrStore(spaceID+"\x00"+logicalAccountID, &sync.Mutex{})
 	return lockContext(ctx, value.(*sync.Mutex))
-}
-
-func validateExistingTradeSchema(db *gorm.DB) error {
-	var tables []string
-	if err := db.Raw(queryTradeTables).Scan(&tables).Error; err != nil {
-		return fmt.Errorf("inspect trade schema: %w", err)
-	}
-	approved := map[string]struct{}{
-		"t_trading_accounts": {}, "t_trade_instruments": {},
-		"t_trade_orders": {}, "t_order_fills": {}, "t_trading_positions": {},
-		"t_trading_position_tombstones": {},
-		"t_logical_accounts":            {}, "t_logical_account_members": {},
-		"t_logical_account_targets": {}, "t_operator_actions": {},
-		"t_paper_account_configs": {}, "t_account_equity_points": {},
-		"t_paper_asset_balances":           {},
-		"t_logical_account_equity_points":  {},
-		"t_logical_account_target_history": {},
-		"t_trade_wallet_transfers":         {},
-		"t_trade_blocked_instruments":      {},
-		"t_trade_delists":                  {},
-		"t_trade_delist_flattens":          {},
-		"t_paper_funding_fees":             {},
-		"t_order_fill_hourly_summaries":    {},
-		"t_account_instrument_summaries":   {},
-	}
-	for _, table := range tables {
-		if _, found := approved[table]; !found {
-			return fmt.Errorf("%w: unexpected table %s", ErrIncompatibleSchema, table)
-		}
-	}
-
-	reference, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		return fmt.Errorf("open schema reference: %w", err)
-	}
-	if err := reference.Exec(schema.AllSQL()).Error; err != nil {
-		return fmt.Errorf("apply schema reference: %w", err)
-	}
-	for _, table := range tables {
-		got, err := inspectTableShape(db, table)
-		if err != nil {
-			return err
-		}
-		want, err := inspectTableShape(reference, table)
-		if err != nil {
-			return err
-		}
-		if !reflect.DeepEqual(got, want) {
-			return fmt.Errorf(
-				"%w: %s does not match current columns and constraints",
-				ErrIncompatibleSchema,
-				table,
-			)
-		}
-	}
-	return nil
-}
-
-type tableShape struct {
-	Columns     []tableColumn
-	UniqueKeys  []string
-	ForeignKeys []tableForeignKey
-	SchemaSQL   []string
-}
-
-type tableColumn struct {
-	Name       string  `gorm:"column:name"`
-	Type       string  `gorm:"column:type"`
-	NotNull    int     `gorm:"column:notnull"`
-	DefaultSQL *string `gorm:"column:dflt_value"`
-	PrimaryKey int     `gorm:"column:pk"`
-}
-
-type tableForeignKey struct {
-	Table    string `gorm:"column:table"`
-	From     string `gorm:"column:from"`
-	To       string `gorm:"column:to"`
-	OnUpdate string `gorm:"column:on_update"`
-	OnDelete string `gorm:"column:on_delete"`
-	Match    string `gorm:"column:match"`
-}
-
-func inspectTableShape(db *gorm.DB, table string) (tableShape, error) {
-	var shape tableShape
-	quoted := strings.ReplaceAll(table, `"`, `""`)
-	if err := db.Raw(`PRAGMA table_info("` + quoted + `")`).Scan(&shape.Columns).Error; err != nil {
-		return tableShape{}, fmt.Errorf("inspect %s columns: %w", table, err)
-	}
-	var indexes []struct {
-		Name   string `gorm:"column:name"`
-		Unique int    `gorm:"column:unique"`
-	}
-	if err := db.Raw(`PRAGMA index_list("` + quoted + `")`).Scan(&indexes).Error; err != nil {
-		return tableShape{}, fmt.Errorf("inspect %s indexes: %w", table, err)
-	}
-	for _, index := range indexes {
-		if index.Unique == 0 {
-			continue
-		}
-		indexName := strings.ReplaceAll(index.Name, `"`, `""`)
-		var columns []struct {
-			Sequence int    `gorm:"column:seqno"`
-			Name     string `gorm:"column:name"`
-		}
-		if err := db.Raw(`PRAGMA index_info("` + indexName + `")`).Scan(&columns).Error; err != nil {
-			return tableShape{}, fmt.Errorf("inspect %s index %s: %w", table, index.Name, err)
-		}
-		sort.Slice(columns, func(i, j int) bool { return columns[i].Sequence < columns[j].Sequence })
-		names := make([]string, 0, len(columns))
-		for _, column := range columns {
-			names = append(names, column.Name)
-		}
-		shape.UniqueKeys = append(shape.UniqueKeys, strings.Join(names, "\x00"))
-	}
-	sort.Strings(shape.UniqueKeys)
-	if err := db.Raw(`PRAGMA foreign_key_list("` + quoted + `")`).Scan(&shape.ForeignKeys).Error; err != nil {
-		return tableShape{}, fmt.Errorf("inspect %s foreign keys: %w", table, err)
-	}
-	sort.Slice(shape.ForeignKeys, func(i, j int) bool {
-		left := shape.ForeignKeys[i]
-		right := shape.ForeignKeys[j]
-		return left.Table+"\x00"+left.From+"\x00"+left.To <
-			right.Table+"\x00"+right.From+"\x00"+right.To
-	})
-	var objects []struct {
-		Type string `gorm:"column:type"`
-		Name string `gorm:"column:name"`
-		SQL  string `gorm:"column:sql"`
-	}
-	if err := db.Raw(queryTableSchemaObjects, table, table).Scan(&objects).Error; err != nil {
-		return tableShape{}, fmt.Errorf("inspect %s schema SQL: %w", table, err)
-	}
-	for _, object := range objects {
-		shape.SchemaSQL = append(
-			shape.SchemaSQL,
-			object.Type+"\x00"+object.Name+"\x00"+normalizeSchemaSQL(object.SQL),
-		)
-	}
-	return shape, nil
-}
-
-func normalizeSchemaSQL(value string) string {
-	// Quoting and whitespace are formatting, not schema.
-	value = strings.ReplaceAll(value, `"`, "")
-	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 func (s *Store) Close() error {
@@ -401,13 +234,3 @@ func writeError(err error) error {
 func blank(value string) bool {
 	return strings.TrimSpace(value) == ""
 }
-
-// 以下 SQL 整条写成常量，不在调用处拼接或内联。
-const (
-	queryTradeTables = `SELECT name FROM sqlite_master
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`
-	queryTableSchemaObjects = `SELECT type, name, sql FROM sqlite_master
-		WHERE (type = 'table' AND name = ?)
-			OR (type = 'index' AND tbl_name = ? AND sql IS NOT NULL)
-		ORDER BY type, name`
-)

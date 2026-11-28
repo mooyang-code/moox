@@ -16,10 +16,10 @@ func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *te
 		t.Fatal(err)
 	}
 	defer store.Close()
-	row := func(dataset, subject string) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
+	row := func(dataset, subject string) *pb.Row {
+		return &pb.Row{Key: &pb.RowKey{SpaceId: "s", DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: subject, Frequency: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
 	}
-	rows := []*pb.RowFieldUpsert{row("delete-me", "BTC-USDT"), row("keep-me", "ETH-USDT")}
+	rows := []*pb.Row{row("delete-me", "BTC-USDT"), row("keep-me", "ETH-USDT")}
 	if err := upsertTestRows(store, context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
@@ -51,19 +51,19 @@ func TestWriteRejectedWhileDatasetIsMissingFromMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}
-	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
+	row := &pb.Row{Key: &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}
+	if err := upsertTestRows(store, context.Background(), []*pb.Row{row}); err != nil {
 		t.Fatal(err)
 	}
 	exists = false
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
 	}
-	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != ErrDatasetDeleted {
+	if err := upsertTestRows(store, context.Background(), []*pb.Row{row}); err != ErrDatasetDeleted {
 		t.Fatalf("write after delete err=%v, want ErrDatasetDeleted", err)
 	}
 	exists = true
-	if err := upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
+	if err := upsertTestRows(store, context.Background(), []*pb.Row{row}); err != nil {
 		t.Fatalf("write after recreate: %v", err)
 	}
 }
@@ -76,7 +76,7 @@ func TestDeleteDatasetRowsMakesMarkersUnpublishable(t *testing.T) {
 	}
 	defer store.Close()
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	if err := store.UpsertFields(context.Background(), "s", "delete-me", []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}}); err != nil {
+	if err := store.UpsertFields(context.Background(), "s", "delete-me", []*pb.Row{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	marker, _, err := BuildLedgerPeriodCompletedMessage("s", &LedgerPeriodCompleted{DatasetID: "delete-me", Frequency: "1m", PeriodTime: 1, Status: "complete", SnapshotRef: "cfg-1", CompletedAt: time.Unix(1, 0).UnixMilli()})

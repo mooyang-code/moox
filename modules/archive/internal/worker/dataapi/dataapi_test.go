@@ -396,7 +396,7 @@ func TestRecentRowsReadDatasetJSONAndPage(t *testing.T) {
 	require.Equal(t, http.StatusConflict, resp.StatusCode, "还没有 dataset.json")
 	require.Contains(t, string(body), "dataset.json")
 
-	meta := e.files.BuildDatasetMeta(export.DatasetMetaInput{SpaceID: space, DatasetID: dataset, Freq: "1m", Purpose: e.task.Purpose, DirName: e.task.DirName,
+	meta := e.files.BuildDatasetMeta(export.DatasetMetaInput{SpaceID: space, DatasetID: dataset, Frequency: "1m", Purpose: e.task.Purpose, DirName: e.task.DirName,
 		PartitionUnit: "day", Timezone: "UTC", Columns: e.task.Columns}, day0)
 	require.NoError(t, e.files.WriteDatasetJSON(meta))
 	var rows []staging.Row

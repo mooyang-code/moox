@@ -182,7 +182,7 @@ func TestKlinePipelineFetchesFieldsAfterKlinesWhenRangeUnknown(t *testing.T) {
 // A 股专用的行与通用的行都输出附加字段，按字段名排序，整数与浮点各用各的类型。
 func TestKlineRowsCarryExtraFields(t *testing.T) {
 	extra := map[string]marketdata.FieldValue{"sw_l1": marketdata.IntField(480000), "adj_factor": marketdata.DoubleField(7.5)}
-	assertExtra := func(row *storagepb.RowFieldUpsert) {
+	assertExtra := func(row *storagepb.Row) {
 		fields := row.GetFields()
 		require.Equal(t, "adj_factor", fields[len(fields)-2].GetFieldId())
 		require.Equal(t, 7.5, fields[len(fields)-2].GetValue().GetDoubleValue())

@@ -44,8 +44,8 @@ func (s *ConsoleServer) ledgerSource(tradingAccountID string) (execution.LedgerS
 	if err != nil {
 		return nil, errLedgerUnavailable
 	}
-	source, ok := adapter.(execution.LedgerSource)
-	if !ok || !source.LedgerSupported() {
+	source := execution.LedgerOf(adapter)
+	if source == nil {
 		return nil, errLedgerUnsupported
 	}
 	return source, nil

@@ -90,14 +90,24 @@ func TestBindFactorTask(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
 }
 
-// 加成员时类型原样传给目录服务，响应带成员键和类型。
-func TestAddTaskMemberPassesKind(t *testing.T) {
+// 加成员时类型与初始状态原样传给目录服务，非法状态返回参数错误。
+func TestAddTaskMemberPassesKindAndStatus(t *testing.T) {
 	fake := &catalogFake{set: domain.FactorTask{TaskID: "s", SpaceID: "crypto"}}
 	svc := NewService(fake, &recalcFake{})
-	rsp, err := svc.AddTaskMember(context.Background(), &factorpb.AddTaskMemberReq{TaskId: "s", FactorId: "ma", Kind: domain.MemberKindVar})
+	rsp, err := svc.AddTaskMember(context.Background(), &factorpb.AddTaskMemberReq{
+		TaskId: "s", FactorId: "ma", Kind: domain.MemberKindVar, Status: domain.MemberStatusEnabled,
+	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, domain.MemberKindVar, fake.addKind)
+	require.Equal(t, domain.MemberStatusEnabled, fake.addStatus)
 	require.Equal(t, "ma__var", rsp.GetMember().GetMemberKey())
 	require.Equal(t, domain.MemberKindVar, rsp.GetMember().GetKind())
+	require.Equal(t, domain.MemberStatusEnabled, rsp.GetMember().GetStatus())
+
+	bad, err := svc.AddTaskMember(context.Background(), &factorpb.AddTaskMemberReq{
+		TaskId: "s", FactorId: "ma", Status: "bogus",
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 }

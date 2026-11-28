@@ -63,8 +63,17 @@ export function secretChangeConfirm(input: { accountName: string; from: string; 
   };
 }
 
-/** 未加入组合的执行账户启用、停用：都不会下单，生产环境也不用输入名称。 */
-export function accountStatusConfirm(input: { accountName: string; enable: boolean }): RiskyConfirm {
+/** 未加入组合的执行账户启用、停用（模拟账户仅支持不可逆关闭）：都不会下单，生产环境也不用输入名称。 */
+export function accountStatusConfirm(input: { accountName: string; enable: boolean; paper?: boolean }): RiskyConfirm {
+  if (input.paper && !input.enable) {
+    return {
+      title: `关闭模拟账户「${input.accountName}」`,
+      lines: ["撤掉它的未完成订单并停用账户。关闭后不能再下单，也不能重新启用；历史订单和成交保留。"],
+      nameRequired: false,
+      danger: true,
+      confirmText: "关闭模拟账户"
+    };
+  }
   return input.enable
     ? {
         title: `启用执行账户「${input.accountName}」`,

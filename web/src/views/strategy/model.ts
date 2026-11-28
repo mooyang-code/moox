@@ -313,6 +313,8 @@ export interface ResolvedTask {
 }
 
 export interface ResolvedBinding {
+  /** 是否为策略池的绑定解析。 */
+  pool: boolean;
   /** 市场模式：select 取 spot | swap | both | equity，prefer 取 spot | swap | equity。 */
   market: { select: string; prefer: string };
   tasks: ResolvedTask[];
@@ -348,6 +350,7 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return {
+    pool: Boolean(value.pool),
     market: { select: value.market?.select ?? "", prefer: value.market?.prefer ?? "" },
     tasks,
     bar: value.bar ?? "",

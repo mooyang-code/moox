@@ -16,7 +16,7 @@ message HealthObject {
   string host_id = 2;
   string component_id = 3;
   string dataset_id = 4;
-  string freq = 5;
+  string frequency = 5;
   string kind = 7;
   string space_id = 8;
   string producer = 9;
@@ -107,7 +107,7 @@ message HealthDataset {
   string producer = 1;
   string space_id = 2;
   string dataset_id = 3;
-  string freq = 4;
+  string frequency = 4;
   string status = 5;
   string reason = 6;
   string raw_error = 7;
@@ -268,16 +268,31 @@ message ExportedNotificationChannel {
 }
 message ExportNotificationChannelsReq {}
 message ExportNotificationChannelsRsp { common.RetInfo ret_info = 1; repeated ExportedNotificationChannel channels = 2; }
+// ImportNotificationChannel 是重装后恢复用的一条告警渠道，按 webhook_url 幂等覆盖（存在则更新 channel_type 与 secret，不存在则新建）。
+message ImportNotificationChannel {
+  string channel_type = 1;
+  string webhook_url = 2;
+  string secret = 3;
+}
+// ImportNotificationChannelsReq 批量导入告警渠道，按 webhook_url 幂等覆盖，只给 moox-cli 重装恢复使用。
+message ImportNotificationChannelsReq {
+  repeated ImportNotificationChannel channels = 1;
+}
+message ImportNotificationChannelsRsp {
+  common.RetInfo ret_info = 1;
+  int32 created = 2;
+  int32 updated = 3;
+}
 // secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥；企业微信不接受。
 message AddNotificationChannelReq { string channel_type = 1; string webhook_url = 2; string secret = 3; }
 message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannel channel = 2; }
 message DeleteNotificationChannelReq { string channel_id = 1; }
 message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
 
-// GetHostPolicyReq 由每台主机的 HostAgent 每分钟调用一次：带上这一分钟采到的主机快照，拉回主机策略缓存到
-// <部署根>/data/host-agent/host-policy.json，供 HostAgent 的对端检查与证书巡检直接推送告警。只允许调用方 host-agent。
-message GetHostPolicyReq {
-  // 这次采集的主机快照；采集失败时为空，策略照常返回。
+// SyncHostAgentReq 由每台主机的 HostAgent 每分钟调用一次：带上这一分钟采到的主机快照，拉回全部告警渠道缓存到
+// <部署根>/data/host-agent/host-policy.json，供非控制机在控制机或 Monitor 不可达、Monitor 反复重启时直接推送告警。只允许调用方 host-agent。
+message SyncHostAgentReq {
+  // 这次采集的主机快照；采集失败时为空，告警渠道照常返回。
   HostReport host = 1;
 }
 // HostReport 是一次主机快照上报。
@@ -288,15 +303,15 @@ message HostReport {
   int64 collected_at = 2;
   trpc.moox.hostagent.HostMetric metric = 3;
 }
-// HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。secret 是渠道密钥（没有时为空）。
-message HostPolicyChannel {
+// HostNotificationChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。secret 是渠道密钥（没有时为空）。
+message HostNotificationChannel {
   string channel_type = 1;
   string webhook_url = 2;
   string secret = 3;
 }
-message GetHostPolicyRsp {
+message SyncHostAgentRsp {
   common.RetInfo ret_info = 1;
-  repeated HostPolicyChannel channels = 2;
+  repeated HostNotificationChannel channels = 2;
   // monitor_started_at 是 Monitor 进程的启动时刻（毫秒）：各主机采集器按它的变化发现 Monitor 反复重启。
   int64 monitor_started_at = 3;
 }
@@ -334,7 +349,7 @@ message QueryPipelineArrivalHistoryReq {
   string space_id = 1;
   // 链路的源数据集（入库的数据集）与周期。
   string dataset_id = 2;
-  string freq = 3;
+  string frequency = 3;
   // YYYY-MM-DD，按市场时区（加密货币 UTC，A 股 Asia/Shanghai）的自然日；为空取市场时区的今天。
   string day = 4;
   // 因子任务 ID：给了就查它的结果数据集；没给且源数据集上只有一个任务，就查这个任务；有多个任务时只返回任务列表和源数据集这一段。
@@ -379,69 +394,6 @@ message QueryPipelineArrivalHistoryRsp {
   bool truncated = 8;
   // 这个源数据集 + 周期上的全部因子任务，由页面选择任务后再查。
   repeated ArrivalTask tasks = 9;
-}
-
-message DoctorExpectedComponent {
-  string component_id = 1;
-  string service_name = 2;
-  string node_id = 3;
-  bool expected = 4;
-  string deployment_status = 5;
-  string transport = 6;
-  string functional_observability = 7;
-}
-message DoctorObservation {
-  string kind = 1;
-  string component_id = 2;
-  string service_name = 3;
-  string instance_id = 4;
-  string node_id = 5;
-  string boot_id = 6;
-  string status = 7;
-  int64 observed_at = 8;
-  string summary = 9;
-  string details_json = 10;
-  bool stale = 11;
-  bool conflict = 12;
-  double value = 13;
-  int64 age_seconds = 14;
-  int32 interval_seconds = 15;
-}
-message DoctorWatermark {
-  string module = 1;
-  string stage = 2;
-  string health_check_id = 3;
-  int64 observed_at = 4;
-  double value = 5;
-  string status = 6;
-}
-message DoctorDiskForecast {
-  // node_id 是主机 ID。
-  string node_id = 1;
-  string mountpoint = 3;
-  string status = 4;
-  double growth_bytes_per_day = 5;
-  double remaining_days = 6;
-  uint32 valid_intervals = 7;
-  string summary = 8;
-}
-message GetDoctorContextReq {
-  string node_id = 1;
-  repeated string component_ids = 2;
-  repeated string health_check_ids = 3;
-}
-message GetDoctorContextRsp {
-  common.RetInfo ret_info = 1;
-  int64 generated_at = 2;
-  string manifest_checksum = 3;
-  repeated DoctorExpectedComponent expected_components = 4;
-  repeated DoctorObservation health_observations = 5;
-  repeated DoctorObservation reporter_observations = 6;
-  repeated DoctorObservation module_observations = 7;
-  repeated DoctorWatermark watermarks = 8;
-  repeated HostAgentInfo host_resources = 9;
-  repeated DoctorDiskForecast disk_forecasts = 10;
-  repeated DoctorObservation missing_observations = 12;
 }
 
 // AlertMuteState 是告警屏蔽的当前状态。屏蔽只停推送：入库、告警评估与记录照常，到期自动恢复。
@@ -535,14 +487,14 @@ service MonitorMgr {
   rpc GetHealthOverview(GetHealthOverviewReq) returns (GetHealthOverviewRsp);
   rpc ListNotificationChannels(ListNotificationChannelsReq) returns (ListNotificationChannelsRsp);
   rpc ExportNotificationChannels(ExportNotificationChannelsReq) returns (ExportNotificationChannelsRsp);
+  rpc ImportNotificationChannels(ImportNotificationChannelsReq) returns (ImportNotificationChannelsRsp);
   rpc AddNotificationChannel(AddNotificationChannelReq) returns (AddNotificationChannelRsp);
   rpc DeleteNotificationChannel(DeleteNotificationChannelReq) returns (DeleteNotificationChannelRsp);
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
   rpc QueryLogRecords(QueryLogRecordsReq) returns (QueryLogRecordsRsp);
-  rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
-  rpc GetHostPolicy(GetHostPolicyReq) returns (GetHostPolicyRsp);
+  rpc SyncHostAgent(SyncHostAgentReq) returns (SyncHostAgentRsp);
   rpc MuteAlerts(MuteAlertsReq) returns (MuteAlertsRsp);
   rpc UnmuteAlerts(UnmuteAlertsReq) returns (UnmuteAlertsRsp);
   rpc GetAlertMute(GetAlertMuteReq) returns (GetAlertMuteRsp);

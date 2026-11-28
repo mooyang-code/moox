@@ -61,7 +61,7 @@ async function mockGateway(route: Route) {
           dataset_id: "dataset_binance_kline_1m",
           name: "现货K线",
           data_kind: 2,
-          freq: "1m",
+          frequency: "1m",
           status: "active",
           attributes: { owner_module: "collector", dataset_role: "raw_collection" }
         }
@@ -77,7 +77,7 @@ async function mockGateway(route: Route) {
             dataset_id: "dataset_binance_kline_1m",
             name: "现货K线",
             data_kind: 2,
-            freq: "1m",
+            frequency: "1m",
             status: "active",
             attributes: { owner_module: "collector", dataset_role: "raw_collection" }
           }
@@ -132,28 +132,33 @@ async function mockGateway(route: Route) {
       })
     });
   }
-  if (method === "GetDataTypeConfigWithFields") {
+  if (method === "GetDataTypeConfigs") {
     return route.fulfill({
       json: ok({
-        detail: {
-          base_output_fields: [
-            { field_id: "open", display_name: "开盘价", group: "行情价格", value_type: "double" },
-            { field_id: "close", display_name: "收盘价", group: "行情价格", value_type: "double" }
-          ],
-          extra_fields: [
-            {
-              field_id: "funding_rate",
-              display_name: "资金费率",
-              group: "合约指标",
-              market_id: "crypto",
-              instrument_type: "swap",
-              frequencies: ["1h", "1d"],
-              provider_id: "binance",
-              value_type: "double",
-              fill: "zero"
-            }
-          ]
-        }
+        configs: [
+          {
+            data_type: "kline",
+            type_name: "K 线",
+            base_output_fields: [
+              { field_id: "open", display_name: "开盘价", group: "行情价格", value_type: "double" },
+              { field_id: "close", display_name: "收盘价", group: "行情价格", value_type: "double" }
+            ],
+            extra_fields: [
+              {
+                field_id: "funding_rate",
+                display_name: "资金费率",
+                group: "合约指标",
+                market_id: "crypto",
+                instrument_type: "swap",
+                frequencies: ["1h", "1d"],
+                provider_id: "binance",
+                provider_name: "币安",
+                value_type: "double",
+                fill: "zero"
+              }
+            ]
+          }
+        ]
       })
     });
   }
@@ -168,10 +173,12 @@ async function mockGateway(route: Route) {
             key: {
               space_id: "crypto",
               dataset_id: "dataset_binance_kline_1m",
-              subject_id: "BTC-USDT",
-              freq: "1m",
-              data_time: "2026-09-18T06:57:00Z",
-              series_tag: "venue:binance"
+              time_series: {
+                subject_id: "BTC-USDT",
+                frequency: "1m",
+                data_time: "2026-09-18T06:57:00Z",
+                series_tag: "venue:binance"
+              }
             },
             fields: [
               { field_id: "open", value: { double_value: 123.4 } },
@@ -222,11 +229,11 @@ test("refresh and direct routes stay available for collection pages", async ({ p
 
 test("data sources hosts field definitions tab with sidebar groups and provider link", async ({ page }) => {
   await page.goto("/#/data/sources");
-  await expect(page.getByText("资金费率（币安）", { exact: true })).toBeVisible();
+  await expect(page.getByRole("row", { name: /binance/ }).getByText("币安", { exact: true })).toBeVisible();
   await page.getByText(/共 1 个字段/).click();
 
   await expect(page).toHaveURL(/tab=fields/);
-  await expect(page.getByText("来源：资金费率（币安）")).toBeVisible();
+  await expect(page.getByText("来源：币安")).toBeVisible();
   await expect(page.getByText("funding_rate", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: /全部字段/ }).click();

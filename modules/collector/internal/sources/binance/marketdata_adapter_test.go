@@ -54,11 +54,17 @@ func TestMarketDataAdapterFetchesClosedKlineThroughTypedProvider(t *testing.T) {
 	assert.Equal(t, 1234.56, rows[0].Amount)
 }
 
-func TestMarketDataAdapterUsesRuntimeKlineRequestTimeout(t *testing.T) {
+func TestMarketDataAdapterUsesConfiguredKlineRequestTimeout(t *testing.T) {
 	t.Setenv("MOOX_FETCH_REQUEST_TIMEOUT_MS", "2000")
 
-	adapter := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSpot})
-	require.Equal(t, 2*time.Second, adapter.KlineSpec().RateLimit.RequestTimeout)
+	defaultAdapter := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSpot})
+	require.Equal(t, 5*time.Second, defaultAdapter.KlineSpec().RateLimit.RequestTimeout, "不从进程环境读取超时，默认 5 秒")
+
+	configured := NewMarketDataAdapter(AdapterConfig{
+		InstrumentType: marketdata.InstrumentSpot,
+		RateLimit:      marketdata.RateLimitPolicy{RequestTimeout: 2 * time.Second},
+	})
+	require.Equal(t, 2*time.Second, configured.KlineSpec().RateLimit.RequestTimeout)
 }
 
 func TestMarketDataAdapterNormalizesBinanceIntervalWithoutChangingStoredFrequency(t *testing.T) {

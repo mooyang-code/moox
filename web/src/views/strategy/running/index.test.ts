@@ -1,6 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defineComponent, h, nextTick, reactive } from "vue";
+import { defineComponent, h, reactive } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 
 const api = vi.hoisted(() => ({
@@ -58,13 +58,7 @@ const stubs = {
     }
   }),
   InstanceEnableDialog: { template: "<div />", methods: { open: api.enableOpen } },
-  InstanceConfirmDialog: { template: "<div />", methods: { open: vi.fn() } },
-  InstanceQuickDrawer: defineComponent({
-    props: ["instanceId"],
-    setup(props) {
-      return () => h("div", { class: "quick" }, `quick:${props.instanceId}`);
-    }
-  })
+  InstanceConfirmDialog: { template: "<div />", methods: { open: vi.fn() } }
 };
 
 async function setup(query: Record<string, string>) {
@@ -107,32 +101,31 @@ describe("strategy running page", () => {
     });
   });
 
-  it("loads the definition catalog once and skips it on later refreshes", async () => {
-    const { wrapper } = await setup({});
+  it("loads the definition catalog once and skips it on later remounts", async () => {
+    const first = await setup({});
     expect(api.store.loadAllStrategies).toHaveBeenCalledTimes(1);
+    first.wrapper.unmount();
+
     api.space.selectedSpaceId = "hk";
-    await nextTick();
-    await flushPromises();
+    const second = await setup({});
     expect(api.loadInstances).toHaveBeenCalledTimes(2);
     expect(api.store.loadAllStrategies).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
+    second.wrapper.unmount();
   });
 
-  it("restores filters, page and the quick detail from the URL with one request", async () => {
-    const { wrapper } = await setup({ strategy_id: "s1", enabled: "false", page: "2", instance_id: "i1" });
+  it("restores filters and page from the URL with one request", async () => {
+    const { wrapper } = await setup({ strategy_id: "s1", enabled: "false", page: "2" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     expect(api.loadInstances).toHaveBeenCalledWith(
       { strategy_id: "s1", enabled: false, page: 2, size: 20 },
       { background: false }
     );
-    expect(wrapper.find(".quick").text()).toBe("quick:i1");
     expect(wrapper.find(".create").text()).toBe("create:false:s1");
   });
 
-  it("opens the create drawer from create=1 and drops the quick detail", async () => {
-    const { wrapper } = await setup({ create: "1", instance_id: "i1", strategy_id: "s1" });
+  it("opens the create drawer from create=1", async () => {
+    const { wrapper } = await setup({ create: "1", strategy_id: "s1" });
     expect(wrapper.find(".create").text()).toBe("create:true:s1");
-    expect(wrapper.find(".quick").text()).toBe("quick:");
   });
 
   it("ends on the detail page of a newly created instance instead of falling back to the list", async () => {
@@ -149,13 +142,13 @@ describe("strategy running page", () => {
     expect(router.currentRoute.value.query.strategy_id).toBe("s1");
   });
 
-  it("does not reload when only the overlay changes", async () => {
+  it("does not reload when only the create drawer toggles", async () => {
     const { router, wrapper } = await setup({ page: "2" });
     api.loadInstances.mockClear();
-    await router.push({ path: "/strategy/tasks", query: { page: "2", instance_id: "i7" } });
+    await router.push({ path: "/strategy/tasks", query: { page: "2", create: "1" } });
     await flushPromises();
     expect(api.loadInstances).not.toHaveBeenCalled();
-    expect(wrapper.find(".quick").text()).toBe("quick:i7");
+    expect(wrapper.find(".create").text()).toBe("create:true:");
   });
 
   it("writes paging with replace and reloads that page", async () => {
@@ -169,27 +162,23 @@ describe("strategy running page", () => {
     );
   });
 
-  it("keeps the deep link when the space initializes but clears it on a real switch", async () => {
+  it("waits until a space is selected before issuing space-scoped requests and preserves deep link on mount", async () => {
     api.space.selectedSpaceId = "";
-    const { router } = await setup({ page: "2", instance_id: "i1" });
+    const empty = await setup({ page: "2", create: "1" });
     expect(api.loadInstances).not.toHaveBeenCalled();
+    expect(api.listLogicalAccounts).not.toHaveBeenCalled();
+    empty.wrapper.unmount();
+
     api.space.selectedSpaceId = "crypto";
-    await nextTick();
-    await flushPromises();
-    // 挂载时清理一次；空间初始化（无 → 有）不再清理。
-    expect(api.clearInstances).toHaveBeenCalledTimes(1);
-    expect(router.currentRoute.value.query).toEqual({ instance_id: "i1", page: "2" });
+    const ready = await setup({ page: "2", create: "1" });
+    expect(ready.router.currentRoute.value.query).toEqual({ create: "1", page: "2" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    api.space.selectedSpaceId = "hk";
-    await nextTick();
-    await flushPromises();
-    expect(api.clearInstances).toHaveBeenCalledTimes(2);
-    expect(router.currentRoute.value.query).toEqual({});
-    expect(api.loadInstances).toHaveBeenCalledTimes(2);
     expect(api.loadInstances).toHaveBeenLastCalledWith(
-      { strategy_id: undefined, enabled: undefined, page: 1, size: 20 },
+      { strategy_id: undefined, enabled: undefined, page: 2, size: 20 },
       { background: false }
     );
+    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(1);
+    ready.wrapper.unmount();
   });
 
   it("shows a catalog failure without marking the instance list as failed", async () => {
@@ -234,111 +223,28 @@ describe("strategy running page", () => {
     expect(api.enableOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("lets only the latest of two quick space switches load the list", async () => {
-    const { router } = await setup({ page: "2" });
-    api.loadInstances.mockClear();
-    api.space.selectedSpaceId = "hk";
-    await nextTick();
-    api.space.selectedSpaceId = "eu";
-    await nextTick();
-    await flushPromises();
-    expect(router.currentRoute.value.query).toEqual({});
-    expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    expect(api.loadInstances).toHaveBeenLastCalledWith(
-      { strategy_id: undefined, enabled: undefined, page: 1, size: 20 },
-      { background: false }
-    );
-  });
-
   it("clears instances left over from another space when the page mounts", async () => {
     await setup({});
     expect(api.clearInstances).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes logicalNames when switching spaces and drops stale responses", async () => {
+  it("drops stale logicalNames responses after unmount", async () => {
     let resolveCrypto!: (value: unknown) => void;
-    api.listLogicalAccounts
-      .mockImplementationOnce(
-        () =>
-          new Promise(resolve => {
-            resolveCrypto = resolve;
-          })
-      )
-      .mockResolvedValueOnce({ logical_accounts: [{ logical_account_id: "la-hk", name: "港股组合" }] });
-
-    const { wrapper } = await setup({});
-    const vm = wrapper.vm as unknown as { logicalNames: Record<string, string> };
-    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(1);
-    expect(vm.logicalNames).toEqual({});
-
-    // 切空间时立刻发起新空间的组合名读取，旧空间迟到的响应不能覆盖新空间结果
-    api.space.selectedSpaceId = "hk";
-    await nextTick();
-    await flushPromises();
-    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(2);
-    expect(vm.logicalNames).toEqual({ "la-hk": "港股组合" });
-
-    resolveCrypto({ logical_accounts: [{ logical_account_id: "la-crypto", name: "币圈组合" }] });
-    await flushPromises();
-    expect(vm.logicalNames).toEqual({ "la-hk": "港股组合" });
-
-    // 切到下一个空间但加载失败时，应清空旧空间名称而不残留
-    api.listLogicalAccounts.mockRejectedValueOnce(new Error("trade unavailable"));
-    api.space.selectedSpaceId = "us";
-    await nextTick();
-    await flushPromises();
-    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(3);
-    expect(vm.logicalNames).toEqual({});
-    wrapper.unmount();
-  });
-
-  it("waits for space initialization before loading logicalNames", async () => {
-    api.space.selectedSpaceId = "";
-    api.listLogicalAccounts.mockResolvedValueOnce({ logical_accounts: [{ logical_account_id: "la-1", name: "实盘一号" }] });
-    const { wrapper } = await setup({});
-    const vm = wrapper.vm as unknown as { logicalNames: Record<string, string> };
-    expect(api.listLogicalAccounts).not.toHaveBeenCalled();
-
-    api.space.selectedSpaceId = "crypto";
-    await nextTick();
-    await flushPromises();
-    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(1);
-    expect(vm.logicalNames).toEqual({ "la-1": "实盘一号" });
-    wrapper.unmount();
-  });
-
-  it("clears instances, logicalNames and invalidates in-flight space switch when selectedSpaceId becomes empty", async () => {
-    api.listLogicalAccounts.mockResolvedValue({ logical_accounts: [{ logical_account_id: "la-1", name: "币圈组合" }] });
-    const { router, wrapper } = await setup({ page: "2" });
-    const vm = wrapper.vm as unknown as { logicalNames: Record<string, string> };
-    expect(vm.logicalNames).toEqual({ "la-1": "币圈组合" });
-
-    api.loadInstances.mockClear();
-    api.listLogicalAccounts.mockClear();
-    api.clearInstances.mockClear();
-
-    // 模拟切空间触发的路由 replace 挂起期间，空间被清空为 ""
-    let finishReplace!: () => void;
-    const originalReplace = router.replace.bind(router);
-    vi.spyOn(router, "replace").mockImplementationOnce(
+    api.listLogicalAccounts.mockImplementationOnce(
       () =>
         new Promise(resolve => {
-          finishReplace = () => resolve(originalReplace({ name: "strategy-tasks", query: {} }));
-        }) as ReturnType<typeof router.replace>
+          resolveCrypto = resolve;
+        })
     );
 
-    api.space.selectedSpaceId = "hk";
-    await nextTick();
-    api.space.selectedSpaceId = "";
-    await nextTick();
-    expect(api.clearInstances).toHaveBeenCalledTimes(2);
+    const { wrapper } = await setup({});
+    const vm = wrapper.vm as unknown as { logicalNames: Record<string, string> };
+    expect(api.listLogicalAccounts).toHaveBeenCalledTimes(1);
     expect(vm.logicalNames).toEqual({});
 
-    finishReplace();
-    await flushPromises();
-    // 原先挂起的 hk 切换因 spaceGeneration 递增而退出，不再发任何读取请求
-    expect(api.loadInstances).not.toHaveBeenCalled();
-    expect(api.listLogicalAccounts).not.toHaveBeenCalled();
     wrapper.unmount();
+    resolveCrypto({ logical_accounts: [{ logical_account_id: "la-crypto", name: "币圈组合" }] });
+    await flushPromises();
+    expect(vm.logicalNames).toEqual({});
   });
 });

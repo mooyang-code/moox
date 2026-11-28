@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package trpc.moox.events;
+
+option go_package = "github.com/mooyang-code/moox/packages/events/eventpb;eventpb";
+
+// DatasetPeriodCompleted 表示数据集的某一期已经完成。source 只描述“这一期是怎么判定完成的”，不是业务分类：
+//   - ledger：DataNode 按登记的序列快照与截止时间判定（采集、重采样走序列账本）；
+//   - producer：写入方自己报告（例如因子）。
+// complete 表示每个标的都成功；degraded 保留完整标的清单并记录失败。
+message DatasetPeriodCompleted {
+  string dataset_id = 1;
+  string frequency = 2;
+  int64 period_time = 3;
+  string status = 4; // complete | degraded
+  string source = 5; // ledger | producer
+  repeated string universe_subject_ids = 6;
+  // failed_subjects 是本期失败的标的：账本来源是快照里没有成功提交的标的；写入方来源由写入方给出。是 universe_subject_ids 的子集。
+  repeated string failed_subjects = 7;
+  // snapshot_ref：ledger 来源时是序列快照引用。
+  string snapshot_ref = 9;
+  // cause_event_id：producer 来源时是触发本次计算的事件 ID，用于幂等查询。
+  string cause_event_id = 10;
+  // completed_at 是判定完成的时刻（Unix 毫秒）。
+  int64 completed_at = 11;
+  // detail_type、detail 是写入方自定义的明细（不透明字节），Storage 原样保存并透传，不解析。
+  string detail_type = 12;
+  bytes detail = 13;
+}
+
+message ViewDataReady {
+  string completion_event_id = 3;
+  // dataset_id 是已就绪的数据集，也是事件的 subject_id：每个数据集恰好有一个查询索引。
+  string dataset_id = 4;
+  string status = 5;
+  string frequency = 7;
+  int64 period_time = 8;
+  // failed_subjects 原样取自周期完成事件的 failed_subjects；complete 时为空，degraded 时可以为空（写入方整期降级但说不出具体标的）。
+  repeated string failed_subjects = 9;
+  // ready_at 是查询索引就绪的时刻（Unix 毫秒）。
+  int64 ready_at = 11;
+  // 周期完成时复制冻结的标的全集，消费方不用再订阅一次完成事件就能锁定同一批成员。
+  repeated string universe_subject_ids = 12;
+  // detail_type、detail 原样透传周期完成事件里写入方自定义的明细（不透明字节）。
+  string detail_type = 13;
+  bytes detail = 14;
+}
+
+// CollectorKlineBackfilled announces, without row data, that K-line rows of a
+// Dataset were written after their period had already ended: a backfill chunk
+// was verified (origin auto, manual or force), or a resample wrote rows outside
+// period tracking (origin resample). Consumers re-derive what depends on
+// [start, end) for subject_ids.
+message CollectorKlineBackfilled {
+  string dataset_id = 1;
+  string frequency = 2;
+  repeated string subject_ids = 3;
+  // start 含、end 不含，都是 K 线开始时间（Unix 秒，数据坐标）。
+  int64 start = 4;
+  int64 end = 5;
+  string origin = 6;
+  string job_id = 7;
+  // confirmed_at 是补写被确认的时刻（Unix 毫秒）。
+  int64 confirmed_at = 9;
+  // absent 是 [start, end) 内补采确认行情源没有的 K 线（只有补采来源的事件会带）：因子据此不把这些标的算进缺失比例。
+  repeated CollectorKlineAbsent absent = 11;
+}
+
+// CollectorKlineAbsent 是补采确认行情源没有 K 线的一段：标的在 [start, end) 没有行情。
+message CollectorKlineAbsent {
+  string subject_id = 1;
+  // start 含、end 不含，是 K 线开始时间（Unix 秒，数据坐标）。
+  int64 start = 3;
+  int64 end = 4;
+}
+
+// InstrumentDelistScheduled 宣告一个标的即将下架，由 Collector 的下架检测发布，只带元数据。
+// exchange 为小写交易所代码（binance、okx），market 为 spot 或 swap；
+// source 取 BINANCE_SPOT_SCHEDULE、BINANCE_SWAP_EXCHANGE_INFO、OKX_SWAP_INSTRUMENTS、MANUAL；
+// scope 取 ALL 或 PAPER_ONLY（后者只用于演练，只处理模拟盘组合）。
+message InstrumentDelistScheduled {
+  string exchange = 1;
+  string market = 2;
+  string exchange_symbol = 3;
+  // delist_at 是交易所公布的下架时刻，first_seen_at 是首次发现这条下架的时刻（都是 Unix 毫秒）。
+  int64 delist_at = 4;
+  string source = 5;
+  int64 first_seen_at = 6;
+  string scope = 7;
+}

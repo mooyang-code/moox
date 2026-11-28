@@ -134,7 +134,7 @@ func (s *Store) compactAsync(start, end []byte) {
 	}()
 }
 
-func validateUpsert(row *pb.RowFieldUpsert) error {
+func validateUpsert(row *pb.Row) error {
 	if row == nil || row.GetKey() == nil {
 		return invalid("row key is required")
 	}

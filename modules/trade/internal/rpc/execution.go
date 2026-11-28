@@ -6,15 +6,13 @@ import (
 	"fmt"
 	"strings"
 
+	positionapp "github.com/mooyang-code/moox/modules/trade/internal/application/position"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
-
-// errNotLogicalMember 是查询持仓时传了不属于该组合账户的交易账户：请求参数有误。
-var errNotLogicalMember = errors.New("交易账户不是该组合账户的成员")
 
 // SubmitOrderCommand 是人工下单的命令：给 LogicalAccountID 里的执行账户下一笔单。
 type SubmitOrderCommand struct {
@@ -47,6 +45,8 @@ type ExecutionServer struct {
 	) (store.OperatorActionRecord, store.OrderRecord, error)
 	// Lanes 按标的返回执行器对目标的结论（targetapp.Executor.LaneStatuses）；为空时 GetLogicalAccountTarget 不带 lanes。
 	Lanes func(context.Context, store.LogicalAccountTargetRecord) ([]targetapp.LaneStatus, error)
+	// Positions 统一查询永续合约持仓与余额类市场（现货、股票）持币；为空时回退到只读 Store（无实时参考价）。
+	Positions *positionapp.Query
 }
 
 // submitOrderCommand 把下单请求转成命令。失败时返回写好的错误信息，调用方直接放进响应。
@@ -312,89 +312,32 @@ func (h *ExecutionServer) ListPositions(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	st := h.Store.ReadOnly()
-	accountIDs, err := positionAccountIDs(ctx, st, spaceID, req)
-	if errors.Is(err, errNotLogicalMember) {
+	query := h.Positions
+	if query == nil && h.Store != nil {
+		query = &positionapp.Query{Store: h.Store.ReadOnly()}
+	}
+	if query == nil {
+		return &tradepb.ListPositionsRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
+	}
+	records, err := query.List(ctx, positionapp.ListRequest{
+		SpaceID:          spaceID,
+		LogicalAccountID: req.GetLogicalAccountId(),
+		TradingAccountID: req.GetTradingAccountId(),
+		InstrumentID:     req.GetInstrumentId(),
+	})
+	if errors.Is(err, positionapp.ErrNotLogicalMember) {
 		return &tradepb.ListPositionsRsp{RetInfo: invalidInfo(err)}, nil
 	}
 	if err != nil {
-		return &tradepb.ListPositionsRsp{RetInfo: errorInfo(err)}, nil
-	}
-	instrumentID, err := queryInstrumentID(ctx, st, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
-	if err != nil {
 		return &tradepb.ListPositionsRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
-	positions := make([]*tradepb.Position, 0)
-	for _, accountID := range accountIDs {
-		records, listErr := st.ListPositionsByInstrument(
-			ctx,
-			spaceID,
-			accountID,
-			instrumentID,
-		)
-		if listErr != nil {
-			return &tradepb.ListPositionsRsp{
-				RetInfo: errorInfo(listErr),
-			}, nil
-		}
-		for _, record := range records {
-			positions = append(positions, positionToPB(record))
-		}
+	positions := make([]*tradepb.Position, 0, len(records))
+	for _, record := range records {
+		positions = append(positions, positionToPB(record))
 	}
 	return &tradepb.ListPositionsRsp{
 		RetInfo: success(), Positions: positions,
 	}, nil
-}
-
-func positionAccountIDs(
-	ctx context.Context,
-	st *store.Store,
-	spaceID string,
-	req *tradepb.ListPositionsReq,
-) ([]string, error) {
-	if req.GetLogicalAccountId() == "" {
-		if _, err := st.GetTradingAccount(
-			ctx,
-			spaceID,
-			req.GetTradingAccountId(),
-		); err != nil {
-			return nil, err
-		}
-		return []string{req.GetTradingAccountId()}, nil
-	}
-	if _, err := st.GetLogicalAccount(
-		ctx,
-		spaceID,
-		req.GetLogicalAccountId(),
-	); err != nil {
-		return nil, err
-	}
-	members, err := st.ListLogicalAccountMembers(
-		ctx,
-		spaceID,
-		req.GetLogicalAccountId(),
-		true,
-	)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(members))
-	for _, member := range members {
-		if req.GetTradingAccountId() != "" &&
-			member.TradingAccountID != req.GetTradingAccountId() {
-			continue
-		}
-		ids = append(ids, member.TradingAccountID)
-	}
-	if req.GetTradingAccountId() != "" && len(ids) == 0 {
-		return nil, fmt.Errorf(
-			"%w：交易账户 %s，组合账户 %s",
-			errNotLogicalMember,
-			req.GetTradingAccountId(),
-			req.GetLogicalAccountId(),
-		)
-	}
-	return ids, nil
 }
 
 // normalizeForMarkets 按可选的市场集合标准化上游传入的标的 ID：只有一个市场时按它标准化；

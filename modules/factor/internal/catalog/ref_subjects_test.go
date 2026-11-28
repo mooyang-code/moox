@@ -30,12 +30,12 @@ func TestAddMemberRejectsReferenceOutsideScope(t *testing.T) {
 	svc := refService(t, &scopedSubjects{list: []string{"BTC", "ETH"}})
 	_, err := svc.CreateFactor(ctx, factorWithSpec("rel_sol", "output: close / cs_ref(close, \"SOL\")\n"))
 	require.NoError(t, err, "保存定义时只校验写法，不校验标的范围")
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "rel_sol", "", nil)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "rel_sol", "", nil, "")
 	require.ErrorContains(t, err, "参考标的 SOL 不在任务的标的范围内")
 
 	_, err = svc.CreateFactor(ctx, factorWithSpec("rel_btc", "output: close / cs_ref(close, \"BTC\")\n"))
 	require.NoError(t, err)
-	member, err := svc.AddTaskMember(ctx, testTaskID(), "rel_btc", "", nil)
+	member, err := svc.AddTaskMember(ctx, testTaskID(), "rel_btc", "", nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "rel_btc", member.MemberKey)
 }

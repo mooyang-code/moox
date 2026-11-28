@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordeployment "github.com/mooyang-code/moox/modules/monitor/internal/deployment"
-	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
@@ -18,19 +17,18 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, doctorContext *monitordoctor.Builder, health *healthview.Builder) {
+func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, health *healthview.Builder) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
 		return
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
-		InstanceID:    cfg.Instance.InstanceID,
-		StartedAt:     runtime.StartedAt,
-		HostStore:     hostStore,
-		DoctorContext: doctorContext,
-		HealthView:    health,
-		Lifecycle:     runtime.life.Load,
+		InstanceID: cfg.Instance.InstanceID,
+		StartedAt:  runtime.StartedAt,
+		HostStore:  hostStore,
+		HealthView: health,
+		Lifecycle:  runtime.life.Load,
 		EvaluationStale: func() string {
 			_, reason := evaluationFresh(runtime, time.Now().UTC())
 			return reason

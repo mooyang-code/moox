@@ -620,11 +620,11 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
   const delay = barDelay(item, nowMs);
   const expected = expectedBar(item, delay, nowMs);
   return {
-    key: `${item.producer}/${item.space_id}/${id}/${item.freq}`,
+    key: `${item.producer}/${item.space_id}/${id}/${item.frequency}`,
     name: item.display_name || names.datasets[id] || id,
     producer: PRODUCER_LABELS[item.producer || ""] || item.producer || "",
     spaceId: item.space_id || "",
-    freq: item.freq || "",
+    freq: item.frequency || "",
     latest: marketTime(item.output_watermark_at, item.timezone, nowMs),
     expected: expected.text,
     expectedTone: expected.tone,
@@ -673,7 +673,6 @@ const KIND_LABELS: Record<string, string> = {
   market_canary: "行情探针",
   metrics_ingest: "指标入库",
   module: "模块运行",
-  archive_coverage: "数据归档",
   observation: "观测输入",
   attention: "关注项",
   subject_tag: "标的标签巡检"

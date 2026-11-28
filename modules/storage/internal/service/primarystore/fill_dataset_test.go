@@ -3,10 +3,12 @@ package primarystore
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
@@ -19,16 +21,47 @@ func fillDataset(req *pb.PrimaryUpsertFieldsReq) *pb.PrimaryUpsertFieldsReq {
 	return req
 }
 
-// activeRequestSnapshot 是任何数据集都存在且启用、但没有列定义的请求快照，只关心读写行的测试用它。
-func activeRequestSnapshot() metadata.RequestSnapshot { return activeSnapshot{} }
-
-type activeSnapshot struct{}
-
-func (activeSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active"}, true
+// testDatasetSource 是测试用的内存元数据来源，供构造真实的 DatasetCache。
+type testDatasetSource struct {
+	mu       sync.Mutex
+	datasets []*pb.Dataset
+	columns  []*pb.DatasetColumn
 }
-func (activeSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
+
+func (s *testDatasetSource) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.datasets, &pb.PageResult{Total: uint32(len(s.datasets))}, nil
+}
+
+func (s *testDatasetSource) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.columns, &pb.PageResult{Total: uint32(len(s.columns))}, nil
+}
+
+func (s *testDatasetSource) set(datasets []*pb.Dataset, columns []*pb.DatasetColumn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.datasets = datasets
+	s.columns = columns
+}
+
+func newTestDatasetCache(t testing.TB, datasets []*pb.Dataset, columns []*pb.DatasetColumn) *metacache.DatasetCache {
+	t.Helper()
+	cache, _ := newMutableDatasetCache(t, datasets, columns)
+	return cache
+}
+
+func newMutableDatasetCache(t testing.TB, datasets []*pb.Dataset, columns []*pb.DatasetColumn) (*metacache.DatasetCache, *testDatasetSource) {
+	t.Helper()
+	source := &testDatasetSource{datasets: datasets, columns: columns}
+	cache, err := metacache.NewDatasetCache(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	return cache, source
 }
 
 // openTestStore 打开一个临时 Pebble 库，测试结束时关闭。
@@ -45,8 +78,8 @@ func openTestStore(t *testing.T) *pebble.Store {
 // hookStore 在真实 Pebble 库上按需替换个别方法，用于注入失败或记录调用。
 type hookStore struct {
 	*pebble.Store
-	upsert           func(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error
-	readRows         func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error)
+	upsert           func(ctx context.Context, spaceID, datasetID string, rows []*pb.Row) error
+	readRows         func(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.Row, error)
 	readSeries       func(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
 	countSeries      func(ctx context.Context, req *pb.CountTimeSeriesRowsReq) ([]*pb.SubjectRowCount, error)
 	readChanges      func(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error)
@@ -55,14 +88,14 @@ type hookStore struct {
 	appendMarker     func(ctx context.Context, raw []byte) (string, error)
 }
 
-func (s *hookStore) UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
+func (s *hookStore) UpsertFields(ctx context.Context, spaceID, datasetID string, rows []*pb.Row) error {
 	if s.upsert != nil {
 		return s.upsert(ctx, spaceID, datasetID, rows)
 	}
 	return s.Store.UpsertFields(ctx, spaceID, datasetID, rows)
 }
 
-func (s *hookStore) ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.RowFieldValues, error) {
+func (s *hookStore) ReadRows(ctx context.Context, keys []*pb.RowKey, columns, attributeKeys []string) ([]*pb.Row, error) {
 	if s.readRows != nil {
 		return s.readRows(ctx, keys, columns, attributeKeys)
 	}

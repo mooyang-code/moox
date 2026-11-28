@@ -53,7 +53,7 @@ var dataRowsExportCmd = &cobra.Command{
 		if dataStartTime == "" || dataEndTime == "" {
 			return fmt.Errorf("必须同时指定 --from 与 --to")
 		}
-		selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
+		selector := timeSeriesSelectorForExport(cmd.Flags().Changed("series-tag"))
 		rsp, err := exportRowsPaged(cmd.Context(), gateway, &pb.ReadTimeSeriesRowsReq{
 			SpaceId: defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
 			Selectors:   []*pb.TimeSeriesSelector{selector},
@@ -67,10 +67,9 @@ var dataRowsExportCmd = &cobra.Command{
 	},
 }
 
-func timeSeriesSelectorForExport(datasetID string, exactSeriesTag bool) *pb.TimeSeriesSelector {
+func timeSeriesSelectorForExport(exactSeriesTag bool) *pb.TimeSeriesSelector {
 	selector := &pb.TimeSeriesSelector{
-		SpaceId: defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
-		SubjectId: dataSubjectID, Freq: dataFreq,
+		SubjectId: dataSubjectID, Frequency: dataFreq,
 	}
 	if exactSeriesTag {
 		selector.SeriesTag = &dataSeriesTag

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -31,7 +32,7 @@ func (m taskMetadata) ListTags(context.Context, *storagepb.ListTagsReq, ...clien
 func (m taskMetadata) ListDatasets(_ context.Context, req *storagepb.ListDatasetsReq, _ ...client.Option) (*storagepb.ListDatasetsRsp, error) {
 	var out []*storagepb.Dataset
 	for _, dataset := range m.datasets {
-		if dataset.GetSpaceId() == req.GetSpaceId() && dataset.GetFreq() == req.GetFreq() {
+		if dataset.GetSpaceId() == req.GetSpaceId() && dataset.GetFrequency() == req.GetFrequency() {
 			out = append(out, dataset)
 		}
 	}
@@ -40,7 +41,7 @@ func (m taskMetadata) ListDatasets(_ context.Context, req *storagepb.ListDataset
 
 // factorResult 是一个因子任务建出的结果数据集（Storage 里的属性与 Factor 建数据集时一致）。
 func factorResult(spaceID, datasetID, name, sourceID, freq string) *storagepb.Dataset {
-	return &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Name: name, Freq: freq,
+	return &storagepb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Name: name, Frequency: freq,
 		Attributes: map[string]string{"dataset_role": "factor_result", "source_dataset_id": sourceID}}
 }
 
@@ -179,7 +180,7 @@ func TestDatasetStatusCarriesTheMarketTimezone(t *testing.T) {
 	require.Equal(t, "UTC", datasetStatus(now, key, healthyRun(now, now.Add(-2*time.Minute), now), testRealtimePolicy(), cryptoClock).Timezone)
 	stock := datasetStatus(cst("2026-10-16", "10:00:00"), stockKey, healthyRun(cst("2026-10-16", "10:00:00"), cst("2026-10-16", "09:58:00"), cst("2026-10-16", "09:59:01")), testRealtimePolicy(), stockSpaceClock(t, stockDays))
 	require.Equal(t, "Asia/Shanghai", stock.Timezone)
-	system := datasetStatus(now, key, healthyRun(now, now.Add(-time.Minute), now), testRealtimePolicy(), spaceClock{err: monmetrics.ErrNoTradingCalendar})
+	system := datasetStatus(now, key, healthyRun(now, now.Add(-time.Minute), now), testRealtimePolicy(), spaceClock{err: marketclock.ErrNoTradingCalendar})
 	require.Equal(t, "UTC", system.Timezone)
 }
 

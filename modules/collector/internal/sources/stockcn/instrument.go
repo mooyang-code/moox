@@ -1,10 +1,7 @@
 package stockcn
 
 import (
-	"encoding/json"
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -75,144 +72,6 @@ func (b *instrumentSnapshotBuilder) Snapshot() (marketdata.InstrumentSnapshot, e
 	return snapshot, nil
 }
 
-func valueAt(root any, path ...string) any {
-	current := root
-	for _, key := range path {
-		object, ok := current.(map[string]any)
-		if !ok {
-			return nil
-		}
-		current, ok = object[key]
-		if !ok {
-			return nil
-		}
-	}
-	return current
-}
-
-func ObjectAt(root map[string]any, path ...string) map[string]any {
-	value := valueAt(root, path...)
-	object, _ := value.(map[string]any)
-	return object
-}
-
-func SliceOfObjectsAt(root map[string]any, path ...string) []map[string]any {
-	value := valueAt(root, path...)
-	rawItems, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	items := make([]map[string]any, 0, len(rawItems))
-	for _, rawItem := range rawItems {
-		item, ok := rawItem.(map[string]any)
-		if !ok {
-			continue
-		}
-		items = append(items, item)
-	}
-	return items
-}
-
-func StringField(object map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := object[key]; ok {
-			if text := toString(value); text != "" {
-				return text
-			}
-		}
-	}
-	return ""
-}
-
-func IntField(object map[string]any, keys ...string) (int, bool) {
-	for _, key := range keys {
-		value, ok := object[key]
-		if !ok {
-			continue
-		}
-		switch v := value.(type) {
-		case int:
-			return v, true
-		case int32:
-			return int(v), true
-		case int64:
-			return int(v), true
-		case float64:
-			return int(v), true
-		case json.Number:
-			n, err := v.Int64()
-			if err == nil {
-				return int(n), true
-			}
-		case string:
-			n, err := strconv.Atoi(strings.TrimSpace(v))
-			if err == nil {
-				return n, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func BoolField(object map[string]any, keys ...string) (bool, bool) {
-	for _, key := range keys {
-		value, ok := object[key]
-		if !ok {
-			continue
-		}
-		switch v := value.(type) {
-		case bool:
-			return v, true
-		case float64:
-			return v != 0, true
-		case int:
-			return v != 0, true
-		case int64:
-			return v != 0, true
-		case json.Number:
-			n, err := v.Int64()
-			if err == nil {
-				return n != 0, true
-			}
-		case string:
-			switch strings.ToLower(strings.TrimSpace(v)) {
-			case "true", "1", "yes", "y":
-				return true, true
-			case "false", "0", "no", "n":
-				return false, true
-			}
-		}
-	}
-	return false, false
-}
-
-func toString(value any) string {
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case json.Number:
-		return v.String()
-	case float64:
-		if math.Trunc(v) == v {
-			return strconv.FormatInt(int64(v), 10)
-		}
-		return strconv.FormatFloat(v, 'f', -1, 64)
-	case int:
-		return strconv.Itoa(v)
-	case int32:
-		return strconv.FormatInt(int64(v), 10)
-	case int64:
-		return strconv.FormatInt(v, 10)
-	case bool:
-		if v {
-			return "true"
-		}
-		return "false"
-	default:
-		return strings.TrimSpace(fmt.Sprint(v))
-	}
-}
-
 func normalizeExchange(value string) string {
 	switch strings.ToUpper(strings.TrimSpace(value)) {
 	case "1", "XSHG", "SH", "SSE", "SHANGHAI", "上海":
@@ -224,25 +83,6 @@ func normalizeExchange(value string) string {
 	default:
 		return ""
 	}
-}
-
-func PageLimit(data map[string]any, pageSize int) int {
-	if limit, ok := IntField(data, "pagecount", "page_count", "total_pages", "totalpage", "pages"); ok && limit > 0 {
-		return limit
-	}
-	if total, ok := IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 && pageSize > 0 {
-		return (total + pageSize - 1) / pageSize
-	}
-	return 0
-}
-
-func ItemSlice(data map[string]any, keys ...string) []map[string]any {
-	for _, key := range keys {
-		if items := SliceOfObjectsAt(data, key); len(items) > 0 {
-			return items
-		}
-	}
-	return nil
 }
 
 func InstrumentFromFields(code, symbol, exchangeValue, name, status string) (marketdata.Instrument, error) {

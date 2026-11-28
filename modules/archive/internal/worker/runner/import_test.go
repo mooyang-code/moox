@@ -12,10 +12,10 @@ import (
 )
 
 // upsert 造一行导入请求：open、close 两列。
-func upsert(subject string, at time.Time, open, close float64) *storagepb.RowFieldUpsert {
-	return &storagepb.RowFieldUpsert{
+func upsert(subject string, at time.Time, open, close float64) *storagepb.Row {
+	return &storagepb.Row{
 		Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "ds_1m", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-			SubjectId: subject, Freq: "1m", DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "spot",
+			SubjectId: subject, Frequency: "1m", DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "spot",
 		}}},
 		Fields: []*storagepb.FieldValue{
 			{FieldId: "open", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: open}}},
@@ -24,7 +24,7 @@ func upsert(subject string, at time.Time, open, close float64) *storagepb.RowFie
 	}
 }
 
-func batchOf(rows ...*storagepb.RowFieldUpsert) *storagepb.PrimaryUpsertFieldsReq {
+func batchOf(rows ...*storagepb.Row) *storagepb.PrimaryUpsertFieldsReq {
 	return &storagepb.PrimaryUpsertFieldsReq{SpaceId: "crypto", DatasetId: "ds_1m", Rows: rows}
 }
 
@@ -91,8 +91,8 @@ func TestImportMergesIntoAFinalPartitionAndExportsOnFinish(t *testing.T) {
 	bad.Fields = append(bad.Fields, &storagepb.FieldValue{FieldId: "volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1}}})
 	for _, req := range []*storagepb.PrimaryUpsertFieldsReq{
 		batchOf(bad),
-		{SpaceId: "crypto", DatasetId: "other", Rows: []*storagepb.RowFieldUpsert{upsert("ETH", day, 1, 1)}},
-		batchOf(&storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "ds_1m"}}),
+		{SpaceId: "crypto", DatasetId: "other", Rows: []*storagepb.Row{upsert("ETH", day, 1, 1)}},
+		batchOf(&storagepb.Row{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "ds_1m"}}),
 	} {
 		if got := run.write(t, req); !errors.Is(got.Err, ErrInvalidBatch) {
 			t.Fatalf("应整批拒绝: %+v", got)
@@ -135,7 +135,7 @@ func TestImportCancelExportsWrittenRows(t *testing.T) {
 	}
 	run.cancel()
 	out := run.wait(t)
-	if out.Status != "canceled" || !strings.Contains(out.Message, "重跑") || report(out, "2026-10-01").GetFilePath() == "" {
+	if out.Status != "cancelled" || !strings.Contains(out.Message, "重跑") || report(out, "2026-10-01").GetFilePath() == "" {
 		t.Fatalf("out = %+v", out)
 	}
 }

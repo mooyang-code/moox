@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
-	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // K 线补写事件：同一个源数据集上的每个任务都记下这段周期已补齐、被唤醒追赶，并唤醒跳过恢复；
@@ -30,10 +30,10 @@ func TestOnBackfilledMarksPeriodsFilledAndKicksTasksOfTheDataset(t *testing.T) {
 	r := &Runtime{catalog: cache, continuity: continuity, advanceKick: make(chan string, 4), filled: newFilledPeriods(time.Now), kickGap: func() { gapKicks++ }}
 
 	start := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
-	payload := &storagepb.CollectorKlineBackfilled{
+	payload := &eventpb.CollectorKlineBackfilled{
 		DatasetId: "dataset_a", Frequency: "1m", SubjectIds: []string{"BTC-USDT"}, Origin: "auto",
 		Start: start.Unix(), End: start.Add(10 * time.Minute).Unix(),
-		Absent: []*storagepb.CollectorKlineAbsent{
+		Absent: []*eventpb.CollectorKlineAbsent{
 			{SubjectId: "ETH-USDT", Start: start.Unix(), End: start.Add(2 * time.Minute).Unix()},
 			{SubjectId: "BTC-USDT", Start: start.Unix(), End: start.Add(time.Minute).Unix()},
 		},
@@ -69,7 +69,7 @@ func TestOnBackfilledRaisesTheCatchupTargetUpToTheLatestClosedBar(t *testing.T) 
 	r := &Runtime{catalog: cache, continuity: continuity, advanceKick: make(chan string, 4), filled: newFilledPeriods(func() time.Time { return now }), kickGap: func() {}}
 
 	backfilled := func(from, to time.Time) {
-		r.onBackfilled("crypto", &storagepb.CollectorKlineBackfilled{DatasetId: "dataset_a", Frequency: "1m", Origin: "auto",
+		r.onBackfilled("crypto", &eventpb.CollectorKlineBackfilled{DatasetId: "dataset_a", Frequency: "1m", Origin: "auto",
 			Start: from.Unix(), End: to.Unix()})
 	}
 	backfilled(start, start.Add(10*time.Minute))

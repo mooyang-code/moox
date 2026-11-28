@@ -227,7 +227,7 @@ func TestRecalcFactorsValidatesTimeRange(t *testing.T) {
 				TaskId:    catalog.set.TaskID,
 				StartTime: tt.start,
 				EndTime:   tt.end,
-				RequestId: "request-1",
+				JobId:     "job-1",
 			})
 
 			require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestRecalcFactorsSubmitsAlignedRange(t *testing.T) {
 		Subjects:  []string{"BTCUSDT"},
 		StartTime: "2026-10-04T10:00:00+00:00",
 		EndTime:   "2026-10-04T10:05:00Z",
-		RequestId: "request-1",
+		JobId:     "job-1",
 	})
 
 	require.NoError(t, err)
@@ -266,10 +266,10 @@ func TestRecalcFactorsSubmitsAlignedRange(t *testing.T) {
 	require.Equal(t, "ftask_binance_kline_1m", recalc.taskID)
 	require.Equal(t, []string{"rolling_mean"}, recalc.factorIDs)
 	require.Equal(t, []string{"BTCUSDT"}, recalc.subjects)
-	require.Equal(t, "request-1", recalc.requestID)
+	require.Equal(t, "job-1", recalc.jobID)
 	require.Equal(t, time.Date(2026, 10, 4, 10, 0, 0, 0, time.UTC), recalc.start)
 	require.Equal(t, time.Date(2026, 10, 4, 10, 5, 0, 0, time.UTC), recalc.end)
-	require.Equal(t, "request-1", rsp.GetJob().GetJobId())
+	require.Equal(t, "job-1", rsp.GetJob().GetJobId())
 }
 
 func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
@@ -284,7 +284,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions",
 		"ListFactorCategories", "UpsertFactorCategory", "DeleteFactorCategory", "SetFactorCategory",
 		"SubmitFactorParams", "GetFactorParams",
-		"PublishUdf", "ListUdfs", "GetUdf", "ActivateUdf", "GetLifecycle", "ControlLifecycle",
+		"PublishUdf", "ListUdfs", "GetUdf", "ActivateUdf",
 	}
 	got := make([]string, 0, service.Methods().Len())
 	for i := 0; i < service.Methods().Len(); i++ {
@@ -312,6 +312,7 @@ type catalogFake struct {
 	boundTask         string
 	boundInstance     string
 	addKind           string
+	addStatus         string
 	deletedBound      []string
 	checkedBound      []string
 }
@@ -366,17 +367,20 @@ func (f *catalogFake) ListFactors(_ context.Context, taskID, status string) ([]d
 	f.listTaskID, f.listStatus = taskID, status
 	return f.infos, nil
 }
-func (f *catalogFake) AddTaskMember(_ context.Context, taskID, factorID, kind string, _ map[string]float64) (domain.TaskMember, error) {
+func (f *catalogFake) AddTaskMember(_ context.Context, taskID, factorID, kind string, _ map[string]float64, status string) (domain.TaskMember, error) {
 	if f.err != nil {
 		return domain.TaskMember{}, f.err
 	}
-	f.addKind = kind
+	f.addKind, f.addStatus = kind, status
 	key := factorID
 	if kind == domain.MemberKindVar {
 		key = factorID + "__var"
 	}
+	if status == "" {
+		status = domain.MemberStatusDisabled
+	}
 	return domain.TaskMember{
-		FactorTaskMember: domain.FactorTaskMember{TaskID: taskID, MemberKey: key, FactorID: factorID, Kind: kind, Status: domain.MemberStatusDisabled},
+		FactorTaskMember: domain.FactorTaskMember{TaskID: taskID, MemberKey: key, FactorID: factorID, Kind: kind, Status: status},
 		Factor:           domain.FactorDef{FactorID: factorID},
 	}, nil
 }
@@ -425,35 +429,35 @@ func (f *catalogFake) GetParams(context.Context, string) ([]domain.MemberParamSt
 
 type recalcFake struct {
 	submitCalls int
-	jobs        []RecalcJob
+	jobs        []store.RecalcJob
 	listTaskID  string
 	listStatus  []string
-	job         RecalcJob
+	job         store.RecalcJob
 	taskID      string
 	factorIDs   []string
 	subjects    []string
-	requestID   string
+	jobID       string
 	start       time.Time
 	end         time.Time
 }
 
-func (f *recalcFake) Submit(_ context.Context, taskID string, factorIDs, subjects []string, requestID string, start, end time.Time) (RecalcJob, error) {
+func (f *recalcFake) Submit(_ context.Context, taskID string, factorIDs, subjects []string, jobID string, start, end time.Time) (store.RecalcJob, error) {
 	f.submitCalls++
-	f.taskID, f.factorIDs, f.subjects, f.requestID, f.start, f.end = taskID, factorIDs, subjects, requestID, start, end
-	f.job = RecalcJob{JobID: requestID, RequestID: requestID, TaskID: taskID, Members: factorIDs, Subjects: subjects, StartTime: start, EndTime: end}
+	f.taskID, f.factorIDs, f.subjects, f.jobID, f.start, f.end = taskID, factorIDs, subjects, jobID, start, end
+	f.job = store.RecalcJob{JobID: jobID, TaskID: taskID, Members: factorIDs, Subjects: subjects, StartTime: start.Unix(), EndTime: end.Unix()}
 	return f.job, nil
 }
-func (f *recalcFake) List(_ context.Context, taskID string, statuses []string) ([]RecalcJob, error) {
+func (f *recalcFake) List(_ context.Context, taskID string, statuses []string) ([]store.RecalcJob, error) {
 	f.listTaskID, f.listStatus = taskID, statuses
 	return f.jobs, nil
 }
-func (f *recalcFake) Get(_ context.Context, jobID string) (RecalcJob, error) {
+func (f *recalcFake) Get(_ context.Context, jobID string) (store.RecalcJob, error) {
 	if f.job.JobID == "" {
-		return RecalcJob{JobID: jobID}, nil
+		return store.RecalcJob{JobID: jobID}, nil
 	}
 	return f.job, nil
 }
-func (f *recalcFake) Cancel(context.Context, string) (RecalcJob, error) {
+func (f *recalcFake) Cancel(context.Context, string) (store.RecalcJob, error) {
 	return f.job, nil
 }
 
@@ -476,7 +480,7 @@ func TestTaskTaskMemberStatusEnablesAndDisablesMembers(t *testing.T) {
 }
 
 func TestListRecalcJobsFiltersByTaskAndPaginates(t *testing.T) {
-	recalc := &recalcFake{jobs: []RecalcJob{{JobID: "job-3"}, {JobID: "job-2"}, {JobID: "job-1"}}}
+	recalc := &recalcFake{jobs: []store.RecalcJob{{JobID: "job-3"}, {JobID: "job-2"}, {JobID: "job-1"}}}
 	svc := NewService(&catalogFake{}, recalc)
 
 	missing, err := svc.ListRecalcJobs(context.Background(), &factorpb.ListRecalcJobsReq{})
@@ -492,25 +496,6 @@ func TestListRecalcJobsFiltersByTaskAndPaginates(t *testing.T) {
 	require.Len(t, rsp.GetJobs(), 2)
 	require.EqualValues(t, 3, rsp.GetPageResult().GetTotal())
 	require.True(t, rsp.GetPageResult().GetHasMore())
-}
-
-// 修改类接口受生命周期门禁约束：暂停、恢复追赶中时被拒绝；读接口不受影响。
-func TestMutationGateRejectsWritesButNotReads(t *testing.T) {
-	blocked := errors.New("因子管理已暂停")
-	gate := func() error { return blocked }
-	service := NewService(&catalogFake{}, &recalcFake{}, WithMutationGate(gate))
-	ctx := context.Background()
-
-	rsp, err := service.CreateFactorTask(ctx, &factorpb.CreateFactorTaskReq{FactorTask: &factorpb.FactorTask{TaskId: "s"}})
-	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "已暂停")
-	del, err := service.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: "f"})
-	require.NoError(t, err)
-	require.Contains(t, del.GetRetInfo().GetMsg(), "已暂停")
-	recalc, err := service.RecalcFactors(ctx, &factorpb.RecalcFactorsReq{})
-	require.NoError(t, err)
-	require.Contains(t, recalc.GetRetInfo().GetMsg(), "已暂停")
 }
 
 func TestDeleteBoundTaskMissingTaskSucceeds(t *testing.T) {

@@ -22,7 +22,7 @@ func (s *Service) SetDelistRegistrar(registrar DelistRegistrar) { s.delistRegist
 // RegisterDelistNotice 手工登记一条标的下架通知，用于补漏报和演练；可以登记过去的下架时间。
 func (s *Service) RegisterDelistNotice(ctx context.Context, req *pb.RegisterDelistNoticeReq) (*pb.RegisterDelistNoticeRsp, error) {
 	if s.delistRegistrar == nil {
-		return &pb.RegisterDelistNoticeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "没有配置 EventBus，不能登记下架通知（Collector 配置里的 event_bus）")}, nil
+		return &pb.RegisterDelistNoticeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "没有配置 EventBus，不能登记下架通知（Collector 配置里的 eventbus）")}, nil
 	}
 	scope := events.DelistScopeAll
 	if req.GetPaperOnly() {

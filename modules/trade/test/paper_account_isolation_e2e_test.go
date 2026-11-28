@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	paperexec "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -41,7 +41,7 @@ func TestPaperAccountIsolationWithProductionDeciderE2E(t *testing.T) {
 				markets[id], accounts[id] = market, account
 				adapters[id] = &paperexec.Adapter{Store: s, Account: account, MarketData: market, Now: func() time.Time { return testNow }}
 			}
-			reducer := &consumer.Reducer{Store: s, Now: func() time.Time { return testNow }}
+			reducer := &fillreduce.Reducer{Store: s, Now: func() time.Time { return testNow }}
 			matcher := &paperexec.Matcher{Store: s, Reducer: reducer, CandidateTimeout: time.Second}
 			decider := &paperexec.Decider{Store: s, Adapters: adapters, Now: func() time.Time { return testNow }}
 			matcher.DecideContext = decider.Decide

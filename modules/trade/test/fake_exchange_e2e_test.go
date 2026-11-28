@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -15,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,7 +121,7 @@ type fakeWeightResolver struct{ testTargetWeightResolver }
 
 func (r fakeWeightResolver) Resolve(
 	ctx context.Context,
-	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	request *eventpb.LogicalAccountTargetWeightRequested,
 	spaceID string,
 ) (targetapp.WeightConversion, error) {
 	conversion, err := r.testTargetWeightResolver.Resolve(ctx, request, spaceID)
@@ -166,8 +166,8 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "A 股组合",
-			ExecutionMode:   string(exchange.ExecutionModeLive),
-			SettlementAsset: "CNY", AutomationState: "PAUSED", PauseReason: "configure",
+			Environment:     string(exchange.AccountEnvironmentTestnet),
+			SettlementAsset: "CNY", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -177,7 +177,7 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 }
 
@@ -204,6 +204,8 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 		Exchange:   fakeExchangeName,
 		OrderTypes: []exchange.OrderType{exchange.OrderTypeMarket},
 		Session:    fakeSession{open: &open},
+	}, func(exchange.AccountConfig) (execution.PublicMarketData, error) {
+		return fakeAdapter{ExecutionAdapter: core}, nil
 	}, func(_ exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
 		if credential.Extra["gateway"] == "" {
 			return nil, fmt.Errorf("缺少券商网关地址")
@@ -242,7 +244,7 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	}
 	deliver := func(id string, sequence int64, quantity string) jetstream.HandlerDecision {
 		result := eventconsumer.HandleTarget(ctx, targetDeliveryWithTargets(t, now, id, sequence,
-			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, MarketType: "equity", TargetWeight: quantity}},
+			[]*eventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, MarketType: "equity", TargetWeight: quantity}},
 		), options)
 		return result.Decision
 	}

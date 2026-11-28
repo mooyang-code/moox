@@ -5,25 +5,18 @@ import (
 	"time"
 )
 
-// ModuleHealthCheck describes one code-owned signal group used to assess a
-// module. Dataset-specific freshness thresholds live in DatasetHealthPolicy.
+// ModuleHealthCheck 描述一类用于评估模块健康的内置信号；数据集级新鲜度阈值由 Monitor 配置中的 RealtimeTimeSeriesPolicy 定义。
 type ModuleHealthCheck struct {
-	ID                    string
-	Module                string
-	Enabled               bool
-	MaxLag                time.Duration
-	CheckFreshness        bool
-	CheckWatermark        bool
-	ObservabilityDeferred bool
+	ID      string
+	Module  string
+	Enabled bool
+	MaxLag  time.Duration
 }
 
 var builtInModuleHealthChecks = []ModuleHealthCheck{
 	{ID: "strategy-targets", Module: "strategy", MaxLag: 10 * time.Minute, Enabled: true},
 	{ID: "trade-rebalance", Module: "trade", MaxLag: 5 * time.Minute, Enabled: true},
-	{
-		ID: "monitor-metrics", Module: "monitor", MaxLag: 2 * time.Minute, Enabled: true,
-		CheckFreshness: true, CheckWatermark: true,
-	},
+	{ID: "monitor-metrics", Module: "monitor", MaxLag: 2 * time.Minute, Enabled: true},
 }
 
 // BuiltInModuleHealthChecks returns a copy of the finite module health-check

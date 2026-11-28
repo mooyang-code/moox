@@ -36,7 +36,7 @@ type CatalogEntry struct {
 	Key        SourceKey
 	MarketID   MarketID
 	Instrument InstrumentType
-	// RouteSource 表示这个（市场，品种）的 K 线来源按路由文件分配：source_id 由路由配置决定，查找时只按 provider 匹配。
+	// RouteSource 表示这个（市场，品种）的 K 线来源按路由文件分配，source_id 须与路由配置一致。
 	RouteSource bool
 	New         Factory
 }
@@ -94,7 +94,7 @@ func (c *Catalog) Lookup(marketID MarketID, instrument InstrumentType, providerI
 		if entry.MarketID != want.MarketID || entry.Instrument != want.Instrument || entry.Key.ProviderID != want.Key.ProviderID {
 			continue
 		}
-		if entry.RouteSource || want.Key.SourceID == "" || entry.Key.SourceID == want.Key.SourceID {
+		if want.Key.SourceID == "" || entry.Key.SourceID == want.Key.SourceID {
 			return entry, nil
 		}
 	}

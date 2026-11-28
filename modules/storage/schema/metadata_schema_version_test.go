@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/glebarez/go-sqlite"
 )
 
 func TestMetadataSchemaContract(t *testing.T) {
@@ -17,8 +17,10 @@ func TestMetadataSchemaContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(sql)
+	if text != AllSQL() {
+		t.Fatal("AllSQL() does not match metadata.sql")
+	}
 	for _, want := range []string{
-		"VALUES ('schema_version', '21')",
 		"CREATE TABLE IF NOT EXISTS t_tags (",
 		"CREATE TABLE IF NOT EXISTS t_subject_tags (",
 		"c_subject_tags_json TEXT NOT NULL DEFAULT '[]'",
@@ -105,13 +107,6 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 	if _, err := db.ExecContext(ctx, string(schema)); err != nil {
 		t.Fatalf("execute metadata schema: %v", err)
 	}
-	var version string
-	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if version != "21" {
-		t.Fatalf("persisted schema version = %q, want 21", version)
-	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {
 		t.Fatal(err)
@@ -124,8 +119,8 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name LIKE 't\_%' ESCAPE '\'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 9 {
-		t.Fatalf("metadata tables = %d, want 9", tables)
+	if tables != 8 {
+		t.Fatalf("metadata tables = %d, want 8", tables)
 	}
 	for _, table := range []string{
 		"t_" + "primary" + "_" + "store" + "_" + "nodes",

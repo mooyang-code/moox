@@ -1,6 +1,6 @@
 import { UNCATEGORIZED, type FactorCategory, type FactorMember } from "@/api/factor/types";
 import type { DisplayHidden } from "@/api/strategy-types";
-import type { DatasetColumn, TimeSeriesKey } from "@/api/storage/types";
+import type { DatasetColumn, RowKey } from "@/api/storage/types";
 import type { QueryTimeSeriesRowsReq } from "@/api/storage/view";
 import { PARAMS_COLUMN, parseParams } from "@/utils/factor-name";
 
@@ -183,19 +183,18 @@ export function valueColumnsFor(scope: FactorScope, items: FactorOutputItem[], w
 }
 
 /** 精确读取一行：完整 selector（显式带 series_tag，默认序列为空串）加 [t, t+1ms)，不统计总数。 */
-export function rowValuesRequest(datasetId: string, key: TimeSeriesKey, columns: string[]): QueryTimeSeriesRowsReq {
-  const start = new Date(key.data_time || "");
+export function rowValuesRequest(datasetId: string, key: RowKey, columns: string[]): QueryTimeSeriesRowsReq {
+  const ts = key.time_series;
+  const start = new Date(ts?.data_time || "");
   const end = new Date(start.getTime() + 1);
   return {
     space_id: key.space_id,
     dataset_id: datasetId,
     selectors: [
       {
-        space_id: key.space_id,
-        dataset_id: key.dataset_id,
-        subject_id: key.subject_id,
-        freq: key.freq,
-        series_tag: key.series_tag ?? ""
+        subject_id: ts?.subject_id ?? "",
+        frequency: ts?.frequency ?? "",
+        series_tag: ts?.series_tag ?? ""
       }
     ],
     time_range: { start_time: start.toISOString(), end_time: end.toISOString() },

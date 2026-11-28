@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -127,7 +127,7 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(3_000) },
 	}
 
@@ -184,7 +184,7 @@ func TestSyncSkipsExternalOrderOutsideInstrumentTable(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(3_000) },
 	}
 
@@ -210,11 +210,11 @@ func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 	current := exchange.Order{Market: exchange.MarketTypeSwap,
@@ -232,7 +232,7 @@ func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
 			context.Background(), "space-1", "logical-1",
 		)
 		return err == nil &&
-			logicalAccount.AutomationState == "PAUSED" &&
+			logicalAccount.AutomationState() == "PAUSED" &&
 			strings.Contains(logicalAccount.PauseReason, "EXTERNAL")
 	}, time.Second, 10*time.Millisecond)
 }
@@ -250,7 +250,7 @@ func TestExternalFactKeepsMarginPauseReason(t *testing.T) {
 
 	logicalAccount, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState())
 	require.Equal(t, store.MarginPause(store.MarginReducePending).Reason, logicalAccount.PauseReason)
 	require.True(t, (logicalAccount.MarginReduceState == store.MarginReducePending))
 }
@@ -260,7 +260,7 @@ func TestExternalFactOverridesManualPauseReason(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工暂停")
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("人工暂停"))
 	}))
 	service := Service{Store: tradeStore}
 
@@ -268,7 +268,7 @@ func TestExternalFactOverridesManualPauseReason(t *testing.T) {
 
 	logicalAccount, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState())
 	require.Equal(t, store.SystemPause("发现外部订单或成交 EXTERNAL：account-1").Reason, logicalAccount.PauseReason)
 }
 
@@ -276,14 +276,14 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	adapter := &syncAdapter{lookupErr: &exchange.Error{
 		Kind: exchange.ErrorOrderNotFound, Err: errors.New("missing"),
 	}}
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 
@@ -307,7 +307,7 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 			context.Background(), "space-1", "logical-1",
 		)
 		return err == nil &&
-			logicalAccount.AutomationState == "PAUSED" &&
+			logicalAccount.AutomationState() == "PAUSED" &&
 			strings.Contains(logicalAccount.PauseReason, "EXTERNAL")
 	}, time.Second, 10*time.Millisecond)
 }
@@ -317,7 +317,7 @@ func TestKnownExternalFillPausesOnceForNewFact(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -361,7 +361,7 @@ func TestKnownExternalOrderUpdatePausesOnceForNewFact(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -395,7 +395,7 @@ func TestKnownExternalAggregateFillAheadPausesLogicalAccount(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -427,7 +427,7 @@ func TestTerminalExternalFillPausesSynchronouslyWithoutObserver(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -465,7 +465,7 @@ func TestTerminalExternalFillPausesSynchronouslyWithoutObserver(t *testing.T) {
 		context.Background(), "space-1", "logical-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState())
 	order, err := tradeStore.GetOrderByClientID(
 		context.Background(), "space-1", "account-1", exchange.MarketTypeSwap, current.ClientOrderID)
 	require.NoError(t, err)
@@ -478,7 +478,7 @@ func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 	woke := make(chan struct{}, 1)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Wake: func() {
 			unlock, err := tradeStore.LockTradingAccountContext(context.Background(), "account-1")
 			require.NoError(t, err)
@@ -516,11 +516,11 @@ func TestExternalFactsDoNotReenterLogicalAccountLock(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 	unlock := tradeStore.LockLogicalAccount("space-1", "logical-1")
@@ -545,7 +545,7 @@ func TestExternalFactsDoNotReenterLogicalAccountLock(t *testing.T) {
 		logicalAccount, err := tradeStore.GetLogicalAccount(
 			context.Background(), "space-1", "logical-1",
 		)
-		return err == nil && logicalAccount.AutomationState == "PAUSED"
+		return err == nil && logicalAccount.AutomationState() == "PAUSED"
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -554,7 +554,7 @@ func TestOrderReducerIgnoresOlderExchangeUpdateAndAggregateFill(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 	open := exchange.Order{Market: exchange.MarketTypeSwap,
@@ -589,7 +589,7 @@ func TestOrderReducerDoesNotRegressTerminalState(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	current := exchange.Order{Market: exchange.MarketTypeSwap,
@@ -618,7 +618,7 @@ func TestOrderReducerIgnoresRegressingCumulativeFillSnapshot(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Now:   func() time.Time { return time.UnixMilli(5_000) },
 	}
 	current := exchange.Order{Market: exchange.MarketTypeSwap,
@@ -687,7 +687,7 @@ func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) 
 		Store: tradeStore, Adapters: adapters, Now: func() time.Time { return now },
 	}
 	service := Service{
-		Store: tradeStore, Adapters: adapters, Fills: &consumer.Reducer{Store: tradeStore},
+		Store: tradeStore, Adapters: adapters, Fills: &fillreduce.Reducer{Store: tradeStore},
 		Orders: orders, Now: func() time.Time { return now },
 	}
 	done := make(chan error, 1)
@@ -712,7 +712,7 @@ func TestApplyPositionOnlyClosesReadiness(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 	err := service.ApplyPosition(context.Background(), "account-1", exchange.Position{Market: exchange.MarketTypeSwap,
 		TradingAccountID:  "account-1",
@@ -741,7 +741,7 @@ func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T
 	wakes := 0
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 		Wake:  func() { wakes++ },
 	}
 	require.NoError(t, service.ApplyPosition(
@@ -784,7 +784,7 @@ func TestApplyUnknownPartialPositionDefersToFullSync(t *testing.T) {
 	}))
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 	require.NoError(t, service.ApplyPosition(context.Background(), "account-1", exchange.Position{Market: exchange.MarketTypeSwap,
 		ExchangeSymbol: "ETH-USDT", PositionSide: exchange.PositionSideNet,
@@ -831,7 +831,7 @@ func TestApplyFillImportsEmptyClientIDPerSymbol(t *testing.T) {
 	}}
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 	for index, symbol := range []string{"BTC-USDT", "ETH-USDT"} {
 		applied, err := service.ApplyFill(context.Background(), "account-1", exchange.Fill{Market: exchange.MarketTypeSwap,
@@ -868,7 +868,7 @@ func TestApplySnapshotAggregatesSyntheticExternalOrderFills(t *testing.T) {
 	}}
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 	fills := []exchange.Fill{
 		{Market: exchange.MarketTypeSwap,
@@ -945,7 +945,7 @@ func TestApplyAccountSnapshotMergesDisjointBalancesAtSameTimestamp(t *testing.T)
 	service := Service{
 		Store:    tradeStore,
 		Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills:    &consumer.Reducer{Store: tradeStore},
+		Fills:    &fillreduce.Reducer{Store: tradeStore},
 	}
 	updatedAt := time.UnixMilli(2_000)
 
@@ -999,7 +999,7 @@ func TestPrivateSnapshotDoesNotAdvanceFullSnapshotWatermark(t *testing.T) {
 	}))
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 	require.NoError(t, service.ApplyAccountSnapshot(
 		context.Background(),
@@ -1045,7 +1045,7 @@ func TestDisconnectReadinessWinsAgainstConcurrentManualSync(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(3_000) },
 	}
 	syncDone := make(chan error, 1)
@@ -1104,7 +1104,10 @@ func setLogicalAccountAutomation(
 ) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", state, "")
+		if state == "ACTIVE" {
+			return tx.ResumeLogicalAccount("space-1", "logical-1")
+		}
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("test"))
 	}))
 }
 
@@ -1118,7 +1121,7 @@ func requireLogicalAccountAutomation(
 		logicalAccount, err := tradeStore.GetLogicalAccount(
 			context.Background(), "space-1", "logical-1",
 		)
-		return err == nil && logicalAccount.AutomationState == state
+		return err == nil && logicalAccount.AutomationState() == state
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -1131,7 +1134,7 @@ func requireLogicalAccountRemainsActive(
 		logicalAccount, err := tradeStore.GetLogicalAccount(
 			context.Background(), "space-1", "logical-1",
 		)
-		return err != nil || logicalAccount.AutomationState != "ACTIVE"
+		return err != nil || logicalAccount.AutomationState() != "ACTIVE"
 	}, 100*time.Millisecond, 10*time.Millisecond)
 }
 
@@ -1151,9 +1154,9 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "LIVE",
+			Environment:     "TESTNET",
 			SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "test",
+			PauseReason:     "test",
 		}); err != nil {
 			return err
 		}
@@ -1192,7 +1195,7 @@ func TestStaleSnapshotDoesNotAdvanceReservationBoundary(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(clock) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1")
@@ -1229,7 +1232,7 @@ func TestPrivateFillClosesAdmissionUntilFullSync(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{order: current, fill: fill}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(4_000) },
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
@@ -1297,7 +1300,7 @@ func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(4_000) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1") // 余额快照 2_000 已采用
@@ -1370,7 +1373,7 @@ func TestOlderRESTSnapshotDoesNotOverwritePrivateBalanceUpdate(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(2_000) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1") // 完整快照 2_000，可用资金 900
@@ -1417,7 +1420,7 @@ func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: snapshotAtAdapter{base, 2_000}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(clock) },
 	}
 	result, err := service.SyncAccount(context.Background(), "account-1")
@@ -1468,7 +1471,7 @@ func TestFullSyncKeepsPositionProjectedFromFillBackfilledInTheSameRound(t *testi
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: noPositionsAdapter{base}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(4_000) },
 	}
 	result, err := service.SyncAccount(context.Background(), "account-1")
@@ -1486,7 +1489,7 @@ func TestFullSyncKeepsPositionProjectedFromFillBackfilledInTheSameRound(t *testi
 func TestAccountLockWaitHonorsCallerDeadline(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
-	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &consumer.Reducer{Store: tradeStore}}
+	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &fillreduce.Reducer{Store: tradeStore}}
 	unlock, err := tradeStore.LockTradingAccountContext(context.Background(), "account-1")
 	require.NoError(t, err)
 	defer unlock()
@@ -1530,7 +1533,7 @@ func TestOrderAheadOfFillDetailsClosesAdmissionUntilBalanceCovers(t *testing.T) 
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(4_000) },
 	}
 	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
@@ -1587,7 +1590,7 @@ func TestFillGapKeepsAdmissionClosedEvenWhenBalanceIsNewer(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: noFillsAdapter{base, 4_000}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(5_000) },
 	}
 	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
@@ -1657,7 +1660,7 @@ func TestLateFillCoveredByPositionSnapshotDoesNotDoubleCountPosition(t *testing.
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: base}, // 持仓快照：数量 0.5，版本时间 2_000
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(4_000) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1")
@@ -1696,7 +1699,7 @@ func TestFirstImportedTerminalOrderWithMissingFillsKeepsAdmissionClosed(t *testi
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: noFillsAdapter{base, 4_000}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(5_000) },
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
@@ -1747,7 +1750,7 @@ func TestCoveredLateFillIsLedgeredEvenWithoutConfiguredLeverage(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: emptyAdapter{base}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(4_000) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1")
@@ -1783,7 +1786,7 @@ func flatSnapshotThenLateClosingFill(t *testing.T, fillAt int64) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: emptyAdapter{base}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 		Now:          func() time.Time { return time.UnixMilli(4_000) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1") // 交易所已空仓（平仓成交明细延迟）：持仓被删除
@@ -1839,7 +1842,7 @@ func TestSyncCancelsLocalOrderOnlyWhenExchangeConfirmsMissing(t *testing.T) {
 			db := openSyncStore(t)
 			seedSyncAccount(t, db)
 			seedOrder(t, db)
-			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{syncAdapter: syncAdapter{lookupErr: tc.err}}}, Fills: &consumer.Reducer{Store: db},
+			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{syncAdapter: syncAdapter{lookupErr: tc.err}}}, Fills: &fillreduce.Reducer{Store: db},
 				Now: func() time.Time { return time.Now().Add(tc.after) }}
 			_, err := svc.SyncAccount(context.Background(), "account-1")
 			require.NoError(t, err)
@@ -1865,7 +1868,7 @@ func TestSetReadyKeepsAdmissionClosedWhileFillGapExists(t *testing.T) {
 		}
 		return tx.RaiseObservedFilledQuantity("space-1", "gap-order", shared.MustDecimal("1"))
 	}))
-	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &consumer.Reducer{Store: tradeStore}}
+	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &fillreduce.Reducer{Store: tradeStore}}
 	require.NoError(t, service.SetReady(context.Background(), "account-1", true, nil))
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)

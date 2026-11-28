@@ -100,10 +100,9 @@ test("新建模拟账户四步，测试网和生产环境也可选，请求带�
   await dialog.getByRole("button", { name: "下一步" }).click();
   await field(dialog, "组合名称").fill("演示组合");
   await dialog.getByRole("button", { name: "创建" }).click();
-  await expect.poll(() => calls.paper.length).toBe(1);
+  await expect.poll(() => calls.members.length).toBe(1);
   expect(calls.paper[0]).toMatchObject({
     name: "演示账户",
-    logical_account_name: "演示组合",
     exchange: "binance",
     markets: ["spot", "swap"],
     margin_mode: "CROSS",
@@ -111,6 +110,16 @@ test("新建模拟账户四步，测试网和生产环境也可选，请求带�
     paper: {
       order_retention_days: 5
     }
+  });
+  expect(calls.logicalCreates[0]).toMatchObject({
+    name: "演示组合",
+    environment: 3,
+    settlement_asset: "USDT"
+  });
+  expect(calls.members[0]).toMatchObject({
+    logical_account_id: "la-new",
+    trading_account_id: "ta-paper-1",
+    enabled: true
   });
 });
 
@@ -256,7 +265,7 @@ test("持仓行下单：现货、永续各一个入口，预填方向和与目�
   await expect(dialog.locator(".arco-radio-checked").filter({ hasText: "买入" })).toBeVisible();
 });
 
-test("新建模拟账户加入已有组合：一次请求带组合编号，不再单独加成员", async ({ page }) => {
+test("新建模拟账户加入已有组合：先建执行账户，再加入指定组合", async ({ page }) => {
   await page.goto("/#/trading/paper");
   await page.getByRole("button", { name: "新建账户" }).click();
   const dialog = page.locator(".arco-modal:visible");
@@ -268,9 +277,14 @@ test("新建模拟账户加入已有组合：一次请求带组合编号，不�
   await dialog.locator(".arco-select").first().click();
   await page.locator(".arco-select-option").filter({ hasText: "手动模拟组合" }).click();
   await dialog.getByRole("button", { name: "创建" }).click();
-  await expect.poll(() => calls.paper.length).toBe(1);
-  expect(calls.paper[0]).toMatchObject({ logical_account_id: "la-paper-manual", logical_account_name: "" });
-  expect(calls.members).toHaveLength(0);
+  await expect.poll(() => calls.members.length).toBe(1);
+  expect(calls.paper[0]).toMatchObject({ name: "加入用账户" });
+  expect(calls.logicalCreates).toHaveLength(0);
+  expect(calls.members[0]).toMatchObject({
+    logical_account_id: "la-paper-manual",
+    trading_account_id: "ta-paper-1",
+    enabled: true
+  });
 });
 
 test("资金流水、关闭模拟账户对话框的提示不超出外框，成员表交易所·市场不折行", async ({ page }) => {
@@ -285,12 +299,20 @@ test("资金流水、关闭模拟账户对话框的提示不超出外框，成�
   await openDetail(page, "la-paper-1", "settings");
   const cell = page.locator(".tx-detail .arco-table-td .tx-nowrap").filter({ hasText: "币安" }).first();
   expect((await cell.boundingBox())?.height).toBeLessThan(26);
+
+  // 关闭模拟账户统一在「执行账户」页签（未加入组合的账户展开后操作）
+  await page.goto("/#/trading/paper?list=execution");
+  await page
+    .getByRole("row", { name: /OKX 模拟（未加入）/ })
+    .locator(".arco-table-expand-btn")
+    .click();
   await page.getByRole("button", { name: "关闭模拟账户" }).click();
   const dialog = page.locator(".arco-modal:visible");
-  // 红色提示里写明会暂停整个组合账户，不再另叠一条橙色；唯一成员时再多一条蓝色说明
-  await expect(dialog.locator(".arco-alert-error")).toHaveCount(1);
-  await expect(dialog.locator(".arco-alert-warning")).toHaveCount(0);
-  await expect(dialog.getByText("暂停整个组合账户的自动执行")).toBeVisible();
+  await expect(dialog.getByText("关闭模拟账户「OKX 模拟（未加入）」")).toBeVisible();
+  await expect(dialog.getByText(/撤掉它的未完成订单并停用账户/)).toBeVisible();
+  const line = dialog.locator(".confirm-line").first();
+  const [lineBox, dialogBox] = [await line.boundingBox(), await dialog.boundingBox()];
+  expect((lineBox?.x ?? 0) + (lineBox?.width ?? 0)).toBeLessThanOrEqual((dialogBox?.x ?? 0) + (dialogBox?.width ?? 0) + 0.5);
 });
 
 test("390 窄屏下持仓页右侧操作列不固定，不会盖住数据列", async ({ page }) => {

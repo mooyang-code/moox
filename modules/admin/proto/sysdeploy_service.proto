@@ -45,6 +45,50 @@ message HostGatewayRuntimeStatus {
   repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 4;
 }
 
+// 服务目录里不对应部署的调用身份（external 为真时从入口主机网关的外部入口 11004 进入）。
+message CatalogIdentity {
+  string id = 1;
+  bool external = 2;
+}
+
+// 服务目录里的一个方法；callers 已按目录规则展开（含人操作身份与机器身份）。
+message CatalogMethod {
+  string name = 1;
+  bool read_only = 2;
+  bool idempotent = 3;
+  int64 timeout_ms = 4;
+  repeated string callers = 5;
+}
+
+// 服务目录里的一个公开 tRPC 服务。
+message CatalogService {
+  string path = 1;
+  int32 port = 2;
+  string console_name = 3;
+  int64 timeout_ms = 4;
+  int64 max_body_bytes = 5;
+  repeated CatalogMethod methods = 6;
+}
+
+// 服务目录里的一个组件定义（供部署页与拓扑图直接消费，不含空间策略）。
+message CatalogComponent {
+  string id = 1;
+  string name = 2;
+  string binary = 3;
+  string scope = 4;
+  bool external_program = 5;
+  repeated int32 ports = 6;
+  int32 health_port = 7;
+  repeated CatalogService services = 8;
+}
+
+// 结构化组件目录，供前端部署页与拓扑图直接使用。
+message ComponentCatalog {
+  int32 version = 1;
+  repeated CatalogIdentity identities = 2;
+  repeated CatalogComponent components = 3;
+}
+
 message GetCatalogReq {}
 message GetCatalogRsp {
   trpc.moox.common.RetInfo ret_info = 1;
@@ -53,6 +97,8 @@ message GetCatalogRsp {
   string sha256 = 3;
   // Authoritative protected host; browsers must not infer it from its name.
   string control_host_id = 4;
+  // 结构化组件目录，供前端部署页与拓扑图直接使用，不再在浏览器解析 YAML。
+  ComponentCatalog catalog = 5;
 }
 
 // ListHostsReq/Rsp already belong to Ssh in this protobuf package.
@@ -133,7 +179,7 @@ message SyncTopologyHost {
 }
 
 // SyncTopologyReq 是 moox.toml 的整份主机与部署声明：Admin 按它覆盖登记，多出的主机与部署删除，
-// 签名公钥与 SSH 指纹保留。setup deploy、setup update 部署每台主机前都发一次。
+// 签名公钥与 SSH 指纹保留。setup deploy、setup install 部署每台主机前都发一次。
 message SyncTopologyReq {
   repeated SyncTopologyHost hosts = 1;
 }

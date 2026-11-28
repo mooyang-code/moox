@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -32,6 +34,17 @@ const defaultStreamSpace = "crypto"
 
 // localGatewayAddress 是本机主机网关给同机组件用的入口。
 const localGatewayAddress = "127.0.0.1:11002"
+
+// sqliteDatabaseFiles 是各 SQLite 业务组件在各自 data/<组件>/ 下的数据库文件名，配置键统一为 database.path。
+var sqliteDatabaseFiles = map[string]string{
+	"admin":       "admin.db",
+	"monitor":     "monitor.db",
+	"collector":   "moox_collector.db",
+	"factor-mgr":  "factor.db",
+	"archive-mgr": "archive.db",
+	"strategy":    "strategy.sqlite",
+	"trade":       "moox_trade.db",
+}
 
 // Identity 是从控制机取到并校验过的身份材料，按部署根布局摆放。
 type Identity struct {
@@ -294,8 +307,6 @@ func (r *renderer) environment(component servicecatalog.Component, values map[st
 		values["MOOX_ADMIN_DB_PATH"] = path.Join(layout.Data(id), "admin.db")
 		// 浏览器入口由 Admin 自己监听：证书用 MooX CA 签，Host 必须等于控制机地址。
 		values["MOOX_ADMIN_WEB_LISTEN"], values["MOOX_ADMIN_WEB_ADDRESS"] = "0.0.0.0:9527", r.Host.Address
-		// 证书巡检每次从本机主机策略缓存读取告警渠道（HostAgent 从 Monitor 同步）。
-		values["MOOX_HOST_POLICY_FILE"] = layout.HostPolicy()
 	case "collector":
 		// Collector 建函数时开通采集日志主题，保留天数来自 moox.toml 的 [logging] retention_days（只在创建主题时生效）。
 		values["MOOX_CLS_RETENTION_DAYS"] = strconv.FormatInt(r.Config.Logging.RetentionDays, 10)
@@ -308,7 +319,6 @@ func (r *renderer) environment(component servicecatalog.Component, values map[st
 		values["MOOX_STORAGE_METADATA_PATH"] = path.Join(layout.Data(id), "metadata/storage_metadata.db")
 		values["MOOX_STORAGE_PRIMARY_TARGET"] = "ip://127.0.0.1:20102"
 		values["MOOX_STORAGE_METADATA_TARGET"] = "ip://127.0.0.1:20100"
-		values["MOOX_STORAGE_VIEW_TARGET"] = "ip://127.0.0.1:20103"
 	}
 }
 
@@ -360,6 +370,13 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 		set("storage.eventbus", map[string]string{"credential_file": credential})
 	}
 	if name == "app.yaml" || name == "engine.yaml" {
+		if dbFile, ok := sqliteDatabaseFiles[id]; ok {
+			set("database.path", path.Join(data, dbFile))
+		}
+		if hasPath(document, "eventbus") {
+			set("eventbus.urls", []string{url})
+			set("eventbus.credential_file", credential)
+		}
 		switch id {
 		case "host-agent":
 			set("host_id", r.Host.Name)
@@ -368,8 +385,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			if err == nil {
 				err = r.gatewayClient(component, member(document.Content[0], "gateway_client"))
 			}
-		case "admin":
-			set("database.path", path.Join(data, "admin.db"))
 		case "eventbus":
 			directory := layout.Secret("eventbus")
 			set("broker.host", "0.0.0.0")
@@ -381,15 +396,7 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			// 服务端证书就是这台主机的主机证书，客户端（含 EventBus 自己的内部连接）用 MooX CA 根证书校验。
 			set("broker.tls", map[string]any{"enabled": true, "cert_file": layout.Secret(hostbundle.HostCertificateFile), "key_file": layout.Secret(hostbundle.HostTLSKeyFile), "ca_file": layout.Secret(hostbundle.CAFile)})
 			set("internal_client", map[string]string{"credential_file": credential})
-		case "monitor":
-			set("database.path", path.Join(data, "monitor.db"))
-			set("observability.eventbus_urls", []string{url})
-			set("observability.credential_file", credential)
-			set("metrics.dataset_health_policy_path", path.Join(layout.Config(id), "dataset-health-policy.yaml"))
 		case "collector":
-			set("database.path", path.Join(data, "moox_collector.db"))
-			set("event_bus.urls", []string{url})
-			set("event_bus.credential_file", credential)
 			if r.Identity.SCFCollectorPublicKey == "" {
 				return nil, errors.New("身份材料里没有 scf-collector 的公钥")
 			}
@@ -397,23 +404,9 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("scf_entry.key_file", layout.Secret("scf-collector.key"))
 		case "collector-stream":
 			set("data_dir", data)
-		case "factor-mgr":
-			set("database.path", path.Join(data, "factor.db"))
-		case "archive-mgr":
-			set("database.path", path.Join(data, "archive.db"))
-		case "strategy":
-			set("database", path.Join(data, "strategy.sqlite"))
-			set("eventbus.urls", []string{url})
-			set("eventbus.credential_file", credential)
-		case "trade":
-			set("database.path", path.Join(data, "moox_trade.db"))
-			set("eventbus.urls", []string{url})
-			set("eventbus.credential_file", credential)
 		case "factor-engine":
 			set("engine.id", id+"@"+r.Host.Name)
 			set("catalog_sync.state_file", path.Join(data, "engine/catalog.json"))
-			set("eventbus.urls", []string{url})
-			set("eventbus.credential_file", credential)
 			set("seriesstore.dir", path.Join(data, "seriesstore"))
 			set("gap.ledger_dir", path.Join(data, "gap"))
 			set("watermark.state_file", path.Join(data, "engine/watermarks.json"))
@@ -578,4 +571,69 @@ func encodeEnvironment(values map[string]string) ([]byte, error) {
 		fmt.Fprintf(&output, "%s=\"%s\"\n", key, value)
 	}
 	return output.Bytes(), nil
+}
+
+// PreflightRender 在不动任何主机之前对 moox.toml 里的全部主机、全部组件做一次纯试渲染（含 [overrides] 应用），
+// 提前拦截模板缺失或 [overrides] 里已改名/不存在的键路径，避免清空主机之后才报 config_invalid。
+func PreflightRender(cfg *topology.Config, secrets *topology.Secrets, sourceRoot string) error {
+	if cfg == nil || strings.TrimSpace(sourceRoot) == "" {
+		return errors.New("配置试渲染需要拓扑配置与源码或产物包目录")
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	readSource := func(name string) ([]byte, error) {
+		if !fs.ValidPath(name) {
+			return nil, fmt.Errorf("模板路径 %q 不合法", name)
+		}
+		return os.ReadFile(filepath.Join(sourceRoot, filepath.FromSlash(name)))
+	}
+	for _, host := range cfg.Hosts() {
+		components, err := cfg.HostComponents(host.Name)
+		if err != nil {
+			return err
+		}
+		identity := Identity{
+			SignPublicKey: "preflight-sign-public-key",
+			EventBus:      map[string][]byte{},
+		}
+		if slices.Contains(components, "collector") {
+			identity.SCFCollectorPublicKey = "preflight-scf-collector-public-key"
+		}
+		for _, id := range components {
+			component, ok := catalog.Component(id)
+			if !ok {
+				return fmt.Errorf("组件 %s 不在服务目录里", id)
+			}
+			for _, role := range component.EventBusRoles() {
+				identity.EventBus[role+".yaml"] = []byte("urls: []\nca_file: \"\"\n")
+			}
+		}
+		if slices.Contains(components, "eventbus") {
+			identity.EventBus[hostbundle.UsersFile] = []byte("users: []\n")
+		}
+		request := Request{
+			Config:         cfg,
+			Catalog:        catalog,
+			Host:           host,
+			Components:     components,
+			HostComponents: components,
+			ReadSource:     readSource,
+			Identity:       identity,
+		}
+		if cfg.Logging.CLS.Enabled {
+			if secrets == nil {
+				return errors.New("config_invalid: moox.toml 打开了 logging.cls.enabled，部署要读 moox.secrets.toml 里的写入密钥")
+			}
+			request.CLS = secrets.Logging.CLS
+		}
+		if slices.Contains(components, "archive-worker") && cfg.ArchiveObjectStore != nil {
+			request.ObjectStoreEnv = []byte("PREFLIGHT=1\n")
+		}
+		if _, err := Render(request); err != nil {
+			return fmt.Errorf("主机 %s 配置预检失败：%w", host.Name, err)
+		}
+	}
+	return nil
 }

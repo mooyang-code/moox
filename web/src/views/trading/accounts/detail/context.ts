@@ -1,14 +1,14 @@
 import type { ComputedRef, InjectionKey, Ref } from "vue";
-import type { LogicalAccount, LogicalAccountTarget, Order, TradingAccount } from "@/api/trade";
+import type { LogicalAccount, LogicalAccountTarget, Order, OrderSide, TradingAccount } from "@/api/trade";
 import type { Environment } from "@/components/trade-confirm/environment";
 import type { PositionSnapshot } from "../shared/position-snapshot";
 import type { StrategyLink } from "../shared/strategy-link";
 import type { ActionTracker } from "./action-tracker";
 import type { CoinRow } from "./positions-model";
 
-/** 下单对话框的预填：方向（1 买入、2 卖出）和数量。 */
+/** 下单对话框的预填：方向（BUY 买入、SELL 卖出）和数量。 */
 export interface OrderPrefill {
-  side?: 1 | 2;
+  side?: typeof OrderSide.BUY | typeof OrderSide.SELL;
   quantity?: string;
 }
 
@@ -35,7 +35,6 @@ export interface DetailContext {
   openOrder: (instrumentId?: string, accountId?: string, prefill?: OrderPrefill) => void;
   openFlatten: (account?: TradingAccount) => void;
   openCancel: (order: Order) => void;
-  openClosePaper: (account: TradingAccount) => void;
   syncAccounts: (accounts: TradingAccount[]) => Promise<void>;
 }
 

@@ -9,10 +9,13 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // recheckFixture 返回一个 1h 的 crypto 复查场景：区间在覆盖之内，复查本身应当通过。
-func recheckFixture(t *testing.T, client *fakeClient) (*Runner, store.Replay, input.Resolved, input.ViewInfo) {
+func recheckFixture(t *testing.T, client *fakeClient) (*Runner, store.Replay, input.Resolved, upstream.ViewInfo) {
 	t.Helper()
 	backoff := recheckRereadBackoff
 	recheckRereadBackoff = time.Millisecond
@@ -21,7 +24,7 @@ func recheckFixture(t *testing.T, client *fakeClient) (*Runner, store.Replay, in
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: period.DefaultCalendar}
 	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, EndTime: origin.Add(20 * time.Hour)}
 	return &Runner{Store: openStore(t), Client: client}, job, resolved, view
 }

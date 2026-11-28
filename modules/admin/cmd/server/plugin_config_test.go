@@ -48,12 +48,14 @@ func TestConfiguredGatewayControlFiltersPreserveWireBytes(t *testing.T) {
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	topology, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	_, err = topology.ReplaceTopology(context.Background(), []sysdeploy.HostSpec{{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin"}}})
+	_, err = topology.ReplaceTopology(context.Background(), &pb.SyncTopologyReq{Hosts: []*pb.SyncTopologyHost{
+		{HostId: "control", Enabled: true, Address: "control.example.test", ComponentIds: []string{"admin"}},
+	}})
 	require.NoError(t, err)
 	keyStore, err := keys.NewStore(db)
 	require.NoError(t, err)
 	require.NoError(t, keyStore.SetHostPublicKey(context.Background(), "control", gatewayauth.EncodePublicKey(authtest.Component("host-gateway", "control").PublicKey())))
-	implementation, err := gatewaycontrol.NewService(db, "control")
+	implementation, err := gatewaycontrol.NewService(db, "control", nil)
 	require.NoError(t, err)
 	cfg, err := trpc.LoadConfig("../../config/trpc_go.yaml")
 	require.NoError(t, err)

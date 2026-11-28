@@ -71,7 +71,7 @@
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 import { computed, ref, watch } from "vue";
-import type { TimeSeriesKey } from "@/api/storage/types";
+import type { RowKey } from "@/api/storage/types";
 import { queryTimeSeriesRows } from "@/api/storage/view";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
@@ -91,7 +91,7 @@ const displayZone = useDisplayZone();
 const props = defineProps<{
   visible: boolean;
   datasetId: string;
-  rowKey?: TimeSeriesKey;
+  rowKey?: RowKey;
   scope: FactorScope;
 }>();
 const emit = defineEmits<{ (event: "update:visible", value: boolean): void }>();
@@ -113,13 +113,13 @@ const filtered = computed(() => filterOutputs(keywordMatched.value, { category: 
 const pageItems = computed(() => pageSlice(filtered.value, page.value));
 
 const title = computed(() => {
-  const key = props.rowKey;
-  if (!key) return "因子值";
+  const ts = props.rowKey?.time_series;
+  if (!ts) return "因子值";
   const parts = [
-    key.subject_id,
-    key.freq,
-    key.series_tag || "默认序列",
-    key.data_time ? formatInstant(key.data_time, displayZone.value) : ""
+    ts.subject_id,
+    ts.frequency,
+    ts.series_tag || "默认序列",
+    ts.data_time ? formatInstant(ts.data_time, displayZone.value) : ""
   ];
   return `因子值 · ${parts.filter(Boolean).join(" · ")}`;
 });

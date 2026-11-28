@@ -30,7 +30,7 @@ func TestSCFPlanDefaultsAndRenderedCollectorConfig(t *testing.T) {
 	require.NoError(t, manifest.CheckSCFPlan())
 	require.Equal(t, 128, manifest.SCFPlan.MemoryMB)
 	require.Equal(t, 50, manifest.SCFPlan.SymbolsPerFunction)
-	require.Equal(t, "moox-collector-crypto-plan", manifest.SCFPlan.Spaces[0].PackageName)
+	require.Equal(t, DefaultSCFPackageName, manifest.SCFPlan.PackageName)
 	require.Equal(t, "moox-crypto-plan", manifest.SCFPlan.Spaces[0].Namespace)
 
 	rendered, err := RenderCollectorRuntimeConfig(manifest, []byte("database: {path: keep.db}\nscf_plan: {package_id: stale}\n"))
@@ -42,11 +42,12 @@ func TestSCFPlanDefaultsAndRenderedCollectorConfig(t *testing.T) {
 	require.Equal(t, map[string]any{"crypto": map[string]any{"spot": []any{"ap-hongkong"}, "swap": []any{"ap-hongkong"}}}, got["scf_markets"])
 	plan := got["scf_plan"].(map[string]any)
 	require.Equal(t, "tencent-scf", plan["cloud_account_id"])
+	require.Equal(t, DefaultSCFPackageName, plan["package_name"])
 	require.Equal(t, 128, plan["memory_mb"])
 	require.Equal(t, 50, plan["symbols_per_function"])
 	require.NotContains(t, plan, "package_id", "代码包只写名称，固定 ID 不再渲染")
 	require.Equal(t, map[string]any{"ap-hongkong": map[string]any{"entry_address": "172.19.32.13:11004", "entry_host": "overseas"}}, plan["entry_routes"])
-	require.Equal(t, map[string]any{"crypto": map[string]any{"package_name": "moox-collector-crypto-plan", "namespace": "moox-crypto-plan"}}, plan["spaces"])
+	require.Equal(t, map[string]any{"crypto": map[string]any{"namespace": "moox-crypto-plan"}}, plan["spaces"])
 
 	// 渲染幂等：对自己的输出再渲染结果不变。
 	again, err := RenderCollectorRuntimeConfig(manifest, rendered)

@@ -11,8 +11,7 @@ import (
 )
 
 // SeriesTimelineEntry 是标的时间线的一行：一个采集数据集的一个频率从 EffectiveFrom（K 线开始时间，Unix 秒）起应有的序列。
-// Series 为空表示从这一刻起不再采集。Symbols 是这一段每个标的的交易所符号（标的 → 符号），补采按它取改名前的旧符号；
-// 它不进序列哈希（哈希要与 Storage 登记的一致）。
+// Series 为空表示从这一刻起不再采集。
 type SeriesTimelineEntry struct {
 	SpaceID       string
 	DatasetID     string
@@ -20,7 +19,6 @@ type SeriesTimelineEntry struct {
 	EffectiveFrom int64
 	SeriesHash    string
 	Series        []seriesset.Series
-	Symbols       map[string]string
 	LatenessS     int
 	OutputFields  []string
 }
@@ -33,7 +31,6 @@ type seriesTimelineRow struct {
 	EffectiveFrom int64  `gorm:"column:c_effective_from"`
 	SeriesHash    string `gorm:"column:c_series_hash"`
 	Series        string `gorm:"column:c_series"`
-	Symbols       string `gorm:"column:c_external_symbols"`
 	LatenessS     int    `gorm:"column:c_lateness_s"`
 	OutputFields  string `gorm:"column:c_output_fields"`
 	CreatedAt     int64  `gorm:"column:c_ctime"`
@@ -123,18 +120,12 @@ func decodeSeriesTimelineRows(rows []seriesTimelineRow) ([]SeriesTimelineEntry, 
 		if err := json.Unmarshal([]byte(row.OutputFields), &entry.OutputFields); err != nil {
 			return nil, fmt.Errorf("decode series timeline row %d: %w", row.ID, err)
 		}
-		if err := json.Unmarshal([]byte(row.Symbols), &entry.Symbols); err != nil {
-			return nil, fmt.Errorf("decode series timeline row %d: %w", row.ID, err)
-		}
 		// 空列表统一读成 nil，与写入前的值一致。
 		if len(entry.Series) == 0 {
 			entry.Series = nil
 		}
 		if len(entry.OutputFields) == 0 {
 			entry.OutputFields = nil
-		}
-		if len(entry.Symbols) == 0 {
-			entry.Symbols = nil
 		}
 		entries = append(entries, entry)
 	}
@@ -152,15 +143,12 @@ func appendSeriesTimeline(tx *gorm.DB, entries []SeriesTimelineEntry) error {
 		if row.SpaceID == "" || row.DatasetID == "" || row.Frequency == "" || row.EffectiveFrom <= 0 {
 			return fmt.Errorf("series timeline entry needs space_id, dataset_id, frequency and a positive effective_from")
 		}
-		series, outputFields, symbols := entry.Series, entry.OutputFields, entry.Symbols
+		series, outputFields := entry.Series, entry.OutputFields
 		if series == nil {
 			series = []seriesset.Series{}
 		}
 		if outputFields == nil {
 			outputFields = []string{}
-		}
-		if symbols == nil {
-			symbols = map[string]string{}
 		}
 		rawSeries, err := json.Marshal(series)
 		if err != nil {
@@ -170,11 +158,7 @@ func appendSeriesTimeline(tx *gorm.DB, entries []SeriesTimelineEntry) error {
 		if err != nil {
 			return err
 		}
-		rawSymbols, err := json.Marshal(symbols)
-		if err != nil {
-			return err
-		}
-		row.Series, row.OutputFields, row.Symbols = string(rawSeries), string(rawFields), string(rawSymbols)
+		row.Series, row.OutputFields = string(rawSeries), string(rawFields)
 		if err := tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_effective_from = ?", row.SpaceID, row.DatasetID, row.Frequency, row.EffectiveFrom).Delete(&seriesTimelineRow{}).Error; err != nil {
 			return err
 		}

@@ -78,17 +78,23 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 		Conns: []*pb.StreamConnStatus{{Market: "spot", Frequency: "1m", Streams: 1, Reconnects: 2}}})
 	worker, err := db.StreamWorkers().Get(ctx, "crypto")
 	require.NoError(t, err)
-	var confirmed fetchplan.StreamApplied
-	require.NoError(t, json.Unmarshal([]byte(worker.Applied), &confirmed))
-	require.Equal(t, fetchplan.StreamApplied{ID: applied.ID}, confirmed)
+	require.Equal(t, applied.ID, worker.AppliedPlanID)
 
-	// 暂停：下发空计划。
+	// 手工暂停与系统生命周期暂停：都下发空计划。
 	require.NoError(t, db.FetchPlans().SetPaused(ctx, "crypto", true))
 	rsp, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
-	require.Zero(t, rsp.GetPlanId(), "暂停时计划号为空")
+	require.Zero(t, rsp.GetPlanId(), "手工暂停时计划号为空")
 	pull, _ = stream.PullStreamPlan(ctx, &pb.PullStreamPlanReq{SpaceId: "crypto"})
 	require.Empty(t, pull.GetItems())
 	require.NoError(t, db.FetchPlans().SetPaused(ctx, "crypto", false))
+
+	sysPaused := true
+	stream.SetSystemPaused(func() bool { return sysPaused })
+	rsp, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
+	require.Zero(t, rsp.GetPlanId(), "系统暂停时计划号为空")
+	pull, _ = stream.PullStreamPlan(ctx, &pb.PullStreamPlanReq{SpaceId: "crypto"})
+	require.Empty(t, pull.GetItems())
+	sysPaused = false
 
 	// 统计进最近记录；疑似下架立即按市场同步标签。
 	_, err = stream.ReportStreamPeriods(ctx, &pb.ReportStreamPeriodsReq{SpaceId: "crypto", Periods: []*pb.StreamPeriodStat{{Market: "spot", DatasetId: "ds1", Frequency: "1m", Period: 60, Expected: 2, Arrived: 1, Missing: 1, Committed: true}},
@@ -141,44 +147,56 @@ func TestSetIngestModeSwitchesKlineTasksAndRequiresAnOnlineStream(t *testing.T) 
 	require.Equal(t, "task_ds1", rsp.GetModes()[0].GetTaskId())
 
 	// 切回 scf 不要求在线；只改写这个数据集的任务，已打开计划的进度不动。
-	open, err := db.FetchPlans().Create(ctx, "crypto", streamPlanContent(t), "{}")
+	_, err = db.FetchPlans().Create(ctx, "crypto", streamPlanContent(t), "{}")
 	require.NoError(t, err)
 	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", DatasetId: "ds1", Ingest: "scf"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, open.ID, rsp.GetPlanId())
 	require.Len(t, rsp.GetModes(), 1)
 	require.Equal(t, "scf", rsp.GetModes()[0].GetIngest())
+	require.True(t, rsp.GetModes()[0].GetEnabled())
 	record, _ := db.FetchPlans().Open(ctx, "crypto")
 	require.Equal(t, "{}", record.Progress)
 
-	got, err := service.GetIngestMode(ctx, &pb.GetIngestModeReq{SpaceId: "crypto", DatasetId: "ds2"})
+	status, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)
-	require.Len(t, got.GetModes(), 1)
-	require.Equal(t, "stream", got.GetModes()[0].GetIngest())
-	require.True(t, got.GetStream().GetOnline())
+	require.Len(t, status.GetIngestModes(), 2)
+	byDS := map[string]*pb.IngestMode{}
+	for _, m := range status.GetIngestModes() {
+		byDS[m.GetDatasetId()] = m
+	}
+	require.Equal(t, "stream", byDS["ds2"].GetIngest())
+	require.True(t, status.GetStream().GetOnline())
 
 	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", DatasetId: "ds_missing", Ingest: "scf"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
 }
 
-// ingest-mode get 从已生效状态里读交接生效点：两份执行端不同的数据集，生效点是后一份的 From。
-func TestIngestModeReadsTheHandoffPeriodFromTheAppliedState(t *testing.T) {
+// GetCollectorStatus 返回全部 K 线任务（含停用）的采集方式与交接生效点；停用任务不触发 stream 离线告警。
+func TestCollectorStatusReadsHandoffPeriodAndIncludesDisabledTasks(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_ds1", TaskName: "ds1", DataType: domain.DataTypeKline, Ingest: domain.IngestStreaming,
 		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds1"}))
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_disabled", TaskName: "ds_off", DataType: domain.DataTypeKline, Ingest: domain.IngestStreaming,
+		Enabled: false, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"5m"}`, ResultDatasetID: "ds_off"}))
 	content := fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDataset{"ds1|1m": {
 		PlanDatasetState: fetchplan.PlanDatasetState{DatasetID: "ds1", Frequency: "1m", Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"},
-		Copies:           []fetchplan.DatasetCopy{{From: 1000, Hash: "h", Count: 1, LatenessS: 15}, {From: 1800, Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"}},
+		Copies:           []fetchplan.DatasetCopy{{From: 1000, Hash: "h", Count: 1, LatenessS: 15, Ingest: "scf"}, {From: 1800, Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"}},
 		Action:           fetchplan.PlanActionAppend, P: 1800,
 	}}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
 	applyPlan(t, db, "crypto", string(raw))
-	got, err := service.GetIngestMode(ctx, &pb.GetIngestModeReq{SpaceId: "crypto", DatasetId: "ds1"})
+	got, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)
-	require.Len(t, got.GetModes(), 1)
-	require.Equal(t, map[string]string{"1m": time.Unix(1800, 0).UTC().Format(time.RFC3339)}, got.GetModes()[0].GetEffectivePeriods())
+	require.Len(t, got.GetIngestModes(), 2)
+	byDS := map[string]*pb.IngestMode{}
+	for _, m := range got.GetIngestModes() {
+		byDS[m.GetDatasetId()] = m
+	}
+	require.True(t, byDS["ds1"].GetEnabled())
+	require.False(t, byDS["ds_off"].GetEnabled())
+	require.Equal(t, map[string]string{"1m": time.Unix(1800, 0).UTC().Format(time.RFC3339)}, byDS["ds1"].GetEffectivePeriods())
 }

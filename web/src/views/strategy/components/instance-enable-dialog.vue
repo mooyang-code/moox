@@ -51,8 +51,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { getLogicalAccount, listTradingAccounts } from "@/api/trade";
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { getLogicalAccount } from "@/api/trade";
+import type { LogicalAccount } from "@/api/trade/types";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import {
   confirmTier,
@@ -74,14 +74,13 @@ const instanceId = ref("");
 const logicalId = ref("");
 const factorTasks = ref<string[]>([]);
 const logical = ref<LogicalAccount | null>(null);
-const accounts = ref<ReadonlyMap<string, TradingAccount>>(new Map());
 const loading = ref(false);
 const loadError = ref("");
 const typedName = ref("");
 let hooks: InstanceToggleHooks = {};
 let loadSeq = 0;
 
-const env = computed<Environment>(() => (logical.value ? logicalEnvironment(logical.value, accounts.value) : "prod"));
+const env = computed<Environment>(() => (logical.value ? logicalEnvironment(logical.value) : "prod"));
 const tier = computed(() => confirmTier(env.value));
 const comboName = computed(() => logical.value?.name || logicalId.value);
 const paused = computed(() => logical.value?.automation_state !== "ACTIVE");
@@ -97,12 +96,8 @@ async function load() {
   loadError.value = "";
   logical.value = null;
   try {
-    const [logicalRsp, accountsRsp] = await Promise.all([
-      getLogicalAccount(logicalId.value),
-      listTradingAccounts({ page: { page: 1, size: 200 } })
-    ]);
+    const logicalRsp = await getLogicalAccount(logicalId.value);
     if (seq !== loadSeq) return;
-    accounts.value = new Map((accountsRsp.accounts || []).map(item => [item.trading_account_id, item]));
     logical.value = logicalRsp.logical_account;
   } catch (error) {
     if (seq === loadSeq) loadError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
@@ -111,7 +106,7 @@ async function load() {
   }
 }
 
-/** 打开启用确认：先读组合账户和执行账户，算出环境再让用户确认。 */
+/** 打开启用确认：先读组合账户，按后端环境给出对应档位确认。 */
 function open(target: EnableTarget, toggleHooks: InstanceToggleHooks = {}) {
   hooks = toggleHooks;
   instanceId.value = target.instance_id;

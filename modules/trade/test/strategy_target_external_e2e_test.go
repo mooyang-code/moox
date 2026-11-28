@@ -24,9 +24,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -47,17 +47,28 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	logicalSrv := &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}
 	console := &rpc.ConsoleServer{
 		Store:                db,
-		AccountServer:        &rpc.AccountServer{Store: db, Logical: logicalSrv, Accounts: &accountapp.Service{Store: accountapp.Repository{Store: db}}},
+		AccountServer:        &rpc.AccountServer{Store: db, Accounts: &accountapp.Service{Store: db}},
 		LogicalAccountServer: logicalSrv,
 	}
 	created, err := console.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
-		Name: "external-paper", LogicalAccountName: "external-strategy", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
-		Paper:       &tradepb.PaperConfig{InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
-		ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+		Name: "external-paper", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
+		Paper: &tradepb.PaperConfig{InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo())
-	logicalID, testAccount := created.GetLogicalAccount().GetLogicalAccountId(), created.GetAccount().GetTradingAccountId()
+	testAccount := created.GetAccount().GetTradingAccountId()
+	createdLogical, err := console.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
+		Name: "external-strategy", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
+		SettlementAsset: "USDT", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, createdLogical.GetRetInfo().GetCode(), createdLogical.GetRetInfo())
+	logicalID := createdLogical.GetLogicalAccount().GetLogicalAccountId()
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: testSpace, LogicalAccountID: logicalID, TradingAccountID: testAccount, Enabled: true, Priority: 1,
+		})
+	}))
 	require.NoError(t, os.WriteFile(filepath.Join(coord, "logical-id"), []byte(logicalID), 0600))
 	accountRecord, err := db.GetTradingAccount(ctx, testSpace, testAccount)
 	require.NoError(t, err)

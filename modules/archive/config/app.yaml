@@ -12,13 +12,11 @@ gateway_client:
 
 run:
   lease_ttl: 10m
+  # 运行记录（manual、range、import）的保留期；不小于 7 天。
+  retention: 2160h
 
 # 分区收盘后再等多久才导出（允许迟到的写入）；不小于 15 分钟。
 allowed_lateness: 15m
-
-retention:
-  # manual、range、import 与失败、取消的运行（follow 成功的保留 24 小时，失败与取消的 7 天）。
-  other: 2160h
 
 # worker 暂存区保留最近多久的数据，之后分区定稿。
 staging_retention: 72h

@@ -13,7 +13,7 @@ import (
 type Backend interface {
 	Store
 	Metadata
-	ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (Universe, bool, error)
+	ComputedUniverse(ctx context.Context, spaceID, datasetID string, periodTime int64) (Universe, bool, error)
 	EarliestPeriod(ctx context.Context, spaceID, datasetID, freq string, subjects, columns []string) (time.Time, bool, error)
 	ReadDatasetChanges(ctx context.Context, spaceID, datasetID string, cursor *ChangeCursor, fromHead bool, limit int) (Changes, error)
 	ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error)
@@ -205,20 +205,20 @@ func (s *Axis) periodToReal(ctx context.Context, spaceID, datasetID string, peri
 	return at.Unix(), nil
 }
 
-func (s *Axis) ComputedExists(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (bool, error) {
+func (s *Axis) ComputedExists(ctx context.Context, spaceID, datasetID string, periodTime int64) (bool, error) {
 	periodTime, err := s.periodToReal(ctx, spaceID, datasetID, periodTime)
 	if err != nil {
 		return false, err
 	}
-	return s.Backend.ComputedExists(ctx, spaceID, datasetID, triggerEventID, periodTime)
+	return s.Backend.ComputedExists(ctx, spaceID, datasetID, periodTime)
 }
 
-func (s *Axis) ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (Universe, bool, error) {
+func (s *Axis) ComputedUniverse(ctx context.Context, spaceID, datasetID string, periodTime int64) (Universe, bool, error) {
 	periodTime, err := s.periodToReal(ctx, spaceID, datasetID, periodTime)
 	if err != nil {
 		return Universe{}, false, err
 	}
-	return s.Backend.ComputedUniverse(ctx, spaceID, datasetID, triggerEventID, periodTime)
+	return s.Backend.ComputedUniverse(ctx, spaceID, datasetID, periodTime)
 }
 
 var _ Backend = (*Client)(nil)

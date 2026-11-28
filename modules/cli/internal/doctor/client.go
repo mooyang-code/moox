@@ -21,24 +21,6 @@ func New(gateway gatewayclient.Invoker) *Client {
 	return &Client{gateway: gateway}
 }
 
-func (c *Client) GetDoctorContext(ctx context.Context, req *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
-	if c == nil || c.gateway == nil {
-		return nil, fmt.Errorf("monitor client is unavailable")
-	}
-	rsp := &monitorpb.GetDoctorContextRsp{}
-	err := c.gateway.Invoke(ctx, "trpc.moox.monitor.MonitorMgr", "GetDoctorContext", req, rsp)
-	if err != nil {
-		return nil, err
-	}
-	if rsp.GetRetInfo() == nil {
-		return nil, fmt.Errorf("Monitor GetDoctorContext returned no status")
-	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		return nil, fmt.Errorf("Monitor GetDoctorContext failed: %s", rsp.GetRetInfo().GetMsg())
-	}
-	return rsp, nil
-}
-
 // GetHealthOverview 只读取 Monitor 的健康概览；spaceID 为空时看全部空间。
 func (c *Client) GetHealthOverview(ctx context.Context, spaceID string) (*monitorpb.HealthOverview, error) {
 	if c == nil || c.gateway == nil {

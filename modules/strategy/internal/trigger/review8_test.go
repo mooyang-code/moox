@@ -6,22 +6,21 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // corrupt 直接改写已启用实例的会话快照（存储层的校验写不出损坏的快照，这里模拟数据被意外改坏）。
 func corrupt(t *testing.T, h *harness, sessionJSON string) {
 	t.Helper()
 	h.handler.programs = nil
-	if err := h.repo.ApplySchema(`UPDATE t_strategy_sessions SET c_resolved_json = '` + sessionJSON + `' WHERE c_session_id = '` + h.session + `';`); err != nil {
+	if err := h.repo.ExecForTest(`UPDATE t_strategy_sessions SET c_resolved_json = '` + sessionJSON + `' WHERE c_session_id = '` + h.session + `';`); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func stockEvent(eventID string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
+func stockEvent(eventID string) (*eventpb.EventMessage, *eventpb.ViewDataReady) {
 	message := &eventpb.EventMessage{EventId: eventID, EventName: "event.storage.view.data_ready", SpaceId: "space"}
 	// A 股日线的周期时间是日期键：交易日期的 UTC 零点。
-	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
+	payload := &eventpb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
 	return message, payload
 }
 

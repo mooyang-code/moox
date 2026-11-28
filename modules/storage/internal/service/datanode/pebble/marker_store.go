@@ -11,7 +11,6 @@ import (
 	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -57,7 +56,7 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	if err != nil {
 		return "", err
 	}
-	payload := &storageeventpb.DatasetPeriodCompleted{}
+	payload := &eventpb.DatasetPeriodCompleted{}
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 		return "", fmt.Errorf("unmarshal dataset period marker: %w", err)
 	}

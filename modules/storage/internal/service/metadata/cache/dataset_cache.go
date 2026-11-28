@@ -25,7 +25,7 @@ type DatasetSource interface {
 type DatasetCache struct {
 	base      DatasetSource
 	refreshMu sync.Mutex
-	views     atomic.Pointer[datasetViews]
+	views     atomic.Pointer[DatasetSnapshot]
 }
 
 // datasetKey 是数据集在只读视图里的键。
@@ -38,14 +38,12 @@ type datasetView struct {
 	columnsByName map[string]*pb.DatasetColumn
 }
 
-// datasetViews 是不可变的数据集与列定义快照；发布后只读，调用方共享其中的消息，不得修改。
-type datasetViews struct {
+// DatasetSnapshot 是不可变的数据集与列定义快照；发布后只读，调用方共享其中的消息，不得修改。
+type DatasetSnapshot struct {
 	datasets []*pb.Dataset
 	columns  []*pb.DatasetColumn
 	items    map[datasetKey]*datasetView
 }
-
-var _ metadata.RequestSnapshot = (*datasetViews)(nil)
 
 // NewDatasetCache 创建并完成首轮数据集与列定义加载。
 func NewDatasetCache(ctx context.Context, base DatasetSource) (*DatasetCache, error) {
@@ -83,15 +81,12 @@ func (c *DatasetCache) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// RequestSnapshot 返回当前不可变数据集只读视图，供单次写请求全程零拷贝复用。
-func (c *DatasetCache) RequestSnapshot() metadata.RequestSnapshot {
+// Snapshot 返回当前不可变数据集只读视图，供单次请求全程零拷贝复用。
+func (c *DatasetCache) Snapshot() *DatasetSnapshot {
 	if c == nil {
 		return nil
 	}
-	if views := c.views.Load(); views != nil {
-		return views
-	}
-	return nil
+	return c.views.Load()
 }
 
 // HasDataset 无锁判断数据集是否存在于当前缓存快照中。
@@ -143,7 +138,7 @@ func (c *DatasetCache) ListDatasets(ctx context.Context, query metadata.DatasetQ
 		if query.DataKind != pb.DataKind_DATA_KIND_UNSPECIFIED && item.GetDataKind() != query.DataKind {
 			continue
 		}
-		if query.Freq != "" && item.GetFreq() != query.Freq {
+		if query.Freq != "" && item.GetFrequency() != query.Freq {
 			continue
 		}
 		if query.Status != "" && item.GetStatus() != query.Status {
@@ -193,7 +188,7 @@ func (c *DatasetCache) ListDatasetColumns(ctx context.Context, spaceID string, d
 	return cloneSlice(paged), pageResult, nil
 }
 
-func (c *DatasetCache) currentViews() (*datasetViews, error) {
+func (c *DatasetCache) currentViews() (*DatasetSnapshot, error) {
 	if c == nil {
 		return nil, errors.New("dataset cache is not open")
 	}
@@ -236,8 +231,8 @@ func (c *DatasetCache) fetchFrom(ctx context.Context) ([]*pb.Dataset, []*pb.Data
 	return datasets, columns, nil
 }
 
-// GetDataset 返回只读视图里共享的数据集消息，调用方不得修改。
-func (v *datasetViews) GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool) {
+// GetDataset 返回快照里共享的数据集消息，调用方不得修改。
+func (v *DatasetSnapshot) GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool) {
 	if v == nil {
 		return nil, false
 	}
@@ -248,20 +243,33 @@ func (v *datasetViews) GetDataset(spaceID string, datasetID string) (*pb.Dataset
 	return item.dataset, true
 }
 
-// ListDatasetColumns 返回只读视图里共享的列定义（切片与消息均只读）。
-func (v *datasetViews) ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+// GetDatasetColumn 按列名返回快照里共享的列定义，调用方不得修改。
+func (v *DatasetSnapshot) GetDatasetColumn(spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, bool) {
 	if v == nil {
-		return nil, nil, errors.New("元数据缓存尚未发布")
+		return nil, false
 	}
-	var columns []*pb.DatasetColumn
-	if item := v.items[datasetKey{spaceID, datasetID}]; item != nil {
-		columns = item.columns
+	item := v.items[datasetKey{spaceID, datasetID}]
+	if item == nil {
+		return nil, false
 	}
-	return pageItems(columns, page)
+	col, ok := item.columnsByName[columnName]
+	return col, ok && col != nil
+}
+
+// DatasetColumns 返回快照里该数据集的全部列定义（切片与消息均只读，保持建列顺序）。
+func (v *DatasetSnapshot) DatasetColumns(spaceID string, datasetID string) []*pb.DatasetColumn {
+	if v == nil {
+		return nil
+	}
+	item := v.items[datasetKey{spaceID, datasetID}]
+	if item == nil {
+		return nil
+	}
+	return item.columns[:len(item.columns):len(item.columns)]
 }
 
 // buildDatasetViews 用一次取回的数据集与列定义构造不可变只读视图；每条消息独立克隆，不与底层对象共享内存。
-func buildDatasetViews(datasets []*pb.Dataset, columns []*pb.DatasetColumn) *datasetViews {
+func buildDatasetViews(datasets []*pb.Dataset, columns []*pb.DatasetColumn) *DatasetSnapshot {
 	clonedDatasets := make([]*pb.Dataset, 0, len(datasets))
 	items := make(map[datasetKey]*datasetView, len(datasets))
 	for _, dataset := range datasets {
@@ -292,7 +300,7 @@ func buildDatasetViews(datasets []*pb.Dataset, columns []*pb.DatasetColumn) *dat
 		item.columns = append(item.columns, cloned)
 		item.columnsByName[cloned.GetColumnName()] = cloned
 	}
-	return &datasetViews{
+	return &DatasetSnapshot{
 		datasets: clonedDatasets,
 		columns:  clonedColumns,
 		items:    items,

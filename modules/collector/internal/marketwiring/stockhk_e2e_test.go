@@ -50,7 +50,7 @@ func newHKRowStore() *hkRowStore {
 
 func hkRowKey(subject, dataTime string) string { return subject + "|" + dataTime }
 
-func (s *hkRowStore) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (s *hkRowStore) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, row := range rows {
@@ -62,7 +62,7 @@ func (s *hkRowStore) UpsertFields(_ context.Context, rows []*storagepb.RowFieldU
 }
 
 func (s *hkRowStore) CommitTimeSeriesBatch(ctx context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow) error {
-	upserts := make([]*storagepb.RowFieldUpsert, 0, len(rows))
+	upserts := make([]*storagepb.Row, 0, len(rows))
 	for _, row := range rows {
 		upserts = append(upserts, row.GetRow())
 	}
@@ -83,7 +83,7 @@ func (s *hkRowStore) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTi
 			if subject != selector.GetSubjectId() || err != nil || at.Before(start) || !at.Before(end) {
 				continue
 			}
-			row := &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SubjectId: subject, DataTime: dataTime}}
+			row := &storagepb.Row{Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, DataTime: dataTime}}}}
 			for _, column := range req.GetColumnNames() {
 				if value, ok := fields[column]; ok {
 					row.Fields = append(row.Fields, &storagepb.FieldValue{FieldId: column, Value: value})
@@ -135,14 +135,21 @@ func TestStockHKCloseBarPeriod(t *testing.T) {
 		"116.09988": `"2026-11-12 15:55,93.600,93.700,93.850,93.400,3871100,362398515.000","2026-11-12 16:00,93.700,93.600,93.750,93.500,2848000,266640075.000"`,
 	}
 	request := func() marketfetch.Request {
+		targetTime := target.Format(time.RFC3339Nano)
 		req := marketfetch.Request{
-			BatchID: "close", BatchKind: domain.BatchKindRealtime, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
+			BatchID: "close", BatchKind: domain.BatchKindRealtime, RequirePeriodCommit: true, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
 			DatasetID: hkE2EDataset, Frequency: "5m", MarketType: "equity", RequestID: "close", Concurrency: 2,
 		}
-		for _, code := range []string{"00005", "09988"} {
+		codes := []string{"00005", "09988"}
+		for idx, code := range codes {
+			instanceID := "i-" + code
 			req.Items = append(req.Items, domain.CollectionItem{
-				SubjectID: code + ".XHKG", Symbol: code, Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: hkE2EDataset, Frequency: "5m",
-				StartTime: target.Format(time.RFC3339Nano), EndTime: target.Add(5 * time.Minute).Format(time.RFC3339Nano), BarLimit: 1,
+				InstanceID: instanceID, SubjectID: code + ".XHKG", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: hkE2EDataset, Frequency: "5m",
+				TargetDataTime: targetTime, BarLimit: 1,
+			})
+			req.Targets = append(req.Targets, domain.WriteTarget{
+				ID: "t-" + code, SpaceID: "stockhk", InstanceID: instanceID, TaskID: "task-1", DatasetID: hkE2EDataset,
+				Frequency: "5m", TargetDataTime: targetTime, SeriesIndex: uint32(idx), SeriesHash: "h", ExpectedCount: uint32(len(codes)),
 			})
 		}
 		return req
@@ -328,19 +335,10 @@ func hkE2EPlanOptions() fetchplan.PlanOptions {
 		DeriveFetch: fetchplan.RouteFetchLimits("stockhk")}
 }
 
-// hkE2EGroup 按 Collector 由任务和标签成员拼分组的做法造一个港股分组：source_id 取行情源目录的登记，
-// 传给数据源的代码由港股的标的规则换出（00700.XHKG → 00700）。
+// hkE2EGroup 按 Collector 由任务和标签成员拼分组的做法造一个港股分组：source_id 取行情源目录的登记。
 func hkE2EGroup(subjects ...string) fetchplan.TaskGroup {
-	symbols := make(map[string]string, len(subjects))
-	for _, subject := range subjects {
-		symbol, err := ResolveSymbol("eastmoney", "stockhk", "equity", subject)
-		if err != nil {
-			panic(err)
-		}
-		symbols[subject] = symbol
-	}
 	return fetchplan.TaskGroup{Provider: "eastmoney", SourceID: DefaultSourceID("stockhk", "eastmoney", "equity"), MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity",
-		DatasetID: hkE2EDataset, Frequency: "5m", Subjects: subjects, ExternalSymbols: symbols}
+		DatasetID: hkE2EDataset, Frequency: "5m", Subjects: subjects}
 }
 
 // hkCapturingTransport 不连网：记下发出去的请求地址，返回固定内容。
@@ -383,12 +381,17 @@ func TestStockHKRequestGoesToTheConfiguredEastmoneyAddress(t *testing.T) {
 	pipeline.Router, pipeline.Now = router, clock
 
 	target := hkTime("2026-11-12 15:55:00")
+	targetTime := target.Format(time.RFC3339Nano)
 	payload, err := pipeline.Execute(context.Background(), marketfetch.Request{
-		BatchID: "address", BatchKind: domain.BatchKindRealtime, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
+		BatchID: "address", BatchKind: domain.BatchKindRealtime, RequirePeriodCommit: true, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
 		DatasetID: hkE2EDataset, Frequency: "5m", MarketType: "equity", RequestID: "address", Concurrency: 1,
 		Items: []domain.CollectionItem{{
-			SubjectID: "00005.XHKG", Symbol: "00005", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: hkE2EDataset, Frequency: "5m",
-			StartTime: target.Format(time.RFC3339Nano), EndTime: target.Add(5 * time.Minute).Format(time.RFC3339Nano), BarLimit: 1,
+			InstanceID: "i1", SubjectID: "00005.XHKG", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: hkE2EDataset, Frequency: "5m",
+			TargetDataTime: targetTime, BarLimit: 1,
+		}},
+		Targets: []domain.WriteTarget{{
+			ID: "t1", SpaceID: "stockhk", InstanceID: "i1", TaskID: "task-1", DatasetID: hkE2EDataset,
+			Frequency: "5m", TargetDataTime: targetTime, SeriesIndex: 0, SeriesHash: "h", ExpectedCount: 1,
 		}},
 	})
 	require.NoError(t, err)
@@ -415,7 +418,7 @@ func firstPlanTimeline(spaceID string, content *fetchplan.FetchPlanContent) []st
 	for _, change := range content.Datasets {
 		entries = append(entries, store.SeriesTimelineEntry{
 			SpaceID: spaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P,
-			SeriesHash: change.Hash, Series: change.Series, Symbols: change.Symbols, LatenessS: change.LatenessS, OutputFields: change.OutputFields,
+			SeriesHash: change.Hash, Series: change.Series, LatenessS: change.LatenessS, OutputFields: change.OutputFields,
 		})
 	}
 	return entries

@@ -23,8 +23,7 @@ var ErrTargetViewNotReady = errors.New("target View is not ready")
 
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
-	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
-	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
+	UpsertDataset(context.Context, *storagepb.UpsertDatasetReq, ...client.Option) (*storagepb.UpsertDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 }
@@ -63,7 +62,6 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		sessionAttrs["calendar"] = market.CalendarID
 	}
 	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
-	params.TargetDatasetID = ids.DatasetID
 	targetDatasetID := ids.DatasetID
 	// 逐级合成时源本身是合成结果、没有数据来源：沿用它记下的原始 K 线来源，因子任务据此绑定数据来源。
 	sourceDataSourceID := source.DataSourceID
@@ -106,12 +104,12 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	columns := targetDatasetColumns(rules)
 	if taskresult.IsDatasetNotFound(target.GetRetInfo().GetCode()) {
 		// 数据集连同列在一次调用里建好，建好即可写入。
-		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: &storagepb.Dataset{
+		created, createErr := c.Metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: &storagepb.Dataset{
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID,
 			// 数据集名称在空间内唯一且必须含中文：用目标 ID 派生一个稳定的短后缀，避免不同合成目标重名。
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			// 周期的迟到容忍（收盘后 2 分钟）：Storage 据此算周期截止，写入目标与引擎的截止判断一致。
-			Freq: targetFreq.Storage, Alignment: market.Alignment, AllowedLatenessSeconds: TargetLatenessSeconds,
+			Frequency: targetFreq.Storage, Alignment: market.Alignment, AllowedLatenessSeconds: TargetLatenessSeconds,
 			Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...),
 		}, Columns: columns})
 		if createErr != nil {
@@ -156,7 +154,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			for key, value := range missing {
 				updated.Attributes[key] = value
 			}
-			resp, updateErr := c.Metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
+			resp, updateErr := c.Metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: updated})
 			if updateErr != nil {
 				return fmt.Errorf("update target Dataset attributes: %w", updateErr)
 			}
@@ -339,8 +337,8 @@ func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, f
 	if err != nil {
 		return fmt.Errorf("target Dataset frequency %q is invalid: %w", frequency, err)
 	}
-	if dataset.GetFreq() != wantedFrequency {
-		return fmt.Errorf("target Dataset freq is %q, not %s", dataset.GetFreq(), frequency)
+	if dataset.GetFrequency() != wantedFrequency {
+		return fmt.Errorf("target Dataset freq is %q, not %s", dataset.GetFrequency(), frequency)
 	}
 	return nil
 }

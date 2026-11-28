@@ -42,7 +42,7 @@ func (c *certificates) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return nil, errors.New("网页证书还没有准备好")
 }
 
-// Refresh 在启动时和每天一次执行：手里的证书由当前 CA 签、SAN 是当前地址、剩余不少于 30 天就继续用；
+// Refresh 在启动时和每 10 分钟随证书巡检执行（幂等）：手里的证书由当前 CA 签、SAN 是当前地址、剩余不少于 30 天就直接返回、无副作用；
 // 否则重签、写入 web-cert/ 并热替换，之后的新连接拿到新证书。
 func (c *certificates) Refresh() error {
 	c.mu.Lock()

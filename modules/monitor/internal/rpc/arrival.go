@@ -14,7 +14,7 @@ func (s *Service) QueryPipelineArrivalHistory(ctx context.Context, req *monitorp
 		return &monitorpb.QueryPipelineArrivalHistoryRsp{RetInfo: inner(errors.New("到达历史不可用"))}, nil
 	}
 	history, err := s.healthView.Facts.ArrivalHistory(ctx, observability.ArrivalHistoryQuery{
-		SpaceID: req.GetSpaceId(), DatasetID: req.GetDatasetId(), Freq: req.GetFreq(), Day: req.GetDay(), TaskID: req.GetTaskId(),
+		SpaceID: req.GetSpaceId(), DatasetID: req.GetDatasetId(), Freq: req.GetFrequency(), Day: req.GetDay(), TaskID: req.GetTaskId(),
 	})
 	if errors.Is(err, observability.ErrInvalidArrivalQuery) {
 		return &monitorpb.QueryPipelineArrivalHistoryRsp{RetInfo: invalid(err)}, nil

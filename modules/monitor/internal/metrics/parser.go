@@ -65,28 +65,24 @@ func (l Limits) normalized() Limits {
 }
 
 type Envelope struct {
-	ServiceName     string
-	InstanceID      string
-	MessageID       string
-	ProducerNodeID  string
-	ProducerVersion string
-	ObservedAt      time.Time
+	ServiceName string
+	InstanceID  string
+	MessageID   string
+	ObservedAt  time.Time
 }
 
 type Sample struct {
-	SeriesID        string
-	ServiceName     string
-	InstanceID      string
-	MetricName      string
-	MetricType      string
-	Labels          map[string]string
-	LabelsJSON      string
-	Value           float64
-	ObservedAt      time.Time
-	Interval        time.Duration
-	MessageID       string
-	ProducerNodeID  string
-	ProducerVersion string
+	SeriesID    string
+	ServiceName string
+	InstanceID  string
+	MetricName  string
+	MetricType  string
+	Labels      map[string]string
+	LabelsJSON  string
+	Value       float64
+	ObservedAt  time.Time
+	Interval    time.Duration
+	MessageID   string
 }
 
 // 快照被拒收的原因，用于入库拒收计数与诊断；没有专门归类的解析失败都算 RejectParse。
@@ -252,7 +248,7 @@ func appendMetricSamples(out *[]Sample, family *dto.MetricFamily, metric *dto.Me
 		if err != nil {
 			return err
 		}
-		*out = append(*out, Sample{SeriesID: SeriesID(env.ServiceName, env.InstanceID, name+suffix, merged), ServiceName: env.ServiceName, InstanceID: env.InstanceID, MetricName: name + suffix, MetricType: typeName, Labels: merged, LabelsJSON: lj, Value: value, ObservedAt: env.ObservedAt, Interval: interval, MessageID: env.MessageID, ProducerNodeID: env.ProducerNodeID, ProducerVersion: env.ProducerVersion})
+		*out = append(*out, Sample{SeriesID: SeriesID(env.ServiceName, env.InstanceID, name+suffix, merged), ServiceName: env.ServiceName, InstanceID: env.InstanceID, MetricName: name + suffix, MetricType: typeName, Labels: merged, LabelsJSON: lj, Value: value, ObservedAt: env.ObservedAt, Interval: interval, MessageID: env.MessageID})
 		if len(*out) > max {
 			return rejected(RejectLimitExceeded, fmt.Errorf("sample limit exceeded: %d > %d", len(*out), max))
 		}

@@ -102,26 +102,6 @@ for module in "${modules[@]}"; do
 	fi
 done
 
-# 已摘除未使用的 trpc-filter/masking 与空转的 packages/healthz/trpcotel，禁止回流。
-if grep -Fq -- 'trpc.group/trpc-go/trpc-filter/masking' go.mod; then
-	fail 'root go.mod must not depend on unused trpc.group/trpc-go/trpc-filter/masking'
-fi
-if rg -n 'trpc\.group/trpc-go/trpc-filter/masking' modules packages --glob '*.go' 2>/dev/null; then
-	fail 'Go sources must not import removed trpc-filter/masking'
-fi
-if rg -n '^[[:space:]]*-[[:space:]]*masking[[:space:]]*$' modules/*/config/trpc_go*.yaml modules/*/config/*/trpc_go*.yaml 2>/dev/null; then
-	fail 'tRPC configs must not declare removed masking filter'
-fi
-if [[ -e packages/healthz/trpcotel ]]; then
-	fail 'removed no-op package packages/healthz/trpcotel must not exist'
-fi
-if rg -n 'packages/healthz/trpcotel' modules packages --glob '*.go' 2>/dev/null; then
-	fail 'Go sources must not import removed packages/healthz/trpcotel'
-fi
-if rg -n '^[[:space:]]*-[[:space:]]*opentelemetry[[:space:]]*$' modules/*/config/trpc_go*.yaml modules/*/config/*/trpc_go*.yaml 2>/dev/null; then
-	fail 'tRPC configs must not declare removed opentelemetry filter'
-fi
-
 # 主机网关只转发一次：只读调用的重发由调用方 gatewayclient 负责，网关再重试会放大上游请求量。
 if grep -Fq -- 'client.WithFilter(' modules/hostgateway/internal/router/upstream.go; then
 	fail 'host gateway upstream must not install client retry filters'

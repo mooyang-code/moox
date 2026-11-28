@@ -32,10 +32,12 @@ var gatewayCallDenied = map[string]string{
 	"trpc.moox.ops.SecretMgr/ImportSecrets":                   "请求含口令与迁移包全文；导入由专用命令在进程内处理，不得经由通用入口传递",
 	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels":   "返回完整 webhook 地址；告警渠道请到管理台「资源与运维 › 监控告警」的“消息通知设置”查看",
 	"trpc.moox.monitor.MonitorMgr/ExportNotificationChannels": "返回完整 webhook 地址与签名密钥明文；仅供备份命令在进程内加密落盘，不得经由通用入口输出",
+	"trpc.moox.monitor.MonitorMgr/ImportNotificationChannels": "请求含完整 webhook 地址与签名密钥明文；仅供 setup install 在进程内恢复备份，不得经由通用入口传递",
 	"trpc.moox.ops.SecretMgr/CreateSecret":                    secretWriteDenied,
 	"trpc.moox.ops.SecretMgr/UpdateSecret":                    secretWriteDenied,
 	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":              secretWriteDenied,
 	"trpc.moox.ops.SecretMgr/DeleteSecret":                    secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/EnsureInitialSecret":             "请求含初始密钥明文；仅供 setup init 在进程内写入默认云账号密钥，不得经由通用入口传递",
 }
 
 // rpcBusinessError 是服务返回了业务失败（ret_info.code 非成功）。响应已经打印，这里只负责非 0 退出。
@@ -48,7 +50,7 @@ func (e *rpcBusinessError) Error() string {
 	return fmt.Sprintf("请求失败: %s (code %s)", e.Msg, e.Code)
 }
 
-// rpcRetError 读取响应顶层的 ret_info：code 为 0、"0"、"SUCCESS" 或缺省时视为成功；没有 ret_info 的响应（如 HostAgentMgr）也算成功。
+// rpcRetError 读取响应顶层的 ret_info：code 为 0、"0"、"SUCCESS" 或缺省（含未携带 ret_info 字段的响应，如 GetDirectoryRsp 或 protojson 省略零值字段）时视为成功。
 func rpcRetError(raw []byte) error {
 	var head struct {
 		RetInfo *struct {
@@ -121,8 +123,9 @@ const (
 	rpcFloat                 // 浮点数
 	rpcBool                  // 布尔；只在显式传入时写入请求
 	rpcStrings               // 可重复或逗号分隔的字符串列表
-	rpcTime                  // 数据时间（data_time 及其上下界）：RFC3339，按字符串原样写入
+	rpcTime                  // 数据时间（data_time 及其上下界）：RFC3339 或 UTC 日期简写，按 RFC3339 字符串写入
 	rpcInstant               // 时刻（创建、截止、查询起止等墙钟时刻）：输入 RFC3339，换成 int64 毫秒写入
+	rpcAfterNow              // 相对当前时间的时长（如 72h），换成 int64 毫秒写入
 	rpcJSON                  // JSON 文本，或 @文件
 	rpcFile                  // 文件路径（- 为标准输入），内容按字符串写入
 	rpcStringMap             // k=v，可重复，按字符串映射写入
@@ -148,23 +151,26 @@ const (
 )
 
 type rpcSpec struct {
-	Path         []string // 命令路径，如 {"factor", "task", "list"}
-	Short        string
-	Service      string // 完整服务名，如 trpc.moox.factor.FactorMgr
-	Method       string
-	Flags        []rpcFlag
-	Page         rpcPageStyle
-	SpaceField   string   // 非空时 --space-id 也写入这个请求字段（通常是 space_id）
-	NoSpace      bool     // 空间无关的方法不加 --space-id
-	Host         bool     // 加 --host，指定调用哪台主机上的服务
-	HostRequired bool     // --host 必填：服务部署在多台主机上、不指定会静默落到别的主机时用
-	Destructive  bool     // 默认只预览，--yes 才执行
-	AutoIDs      []string // 请求里缺省时自动生成随机 ID 的字段
+	Path          []string // 命令路径，如 {"factor", "task", "list"}
+	Short         string
+	Service       string // 完整服务名，如 trpc.moox.factor.FactorMgr
+	Method        string
+	Flags         []rpcFlag
+	Page          rpcPageStyle
+	SpaceField    string   // 非空时 --space-id 也写入这个请求字段（通常是 space_id）
+	SpaceRequired bool     // --space-id 必填且不设默认值（避免漏写时静默落到 crypto）
+	NoSpace       bool     // 空间无关的方法不加 --space-id
+	Host          bool     // 加 --host，指定调用哪台主机上的服务
+	HostRequired  bool     // --host 必填：服务部署在多台主机上、不指定会静默落到别的主机时用
+	Destructive   bool     // 默认只预览，--yes 才执行
+	AutoIDs       []string // 请求里缺省时自动生成随机 ID 的字段
 	// Fixed 是固定写入请求的字段（如启用/停用命令里的 status）。
 	Fixed map[string]any
 	// Merge 非空时，在发请求（和预览）之前先取回现有对象，把用户给的字段合并进去再提交：
 	// 服务端的修改接口是整体替换，只给几个字段会把其余字段清空。
 	Merge rpcMerge
+	// FormatResponse 非空时，成功响应先经它整理成精简结构再输出（业务失败仍输出原始响应）。
+	FormatResponse func(raw []byte) (any, error)
 }
 
 // rpcMerge 读取现有对象并把用户给的字段合并进请求。request 是已经构造好的请求，实现里原地改写。
@@ -333,6 +339,9 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 	switch f.Kind {
 	case rpcString:
 		v, _ := flags.GetString(f.Name)
+		if f.Required && strings.TrimSpace(v) == "" {
+			return nil, false, nil
+		}
 		return v, true, nil
 	case rpcInt:
 		v, _ := flags.GetInt64(f.Name)
@@ -345,13 +354,23 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 		return v, true, nil
 	case rpcStrings:
 		v, _ := flags.GetStringSlice(f.Name)
-		return v, true, nil
+		cleaned := make([]string, 0, len(v))
+		for _, item := range v {
+			if item = strings.TrimSpace(item); item != "" {
+				cleaned = append(cleaned, item)
+			}
+		}
+		if len(cleaned) == 0 {
+			return nil, false, nil
+		}
+		return cleaned, true, nil
 	case rpcTime:
 		v, _ := flags.GetString(f.Name)
-		if _, err := time.Parse(time.RFC3339, v); err != nil {
-			return nil, false, fmt.Errorf("--%s 需要 RFC3339 时间，例如 2026-10-01T00:00:00Z", f.Name)
+		normalized, err := parseRPCTime(f.Name, v)
+		if err != nil {
+			return nil, false, err
 		}
-		return v, true, nil
+		return normalized, true, nil
 	case rpcInstant:
 		v, _ := flags.GetString(f.Name)
 		at, err := time.Parse(time.RFC3339, v)
@@ -359,6 +378,12 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 			return nil, false, fmt.Errorf("--%s 需要 RFC3339 时刻，例如 2026-10-01T00:00:00Z 或 2026-10-01T08:00:00+08:00", f.Name)
 		}
 		return at.UnixMilli(), true, nil
+	case rpcAfterNow:
+		d, _ := flags.GetDuration(f.Name)
+		if d <= 0 {
+			return nil, false, fmt.Errorf("--%s 需要大于 0 的时长，例如 72h", f.Name)
+		}
+		return time.Now().Add(d).UnixMilli(), true, nil
 	case rpcJSON:
 		v, _ := flags.GetString(f.Name)
 		raw := []byte(v)
@@ -418,6 +443,8 @@ func (f rpcFlag) register(cmd *cobra.Command) {
 		cmd.Flags().StringSlice(f.Name, nil, f.Usage)
 	case rpcStringMap, rpcNumberMap:
 		cmd.Flags().StringToString(f.Name, nil, f.Usage)
+	case rpcAfterNow:
+		cmd.Flags().Duration(f.Name, 0, f.Usage)
 	default:
 		cmd.Flags().String(f.Name, f.Default, f.Usage)
 	}
@@ -433,8 +460,14 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 	// 默认值（空间 crypto、分页 1/50）不能覆盖 --data 里显式给的值；用户显式传了参数才覆盖。
 	if !s.NoSpace && s.SpaceField != "" {
 		space, _ := cmd.Flags().GetString("space-id")
+		space = strings.TrimSpace(space)
 		if space != "" && (cmd.Flags().Changed("space-id") || !hasRequestPath(request, s.SpaceField)) {
 			setRequestPath(request, s.SpaceField, space)
+		}
+		if s.SpaceRequired {
+			if v, ok := lookupRequestString(request, s.SpaceField); !ok || strings.TrimSpace(v) == "" {
+				return nil, fmt.Errorf("缺少 --space-id（也可以在 --data 里提供 %s）", s.SpaceField)
+			}
 		}
 	}
 	for _, flag := range s.Flags {
@@ -510,11 +543,15 @@ func buildRPCCommand(spec rpcSpec) *cobra.Command {
 			inv := rpcInvocation{File: file, Service: spec.Service, Method: spec.Method, Request: request}
 			if !spec.NoSpace {
 				inv.SpaceID, _ = cmd.Flags().GetString("space-id")
+				inv.SpaceID = strings.TrimSpace(inv.SpaceID)
 				// 没显式给 --space-id 时，--data 里的空间就是请求所属的空间。
 				if !cmd.Flags().Changed("space-id") && spec.SpaceField != "" {
 					if fromData, ok := lookupRequestString(request, spec.SpaceField); ok {
-						inv.SpaceID = fromData
+						inv.SpaceID = strings.TrimSpace(fromData)
 					}
+				}
+				if spec.SpaceRequired && inv.SpaceID == "" {
+					return errors.New("缺少 --space-id")
 				}
 			}
 			if spec.Host {
@@ -535,13 +572,32 @@ func buildRPCCommand(spec rpcSpec) *cobra.Command {
 				}
 			}
 			cmd.SilenceUsage = true
+			if spec.FormatResponse != nil {
+				response, err := invokeRPC(cmd.Context(), inv)
+				if err != nil {
+					return err
+				}
+				if err := rpcRetError(response); err != nil {
+					_ = printRPCResponse(cmd.OutOrStdout(), response, true)
+					return err
+				}
+				formatted, err := spec.FormatResponse(response)
+				if err != nil {
+					return err
+				}
+				return printJSON(cmd.OutOrStdout(), formatted)
+			}
 			return runRPC(cmd.Context(), cmd.OutOrStdout(), inv, true)
 		},
 	}
 	cmd.Flags().String("file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 	cmd.Flags().String("data", "", "完整请求 JSON；@文件 读取文件，- 读取标准输入。各参数优先于它")
 	if !spec.NoSpace {
-		cmd.Flags().String("space-id", "crypto", "空间 ID")
+		if spec.SpaceRequired {
+			cmd.Flags().String("space-id", "", "空间 ID（必填）")
+		} else {
+			cmd.Flags().String("space-id", "crypto", "空间 ID")
+		}
 	}
 	if spec.Host {
 		cmd.Flags().String("host", "", "主机 ID：只调用这台主机上的服务（moox.toml 里的主机名）")
@@ -676,6 +732,32 @@ func timeFlag(name, field, usage string, required bool) rpcFlag {
 func instantFlag(name, field, usage string, required bool) rpcFlag {
 	return rpcFlag{Name: name, Field: field, Kind: rpcInstant, Usage: usage, Required: required}
 }
+func afterNowFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcAfterNow, Usage: usage}
+}
 func mapFlag(name, field, usage string) rpcFlag {
 	return rpcFlag{Name: name, Field: field, Kind: rpcStringMap, Usage: usage}
+}
+
+// parseRPCTime 接受标准 RFC3339（原样保留），以及不带时区的 UTC 日期时间简写（如 2026-10-12、2026-10-12T08:00）。
+func parseRPCTime(name, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("--%s 不能为空", name)
+	}
+	if _, err := time.Parse(time.RFC3339, value); err == nil {
+		return value, nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02 15:04", "2006-01-02"} {
+		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+			return parsed.UTC().Format(time.RFC3339), nil
+		}
+	}
+	return "", fmt.Errorf("--%s 需要 RFC3339 时间，例如 2026-10-01T00:00:00Z", name)
+}
+
+func printJSON(out io.Writer, value any) error {
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
 }

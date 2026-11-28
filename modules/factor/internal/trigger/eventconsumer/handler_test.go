@@ -3,6 +3,8 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -14,9 +16,9 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
+	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +92,7 @@ type handlerPeriodStore struct {
 	calls     int
 }
 
-func (s *handlerPeriodStore) ComputedExists(_ context.Context, _, resultDatasetID, _ string, _ int64) (bool, error) {
+func (s *handlerPeriodStore) ComputedExists(_ context.Context, _, resultDatasetID string, _ int64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -150,10 +152,37 @@ func (l *testTaskLocks) LockContext(_ context.Context, taskID string) (func(), e
 	}, nil
 }
 
+func newTestContinuity(t *testing.T, rows LocalRows) *Continuity {
+	t.Helper()
+	if rows == nil {
+		rows = &periodRows{}
+	}
+	wm, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
+	require.NoError(t, err)
+	cont, err := NewContinuity(ContinuityConfig{Store: wm, Local: rows, MaxMissingRatio: 0.6})
+	require.NoError(t, err)
+	return cont
+}
+
+func mustNewHandler(t *testing.T, sets trigger.TaskLocator, periodStore trigger.PeriodStore, runner trigger.PipelineRunner, cfg HandlerConfig) *Handler {
+	t.Helper()
+	if cfg.Continuity == nil {
+		cfg.Continuity = newTestContinuity(t, nil)
+	}
+	handler, err := NewHandler(sets, periodStore, runner, new(testTaskLocks), cfg)
+	require.NoError(t, err)
+	t.Cleanup(handler.Close)
+	return handler
+}
+
+func TestNewHandlerRequiresContinuity(t *testing.T) {
+	_, err := NewHandler(&handlerTaskLocator{}, &handlerPeriodStore{}, new(handlerRunner), new(testTaskLocks), HandlerConfig{})
+	require.Error(t, err)
+}
+
 func TestHandlerAcksWhenNoEnabledTask(t *testing.T) {
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerTaskLocator{}, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
+	handler := mustNewHandler(t, &handlerTaskLocator{}, &handlerPeriodStore{}, runner, HandlerConfig{})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-1"))
 
@@ -165,27 +194,34 @@ func TestHandlerGateClosedAcksWithoutComputing(t *testing.T) {
 	set := enabledTestTask()
 	periodStore := &handlerPeriodStore{}
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerTaskLocator{set: set, found: true}, periodStore, runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
 	open := false
-	handler.SetGate(func(string) bool { return open })
+	released := 0
+	handler := mustNewHandler(t, &handlerTaskLocator{set: set, found: true}, periodStore, runner, HandlerConfig{
+		Begin: func(_ context.Context, _ string, _ bool) (func(), bool) {
+			if !open {
+				return nil, false
+			}
+			return func() { released++ }, true
+		},
+	})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-gate-1"))
 	require.Equal(t, jetstream.ACK, result.Decision)
 	require.Empty(t, runner.plans, "门禁关闭时不计算")
+	require.Zero(t, released)
 
 	open = true
 	result = handler.Handle(context.Background(), collectorDelivery(t, "event-gate-2"))
 	require.Equal(t, jetstream.ACK, result.Decision)
 	require.NotEmpty(t, runner.plans, "门禁打开后正常计算")
+	require.Equal(t, 1, released, "计算结束后注销在途登记")
 }
 
 func TestHandlerAcksWhenComputedAlreadyExists(t *testing.T) {
 	set := enabledTestTask()
 	periodStore := &handlerPeriodStore{exists: true}
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerTaskLocator{set: set, found: true}, periodStore, runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
+	handler := mustNewHandler(t, &handlerTaskLocator{set: set, found: true}, periodStore, runner, HandlerConfig{})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-2"))
 
@@ -197,8 +233,7 @@ func TestHandlerAcksWhenComputedAlreadyExists(t *testing.T) {
 func TestHandlerNaksOnErrInfra(t *testing.T) {
 	set := enabledTestTask()
 	runner := &handlerRunner{err: errors.Join(errors.New("wrapped"), storageio.ErrInfra)}
-	handler := NewHandler(&handlerTaskLocator{set: set, found: true}, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{NakDelay: 3 * time.Second})
-	t.Cleanup(handler.Close)
+	handler := mustNewHandler(t, &handlerTaskLocator{set: set, found: true}, &handlerPeriodStore{}, runner, HandlerConfig{NakDelay: 3 * time.Second})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-3"))
 
@@ -210,8 +245,7 @@ func TestHandlerNaksOnErrInfra(t *testing.T) {
 func TestHandlerAcksDegradedOutcome(t *testing.T) {
 	set := enabledTestTask()
 	runner := &handlerRunner{out: pipeline.Outcome{Status: "degraded", FailedSubjects: []string{"ETH"}}}
-	handler := NewHandler(&handlerTaskLocator{set: set, found: true}, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
+	handler := mustNewHandler(t, &handlerTaskLocator{set: set, found: true}, &handlerPeriodStore{}, runner, HandlerConfig{})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-4"))
 
@@ -219,7 +253,6 @@ func TestHandlerAcksDegradedOutcome(t *testing.T) {
 	require.Len(t, runner.plans, 1)
 	plan := runner.plans[0]
 	require.Equal(t, pipeline.ModeLive, plan.Mode)
-	require.Equal(t, "event-4", plan.TriggerEventID)
 	require.Equal(t, []string{"BTC", "ETH"}, plan.Expected)
 	require.Equal(t, []string{"BTC"}, plan.Available)
 	require.Equal(t, []string{"ETH"}, plan.UpstreamFailed)
@@ -236,10 +269,8 @@ func TestHandlerFansOutToEveryTaskAndSelectsParams(t *testing.T) {
 	locator := &handlerTaskLocator{set: first, factors: []domain.FactorDef{factor}, found: true,
 		extra: []domain.EngineTask{{Set: second, Members: []domain.MemberDef{{Key: "fast", Factor: factor, Kind: domain.MemberKindVar}}, ResultReady: true}}}
 	runner := new(handlerRunner)
-	handler := NewHandler(locator, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
 	selector := new(handlerParamSelector)
-	handler.SetParamSelector(selector)
+	handler := mustNewHandler(t, locator, &handlerPeriodStore{}, runner, HandlerConfig{Params: selector})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-fan"))
 	require.Equal(t, jetstream.ACK, result.Decision)
@@ -260,11 +291,9 @@ func TestHandlerFansOutToEveryTaskAndSelectsParams(t *testing.T) {
 // 取参失败是基础设施错误：事件重投，不按默认参数硬算。
 func TestHandlerRetriesWhenParamSelectionFails(t *testing.T) {
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true},
-		&handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{NakDelay: time.Second})
-	t.Cleanup(handler.Close)
 	selector := &handlerParamSelector{err: errors.New("mgr down")}
-	handler.SetParamSelector(selector)
+	handler := mustNewHandler(t, &handlerTaskLocator{set: enabledTestTask(), factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true},
+		&handlerPeriodStore{}, runner, HandlerConfig{NakDelay: time.Second, Params: selector})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-select"))
 	require.Equal(t, jetstream.RETRY, result.Decision)
@@ -277,9 +306,8 @@ func TestHandlerRetriesWhenAnyTaskResultIsNotReady(t *testing.T) {
 	pending := enabledTestTask()
 	pending.TaskID = "ftask_pending"
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), found: true, extra: []domain.EngineTask{{Set: pending}}},
-		&handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{NakDelay: time.Second})
-	t.Cleanup(handler.Close)
+	handler := mustNewHandler(t, &handlerTaskLocator{set: enabledTestTask(), found: true, extra: []domain.EngineTask{{Set: pending}}},
+		&handlerPeriodStore{}, runner, HandlerConfig{NakDelay: time.Second})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-pending"))
 	require.Equal(t, jetstream.RETRY, result.Decision)
@@ -288,8 +316,7 @@ func TestHandlerRetriesWhenAnyTaskResultIsNotReady(t *testing.T) {
 }
 
 func TestHandlerTerminatesMalformedEvent(t *testing.T) {
-	handler := NewHandler(&handlerTaskLocator{}, &handlerPeriodStore{}, new(handlerRunner), new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
+	handler := mustNewHandler(t, &handlerTaskLocator{}, &handlerPeriodStore{}, new(handlerRunner), HandlerConfig{})
 	result := handler.Handle(context.Background(), &jetstream.Delivery{RawData: []byte("not-an-event")})
 
 	require.Equal(t, jetstream.TERM, result.Decision)
@@ -361,7 +388,7 @@ func collectorDelivery(t *testing.T, eventID string) *jetstream.Delivery {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: "degraded",
 		Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
@@ -405,9 +432,8 @@ func TestHandlerComputesTasksConcurrently(t *testing.T) {
 		case <-time.After(5 * time.Second):
 		}
 	}}
-	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), found: true, extra: []domain.EngineTask{secondTask()}},
-		&handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
+	handler := mustNewHandler(t, &handlerTaskLocator{set: enabledTestTask(), found: true, extra: []domain.EngineTask{secondTask()}},
+		&handlerPeriodStore{}, runner, HandlerConfig{})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-parallel"))
 	require.Equal(t, jetstream.ACK, result.Decision)
@@ -424,8 +450,7 @@ func TestHandlerOneTaskFailureKeepsTheOtherAndRedeliverySkipsIt(t *testing.T) {
 	first, second := enabledTestTask(), secondTask()
 	runner := &handlerRunner{errFor: map[string]error{first.TaskID: errors.Join(errors.New("读源数据失败"), storageio.ErrInfra)}}
 	periodStore := &handlerPeriodStore{existsFor: map[string]bool{}}
-	handler := NewHandler(&handlerTaskLocator{set: first, found: true, extra: []domain.EngineTask{second}}, periodStore, runner, new(testTaskLocks), HandlerConfig{NakDelay: time.Second})
-	t.Cleanup(handler.Close)
+	handler := mustNewHandler(t, &handlerTaskLocator{set: first, found: true, extra: []domain.EngineTask{second}}, periodStore, runner, HandlerConfig{NakDelay: time.Second})
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-partial"))
 	require.Equal(t, jetstream.RETRY, result.Decision)
@@ -436,7 +461,7 @@ func TestHandlerOneTaskFailureKeepsTheOtherAndRedeliverySkipsIt(t *testing.T) {
 	}
 	require.Equal(t, map[string]int{first.TaskID: 1, second.Set.TaskID: 1}, planned, "失败的任务不拖住另一个任务")
 
-	// 重投：第二个任务的完成标记已经写出，只重算第一个。
+	// 重投：第二个任务的完成标记已经写出且水位已前进，只重算第一个。
 	periodStore.existsFor[second.Set.ResultDatasetID] = true
 	delete(runner.errFor, first.TaskID)
 	result = handler.Handle(context.Background(), collectorDelivery(t, "event-partial"))
@@ -448,7 +473,7 @@ func TestHandlerOneTaskFailureKeepsTheOtherAndRedeliverySkipsIt(t *testing.T) {
 	require.Equal(t, map[string]int{first.TaskID: 2, second.Set.TaskID: 1}, planned, "已写出的任务在重投时被跳过")
 }
 
-// 同一任务内部仍然串行：同一个任务的两个事件并发到达时，两次计算不重叠。
+// 同一任务内部仍然串行：同一个任务的多个周期事件并发到达时，各期计算不重叠。
 func TestHandlerKeepsOnePeriodAtATimePerTask(t *testing.T) {
 	var active, peak atomic.Int32
 	runner := &handlerRunner{hook: func(pipeline.Plan) {
@@ -456,19 +481,29 @@ func TestHandlerKeepsOnePeriodAtATimePerTask(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 		active.Add(-1)
 	}}
-	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), found: true}, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
+	rows := &periodRows{}
+	base := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	universe := []string{"BTC", "ETH"}
+	for offset := 1; offset <= 3; offset++ {
+		rows.set(base.Add(time.Duration(offset)*time.Minute), universe...)
+	}
+	handler := mustNewHandler(t, &handlerTaskLocator{set: enabledTestTask(), found: true}, &handlerPeriodStore{}, runner, HandlerConfig{
+		Continuity: newTestContinuity(t, rows),
+	})
+	require.Equal(t, jetstream.ACK, handler.Handle(context.Background(), periodDelivery(t, "event-serial-0", base, universe, nil)).Decision)
 
 	var wg sync.WaitGroup
-	for _, id := range []string{"event-serial-1", "event-serial-2", "event-serial-3"} {
+	for offset := 1; offset <= 3; offset++ {
+		period := base.Add(time.Duration(offset) * time.Minute)
+		id := "event-serial-" + period.Format("1504")
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			require.Equal(t, jetstream.ACK, handler.Handle(context.Background(), collectorDelivery(t, id)).Decision)
+			require.Equal(t, jetstream.ACK, handler.Handle(context.Background(), periodDelivery(t, id, period, universe, nil)).Decision)
 		}()
 	}
 	wg.Wait()
-	require.Len(t, runner.plans, 3)
+	require.Len(t, runner.plans, 4)
 	require.EqualValues(t, 1, peak.Load(), "同一任务的期次不能并行计算")
 }
 
@@ -477,7 +512,7 @@ func stockDelivery(t *testing.T, eventID string, period time.Time) *jetstream.De
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: "stock_bars", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
 		Source: "ledger", SnapshotRef: "scope-1", UniverseSubjectIds: []string{"600000.SH"},
 		CompletedAt: period.Add(5 * time.Minute).UnixMilli(),
@@ -498,10 +533,8 @@ func TestHandlerConvertsStockCNPeriodToAxis(t *testing.T) {
 	factor := domain.FactorDef{FactorID: "f", InputColumns: []string{"close"}}
 	locator := &handlerTaskLocator{set: set, factors: []domain.FactorDef{factor}, found: true}
 	runner := new(handlerRunner)
-	handler := NewHandler(locator, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
-	t.Cleanup(handler.Close)
 	selector := new(handlerParamSelector)
-	handler.SetParamSelector(selector)
+	handler := mustNewHandler(t, locator, &handlerPeriodStore{}, runner, HandlerConfig{Params: selector})
 
 	period := time.Date(2026, 10, 12, 5, 0, 0, 0, time.UTC) // 北京时间 13:00，午休后第一根
 	result := handler.Handle(context.Background(), stockDelivery(t, "event-stock", period))

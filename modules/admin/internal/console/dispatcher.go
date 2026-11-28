@@ -78,7 +78,8 @@ func (d *LocalDispatcher) Forward(ctx context.Context, service, method string, s
 		return nil, errs.New(errs.RetServerDecodeFail, "console requires JSON serialization")
 	}
 	spec, _ := d.catalog.Service(service)
-	if int64(len(body)) > spec.MaxBodyBytes {
+	limit := spec.BodyLimit()
+	if int64(len(body)) > limit {
 		return nil, errRequestBodyTooLarge
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(spec.TimeoutFor(method))*time.Millisecond)
@@ -104,7 +105,7 @@ func (d *LocalDispatcher) Forward(ctx context.Context, service, method string, s
 		return nil, err
 	}
 	response, err = codec.Marshal(serialization, value)
-	if err == nil && int64(len(response)) > spec.MaxBodyBytes {
+	if err == nil && int64(len(response)) > limit {
 		return nil, fmt.Errorf("local Admin response exceeds service body limit")
 	}
 	return response, err

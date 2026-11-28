@@ -7,56 +7,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewLogicalAccountStartsPaused(t *testing.T) {
-	account, err := New(
-		"space-1",
-		"logical-1",
-		"main",
-		exchange.ExecutionModePaper,
-		"USDT",
-		"",
-	)
+func TestValidateConfigRejectsInvalidFieldsAndControlMode(t *testing.T) {
+	require.NoError(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentPaper, "USDT", ControlStrategy, "USER", DefaultPauseReason, ""))
+	require.NoError(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentTestnet, "USDT", ControlStrategy, "", "", ""))
+	require.NoError(t, ValidateConfig("space-1", "logical-1", "manual", exchange.AccountEnvironmentProduction, "USDT", ControlManual, "", "", ""))
 
-	require.NoError(t, err)
-	require.Equal(t, AutomationPaused, account.AutomationState)
-	require.NotEmpty(t, account.PauseReason)
-	require.Equal(t, ControlStrategy, account.ControlMode)
+	require.ErrorIs(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentUnspecified, "USDT", ControlStrategy, "", "", ""), ErrInvalidAccount)
+	require.ErrorIs(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentPaper, "USDT", "UNKNOWN", "", "", ""), ErrInvalidAccount)
+	require.ErrorIs(t, ValidateConfig("", "logical-1", "main", exchange.AccountEnvironmentPaper, "USDT", ControlStrategy, "", "", ""), ErrInvalidAccount)
 }
 
-func TestManualAccountRejectsStrategyOwnershipAndAutomation(t *testing.T) {
-	a, err := New("space", "logical", "manual", exchange.ExecutionModePaper, "USDT", ControlManual)
-	require.NoError(t, err)
-	require.Equal(t, ControlManual, a.ControlMode)
-	require.NoError(t, a.Validate())
-	a.AutomationState, a.PauseReason = AutomationActive, ""
-	require.Error(t, a.Validate())
-	a.ControlMode = "invalid"
-	require.Error(t, a.Validate())
-}
-
-func TestNewRejectsUnknownControlMode(t *testing.T) {
-	_, err := New("space", "logical", "name", exchange.ExecutionModePaper, "USDT", "unknown")
-	require.Error(t, err)
-}
-
-func TestLogicalAccountAutomationStateAndReasonMustAgree(t *testing.T) {
-	valid := Account{
-		ControlMode: ControlStrategy,
-		SpaceID:     "space-1", ID: "logical-1", Name: "main",
-		ExecutionMode:   exchange.ExecutionModePaper,
-		SettlementAsset: "USDT",
-		AutomationState: AutomationPaused, PauseReason: "manual",
-	}
-	require.NoError(t, valid.Validate())
-
-	active := valid
-	active.AutomationState = AutomationActive
-	require.ErrorIs(t, active.Validate(), ErrAutomationState)
-
-	paused := valid
-	paused.PauseReason = ""
-	require.ErrorIs(t, paused.Validate(), ErrAutomationState)
-
-	active.PauseReason = ""
-	require.NoError(t, active.Validate())
+func TestValidateConfigEnforcesPauseInvariants(t *testing.T) {
+	require.ErrorIs(t, ValidateConfig("space-1", "logical-1", "manual", exchange.AccountEnvironmentPaper, "USDT", ControlManual, "USER", "人工暂停", ""), ErrAutomationState)
+	require.ErrorIs(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentPaper, "USDT", ControlStrategy, "USER", "", ""), ErrAutomationState)
+	require.ErrorIs(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentPaper, "USDT", ControlStrategy, "", "孤立原因", ""), ErrAutomationState)
+	require.ErrorIs(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentPaper, "USDT", ControlStrategy, "MARGIN", "保证金低", ""), ErrAutomationState)
+	require.ErrorIs(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentPaper, "USDT", ControlStrategy, "USER", "人工暂停", "REDUCED"), ErrAutomationState)
+	require.NoError(t, ValidateConfig("space-1", "logical-1", "main", exchange.AccountEnvironmentProduction, "USDT", ControlStrategy, "MARGIN", "保证金低", "REDUCED"))
 }

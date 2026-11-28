@@ -39,15 +39,15 @@ func (s *registryStub) ReplaceExpected(items []report.DatasetExpectation) error 
 func (s *registryStub) ObserveInventoryRefreshError() { s.errors++ }
 
 func collectorRule(id string, enabled bool, dataType, target, frequency string) domain.CollectionTask {
-	params := `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
-	return domain.CollectionTask{SpaceID: "crypto", TaskID: id, DataType: dataType, CollectParams: params, Enabled: enabled}
+	params := `{"frequency":"` + frequency + `"}`
+	return domain.CollectionTask{SpaceID: "crypto", TaskID: id, DataType: dataType, CollectParams: params, ResultDatasetID: target, Enabled: enabled}
 }
 
 func tagOnlyCollectorRule(id, target, frequency string) domain.CollectionTask {
-	params := `{"target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
+	params := `{"frequency":"` + frequency + `"}`
 	return domain.CollectionTask{
 		SpaceID: "crypto", TaskID: id, DataType: "kline", TagIDs: []string{"binance_spot"},
-		CollectParams: params, Enabled: true,
+		CollectParams: params, ResultDatasetID: target, Enabled: true,
 	}
 }
 
@@ -107,8 +107,8 @@ func TestRealtimeInventoryFailureRetainsPreviousSnapshot(t *testing.T) {
 
 func TestRealtimeInventoryAcceptsResampleTargetWithoutFrequencySuffix(t *testing.T) {
 	// 回归：结果数据集 ID 由任务派生、不带频率后缀，清单刷新曾因后缀检查失败并让 Collector 起不来。
-	params := `{"provider":"binance","market_type":"spot","source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_resample_task","target_frequency":"5m","alignment":"epoch_utc"}`
-	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "resample-task", DataType: "kline_resample", CollectParams: params, Enabled: true, PrepareState: domain.PrepareStateReady}
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_frequency":"5m"}`
+	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "resample-task", DataType: "kline_resample", CollectParams: params, ResultDatasetID: "dataset_resample_task", Enabled: true, PrepareState: domain.PrepareStateReady}
 	registry := &registryStub{}
 	inventory := NewRealtimeInventory(&ruleSourceStub{rules: []domain.CollectionTask{task}}, registry)
 
@@ -121,7 +121,7 @@ func TestRealtimeInventoryAcceptsResampleTargetWithoutFrequencySuffix(t *testing
 // 收盘后启用 A 股任务：定时采集路径在 Storage 第一次提交前没有运行记录，登记时记一次“空”运行，Monitor 不会整夜判“尚未上报”；
 // 已登记的不重复记，移出后重新进入、进程重启后重新登记都会再记一次。
 func TestRealtimeInventoryRecordsAnEmptyRunWhenADatasetIsFirstRegistered(t *testing.T) {
-	stock := domain.CollectionTask{SpaceID: "stockcn", TaskID: "stock-5m", DataType: "kline", TagIDs: []string{"cn_hs300"}, CollectParams: `{"target_dataset_id":"dataset_stock_5m","frequency":"5m"}`, Enabled: true}
+	stock := domain.CollectionTask{SpaceID: "stockcn", TaskID: "stock-5m", DataType: "kline", TagIDs: []string{"cn_hs300"}, CollectParams: `{"frequency":"5m"}`, ResultDatasetID: "dataset_stock_5m", Enabled: true}
 	source := &ruleSourceStub{rules: []domain.CollectionTask{stock}}
 	registry := &registryStub{}
 	registeredAt := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC) // 20:00 Asia/Shanghai，已收盘
@@ -164,7 +164,7 @@ func TestRealtimeInventoryEmptyRunSetsLastRunAndSuccess(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := report.NewDatasetMetrics(registry, "collector")
 	require.NoError(t, err)
-	stock := domain.CollectionTask{SpaceID: "stockcn", TaskID: "stock-5m", DataType: "kline", TagIDs: []string{"cn_hs300"}, CollectParams: `{"target_dataset_id":"dataset_stock_5m","frequency":"5m"}`, Enabled: true}
+	stock := domain.CollectionTask{SpaceID: "stockcn", TaskID: "stock-5m", DataType: "kline", TagIDs: []string{"cn_hs300"}, CollectParams: `{"frequency":"5m"}`, ResultDatasetID: "dataset_stock_5m", Enabled: true}
 	inventory := NewRealtimeInventory(&ruleSourceStub{rules: []domain.CollectionTask{stock}}, metrics)
 	registeredAt := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	inventory.now = func() time.Time { return registeredAt }

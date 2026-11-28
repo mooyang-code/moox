@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -192,7 +191,7 @@ func (p *protoIndex) kindMatches(kind rpcFlagKind, f protoField) (bool, string) 
 		return !f.Repeated && !isMap && (f.Type == "string" || isEnum), "需要 string 或枚举，实际 " + f.Type
 	case rpcInt:
 		return !f.Repeated && scalar && strings.Contains(f.Type, "int"), "需要整数，实际 " + f.Type
-	case rpcInstant:
+	case rpcInstant, rpcAfterNow:
 		return !f.Repeated && f.Type == "int64", "时刻参数需要 int64 毫秒，实际 " + f.Type
 	case rpcFloat:
 		return !f.Repeated && (f.Type == "double" || f.Type == "float"), "需要浮点数，实际 " + f.Type
@@ -272,6 +271,9 @@ func TestRPCSpecsMatchProtoAndCatalog(t *testing.T) {
 			for _, field := range spec.AutoIDs {
 				_, exists, why := index.checkPath(request, field)
 				assert.True(t, exists, "自动 ID 字段 %s：%s", field, why)
+			}
+			if spec.SpaceRequired {
+				assert.False(t, spec.NoSpace, "NoSpace 与 SpaceRequired 矛盾")
 			}
 			if spec.SpaceField != "" {
 				assert.False(t, spec.NoSpace, "NoSpace 与 SpaceField 矛盾")
@@ -433,37 +435,26 @@ func TestProtoIndexCatchesWrongSpecs(t *testing.T) {
 	assert.True(t, matches)
 }
 
-// skill 的完整命令清单必须列出每一个叶子命令：新增命令忘了写进 skills/moox/references/command-index.md，Agent 就不知道有它。
-func TestSkillCommandIndexListsEveryCommand(t *testing.T) {
+// skill 的完整命令清单由命令树自动生成并受本测试守护：改动命令或说明后运行
+// MOOX_UPDATE_COMMAND_INDEX=1 go test ./internal/command -run TestSkillCommandIndexMatchesCommandTree 更新。
+func TestSkillCommandIndexMatchesCommandTree(t *testing.T) {
 	mountCommands(rootCmd)
-	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "skills", "moox", "references", "command-index.md"))
-	require.NoError(t, err)
-	index := string(raw)
-	var leaves []string
-	var walk func(cmd *cobra.Command)
-	walk = func(cmd *cobra.Command) {
-		children := 0
-		for _, child := range cmd.Commands() {
-			if child.Name() == "help" || child.Hidden {
-				continue
-			}
-			children++
-			walk(child)
-		}
-		if children == 0 && cmd != rootCmd {
-			leaves = append(leaves, strings.TrimPrefix(cmd.CommandPath(), rootCmd.Name()+" "))
-		}
+	var leaves []commandIndexEntry
+	for _, top := range visibleChildren(rootCmd) {
+		leaves = append(leaves, collectLeafEntries(top, rootCmd.Name()+" ")...)
 	}
-	walk(rootCmd)
 	require.Greater(t, len(leaves), 200)
-	var missing []string
 	for _, leaf := range leaves {
-		if !strings.Contains(index, "| `"+leaf+"` |") {
-			missing = append(missing, leaf)
-		}
+		assert.NotEmpty(t, strings.TrimSpace(leaf.Short), "命令 %s 缺少 Short 说明", leaf.Path)
 	}
-	sort.Strings(missing)
-	assert.Empty(t, missing, "这些命令没有写进 skills/moox/references/command-index.md：\n%s", strings.Join(missing, "\n"))
+	want := renderSkillCommandIndex(rootCmd)
+	indexPath := filepath.Join(repoRoot(t), "skills", "moox", "references", "command-index.md")
+	if os.Getenv("MOOX_UPDATE_COMMAND_INDEX") == "1" {
+		require.NoError(t, os.WriteFile(indexPath, []byte(want), 0o644))
+	}
+	raw, err := os.ReadFile(indexPath)
+	require.NoError(t, err)
+	assert.Equal(t, want, string(raw), "skills/moox/references/command-index.md 与命令树不一致；请在 modules/cli 目录运行 MOOX_UPDATE_COMMAND_INDEX=1 go test ./internal/command -run TestSkillCommandIndexMatchesCommandTree 重新生成")
 }
 
 // 帮助文本里的“只读”必须和服务目录一致：写方法不能标成只读，Short 里也不能自称只读。

@@ -1,7 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LogicalAccount, TradingAccount } from "@/api/trade";
+import { AccountEnvironment, ExecutionMode, type LogicalAccount, type TradingAccount } from "@/api/trade";
 
 const api = vi.hoisted(() => ({
   updateTradingAccount: vi.fn(async () => ({})),
@@ -42,7 +42,8 @@ const account = {
 const combo = {
   logical_account_id: "la-9",
   name: "生产组合",
-  execution_mode: 2,
+  execution_mode: ExecutionMode.LIVE,
+  environment: AccountEnvironment.PRODUCTION,
   settlement_asset: "USDT",
   automation_state: "PAUSED",
   members: []
@@ -61,7 +62,7 @@ let wrapper: VueWrapper;
 const row = { key: "ta-9", account, logical: null, priority: null, enabled: null };
 const mountTab = () => {
   wrapper = mount(ExecutionTab, {
-    props: { env: "prod", rows: [row], logicals: [combo], accounts: [account], loading: false },
+    props: { env: "prod", rows: [row], logicals: [combo], loading: false },
     global: { plugins: [ArcoVue] },
     attachTo: document.body
   });
@@ -69,7 +70,7 @@ const mountTab = () => {
 };
 const mountJoin = () => {
   wrapper = mount(JoinDialog, {
-    props: { env: "prod", logicals: [combo], accounts: [account] },
+    props: { env: "prod", logicals: [combo] },
     global: { plugins: [ArcoVue] },
     attachTo: document.body
   });
@@ -123,6 +124,37 @@ describe("执行账户子页签", () => {
     confirmButton("确认接管")?.click();
     await flushPromises();
     expect(api.addLogicalAccountMember).toHaveBeenCalledWith(expect.objectContaining({ adopt_existing_exposure: true }));
+  });
+
+  it("关闭未加入组合的模拟账户：弹确认后发送 DISABLED", async () => {
+    const paperAccount = {
+      trading_account_id: "ta-paper-1",
+      name: "模拟一号",
+      exchange: "binance",
+      markets: ["spot"],
+      execution_mode: 1,
+      status: "ENABLED",
+      settlement_asset: "USDT"
+    } as unknown as TradingAccount;
+    wrapper = mount(ExecutionTab, {
+      props: {
+        env: "paper",
+        rows: [{ key: "ta-paper-1", account: paperAccount, logical: null, priority: null, enabled: null }],
+        logicals: [],
+        accounts: [paperAccount],
+        loading: false
+      },
+      global: { plugins: [ArcoVue] },
+      attachTo: document.body
+    });
+    const vm = wrapper.vm as unknown as TabVM;
+    vm.setStatus(paperAccount, "DISABLED");
+    await flushPromises();
+    expect(vm.confirmVisible).toBe(true);
+    expect(document.body.textContent).toContain("关闭模拟账户「模拟一号」");
+    confirmButton("关闭模拟账户")?.click();
+    await flushPromises();
+    expect(api.updateTradingAccount).toHaveBeenCalledWith({ trading_account_id: "ta-paper-1", status: "DISABLED" });
   });
 
   it("不接管时直接加入，不弹确认", async () => {

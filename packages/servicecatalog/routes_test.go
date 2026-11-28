@@ -146,9 +146,9 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 		routes  int
 		callers []string
 	}{
-		"control":  {163, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
-		"storage":  {49, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
-		"overseas": {48, []string{"collector", "console", "moox-cli", "strategy"}},
+		"control":  {159, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
+		"storage":  {47, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "scf-collector", "strategy"}},
+		"overseas": {47, []string{"collector", "console", "moox-cli", "strategy"}},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -395,30 +395,29 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 			routes[route.ServicePath+"/"+route.Method] = route
 		}
 	}
-	// ArchiveMgr 17 个（含生命周期两个）、ArchiveWorker 4 个。
-	if len(routes) != 17+4 {
+	// ArchiveMgr 15 个（已移除模块生命周期）、ArchiveWorker 6 个（含 ListFollowTasks、ReportFollowResult）。
+	if len(routes) != 15+6 {
 		t.Fatalf("archive-mgr routes = %d, want 21", len(routes))
 	}
-	if route := routes["trpc.moox.archive.ArchiveMgr/GetLifecycle"]; !slices.Equal(route.Callers, []string{"console", "moox-cli"}) || !route.ReadOnly {
-		t.Fatalf("GetLifecycle 给管理台与 moox-cli 读: %+v", route)
+	if route := routes["trpc.moox.archive.ArchiveMgr/StartArchiveImport"]; !slices.Equal(route.Callers, []string{"moox-cli"}) || route.ReadOnly {
+		t.Fatalf("StartArchiveImport 只给 moox-cli: %+v", route)
 	}
-	for _, method := range []string{"StartArchiveImport", "ClearArchiveUnrecoverable", "ControlLifecycle"} {
-		if route := routes["trpc.moox.archive.ArchiveMgr/"+method]; !slices.Equal(route.Callers, []string{"moox-cli"}) || route.ReadOnly {
-			t.Fatalf("%s 只给 moox-cli: %+v", method, route)
+	for _, method := range []string{"CreateArchiveTask", "ClearArchiveUnrecoverable"} {
+		route := routes["trpc.moox.archive.ArchiveMgr/"+method]
+		if !slices.Equal(route.Callers, []string{"console", "moox-cli"}) || route.ReadOnly {
+			t.Fatalf("%s route = %+v", method, route)
 		}
-	}
-	create := routes["trpc.moox.archive.ArchiveMgr/CreateArchiveTask"]
-	if !slices.Equal(create.Callers, []string{"console", "moox-cli"}) || create.ReadOnly {
-		t.Fatalf("CreateArchiveTask route = %+v", create)
 	}
 	list := routes["trpc.moox.archive.ArchiveMgr/ListArchiveTasks"]
 	if !slices.Equal(list.Callers, []string{"console", "moox-cli"}) || !list.ReadOnly {
 		t.Fatalf("ListArchiveTasks 只读方法允许 console/moox-cli: %+v", list)
 	}
 	// ArchiveWorker 的方法只有归档 worker 能调：它用所在主机的密钥直接到网关，不是外部身份。
-	pull := routes["trpc.moox.archive.ArchiveWorker/PullArchiveRun"]
-	if !slices.Equal(pull.Callers, []string{"archive-worker"}) {
-		t.Fatalf("PullArchiveRun callers = %v", pull.Callers)
+	for _, method := range []string{"ArchiveWorkerHeartbeat", "ListFollowTasks", "ReportFollowResult", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"} {
+		route := routes["trpc.moox.archive.ArchiveWorker/"+method]
+		if !slices.Equal(route.Callers, []string{"archive-worker"}) {
+			t.Fatalf("%s callers = %v", method, route.Callers)
+		}
 	}
 	if !c.Allowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
 		c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
@@ -772,7 +771,7 @@ func TestConsoleOnlyPortZeroServicesSkipPortsDirectoryAndRoutes(t *testing.T) {
 	if svc, ok := c.ConsoleService("ssh", "CreateSession"); !ok || svc.Path != "trpc.moox.ops.Ssh" || svc.Port != 0 {
 		t.Fatalf("ConsoleService(ssh, CreateSession) = %+v, %v", svc, ok)
 	}
-	if _, ok := c.ConsoleService("setup", "GetSetupStatus"); ok {
-		t.Fatal("Setup must not be exposed to console")
+	if _, ok := c.ConsoleService("secret", "EnsureInitialSecret"); ok {
+		t.Fatal("EnsureInitialSecret must not be exposed to console")
 	}
 }

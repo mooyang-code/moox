@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
@@ -71,11 +70,11 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	ctx := context.Background()
 	// 控制机登记成外部入口：它的网关多开 11004，接外部身份的请求。外部身份能调的方法都在存储机上，
 	// 入口放在控制机，外部请求都要由控制机网关带来源头转到存储机，跨主机转发因此有真实进程覆盖。
-	controlSpec := sysdeploy.HostSpec{HostID: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, Components: []string{"admin", "collector"}}
-	storageSpec := sysdeploy.HostSpec{HostID: "storage", Enabled: true, Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view", "monitor"}}
-	f.specs = []sysdeploy.HostSpec{controlSpec, storageSpec}
+	controlSpec := &pb.SyncTopologyHost{HostId: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, ComponentIds: []string{"admin", "collector"}}
+	storageSpec := &pb.SyncTopologyHost{HostId: "storage", Enabled: true, Address: "127.0.0.2", ComponentIds: []string{"storage-primary", "storage-view", "monitor"}}
+	f.specs = []*pb.SyncTopologyHost{controlSpec, storageSpec}
 	require.NoError(t, f.declare())
-	for _, identity := range []string{"scf-collector", "moox-skill"} {
+	for _, identity := range []string{"scf-collector"} {
 		require.NoError(t, f.keys.SetIdentity(ctx, identity, publicKey("identity/"+identity)))
 	}
 
@@ -113,8 +112,8 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	storageProcess := startGatewayExecutable(t, binary, framework, configs["storage"])
 	waitForE2E(t, 15*time.Second, "both actual gateway heartbeats", func() bool {
 		for _, host := range []string{"control", "storage"} {
-			status, err := f.topology.GetGatewayStatus(ctx, host)
-			if err != nil || status.LastSeenAt == nil || status.AppliedHash == "" {
+			status, ok := f.statuses.Get(host)
+			if !ok || status.LastSeenAt == nil || status.AppliedHash == "" {
 				return false
 			}
 		}
@@ -214,41 +213,42 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	// 外部入口（控制机的 11004，明文加签名）：外部身份签名的目标主机是入口主机。
 	entry := configs["control"].Server.ExternalAddr
-	scf, skill := authtest.Identity("scf-collector"), authtest.Identity("moox-skill")
+	scf := authtest.Identity("scf-collector")
 	external := func(credential gatewayauth.Credentials, service, method string) ([]byte, error) {
 		return e2eRawCall(entry, nil, service, method, codec.SerializationTypePB, body, signedE2E(t, credential, "control", service, method, body))
 	}
-	// 正向：目标在别的主机，控制机网关带来源头转到存储机（scf-collector 写行情、moox-skill 读行情）。
+	// 正向：目标在别的主机，控制机网关带来源头转到存储机（scf-collector 写行情）。
 	reached = backendCalls.Load()
 	for _, permitted := range []struct {
 		credential gatewayauth.Credentials
 		method     string
-	}{{scf, "CommitTimeSeriesBatch"}, {scf, "UpsertFields"}, {skill, "ReadTimeSeriesRows"}} {
+	}{{scf, "CommitTimeSeriesBatch"}, {scf, "UpsertFields"}} {
 		echoed, err = external(permitted.credential, primaryPath, permitted.method)
 		require.NoError(t, err, "%s 经控制机入口调存储机的 %s", permitted.credential.Caller, permitted.method)
 		require.Equal(t, body, echoed)
 	}
-	require.Equal(t, reached+3, backendCalls.Load())
+	require.Equal(t, reached+2, backendCalls.Load())
 	// 名单外的方法、不是外部身份的调用方、重放：都在入口被拒，到不了服务。
 	for _, denied := range []struct {
 		credential      gatewayauth.Credentials
 		service, method string
 	}{
-		{skill, primaryPath, "UpsertFields"}, {scf, primaryPath, "ReadTimeSeriesRows"}, {scf, collectPath, "SetSubjectExclusions"},
+		{scf, primaryPath, "ReadTimeSeriesRows"}, {scf, collectPath, "SetSubjectExclusions"},
+		{authtest.Identity("moox-skill"), primaryPath, "ReadTimeSeriesRows"},
 		{collector, primaryPath, "ReadTimeSeriesRows"}, {authtest.Identity("moox-cli"), primaryPath, "ReadTimeSeriesRows"},
 	} {
 		_, err = external(denied.credential, denied.service, denied.method)
 		require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "%s 经外部入口调 %s/%s", denied.credential.Caller, denied.service, denied.method)
 	}
-	replayed := signedE2E(t, skill, "control", primaryPath, "ReadTimeSeriesRows", body)
-	_, err = e2eRawCall(entry, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, replayed)
+	replayed := signedE2E(t, scf, "control", primaryPath, "CommitTimeSeriesBatch", body)
+	_, err = e2eRawCall(entry, nil, primaryPath, "CommitTimeSeriesBatch", codec.SerializationTypePB, body, replayed)
 	require.NoError(t, err)
-	_, err = e2eRawCall(entry, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, replayed)
+	_, err = e2eRawCall(entry, nil, primaryPath, "CommitTimeSeriesBatch", codec.SerializationTypePB, body, replayed)
 	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "同一个签名第二次出现在外部入口")
 	// 外部身份的签名拿到 11003 上直接用不行；存储机没开外部入口，11004 上没有监听。
-	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, skill, "storage", primaryPath, "ReadTimeSeriesRows", body))
+	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "CommitTimeSeriesBatch", codec.SerializationTypePB, body, signedE2E(t, scf, "storage", primaryPath, "CommitTimeSeriesBatch", body))
 	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "外部身份不走 11003")
-	_, err = e2eRawCall("127.0.0.2:11004", nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, skill, "storage", primaryPath, "ReadTimeSeriesRows", body))
+	_, err = e2eRawCall("127.0.0.2:11004", nil, primaryPath, "CommitTimeSeriesBatch", codec.SerializationTypePB, body, signedE2E(t, scf, "storage", primaryPath, "CommitTimeSeriesBatch", body))
 	require.Error(t, err, "存储机不开外部入口")
 	// 伪造来源头（X-Moox-Origin-Caller）：三条检查缺一条就拒。
 	forwarded := func(credential gatewayauth.Credentials, origin, method string) error {
@@ -263,9 +263,10 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		"存储机不是外部入口，它的 host-gateway 带来源头不认":      forwarded(storageGateway, "scf-collector", "CommitTimeSeriesBatch"),
 		"带来源头的不是 host-gateway（控制机上的 collector）": forwarded(collector, "scf-collector", "CommitTimeSeriesBatch"),
 		"入口主机的 host-gateway 冒充 moox-cli":        forwarded(controlGateway, "moox-cli", "ReadTimeSeriesRows"),
+		"入口主机的 host-gateway 冒充已删除的 moox-skill":  forwarded(controlGateway, "moox-skill", "ReadTimeSeriesRows"),
 		"入口主机的 host-gateway 冒充 console":         forwarded(controlGateway, "console", "ReadTimeSeriesRows"),
 		"入口主机的 host-gateway 冒充组件":               forwarded(controlGateway, "collector", "ReadTimeSeriesRows"),
-		"外部身份不在这个方法的名单上":                        forwarded(controlGateway, "moox-skill", "CommitTimeSeriesBatch"),
+		"外部身份不在这个方法的名单上":                        forwarded(controlGateway, "scf-collector", "ReadTimeSeriesRows"),
 		"不带来源头的 host-gateway 调业务方法": func() error {
 			_, err := e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "CommitTimeSeriesBatch", codec.SerializationTypePB, body, signedE2E(t, controlGateway, "storage", primaryPath, "CommitTimeSeriesBatch", body))
 			return err
@@ -281,7 +282,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	// A newly registered host is also a new caller. Its signature must become
 	// accepted through the already running control gateway after the next pull.
-	require.NoError(t, f.declareHost(sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
+	require.NoError(t, f.declareHost(&pb.SyncTopologyHost{HostId: "joining", Address: "127.0.0.3"}))
 	require.NoError(t, f.keys.SetHostPublicKey(ctx, "joining", publicKey("host/joining")))
 	joining := authtest.Component("host-gateway", "joining")
 	joiningBody, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "joining"})
@@ -296,14 +297,14 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	})
 	t.Log("SCENARIO PASS new-caller-next-snapshot-without-restart")
 
-	f.specs[1].DisabledComponents = []string{"storage-primary"}
+	f.specs[1].DisabledComponentIds = []string{"storage-primary"}
 	require.NoError(t, f.declare())
 	waitForE2E(t, 15*time.Second, "disabled deployment explicitly rejected", func() bool {
 		_, err := clients["control"].Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
 		return err != nil && (strings.Contains(err.Error(), "no enabled deployment") || strings.Contains(err.Error(), "not deployed"))
 	})
-	f.specs[0] = sysdeploy.HostSpec{HostID: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, Components: append(slices.Clone(controlSpec.Components), "storage-primary")}
-	f.specs[1] = sysdeploy.HostSpec{HostID: "storage", Enabled: true, Address: "127.0.0.2", Components: []string{"storage-view", "monitor"}}
+	f.specs[0] = &pb.SyncTopologyHost{HostId: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, ComponentIds: append(slices.Clone(controlSpec.GetComponentIds()), "storage-primary")}
+	f.specs[1] = &pb.SyncTopologyHost{HostId: "storage", Enabled: true, Address: "127.0.0.2", ComponentIds: []string{"storage-view", "monitor"}}
 	require.NoError(t, f.declare())
 	// PrimaryStore 换到 control：control 的客户端改成直连本机服务端口，storage 的客户端改成跨主机经 control 网关的 11003。
 	waitForE2E(t, 15*time.Second, "existing clients automatically switch deployment target", func() bool {

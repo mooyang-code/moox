@@ -1,6 +1,7 @@
 package events
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -9,19 +10,36 @@ func TestConsumerEventFilterCoversTheWholeFamily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := ConsumerConfig{Name: "c", Event: ViewDataReady}
-	filter, err := consumerEventFilter(registry, cfg)
+	cfg := ConsumerConfig{Consumer: StrategyViewReadyConsumer.WithName("c")}
+	filters, err := consumerEventFilters(registry, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filter != "moox.event.storage.view.data.ready.v2.>" {
-		t.Fatalf("filter = %q", filter)
+	if !slices.Equal(filters, []string{"moox.event.storage.view.data.ready.v2.>"}) {
+		t.Fatalf("filters = %q", filters)
 	}
-	transport := jetstreamConsumerConfig(cfg, filter)
-	if transport.Stream != "MOOX_STORAGE" || transport.FilterSubject != filter || len(transport.FilterSubjects) != 0 {
+	transport := jetstreamConsumerConfig(cfg, filters)
+	if transport.Stream != "MOOX_STORAGE" || transport.Durable != "c" || transport.FilterSubject != filters[0] || len(transport.FilterSubjects) != 0 {
 		t.Fatalf("transport = %+v", transport)
 	}
-	if _, err := consumerEventFilter(registry, ConsumerConfig{}); err == nil {
-		t.Fatal("没有 Event 的消费者配置应被拒绝")
+	// WithName 传入空串保持原名，不改动原 DurableConsumer。
+	if StrategyViewReadyConsumer.WithName("").Name() != StrategyViewReadyConsumer.Name() {
+		t.Fatalf("empty WithName changed name")
+	}
+	// 多事件消费者使用 FilterSubjects。
+	multiCfg := ConsumerConfig{Consumer: MonitorObservabilityConsumer}
+	multiFilters, err := consumerEventFilters(registry, multiCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiTransport := jetstreamConsumerConfig(multiCfg, multiFilters)
+	if multiTransport.Stream != StreamObservability || multiTransport.FilterSubject != "" || len(multiTransport.FilterSubjects) != 2 {
+		t.Fatalf("multiTransport = %+v", multiTransport)
+	}
+	if _, err := consumerEventFilters(registry, ConsumerConfig{}); err == nil {
+		t.Fatal("缺少 DurableConsumer 的消费者配置应被拒绝")
+	}
+	if _, err := consumerEventFilters(registry, ConsumerConfig{Consumer: declareConsumer("only_name")}); err == nil {
+		t.Fatal("缺少事件的消费者配置应被拒绝")
 	}
 }

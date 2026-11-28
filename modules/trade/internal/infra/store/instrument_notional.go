@@ -1,11 +1,33 @@
 package store
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
+
+// BaseQuantityRules 返回标的基础资产口径的数量步长与最小下单数量（合约自动乘以合约面值）。
+func (r InstrumentRecord) BaseQuantityRules() (step, minimum shared.Decimal, err error) {
+	step, err = shared.ParseDecimal(r.ExchangeQuantityStep)
+	if err != nil || step.Cmp(shared.Zero()) <= 0 {
+		return shared.Decimal{}, shared.Decimal{}, errors.New("标的数量步长不合法")
+	}
+	minimum, err = shared.ParseDecimal(r.MinExchangeQuantity)
+	if err != nil || minimum.IsNegative() {
+		return shared.Decimal{}, shared.Decimal{}, errors.New("标的最小下单数量不合法")
+	}
+	if exchange.RuleFor(r.MarketType).ContractValue {
+		contractValue, parseErr := shared.ParseDecimal(r.ContractValue)
+		if parseErr != nil || contractValue.Cmp(shared.Zero()) <= 0 {
+			return shared.Decimal{}, shared.Decimal{}, errors.New("标的合约面值不合法")
+		}
+		step = step.Mul(contractValue)
+		minimum = minimum.Mul(contractValue)
+	}
+	return step, minimum, nil
+}
 
 // MinNotionalAt 返回在某个价格下的最小下单名义金额（十进制字符串，没有下限返回空串），规则同 exchange.Instrument.MinNotionalAt：
 // 交易所给了最小名义金额（币安）就用它；没有（OKX）用 最小下单量 × 合约面值 × 价格 折算。

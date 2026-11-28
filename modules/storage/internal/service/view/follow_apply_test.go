@@ -11,14 +11,13 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
 func changeRange(subject, freq string, start, end time.Time) *pb.DatasetChangeRange {
-	return &pb.DatasetChangeRange{SubjectId: subject, Freq: freq, StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}
+	return &pb.DatasetChangeRange{SubjectId: subject, Frequency: freq, StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)}
 }
 
 // 回读计划：结束时间加一个频率步长（月按日历）；先按 max_age 截掉过期部分；同一标的相接的范围合并；
@@ -80,12 +79,12 @@ func TestPlanFollowReads(t *testing.T) {
 
 // readyPublisherFake 记下每次发布的就绪事件。
 type readyPublisherFake struct {
-	payloads []*storageeventpb.ViewDataReady
+	payloads []*eventpb.ViewDataReady
 	opts     []events.PublishOptions
 }
 
 func (p *readyPublisherFake) Publish(_ context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
-	p.payloads = append(p.payloads, proto.Clone(payload).(*storageeventpb.ViewDataReady))
+	p.payloads = append(p.payloads, proto.Clone(payload).(*eventpb.ViewDataReady))
 	p.opts = append(p.opts, opts)
 	return &jetstream.PublishAck{Stream: event.Stream(), Sequence: uint64(len(p.payloads))}, nil
 }
@@ -96,18 +95,18 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 	cases := []struct {
 		name    string
 		spec    *viewSpec
-		payload *storageeventpb.DatasetPeriodCompleted
-		want    *storageeventpb.ViewDataReady
+		payload *eventpb.DatasetPeriodCompleted
+		want    *eventpb.ViewDataReady
 		eventID string
 	}{
 		{
 			name: "账本判定",
 			spec: timeSeriesSpec("quant", "kline", "1m"),
-			payload: &storageeventpb.DatasetPeriodCompleted{
+			payload: &eventpb.DatasetPeriodCompleted{
 				DatasetId: "kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "ledger", SnapshotRef: "universe:kline:1m",
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CompletedAt: occurredAt.UnixMilli(),
 			},
-			want: &storageeventpb.ViewDataReady{
+			want: &eventpb.ViewDataReady{
 				CompletionEventId: "marker-ledger", DatasetId: "kline", Status: "degraded",
 				Frequency: "1m", PeriodTime: 1786032000, FailedSubjects: []string{"ETH-USDT"}, ReadyAt: occurredAt.UnixMilli(),
 				UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
@@ -117,12 +116,12 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 		{
 			name: "写入方上报",
 			spec: timeSeriesSpec("quant", "factor-results", "1m"),
-			payload: &storageeventpb.DatasetPeriodCompleted{
+			payload: &eventpb.DatasetPeriodCompleted{
 				DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, CompletedAt: occurredAt.UnixMilli(), CauseEventId: "cause-1",
 				DetailType: "test.Detail.v1", Detail: []byte("detail"),
 			},
-			want: &storageeventpb.ViewDataReady{
+			want: &eventpb.ViewDataReady{
 				CompletionEventId: "marker-producer", DatasetId: "factor-results", Status: "complete",
 				Frequency: "1m", PeriodTime: 1786032000, ReadyAt: occurredAt.UnixMilli(),
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, DetailType: "test.Detail.v1", Detail: []byte("detail"),
@@ -162,7 +161,7 @@ func (p *errPublisher) Publish(context.Context, events.Event, proto.Message, eve
 func TestFollowReadyPublishErrors(t *testing.T) {
 	spec := timeSeriesSpec("quant", "factor-results", "1m")
 	ref := spec.ref()
-	raw, err := proto.Marshal(&storageeventpb.DatasetPeriodCompleted{
+	raw, err := proto.Marshal(&eventpb.DatasetPeriodCompleted{
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 		CauseEventId: "cause-1", CompletedAt: time.Unix(1786032060, 0).UnixMilli(),
 	})

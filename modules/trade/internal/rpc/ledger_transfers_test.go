@@ -9,8 +9,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,7 +51,7 @@ func TestListAccountLedgerMergesLocalTransfers(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l",
-			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
+			Environment: "PRODUCTION", SettlementAsset: "USDT", PauseReason: "x",
 		}); err != nil {
 			return err
 		}

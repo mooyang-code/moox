@@ -25,7 +25,7 @@ func TestConcurrentWritesKeepChangeSequencesContiguous(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < perWriter; i++ {
 				subject := fmt.Sprintf("S%02d-%02d", w, i)
-				if err := upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow(subject, "", base.Add(time.Duration(i)*time.Minute), float64(i))}); err != nil {
+				if err := upsertTestRows(s, ctx, []*pb.Row{tsRow(subject, "", base.Add(time.Duration(i)*time.Minute), float64(i))}); err != nil {
 					t.Errorf("写入 %s: %v", subject, err)
 					return
 				}
@@ -56,7 +56,7 @@ func TestWriteCanceledWhileWaitingForLockIsNotCommitted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		err := upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)})
+		err := upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base, 1)})
 		done <- err
 	}()
 	time.Sleep(100 * time.Millisecond) // 让写入完成预处理并阻塞在 changeMu 上

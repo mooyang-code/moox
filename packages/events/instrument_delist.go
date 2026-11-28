@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -40,7 +39,7 @@ func InstrumentDelistEventID(exchange, market, exchangeSymbol, scope string, del
 }
 
 func validateInstrumentDelistScheduled(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.InstrumentDelistScheduled)
+	payload, ok := value.(*eventpb.InstrumentDelistScheduled)
 	if !ok {
 		return fmt.Errorf("instrument delist scheduled payload has type %T", value)
 	}

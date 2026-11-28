@@ -16,24 +16,14 @@ import (
 )
 
 type canaryReader struct {
-	rows    []*storagepb.TimeSeriesRow
+	rows    []*storagepb.Row
 	request *storagepb.PrimaryReadRowsReq
 	retInfo *storagepb.RetInfo
 }
 
 type tagFilteringCanaryReader struct {
-	rows    []*storagepb.TimeSeriesRow
+	rows    []*storagepb.Row
 	request *storagepb.PrimaryReadRowsReq
-}
-
-func rowFieldValues(row *storagepb.TimeSeriesRow) *storagepb.RowFieldValues {
-	key := row.GetKey()
-	return &storagepb.RowFieldValues{
-		Key: &storagepb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-			SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
-		}}},
-		Fields: row.GetFields(),
-	}
 }
 
 func (r *tagFilteringCanaryReader) ReadRows(_ context.Context, request *storagepb.PrimaryReadRowsReq, _ ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
@@ -42,10 +32,11 @@ func (r *tagFilteringCanaryReader) ReadRows(_ context.Context, request *storagep
 	for _, key := range request.GetKeys() {
 		wanted[key.GetTimeSeries().GetDataTime()+"\n"+key.GetTimeSeries().GetSeriesTag()] = struct{}{}
 	}
-	rows := make([]*storagepb.RowFieldValues, 0, len(r.rows))
+	rows := make([]*storagepb.Row, 0, len(r.rows))
 	for _, row := range r.rows {
-		if _, ok := wanted[row.GetKey().GetDataTime()+"\n"+row.GetKey().GetSeriesTag()]; ok {
-			rows = append(rows, rowFieldValues(row))
+		key := row.GetKey().GetTimeSeries()
+		if _, ok := wanted[key.GetDataTime()+"\n"+key.GetSeriesTag()]; ok {
+			rows = append(rows, row)
 		}
 	}
 	return &storagepb.PrimaryReadRowsRsp{
@@ -64,10 +55,10 @@ func (r *canaryReader) ReadRows(_ context.Context, request *storagepb.PrimaryRea
 	for _, key := range request.GetKeys() {
 		wanted[key.GetTimeSeries().GetDataTime()] = struct{}{}
 	}
-	rows := make([]*storagepb.RowFieldValues, 0, len(r.rows))
+	rows := make([]*storagepb.Row, 0, len(r.rows))
 	for _, row := range r.rows {
-		if _, ok := wanted[row.GetKey().GetDataTime()]; ok {
-			rows = append(rows, rowFieldValues(row))
+		if _, ok := wanted[row.GetKey().GetTimeSeries().GetDataTime()]; ok {
+			rows = append(rows, row)
 		}
 	}
 	return &storagepb.PrimaryReadRowsRsp{
@@ -78,7 +69,7 @@ func (r *canaryReader) ReadRows(_ context.Context, request *storagepb.PrimaryRea
 
 func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &canaryReader{rows: []*storagepb.Row{
 		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
 		marketCanaryRow(now.Add(-time.Minute), 101, 12),
 	}}
@@ -93,7 +84,7 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.Equal(t, "crypto", reader.request.GetKeys()[0].GetSpaceId())
 	require.Equal(t, "market_kline", reader.request.GetKeys()[0].GetDatasetId())
 	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetTimeSeries().GetSubjectId())
-	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
+	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFrequency())
 	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
 	// 只取已收盘的桶（不含 12:00 这根未收盘的），按时间升序。
 	require.Len(t, reader.request.GetKeys(), 24)
@@ -101,7 +92,7 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[23].GetTimeSeries().GetDataTime())
 	require.Equal(t, []string{"close"}, reader.request.GetColumnNames())
 
-	reader.rows = []*storagepb.TimeSeriesRow{
+	reader.rows = []*storagepb.Row{
 		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
 		marketCanaryRow(now.Add(-time.Minute), 110, 12),
 	}
@@ -118,7 +109,7 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 
 func TestMarketCanaryIgnoresVolumeChanges(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &canaryReader{rows: []*storagepb.Row{
 		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
 		marketCanaryRow(now.Add(-time.Minute), 100.1, 5000),
 	}}
@@ -134,7 +125,7 @@ func TestMarketCanaryIgnoresVolumeChanges(t *testing.T) {
 
 func TestMarketCanaryPageDoesNotMixVenuesAtSameTimestamp(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	reader := &tagFilteringCanaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &tagFilteringCanaryReader{rows: []*storagepb.Row{
 		marketCanaryTaggedRow(now.Add(-2*time.Minute), "venue:binance", 100, 10),
 		marketCanaryTaggedRow(now.Add(-2*time.Minute), "venue:okx", 300, 30),
 		marketCanaryTaggedRow(now.Add(-time.Minute), "venue:binance", 101, 12),
@@ -168,7 +159,7 @@ func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
 
 func TestMarketCanaryExactWindowCoversConfiguredFreshness(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &canaryReader{rows: []*storagepb.Row{
 		marketCanaryRow(now.Add(-31*time.Minute), 100, 10),
 		marketCanaryRow(now.Add(-30*time.Minute), 101, 12),
 	}}
@@ -230,7 +221,7 @@ func TestMarketCanaryStorageRejectionRedactsSensitiveDetail(t *testing.T) {
 
 func TestMarketCanaryStockCNChecksLatestClosedBucketsAndOHLCV(t *testing.T) {
 	now := shanghai(2026, 8, 28, 9, 33, 5)
-	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &canaryReader{rows: []*storagepb.Row{
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 30, 0), "sina"),
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 31, 0), "tencent"),
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 32, 0), "eastmoney"),
@@ -242,7 +233,7 @@ func TestMarketCanaryStockCNChecksLatestClosedBucketsAndOHLCV(t *testing.T) {
 	require.Equal(t, []string{"open", "high", "low", "close", "volume", "amount", "source_provider"}, reader.request.GetColumnNames())
 	require.Equal(t, []string{"2026-08-28T01:30:00Z", "2026-08-28T01:31:00Z", "2026-08-28T01:32:00Z"}, requestedTimes(reader))
 	require.Equal(t, "default", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
-	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
+	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFrequency())
 }
 
 func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
@@ -255,7 +246,7 @@ func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
 	require.Nil(t, earlyReader.request)
 
 	now := shanghai(2026, 8, 28, 15, 1, 5)
-	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &canaryReader{rows: []*storagepb.Row{
 		stockCanaryRow(shanghai(2026, 8, 28, 14, 57, 0), "sina"),
 		stockCanaryRow(shanghai(2026, 8, 28, 14, 58, 0), "sina"),
 		stockCanaryRow(shanghai(2026, 8, 28, 14, 59, 0), "sina"),
@@ -312,7 +303,7 @@ func TestMarketCanaryStockCN5mExpectedBars(t *testing.T) {
 	config := stockCanaryConfig("5m")
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rows := make([]*storagepb.TimeSeriesRow, 0, len(tc.want))
+			rows := make([]*storagepb.Row, 0, len(tc.want))
 			want := make([]string, 0, len(tc.want))
 			for _, at := range tc.want {
 				rows = append(rows, stockCanaryRow(at, "eastmoney"))
@@ -328,14 +319,14 @@ func TestMarketCanaryStockCN5mExpectedBars(t *testing.T) {
 			}
 			require.Empty(t, result.Diagnostic)
 			require.Equal(t, want, requestedTimes(reader))
-			require.Equal(t, "5m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
+			require.Equal(t, "5m", reader.request.GetKeys()[0].GetTimeSeries().GetFrequency())
 		})
 	}
 }
 
 func TestMarketCanaryStockCN5mReportsMissingBars(t *testing.T) {
 	now := shanghai(2026, 8, 28, 15, 1, 5)
-	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &canaryReader{rows: []*storagepb.Row{
 		stockCanaryRow(shanghai(2026, 8, 28, 14, 45, 0), "eastmoney"),
 		stockCanaryRow(shanghai(2026, 8, 28, 14, 50, 0), "tdx"),
 	}}
@@ -382,7 +373,7 @@ func TestMarketCanaryStockCNReportsCalendarAndDataReasons(t *testing.T) {
 	require.Equal(t, "calendar_expiring", result.Reason)
 
 	now := shanghai(2026, 8, 28, 9, 33, 5)
-	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &canaryReader{rows: []*storagepb.Row{
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 30, 0), ""),
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 31, 0), "sina"),
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 32, 0), "sina"),
@@ -399,7 +390,7 @@ func TestMarketCanaryStockCNEnforcesConfiguredClosedBarCoverage(t *testing.T) {
 	now := shanghai(2026, 8, 28, 9, 33, 5)
 	config := stockCanaryConfig("1m")
 	config.ClosedBarMinCoverage = 0.99
-	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+	reader := &canaryReader{rows: []*storagepb.Row{
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 31, 0), "sina"),
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 32, 0), "tencent"),
 	}}
@@ -479,8 +470,8 @@ func requestedTimes(reader *canaryReader) []string {
 	return out
 }
 
-func stockCanaryRow(at time.Time, provider string) *storagepb.TimeSeriesRow {
-	return &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "default"}, Fields: []*storagepb.FieldValue{
+func stockCanaryRow(at time.Time, provider string) *storagepb.Row {
+	return &storagepb.Row{Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "default"}}}, Fields: []*storagepb.FieldValue{
 		{FieldId: "open", Value: doubleTyped(10)}, {FieldId: "high", Value: doubleTyped(11)},
 		{FieldId: "low", Value: doubleTyped(9)}, {FieldId: "close", Value: doubleTyped(10.5)},
 		{FieldId: "volume", Value: doubleTyped(100)}, {FieldId: "amount", Value: doubleTyped(1000)},
@@ -492,13 +483,13 @@ func doubleTyped(value float64) *storagepb.TypedValue {
 	return &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}}
 }
 
-func marketCanaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {
+func marketCanaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.Row {
 	return marketCanaryTaggedRow(at, "venue:binance", closeValue, volumeValue)
 }
 
-func marketCanaryTaggedRow(at time.Time, seriesTag string, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {
-	return &storagepb.TimeSeriesRow{
-		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag},
+func marketCanaryTaggedRow(at time.Time, seriesTag string, closeValue, volumeValue float64) *storagepb.Row {
+	return &storagepb.Row{
+		Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag}}},
 		Fields: []*storagepb.FieldValue{
 			{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
 			{FieldId: "volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},

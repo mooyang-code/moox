@@ -57,20 +57,19 @@ describe("factor API contract", () => {
     expect(info.usages[0].status).toBe(member.status);
   });
 
-  it("accepts set-scoped async recalc jobs with a request id", () => {
+  it("accepts set-scoped async recalc jobs with a job id", () => {
     const request: RecalcFactorsReq = {
       task_id: "factor_task_crypto_1m",
-      factor_ids: ["Bias"],
+      members: ["Bias"],
       subjects: ["BTC-USDT"],
-      request_id: "recalc-1",
+      job_id: "recalc-1",
       start_time: "2026-07-26T00:00:00Z",
       end_time: "2026-07-27T00:00:00Z"
     };
     const job: RecalcJob = {
-      job_id: "job-1",
-      request_id: request.request_id,
+      job_id: request.job_id,
       task_id: request.task_id,
-      factor_ids: request.factor_ids,
+      members: request.members,
       subjects: request.subjects,
       start_time: request.start_time,
       end_time: request.end_time,
@@ -80,7 +79,7 @@ describe("factor API contract", () => {
       created_at: request.start_time,
       updated_at: request.start_time
     };
-    const list: ListRecalcJobsReq = { task_id: job.task_id, statuses: ["accepted", "running"] };
+    const list: ListRecalcJobsReq = { task_id: job.task_id, statuses: ["queued", "running"] };
     expect(list.task_id).toBe(request.task_id);
     expect(job.progress_time).toBe(request.start_time);
   });
@@ -123,8 +122,8 @@ describe("factor API contract", () => {
 
 describe("factor pages contract", () => {
   it("keeps the selected set and tab in the URL query", () => {
-    expect(taskHost).toContain("route.query.tab");
-    expect(taskHost).toContain("PageTitleTabs");
+    expect(taskHost).toContain("TitleTabsWorkbench");
+    expect(taskHost).toContain("buildTabQuery");
     expect(factorScope).toContain("route.query.task");
     expect(factorScope).toContain("usePolling");
     expect(computeTasks).toContain("extraPoll");
@@ -143,7 +142,7 @@ describe("factor pages contract", () => {
 
   it("lays out the definitions page as a two-tab host with definitions workbench and output fields tab", () => {
     expect(definitionsHost).toContain("PageTitleTabs");
-    expect(definitionsHost).toContain("route.query.tab");
+    expect(definitionsHost).toContain("useQueryTab");
     expect(definitionsHost).toContain('label: "因子定义"');
     expect(definitionsHost).toContain('label: "产出字段"');
     // 因子定义页签保持搜索、筛选、查询在左，新增在右；下方提示条；左侧分类树，右侧批量栏加表格

@@ -9,7 +9,6 @@
 
 ```bash
 ./scripts/build/build.sh strategy
-./scripts/build/build.sh strategy-cli
 go test -count=1 ./modules/strategy/...
 ```
 

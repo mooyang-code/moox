@@ -45,7 +45,7 @@ export function availableExtraFieldIds(condition: ExtraFieldCondition): Set<stri
   return available;
 }
 
-/** 基础输出字段的 ID 集合：来自 GetDataTypeConfigWithFields 的 base_output_fields（结果数据集能建的列）。 */
+/** 基础输出字段的 ID 集合：来自 GetDataTypeConfigs 的 base_output_fields（结果数据集能建的列）。 */
 export function baseOutputFieldIds(options: ReadonlyArray<OutputFieldOption> | undefined): Set<string> {
   return new Set((options || []).map(option => option.field_id));
 }
@@ -62,7 +62,7 @@ export function resampleOutputFieldOptions(
   return (fallbackBase || []).slice();
 }
 
-/** 输出字段目录里的一项：显示名与分组只在 Collector 的字段规格里登记，由 GetDataTypeConfigWithFields 给出。 */
+/** 输出字段目录里的一项：显示名与分组只在 Collector 的字段规格里登记，由 GetDataTypeConfigs 给出。 */
 export interface OutputFieldEntry {
   field_id: string;
   display_name: string;
@@ -256,7 +256,6 @@ export function buildCollectionTaskParams(input: CollectionTaskInput): Record<st
   const subjectTags = normalizeSubjectTags(input.subjectTags);
   if (subjectTags.length === 0) throw new Error("请选择标的标签");
   return {
-    subject_tags: subjectTags,
     frequency,
     ...(outputFields.length ? { output_fields: outputFields } : {})
   };
@@ -345,7 +344,7 @@ export function parseCollectionTaskInput(
   return {
     dataType,
     frequency: stringValue(params.frequency),
-    subjectTags: task.tag_ids.length ? task.tag_ids.slice() : stringArrayValue(params.subject_tags),
+    subjectTags: task.tag_ids.slice(),
     outputFields: stringArrayValue(params.output_fields)
   };
 }

@@ -50,7 +50,7 @@ func TestRejectedFirstMemberIsNotFundedButOtherMemberStillPlaces(t *testing.T) {
 	f := liveStandardFixture(t)
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"10","min_notional_swap":"5"}`)
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "加成员"); err != nil {
+		if err := tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("加成员")); err != nil {
 			return err
 		}
 		second := store.TradingAccountRecord{
@@ -71,7 +71,7 @@ func TestRejectedFirstMemberIsNotFundedButOtherMemberStillPlaces(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
 	f.order(t, store.OrderRecord{
@@ -85,7 +85,7 @@ func TestRejectedFirstMemberIsNotFundedButOtherMemberStillPlaces(t *testing.T) {
 	fakeB := &wallettest.Exchange{Spot: "100000", Futures: "0", Ask: "50000"}
 	executor := f.executor()
 	executor.Prices = targetPriceStub{price: shared.MustDecimal("50000")}
-	executor.Transfers = NewWalletTransfer(&wallet.Service{Store: f.store, Adapters: wallettest.Adapters{"account-a": fakeA, "account-b": fakeB}})
+	executor.Transfers = &wallet.Service{Store: f.store, Adapters: wallettest.Adapters{"account-a": fakeA, "account-b": fakeB}}
 
 	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)

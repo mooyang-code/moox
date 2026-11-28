@@ -20,7 +20,7 @@ Storage 的端到端验证（View 跟随变更日志）在 `modules/storage/inte
 先核对 `moox.toml` 与已部署计划，等待 Collector 自动创建、更新函数。Timer 函数当前超时 60 秒，计划默认内存 128MB（可配置），部署参数由对账器下发；函数应就绪且 Timer 云侧读回与期望一致。
 
 ```bash
-./bin/moox-cli collector fetch-plan --file ./moox.toml --space-id stockcn
+./bin/moox-cli collector fetch-plan show --file ./moox.toml --space-id stockcn
 ./bin/moox-cli collector function probe-egress --file ./moox.toml --space-id stockcn
 ./bin/moox-cli collector function list --file ./moox.toml --space-id stockcn --drift
 ```
@@ -31,7 +31,7 @@ CLI 使用清单中的操作员 SSH 网关身份。`probe-egress` 经 Collector 
 
 先用少量标的的独立采集任务验收，每期保留：
 
-1. `fetch-plan` 的计划状态、数据集 hash、函数分配和 Timer 读回。
+1. `fetch-plan show` 的计划状态、数据集 hash、函数分配和 Timer 读回。
 2. SCF CLS 的 `market_fetch_batch`、失败项、写入耗时与请求 ID。
 3. Storage Primary 的实际行、周期提交回执，以及 `DatasetPeriodCompleted` 的 complete/degraded 标记；整期零提交不会产生周期标记。
 4. View 中同一标的、频率、`series_tag` 的最新已收盘 `data_time`。

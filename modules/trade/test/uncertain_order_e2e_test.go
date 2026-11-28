@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -99,10 +99,10 @@ func TestCanceledOrderAcceptsLateFillAndDeduplicatesIt(t *testing.T) {
 	require.Equal(t, "0.004", after.FilledQuantity, "snapshot regression must not erase persisted Fill facts")
 }
 
-func consumerSource() consumer.Source {
-	return consumer.Source{
+func consumerSource() fillreduce.Source {
+	return fillreduce.Source{
 		SpaceID: testSpace, TradingAccountID: testAccount,
-		Kind: consumer.OriginPrivateSocket,
+		Kind: fillreduce.OriginPrivateSocket,
 	}
 }
 

@@ -36,13 +36,6 @@ server:
       protocol: trpc
       transport: go-net
       timeout: 10000
-    - name: trpc.moox.admin.Setup
-      ip: 127.0.0.1
-      port: 11110
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 30000
     - name: trpc.moox.admin.ActivityLog
       ip: 127.0.0.1
       port: 11113
@@ -64,7 +57,7 @@ server:
       timeout: 10000
     - name: trpc.moox.admin.certificates.timer
       port: 11307
-      network: "0 0 0 * * *"
+      network: "0 * * * * *"
       protocol: timer
       timeout: 30000
 

@@ -61,7 +61,7 @@ message ListActivityLogsReq {
 message ListActivityLogsRsp {
   common.RetInfo ret_info = 1;
   repeated ActivityLogItem items = 2;
-  common.PageResult page = 3;
+  common.PageResult page_result = 3;
 }
 
 service ActivityLog {

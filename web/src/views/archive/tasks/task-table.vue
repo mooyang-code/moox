@@ -14,7 +14,7 @@
       :scroll="{ x: 1280 }"
     >
       <template #empty>
-        <div class="empty-text">{{ emptyText }}</div>
+        <div class="empty-text">还没有归档任务</div>
       </template>
       <template #columns>
         <a-table-column title="数据集" :width="220">
@@ -24,7 +24,7 @@
           </template>
         </a-table-column>
         <a-table-column title="频率 / 线上保留" :width="130">
-          <template #cell="{ record }">{{ record.freq || "—" }} / {{ formatRetention(record.retention) }}</template>
+          <template #cell="{ record }">{{ record.frequency || "—" }} / {{ formatRetention(record.retention) }}</template>
         </a-table-column>
         <a-table-column title="跟随" :width="250">
           <template #cell="{ record }">
@@ -34,6 +34,15 @@
               :title="toInstantMs(record.last_success_at) !== null ? formatInstant(record.last_success_at, zone) : undefined"
             >
               {{ lastFollowText(record, zone) }}
+            </div>
+            <div v-if="rescanProgressText(record, zone)" class="sub tone-warn" :title="rescanProgressText(record, zone)">
+              {{ rescanProgressText(record, zone) }}
+            </div>
+            <div v-if="record.last_follow_error" class="sub tone-bad ellipsis" :title="record.last_follow_error">
+              最近失败：{{ record.last_follow_error }}
+            </div>
+            <div v-else-if="record.last_follow_message" class="sub ellipsis" :title="record.last_follow_message">
+              {{ record.last_follow_message }}
             </div>
           </template>
         </a-table-column>
@@ -85,7 +94,7 @@
               <a-button
                 size="mini"
                 :loading="busy[record.dataset_id]"
-                title="重读线上保留期内的全部数据；排队中的跟随会被取消、让位给它"
+                title="重读线上保留期内的全部数据，之后由每分钟的本地跟随分段读完"
                 @click="emit('run', record)"
                 >整段重读</a-button
               >
@@ -94,7 +103,7 @@
                 <a-button size="mini">更多</a-button>
                 <template #content>
                   <a-doption value="backfill">补拉区间</a-doption>
-                  <a-doption value="toggle">{{ record.status === "paused" ? "启用" : "停用" }}</a-doption>
+                  <a-doption value="toggle">{{ record.status === "disabled" ? "启用" : "停用" }}</a-doption>
                   <a-doption
                     value="remove"
                     :disabled="(record.partition_count || 0) > 0"
@@ -112,7 +121,6 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
 import type { ArchiveTask } from "@/api/archive";
 import { formatBytes } from "@/api/modules/host-monitor";
 import { formatInstant, toInstantMs } from "@/utils/time-zone";
@@ -123,6 +131,7 @@ import {
   followText,
   kindLabel,
   lastFollowText,
+  rescanProgressText,
   runDurationText,
   runStatusLabel,
   runTone,
@@ -135,13 +144,10 @@ import {
  */
 const DELETE_BLOCKED = "已有分区的任务不能删除，只能停用";
 
-const props = defineProps<{
+defineProps<{
   tasks: ArchiveTask[];
   loaded: boolean;
   error: string;
-  unarchivedCount: number;
-  /** 数据集读到了没有：没读到时空态不能说“没有需要归档的数据集” */
-  datasetsLoaded: boolean;
   names: Record<string, string>;
   zone: string;
   nowMs: number;
@@ -158,14 +164,6 @@ const emit = defineEmits<{
   remove: [task: ArchiveTask];
   retry: [];
 }>();
-
-const emptyText = computed(() =>
-  !props.datasetsLoaded
-    ? "还没有归档任务"
-    : props.unarchivedCount
-      ? "还没有归档任务，从上面的未归档数据集开始建"
-      : "这个空间没有需要归档的时序数据集"
-);
 
 function onMore(action: string, task: ArchiveTask) {
   if (action === "backfill") emit("backfill", task);

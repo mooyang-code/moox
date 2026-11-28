@@ -9,10 +9,9 @@ import (
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -239,14 +238,14 @@ func (s *Service) Place(
 
 func (s *Service) oppositeDust(
 	ctx context.Context,
-	account tradingaccount.Account,
+	account store.TradingAccountRecord,
 	spec orderdomain.OrderSpec,
 	current shared.Decimal,
 ) bool {
 	if s.Store == nil {
 		return false
 	}
-	instrument, err := s.Store.GetInstrumentByIDForAccount(ctx, account.SpaceID, account.ID, spec.InstrumentID)
+	instrument, err := s.Store.GetInstrumentByIDForAccount(ctx, account.SpaceID, account.TradingAccountID, spec.InstrumentID)
 	if err != nil {
 		return false
 	}
@@ -511,7 +510,7 @@ func (s *Service) checkTargetAuthorization(
 	if logicalAccount.ControlMode != "STRATEGY" {
 		return ErrTargetOwnerConflict
 	}
-	if logicalAccount.AutomationState != "ACTIVE" {
+	if !logicalAccount.IsActive() {
 		return ErrAutomationPaused
 	}
 	// 目标单可能在提交之前很久就准备好了：提交前再读一次组合的当前目标行，确认这笔单的目标仍是当前目标、
@@ -604,7 +603,7 @@ func (s *Service) cancel(
 		if accountErr != nil {
 			return orderdomain.Order{}, accountErr
 		}
-		policy := execution.ResolveOrderPolicy(adapter, tradingaccount.Account{ExecutionMode: exchange.ExecutionMode(account.ExecutionMode)})
+		policy := execution.ResolveOrderPolicy(adapter, account)
 		if policy.ConfirmsCancelLocally() &&
 			response.Status == exchange.OrderStatusCanceled {
 			if confirmer, ok := s.Syncer.(CancelConfirmer); ok {
@@ -1184,7 +1183,7 @@ func (s *Service) prepareSubmit(
 	if err := ctx.Err(); err != nil {
 		return nil, aggregate, err
 	}
-	if s.SymbolConfig != nil && validation.Account.ExecutionMode == exchange.ExecutionModeLive &&
+	if s.SymbolConfig != nil && validation.Account.ExecutionMode == string(exchange.ExecutionModeLive) &&
 		exchange.RuleFor(validation.Instrument.MarketType).Leverage && !aggregate.Spec.ReducePositionOnly {
 		if err := s.SymbolConfig.EnsureSymbolConfig(ctx, record.TradingAccountID, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), validation.Leverage); err != nil {
 			if !exchange.IsKind(err, exchange.ErrorRejected) {
@@ -1262,7 +1261,7 @@ func (s *Service) prepareSubmit(
 			unreflected, err := tx.GetUnreflectedReservation(
 				record.SpaceID, record.TradingAccountID, validation.ReservedAsset,
 				validation.Account.MarketsSharingFunds(market),
-				validation.Account.SnapshotSourceTime.UnixMilli(),
+				validation.Account.SnapshotSourceTime,
 			)
 			if err != nil {
 				return err
@@ -1403,11 +1402,11 @@ func (s *Service) deliverSubmit(
 			if err := tx.RaiseObservedFilledQuantity(latest.SpaceID, latest.OrderID, response.FilledQuantity); err != nil {
 				return err
 			}
-			if validation.Account.ExecutionMode == exchange.ExecutionModeLive {
+			if validation.Account.ExecutionMode == string(exchange.ExecutionModeLive) {
 				// 水位只用交易所时间：本地时间比成交晚一个往返，现货余额的更新时间永远追不上。
 				// 回执没有时间时只关闭准入，成交缺口会挡住恢复，成交入账时再按成交时间抬水位。
 				if at := response.UpdatedAt.UnixMilli(); at > 0 {
-					if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, exchange.WalletFor(validation.Account.Exchange, validation.Account.AccountMode, exchange.MarketType(latest.MarketType)), at); err != nil {
+					if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, exchange.WalletFor(exchange.Exchange(validation.Account.Exchange), exchange.AccountMode(validation.Account.AccountMode), exchange.MarketType(latest.MarketType)), at); err != nil {
 						return err
 					}
 				}
@@ -1415,7 +1414,7 @@ func (s *Service) deliverSubmit(
 					send.closeReadiness = true
 					return nil
 				}
-				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), consumer.AwaitingBalanceReason)
+				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), fillreduce.AwaitingBalanceReason)
 			}
 		}
 		return nil

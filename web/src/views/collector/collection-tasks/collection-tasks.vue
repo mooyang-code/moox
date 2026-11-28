@@ -169,7 +169,7 @@
 import { RequestError, reportError } from "@/api/http";
 import { buildResultsQuery } from "@/views/collector/task-results/task-results-model";
 import ArchiveCoverageText from "@/views/archive/shared/archive-coverage-text.vue";
-import { computed, onActivated, onDeactivated, onMounted, reactive, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import { DeleteTask, DisableTask, GetTaskDetail, GetTaskList, UpdateTask } from "@/api/collector";
@@ -381,7 +381,7 @@ async function getTaskList() {
     });
     if (generation !== taskListGeneration) return;
     taskList.value = (response.tasks || []).map(normalizeCollectionTask);
-    pagination.total = Number(response.page?.total ?? taskList.value.length);
+    pagination.total = Number(response.page_result?.total ?? taskList.value.length);
     if (pageActive && onTasksTab()) syncDetailFromQuery();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "获取任务列表失败");
@@ -474,7 +474,7 @@ async function openDetailById(taskId: string) {
   const token = ++detailRequestToken;
   try {
     const response = await GetTaskDetail({ space_id: spaceId, task_id: taskId });
-    if (token !== detailRequestToken || spaceId !== selectedSpaceId.value) return;
+    if (token !== detailRequestToken) return;
     if (response.task) onViewDetails(normalizeCollectionTask(response.task));
   } catch (error) {
     // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；只提示网络错误，业务错误不另提示
@@ -551,29 +551,15 @@ function openJobs(record: CollectionTaskRecord) {
   jobsVisible.value = true;
 }
 
-watch(selectedSpaceId, () => {
-  catalog.resetForSpace();
-  // 筛选、详情属于旧空间：只重置内存状态，URL 由页签容器统一清掉。
-  filters.keyword = "";
-  filters.dataType = "";
-  filters.enabled = "";
-  pagination.current = 1;
-  detailRequestToken += 1;
-  detailVisible.value = false;
-  // 空间初始化完成或切换后重新加载；数据类型配置同样按空间授权，不能只在挂载时请求一次。
-  if (selectedSpaceId.value) void catalog.loadDataTypeConfigs();
-  void getTaskList();
-  void catalog.loadSourceTasks();
-  void catalog.loadTags();
-});
-
 onMounted(() => {
-  // 空间尚未初始化时请求会被 Console 拒绝；初始化完成后由上面的空间监听补载。
   if (!selectedSpaceId.value) return;
   void getTaskList();
   void catalog.loadDataTypeConfigs();
   void catalog.loadSourceTasks();
   void catalog.loadTags();
+});
+onBeforeUnmount(() => {
+  detailRequestToken += 1;
 });
 </script>
 

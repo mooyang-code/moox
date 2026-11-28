@@ -28,7 +28,7 @@ func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 		Ingest:         task.Ingest,
 		TagIds:         append([]string(nil), task.TagIDs...),
 		DefinitionHash: task.DefinitionHash,
-		CollectParams:  structFromJSONString(redactTaskResultDatasetID(task.CollectParams)),
+		CollectParams:  structFromJSONString(task.CollectParams),
 		Enabled:        &enabled,
 		Creator:        task.Creator,
 		CreatedAt:      unixMillis(task.CreateTime),
@@ -37,21 +37,6 @@ func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 		LastError:      task.LastError,
 		Result:         &pb.TaskResult{ResultName: resultName(task.TaskName), DatasetId: task.ResultDatasetID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
 	}
-}
-
-func redactTaskResultDatasetID(raw string) string {
-	values := map[string]any{}
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return raw
-	}
-	for _, key := range []string{"target_dataset_id", "result_dataset_id", "source_dataset_id", "subject_tags"} {
-		delete(values, key)
-	}
-	encoded, err := json.Marshal(values)
-	if err != nil {
-		return raw
-	}
-	return string(encoded)
 }
 
 func fromPBTask(task *pb.CollectionTask) domain.CollectionTask {

@@ -146,6 +146,13 @@ describe("FactorMgr factor-set API", () => {
       kind: "var",
       params: { span: 30 }
     });
+    await addFactorToTask("set-1", "bias", "fixed", undefined, "enabled");
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", {
+      task_id: "set-1",
+      factor_id: "bias",
+      kind: "fixed",
+      status: "enabled"
+    });
   });
 
   it("manages categories, factor category and the submitted params", async () => {
@@ -195,7 +202,7 @@ describe("FactorMgr factor-set API", () => {
     await recalcFactors(req);
     expect(call).toHaveBeenLastCalledWith("RecalcFactors", req);
 
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, job: { job_id: "job-1", status: "canceled" } });
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, job: { job_id: "job-1", status: "cancelled" } });
     await cancelRecalcJob("job-1");
     expect(call).toHaveBeenLastCalledWith("CancelRecalcJob", { job_id: "job-1" });
 

@@ -2,7 +2,6 @@ package fetchplan
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -297,10 +296,7 @@ func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchP
 			return r.fail("store", err)
 		}
 		if worker != nil {
-			var applied StreamApplied
-			if json.Unmarshal([]byte(worker.Applied), &applied) == nil {
-				ok = applied.ID == record.ID
-			}
+			ok = worker.AppliedPlanID == record.ID
 		}
 	}
 	if !ok {
@@ -328,22 +324,22 @@ func (r *PlanReconciler) streamOffline(ctx context.Context) (bool, error) {
 // movesToWorker 判断计划里有数据集正从别的执行端切到推送或本地执行端（collector-stream 是新执行端）。
 func movesToWorker(content *FetchPlanContent) bool {
 	for _, dataset := range content.Datasets {
-		if dataset.changesCopies() && dataset.HandoffFrom() > 0 && dataset.Head().ingestOrSCF() != marketfetch.PlanExecutorSCF {
+		if dataset.changesCopies() && dataset.HandoffFrom() > 0 && dataset.Head().Ingest != marketfetch.PlanExecutorSCF {
 			return true
 		}
 	}
 	return false
 }
 
-// logPlan 写入活动日志：计划开始（每个换了份或符号的数据集一条）与计划生效。写入失败返回错误，下一轮重试；幂等键保证不重复。
-// 只做裁剪或只改函数内容的计划（没有 replace、append、symbols）两条都不写。
+// logPlan 写入活动日志：计划开始（每个换了份的数据集一条）与计划生效。写入失败返回错误，下一轮重试；幂等键保证不重复。
+// 只做裁剪或只改函数内容的计划（没有 replace、append）两条都不写。
 func (r *PlanReconciler) logPlan(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, applied bool) error {
 	if r.Activity == nil {
 		return nil
 	}
 	var keys []string
 	for _, key := range content.sortedDatasetKeys() {
-		if dataset := content.Datasets[key]; dataset.changesCopies() || dataset.Action == PlanActionSymbols {
+		if dataset := content.Datasets[key]; dataset.changesCopies() {
 			keys = append(keys, key)
 		}
 	}
@@ -361,11 +357,8 @@ func (r *PlanReconciler) logPlan(ctx context.Context, record *store.FetchPlanRec
 				"effective_period": effective.Format(time.RFC3339), "added": dataset.Added, "removed": dataset.Removed, "count": dataset.Count,
 			}
 			title := fmt.Sprintf("%s %s：新增 %d 个、移除 %d 个标的，将于 %s 生效", dataset.DatasetID, dataset.Frequency, len(dataset.Added), len(dataset.Removed), effective.Format("2006-01-02 15:04"))
-			switch dataset.Action {
-			case PlanActionReplace:
+			if dataset.Action == PlanActionReplace {
 				title = fmt.Sprintf("%s %s：替换 %s 起的标的（新增 %d 个、移除 %d 个）", dataset.DatasetID, dataset.Frequency, effective.Format("2006-01-02 15:04"), len(dataset.Added), len(dataset.Removed))
-			case PlanActionSymbols:
-				title = fmt.Sprintf("%s %s：交易所符号变更，将于 %s 生效", dataset.DatasetID, dataset.Frequency, effective.Format("2006-01-02 15:04"))
 			}
 			entries = append(entries, ActivityEntry{
 				SpaceID: r.SpaceID, Source: "collector", Category: "collector.subject_change", Level: "info", RefID: refID,

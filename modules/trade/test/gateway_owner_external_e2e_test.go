@@ -15,8 +15,8 @@ import (
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/filter"
@@ -33,7 +33,7 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	logicalSrv := &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}
 	console := &rpc.ConsoleServer{
 		Store:                db,
-		AccountServer:        &rpc.AccountServer{Store: db, Logical: logicalSrv, Accounts: &accountapp.Service{Store: accountapp.Repository{Store: db}}},
+		AccountServer:        &rpc.AccountServer{Store: db, Accounts: &accountapp.Service{Store: db}},
 		LogicalAccountServer: logicalSrv,
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:11200")
@@ -56,15 +56,26 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	var created *tradepb.CreateTradingAccountRsp
 	require.Eventually(t, func() bool {
 		created, err = proxy.CreateTradingAccount(context.Background(), &tradepb.CreateTradingAccountReq{
-			Name: "gateway-paper", LogicalAccountName: "gateway-strategy", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
-			Paper:       &tradepb.PaperConfig{InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
-			ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+			Name: "gateway-paper", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT",
+			Paper: &tradepb.PaperConfig{InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
 		}, client.WithMetaData("X-Space-Id", []byte("space-gateway-e2e")))
 		return err == nil
 	}, 5*time.Second, 20*time.Millisecond)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created)
-	id := created.GetLogicalAccount().GetLogicalAccountId()
+	createdLogical, err := proxy.CreateLogicalAccount(context.Background(), &tradepb.CreateLogicalAccountReq{
+		Name: "gateway-strategy", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
+		SettlementAsset: "USDT", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
+	}, client.WithMetaData("X-Space-Id", []byte("space-gateway-e2e")))
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, createdLogical.GetRetInfo().GetCode(), createdLogical)
+	id := createdLogical.GetLogicalAccount().GetLogicalAccountId()
 	require.NotEmpty(t, id)
+	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-gateway-e2e", LogicalAccountID: id,
+			TradingAccountID: created.GetAccount().GetTradingAccountId(), Enabled: true, Priority: 1,
+		})
+	}))
 	require.NoError(t, os.WriteFile(filepath.Join(coord, "logical-id"), []byte(id), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(coord, "trade-ready"), []byte(listener.Addr().String()), 0600))
 	require.Eventually(t, func() bool { _, e := os.Stat(filepath.Join(coord, "gateway-done")); return e == nil }, 45*time.Second, 25*time.Millisecond)

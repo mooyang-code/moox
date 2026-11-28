@@ -1,4 +1,4 @@
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { ExecutionMode, type LogicalAccount, type TradingAccount } from "@/api/trade/types";
 import { exchangeLabel } from "@/api/trade";
 import { logicalInEnvironment, accountEnvironment, type Environment } from "@/components/trade-confirm/environment";
 
@@ -13,7 +13,7 @@ export function joinedAccountIds(logicals: readonly LogicalAccount[]): Set<strin
 
 /** 已关闭的模拟账户：关闭会停用账户并移出组合，之后不能再启用，也不再出现在执行账户列表里。 */
 export function isClosedPaper(account: Pick<TradingAccount, "execution_mode" | "status">): boolean {
-  return account.execution_mode === 1 && account.status !== "ENABLED";
+  return account.execution_mode === ExecutionMode.PAPER && account.status !== "ENABLED";
 }
 
 /** 执行账户子页签的一行：账户本身，以及它所在的组合（没加入组合时为空）。 */
@@ -64,20 +64,10 @@ export interface ComboRow {
   members: TradingAccount[];
 }
 
-function snapshotNumber(value: string | undefined): number | null {
+function optionalNumber(value: string | undefined): number | null {
   if (value === undefined || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
-}
-
-/** 成员权益之和；没有任何成员给出权益时返回 null。 */
-export function sumEquity(accounts: readonly TradingAccount[]): number | null {
-  let total: number | null = null;
-  for (const account of accounts) {
-    const value = snapshotNumber(account.snapshot?.equity);
-    if (value !== null) total = (total ?? 0) + value;
-  }
-  return total;
 }
 
 export function comboRows(
@@ -86,15 +76,12 @@ export function comboRows(
   env: Environment
 ): ComboRow[] {
   return logicals
-    .filter(logical => logicalInEnvironment(logical, accounts, env))
+    .filter(logical => logicalInEnvironment(logical, env))
     .map(logical => {
       const members: TradingAccount[] = [];
-      const enabled: TradingAccount[] = [];
       for (const member of logical.members || []) {
         const account = accounts.get(member.trading_account_id);
-        if (!account) continue;
-        members.push(account);
-        if (member.enabled) enabled.push(account);
+        if (account) members.push(account);
       }
       const exchanges = [...new Set(members.map(item => exchangeLabel(item.exchange)))];
       return {
@@ -102,8 +89,8 @@ export function comboRows(
         logical,
         env,
         exchangesText: exchanges.length ? exchanges.join("、") : "-",
-        equity: sumEquity(enabled),
-        equityChangePct24h: snapshotNumber(logical.equity_change_pct_24h),
+        equity: optionalNumber(logical.total_equity),
+        equityChangePct24h: optionalNumber(logical.equity_change_pct_24h),
         positionCount: logical.position_count ?? 0,
         settlementAsset: logical.settlement_asset,
         members

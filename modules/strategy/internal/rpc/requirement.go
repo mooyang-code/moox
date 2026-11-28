@@ -16,9 +16,22 @@ import (
 //
 // 读不到成员定义等问题记进 problems，不报错：页面照常展示定义，只是不能据此建实例。
 func (s *Service) taskRequirement(ctx context.Context, strategy dsl.Strategy) *strategypb.StrategyTaskRequirement {
-	requirement := &strategypb.StrategyTaskRequirement{Pool: strategy.IsPool(), TaskKeys: []string{}, Sources: []*strategypb.StrategySourceRequirement{}, Problems: []string{}, ReferenceMarkets: []string{}}
+	requirement := &strategypb.StrategyTaskRequirement{
+		Pool:             strategy.IsPool(),
+		Tuned:            len(strategy.FactorParams) > 0,
+		TaskKeys:         []string{},
+		Sources:          []*strategypb.StrategySourceRequirement{},
+		Problems:         []string{},
+		ReferenceMarkets: []string{},
+	}
+	if strategy.IsPool() {
+		requirement.PoolAllocationMethod = strategy.Pool.Allocation.Method
+		if strategy.Pool.Allocation.Method == dsl.AllocationDrift {
+			requirement.PoolDriftStart = strategy.Pool.Allocation.DriftStart()
+		}
+	}
 	for _, source := range strategy.Sources {
-		requirement.Sources = append(requirement.Sources, &strategypb.StrategySourceRequirement{Name: source.Name, Bar: source.Bar})
+		requirement.Sources = append(requirement.Sources, &strategypb.StrategySourceRequirement{Name: source.Name, Frequency: source.Bar})
 	}
 	var markets []string
 	if strategy.IsPool() {

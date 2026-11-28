@@ -39,7 +39,7 @@ func TestTwoTasksShareOneSource(t *testing.T) {
 	require.Equal(t, "complete", fx.live(t, at(9), []string{"BTC"}).Status)
 	require.InDelta(t, (107+108+109)/3.0, fx.result("BTC", 9).Fields["mean"], 1e-9)
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-		Set: second.Set, Members: second.Members, PeriodTime: at(9), UniverseSubjects: []string{"ETH"}, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+		Set: second.Set, Members: second.Members, PeriodTime: at(9), UniverseSubjects: []string{"ETH"}, CarryColumns: []string{"close", "volume"},
 	})
 	require.NoError(t, err)
 	outcome, err := fx.runner.Run(context.Background(), plan)

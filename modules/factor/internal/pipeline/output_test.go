@@ -146,7 +146,6 @@ func TestReportOnlyInLiveMode(t *testing.T) {
 	require.Empty(t, store.markers)
 	plan.Mode = ModeLive
 	plan.TargetEnd = time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC)
-	plan.TriggerEventID = "event-1"
 	require.NoError(t, runner.Report(context.Background(), plan, Outcome{Status: "complete"}))
 	require.Len(t, store.markers, 1)
 }
@@ -154,7 +153,7 @@ func TestReportOnlyInLiveMode(t *testing.T) {
 func TestNoEnabledFactorsStillReportsComplete(t *testing.T) {
 	store := &outputStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC"}}
+	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), Expected: []string{"BTC"}}
 	outcome, err := runner.Run(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, "complete", outcome.Status)
@@ -166,7 +165,7 @@ func TestNoEnabledFactorsStillReportsComplete(t *testing.T) {
 func TestNoEnabledFactorsWithUpstreamFailureReportsDegraded(t *testing.T) {
 	store := &outputStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC", "ETH"}, UpstreamFailed: []string{"ETH"}}
+	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), Expected: []string{"BTC", "ETH"}, UpstreamFailed: []string{"ETH"}}
 	outcome, err := runner.Run(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, "degraded", outcome.Status)
@@ -209,7 +208,7 @@ func (s *outputStore) ReportComputed(_ context.Context, marker storageio.PeriodM
 	s.markers = append(s.markers, marker)
 	return nil
 }
-func (*outputStore) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (*outputStore) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 
@@ -233,7 +232,7 @@ func TestReportNotifiesSinkAfterMarkerWritten(t *testing.T) {
 	sink := &orderSink{store: store}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{GapSink: sink})
 	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars", SourceDatasetID: "dataset_bars", Freq: "1m"},
-		TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1"}
+		TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC)}
 	require.NoError(t, runner.Report(context.Background(), plan, Outcome{Status: "complete"}))
 	require.Equal(t, []int{1}, sink.markersAtKick, "通知发生在 marker 写完之后")
 

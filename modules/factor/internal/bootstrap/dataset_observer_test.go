@@ -20,8 +20,8 @@ type fakeEngineView struct {
 	unknown bool
 }
 
-func (f *fakeEngineView) Snapshot(context.Context, string) (string, bool, []domain.EngineTask, error) {
-	return "hash", false, f.sets, nil
+func (f *fakeEngineView) Snapshot(context.Context, string) (string, bool, []domain.EngineTask, []string, error) {
+	return "hash", false, f.sets, nil, nil
 }
 
 func (f *fakeEngineView) Engine(context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error) {

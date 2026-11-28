@@ -49,13 +49,12 @@ const (
 
 // setupStartSummary 是 setup start 的结果，跳过的内容写在 Notes 里交给用户。
 type setupStartSummary struct {
-	Status       string                    `json:"status"`
-	SpaceID      string                    `json:"space_id"`
-	TasksEnabled int                       `json:"tasks_enabled"`
-	Plan         string                    `json:"plan"`
-	Strategy     string                    `json:"strategy"`
-	ArchiveTasks *setupArchiveTasksSummary `json:"archive_tasks,omitempty"`
-	Notes        []string                  `json:"notes,omitempty"`
+	Status       string   `json:"status"`
+	SpaceID      string   `json:"space_id"`
+	TasksEnabled int      `json:"tasks_enabled"`
+	Plan         string   `json:"plan"`
+	Strategy     string   `json:"strategy"`
+	Notes        []string `json:"notes,omitempty"`
 }
 
 // setupStartClient 是 setup start 要用的线上操作。
@@ -88,9 +87,9 @@ func newSetupStartCommand(deps setupDeps) *cobra.Command {
 	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略并补齐归档任务",
+		Short: "启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略",
 		Long: "crypto 走 collector-stream 和出口代理，其他空间要配 [scf_plan]。任务绑定的标签还没有标的时先立即同步再启用，Collector 正在同步别的标签时排队，最多等 5 分钟。默认因子任务取自 config/setup/factor-tasks.yaml 里这个空间的任务，" +
-			"只建不改：线上已有且内容不同时逐项列出差异、不写入（自己的任务用 moox-cli factor task apply --file 导入）。部署了数据归档时自动为该空间有限保留期的时序数据集（含新建的因子结果数据集）补建归档任务。重复运行不会重复创建。没有因子机时跳过因子和默认策略。",
+			"只建不改：线上已有且内容不同时逐项列出差异、不写入（自己的任务用 moox-cli factor task apply --file 导入）。重复运行不会重复创建。没有因子机时跳过因子和默认策略。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(spaceID) == "" {
@@ -152,13 +151,6 @@ func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient,
 	summary, err := runSetupStartSteps(ctx, deps, client, snapshot, repository, spaceID, poll)
 	if err != nil {
 		return summary, err
-	}
-	if deps.ensureArchiveTasks != nil {
-		archiveTasks, archiveErr := deps.ensureArchiveTasks(ctx, snapshot, spaceID)
-		if archiveErr != nil {
-			return summary, fmt.Errorf("archive_tasks: %w", archiveErr)
-		}
-		summary.ArchiveTasks = archiveTasks
 	}
 	if counter, ok := client.(historySeedingCounter); ok {
 		if running, countErr := counter.HistorySeeding(ctx, spaceID); countErr == nil && running > 0 {

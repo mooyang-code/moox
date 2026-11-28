@@ -127,7 +127,7 @@ type Backfiller struct {
 
 	Checker *Checker
 	Store   BackfillStore
-	// Routes 给出补采用的来源与参数（取当前任务）；交易所符号按 Checker.Timeline 取分块起点那一段的。
+	// Routes 给出补采用的来源与参数（取当前任务）。
 	Routes    RouteSource
 	Invoker   Invoker
 	Functions func(spaceID string) FunctionProvider
@@ -561,7 +561,7 @@ func (b *Backfiller) settleJob(ctx context.Context, job store.BackfillJob) error
 	if err != nil {
 		return err
 	}
-	if counts[store.BackfillPending] == 0 && counts[store.BackfillRunning] == 0 {
+	if counts[store.BackfillQueued] == 0 && counts[store.BackfillRunning] == 0 {
 		status, message := store.BackfillSucceeded, ""
 		if counts[store.BackfillFailed] > 0 {
 			status, message = store.BackfillFailed, fmt.Sprintf("%d chunks failed", counts[store.BackfillFailed])
@@ -686,8 +686,7 @@ func (b *Backfiller) baseContext() context.Context {
 	return context.Background()
 }
 
-// chunkPlan 返回分块用的计划：来源、拉取参数、输出字段取当前任务（Routes），交易所符号取标的时间线上覆盖分块起点的那一段
-// （改名或换合约的标的，旧区间要用旧符号，否则会取到别的交易对并写入）。
+// chunkPlan 返回分块用的计划：来源、拉取参数、输出字段取当前任务（Routes）。
 func (b *Backfiller) chunkPlan(ctx context.Context, spaceID string, chunk store.BackfillChunk) (*marketfetch.Plan, error) {
 	if b.Routes == nil {
 		return nil, fmt.Errorf("backfill routes are not configured")
@@ -699,15 +698,6 @@ func (b *Backfiller) chunkPlan(ctx context.Context, spaceID string, chunk store.
 	if !found {
 		return nil, fmt.Errorf("数据集 %s（%s）没有对应的采集任务（任务已删除），不能补采", chunk.DatasetID, chunk.Frequency)
 	}
-	timeline, err := b.loadTimeline(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	symbol, ok := timeline.SymbolAt(DatasetKey(chunk.DatasetID, chunk.Frequency), chunk.SubjectID, chunk.From)
-	if !ok {
-		return nil, fmt.Errorf("标的时间线里没有 %s 在 %s 的交易所符号", chunk.SubjectID, chunk.From.UTC().Format(time.RFC3339))
-	}
-	plan.SymbolExceptions = map[string]string{chunk.SubjectID: symbol}
 	return plan, nil
 }
 
@@ -725,10 +715,16 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 		}
 	}
 	instanceID := "backfill|" + chunk.Frequency + "|" + chunk.SubjectID
-	// 补采与实时采集同一套来源分配：A 股按标的分配、失败回落，加密货币固定标签来源。
+	// 补采与实时采集同一套来源分配：按路由分配的市场由路由定源，单一来源固定标签来源。
 	provider, sourceID := plan.Market.RequestSource()
+	limits := plan.Fetch.Limits()
+	if provider == "" && limits != nil {
+		// 按路由装配的市场在补采时沿用数据源配置文件的 request_timeout（例如美股 CNBC 补齐一块需 15 秒），
+		// 不用实时计划里的短超时覆盖它。
+		limits.RequestTimeoutMS = 0
+	}
 	item := domain.CollectionItem{
-		InstanceID: instanceID, SubjectID: chunk.SubjectID, Symbol: plan.ExchangeSymbol(chunk.SubjectID),
+		InstanceID: instanceID, SubjectID: chunk.SubjectID,
 		StartTime: chunk.From.UTC().Format(time.RFC3339), EndTime: chunk.To.UTC().Format(time.RFC3339), BarLimit: bars,
 		Provider: provider, SourceID: sourceID, MarketID: plan.Market.MarketID, InstrumentType: plan.Market.InstrumentType,
 		MarketType: plan.Market.MarketType, DataType: "kline", DatasetID: chunk.DatasetID, Frequency: chunk.Frequency,
@@ -740,7 +736,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 	return marketfetch.Request{
 		BatchID: chunk.ChunkID, BatchKind: domain.BatchKindBackfill, SpaceID: spaceID, MarketID: plan.Market.MarketID, InstrumentType: plan.Market.InstrumentType,
 		DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, Provider: provider, SourceID: sourceID, MarketType: plan.Market.MarketType,
-		NodeID: functionName, FunctionName: functionName, RequestID: chunk.ChunkID, PlanRequest: true, Concurrency: 1, FetchLimits: plan.Fetch.Limits(),
+		NodeID: functionName, FunctionName: functionName, RequestID: chunk.ChunkID, PlanRequest: true, Concurrency: 1, FetchLimits: limits,
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target}, CompleteOnly: force,
 	}, nil
 }

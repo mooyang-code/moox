@@ -36,6 +36,7 @@ func TestEveryFieldSpecHasDisplayNameAndGroup(t *testing.T) {
 	names := map[string]string{}
 	for _, offer := range offers {
 		spec := offer.Spec
+		require.NotEmpty(t, offer.ProviderName, "%s/%s 缺少提供方显示名", offer.MarketID, offer.ProviderID)
 		require.NotEmpty(t, spec.Name, "%s/%s", offer.MarketID, spec.ID)
 		require.True(t, groups[spec.Group], "%s/%s 的分组 %q 不在已定的分组里", offer.MarketID, spec.ID, spec.Group)
 		key := string(offer.MarketID) + "/" + spec.ID

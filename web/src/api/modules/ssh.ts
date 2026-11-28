@@ -1,6 +1,6 @@
 import { call } from "@/api/http";
 import { gatewayURL, gatewayWebSocketURL } from "@/api/gateway";
-import { expireBrowserSession } from "@/api/admin/space-client";
+import { expireBrowserSession } from "@/api/admin/session-expiry";
 import type { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 
 // ========== 类型定义 ==========

@@ -14,43 +14,12 @@ var handWrittenCoverage = map[string]string{
 
 	"trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance": "strategy instance delete",
 
-	"trpc.moox.archive.ArchiveMgr/GetArchiveOverview":    "archive overview",
-	"trpc.moox.archive.ArchiveMgr/ListArchiveTasks":      "archive tasks list",
-	"trpc.moox.archive.ArchiveMgr/PrepareArchiveTask":    "archive tasks prepare",
-	"trpc.moox.archive.ArchiveMgr/CreateArchiveTask":     "archive tasks create",
-	"trpc.moox.archive.ArchiveMgr/UpdateArchiveTask":     "archive tasks update",
-	"trpc.moox.archive.ArchiveMgr/DeleteArchiveTask":     "archive tasks delete",
-	"trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow":     "archive tasks run",
-	"trpc.moox.archive.ArchiveMgr/BackfillArchiveRange":  "archive tasks backfill",
-	"trpc.moox.archive.ArchiveMgr/CancelArchiveRun":      "archive runs cancel",
-	"trpc.moox.archive.ArchiveMgr/ListArchiveRuns":       "archive runs list",
-	"trpc.moox.archive.ArchiveMgr/GetArchiveRun":         "archive runs get",
-	"trpc.moox.archive.ArchiveMgr/ListArchivePartitions": "archive partitions list",
-	"trpc.moox.archive.ArchiveMgr/GetArchivePartition":   "archive partitions get",
-
 	"trpc.moox.collector.CollectMgr/InitPackageUpload":     "collector function upload",
 	"trpc.moox.collector.CollectMgr/CompletePackageUpload": "collector function upload",
 	"trpc.moox.collector.CollectMgr/ListCloudFunctions":    "collector function list",
 
-	"trpc.moox.collector.CollectMgr/CreateTask":             "collector task create",
-	"trpc.moox.collector.CollectMgr/DeleteTask":             "collector task delete",
-	"trpc.moox.collector.CollectMgr/GetCollectorStatus":     "collector status",
-	"trpc.moox.collector.CollectMgr/ListHistorySeeds":       "collector status",
-	"trpc.moox.collector.CollectMgr/CheckKline":             "collector kline check",
-	"trpc.moox.collector.CollectMgr/SubmitKlineBackfill":    "collector kline backfill",
-	"trpc.moox.collector.CollectMgr/GetKlineBackfill":       "collector kline backfill-status",
-	"trpc.moox.collector.CollectMgr/ListKlineBackfills":     "collector kline backfill-status",
-	"trpc.moox.collector.CollectMgr/CancelKlineBackfill":    "collector kline backfill-cancel",
-	"trpc.moox.collector.CollectMgr/RetryKlineBackfill":     "collector kline backfill-retry",
-	"trpc.moox.collector.CollectMgr/ClearSourceAbsences":    "collector kline absences-clear",
-	"trpc.moox.collector.CollectMgr/SubmitKlineResampleJob": "collector resample backfill",
-	"trpc.moox.collector.CollectMgr/GetKlineResampleJob":    "collector resample jobs",
-	"trpc.moox.collector.CollectMgr/ListKlineResampleJobs":  "collector resample jobs",
-	"trpc.moox.collector.CollectMgr/CancelKlineResampleJob": "collector resample cancel",
-	"trpc.moox.collector.CollectMgr/GetIngestMode":          "collector ingest-mode get",
-	"trpc.moox.collector.CollectMgr/SetSubjectExclusions":   "collector subjects exclude",
-	"trpc.moox.collector.CollectMgr/ClearSubjectExclusions": "collector subjects unexclude",
-	"trpc.moox.collector.CollectMgr/ListSubjectExclusions":  "collector subjects exclusions",
+	"trpc.moox.collector.CollectMgr/CreateTask": "collector task create",
+	"trpc.moox.collector.CollectMgr/DeleteTask": "collector task delete",
 
 	"trpc.moox.factor.FactorMgr/PublishUdf":  "udf publish",
 	"trpc.moox.factor.FactorMgr/ListUdfs":    "udf list",
@@ -58,9 +27,7 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.factor.FactorMgr/ActivateUdf": "udf activate",
 
 	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels": "setup init",
-	"trpc.moox.monitor.MonitorMgr/AddNotificationChannel":   "setup init",
 	"trpc.moox.monitor.MonitorMgr/GetAlertMute":             "monitor mute-status",
-	"trpc.moox.monitor.MonitorMgr/GetDoctorContext":         "doctor diagnose",
 
 	"trpc.moox.ops.SecretMgr/ExportSecrets": "setup backup",
 	"trpc.moox.ops.SecretMgr/ImportSecrets": "setup backup",
@@ -69,8 +36,6 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.collector.CollectMgr/GetLifecycle":      "lifecycle status",
 	"trpc.moox.strategy.StrategyMgr/GetLifecycle":      "lifecycle status",
 	"trpc.moox.trade.TradeConsoleService/GetLifecycle": "lifecycle status",
-	"trpc.moox.factor.FactorMgr/GetLifecycle":          "lifecycle status",
-	"trpc.moox.archive.ArchiveMgr/GetLifecycle":        "lifecycle status",
 
 	"trpc.moox.storage.Metadata/AddTagMembers":    "metadata tag members",
 	"trpc.moox.storage.Metadata/RemoveTagMembers": "metadata tag members",
@@ -79,10 +44,10 @@ var handWrittenCoverage = map[string]string{
 
 // cliOnlyCoverage 记录管理台不开放、只有 moox-cli 能调用的方法由哪个手写命令覆盖（接口 → 命令路径）。
 var cliOnlyCoverage = map[string]string{
-	"trpc.moox.admin.Setup/ApplySetup":     "setup init",
-	"trpc.moox.admin.Setup/GetSetupStatus": "setup status",
+	"trpc.moox.ops.SecretMgr/EnsureInitialSecret": "setup init",
 
 	"trpc.moox.monitor.MonitorMgr/ExportNotificationChannels": "setup backup",
+	"trpc.moox.monitor.MonitorMgr/ImportNotificationChannels": "setup install",
 
 	"trpc.moox.collector.CollectMgr/DeleteCloudFunctions": "collector function delete",
 	"trpc.moox.collector.CollectMgr/ProbeFunctionEgress":  "collector function probe-egress",
@@ -91,8 +56,6 @@ var cliOnlyCoverage = map[string]string{
 	"trpc.moox.collector.CollectMgr/ControlLifecycle":      "lifecycle pause",
 	"trpc.moox.strategy.StrategyMgr/ControlLifecycle":      "lifecycle pause",
 	"trpc.moox.trade.TradeConsoleService/ControlLifecycle": "lifecycle pause",
-	"trpc.moox.factor.FactorMgr/ControlLifecycle":          "lifecycle pause",
-	"trpc.moox.archive.ArchiveMgr/ControlLifecycle":        "lifecycle pause",
 	"trpc.moox.factor.EngineControl/GetLifecycle":          "lifecycle status",
 	"trpc.moox.factor.EngineControl/ControlLifecycle":      "lifecycle pause",
 	"trpc.moox.factor.EngineControl/CheckTask":             "factor task status",
@@ -119,7 +82,8 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.Ssh/SftpMkdir":         sshReason,
 	"trpc.moox.ops.Ssh/SftpDelete":        sshReason,
 
-	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "告警渠道的增删改在管理台「资源与运维 › 监控告警」的“消息通知设置”做；初始渠道由 setup init 在 Monitor 还没有渠道时写入一次",
+	"trpc.moox.monitor.MonitorMgr/AddNotificationChannel":    "告警渠道的增删改在管理台「资源与运维 › 监控告警」的“消息通知设置”做（不经命令行传 Webhook 与签名密钥明文）",
+	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "告警渠道的增删改在管理台「资源与运维 › 监控告警」的“消息通知设置”做",
 
 	"trpc.moox.ops.SecretMgr/CreateSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/UpdateSecret":       secretWriteReason,

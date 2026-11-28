@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -47,7 +47,7 @@ func matchFill(o store.OrderRecord) Decision {
 
 func TestMatcherIsolatesPermanentAccountFailureAndRecovers(t *testing.T) {
 	s := matcherFixture(t)
-	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}}
+	m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}}
 	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) {
 		if o.TradingAccountID == "a" {
 			return Decision{}, errors.New("quote unavailable")
@@ -74,7 +74,7 @@ func TestMatcherCandidateDeadlineCoversDecisionAndRefresh(t *testing.T) {
 			s := matcherFixture(t)
 			// The deadline also covers real SQLite reduction. Leave headroom for
 			// race instrumentation; blocked callbacks still prove cancellation.
-			m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}, CandidateTimeout: 2 * time.Second}
+			m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}, CandidateTimeout: 2 * time.Second}
 			m.DecideContext = func(ctx context.Context, o store.OrderRecord) (Decision, error) {
 				if o.TradingAccountID == "a" && stage == "decision" {
 					<-ctx.Done()
@@ -140,7 +140,7 @@ func TestMatcherStopsOnParentCancellationAndSharedStorageFailure(t *testing.T) {
 
 func TestMatcherStaleCandidateDoesNotStopOtherAccount(t *testing.T) {
 	s := matcherFixture(t)
-	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}}
+	m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}}
 	m.DecideContext = func(ctx context.Context, o store.OrderRecord) (Decision, error) {
 		if o.OrderID == "a" {
 			require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
@@ -166,7 +166,7 @@ func TestMatcherBusyAccountDoesNotBlockHealthyAccountOrClearFault(t *testing.T) 
 		}
 		return nil
 	}))
-	m := &Matcher{Store: s, PageSize: 2, Reducer: &consumer.Reducer{Store: s}, CandidateTimeout: time.Second}
+	m := &Matcher{Store: s, PageSize: 2, Reducer: &fillreduce.Reducer{Store: s}, CandidateTimeout: time.Second}
 	accountACalls := 0
 	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) {
 		if o.TradingAccountID == "a" {
@@ -212,7 +212,7 @@ func TestMatcherRecoveryDoesNotEraseNewFailure(t *testing.T) {
 
 func TestMatcherRemovesDisabledAccountDiagnostics(t *testing.T) {
 	s := matcherFixture(t)
-	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}}
+	m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}}
 	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) { return matchFill(o), nil }
 	m.failAccount("a", errors.New("quote failed before closing account"))
 	require.NoError(t, s.DBForTest().Exec("UPDATE t_trading_accounts SET c_status='DISABLED' WHERE c_trading_account_id='a'").Error)
@@ -224,7 +224,7 @@ func TestMatcherRemovesDisabledAccountDiagnostics(t *testing.T) {
 func TestMatcherEnqueuesAfterUnlockAndRefresh(t *testing.T) {
 	s := matcherFixture(t)
 	refreshed := false
-	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}, Refresh: func(context.Context, string) error { refreshed = true; return nil }}
+	m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}, Refresh: func(context.Context, string) error { refreshed = true; return nil }}
 	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) { return matchFill(o), nil }
 	m.Enqueue = func(id string) {
 		require.True(t, refreshed)
@@ -245,7 +245,7 @@ func TestMatcherEnqueuesAfterUnlockAndRefresh(t *testing.T) {
 func TestMatcherWakesTargetAfterFillIsCommitted(t *testing.T) {
 	s := matcherFixture(t)
 	var woken []string
-	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}}
+	m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}}
 	// 只成交账户 a 的订单，b 的订单只清首次撮合标记。
 	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) {
 		if o.TradingAccountID == "a" {
@@ -292,7 +292,7 @@ func TestMatcherReducerConflictIsNotMistakenForStaleCandidate(t *testing.T) {
 
 type failingMatchReducer struct{ err error }
 
-func (r failingMatchReducer) ApplyFillToOrderTx(context.Context, *store.Tx, store.OrderRecord, exchange.Fill, consumer.Source) error {
+func (r failingMatchReducer) ApplyFillToOrderTx(context.Context, *store.Tx, store.OrderRecord, exchange.Fill, fillreduce.Source) error {
 	return r.err
 }
 
@@ -304,7 +304,7 @@ func TestMatcherPagesPastFailedAccountWithoutFixedWindow(t *testing.T) {
 INSERT INTO t_trade_orders (c_space_id,c_order_id,c_trading_account_id,c_client_order_id,c_exchange,c_market_type,c_instrument_id,c_exchange_symbol,c_order_type,c_side,c_quantity,c_reference_price,c_reference_price_at,c_owner_type,c_owner_id,c_state,c_first_match_pending)
 SELECT 's',printf('a%06d',x),'a',printf('a%06d',x),'binance','spot','BTCUSDT','BTCUSDT','MARKET','BUY','1','100',1000,'EXTERNAL','a','OPEN',1 FROM n`, count).Error)
 			calls := 0
-			m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}, PageSize: 17}
+			m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}, PageSize: 17}
 			if count > 1000 {
 				m.PageSize = 1024
 			}

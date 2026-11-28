@@ -377,7 +377,13 @@ func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	var attempts int
 	executor := func(runner *planRecorder) *recalcexec.Executor {
 		return recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2),
-			recalcexec.WithGate(func(string) bool { attempts++; return attempts > 2 }))
+			recalcexec.WithWriteScope(func(context.Context, string) (func(), bool) {
+				attempts++
+				if attempts <= 2 {
+					return nil, false
+				}
+				return func() {}, true
+			}))
 	}
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
@@ -394,13 +400,13 @@ func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	// 一直被挡住：超过等待时间后归还作业、按没有任务处理，不报失败。
 	client2 := &jobClientFake{job: testJob("BTC"), found: true}
 	runner2 := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
-	blocked := recalcexec.NewExecutor(runner2, recalcexec.WithGate(func(string) bool { return false }))
+	blocked := recalcexec.NewExecutor(runner2, recalcexec.WithWriteScope(func(context.Context, string) (func(), bool) { return nil, false }))
 	loop2 := &recalcLoop{client: client2, executor: blocked, source: &sourceFake{}, poll: time.Millisecond, gateWait: 20 * time.Millisecond, gateRetry: 5 * time.Millisecond}
 	found, err = loop2.RunOnce(context.Background())
 	require.NoError(t, err)
 	require.False(t, found)
 	require.Empty(t, runner2.plans)
-	require.Equal(t, []string{jobStatusAccepted}, reportedStatuses(client2), "被门禁挡住只归还作业，不报失败")
+	require.Equal(t, []string{jobStatusQueued}, reportedStatuses(client2), "被门禁挡住只归还作业，不报失败")
 }
 
 // 停止时正在上报的分块因上下文取消而失败：仍按引擎停止处理，归还作业。
@@ -416,7 +422,7 @@ func TestRecalcLoopGivesTheJobBackWhenTheReportFailsOnShutdown(t *testing.T) {
 
 	require.NoError(t, err)
 	statuses := reportedStatuses(client)
-	require.Equal(t, jobStatusAccepted, statuses[len(statuses)-1])
+	require.Equal(t, jobStatusQueued, statuses[len(statuses)-1])
 }
 
 // 引擎停止时在跑的作业被归还：重启后立刻能重新领取，不等作业租约过期。
@@ -432,7 +438,7 @@ func TestRecalcLoopGivesTheJobBackOnShutdown(t *testing.T) {
 	require.NoError(t, err)
 	statuses := reportedStatuses(client)
 	require.NotEmpty(t, statuses)
-	require.Equal(t, jobStatusAccepted, statuses[len(statuses)-1])
+	require.Equal(t, jobStatusQueued, statuses[len(statuses)-1])
 	require.NotContains(t, statuses, jobStatusFailed)
 }
 
@@ -513,13 +519,13 @@ func TestRecalcLoopKeepsOriginalProgressBeforeFirstChunkOnSessionCalendar(t *tes
 
 	// 3. 首块前被门禁挡住归还（giveBack）：原样回传 start。
 	gatedClient := &jobClientFake{job: newStockJob(), found: true}
-	gatedExec := recalcexec.NewExecutor(&planRecorder{}, recalcexec.WithGate(func(string) bool { return false }))
+	gatedExec := recalcexec.NewExecutor(&planRecorder{}, recalcexec.WithWriteScope(func(context.Context, string) (func(), bool) { return nil, false }))
 	gatedLoop := &recalcLoop{client: gatedClient, executor: gatedExec, source: &sourceFake{}, poll: time.Millisecond, gateWait: 10 * time.Millisecond, gateRetry: 2 * time.Millisecond}
 	found, err = gatedLoop.RunOnce(context.Background())
 	require.NoError(t, err)
 	require.False(t, found)
 	require.Len(t, gatedClient.reports, 1)
-	require.Equal(t, jobStatusAccepted, gatedClient.reports[0].status)
+	require.Equal(t, jobStatusQueued, gatedClient.reports[0].status)
 	require.True(t, start.Equal(gatedClient.reports[0].progress))
 
 	// 4. 推进完第一块（2 根 5m 线：09:30、09:35，收盘 09:40）后第二块失败：回传第一块已确认的真实进度 09:40。

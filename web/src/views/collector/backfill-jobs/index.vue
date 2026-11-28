@@ -74,7 +74,7 @@
             <a-table-column title="进度" :width="150">
               <template #cell="{ record }">
                 <a-tooltip
-                  :content="`成功 ${record.succeeded || 0} / 失败 ${record.failed || 0} / 执行中 ${record.running || 0} / 未开始 ${record.pending || 0}`"
+                  :content="`成功 ${record.succeeded || 0} / 失败 ${record.failed || 0} / 执行中 ${record.running || 0} / 未开始 ${record.queued || 0}`"
                 >
                   <div class="segments">
                     <span class="seg-ok" :style="{ width: `${jobSegments(record).succeeded}%` }" />
@@ -148,7 +148,7 @@
           /></a-descriptions-item>
           <a-descriptions-item label="分块" :span="2">
             成功 {{ detail.job.succeeded || 0 }} / 失败 {{ detail.job.failed || 0 }} / 执行中 {{ detail.job.running || 0 }} /
-            未开始 {{ detail.job.pending || 0 }} / 取消 {{ detail.job.canceled || 0 }}
+            未开始 {{ detail.job.queued || 0 }} / 取消 {{ detail.job.cancelled || 0 }}
           </a-descriptions-item>
           <a-descriptions-item v-if="detail.job.last_error" label="错误" :span="2">{{
             detail.job.last_error
@@ -186,7 +186,7 @@
 <script setup lang="ts">
 import InfoTip from "@/components/info-tip/index.vue";
 import TimeText from "@/components/time-text/index.vue";
-import { computed, onActivated, onDeactivated, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
@@ -269,9 +269,9 @@ async function load(options: { silent?: boolean } = {}) {
   if (!options.silent) loading.value = true;
   try {
     const data = await listKlineBackfills(space, filterOf(), page.value, pageSize);
-    if (!request.isLatest() || space !== spaceId.value) return;
+    if (!request.isLatest()) return;
     jobs.value = data.items || [];
-    total.value = Number(data.page?.total || 0);
+    total.value = Number(data.page_result?.total || 0);
   } catch (error) {
     if (request.isLatest() && !options.silent) Message.error(error instanceof Error ? error.message : "补采作业加载失败");
   } finally {
@@ -279,13 +279,15 @@ async function load(options: { silent?: boolean } = {}) {
   }
 }
 
+let unmounted = false;
+
 /** 数据集下拉的展示名来自运行状态（只列正在采集的数据集）。 */
 async function loadDatasets() {
   const space = spaceId.value;
   if (!space) return;
   try {
     const status = await getCollectorStatus(space);
-    if (space !== spaceId.value) return;
+    if (unmounted) return;
     const options = new Map<string, string>();
     for (const item of status.datasets || []) {
       if (item.dataset_id && !options.has(item.dataset_id)) options.set(item.dataset_id, item.dataset_name || item.dataset_id);
@@ -427,23 +429,13 @@ watch(
   { immediate: true }
 );
 
-watch(
-  spaceId,
-  (next, previous) => {
-    guard.invalidate();
-    jobs.value = [];
-    total.value = 0;
-    page.value = 1;
-    detail.value = null;
-    // 真正切换空间时，筛选属于旧空间（数据集清单不同）：重置内存状态，URL 由页签容器统一清掉；首次进入保留 URL 里的筛选
-    if (previous && next !== previous) {
-      segment.value = "attention";
-      datasetId.value = "";
-    }
-    void reload();
-  },
-  { immediate: true }
-);
+onMounted(() => {
+  void reload();
+});
+onBeforeUnmount(() => {
+  unmounted = true;
+  guard.invalidate();
+});
 </script>
 
 <style scoped>

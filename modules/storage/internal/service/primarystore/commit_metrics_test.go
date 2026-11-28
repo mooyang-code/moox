@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -19,12 +18,14 @@ type commitFunc func(context.Context, pebble.DatasetPeriodExpectation, []pebble.
 func commitMetricsService(t *testing.T, commit commitFunc) (*Service, *recordingDatasetMetrics) {
 	t.Helper()
 	metrics := &recordingDatasetMetrics{}
+	datasets := newTestDatasetCache(t,
+		[]*pb.Dataset{{SpaceId: "crypto", DatasetId: "market_kline", Status: "active", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m"}},
+		[]*pb.DatasetColumn{{SpaceId: "crypto", DatasetId: "market_kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}},
+	)
 	svc, err := New(Options{
 		Store:          &hookStore{Store: openTestStore(t), commit: commit},
 		DatasetMetrics: metrics,
-		Snapshot: func() metadata.RequestSnapshot {
-			return collectorPeriodMetadataSnapshot("crypto", "market_kline", "1m")
-		},
+		Datasets:       datasets,
 	})
 	require.NoError(t, err)
 	return svc, metrics
@@ -33,9 +34,9 @@ func commitMetricsService(t *testing.T, commit commitFunc) (*Service, *recording
 func commitRequest(times ...time.Time) *pb.PrimaryCommitTimeSeriesBatchReq {
 	items := make([]*pb.TimeSeriesBatchRow, 0, len(times))
 	for i, at := range times {
-		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: uint32(i), Row: &pb.RowFieldUpsert{
+		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: uint32(i), Row: &pb.Row{
 			Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "market_kline", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: "BTC-USDT", Freq: "1m", DataTime: at.UTC().Format(time.RFC3339Nano),
+				SubjectId: "BTC-USDT", Frequency: "1m", DataTime: at.UTC().Format(time.RFC3339Nano),
 			}}},
 			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 		}})

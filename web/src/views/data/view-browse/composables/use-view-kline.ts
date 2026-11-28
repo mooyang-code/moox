@@ -1,7 +1,8 @@
 import { computed, ref, type Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { readAllPages } from "@/api/read-all-pages";
 import { queryTimeSeriesRows } from "@/api/storage/view";
-import type { FilterSpec, TimeRange, TimeSeriesKey, TimeSeriesRow } from "@/api/storage/types";
+import type { FilterSpec, Row, RowKey, TimeRange } from "@/api/storage/types";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
   buildKlineChartRecords,
@@ -18,7 +19,7 @@ import {
   type ViewFilterState
 } from "../view-browse-utils";
 
-export type ViewBrowseTableRow = BrowseTableRow & { freq?: string; rawKey?: TimeSeriesKey };
+export type ViewBrowseTableRow = BrowseTableRow & { freq?: string; rawKey?: RowKey };
 
 export const KLINE_PAGE_SIZE = 25;
 
@@ -68,10 +69,10 @@ export function useViewKline(options: UseViewKlineOptions) {
   }
 
   /** 行操作“K 线”：直接用这一行的标的和序列标签打开图表。 */
-  async function openRowKline(record: { rawKey?: { subject_id?: string; series_tag?: string } }) {
-    const subjectId = record.rawKey?.subject_id;
+  async function openRowKline(record: { rawKey?: { time_series?: { subject_id?: string; series_tag?: string } } }) {
+    const subjectId = record.rawKey?.time_series?.subject_id;
     if (!subjectId) return;
-    const seriesTag = record.rawKey?.series_tag ?? "";
+    const seriesTag = record.rawKey?.time_series?.series_tag ?? "";
     klineRowFilter.value = { subjectId, seriesTag };
     klineSubjectId.value = subjectId;
     const ok = await loadKlineRecords(subjectId, seriesTag, rowKlineFilter(subjectId, seriesTag));
@@ -163,9 +164,10 @@ export function useViewKline(options: UseViewKlineOptions) {
   ): Promise<ViewBrowseTableRow[]> {
     const space_id = options.spaceId();
     const timeRange = options.previewRange();
-    const rows: TimeSeriesRow[] = [];
     const limit = query.limit;
-    for (let pageNo = 1; rows.length < limit; pageNo += 1) {
+    let read = 0;
+    const maxPages = Math.max(50, Math.ceil(limit / KLINE_PAGE_SIZE) * 2);
+    const rows = await readAllPages<Row>(async pageNo => {
       const rsp = await queryTimeSeriesRows({
         space_id,
         dataset_id: datasetId,
@@ -177,15 +179,15 @@ export function useViewKline(options: UseViewKlineOptions) {
         page: { page: pageNo, size: KLINE_PAGE_SIZE },
         total_mode: "NONE"
       });
-      if (!isCurrent()) break; // 已失效：不再翻页
+      if (!isCurrent()) return { items: [], hasMore: false }; // 已失效：不再翻页
       const pageRows = rsp.rows || [];
-      rows.push(...pageRows);
-      if (!rsp.page_result?.has_more || pageRows.length === 0) break;
-    }
+      read += pageRows.length;
+      return { items: pageRows, hasMore: Boolean(rsp.page_result?.has_more) && read < limit };
+    }, maxPages);
     return timeSeriesRowsToTableRows(rows).map((row, index) => ({
       ...row,
-      freq: rows[index]?.key?.freq || "-",
-      seriesTag: rows[index]?.key?.series_tag || "",
+      freq: rows[index]?.key?.time_series?.frequency || "-",
+      seriesTag: rows[index]?.key?.time_series?.series_tag || "",
       rawKey: rows[index]?.key
     }));
   }

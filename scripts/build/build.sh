@@ -134,8 +134,8 @@ case "${TARGET_MODULE}" in
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
     build_go modules/factor ./cmd/engine moox-factor-engine 0
     build_go modules/archive ./cmd/mgr moox-archive-mgr 0
+    build_go modules/archive ./cmd/worker moox-archive-worker 0
     build_go modules/strategy ./cmd/server moox-strategy 0
-    build_go modules/strategy ./cmd/cli moox-strategy-cli 0
     build_go modules/trade ./cmd/server moox-trade 0
     build_go modules/monitor ./cmd/server moox-monitor 0
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
@@ -191,10 +191,6 @@ case "${TARGET_MODULE}" in
     ;;
   strategy)
     build_go modules/strategy ./cmd/server moox-strategy 0
-    build_go modules/strategy ./cmd/cli moox-strategy-cli 0
-    ;;
-  strategy-cli)
-    build_go modules/strategy ./cmd/cli moox-strategy-cli 0
     ;;
   trade)
     build_go modules/trade ./cmd/server moox-trade 0

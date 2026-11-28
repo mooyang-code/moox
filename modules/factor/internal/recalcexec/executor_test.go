@@ -351,7 +351,7 @@ func (s *recalcPipelineStore) ReportComputed(context.Context, storageio.PeriodMa
 	return nil
 }
 
-func (*recalcPipelineStore) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (*recalcPipelineStore) ComputedExists(context.Context, string, string, int64) (bool, error) {
 	return false, nil
 }
 
@@ -449,7 +449,12 @@ func TestExecutorGateStopsWritesBeforeRunner(t *testing.T) {
 	runner := &recordingRunner{}
 	open := false
 	executor := NewExecutor(runner, WithChunkPeriods(2),
-		WithGate(func(taskID string) bool { return open && taskID == "ftask_bars_1m" }))
+		WithWriteScope(func(_ context.Context, taskID string) (func(), bool) {
+			if !open || taskID != "ftask_bars_1m" {
+				return nil, false
+			}
+			return func() {}, true
+		}))
 	var records []progressRecord
 
 	err := executor.Run(context.Background(), testWindow(4), fixedSource(executorSelection("BTC")), recordProgress(&records, 0))

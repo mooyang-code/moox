@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,11 +15,14 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
+	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 )
 
@@ -79,35 +80,41 @@ func runBootstrapCommand(args []string, stdout, stderr io.Writer) error {
 	if opts.dbPath == opts.masterFile || opts.dbPath == opts.topologyFile || opts.masterFile == opts.topologyFile {
 		return errors.New("database, encryption key and topology input must use different files")
 	}
-	topology, err := readBootstrapTopology(opts.topologyFile)
+	topology, controlHostID, err := readBootstrapTopology(opts.topologyFile)
 	if err != nil {
 		return err
 	}
-	return bootstrapAdmin(context.Background(), opts, topology, stdout)
+	return bootstrapAdmin(context.Background(), opts, topology, controlHostID, stdout)
 }
 
-func readBootstrapTopology(path string) (hostbundle.Topology, error) {
+func readBootstrapTopology(path string) (*pb.SyncTopologyReq, string, error) {
 	raw, err := privatefiles.Read(path, 1<<20)
 	if err != nil {
-		return hostbundle.Topology{}, fmt.Errorf("read normalized topology: %w", err)
+		return nil, "", fmt.Errorf("读取拓扑文件失败: %w", err)
 	}
-	var topology hostbundle.Topology
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&topology) != nil {
-		return topology, errors.New("invalid normalized topology JSON or unknown fields")
+	topology := &pb.SyncTopologyReq{}
+	if (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(raw, topology) != nil {
+		return nil, "", errors.New("拓扑 JSON 格式无效或包含未知字段")
 	}
-	var trailing any
-	if decoder.Decode(&trailing) != io.EOF || topology.Version != 1 || !servicecatalog.ValidHostID(topology.ControlHostID) || len(topology.Hosts) == 0 || len(topology.Hosts) > 1024 {
-		return topology, errors.New("normalized topology requires version 1, canonical control_host_id and 1..1024 hosts in exactly one JSON document")
+	if len(topology.GetHosts()) == 0 || len(topology.GetHosts()) > 1024 {
+		return nil, "", errors.New("拓扑必须包含 1..1024 台主机")
 	}
-	if !slices.ContainsFunc(topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == topology.ControlHostID }) {
-		return topology, errors.New("normalized topology must include the control host")
+	controlHostID := ""
+	for _, host := range topology.GetHosts() {
+		if slices.Contains(host.GetComponentIds(), "admin") {
+			if controlHostID != "" {
+				return nil, "", errors.New("拓扑只能有一台部署 admin 的控制主机")
+			}
+			controlHostID = host.GetHostId()
+		}
 	}
-	return topology, nil
+	if !servicecatalog.ValidHostID(controlHostID) {
+		return nil, "", errors.New("拓扑必须包含一台规范命名的 admin 控制主机")
+	}
+	return topology, controlHostID, nil
 }
 
-func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbundle.Topology, stdout io.Writer) error {
+func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology *pb.SyncTopologyReq, controlHostID string, stdout io.Writer) error {
 	// Serialize the entire operation across processes, before opening SQLite or
 	// creating a master key. The persistent file itself is never a stale lock.
 	masterRoot, err := privatefiles.OpenRoot(filepath.Dir(opts.masterFile))
@@ -128,7 +135,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		return err
 	}
 	defer closeAdminCLIDB(db)
-	if err := db.Transaction(func(tx *gorm.DB) error { return tx.Exec(adminschema.AdminSQL()).Error }); err != nil {
+	if err := sqlitedb.EnsureSchemaGORM(db, opts.dbPath, "admin", adminschema.AdminSQL(), nil); err != nil {
 		return fmt.Errorf("apply Admin schema: %w", err)
 	}
 	var caInfo hostbundle.CAInfo
@@ -138,8 +145,13 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 			ca.Close()
 		}
 	}()
-	control := topology.Hosts[slices.IndexFunc(topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == topology.ControlHostID })]
-	material := hostBundleMaterial{host: control, control: control}
+	control := topology.GetHosts()[slices.IndexFunc(topology.GetHosts(), func(h *pb.SyncTopologyHost) bool { return h.GetHostId() == controlHostID })]
+	reachability, _ := servicecatalog.ParseReachability(control.GetReachability())
+	controlBundle := bundleHost{
+		hostID: control.GetHostId(), address: control.GetAddress(), privateAddress: control.GetPrivateAddress(),
+		reachability: reachability, components: control.GetComponentIds(),
+	}
+	material := hostBundleMaterial{host: controlBundle, control: controlBundle}
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 主机的 SSH 凭据加密要用主密钥：同步校验通过、要写凭据时才取得（没有则创建），拓扑非法时不会创建它。
 		var master string
@@ -151,17 +163,13 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 			master = value
 			return value, err
 		}
-		dao, err := sysdeploy.NewTopologyDAO(tx, topology.ControlHostID)
+		dao, err := sysdeploy.NewTopologyDAO(tx, controlHostID)
 		if err != nil {
 			return err
 		}
 		dao.WithEncryptionKeyFunc(masterKey)
-		specs := make([]sysdeploy.HostSpec, 0, len(topology.Hosts))
-		for _, h := range topology.Hosts {
-			specs = append(specs, hostSpec(h))
-		}
-		// 按 moox.toml 整份覆盖主机与部署（含启停状态）；同时先占住 SQLite 的写锁再校验整份拓扑。
-		if _, err := dao.ReplaceTopology(ctx, specs); err != nil {
+		// 按 moox.toml 整份覆盖主机与部署（含启停状态）；与在线 SyncTopology 共用同一套消息和写库函数。
+		if _, err := dao.ReplaceTopology(ctx, topology); err != nil {
 			return err
 		}
 		if _, err := masterKey(); err != nil {
@@ -184,11 +192,11 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		if material.operatorPublic, err = store.EnsureIdentity(ctx, servicecatalog.OperatorMooxCLI, opts.operatorPublicKey); err != nil {
 			return err
 		}
-		if material.keys, err = ensureSigningKeys(ctx, store, control, opts.current, false); err != nil {
+		if material.keys, err = ensureSigningKeys(ctx, store, controlBundle, opts.current, false); err != nil {
 			return err
 		}
 		// 拓扑要合法、能算出控制机的路由，公钥要能拼出快照，否则不提交。
-		if _, err := dao.Compile(ctx, control.HostID); err != nil {
+		if _, err := dao.Compile(ctx, controlHostID); err != nil {
 			return err
 		}
 		if _, err := dao.Snapshot(ctx); err != nil {
@@ -211,22 +219,6 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		return err
 	}
 	return writeJSON(stdout, result)
-}
-
-// hostSpec 把离线拓扑里的主机转换成部署同步的输入；SSH 凭据随主机一起写入。
-func hostSpec(h hostbundle.Host) sysdeploy.HostSpec {
-	spec := sysdeploy.HostSpec{HostID: h.HostID, Enabled: !h.Disabled, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability,
-		ExternalEntry: h.ExternalEntry, Description: h.Description, Components: h.Components, DisabledComponents: h.DisabledComponents}
-	if h.SSH != nil && h.SSH.Port != 0 {
-		ssh := &sysdeploy.SSHSpec{Port: h.SSH.Port, User: h.SSH.User}
-		if h.SSH.AuthType == "private_key" {
-			ssh.PrivateKey, ssh.Passphrase = h.SSH.Secret, h.SSH.Passphrase
-		} else {
-			ssh.Password = h.SSH.Secret
-		}
-		spec.SSH = ssh
-	}
-	return spec
 }
 
 func bootstrapMaster(tx *gorm.DB, root *os.Root, name string) (string, error) {

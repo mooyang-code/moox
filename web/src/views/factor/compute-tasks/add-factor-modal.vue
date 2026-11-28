@@ -97,11 +97,11 @@
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, h, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { addFactorToTask, listFactorCategories, listFactors, setFactorMemberStatus } from "@/api/factor";
+import { addFactorToTask, listFactorCategories, listFactors } from "@/api/factor";
+import { readAllPages } from "@/api/read-all-pages";
 import type { FactorCategory, FactorDef, FactorParamDecl, FactorTaskInfo, MemberKind } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
-import { selectedSpaceGeneration } from "@/api/admin/space-header";
-import { useSpaceStore } from "@/store/modules/space";
+import { factorTaskRecalcHref } from "@/router/links";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { precheckAddFactor, type PrecheckMember, type PrecheckResult } from "./add-factor-precheck";
 
@@ -201,26 +201,18 @@ function setParam(factorId: string, name: string, value: number | undefined) {
   else draft.params[name] = value;
 }
 
-async function fetchAllFactors() {
-  const items: FactorDef[] = [];
-  for (let page = 1; ; page += 1) {
+function fetchAllFactors() {
+  return readAllPages(async page => {
     const rsp = await listFactors({ page: { page, size: PAGE_SIZE } });
-    const batch = rsp.factors || [];
-    items.push(...batch.map(item => item.factor));
-    if (!rsp.page_result?.has_more || !batch.length) break;
-  }
-  return items;
+    return { items: (rsp.factors || []).map(item => item.factor), hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }
 
-async function fetchSourceColumns(spaceId: string, datasetId: string) {
-  const names: string[] = [];
-  for (let page = 1; ; page += 1) {
+function fetchSourceColumns(spaceId: string, datasetId: string) {
+  return readAllPages(async page => {
     const rsp = await listDatasetColumns({ space_id: spaceId, dataset_id: datasetId, page: { page, size: PAGE_SIZE } });
-    const batch = rsp.columns || [];
-    names.push(...batch.map(column => column.column_name));
-    if (!rsp.page_result?.has_more || !batch.length) break;
-  }
-  return names;
+    return { items: (rsp.columns || []).map(column => column.column_name), hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }
 
 async function prepare() {
@@ -276,22 +268,14 @@ function noteClass(row: CandidateRow) {
 }
 
 /** 逐个提交；预检只是提示，失败按行展示后端给出的原因。 */
-const spaceStore = useSpaceStore();
-
 async function submit() {
   const { task_id: taskId } = props.info.factor_task;
-  // 批量添加固定发起空间与代次：每一项请求都按当前空间头发出，空间切换后继续提交会把旧任务的因子写到新空间
-  const submitSpaceId = spaceStore.selectedSpaceId;
-  const submitGeneration = selectedSpaceGeneration();
   const submission = addScope.begin();
-  const stale = () =>
-    !submission.isCurrent() || spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
+  const stale = () => !submission.isCurrent();
   submitting.value = true;
   errors.value = {};
   const done: string[] = [];
   const enable = enableAfterAdd.value && taskEnabled.value;
-  // 已添加但没能启用的成员键（失败原因）：成员已经在任务里，只是还停用着。
-  const enableFailures: string[] = [];
   try {
     for (const factorId of [...selected.value]) {
       if (stale()) break;
@@ -304,14 +288,7 @@ async function submit() {
           ? Object.fromEntries(decls.map(decl => [decl.name, draft?.params[decl.name] ?? decl.default_value]))
           : undefined;
         const kind = draft?.kind ?? "fixed";
-        const member = await addFactorToTask(taskId, factorId, kind, params);
-        if (enable && !stale()) {
-          try {
-            await setFactorMemberStatus(taskId, member.member_key, "enabled");
-          } catch (error) {
-            enableFailures.push(`${member.member_key}（${error instanceof Error ? error.message : "启用失败"}）`);
-          }
-        }
+        const member = await addFactorToTask(taskId, factorId, kind, params, enable ? "enabled" : undefined);
         addedMembers.value = [
           ...addedMembers.value,
           {
@@ -341,14 +318,9 @@ async function submit() {
     for (const id of done) delete drafts.value[id];
     emit("added", done);
   }
-  if (enableFailures.length) {
-    Message.warning({ content: `已添加，但这些没能启用，请在成员列表里再启用：${enableFailures.join("、")}`, duration: 8000 });
-  }
   if (!Object.keys(errors.value).length) {
     if (!enable) Message.success(`已添加 ${done.length} 个因子（已停用），在成员列表里启用后才会计算`);
-    else if (done.length > enableFailures.length) {
-      Message.success({ content: () => addedAndEnabledText(done.length - enableFailures.length, taskId), duration: 6000 });
-    }
+    else Message.success({ content: () => addedAndEnabledText(done.length, taskId), duration: 6000 });
     visible.value = false;
   } else {
     Message.warning(`${done.length} 个已添加，${Object.keys(errors.value).length} 个失败，原因见对应行`);
@@ -357,7 +329,7 @@ async function submit() {
 
 /** 启用不自动补算历史：提示里带上补算页的链接。 */
 function addedAndEnabledText(count: number, taskId: string) {
-  const href = `#/factor/tasks?tab=recalc&task=${encodeURIComponent(taskId)}`;
+  const href = factorTaskRecalcHref(taskId);
   return h("span", [`已添加并启用 ${count} 个因子。历史数据需要补算：`, h("a", { href }, "去补算")]);
 }
 

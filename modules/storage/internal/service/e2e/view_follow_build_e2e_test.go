@@ -63,7 +63,7 @@ func TestFollowSkipsReadyDuringInitialBuild(t *testing.T) {
 		t.Fatal("30 秒内没有开始建索引")
 	}
 	writePeriod := func(period time.Time, round int) {
-		rows := make([]*pb.RowFieldUpsert, len(factor.subjects))
+		rows := make([]*pb.Row, len(factor.subjects))
 		for i, subject := range factor.subjects {
 			rows[i] = readyBenchRow(factor, subject, period, round)
 		}
@@ -97,7 +97,7 @@ func TestFollowRebuildsAfterGap(t *testing.T) {
 	env := newFollowEnv(t, []readyBenchDataset{kline}, followEnvOptions{})
 	env.WaitBuilt(t, ctx, kline.datasetID)
 	write := func(period time.Time, round int) {
-		rows := make([]*pb.RowFieldUpsert, len(kline.subjects))
+		rows := make([]*pb.Row, len(kline.subjects))
 		for i, subject := range kline.subjects {
 			rows[i] = readyBenchRow(kline, subject, period, round)
 		}
@@ -151,7 +151,7 @@ func TestIdleViewSurvivesChangeLogCleanup(t *testing.T) {
 	}
 	for i := 0; i < 5; i++ {
 		row := readyBenchRow(busy, busy.subjects[0], readyBenchBase.Add(time.Duration(i)*readyBenchStep), i)
-		writeRowsInBatches(t, ctx, env, busy, []*pb.RowFieldUpsert{row})
+		writeRowsInBatches(t, ctx, env, busy, []*pb.Row{row})
 	}
 	head, err := env.store.ChangeCursor()
 	if err != nil {
@@ -172,7 +172,7 @@ func TestIdleViewSurvivesChangeLogCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := readyBenchRow(idle, idle.subjects[0], readyBenchBase, 0)
-	writeRowsInBatches(t, ctx, env, idle, []*pb.RowFieldUpsert{row})
+	writeRowsInBatches(t, ctx, env, idle, []*pb.Row{row})
 	env.WaitApplied(t, ctx, idle.datasetID)
 	requireViewRows(t, ctx, env, idle.datasetID, readyBenchBase, readyBenchBase.Add(readyBenchStep), 1)
 	if after := env.WaitBuilt(t, ctx, idle.datasetID); after.GetGeneration() != before.GetGeneration() {
@@ -255,7 +255,7 @@ func newGapEnv(t *testing.T) (*followEnv, *controlledRangeReader, readyBenchData
 
 func writeGapPeriod(t *testing.T, env *followEnv, dataset readyBenchDataset, period time.Time, round int) {
 	t.Helper()
-	rows := make([]*pb.RowFieldUpsert, len(dataset.subjects))
+	rows := make([]*pb.Row, len(dataset.subjects))
 	for i, subject := range dataset.subjects {
 		rows[i] = readyBenchRow(dataset, subject, period, round)
 	}
@@ -374,7 +374,7 @@ func TestRecreatedDatasetDoesNotReuseOldIndex(t *testing.T) {
 	env := newFollowEnv(t, []readyBenchDataset{kline}, followEnvOptions{})
 	env.WaitBuilt(t, ctx, kline.datasetID)
 	write := func(period time.Time, round int) {
-		rows := make([]*pb.RowFieldUpsert, len(kline.subjects))
+		rows := make([]*pb.Row, len(kline.subjects))
 		for i, subject := range kline.subjects {
 			rows[i] = readyBenchRow(kline, subject, period, round)
 		}

@@ -26,7 +26,6 @@
         :env="env"
         :rows="execution"
         :logicals="logicals"
-        :accounts="accounts"
         :loading="loading"
         :focus-account-id="focusAccountId"
         @changed="load"
@@ -74,14 +73,20 @@
               <template v-else>
                 <span class="tx-muted">无</span>
                 <div class="tx-muted">
-                  {{ record.logical.control_mode === 2 ? "自主下单" : strategiesFailed ? "策略读取失败" : "尚未绑定策略" }}
+                  {{
+                    record.logical.control_mode === ControlMode.MANUAL
+                      ? "自主下单"
+                      : strategiesFailed
+                        ? "策略读取失败"
+                        : "尚未绑定策略"
+                  }}
                 </div>
               </template>
             </template>
           </a-table-column>
           <a-table-column title="自动执行" :width="130">
             <template #cell="{ record }">
-              <span v-if="record.logical.control_mode !== 1" class="tx-muted">不适用</span>
+              <span v-if="record.logical.control_mode !== ControlMode.STRATEGY" class="tx-muted">不适用</span>
               <a-tooltip
                 v-else-if="record.logical.automation_state !== 'ACTIVE'"
                 :content="record.logical.pause_reason || '已暂停'"
@@ -95,7 +100,7 @@
             <template #cell="{ record }">
               <span class="tx-num tx-nowrap">
                 <strong>{{ fmtMoney(record.equity) }}</strong>
-                <span class="tx-muted tx-unit">{{ record.settlementAsset }}</span>
+                <span v-if="record.equity !== null" class="tx-muted tx-unit">{{ record.settlementAsset }}</span>
               </span>
             </template>
           </a-table-column>
@@ -124,17 +129,17 @@
           {{ environmentLabel(env) }}还没有组合账户。<a-link @click="createDialog?.open(env)">新建一个</a-link>
         </template>
       </a-table>
-      <CreateAccount ref="createDialog" :logicals="logicals" :accounts="accounts" @created="onCreated" />
+      <CreateAccount ref="createDialog" :logicals="logicals" @created="onCreated" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import InfoTip from "@/components/info-tip/index.vue";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useSpaceStore } from "@/store/modules/space";
-import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
+import { strategyInstanceDetailLink } from "@/router/links";
+import { ControlMode, listLogicalAccounts, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { accountMapOf, comboRows, executionRows, type ComboRow } from "./account-list";
@@ -159,7 +164,6 @@ const LIST_WIDTH = 230 + 180 + 100 + 200 + 130 + 170 + 130 + 70 + 140;
 
 const route = useRoute();
 const router = useRouter();
-const spaceStore = useSpaceStore();
 
 // 三个环境各一个菜单，共用这个页面：环境写在路由 meta 里
 const env = computed<Environment>(() => environmentOfRoute(route) ?? "paper");
@@ -228,7 +232,7 @@ function onRowClick(record: ComboRow, event: Event) {
 }
 
 function openStrategy(instanceId: string) {
-  void router.push({ name: "strategy-detail", params: { instanceId } });
+  void router.push(strategyInstanceDetailLink(instanceId));
 }
 
 /** 新建的账户属于别的环境时，跳到那个环境的菜单；否则重读当前列表。 */
@@ -237,16 +241,6 @@ function onCreated(kind: Environment) {
   else void load();
 }
 
-watch(
-  () => spaceStore.selectedSpaceId,
-  (next, previous) => {
-    if (!next || next === previous) return;
-    listRequests.invalidate();
-    logicals.value = [];
-    accounts.value = [];
-    void load();
-  }
-);
 onBeforeUnmount(() => {
   listRequests.invalidate();
 });

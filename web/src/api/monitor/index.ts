@@ -18,7 +18,7 @@ export const monitorApi = {
     return call<typeof req, Record<string, never>>(SERVICE, "DeleteNotificationChannel", req);
   },
   /** 一条数据链路（源数据集 + 周期）某一天各环节逐根 K 线的到达延迟；day 按市场时区，空为今天。 */
-  queryArrivalHistory(req: { space_id: string; dataset_id: string; freq: string; day?: string; task_id?: string }) {
+  queryArrivalHistory(req: { space_id: string; dataset_id: string; frequency: string; day?: string; task_id?: string }) {
     return call<typeof req, ArrivalHistory>(SERVICE, "QueryPipelineArrivalHistory", req);
   },
   /** 重要日志（各服务的 Error 及以上日志和关键事件），新的在前；before_id 传上一页最后一条的 id 向更早翻页。 */

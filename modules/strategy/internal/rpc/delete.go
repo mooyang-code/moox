@@ -13,12 +13,14 @@ import (
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/log"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // FactorTaskAdmin 是删除实例、启用前核对与标出“删除未完成”用到的 FactorMgr 接口。
 type FactorTaskAdmin interface {
 	// GetFactorTask 读取任务；任务不存在时返回 input.ErrFactorTaskNotFound。
-	GetFactorTask(ctx context.Context, taskID string) (input.FactorTaskRecord, error)
+	GetFactorTask(ctx context.Context, taskID string) (upstream.FactorTaskRecord, error)
 	// ListFactorTaskIDs 列出 Factor 里现有的全部任务 ID。
 	ListFactorTaskIDs(ctx context.Context) (map[string]bool, error)
 	// CheckBoundTask 只做 DeleteBoundTask 动手前的全部检查（关联、补算、结果数据集能否删），不做修改；被拒绝时返回 *input.RejectedError。
@@ -106,7 +108,7 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	for i, taskID := range plan.Delete {
 		if err := s.Tasks.DeleteBoundTask(callCtx, taskID, instance.InstanceID); err != nil {
 			wrapped := fmt.Errorf("删除因子任务 %s 未完成（实例还在，可以重新执行删除）：%w", taskID, err)
-			var rejected *input.RejectedError
+			var rejected *upstream.RejectedError
 			if errors.As(err, &rejected) && i == 0 {
 				// 检查之后才出现的拒绝（例如刚有人发起了补算），第一个任务被拒绝时还什么都没删。
 				return refuse(invalid(fmt.Errorf("因子任务 %s 暂不能删除：%w", taskID, err)))
@@ -121,7 +123,7 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	cleared := append(slices.Clone(plan.Delete), plan.Gone...)
 	datasetIDs := make([]string, 0, len(cleared))
 	for _, taskID := range cleared {
-		if datasetID, err := input.DatasetIDOfTask(taskID); err == nil {
+		if datasetID, err := upstream.DatasetIDOfTask(taskID); err == nil {
 			datasetIDs = append(datasetIDs, datasetID)
 		}
 	}
@@ -146,7 +148,7 @@ type rejection struct{ error }
 // deleteError 把删除前的核对结果转成接口错误：拒绝（含 Factor 的明确拒绝）按参数错误返回，读不到依赖按内部错误返回。
 func deleteError(err error) *commonpb.RetInfo {
 	var rejected rejection
-	var factorRejected *input.RejectedError
+	var factorRejected *upstream.RejectedError
 	if errors.As(err, &rejected) || errors.As(err, &factorRejected) {
 		return invalid(err)
 	}
@@ -172,7 +174,7 @@ func (s *Service) planTasks(ctx context.Context, instance store.Instance) (taskP
 	var plan taskPlan
 	for _, taskID := range input.TaskIDs(instance.FactorTasks) {
 		task, err := s.Tasks.GetFactorTask(ctx, taskID)
-		if errors.Is(err, input.ErrFactorTaskNotFound) {
+		if errors.Is(err, upstream.ErrFactorTaskNotFound) {
 			plan.Gone = append(plan.Gone, taskID)
 			continue
 		}
@@ -227,7 +229,7 @@ func (s *Service) checkTasksExist(ctx context.Context, instance store.Instance) 
 		return nil
 	}
 	for _, taskID := range input.TaskIDs(instance.FactorTasks) {
-		if _, err := s.Tasks.GetFactorTask(ctx, taskID); errors.Is(err, input.ErrFactorTaskNotFound) {
+		if _, err := s.Tasks.GetFactorTask(ctx, taskID); errors.Is(err, upstream.ErrFactorTaskNotFound) {
 			return fmt.Errorf("因子任务 %s：%s", taskID, errTaskMissing)
 		} else if err != nil {
 			return err
@@ -261,7 +263,7 @@ func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instan
 	if perTask {
 		exists = func(taskID string) (bool, error) {
 			_, err := s.Tasks.GetFactorTask(ctx, taskID)
-			if errors.Is(err, input.ErrFactorTaskNotFound) {
+			if errors.Is(err, upstream.ErrFactorTaskNotFound) {
 				return false, nil
 			}
 			return err == nil, err
@@ -269,7 +271,7 @@ func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instan
 	} else {
 		existing, err := s.Tasks.ListFactorTaskIDs(ctx)
 		if err != nil {
-			log.Warnf("检查实例的因子任务是否还在失败，本次不标出引用任务已不存在的实例：%v", input.RawCause(err))
+			log.Warnf("检查实例的因子任务是否还在失败，本次不标出引用任务已不存在的实例：%v", upstream.RawCause(err))
 			return
 		}
 		exists = func(taskID string) (bool, error) { return existing[taskID], nil }
@@ -279,7 +281,7 @@ func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instan
 		for _, taskID := range input.TaskIDs(instances[i].FactorTasks) {
 			found, err := exists(taskID)
 			if err != nil {
-				log.Warnf("检查实例 %s 的因子任务 %s 是否还在失败，本次不标出：%v", instances[i].InstanceID, taskID, input.RawCause(err))
+				log.Warnf("检查实例 %s 的因子任务 %s 是否还在失败，本次不标出：%v", instances[i].InstanceID, taskID, upstream.RawCause(err))
 				return
 			}
 			if !found {

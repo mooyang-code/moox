@@ -109,33 +109,33 @@ func goldenStockPipeline(t *testing.T, frequency string, now time.Time, storage 
 	}
 }
 
-func goldenRealtimeRows(t *testing.T, frequency string, now, start time.Time) []*storagepb.RowFieldUpsert {
+func goldenRealtimeRows(t *testing.T, frequency string, now, start time.Time) []*storagepb.Row {
 	t.Helper()
 	storage := &pipelineStorageWithInstrumentNames{names: map[string]string{"600000.XSHG": "浦发银行", "000001.XSHE": "平安银行"}}
 	pipeline := goldenStockPipeline(t, frequency, now, storage)
 	items := make([]domain.CollectionItem, 0, 45)
 	for _, subject := range goldenSubjects() {
 		items = append(items, domain.CollectionItem{
-			SubjectID: subject, Symbol: subject, MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID,
-			Frequency: frequency, StartTime: start.Format(time.RFC3339),
+			SubjectID: subject, MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID,
+			Frequency: frequency,
 		})
 	}
-	payload, err := pipeline.Execute(context.Background(), Request{
+	payload, err := pipeline.Execute(context.Background(), testPeriodRequest(Request{
 		BatchID: "golden-" + frequency, BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: frequency, MarketType: "equity", RequestID: "golden-request-" + frequency, Concurrency: 8, Items: items,
-	})
+	}, start))
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.Status)
 	return storage.rows
 }
 
-func dumpRows(title string, rows []*storagepb.RowFieldUpsert) string {
+func dumpRows(title string, rows []*storagepb.Row) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "## %s（%d 行）\n", title, len(rows))
 	for _, row := range rows {
 		series := row.GetKey().GetTimeSeries()
 		fmt.Fprintf(&out, "space=%s dataset=%s subject=%s freq=%s data_time=%s series_tag=%s\n",
-			row.GetKey().GetSpaceId(), row.GetKey().GetDatasetId(), series.GetSubjectId(), series.GetFreq(), series.GetDataTime(), series.GetSeriesTag())
+			row.GetKey().GetSpaceId(), row.GetKey().GetDatasetId(), series.GetSubjectId(), series.GetFrequency(), series.GetDataTime(), series.GetSeriesTag())
 		for _, field := range row.GetFields() {
 			switch value := field.GetValue().GetValue().(type) {
 			case *storagepb.TypedValue_DoubleValue:
@@ -169,14 +169,14 @@ func TestKlineRowsMatchGolden(t *testing.T) {
 	backfillNow := time.Date(2026, 11, 5, 8, 0, 0, 0, time.UTC)
 	backfillStorage := &pipelineStorage{}
 	backfill := goldenStockPipeline(t, "5m", backfillNow, backfillStorage)
-	payload, err := backfill.Execute(context.Background(), Request{
+	payload, err := backfill.Execute(context.Background(), testBackfillRequest(Request{
 		BatchID: "golden-backfill", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: "5m", MarketType: "equity", RequestID: "golden-request-backfill",
 		Items: []domain.CollectionItem{{
-			SubjectID: "600519.XSHG", Symbol: "sh600519", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "5m",
+			SubjectID: "600519.XSHG", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "5m",
 			StartTime: "2026-11-05T02:00:00Z", EndTime: "2026-11-05T02:10:00Z", BarLimit: 2, OutputFields: []string{"close", "volume", "amount", "amount_unit", "trade_date", "source_provider"},
 		}},
-	})
+	}))
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.Status)
 	out.WriteString(dumpRows("stockcn equity 5m 补采（选字段）", backfillStorage.rows))
@@ -217,7 +217,7 @@ func TestKlineRowsMatchGolden(t *testing.T) {
 	for _, item := range direct {
 		row, rowErr := item.committer.rowFor(item.bar, item.req, item.routeID, item.routeRank, item.instrument)
 		require.NoError(t, rowErr, item.title)
-		out.WriteString(dumpRows(item.title, []*storagepb.RowFieldUpsert{row}))
+		out.WriteString(dumpRows(item.title, []*storagepb.Row{row}))
 	}
 
 	// 周期提交绑定用的序列标签。

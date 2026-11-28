@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"slices"
 	"sort"
 	"strings"
@@ -19,7 +20,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -92,7 +92,7 @@ func heldConversion(requestHash string, signalTime int64, weightsJSON string, or
 	return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: held}
 }
 
-func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
+func (r *WeightResolver) Resolve(ctx context.Context, request *eventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
 	if r == nil || r.Store == nil || r.Prices == nil || r.Equity == nil {
 		return WeightConversion{}, fmt.Errorf("%w: target weight resolver is not configured", ErrPermanent)
 	}
@@ -230,7 +230,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.Logi
 		// executor creates child orders; quantizing here would let the first
 		// member's step silently erase a quantity that another member can fill.
 		negative := quantity.IsNegative()
-		quantity = floorToStep(quantity.Abs(), logicalTargetQuantityStep)
+		quantity = shared.FloorToStep(quantity.Abs(), logicalTargetQuantityStep)
 		if negative {
 			quantity = quantity.Neg()
 		}
@@ -508,7 +508,7 @@ type orderedWeight struct {
 	Hold bool `json:"hold,omitempty"`
 }
 
-func canonicalWeights(request *tradeeventpb.LogicalAccountTargetWeightRequested) (string, string, []orderedWeight, error) {
+func canonicalWeights(request *eventpb.LogicalAccountTargetWeightRequested) (string, string, []orderedWeight, error) {
 	weights := make([]orderedWeight, 0, len(request.GetTargets()))
 	seen := make(map[string]struct{}, len(request.GetTargets()))
 	for _, target := range request.GetTargets() {
@@ -545,7 +545,7 @@ func canonicalWeights(request *tradeeventpb.LogicalAccountTargetWeightRequested)
 }
 
 // RequestHash returns the canonical logical request hash used by TargetReceipt.
-func RequestHash(request *tradeeventpb.LogicalAccountTargetWeightRequested) (string, error) {
+func RequestHash(request *eventpb.LogicalAccountTargetWeightRequested) (string, error) {
 	hash, _, _, err := canonicalWeights(request)
 	return hash, err
 }

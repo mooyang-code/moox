@@ -29,6 +29,7 @@ scf_markets:
       - ap-shanghai
 scf_plan:
   cloud_account_id: tencent-scf
+  package_name: moox-collector-plan
   memory_mb: 128
   symbols_per_function: 50
   entry_routes:
@@ -41,10 +42,8 @@ scf_plan:
   spaces:
     crypto:
       namespace: moox-crypto-plan
-      package_name: moox-collector-crypto-plan
     stockcn:
       namespace: moox-stockcn-plan
-      package_name: moox-collector-stockcn-plan
 collector_retention:
   maintenance_interval: 1m
   maintenance_offset: 35s

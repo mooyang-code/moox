@@ -12,7 +12,6 @@ import (
 	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -50,22 +49,22 @@ func readAllChanges(t *testing.T, s *Store, spaceID, datasetID string) []*pb.Dat
 	}
 }
 
-func recordRow(spaceID, datasetID, recordID, version string) *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func recordRow(spaceID, datasetID, recordID, version string) *pb.Row {
+	return &pb.Row{
 		Key:    &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: recordID, Version: version}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: recordID}}}},
 	}
 }
 
 // markerPayload 解出完成标记条目内嵌的周期完成事件。
-func markerPayload(t *testing.T, change *pb.DatasetChange) (*eventpb.EventMessage, *storageeventpb.DatasetPeriodCompleted) {
+func markerPayload(t *testing.T, change *pb.DatasetChange) (*eventpb.EventMessage, *eventpb.DatasetPeriodCompleted) {
 	t.Helper()
 	require.NotEmpty(t, change.GetMarker())
 	require.Empty(t, change.GetRanges())
 	require.Empty(t, change.GetRecords())
 	message := &eventpb.EventMessage{}
 	require.NoError(t, proto.Unmarshal(change.GetMarker(), message))
-	payload := &storageeventpb.DatasetPeriodCompleted{}
+	payload := &eventpb.DatasetPeriodCompleted{}
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
 	return message, payload
 }
@@ -82,12 +81,12 @@ func TestChangeLogRecordsWritesInOrder(t *testing.T) {
 	require.Empty(t, head.GetChanges())
 
 	// 一次写入里同一标的的多行合并成一个时间范围，两个数据集各记一条；时间保留到纳秒。
-	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{
 		tsRow("BTCUSDT", "", base, 1), tsRow("BTCUSDT", "", base.Add(2*time.Minute+1500*time.Millisecond), 2), tsRow("ETHUSDT", "", base.Add(time.Minute), 3),
 	}))
 	other := tsRow("BTCUSDT", "", base, 9)
 	other.Key.DatasetId = "other"
-	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{other}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{other}))
 
 	got, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: head.GetNextCursor()})
 	require.NoError(t, err)
@@ -117,7 +116,7 @@ func TestChangeLogRecordsWritesInOrder(t *testing.T) {
 func TestChangeLogRecordsRecordKeys(t *testing.T) {
 	ctx := context.Background()
 	s := openChangeLogStore(t, 0)
-	err := s.UpsertFields(ctx, "s", "notes", []*pb.RowFieldUpsert{
+	err := s.UpsertFields(ctx, "s", "notes", []*pb.Row{
 		recordRow("s", "notes", "b", "1"), recordRow("s", "notes", "a", "2"), recordRow("s", "notes", "a", "1"),
 	})
 	require.NoError(t, err)
@@ -146,7 +145,7 @@ func TestChangeLogOrdersRowsMarkersAndRecords(t *testing.T) {
 	_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[1], goldenPeriod, 1)}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", goldenPeriodStatus(t, store, goldenSpace, goldenDataset, goldenFreq, goldenPeriod.Unix()))
-	err = store.UpsertFields(ctx, goldenSpace, goldenDataset, []*pb.RowFieldUpsert{recordRow(goldenSpace, goldenDataset, "note", "1")})
+	err = store.UpsertFields(ctx, goldenSpace, goldenDataset, []*pb.Row{recordRow(goldenSpace, goldenDataset, "note", "1")})
 	require.NoError(t, err)
 	marker := goldenProducerMarker("source-ready", goldenPeriod.Unix(), "complete")
 	marker.DatasetId = goldenDataset
@@ -228,7 +227,7 @@ func TestChangeLogPagingAndHasMore(t *testing.T) {
 	s := openChangeLogStore(t, 0)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
-		require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
+		require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
 	}
 	cursor := &pb.DatasetChangeCursor{StoreId: mustHead(t, s).GetStoreId()}
 	var seen []uint64
@@ -273,7 +272,7 @@ func TestChangeLogPagingLimitsBytes(t *testing.T) {
 	stageTestChange(t, s, marker("d", part))                 // 4：放进第一页会超过上限
 	stageTestChange(t, s, marker("d", maxChangePageBytes+1)) // 5：单条就超过上限，单独成页
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)})) // 6
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base, 1)})) // 6
 
 	cursor := &pb.DatasetChangeCursor{StoreId: mustHead(t, s).GetStoreId()}
 	var pages [][]uint64
@@ -324,14 +323,14 @@ func TestReadDatasetChangesWaitReturnsAfterCommit(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	other := tsRow("BTCUSDT", "", base, 1)
 	other.Key.DatasetId = "other"
-	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{other}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{other}))
 	time.Sleep(50 * time.Millisecond)
 	select {
 	case got := <-done:
 		t.Fatalf("别的数据集的写入不应让读取返回：%+v", got.rsp)
 	default:
 	}
-	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 2)}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base, 2)}))
 	got := <-done
 	require.NoError(t, got.err)
 	require.Less(t, got.elapsed, 5*time.Second)
@@ -355,7 +354,7 @@ func TestReadDatasetChangesWaitReturnsAfterCommit(t *testing.T) {
 	markerPayload(t, got.rsp.GetChanges()[0])
 
 	// 到期仍没有本数据集的变更：返回空，游标前进到已扫描的位置（别的数据集的序号）。
-	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{other}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{other}))
 	started := time.Now()
 	rsp, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: got.rsp.GetNextCursor(), WaitMs: 100})
 	require.NoError(t, err)
@@ -370,7 +369,7 @@ func TestChangeLogGapDetection(t *testing.T) {
 	s := openChangeLogStore(t, time.Hour)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 4; i++ {
-		require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
+		require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
 	}
 	storeID := mustHead(t, s).GetStoreId()
 
@@ -378,7 +377,7 @@ func TestChangeLogGapDetection(t *testing.T) {
 	removed, err := s.CleanupChangeLog(ctx, time.Now().Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, 4, removed)
-	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(10*time.Minute), 10)}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base.Add(10*time.Minute), 10)}))
 
 	gapCases := map[string]*pb.DatasetChangeCursor{
 		"早于清理到的序号":     {StoreId: storeID, Sequence: 0},
@@ -405,7 +404,7 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 	ctx := context.Background()
 	s := openChangeLogStore(t, 7*24*time.Hour)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base, 1)}))
 	removed, err := s.CleanupChangeLog(ctx, time.Now().Add(-s.ChangeLogRetention()))
 	require.NoError(t, err)
 	require.Equal(t, 0, removed)
@@ -415,7 +414,7 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 // peekChange 读出的定位字段与完整解码一致，三种条目都能跳过其余字段。
 func TestPeekChangeMatchesFullDecode(t *testing.T) {
 	for _, change := range []*pb.DatasetChange{
-		{Sequence: 7, SpaceId: "s", DatasetId: "d", CreatedAt: 1790812800500, Ranges: []*pb.DatasetChangeRange{{SubjectId: "BTC", Freq: "1m", StartTime: "a", EndTime: "b"}}},
+		{Sequence: 7, SpaceId: "s", DatasetId: "d", CreatedAt: 1790812800500, Ranges: []*pb.DatasetChangeRange{{SubjectId: "BTC", Frequency: "1m", StartTime: "a", EndTime: "b"}}},
 		{Sequence: 8, SpaceId: "s", DatasetId: "notes", CreatedAt: 1790812800501, Records: []*pb.RecordRowKey{{RecordId: "r", Version: "1"}}},
 		{Sequence: 9, SpaceId: "s", DatasetId: "d", CreatedAt: 1, Marker: []byte("marker")},
 	} {
@@ -439,7 +438,7 @@ func TestReadDatasetChangesConcurrentWithCleanup(t *testing.T) {
 	go func() {
 		defer close(writerDone)
 		for i := 0; i < 200; i++ {
-			if err := upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}); err != nil {
+			if err := upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}); err != nil {
 				t.Error(err)
 				return
 			}
@@ -511,7 +510,7 @@ func TestChangeLogConcurrentWritersKeepSequenceAndOrder(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 10; i++ {
 			row := goldenRow(goldenSpace, "plain", goldenFreq, series[0], goldenPeriod.Add(-time.Duration(i+1)*time.Minute), float64(i))
-			err := store.UpsertFields(ctx, goldenSpace, "plain", []*pb.RowFieldUpsert{row})
+			err := store.UpsertFields(ctx, goldenSpace, "plain", []*pb.Row{row})
 			assert.NoError(t, err)
 		}
 	}()
@@ -609,7 +608,7 @@ func TestReadDatasetChangesWaitEndings(t *testing.T) {
 			}()
 		}
 		time.Sleep(50 * time.Millisecond)
-		require.NoError(t, upsertTestRows(s, context.Background(), []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)}))
+		require.NoError(t, upsertTestRows(s, context.Background(), []*pb.Row{tsRow("BTCUSDT", "", base, 1)}))
 		for i := 0; i < waiters; i++ {
 			select {
 			case rsp := <-done:
@@ -646,7 +645,7 @@ func TestChangeLogMissingEntriesReportGap(t *testing.T) {
 	s := openChangeLogStore(t, 0)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 3; i++ {
-		require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
+		require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
 	}
 	storeID := mustHead(t, s).GetStoreId()
 	read := func(seq uint64) *pb.ReadDatasetChangesRsp {
@@ -670,7 +669,7 @@ func TestChangeLogCleanupSkipsPastMissingCreatedAt(t *testing.T) {
 	s := openChangeLogStore(t, 0)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	write := func(i int) {
-		require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
+		require.NoError(t, upsertTestRows(s, ctx, []*pb.Row{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
 	}
 	for i := 0; i < 3; i++ {
 		write(i)

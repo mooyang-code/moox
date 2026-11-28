@@ -35,7 +35,7 @@ def csv_rows_in_window(path, start, end):
 def storage_rows_in_window(args, manifest, subject, start, end):
     command = [
         args.moox_cli, "data", "rows", "export", "--file", args.moox_toml, "--space-id", manifest["space_id"],
-        "--dataset-id", manifest["dataset_id"], "--frequency", manifest["freq"], "--subject", subject, "--columns", "close",
+        "--dataset-id", manifest["dataset_id"], "--frequency", manifest["frequency"], "--subject", subject, "--columns", "close",
         "--series-tag", manifest["series_tag"],
         "--from", start.strftime("%Y-%m-%dT%H:%M:%SZ"), "--to", (end + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "--page-size", str(args.page_size),

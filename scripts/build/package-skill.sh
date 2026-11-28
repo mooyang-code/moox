@@ -2,8 +2,6 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONFIG="${CONFIG:-${ROOT}/moox.toml}"
-MOOX_CLI="${MOOX_CLI:-${ROOT}/bin/moox-cli}"
 OUT="${OUT:-${ROOT}/dist/moox-skill.tar.gz}"
 SKILL_DIR="${SKILL_DIR:-${ROOT}/skills/moox}"
 
@@ -28,10 +26,6 @@ file_mode() {
   echo "missing skill directory: ${SKILL_DIR}" >&2
   exit 1
 }
-[[ -x "${MOOX_CLI}" ]] || {
-  echo "moox-cli is not executable: ${MOOX_CLI}" >&2
-  exit 1
-}
 if [[ -L "${OUT}" ]]; then
   echo "output archive must not be a symlink: ${OUT}" >&2
   exit 1
@@ -46,25 +40,7 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/moox-skill-stage.XXXXXX")"
 mkdir -p "${STAGE}/moox"
 cp -R "${SKILL_DIR}/." "${STAGE}/moox/"
 # 隐藏文件与密钥类文件不进分发包：本地调试用的 .env（例如 references/cls-query.md 让用户保存的 CLS 云凭据）、.ssh、*.key/*.pem。
-# 导出的 config（含 .moox-skill-keys）在下面由 moox-cli 单独生成，不受这里影响。
 find "${STAGE}/moox" -mindepth 1 \( -name '.*' -o -name '*.env' -o -name '*.key' -o -name '*.pem' \) -prune -exec rm -rf {} +
-rm -rf "${STAGE}/moox/config"
-mkdir -p "${STAGE}/moox/config"
-
-PACKAGED_CONFIG="${STAGE}/moox/config/data-access.yaml"
-"${MOOX_CLI}" setup export-skill-config \
-  --file "${CONFIG}" \
-  --space crypto \
-  --output "${PACKAGED_CONFIG}"
-
-if [[ ! -f "${PACKAGED_CONFIG}" || -L "${PACKAGED_CONFIG}" ]]; then
-  echo "exported config must be a regular non-symlink file" >&2
-  exit 1
-fi
-if [[ "$(file_mode "${PACKAGED_CONFIG}")" != 600 ]]; then
-  echo "exported config must have permission 0600" >&2
-  exit 1
-fi
 
 ARCHIVE_TMP="$(mktemp "${OUT}.tmp.XXXXXX")"
 tar -C "${STAGE}" -czf "${ARCHIVE_TMP}" moox

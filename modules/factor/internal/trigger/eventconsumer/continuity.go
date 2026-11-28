@@ -221,18 +221,15 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 	state, _ := c.cfg.Store.Get(set.TaskID)
 	for processed := 0; state.Behind() && processed < c.cfg.MaxPeriods; processed++ {
 		period := state.CommittedThrough.Add(step)
-		scope, triggerID := periodScope{universe: state.UniverseSubjects}, CatchupEventID(set.TaskID, period)
+		scope := periodScope{universe: state.UniverseSubjects}
 		if event != nil && event.periodTime.Equal(period) {
-			scope, triggerID = event.scope(), event.eventID
+			scope = event.scope()
 		} else {
 			missing, err := c.missingSubjects(ctx, set, period, scope.universe)
 			if err != nil {
 				return err
 			}
 			scope.failed = missing
-		}
-		if state.InFlightTrigger != "" && state.InFlightPeriod.Equal(period) {
-			triggerID = state.InFlightTrigger
 		}
 		expected, unconfirmed, confirmed, scope := c.scoped(set, period, scope)
 		if reason := c.invalid(set.TaskID, expected, unconfirmed, confirmed); reason != "" {
@@ -251,11 +248,7 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 		// 补采确认行情源没有的标的不参与计算：不读窗口、不记空洞账本、不补算。
 		// 范围内的标的全部确认没有时这一期没有可算的，直接推进。
 		if expected > 0 {
-			state.InFlightPeriod, state.InFlightTrigger = period, triggerID
-			if err := c.cfg.Store.Put(state); err != nil {
-				return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
-			}
-			if _, err := h.computePeriod(ctx, set, members, period, scope, triggerID); err != nil {
+			if _, err := h.computePeriod(ctx, set, members, period, scope); err != nil {
 				if !transient(err) {
 					// 重试也不会通过的错误（例如完成标记超过体积上限、被 Storage 判为无效请求）：水位停在这一期，
 					// 记成阻塞，让水位阻塞的监控看得到；之后的追赶照常重试，问题排除后自动解除。
@@ -277,7 +270,6 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 			log.InfoContextf(ctx, "factor_watermark_unblocked task_id=%s period=%s blocked_for=%s", set.TaskID, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), c.cfg.Now().Sub(state.BlockedSince).Truncate(time.Second))
 		}
 		state.CommittedThrough, state.BlockedSince, state.BlockedPeriod, state.BlockedReason = period, time.Time{}, time.Time{}, ""
-		state.InFlightPeriod, state.InFlightTrigger = time.Time{}, ""
 		if err := c.cfg.Store.Put(state); err != nil {
 			return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 		}
@@ -347,11 +339,6 @@ func periodStep(set domain.FactorTask) time.Duration {
 		return time.Minute
 	}
 	return step
-}
-
-// CatchupEventID 是没有事件可用、靠读回推进的周期使用的触发事件 ID。
-func CatchupEventID(taskID string, period time.Time) string {
-	return fmt.Sprintf("catchup:%s:%d", taskID, period.Unix())
 }
 
 func uniqueStrings(values []string) []string {

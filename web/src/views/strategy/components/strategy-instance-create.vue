@@ -14,14 +14,7 @@
           >
         </a-select>
       </a-form-item>
-      <a-descriptions v-if="preview" :column="1" bordered size="small" class="preview">
-        <a-descriptions-item v-if="preview.pool" label="策略池">{{ describePool(preview.pool) }}</a-descriptions-item>
-        <a-descriptions-item v-else label="规则">{{
-          preview.rules.map(rule => `${rule.name || rule.id}（${rule.type}）`).join("、")
-        }}</a-descriptions-item>
-        <a-descriptions-item v-if="!preview.pool" label="标的池">{{ preview.universe }}</a-descriptions-item>
-        <a-descriptions-item label="bar 断言">{{ preview.bar }}</a-descriptions-item>
-      </a-descriptions>
+      <p v-if="summary" class="meta-hint preview">{{ summary }}</p>
       <a-alert v-if="requirementError" type="error" show-icon class="form-alert"
         >读取这份定义要绑定的计算任务失败：{{ requirementError }}<a-link @click="reloadRequirement">重试</a-link></a-alert
       >
@@ -190,15 +183,15 @@
 
 <script setup lang="ts">
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createInstance, getInstance, listInstances, validateStrategy } from "@/api/strategy";
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
 import { listAllFactorTasks } from "@/api/factor";
-import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { readAllPages } from "@/api/read-all-pages";
+import { listLogicalAccounts } from "@/api/trade";
+import type { LogicalAccount } from "@/api/trade/types";
 import {
-  declaresFactorParams,
   enabledTasks,
   selectableTask,
   varMemberBlockReason,
@@ -210,8 +203,7 @@ import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import {
   enabledInstanceAccounts,
   logicalAccountOptions,
-  marketsToResolved,
-  resolvedMarkets
+  marketsToResolved
 } from "@/views/strategy/components/logical-account-options";
 import {
   mainMarkets,
@@ -222,7 +214,7 @@ import {
   taskKeyLabel
 } from "@/views/strategy/market-mode";
 import { useTaskRequirement } from "@/views/strategy/use-task-requirement";
-import { describePool, parseDSL } from "@/views/strategy/dsl";
+import { summarizeDSL } from "@/views/strategy/dsl";
 
 const props = defineProps<{ visible: boolean; strategies: Strategy[]; spaceId: string; presetStrategyId?: string }>();
 const emit = defineEmits<{ "update:visible": [boolean]; created: [string] }>();
@@ -251,8 +243,6 @@ const form = reactive({
 });
 const tasks = ref<TaskOption[]>([]);
 const accounts = ref<LogicalAccount[]>([]);
-// 成员执行账户：用来在账户选项前写测试网还是生产；读不到时为 null，选项只写“实盘”。
-const tradingAccounts = ref<ReadonlyMap<string, TradingAccount> | null>(null);
 // 组合账户 → 绑着它的启用实例（取自 Strategy 的实例列表，Trade 不存归属）：这些账户显示但不可选；读不到时为 null，不置灰，启用时由 Strategy 拒绝。
 const boundInstances = ref<ReadonlyMap<string, string> | null>(null);
 const check_result = ref<ValidateStrategyResult | null>(null);
@@ -262,35 +252,31 @@ let submitRequest = 0;
 let checkRequest = 0;
 
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
-const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
-// 定义写了 factor_params：启用时独占关联主帧任务，已关联到别的实例的主帧任务不能选。
-const tuned = computed(() => declaresFactorParams(selectedStrategy.value?.dsl_yaml ?? ""));
+const summary = computed(() => (selectedStrategy.value ? summarizeDSL(selectedStrategy.value.dsl_yaml) : ""));
 
 // 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
 const singleMarkets = ["spot", "swap", "equity"];
-// 要绑定的任务由后端按定义的 DSL 推出（GetStrategy 的 requirement）：任务键、是否策略池、建不了实例的问题。
+// 要绑定的任务由后端按定义的 DSL 推出（GetStrategy / ValidateStrategy 的 requirement）：任务键、是否策略池、是否动态调参、建不了实例的问题。
 const {
   requirement,
   error: requirementError,
   reload: reloadRequirement
 } = useTaskRequirement(computed(() => ({ strategyId: form.strategy_id })));
+// 预检返回最新的 requirement 时以其为准；预检之前用 GetStrategy 的 requirement。
+const effectiveRequirement = computed(() => check_result.value?.requirement ?? requirement.value);
+// 定义写了 factor_params：启用时独占关联主帧任务，已关联到别的实例的主帧任务不能选。
+const tuned = computed(() => Boolean(effectiveRequirement.value?.tuned));
 // 要绑定的任务键：主帧市场、参考市场、附加来源（来源名:市场）；没写 market 时按选的市场拼出。
-const taskKeys = computed(() => requirementTaskKeys(requirement.value, form.single_market));
+const taskKeys = computed(() => requirementTaskKeys(effectiveRequirement.value, form.single_market));
 // 主帧市场：不带来源、也不是参考市场的键；参考市场只用于 age_markets: all 的年龄判定。
-const activeMarkets = computed(() => mainMarkets(requirement.value, form.single_market));
-const referenceKeys = computed(() => requirementReferenceMarkets(requirement.value, taskKeys.value));
+const activeMarkets = computed(() => mainMarkets(effectiveRequirement.value, form.single_market));
+const referenceKeys = computed(() => requirementReferenceMarkets(effectiveRequirement.value, taskKeys.value));
 // 只列策略驱动且可交易市场包含策略输出市场的组合账户（A 股要开通了股票市场），已被其他实例占用的显示但不可选。
-// 预检之后以服务端解析出的市场为准；预检之前按要绑定的市场（没写 market 时按选的市场）先筛。
-const market = computed(() => {
-  if (check_result.value?.resolved_json) return resolvedMarkets(check_result.value.resolved_json);
-  return activeMarkets.value.length ? marketsToResolved(activeMarkets.value) : {};
-});
+const market = computed(() => (activeMarkets.value.length ? marketsToResolved(activeMarkets.value) : {}));
 const marketNames = computed(() => (activeMarkets.value.length ? activeMarkets.value.map(marketLabel).join("、") : "策略市场"));
 // 已选的账户因为市场收窄被清空：提示一句，用户重新选择后消失。
 const accountCleared = ref(false);
-const accountOptions = computed(() =>
-  logicalAccountOptions(accounts.value, market.value, tradingAccounts.value, boundInstances.value)
-);
+const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value, boundInstances.value));
 // 预检或成员定义读到后账户列表会收窄：已选的账户不在新列表里（或变成不可选）时清掉，不能悄悄提交不符合的账户。
 watch(accountOptions, options => {
   if (!form.logical_account_id) return;
@@ -311,7 +297,7 @@ const extraHint = computed(() => {
   const sources = requirement.value?.sources ?? [];
   if (sources.length)
     parts.push(
-      `附加来源 ${sources.map(source => `${source.name}（${source.bar || "?"}）`).join("、")} 按主帧的市场各绑一个计算任务：周期要与来源的 bar 一致、是主帧周期的整数倍，任务不能有可变成员`
+      `附加来源 ${sources.map(source => `${source.name}（${source.frequency || "?"}）`).join("、")} 按主帧的市场各绑一个计算任务：周期要与来源的 bar 一致、是主帧周期的整数倍，任务不能有可变成员`
     );
   return parts.join("；") + "。";
 });
@@ -367,13 +353,11 @@ function close() {
   emit("update:visible", false);
 }
 
-async function loadAllAccounts() {
-  const items: LogicalAccount[] = [];
-  for (let page = 1; ; page += 1) {
+function loadAllAccounts() {
+  return readAllPages(async page => {
     const rsp = await listLogicalAccounts({ page, size: 200 });
-    items.push(...(rsp.logical_accounts || []));
-    if (!rsp.page_result?.has_more || !(rsp.logical_accounts || []).length) return items;
-  }
+    return { items: rsp.logical_accounts || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }
 
 async function loadTasksList() {
@@ -384,7 +368,7 @@ async function loadTasksList() {
   tasksError.value = "";
   try {
     const infos = await listAllFactorTasks();
-    if (requestId !== tasksRequest || props.spaceId !== spaceId) return;
+    if (requestId !== tasksRequest) return;
     tasks.value = enabledTasks(infos, spaceId);
   } catch (err) {
     if (requestId === tasksRequest) tasksError.value = err instanceof Error ? err.message : "计算任务加载失败";
@@ -400,18 +384,14 @@ async function loadAccountsList() {
   accountsLoading.value = true;
   accountsError.value = "";
   try {
-    const [nextAccounts, members, bound] = await Promise.all([
+    const [nextAccounts, bound] = await Promise.all([
       loadAllAccounts(),
-      listTradingAccounts({ page: { page: 1, size: 200 } })
-        .then(rsp => new Map((rsp.accounts || []).map(item => [item.trading_account_id, item])))
-        .catch(() => null),
       listInstances({ page: 1, size: 500, enabled: true })
         .then(rsp => enabledInstanceAccounts(rsp.items))
         .catch(() => null)
     ]);
-    if (requestId !== accountsRequest || props.spaceId !== spaceId) return;
+    if (requestId !== accountsRequest) return;
     accounts.value = nextAccounts.filter(account => account.space_id === spaceId);
-    tradingAccounts.value = members;
     boundInstances.value = bound;
   } catch (err) {
     if (requestId === accountsRequest) accountsError.value = err instanceof Error ? err.message : "账户读取失败";
@@ -502,7 +482,6 @@ function resetForm() {
   form.mode = "compute";
   tasks.value = [];
   accounts.value = [];
-  tradingAccounts.value = null;
   boundInstances.value = null;
   tasksRequest += 1;
   accountsRequest += 1;
@@ -530,15 +509,14 @@ async function submit() {
       : `请为${taskKeys.value.map(taskLabel).join("、")}各选一个计算任务`;
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
   if (fieldErrors.strategy_id || fieldErrors.factor_tasks || fieldErrors.logical_account_id) return;
-  const spaceId = props.spaceId;
   const requestId = ++submitRequest;
   saving.value = true;
   try {
     // 写了 factor_params 的实例启用后永久占住任务：没有当前有效的预检结果就先预检（服务端会核对市场与任务是否对应），通过了才创建。
     if (!check_result.value?.resolved_json) {
       const result = await check();
-      // 预检被作废（等待期间改了定义、任务或市场）：不创建，按新的选择再点创建
-      if (!result || requestId !== submitRequest || props.spaceId !== spaceId) return;
+      // 预检被作废（等待期间改了定义、任务、市场或组件卸载）：不创建，按新的选择再点创建
+      if (!result || requestId !== submitRequest) return;
       if (!result.resolved_json) {
         error.value = "预检没有通过（原因见下方），没有创建实例";
         return;
@@ -550,8 +528,8 @@ async function submit() {
       factor_tasks: factorTasks(),
       logical_account_id: form.mode === "trade" ? form.logical_account_id : ""
     });
-    if (requestId !== submitRequest || props.spaceId !== spaceId) {
-      Message.info("实例已创建，但当前空间已切换；请在原空间实例列表中确认");
+    if (requestId !== submitRequest) {
+      Message.info("实例已创建，但抽屉已关闭或空间已切换；请在原空间实例列表中确认");
       return;
     }
     // 成功后由父组件统一导航：不再发 update:visible(false)，否则父组件的“关闭抽屉”导航会取消去详情页的导航。
@@ -560,17 +538,16 @@ async function submit() {
     emit("created", instance.instance_id);
     Message.success("策略实例已创建并保持停用");
   } catch (err) {
-    if (requestId !== submitRequest || props.spaceId !== spaceId) return;
+    if (requestId !== submitRequest) return;
     const instanceId = form.instance_id.trim();
     if (instanceId) {
       try {
         await getInstance(instanceId);
-        if (requestId !== submitRequest || props.spaceId !== spaceId) return; // 补查期间空间已切换
+        if (requestId !== submitRequest) return;
         error.value = "创建请求结果未知，但实例 ID 已存在，请返回列表确认，不要重复创建";
         return;
       } catch (lookupErr) {
-        // 补查被切换空间取消：当前表单属于新空间，不写入旧空间的错误，也不能当作“实例不存在”
-        if (lookupErr instanceof StaleSpaceRequestError || requestId !== submitRequest || props.spaceId !== spaceId) return;
+        if (lookupErr instanceof StaleSpaceRequestError || requestId !== submitRequest) return;
         // 实例不存在，展示原始错误。
       }
     }
@@ -592,15 +569,12 @@ watch(
   { immediate: true }
 );
 
-watch(
-  () => props.spaceId,
-  (value, previous) => {
-    if (value !== previous && props.visible) {
-      resetForm();
-      loadMetadata();
-    }
-  }
-);
+onBeforeUnmount(() => {
+  tasksRequest += 1;
+  accountsRequest += 1;
+  submitRequest += 1;
+  checkRequest += 1;
+});
 </script>
 
 <style scoped>

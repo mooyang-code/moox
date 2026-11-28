@@ -71,7 +71,7 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, `kline_resample:
   enabled: true
   fallback_lookback_bars: 5
-event_bus:
+eventbus:
   urls: ["nats://127.0.0.1:4222"]
   credential_file: ./secrets/collector-eventbus.yaml
 `))
@@ -332,11 +332,10 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 
 	shared := valid()
 	shared.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
-	require.ErrorContains(t, shared.validateSCFPlan(), "share code package")
-	own := valid()
-	own.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
-	own.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}
-	require.NoError(t, own.validateSCFPlan())
+	require.NoError(t, shared.validateSCFPlan(), "多空间允许共享同一个代码包")
+	noPkg := valid()
+	noPkg.SCFPlan.PackageName = ""
+	require.ErrorContains(t, noPkg.validateSCFPlan(), "package_name")
 }
 
 func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
@@ -345,11 +344,10 @@ func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
 	cfg := Default()
 	cfg.sourcePath = filepath.Join(dir, "app.yaml")
 	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "env.json"
-	cfg.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}
 	deploy, err := cfg.fetchPlanDeploy("stockcn")
 	require.NoError(t, err)
 	require.Equal(t, "stockcn", deploy.BaseEnvironment["MOOX_SPACE_ID"])
-	require.Equal(t, "pkg-stockcn", deploy.PackageName)
+	require.Equal(t, "pkg", deploy.PackageName)
 	cryptoDeploy, err := cfg.fetchPlanDeploy("crypto")
 	require.NoError(t, err)
 	require.Equal(t, "crypto", cryptoDeploy.BaseEnvironment["MOOX_SPACE_ID"])
@@ -368,13 +366,12 @@ func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
 	require.Equal(t, map[string]string{"MOOX_SPACE_ID": "crypto"}, deploy.BaseEnvironment)
 }
 
-// 代码包只能按包名取最新；固定包 ID 的 package_id 已删除，旧配置里还写着它时严格解码直接报错。
+// 代码包只能按全局包名取最新；固定包 ID（package_id）和按空间覆盖包名（spaces.<space>.package_name）已删除，严格解码直接报错。
 func TestSCFPlanPackageIsSelectedByNameOnly(t *testing.T) {
-	plan := SCFPlanConfig{PackageName: "pkg-name", Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}}
-	require.Equal(t, "pkg-name", plan.packageNameFor("crypto"))
-	require.Equal(t, "pkg-stockcn", plan.packageNameFor("stockcn"))
 	_, err := Load(writeCollectorConfig(t, "scf_plan: {package_id: stale}\n"))
 	require.ErrorContains(t, err, "package_id")
+	_, err = Load(writeCollectorConfig(t, "scf_plan: {spaces: {stockcn: {package_name: pkg-stockcn}}}\n"))
+	require.ErrorContains(t, err, "package_name")
 }
 
 // 部署渲染出的 Timer 配置经真实 Load（含 validateSCFPlan）：覆盖 crypto、仅 stockcn、多空间与关闭状态。
@@ -395,18 +392,18 @@ func renderedTimerPlan(markets, spaces string) string {
 
 func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 	t.Run("crypto only", func(t *testing.T) {
-		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n", "    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n")))
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n", "    crypto: {namespace: ns-crypto}\n")))
 		require.NoError(t, err)
 		require.Equal(t, []string{"crypto"}, cfg.scfSpaces())
 		deploy, err := cfg.fetchPlanDeploy("crypto")
 		require.NoError(t, err)
-		require.Equal(t, "pkg-crypto", deploy.PackageName)
+		require.Equal(t, DefaultSCFPackageName, deploy.PackageName)
 		require.Equal(t, "ns-crypto", deploy.Namespace)
 		require.Equal(t, "crypto", deploy.BaseEnvironment["MOOX_SPACE_ID"])
 		require.Equal(t, 50, cfg.SCFPlan.symbolsPerFunction("crypto"))
 	})
 	t.Run("only stockcn keeps its own defaults", func(t *testing.T) {
-		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  stockcn: {equity: [ap-nanjing]}\n", "    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  stockcn: {equity: [ap-nanjing]}\n", "    stockcn: {namespace: ns-stock}\n")))
 		require.NoError(t, err)
 		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
 		sizing := cfg.SCFPlan.autoSizing("stockcn")
@@ -419,26 +416,27 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 	})
 	t.Run("egress balance is configurable for any space and validated", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n",
-			"    crypto: {package_name: pkg-crypto, namespace: ns-crypto, egress_balance: {max_per_ip: 2, rounds: 3}}\n")))
+			"    crypto: {namespace: ns-crypto, egress_balance: {max_per_ip: 2, rounds: 3}}\n")))
 		require.NoError(t, err)
 		require.Equal(t, SCFPlanEgressBalance{MaxPerIP: 2, Rounds: 3}, *cfg.SCFPlan.Spaces["crypto"].EgressBalance, "任何空间都能配置，不写时段表示任何时候")
 		_, err = Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n",
-			"    crypto: {package_name: pkg-crypto, namespace: ns-crypto, egress_balance: {idle_start: \"25:00\", idle_end: \"09:00\"}}\n")))
+			"    crypto: {namespace: ns-crypto, egress_balance: {idle_start: \"25:00\", idle_end: \"09:00\"}}\n")))
 		require.ErrorContains(t, err, "egress_balance")
-		cfg, err = Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n", "    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n")))
+		cfg, err = Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n", "    crypto: {namespace: ns-crypto}\n")))
 		require.NoError(t, err)
 		require.Nil(t, cfg.SCFPlan.Spaces["crypto"].EgressBalance, "没配置就不做")
 	})
 	t.Run("several spaces", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
-			"    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
+			"    crypto: {namespace: ns-crypto}\n    stockcn: {namespace: ns-stock}\n")))
 		require.NoError(t, err)
 		require.Equal(t, []string{"crypto", "stockcn"}, cfg.scfSpaces())
 	})
-	t.Run("two spaces sharing one package are rejected", func(t *testing.T) {
-		_, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
-			"    crypto: {package_name: shared}\n    stockcn: {package_name: shared}\n")))
-		require.ErrorContains(t, err, "share code package")
+	t.Run("two spaces sharing one package are allowed", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
+			"    crypto: {}\n    stockcn: {}\n")))
+		require.NoError(t, err)
+		require.Equal(t, DefaultSCFPackageName, cfg.SCFPlan.PackageName)
 	})
 	t.Run("disabled renders nothing", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, "database: {path: ./c.db}\n"))
@@ -526,13 +524,13 @@ func TestPerMarketFetchOverridesOnlyTheirMarket(t *testing.T) {
 
 func TestPerMarketFetchYAMLIsStrictlyParsed(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n",
-		"    crypto: {package_name: pkg-crypto, namespace: ns-crypto, markets: {swap: {fetch: {not_before_ms: 9000}, lateness_s: 25}}}\n")))
+		"    crypto: {namespace: ns-crypto, markets: {swap: {fetch: {not_before_ms: 9000}, lateness_s: 25}}}\n")))
 	require.NoError(t, err)
 	require.Equal(t, 9000, cfg.SCFPlan.fetchFor("crypto", "swap").NotBeforeMS)
 	require.Equal(t, 3000, cfg.SCFPlan.fetchFor("crypto", "spot").NotBeforeMS, "未写的市场仍用内置默认")
 	require.Equal(t, 25, cfg.SCFPlan.marketLateness("crypto")["swap"])
 	_, err = Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n",
-		"    crypto: {package_name: pkg-crypto, markets: {swap: {unknown: 1}}}\n")))
+		"    crypto: {markets: {swap: {unknown: 1}}}\n")))
 	require.Error(t, err)
 }
 

@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { getFactorStatus, listAllFactorTasks } from "@/api/factor";
 import type { EngineStatus, FactorTask, FactorTaskInfo } from "@/api/factor/types";
+import { readAllPages } from "@/api/read-all-pages";
 import { listDatasets } from "@/api/storage/metadata";
 import { createLatestRequestGuard, type LatestRequest } from "@/utils/latest-request";
 
@@ -13,14 +14,13 @@ async function fetchAllTasks(spaceId: string) {
 }
 
 async function fetchDatasetNames(spaceId: string) {
-  const names: Record<string, string> = {};
-  for (let page = 1; ; page += 1) {
+  const datasets = await readAllPages(async page => {
     // 名称只用于展示，失败时回落到 dataset_id：一律静默（读取失败时每次刷新都会重试）
     const rsp = await listDatasets({ space_id: spaceId, page: { page, size: PAGE_SIZE } });
-    const batch = rsp.datasets || [];
-    for (const dataset of batch) names[dataset.dataset_id] = dataset.name;
-    if (!rsp.page_result?.has_more || !batch.length) break;
-  }
+    return { items: rsp.datasets || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
+  const names: Record<string, string> = {};
+  for (const dataset of datasets) names[dataset.dataset_id] = dataset.name;
   return names;
 }
 
@@ -39,9 +39,9 @@ export const useFactorStore = defineStore("factorStore", () => {
   const current = computed(() => tasks.value.find(item => item.factor_task.task_id === currentTaskId.value));
 
   /** 计算任务的展示名：任务名 · 频率；没有任务名时回落为数据集名称 · 频率，再回落为 source_dataset_id。 */
-  function taskLabel(set: Pick<FactorTask, "source_dataset_id" | "freq"> & Partial<Pick<FactorTask, "name">>) {
+  function taskLabel(set: Pick<FactorTask, "source_dataset_id" | "frequency"> & Partial<Pick<FactorTask, "name">>) {
     const base = set.name || datasetNames.value[set.source_dataset_id] || set.source_dataset_id;
-    return `${base} · ${set.freq}`;
+    return `${base} · ${set.frequency}`;
   }
 
   /** 该空间的计算任务是否已经成功加载过（页面重新挂载时据此跳过重置）。 */

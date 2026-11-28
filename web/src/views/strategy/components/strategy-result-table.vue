@@ -86,10 +86,7 @@
           <a-tab-pane key="items" title="逐标的解释"><ResultItems :result="detail.result" :items="detail.items" /></a-tab-pane>
           <a-tab-pane key="targets" title="目标权重"><TargetList :targets="detail.result.targets" /></a-tab-pane>
           <a-tab-pane key="binding" title="当时的绑定"
-            ><ResolvedTable
-              :resolved-json="detail.resolved_json"
-              :pool="isPoolDsl(detail.dsl_yaml || '')"
-              empty-text="会话快照缺失"
+            ><ResolvedTable :resolved-json="detail.resolved_json" empty-text="会话快照缺失"
           /></a-tab-pane>
           <a-tab-pane key="dsl" title="当时的 DSL">
             <pre class="code-block">{{ detail.dsl_yaml || "DSL 版本缺失" }}</pre>
@@ -105,7 +102,6 @@ import { computed, defineComponent, h, ref } from "vue";
 import type { InstrumentWeight, StrategyResult, StrategyResultDetail } from "@/api/strategy-types";
 import { getStrategyResult } from "@/api/strategy";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
-import { isPoolDsl } from "@/views/strategy/dsl";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import ResultOverview from "@/views/strategy/components/strategy-result-overview.vue";
 import { marketLabel } from "@/views/strategy/market-mode";

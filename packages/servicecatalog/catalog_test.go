@@ -67,11 +67,8 @@ func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 		if component.Health.Port != want[component.ID] {
 			t.Fatalf("incorrect health for %s", component.ID)
 		}
-		if component.Protected != slices.Contains([]string{"host-gateway", "admin"}, component.ID) {
+		if component.IsProtected() != slices.Contains([]string{"host-gateway", "admin"}, component.ID) {
 			t.Fatalf("incorrect protection for %s", component.ID)
-		}
-		if component.Replicas != Single {
-			t.Fatalf("incorrect replicas for %s", component.ID)
 		}
 	}
 	// 浏览器入口 9527 由 Admin 自己监听。
@@ -98,8 +95,18 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"duplicate component", func(c *Catalog) { c.Components = append(c.Components, c.Components[0]) }},
 		{"binary alias", func(c *Catalog) { componentPtr(c, "admin").Binary = "caddy" }},
 		{"invalid scope", func(c *Catalog) { c.Components[0].Scope = "arbitrary" }},
-		{"invalid replicas", func(c *Catalog) { c.Components[0].Replicas = "unlimited" }},
-		{"multi replicas", func(c *Catalog) { c.Components[0].Replicas = "multi" }},
+		{"invalid service space policy", func(c *Catalog) { servicePtr(c, "trpc.moox.infra.Auth").SpacePolicy = "unknown" }},
+		{"service space policy without console name", func(c *Catalog) { servicePtr(c, GatewayControlPath).SpacePolicy = SpacePolicyGlobal }},
+		{"invalid method space policy", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").SpacePolicy = "unknown" }},
+		{"method space policy without console name", func(c *Catalog) {
+			methodPtr(c, GatewayControlPath, "PullSnapshot").SpacePolicy = SpacePolicyGlobal
+		}},
+		{"method space policy overrides service level", func(c *Catalog) {
+			methodPtr(c, "trpc.moox.infra.Auth", "Login").SpacePolicy = SpacePolicyRequired
+		}},
+		{"inconsistent console service space policy", func(c *Catalog) {
+			servicePtr(c, "trpc.moox.storage.DataView").SpacePolicy = SpacePolicyGlobal
+		}},
 		{"missing health port", func(c *Catalog) { c.Components[0].Health.Port = 0 }},
 		{"duplicate port", func(c *Catalog) { c.Components[0].Ports = append(c.Components[0].Ports, 11012) }},
 		{"unknown caller", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"typo"} }},
@@ -222,12 +229,17 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"console", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", false},
 		{"moox-cli", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", true},
 		{"console", "trpc.moox.ops.SecretMgr", "GetSecretValue", false},
-		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", true},
+		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", false},
+		{"trade", "trpc.moox.ops.SecretMgr", "GetExchangeCredential", true},
+		{"console", "trpc.moox.ops.SecretMgr", "GetExchangeCredential", false},
+		{"moox-cli", "trpc.moox.ops.SecretMgr", "GetExchangeCredential", false},
+		{"collector", "trpc.moox.ops.SecretMgr", "GetExchangeCredential", false},
 		{"trade", "trpc.moox.ops.SecretMgr", "ListSecrets", false},
+		{"console", "trpc.moox.ops.SecretMgr", "EnsureInitialSecret", false},
+		{"moox-cli", "trpc.moox.ops.SecretMgr", "EnsureInitialSecret", true},
+		{"trade", "trpc.moox.ops.SecretMgr", "EnsureInitialSecret", false},
 		{"console", "trpc.moox.admin.Setup", "ApplySetup", false},
-		{"console", "trpc.moox.admin.Setup", "GetSetupStatus", false},
-		{"moox-cli", "trpc.moox.admin.Setup", "ApplySetup", true},
-		{"moox-cli", "trpc.moox.admin.Setup", "GetSetupStatus", true},
+		{"moox-cli", "trpc.moox.admin.Setup", "ApplySetup", false},
 		{"console", "trpc.moox.ops.SysDeploy", "SyncTopology", false},
 		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncTopology", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", true},
@@ -289,9 +301,8 @@ func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string]map[string][]string{
 		"scf-collector": {"trpc.moox.storage.PrimaryStore": {"CommitTimeSeriesBatch", "UpsertFields"}},
-		"moox-skill":    {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows"}},
 	}
-	if !slices.Equal(c.ExternalIdentities(), []string{"scf-collector", "moox-skill"}) {
+	if !slices.Equal(c.ExternalIdentities(), []string{"scf-collector"}) {
 		t.Fatalf("unexpected external identities %v", c.ExternalIdentities())
 	}
 	for _, principal := range c.ExternalIdentities() {
@@ -437,8 +448,8 @@ func TestOnlyReadOnlyAndDeclaredIdempotentMethodsAreRetryable(t *testing.T) {
 func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	c := mustCatalog(t)
 	for service, methods := range map[string][]string{
-		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"},
-		"Metadata":     {"GetDataset", "ListDatasetColumns", "CreateDataset", "UpsertDatasetColumn", "DeleteDataset", "UpdateDataset", "ListDatasetSubjects"},
+		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportDatasetPeriodCompleted"},
+		"Metadata":     {"GetDataset", "ListDatasetColumns", "UpsertDataset", "UpsertDatasetColumn", "DeleteDataset", "ListDatasetSubjects"},
 	} {
 		for _, method := range methods {
 			if !c.Allowed("factor-mgr", "trpc.moox.storage."+service, method) {
@@ -447,7 +458,7 @@ func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 		}
 	}
 	for service, methods := range map[string][]string{
-		"PrimaryStore": {"CommitTimeSeriesBatch"},
+		"PrimaryStore": {"CommitTimeSeriesBatch", "ReadDatasetChanges", "GetDatasetPeriodCompleted"},
 		"Metadata":     {"CreateSpace", "DeleteSpace"},
 	} {
 		for _, method := range methods {
@@ -464,7 +475,7 @@ func TestExternalProgramComponents(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string]map[string][]string{
 		"factor-engine":  {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}, "trpc.moox.factor.FactorEngine": {"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress", "GetTaskParams", "GetUdfModule"}},
-		"archive-worker": {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges"}, "trpc.moox.storage.Metadata": {"GetDataset", "ListDatasetColumns"}, "trpc.moox.archive.ArchiveWorker": {"ArchiveWorkerHeartbeat", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}},
+		"archive-worker": {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows", "ReadDatasetChanges"}, "trpc.moox.storage.Metadata": {"ListDatasetColumns"}, "trpc.moox.archive.ArchiveWorker": {"ArchiveWorkerHeartbeat", "ListFollowTasks", "ReportFollowResult", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}},
 	}
 	for _, id := range []string{"factor-engine", "archive-worker"} {
 		component, ok := c.Component(id)
@@ -563,7 +574,7 @@ func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 	for _, file := range primary.ConfigFiles {
 		targets = append(targets, file.Target())
 	}
-	if !slices.Equal(targets, []string{"trpc_go.yaml", "storage.yaml", "metadata.sql"}) {
+	if !slices.Equal(targets, []string{"trpc_go.yaml", "storage.yaml"}) {
 		t.Fatalf("storage-primary config files = %v", targets)
 	}
 	if UnitName("collector") != "moox-collector.service" {
@@ -577,7 +588,6 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	for _, tc := range []struct{ path, method string }{
 		{"trpc.moox.ops.SysDeploy", "SyncTopology"},
 		{"trpc.moox.archive.ArchiveMgr", "StartArchiveImport"},
-		{"trpc.moox.archive.ArchiveMgr", "ClearArchiveUnrecoverable"},
 	} {
 		if c.Allowed("console", tc.path, tc.method) {
 			t.Fatalf("console can call %s/%s", tc.path, tc.method)
@@ -597,14 +607,14 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	}
 }
 
-// 模块生命周期（设计 3.7）：六个模块的服务都有 GetLifecycle、ControlLifecycle，读给管理台与 moox-cli、写只给 moox-cli，没有机器调用方；
+// 模块生命周期（设计 3.7）：四个模块的服务都有 GetLifecycle、ControlLifecycle，读给管理台与 moox-cli、写只给 moox-cli，没有机器调用方；
 // ControlLifecycle 要等在途操作结束（采集最长 5 分钟，策略、Trade、因子引擎最长 30 秒），所以路由超时与模块的 tRPC 服务端超时
 // 都不能短于收敛时限，否则暂停会被网关或服务端先截断（H4）。
 func TestLifecycleMethodsAndTimeoutsCoverQuiesce(t *testing.T) {
 	c := mustCatalog(t)
 	quiesce := map[string]int64{
 		"trpc.moox.collector.CollectMgr": 300000, "trpc.moox.strategy.StrategyMgr": 30000, "trpc.moox.trade.TradeConsoleService": 30000,
-		"trpc.moox.factor.EngineControl": 30000, "trpc.moox.factor.FactorMgr": 0, "trpc.moox.archive.ArchiveMgr": 0,
+		"trpc.moox.factor.EngineControl": 30000,
 	}
 	serverTimeouts := map[string]int64{}
 	files, err := filepath.Glob("../../modules/*/config/trpc_go*.yaml")

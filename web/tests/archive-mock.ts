@@ -15,7 +15,7 @@ const datasets = [
     dataset_id: "ds_kline_1m",
     name: "现货 1 分钟 K 线",
     data_kind: 2,
-    freq: "1m",
+    frequency: "1m",
     status: "active",
     retention: "840h"
   },
@@ -23,7 +23,7 @@ const datasets = [
     dataset_id: "ds_kline_5m",
     name: "现货 5 分钟 K 线",
     data_kind: 2,
-    freq: "5m",
+    frequency: "5m",
     status: "active",
     retention: "840h"
   },
@@ -33,7 +33,7 @@ const datasets = [
 const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
   space_id: "crypto",
   dataset_id: datasetId,
-  freq: "1m",
+  frequency: "1m",
   partition_unit: "day",
   retention: "840h",
   status: "enabled",
@@ -225,7 +225,7 @@ async function gateway(route: Route) {
     case "PrepareArchiveTask":
       return route.fulfill({
         json: ok({
-          freq: "5m",
+          frequency: "5m",
           partition_unit: "day",
           retention: "840h",
           earliest_backfill_from: iso(NOW - 34 * DAY),
@@ -240,7 +240,7 @@ async function gateway(route: Route) {
       tasks = [
         ...tasks,
         task(String(body.dataset_id), {
-          freq: "5m",
+          frequency: "5m",
           dir_name: String(body.dir_name || ""),
           partition_count: 0,
           min_data_time: "",
@@ -252,7 +252,7 @@ async function gateway(route: Route) {
     case "ListArchiveRuns":
       return route.fulfill({ json: ok({ runs, page_result: { total: runs.length } }) });
     case "CancelArchiveRun":
-      return route.fulfill({ json: ok({ run: { ...runs[0], status: "canceled" } }) });
+      return route.fulfill({ json: ok({ run: { ...runs[0], status: "cancelled" } }) });
     case "ListArchivePartitions":
       return route.fulfill({ json: ok({ partitions, page_result: { total: partitions.length } }) });
     case "GetArchivePartition":

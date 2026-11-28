@@ -38,7 +38,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if expected := pin.GetRevision(); expected != 0 && expected != startRevision {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index revision changed: expected=%d actual=%d", expected, startRevision))}, nil
 	}
-	selectors, err := timeSeriesSelectors(req.GetSpaceId(), req.GetDatasetId(), req.GetSelectors())
+	selectors, err := timeSeriesSelectors(req.GetSelectors())
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
@@ -71,10 +71,10 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if currentRevision != startRevision {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index was updated during query: start=%d current=%d", startRevision, currentRevision))}, nil
 	}
-	out := make([]*pb.TimeSeriesRow, 0, len(rows))
+	out := make([]*pb.Row, 0, len(rows))
 	hidden := runtimeHiddenColumns(runtime)
 	for _, row := range rows {
-		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: visibleFields(row.GetFields(), hidden)})
+		out = append(out, &pb.Row{Key: row.GetKey(), Fields: visibleFields(row.GetFields(), hidden)})
 	}
 	stats, hasStats := cachedActiveIndexStats(runtime, indexID)
 	if req.GetTotalMode() != pb.TotalMode_NONE {
@@ -143,7 +143,7 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		if k == nil {
 			return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("record key is required"))}, nil
 		}
-		keys = append(keys, recordRowKey(k))
+		keys = append(keys, recordRowKey(req.GetSpaceId(), req.GetDatasetId(), k))
 	}
 	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetDatasetId())
 	engine, err := engineFor(runtime, indexID)
@@ -156,10 +156,10 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 	if err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
 	}
-	out := make([]*pb.RecordRow, 0, len(rows))
+	out := make([]*pb.Row, 0, len(rows))
 	hidden := runtimeHiddenColumns(runtime)
 	for _, row := range rows {
-		out = append(out, &pb.RecordRow{Key: rowToRecordKey(row.GetKey()), Fields: visibleFields(row.GetFields(), hidden)})
+		out = append(out, &pb.Row{Key: row.GetKey(), Fields: visibleFields(row.GetFields(), hidden)})
 	}
 	// Record views have no time-window coverage; the active index itself is the completeness signal.
 	stats, statsErr := engine.Stat(ctx, indexID)
@@ -245,22 +245,8 @@ func queryPage(page *pb.Page) (int, int) {
 	return pageNo, size
 }
 
-func rowToTimeSeriesKey(k *pb.RowKey) *pb.TimeSeriesKey {
-	if k == nil || k.GetTimeSeries() == nil {
-		return nil
-	}
-	return &pb.TimeSeriesKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), SubjectId: k.GetTimeSeries().GetSubjectId(), Freq: k.GetTimeSeries().GetFreq(), DataTime: k.GetTimeSeries().GetDataTime(), SeriesTag: k.GetTimeSeries().GetSeriesTag()}
-}
-
-func recordRowKey(k *pb.RecordKey) *pb.RowKey {
-	return &pb.RowKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: k.GetRecordId(), Version: k.GetVersion()}}}
-}
-
-func rowToRecordKey(k *pb.RowKey) *pb.RecordKey {
-	if k == nil || k.GetRecord() == nil {
-		return nil
-	}
-	return &pb.RecordKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), RecordId: k.GetRecord().GetRecordId(), Version: k.GetRecord().GetVersion()}
+func recordRowKey(spaceID, datasetID string, k *pb.RecordRowKey) *pb.RowKey {
+	return &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: k.GetRecordId(), Version: k.GetVersion()}}}
 }
 func queryErrorCode(err error) pb.ErrorCode {
 	if err == nil {
@@ -323,32 +309,21 @@ func runtimeCoverageComplete(runtime *viewRuntime, rng *pb.TimeRange, stats view
 	return runtime.queryState().active() && queryCoverageComplete(rng, stats)
 }
 
-// timeSeriesSelectors 校验并转换时序选择器：每个选择器的空间与数据集都必须等于请求的空间与数据集。
-func timeSeriesSelectors(spaceID, datasetID string, selectors []*pb.TimeSeriesSelector) ([]viewindex.TimeSeriesSelector, error) {
+// timeSeriesSelectors 校验并转换时序选择器：空间与数据集取自外层请求。
+func timeSeriesSelectors(selectors []*pb.TimeSeriesSelector) ([]viewindex.TimeSeriesSelector, error) {
 	if len(selectors) == 0 {
 		return nil, nil
-	}
-	if strings.TrimSpace(spaceID) == "" {
-		return nil, errors.New("space_id is required")
 	}
 	out := make([]viewindex.TimeSeriesSelector, 0, len(selectors))
 	for _, selector := range selectors {
 		if selector == nil {
 			return nil, errors.New("time-series selector is required")
 		}
-		if selector.GetSpaceId() == "" || selector.GetDatasetId() == "" ||
-			selector.GetSubjectId() == "" || selector.GetFreq() == "" {
-			return nil, errors.New("selector space_id, dataset_id, subject_id, and freq are required")
-		}
-		if selector.GetSpaceId() != spaceID {
-			return nil, errors.New("selector space_id does not match the request")
-		}
-		if selector.GetDatasetId() != datasetID {
-			return nil, errors.New("selector dataset_id does not match the request")
+		if selector.GetSubjectId() == "" || selector.GetFrequency() == "" {
+			return nil, errors.New("selector subject_id and freq are required")
 		}
 		out = append(out, viewindex.TimeSeriesSelector{
-			SpaceID: selector.GetSpaceId(), DatasetID: selector.GetDatasetId(),
-			SubjectID: selector.GetSubjectId(), Freq: selector.GetFreq(),
+			SubjectID: selector.GetSubjectId(), Freq: selector.GetFrequency(),
 			SeriesTag: selector.SeriesTag,
 		})
 	}

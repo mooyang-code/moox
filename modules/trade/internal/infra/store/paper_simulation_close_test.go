@@ -104,3 +104,24 @@ func TestClosePaperSimulationKeepsSpotValueInEquity(t *testing.T) {
 		})
 	}
 }
+
+func TestClosePaperSimulationRejectsMemberStillInLogicalAccount(t *testing.T) {
+	s := openTestStore(t)
+	fill := seedPaperBalanceOrder(t, s)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: fill.SpaceID, LogicalAccountID: "logical-1", Name: "logical-1",
+			Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "init",
+		}); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
+			SpaceID: fill.SpaceID, LogicalAccountID: "logical-1", TradingAccountID: fill.TradingAccountID, Enabled: true, Priority: 1,
+		})
+	}))
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		return tx.ClosePaperAccount(fill.SpaceID, fill.TradingAccountID, time.Now().UTC())
+	})
+	require.ErrorIs(t, err, ErrConflict)
+}

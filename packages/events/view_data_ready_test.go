@@ -1,10 +1,10 @@
 package events
 
 import (
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -41,7 +41,7 @@ func TestViewDataReadyContract(t *testing.T) {
 	})
 
 	now := time.Now().UnixMilli()
-	validReady := &storagepb.ViewDataReady{
+	validReady := &eventpb.ViewDataReady{
 		CompletionEventId: "collector-completed-1",
 		DatasetId:         "dataset_kline_1m",
 		Status:            "complete",
@@ -53,15 +53,15 @@ func TestViewDataReadyContract(t *testing.T) {
 	t.Run("missing identity fields are rejected", func(t *testing.T) {
 		cases := []struct {
 			name   string
-			mutate func(*storagepb.ViewDataReady)
+			mutate func(*eventpb.ViewDataReady)
 		}{
-			{name: "completion_event_id", mutate: func(v *storagepb.ViewDataReady) { v.CompletionEventId = "" }},
-			{name: "detail_type", mutate: func(v *storagepb.ViewDataReady) { v.Detail = []byte("x") }},
-			{name: "dataset_id", mutate: func(v *storagepb.ViewDataReady) { v.DatasetId = "" }},
+			{name: "completion_event_id", mutate: func(v *eventpb.ViewDataReady) { v.CompletionEventId = "" }},
+			{name: "detail_type", mutate: func(v *eventpb.ViewDataReady) { v.Detail = []byte("x") }},
+			{name: "dataset_id", mutate: func(v *eventpb.ViewDataReady) { v.DatasetId = "" }},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				invalid := proto.Clone(validReady).(*storagepb.ViewDataReady)
+				invalid := proto.Clone(validReady).(*eventpb.ViewDataReady)
 				tc.mutate(invalid)
 				_, err := registry.Encode(ViewDataReady, invalid, validationOptions("ready-1", "space", "dataset_kline_1m"))
 				require.Error(t, err)
@@ -80,8 +80,8 @@ func TestViewDataReadyContract(t *testing.T) {
 	})
 
 	t.Run("failed_subjects rules", func(t *testing.T) {
-		withFailed := func(status string, universe, failed []string) *storagepb.ViewDataReady {
-			ready := proto.Clone(validReady).(*storagepb.ViewDataReady)
+		withFailed := func(status string, universe, failed []string) *eventpb.ViewDataReady {
+			ready := proto.Clone(validReady).(*eventpb.ViewDataReady)
 			ready.Status, ready.UniverseSubjectIds, ready.FailedSubjects = status, universe, failed
 			return ready
 		}

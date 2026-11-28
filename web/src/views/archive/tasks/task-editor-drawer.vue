@@ -24,7 +24,7 @@
               :key="item.dataset_id"
               :value="item.dataset_id"
               :disabled="taskIds.has(item.dataset_id)"
-              >{{ item.name || item.dataset_id }} · {{ item.freq || "—" }} · {{ formatRetention(item.retention)
+              >{{ item.name || item.dataset_id }} · {{ item.frequency || "—" }} · {{ formatRetention(item.retention)
               }}{{ taskIds.has(item.dataset_id) ? "（已有任务）" : "" }}</a-option
             >
           </a-select>
@@ -131,7 +131,7 @@ const props = defineProps<{
   mode: "create" | "edit";
   task: ArchiveTask | null;
   presetDatasetId: string;
-  /** 应该归档的数据集（时序、active、有限保留期） */
+  /** 当前空间的时序数据集（归档任务由 ArchiveMgr 自动补齐，手工新建入口保留） */
   datasets: Dataset[];
   tasks: ArchiveTask[];
   zone: string;
@@ -212,7 +212,7 @@ watch(
       Object.assign(form, {
         datasetId: props.task.dataset_id || "",
         backfillFrom: toInstantMs(props.task.backfill_from),
-        enabled: props.task.status !== "paused",
+        enabled: props.task.status !== "disabled",
         dirName: props.task.dir_name || ""
       });
     } else {
@@ -322,15 +322,15 @@ async function submit() {
       await createArchiveTask({
         dataset_id: form.datasetId,
         backfill_from: iso(form.backfillFrom),
-        paused: !form.enabled,
+        disabled: !form.enabled,
         dir_name: form.dirName
       });
       Message.success("归档任务已创建");
       emit("update:visible", false);
       emit("created", form.datasetId);
     } else if (props.task) {
-      const status = form.enabled ? "enabled" : "paused";
-      if (status !== (props.task.status === "paused" ? "paused" : "enabled")) {
+      const status = form.enabled ? "enabled" : "disabled";
+      if (status !== (props.task.status === "disabled" ? "disabled" : "enabled")) {
         await updateArchiveTask({ dataset_id: props.task.dataset_id || "", status });
       }
       Message.success("已保存");

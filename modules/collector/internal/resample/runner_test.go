@@ -41,7 +41,7 @@ func (f fakeSource) ResolveSubjects(context.Context, string, []string) ([]domain
 // seedTask 在库里建一个就绪的合成任务，并给源数据集铺好 [from, to) 内每根 5m。
 func seedTask(t *testing.T, mgr *store.Store, storage *fakeStorage, subjects []string, from, to time.Time) {
 	t.Helper()
-	params := `{"provider":"binance","market_type":"spot","source_dataset_id":"dataset_src","source_frequency":"5m","source_series_tag":"venue:binance","target_dataset_id":"dataset_task","target_frequency":"15m"}`
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"5m","source_series_tag":"venue:binance","target_frequency":"15m"}`
 	require.NoError(t, mgr.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task", DataType: "kline_resample", CollectParams: params, Enabled: true,
 		ResultDatasetID: "dataset_task", PrepareState: domain.PrepareStateReady,
@@ -104,7 +104,7 @@ func TestFallbackAcrossAllSpacesCoversCustomSpace(t *testing.T) {
 	mgr := openState(t)
 	storage := newFakeStorage()
 	now := utc("2026-10-21T10:36:30Z")
-	params := `{"source_dataset_id":"dataset_src","source_frequency":"5m","source_series_tag":"venue:ext","target_dataset_id":"dataset_sandbox_15m","target_frequency":"15m"}`
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"5m","source_series_tag":"venue:ext","target_frequency":"15m"}`
 	require.NoError(t, mgr.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "sandbox", TaskID: "task-sandbox", DataType: "kline_resample", CollectParams: params, Enabled: true,
 		ResultDatasetID: "dataset_sandbox_15m", PrepareState: domain.PrepareStateReady,

@@ -11,9 +11,10 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
-// Factory constructs an execution adapter for one account binding. The
-// exchange package only owns transport/domain types; execution owns binding
-// and adapter selection so application code depends on one port.
+// MarketDataFactory 构造一个场所的公共行情源（不需要密钥），供模拟盘与公共行情查询使用。
+type MarketDataFactory func(exchange.AccountConfig) (PublicMarketData, error)
+
+// AdapterFactory 构造一个场所的实盘下单通道适配器（需要密钥）；不支持实盘的场所登记为 nil。
 type AdapterFactory func(exchange.AccountConfig, exchange.Credential) (ExecutionAdapter, error)
 
 type ExchangeIdentity interface {
@@ -93,28 +94,37 @@ func (r *Registry) Inspect(ctx context.Context, name exchange.Exchange, request 
 
 type Registry struct {
 	mu          sync.RWMutex
-	factories   map[exchange.Exchange]AdapterFactory
+	marketData  map[exchange.Exchange]MarketDataFactory
+	live        map[exchange.Exchange]AdapterFactory
 	descriptors map[exchange.Exchange]ExchangeDescriptor
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		factories:   make(map[exchange.Exchange]AdapterFactory),
+		marketData:  make(map[exchange.Exchange]MarketDataFactory),
+		live:        make(map[exchange.Exchange]AdapterFactory),
 		descriptors: make(map[exchange.Exchange]ExchangeDescriptor),
 	}
 }
 
-func (r *Registry) Register(descriptor ExchangeDescriptor, factory AdapterFactory) {
+// Register 登记一个场所：公共行情工厂必填；下单通道工厂可为空，为空表示这个场所不能建实盘账户。
+func (r *Registry) Register(descriptor ExchangeDescriptor, marketData MarketDataFactory, live AdapterFactory) {
 	name := descriptor.Exchange
-	if !name.Valid() || factory == nil {
-		panic("execution: Register requires a supported Exchange and factory")
+	if !name.Valid() || marketData == nil {
+		panic("execution: Register requires a supported Exchange and market data factory")
+	}
+	if live == nil && strings.TrimSpace(descriptor.LiveUnavailable) == "" {
+		descriptor.LiveUnavailable = fmt.Sprintf("场所 %s 没有实盘下单通道", name)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.factories[name]; exists {
+	if _, exists := r.marketData[name]; exists {
 		panic(fmt.Sprintf("execution: duplicate registration for %q", name))
 	}
-	r.factories[name] = factory
+	r.marketData[name] = marketData
+	if live != nil {
+		r.live[name] = live
+	}
 	r.descriptors[name] = descriptor
 }
 
@@ -126,16 +136,61 @@ func (r *Registry) Descriptor(name exchange.Exchange) (ExchangeDescriptor, bool)
 	return descriptor, ok
 }
 
-func (r *Registry) Bind(config exchange.AccountConfig, credential exchange.Credential) (ExecutionAdapter, error) {
+// BindMarketData 按账户配置绑定场所的公共行情源（供模拟盘使用，不校验也不传递交易凭据）。
+func (r *Registry) BindMarketData(config exchange.AccountConfig) (PublicMarketData, error) {
 	if err := validateBinding(config); err != nil {
 		return nil, err
 	}
 	r.mu.RLock()
-	factory, ok := r.factories[config.Exchange]
-	descriptor := r.descriptors[config.Exchange]
+	factory, ok := r.marketData[config.Exchange]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("execution: unregistered Exchange %q", config.Exchange)
+	}
+	sources := make(map[exchange.MarketType]PublicMarketData, len(config.Markets))
+	for _, market := range config.Markets {
+		single := config
+		single.Markets = []exchange.MarketType{market}
+		if !exchange.RuleFor(market).Leverage {
+			single.MarginMode = exchange.MarginModeUnspecified
+		}
+		source, err := factory(single)
+		if err != nil {
+			return nil, fmt.Errorf("execution: bind %s market data for account %q market %s: %w", config.Exchange, config.TradingAccountID, market, err)
+		}
+		if source == nil {
+			return nil, fmt.Errorf("execution: %s market data factory returned nil source", config.Exchange)
+		}
+		identity, ok := source.(ExchangeIdentity)
+		if !ok || identity.Exchange() != config.Exchange {
+			return nil, fmt.Errorf("execution: market data identity does not match account Exchange %q", config.Exchange)
+		}
+		sources[market] = source
+	}
+	if len(config.Markets) == 1 {
+		return sources[config.Markets[0]], nil
+	}
+	return NewMultiMarketData(config.Exchange, config.Markets, sources)
+}
+
+// Bind 按账户配置与凭据绑定场所的实盘下单通道适配器；没有登记下单通道的场所直接拒绝。
+func (r *Registry) Bind(config exchange.AccountConfig, credential exchange.Credential) (ExecutionAdapter, error) {
+	if err := validateBinding(config); err != nil {
+		return nil, err
+	}
+	if config.ExecutionMode != exchange.ExecutionModeLive {
+		return nil, fmt.Errorf("execution: Bind 只用于实盘账户，模拟盘请使用 BindMarketData")
+	}
+	r.mu.RLock()
+	_, registered := r.marketData[config.Exchange]
+	factory := r.live[config.Exchange]
+	descriptor := r.descriptors[config.Exchange]
+	r.mu.RUnlock()
+	if !registered {
+		return nil, fmt.Errorf("execution: unregistered Exchange %q", config.Exchange)
+	}
+	if factory == nil {
+		return nil, errors.New(descriptor.LiveUnavailable)
 	}
 	if descriptor.WholeAccount != nil && descriptor.WholeAccount(config) {
 		adapter, err := factory(config, credential)

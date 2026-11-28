@@ -79,7 +79,7 @@ func TestCollectorFunctionDeletePreviewUsesTheServerDryRun(t *testing.T) {
 	require.Len(t, targets, 1)
 	assert.Equal(t, "legacy", targets[0].(map[string]any)["namespace"])
 	require.Len(t, preview["refused"].([]any), 1)
-	assert.Contains(t, preview["note"], "setup inspect-scf", "提示旧账号下的函数怎么找")
+	assert.Contains(t, preview["note"], "collector function inspect", "提示旧账号下的函数怎么找")
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(gateway.bodies["DeleteCloudFunctions"], &body))
 	assert.Equal(t, true, body["dry_run"])
@@ -140,7 +140,7 @@ func TestCollectorFunctionProbeSummarisesDistinctEgressIPs(t *testing.T) {
 	assert.Equal(t, []any{"a", "b"}, body["names"])
 }
 
-// 新的云账号、代码包命令是规格命令：删除默认只预览；账号命令与空间无关，代码包命令把 --space-id 写进请求。
+// 云账号与代码包命令都是全局规格命令：删除默认只预览，均不携带 space_id。
 func TestCollectorAccountAndPackageCommandsPreviewDeletes(t *testing.T) {
 	gateway := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
 	useRPCGateway(t, gateway)
@@ -151,15 +151,17 @@ func TestCollectorAccountAndPackageCommandsPreviewDeletes(t *testing.T) {
 	stdout, _, err := runSpecCommand(t, specs[collectMgr+"/DeleteCloudAccount"], "--account-id", "old-account")
 	require.NoError(t, err)
 	assert.Equal(t, "old-account", parsePreview(t, stdout)["request"].(map[string]any)["account_id"])
-	stdout, _, err = runSpecCommand(t, specs[collectMgr+"/DeleteFunctionPackage"], "--space-id", "stockcn", "--package-id", "pkg-1")
+	stdout, _, err = runSpecCommand(t, specs[collectMgr+"/DeleteFunctionPackage"], "--package-id", "pkg-1")
 	require.NoError(t, err)
-	assert.Equal(t, "stockcn", parsePreview(t, stdout)["request"].(map[string]any)["space_id"])
+	deleteReq := parsePreview(t, stdout)["request"].(map[string]any)
+	assert.Equal(t, "pkg-1", deleteReq["package_id"])
+	assert.NotContains(t, deleteReq, "space_id")
 	assert.Zero(t, gateway.calls, "预览不发请求")
 
-	_, _, err = runSpecCommand(t, specs[collectMgr+"/ListFunctionPackages"], "--space-id", "stockcn")
+	_, _, err = runSpecCommand(t, specs[collectMgr+"/ListFunctionPackages"])
 	require.NoError(t, err)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(gateway.bodies["ListFunctionPackages"], &body))
-	assert.Equal(t, "stockcn", body["space_id"])
-	assert.Contains(t, specs[collectMgr+"/DeleteCloudAccount"].Short, "setup inspect-scf", "删账号的说明里写明旧账号下的函数怎么处理")
+	assert.NotContains(t, body, "space_id")
+	assert.Contains(t, specs[collectMgr+"/DeleteCloudAccount"].Short, "collector function inspect", "删账号的说明里写明旧账号下的函数怎么处理")
 }

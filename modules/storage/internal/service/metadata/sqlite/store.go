@@ -5,12 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
-	_ "modernc.org/sqlite"
+	storageschema "github.com/mooyang-code/moox/modules/storage/schema"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 var _ coremetadata.Store = (*Store)(nil)
@@ -46,52 +50,31 @@ func (s *Store) WithReadSnapshot(ctx context.Context, fn func(context.Context) e
 
 // Options 保存 SQLite 元数据存储打开配置。
 type Options struct {
-	Path       string
-	SchemaPath string
+	Path string
 }
 
 // Store 封装 SQLite 元数据表的直接读写能力。
 type Store struct {
-	db         *sql.DB
-	schemaPath string
-	now        func() time.Time
+	db  *sql.DB
+	now func() time.Time
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
 	if opts.Path == "" {
 		return nil, errors.New("metadata sqlite path is required")
 	}
-	db, err := sql.Open("sqlite", withPragmas(opts.Path))
+	db, err := sqlitedb.OpenSQL(sqlitedb.Options{
+		Path:          opts.Path,
+		BusyTimeoutMS: 5000,
+	})
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	return &Store{db: db, schemaPath: opts.SchemaPath, now: time.Now}, nil
-}
-
-func withPragmas(path string) string {
-	separator := "?"
-	if strings.Contains(path, "?") {
-		separator = "&"
-	}
-	return path + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+	return &Store{db: db, now: time.Now}, nil
 }
 
 func (s *Store) Close() error {
@@ -101,81 +84,43 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// InitSchema 统一使用二进制内嵌的 schema 初始化并校验元数据库。
 func (s *Store) InitSchema(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("metadata store is not open")
 	}
-	if s.schemaPath == "" {
-		return errors.New("metadata schema path is required for schema initialization")
-	}
-	if err := s.checkSchemaVersion(ctx); err != nil {
-		return err
-	}
-	schema, err := os.ReadFile(s.schemaPath)
-	if err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, string(schema))
-	return err
+	return sqlitedb.ApplySchemaSQL(ctx, s.db, "storage-primary", storageschema.AllSQL())
 }
 
-// ValidateSchemaVersion checks that the persisted metadata database matches the
-// schema shipped with the current binary without creating or altering tables.
-func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
+// ValidateSchema 严格比对持久化元数据库与当前二进制内嵌的 schema（不建表、不改表）。
+func (s *Store) ValidateSchema(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("metadata store is not open")
 	}
-	if err := s.checkSchemaVersion(ctx); err != nil {
-		return err
-	}
-	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 't_schema_meta'`).Scan(&count); err != nil {
-		return err
-	}
-	if count == 0 {
-		return errors.New("storage metadata schema is not initialized")
-	}
-	return nil
+	return sqlitedb.ValidateSQL(ctx, s.db, "storage-primary", storageschema.AllSQL(), false)
 }
 
-const metadataSchemaVersion = "21"
-
-func (s *Store) checkSchemaVersion(ctx context.Context) error {
-	var schemaTableCount int
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(1) FROM sqlite_master
-		WHERE type = 'table' AND name = 't_schema_meta'
-	`).Scan(&schemaTableCount); err != nil {
-		return err
-	}
-	if schemaTableCount == 0 {
-		var existingTables int
-		if err := s.db.QueryRowContext(ctx, `
-			SELECT COUNT(1) FROM sqlite_master
-			WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-		`).Scan(&existingTables); err != nil {
-			return err
-		}
-		if existingTables > 0 {
-			return errors.New("incompatible storage metadata schema; reset metadata database")
-		}
+// RecordPrimaryFormat 在元数据库与 Pebble 布局都校验通过后，核对并把 storage-primary 的复合格式写入数据目录。
+// storage-primary 的事件摘要仅覆盖已注册事件的名称、版本与负载描述（不含 EventBus Stream 与消费者声明）。
+// hasExistingData 为真且已有格式文件但格式值不符时拒绝启动并提示全新部署。
+func RecordPrimaryFormat(storageRoot string, hasExistingData bool) error {
+	if strings.TrimSpace(storageRoot) == "" {
 		return nil
 	}
-	var version string
-	err := s.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) {
-		return errors.New("incompatible storage metadata schema; reset metadata database")
-	}
+	eventsDigest, err := events.MessagesFormatDigest()
 	if err != nil {
-		return err
+		return fmt.Errorf("计算事件格式摘要失败：%w", err)
 	}
-	if version != metadataSchemaVersion {
-		return fmt.Errorf("incompatible storage metadata schema v%s; remove the metadata database and run init and metadata apply", version)
-	}
-	return nil
+	return sqlitedb.RecordFormatAt(
+		filepath.Join(storageRoot, dataformat.FileName),
+		"storage-primary",
+		storageschema.AllSQL(),
+		map[string]string{
+			dataformat.PartStoragePebbleLayout: strconv.Itoa(dataformat.StoragePebbleLayoutVersion),
+			dataformat.PartEvents:              eventsDigest,
+		},
+		hasExistingData,
+	)
 }
 
 func (s *Store) nowUTC() time.Time {

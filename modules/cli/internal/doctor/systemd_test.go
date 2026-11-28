@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,53 +40,45 @@ func TestSystemdCheckerRequiresEnabledActiveAndLinger(t *testing.T) {
 }
 
 func TestSupervisorResultMapsStates(t *testing.T) {
-	pass := supervisorResult("service.supervisor:x@y", "moox-factor-engine", SystemdState{true, true, true}, nil)
+	pass := supervisorResult("bootstrap.service_autostart:x@y", "moox-factor-engine", SystemdState{true, true, true}, nil)
 	assert.Equal(t, core.StatusPass, pass.Status)
-	fail := supervisorResult("service.supervisor:x@y", "moox-factor-engine", SystemdState{false, true, true}, nil)
+	fail := supervisorResult("bootstrap.service_autostart:x@y", "moox-factor-engine", SystemdState{false, true, true}, nil)
 	assert.Equal(t, core.StatusFail, fail.Status, "active 但没有开机自启不通过")
 	assert.Contains(t, fail.Summary, "enabled=false active=true linger=true")
-	unknown := supervisorResult("service.supervisor:x@y", "moox-factor-engine", SystemdState{}, errors.New("ssh down"))
+	unknown := supervisorResult("bootstrap.service_autostart:x@y", "moox-factor-engine", SystemdState{}, errors.New("ssh down"))
 	assert.Equal(t, core.StatusUnknown, unknown.Status)
 }
 
-func supervisorSnapshot(t *testing.T, node string) *monitorpb.GetDoctorContextRsp {
-	t.Helper()
-	return &monitorpb.GetDoctorContextRsp{
-		ManifestChecksum: embeddedManifestChecksum(t),
-		ExpectedComponents: []*monitorpb.DoctorExpectedComponent{
-			{ComponentId: "factor-engine", NodeId: node, Expected: true, Transport: "delegated", FunctionalObservability: "deferred"},
-		},
-	}
-}
-
-func TestDiagnoseChecksTheSystemdSupervisorOfEveryComponent(t *testing.T) {
-	snapshot := supervisorSnapshot(t, "factor")
+func TestBootstrapChecksTheSystemdSupervisorOfEveryComponent(t *testing.T) {
+	manifest, err := core.LoadEmbeddedManifest()
+	require.NoError(t, err)
+	root := t.TempDir()
+	writeVersion(t, root, manifest.Checksum)
 	var asked []string
-	options := DiagnoseOptions{
-		NodeID: "factor", Client: contextClientStub{rsp: snapshot}, CheckIDs: []string{"service.supervisor:factor-engine@factor"},
+	options := BootstrapOptions{
+		NodeID:      "factor",
+		LocalNodeID: "factor",
+		DeployRoot:  root,
+		Client: deploymentClientStub{rows: []Deployment{
+			{ComponentID: "host-gateway", HostID: "factor", Status: "enabled"},
+			{ComponentID: "host-agent", HostID: "factor", Status: "enabled"},
+			{ComponentID: "factor-engine", HostID: "factor", Status: "enabled"},
+		}},
+		CheckIDs: []string{"bootstrap.service_autostart:factor-engine@factor"},
 		Systemd: func(_ context.Context, node, unit string) (SystemdState, error) {
 			asked = append(asked, node+"/"+unit)
 			return SystemdState{Enabled: false, Active: true, Linger: true}, nil
 		},
 	}
-	result, err := RunDiagnose(t.Context(), options)
+	result, err := RunBootstrap(t.Context(), options)
 	require.NoError(t, err)
-	check := result.CheckByID("service.supervisor:factor-engine@factor")
+	check := result.CheckByID("bootstrap.service_autostart:factor-engine@factor")
 	require.NotNil(t, check)
 	assert.Equal(t, core.StatusFail, check.Status, "active 但 disabled 不通过")
 	assert.Equal(t, []string{"factor/moox-factor-engine.service"}, asked)
 
 	options.Systemd = nil
-	result, err = RunDiagnose(t.Context(), options)
+	result, err = RunBootstrap(t.Context(), options)
 	require.NoError(t, err)
-	assert.Equal(t, core.StatusUnknown, result.CheckByID("service.supervisor:factor-engine@factor").Status)
-
-	// 普通组件同样由 systemd 托管；未知组件不在诊断清单里。
-	manifest, err := core.LoadEmbeddedManifest()
-	require.NoError(t, err)
-	unit, systemd := systemdUnit(manifest, "trade")
-	assert.True(t, systemd)
-	assert.Equal(t, "moox-trade.service", unit)
-	_, systemd = systemdUnit(manifest, "unknown-component")
-	assert.False(t, systemd)
+	assert.Equal(t, core.StatusUnknown, result.CheckByID("bootstrap.service_autostart:factor-engine@factor").Status)
 }

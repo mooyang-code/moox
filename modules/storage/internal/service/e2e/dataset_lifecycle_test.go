@@ -41,7 +41,7 @@ func newPrimaryProcess(t *testing.T, ctx context.Context, meta coremetadata.Stor
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	primary, err := primarystore.New(primarystore.Options{Store: store, Validator: primarystore.NewMetadataValidator(cache), Snapshot: cache.RequestSnapshot})
+	primary, err := primarystore.New(primarystore.Options{Store: store, Datasets: cache})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestDatasetLifecycleInPrimaryProcess(t *testing.T) {
 		t.Fatal("deleted Dataset accepted a write")
 	}
 	// 绕过请求快照直接写存储层（相当于删除前就已通过校验的迟到写入）：拿到读锁后按最新元数据被拒绝。
-	if err := process.store.UpsertFields(ctx, "quant", "dataset_a", []*pb.RowFieldUpsert{row}); !errors.Is(err, pebble.ErrDatasetDeleted) {
+	if err := process.store.UpsertFields(ctx, "quant", "dataset_a", []*pb.Row{row}); !errors.Is(err, pebble.ErrDatasetDeleted) {
 		t.Fatalf("late write after delete err=%v, want ErrDatasetDeleted", err)
 	}
 
@@ -139,8 +139,7 @@ func readLifecycleValues(t *testing.T, ctx context.Context, primary *primarystor
 func openLifecycleStore(t *testing.T, ctx context.Context) *metasqlite.Store {
 	t.Helper()
 	store, err := metasqlite.Open(ctx, metasqlite.Options{
-		Path:       filepath.Join(t.TempDir(), "metadata.db"),
-		SchemaPath: filepath.Join("..", "..", "..", "schema", "metadata.sql"),
+		Path: filepath.Join(t.TempDir(), "metadata.db"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -164,9 +163,10 @@ func seedLifecycleParents(t *testing.T, ctx context.Context, store *metasqlite.S
 
 func createDataset(t *testing.T, ctx context.Context, service *catalog.Service, datasetID, name string) *pb.Dataset {
 	t.Helper()
-	rsp, err := service.CreateDataset(ctx, &pb.CreateDatasetReq{
-		Dataset: &pb.Dataset{SpaceId: "quant", DatasetId: datasetID, DataSourceId: "source_a", Name: name, DataKind: pb.DataKind_DATA_KIND_RECORD},
-		Columns: []*pb.DatasetColumn{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active", DisplayName: "数值"}},
+	rsp, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{
+		Dataset:    &pb.Dataset{SpaceId: "quant", DatasetId: datasetID, DataSourceId: "source_a", Name: name, DataKind: pb.DataKind_DATA_KIND_RECORD},
+		Columns:    []*pb.DatasetColumn{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active", DisplayName: "数值"}},
+		CreateOnly: true,
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("create Dataset %s: rsp=%v err=%v", datasetID, rsp, err)
@@ -176,23 +176,23 @@ func createDataset(t *testing.T, ctx context.Context, service *catalog.Service, 
 
 func updateDataset(t *testing.T, ctx context.Context, service *catalog.Service, dataset *pb.Dataset) *pb.Dataset {
 	t.Helper()
-	rsp, err := service.UpdateDataset(ctx, &pb.UpdateDatasetReq{Dataset: dataset})
+	rsp, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: dataset})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("update Dataset %s: rsp=%v err=%v", dataset.GetDatasetId(), rsp, err)
 	}
 	return rsp.GetDataset()
 }
 
-func lifecycleRow() *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func lifecycleRow() *pb.Row {
+	return &pb.Row{
 		Key:    &pb.RowKey{SpaceId: "quant", DatasetId: "dataset_a", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row-1", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}},
 	}
 }
 
-func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Service, row *pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsRsp {
+func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Service, row *pb.Row) *pb.PrimaryUpsertFieldsRsp {
 	t.Helper()
-	rsp, err := service.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{row}}))
+	rsp, err := service.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.Row{row}}))
 	if err != nil {
 		t.Fatalf("PrimaryStore write: rsp=%v err=%v", rsp, err)
 	}

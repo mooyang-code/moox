@@ -1,17 +1,4 @@
-import type { TotalState } from "@/api/storage/types";
-
-export interface PageRequest {
-  page?: number;
-  size?: number;
-}
-
-export interface PageResponse {
-  page: number;
-  size: number;
-  total: number;
-  has_more: boolean;
-  total_state?: TotalState;
-}
+export type { Page, PageResult, TotalState } from "@/api/page";
 
 // 时刻字段（*_at、bar_end_time、valid_until、回放的起止与进度、首末根）在 JSON 里是 Unix 毫秒的数字字符串，"0" 表示没有；
 // 读取一律经 utils/time-zone 的 toInstantMs / formatInstant，不要直接 Date.parse 或按真值判断有没有。
@@ -38,6 +25,8 @@ export interface Strategy {
 export interface StrategyInstance {
   instance_id: string;
   strategy_id: string;
+  /** 关联策略定义的名称（由服务端关联带出）。 */
+  strategy_name: string;
   space_id: string;
   factor_tasks: Record<string, string>;
   logical_account_id: string;
@@ -116,11 +105,17 @@ export interface StrategyTaskRequirement {
   /** 要绑定的任务键（市场确定时才有）：主帧市场（现货在前）、参考市场、附加来源的 来源名:市场 */
   taskKeys: string[];
   /** 附加来源（声明顺序） */
-  sources: { name: string; bar: string }[];
+  sources: { name: string; frequency: string }[];
   /** 据此建不了实例的问题（中文） */
   problems: string[];
   /** 参考市场（market.reference）：也在 taskKeys 里，只用于年龄判定，不是主帧市场 */
   referenceMarkets: string[];
+  /** 策略声明了 factor_params（动态调参） */
+  tuned: boolean;
+  /** 策略池的分配方式：fixed | rotation | drift，非池为空 */
+  poolAllocationMethod: string;
+  /** 策略池为 drift 时的 allocation.start 或 allocation.initial.at，其余为空 */
+  poolDriftStart: string;
 }
 
 export interface ValidateStrategyResult {
@@ -155,7 +150,7 @@ export interface Replay {
   slippage_bps: number;
   /** 永续持仓结算资金费用的列（本根累计的资金费率）；空串表示不计。 */
   funding_column: string;
-  status: "pending" | "running" | "done" | "failed" | "cancelled" | string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | string;
   progress_time: string;
   metrics_json: string;
   error: string;

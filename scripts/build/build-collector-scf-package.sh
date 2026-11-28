@@ -9,11 +9,10 @@ while [[ -h "${SOURCE}" ]]; do
 done
 ROOT="$(cd -P "$(dirname "${SOURCE}")/../.." && pwd)"
 if [[ "${1:-}" == "--help" ]]; then
-  echo "Usage: SCF_SPACE_ID=<space> $0"
+  echo "Usage: [VERSION=v...] [OUT_PATH=...] $0"
   echo "Requires: go, zip. Packages only the single linux/amd64 main binary; all market configs are embedded."
   exit 0
 fi
-SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto)}"
 SCF_ENTRYPOINT="${SCF_ENTRYPOINT:-market_data}"
 [[ "${SCF_ENTRYPOINT}" == "market_data" ]] || { echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1; }
 while (($#)); do
@@ -24,7 +23,7 @@ done
 
 VERSION="${VERSION:-v$(date +%Y%m%d%H%M%S)}"
 OUT_DIR="${OUT_DIR:-${ROOT}/release/scf}"
-OUT_PATH="${OUT_PATH:-${OUT_DIR}/collector-scf-${SCF_SPACE_ID}-${VERSION}.zip}"
+OUT_PATH="${OUT_PATH:-${OUT_DIR}/collector-scf-${VERSION}.zip}"
 if [[ "${OUT_PATH}" != /* ]]; then
   OUT_PATH="${PWD}/${OUT_PATH}"
 fi

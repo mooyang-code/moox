@@ -157,22 +157,6 @@ func TestCriticalAlertLinesSkipReadonlyKeyMissing(t *testing.T) {
 	require.Contains(t, lines[0], "下架检测来源连续失败")
 }
 
-// 全新安装没有任何归档任务，Monitor 把“未归档的数据集”报成 critical：它是待办提醒，验收不能因此失败。
-func TestCriticalAlertLinesSkipArchiveCoverage(t *testing.T) {
-	overview := &monitorpb.HealthOverview{
-		Alerts: []*monitorpb.HealthAlert{
-			{Id: "archive_coverage:archive", Severity: "critical", Title: "未归档的数据集", Object: &monitorpb.HealthObject{Type: "business", Kind: "archive_coverage"}},
-		},
-		BusinessChecks: []*monitorpb.HealthBusinessCheck{
-			{CheckId: "archive_coverage:archive", Name: "未归档的数据集", Status: "down", Reason: "7 个有限保留期的时序数据集还没有归档任务"},
-			{CheckId: "archive_object_store:archive", Name: "归档对象存储", Status: "down", Reason: "连不上"},
-		},
-	}
-	lines := criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items)
-	require.Len(t, lines, 1)
-	require.Contains(t, lines[0], "归档对象存储")
-}
-
 func TestSetupVerifyMonitorErrorKeepsOtherChecks(t *testing.T) {
 	checks := verify.Evaluate(verify.Input{Now: time.Now(), MonitorError: "connection refused"})
 	last := checks[len(checks)-1]
@@ -207,6 +191,7 @@ type fakeVerifyGateway struct {
 	factors       *factorpb.ListFactorTasksRsp
 	tasksDisabled bool
 	seeds         []*collectorpb.HistorySeed
+	ingestModes   []*collectorpb.IngestMode
 }
 
 func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp any) error {
@@ -220,6 +205,7 @@ func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp 
 		out.Datasets = []*collectorpb.CollectorDatasetStatus{{DatasetId: "dataset_task_a", Frequency: "1m"}}
 		out.Applied = &collectorpb.FetchPlanSummary{}
 		out.HistorySeeds = g.seeds
+		out.IngestModes = g.ingestModes
 	case *collectorpb.CheckKlineRsp:
 		out.Expected, out.Missing = 3, 0
 	case *factorpb.ListFactorTasksRsp:
@@ -238,7 +224,7 @@ func (g fakeVerifyGateway) Forward(context.Context, string, string, int, []byte)
 }
 
 func TestSetupVerifyReaderMatchesDatasetsByTaskResult(t *testing.T) {
-	factors := &factorpb.ListFactorTasksRsp{FactorTasks: []*factorpb.FactorTaskInfo{{FactorTask: &factorpb.FactorTask{TaskId: "f", SpaceId: "crypto", Freq: "1m", SourceDatasetId: "dataset_task_a"}}}}
+	factors := &factorpb.ListFactorTasksRsp{FactorTasks: []*factorpb.FactorTaskInfo{{FactorTask: &factorpb.FactorTask{TaskId: "f", SpaceId: "crypto", Frequency: "1m", SourceDatasetId: "dataset_task_a"}}}}
 	reader := setupVerifyReader{gateway: fakeVerifyGateway{strategy: `{"instances":[]}`, factors: factors}, spaceID: "crypto", factorDeployed: true}
 	input, err := reader.read(context.Background(), map[string]int64{})
 	require.NoError(t, err)
@@ -264,8 +250,8 @@ func TestSetupVerifyReaderMatchesDatasetsByTaskResult(t *testing.T) {
 // 已完成或放行的、频率不同的都不算。全新安装时 crypto 两个 1m 数据集补 34 天要几小时，验收不能因此超时失败。
 func TestSetupVerifyReaderMarksSeedingFactors(t *testing.T) {
 	factors := &factorpb.ListFactorTasksRsp{FactorTasks: []*factorpb.FactorTaskInfo{
-		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_1m", SpaceId: "crypto", Freq: "1m", SourceDatasetId: "dataset_task_a"}},
-		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_5m", SpaceId: "crypto", Freq: "5m", SourceDatasetId: "dataset_task_a"}},
+		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_1m", SpaceId: "crypto", Frequency: "1m", SourceDatasetId: "dataset_task_a"}},
+		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_5m", SpaceId: "crypto", Frequency: "5m", SourceDatasetId: "dataset_task_a"}},
 	}}
 	seeds := []*collectorpb.HistorySeed{{DatasetId: "dataset_task_a", Frequency: "1m", Status: "running"}, {DatasetId: "dataset_task_a", Frequency: "5m", Status: "done"}}
 	reader := setupVerifyReader{gateway: fakeVerifyGateway{strategy: `{"instances":[]}`, factors: factors, seeds: seeds}, spaceID: "crypto", factorDeployed: true}
@@ -284,4 +270,32 @@ func TestSetupVerifyReaderMarksSeedingFactors(t *testing.T) {
 	}
 	require.Equal(t, verify.Pass, check.Status)
 	require.Contains(t, check.Detail, "ftask_spot_1m 补历史中，下游待生效")
+}
+
+// 停用的 stream/local 任务不得让验收要求 collector-stream 在线。
+func TestSetupVerifyReaderNeedsStreamOnlyForEnabledTasks(t *testing.T) {
+	factors := &factorpb.ListFactorTasksRsp{}
+	disabledOnly := setupVerifyReader{
+		gateway: fakeVerifyGateway{
+			strategy:    `{"instances":[]}`,
+			factors:     factors,
+			ingestModes: []*collectorpb.IngestMode{{DatasetId: "ds_1m", Ingest: "stream", Enabled: false}},
+		},
+		spaceID: "crypto",
+	}
+	input, err := disabledOnly.read(context.Background(), map[string]int64{})
+	require.NoError(t, err)
+	require.False(t, input.NeedsStream)
+
+	withEnabled := setupVerifyReader{
+		gateway: fakeVerifyGateway{
+			strategy:    `{"instances":[]}`,
+			factors:     factors,
+			ingestModes: []*collectorpb.IngestMode{{DatasetId: "ds_1m", Ingest: "stream", Enabled: true}},
+		},
+		spaceID: "crypto",
+	}
+	input, err = withEnabled.read(context.Background(), map[string]int64{})
+	require.NoError(t, err)
+	require.True(t, input.NeedsStream)
 }

@@ -18,7 +18,7 @@ import (
 type Package = store.FunctionPackage
 
 const (
-	// keepPackagesPerName 是每个（空间、包名）保留的可用包个数：函数总是滚动到最新包，更早的连同 COS 对象删除。
+	// keepPackagesPerName 是每个包名保留的可用包个数：函数总是滚动到最新包，更早的连同 COS 对象删除。
 	keepPackagesPerName = 3
 	// pendingPackageTTL 是发出上传地址后多久还没完成上传就删除。
 	pendingPackageTTL = 6 * time.Hour
@@ -36,26 +36,32 @@ type objectStore interface {
 
 // Packages 管理云函数代码包：上传（COS 预签名）、登记、取最新、删除与清理。
 type Packages struct {
-	packages    *store.FunctionPackageRepository
-	accounts    *store.CloudAccountRepository
-	credentials CredentialResolver
+	packages         *store.FunctionPackageRepository
+	accounts         *store.CloudAccountRepository
+	credentials      CredentialResolver
+	defaultAccountID string
 	// objects 按桶、地域与密钥打开 COS；测试里替换。
 	objects func(bucket, region string, credential Credential) objectStore
 	now     func() time.Time
 }
 
-// NewPackages 用 Collector 库里的代码包与云账号表构造代码包管理。
-func NewPackages(db *store.Store, credentials CredentialResolver) *Packages {
-	return &Packages{packages: db.FunctionPackages(), accounts: db.CloudAccounts(), credentials: credentials, objects: newCOSObjects, now: time.Now}
+// NewPackages 用 Collector 库里的代码包与云账号表构造代码包管理；defaultAccountID 指定上传使用的云账号。
+func NewPackages(db *store.Store, credentials CredentialResolver, defaultAccountID string) *Packages {
+	return &Packages{
+		packages:         db.FunctionPackages(),
+		accounts:         db.CloudAccounts(),
+		credentials:      credentials,
+		defaultAccountID: strings.TrimSpace(defaultAccountID),
+		objects:          newCOSObjects,
+		now:              time.Now,
+	}
 }
 
 // UploadRequest 是发起一次代码包上传的请求。
 type UploadRequest struct {
-	SpaceID        string
-	PackageName    string
-	Version        string
-	Runtime        string
-	CloudAccountID string
+	PackageName string
+	Version     string
+	Runtime     string
 	// Filename 是上传的文件名，为空时用“包名-版本.zip”。
 	Filename string
 }
@@ -69,17 +75,20 @@ type Upload struct {
 
 // InitUpload 登记一个待上传的代码包并返回 COS 预签名上传地址；桶不存在时先建桶并配好跨域规则。
 func (p *Packages) InitUpload(ctx context.Context, req UploadRequest) (Upload, error) {
-	for name, value := range map[string]string{"空间": req.SpaceID, "包名": req.PackageName, "版本": req.Version, "运行时": req.Runtime, "云账号": req.CloudAccountID} {
+	for name, value := range map[string]string{"包名": req.PackageName, "版本": req.Version, "运行时": req.Runtime} {
 		if strings.TrimSpace(value) == "" {
 			return Upload{}, fmt.Errorf("上传代码包必须写明%s", name)
 		}
 	}
-	account, err := p.accounts.Get(ctx, req.CloudAccountID)
+	if p.defaultAccountID == "" {
+		return Upload{}, fmt.Errorf("未配置云函数代码包使用的云账号")
+	}
+	account, err := p.accounts.Get(ctx, p.defaultAccountID)
 	if err != nil {
 		return Upload{}, err
 	}
 	if account == nil {
-		return Upload{}, fmt.Errorf("云账号 %s 不存在", req.CloudAccountID)
+		return Upload{}, fmt.Errorf("云账号 %s 不存在", p.defaultAccountID)
 	}
 	if account.COSRegion == "" || account.COSBucket == "" {
 		return Upload{}, fmt.Errorf("云账号 %s 没有配置 COS 地域与桶", account.AccountID)
@@ -96,7 +105,7 @@ func (p *Packages) InitUpload(ctx context.Context, req UploadRequest) (Upload, e
 	packageID := buildPackageID(req.PackageName, req.Version, uuid.NewString())
 	now := p.now().UTC()
 	pkg := Package{
-		SpaceID: strings.TrimSpace(req.SpaceID), PackageID: packageID, PackageName: strings.TrimSpace(req.PackageName),
+		PackageID: packageID, PackageName: strings.TrimSpace(req.PackageName),
 		Version: strings.TrimSpace(req.Version), Runtime: strings.TrimSpace(req.Runtime), CloudAccountID: account.AccountID,
 		COSRegion: account.COSRegion, COSBucket: account.COSBucket, COSPath: buildPackageCOSPath(now, req.PackageName, req.Version, packageID, filename),
 		Status: store.FunctionPackagePending, CreateTime: now,
@@ -112,11 +121,11 @@ func (p *Packages) InitUpload(ctx context.Context, req UploadRequest) (Upload, e
 }
 
 // CompleteUpload 核对 COS 里的对象（大小与 MD5）后把代码包标成可用。
-func (p *Packages) CompleteUpload(ctx context.Context, spaceID, packageID string, size int64, md5 string) (Package, error) {
+func (p *Packages) CompleteUpload(ctx context.Context, packageID string, size int64, md5 string) (Package, error) {
 	if size <= 0 || strings.TrimSpace(md5) == "" {
 		return Package{}, fmt.Errorf("完成上传必须带文件大小与 MD5")
 	}
-	pkg, err := p.packages.Get(ctx, spaceID, packageID)
+	pkg, err := p.packages.Get(ctx, packageID)
 	if err != nil {
 		return Package{}, err
 	}
@@ -140,19 +149,19 @@ func (p *Packages) CompleteUpload(ctx context.Context, spaceID, packageID string
 	return *pkg, nil
 }
 
-// List 返回一个空间的代码包；spaceID 为空时返回全部空间的。
-func (p *Packages) List(ctx context.Context, spaceID string) ([]Package, error) {
-	return p.packages.List(ctx, spaceID)
+// List 按上传先后倒序返回全部代码包。
+func (p *Packages) List(ctx context.Context) ([]Package, error) {
+	return p.packages.List(ctx)
 }
 
-// Latest 返回该空间某个包名最新的可用代码包；没有时返回 nil。
-func (p *Packages) Latest(ctx context.Context, spaceID, packageName string) (*Package, error) {
-	return p.packages.Latest(ctx, spaceID, packageName)
+// Latest 返回某个包名最新的可用代码包；没有时返回 nil。
+func (p *Packages) Latest(ctx context.Context, packageName string) (*Package, error) {
+	return p.packages.Latest(ctx, packageName)
 }
 
 // Delete 删除一个代码包：先删 COS 对象，再删记录；对象删不掉时记录保留，下次再删。
-func (p *Packages) Delete(ctx context.Context, spaceID, packageID string) error {
-	pkg, err := p.packages.Get(ctx, spaceID, packageID)
+func (p *Packages) Delete(ctx context.Context, packageID string) error {
+	pkg, err := p.packages.Get(ctx, packageID)
 	if err != nil || pkg == nil {
 		return err
 	}
@@ -167,9 +176,9 @@ type CleanupResult struct {
 	Failed []string
 }
 
-// Cleanup 清理代码包：每个（空间、包名）只留最新 3 个可用包，更早的连同 COS 对象删除；上传超过 6 小时仍没完成的删除。
+// Cleanup 清理代码包：每个包名只留最新 3 个可用包，更早的连同 COS 对象删除；上传超过 6 小时仍没完成的删除。
 func (p *Packages) Cleanup(ctx context.Context) (CleanupResult, error) {
-	packages, err := p.packages.List(ctx, "")
+	packages, err := p.packages.List(ctx)
 	if err != nil {
 		return CleanupResult{}, err
 	}
@@ -181,9 +190,8 @@ func (p *Packages) Cleanup(ctx context.Context) (CleanupResult, error) {
 		remove := false
 		switch pkg.Status {
 		case store.FunctionPackageAvailable:
-			key := pkg.SpaceID + "\x00" + pkg.PackageName
-			kept[key]++
-			remove = kept[key] > keepPackagesPerName
+			kept[pkg.PackageName]++
+			remove = kept[pkg.PackageName] > keepPackagesPerName
 		default:
 			remove = pkg.CreateTime.Before(cutoff)
 		}
@@ -209,7 +217,7 @@ func (p *Packages) remove(ctx context.Context, pkg Package) error {
 			return fmt.Errorf("删除 COS 对象失败: %w", err)
 		}
 	}
-	return p.packages.Delete(ctx, pkg.SpaceID, pkg.PackageID)
+	return p.packages.Delete(ctx, pkg.PackageID)
 }
 
 // objectsFor 用代码包记录里的桶与地域（账号的 COS 配置后来可能改过）、账号的密钥打开 COS。

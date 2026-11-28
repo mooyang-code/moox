@@ -11,9 +11,11 @@
     <div class="column">
       <SectionBlock title="策略目标">
         <template #extra>
-          <a-link v-if="logical.control_mode === 1 && target" @click="goPositions">看未到位的标的</a-link>
+          <a-link v-if="logical.control_mode === ControlMode.STRATEGY && target" @click="goPositions">看未到位的标的</a-link>
         </template>
-        <p v-if="logical.control_mode !== 1" class="placeholder">自主下单的组合没有策略目标，只按手工订单交易。</p>
+        <p v-if="logical.control_mode !== ControlMode.STRATEGY" class="placeholder">
+          自主下单的组合没有策略目标，只按手工订单交易。
+        </p>
         <p v-else-if="!target" class="placeholder">策略还没有给这个组合下过目标。</p>
         <a-descriptions v-else :column="1" size="small" :label-style="{ width: '96px' }">
           <a-descriptions-item label="状态">
@@ -76,7 +78,7 @@
 <script setup lang="ts">
 import { computed, inject } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { exchangeLabel, targetStateLabels } from "@/api/trade";
+import { ControlMode, exchangeLabel, targetStateLabels } from "@/api/trade";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import EquityCurve from "../shared/equity-curve.vue";
 import { accountEnvironment } from "@/components/trade-confirm/environment";
@@ -126,7 +128,7 @@ function positionCountOf(accountId: string): number {
   return (
     snapshot.value.swapPositions.filter(item => item.trading_account_id === accountId).length +
     snapshot.value.spotHoldings.filter(
-      item => item.trading_account_id === accountId && item.instrument_id && Number(item.quantity) !== 0
+      item => item.trading_account_id === accountId && item.instrument_id && Number(item.signed_quantity) !== 0
     ).length
   );
 }

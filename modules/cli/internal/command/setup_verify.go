@@ -189,7 +189,7 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 	input.PlanIssue = strings.Join(status.GetReasons(), "；")
 	input.StreamOnline = status.GetStream().GetOnline()
 	for _, mode := range status.GetIngestModes() {
-		if mode.GetIngest() == "stream" || mode.GetIngest() == "local" {
+		if mode.GetEnabled() && (mode.GetIngest() == "stream" || mode.GetIngest() == "local") {
 			input.NeedsStream = true
 		}
 	}
@@ -238,9 +238,9 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 				continue
 			}
 			input.Factors = append(input.Factors, verify.Factor{
-				TaskID: task.GetTaskId(), Frequency: task.GetFreq(), LastPeriod: info.GetLastRun().GetLastPeriodTime(), Baseline: baseline[task.GetTaskId()],
+				TaskID: task.GetTaskId(), Frequency: task.GetFrequency(), LastPeriod: info.GetLastRun().GetLastPeriodTime(), Baseline: baseline[task.GetTaskId()],
 				LastStatus: info.GetLastRun().GetLastStatus(), SourceEnabled: sources[task.GetSourceDatasetId()],
-				SourceSeeding: seeding[[2]string{task.GetSourceDatasetId(), task.GetFreq()}],
+				SourceSeeding: seeding[[2]string{task.GetSourceDatasetId(), task.GetFrequency()}],
 			})
 		}
 	}
@@ -264,12 +264,6 @@ func readCriticalAlerts(ctx context.Context, gateway setupVerifyGateway, spaceID
 	return criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items), nil
 }
 
-// “有限保留期的数据集还没有归档任务”这一项在告警报告里的对象名：一条来自告警，一条来自业务检查。
-const (
-	archiveCoverageAlert = "business/archive_coverage"
-	archiveCoverageCheck = "archive_coverage:archive"
-)
-
 // criticalAlertLines 列出 critical 项。同一个组件既有 critical 告警又有 critical 状态项，只算一项；
 // 组件状态项不是 critical 时保留它的 critical 告警，不能因为去重把严重告警丢掉。
 func criticalAlertLines(items []doctorcli.AlertItem) []string {
@@ -282,10 +276,6 @@ func criticalAlertLines(items []doctorcli.AlertItem) []string {
 	var alerts []string
 	for _, item := range items {
 		if item.Severity != doctorcli.AlertSeverityCritical {
-			continue
-		}
-		// 归档任务要用户自己决定建哪些，全新安装时一定一个都没有：这是待办提醒，不算没装好（doctor alerts 里照常显示）。
-		if item.Object == archiveCoverageAlert || item.Object == archiveCoverageCheck {
 			continue
 		}
 		duplicate := item.Source == doctorcli.AlertSourceAlert && slices.ContainsFunc(components, func(object string) bool {

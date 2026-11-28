@@ -106,16 +106,15 @@ func TestSubjectExclusionWaitsForAnOpenHandoff(t *testing.T) {
 	require.NotContains(t, finalSubjects(t, content), "S001-USDT")
 }
 
-func TestExcludeSubjectsDropsSymbolsPairsAndEmptyGroups(t *testing.T) {
+func TestExcludeSubjectsDropsPairsAndEmptyGroups(t *testing.T) {
 	groups := []TaskGroup{
-		{MarketType: "swap", DatasetID: "a", Subjects: []string{"BTC-USDT", "ETH-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": "BTCUSDT", "ETH-USDT": "ETHUSDT"}, Pairs: map[string]string{"BTC-USDT": "BTCUSD"}},
-		{MarketType: "spot", DatasetID: "b", Subjects: []string{"BTC-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": "BTCUSDT"}},
+		{MarketType: "swap", DatasetID: "a", Subjects: []string{"BTC-USDT", "ETH-USDT"}, Pairs: map[string]string{"BTC-USDT": "BTCUSD", "ETH-USDT": "ETHUSD"}},
+		{MarketType: "spot", DatasetID: "b", Subjects: []string{"BTC-USDT"}},
 	}
 	got := excludeSubjects(groups, []store.SubjectExclusion{{SubjectID: "BTC-USDT"}})
 	require.Len(t, got, 1)
 	require.Equal(t, []string{"ETH-USDT"}, got[0].Subjects)
-	require.Equal(t, map[string]string{"ETH-USDT": "ETHUSDT"}, got[0].ExternalSymbols)
-	require.Nil(t, got[0].Pairs)
+	require.Equal(t, map[string]string{"ETH-USDT": "ETHUSD"}, got[0].Pairs)
 	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, groups[0].Subjects, "不改原分组")
 }
 

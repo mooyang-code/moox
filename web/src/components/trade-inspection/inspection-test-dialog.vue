@@ -53,7 +53,7 @@ import { exchangeFromProvider, inspectionRequest, secretEnvironmentOf } from "./
 
 defineOptions({ name: "TradeInspectionTestDialog" });
 
-const props = defineProps<{ visible: boolean; secretId: string; secretName: string; provider: string }>();
+const props = defineProps<{ visible: boolean; secretId: string; secretName: string; provider: string; extraConfig?: string }>();
 // 检测时间：密钥页和空间无关，按 UTC
 const displayZone = useDisplayZone("global");
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
@@ -68,12 +68,12 @@ const exchangeLabel = computed(() => (props.provider || "未知").toUpperCase())
 
 // 每次打开都从干净状态开始，不沿用上一把密钥的结果。
 watch(
-  () => [props.visible, props.secretId],
+  () => [props.visible, props.secretId, props.extraConfig],
   () => {
     view.value = null;
     errorText.value = "";
-    // 按密钥 ID 的环境段预选环境；看不出来时默认生产环境
-    form.environment = secretEnvironmentOf(props.secretId) || 2;
+    // 按 extra_config 的 environment 字段预选环境；未标注时默认生产环境
+    form.environment = secretEnvironmentOf(props.extraConfig) || 2;
     form.markets = [];
   }
 );

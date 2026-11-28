@@ -11,6 +11,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 )
 
@@ -34,7 +35,7 @@ func TestOpenRejectsChangedConstraints(t *testing.T) {
 	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "t_strategy_instances") {
 		t.Fatalf("约束变化的旧库应被拒绝：%v", err)
 	}
-	if normalizeSchemaSQL("CREATE TABLE t (\n    a INT, -- 注释\n    b TEXT\n)") != normalizeSchemaSQL("CREATE TABLE t (a INT,\n b TEXT)") {
+	if sqlitedb.NormalizeSchemaSQL("CREATE TABLE t (\n    a INT, -- 注释\n    b TEXT\n)") != sqlitedb.NormalizeSchemaSQL("CREATE TABLE t (a INT,\n b TEXT)") {
 		t.Fatal("纯格式差异不应影响比较")
 	}
 }
@@ -113,7 +114,7 @@ func TestDeleteReplaysBeyondKeepsLatestPerSpace(t *testing.T) {
 		if strings.HasSuffix(claimed.ReplayID, "-0") {
 			continue
 		}
-		if err := repo.FinishReplay(ctx, claimed.ReplayID, ReplayDone, []byte(`{}`), "", testNow); err != nil {
+		if err := repo.FinishReplay(ctx, claimed.ReplayID, ReplaySucceeded, []byte(`{}`), "", testNow); err != nil {
 			t.Fatal(err)
 		}
 	}

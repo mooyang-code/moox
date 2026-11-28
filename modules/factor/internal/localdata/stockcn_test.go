@@ -55,8 +55,8 @@ func (b stockBackend) ReportComputed(ctx context.Context, marker storageio.Perio
 	return b.fakeStorage.ReportComputed(ctx, marker)
 }
 
-func (b stockBackend) ComputedExists(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (bool, error) {
-	return b.fakeStorage.ComputedExists(ctx, spaceID, datasetID, triggerEventID, periodTime)
+func (b stockBackend) ComputedExists(ctx context.Context, spaceID, datasetID string, periodTime int64) (bool, error) {
+	return b.fakeStorage.ComputedExists(ctx, spaceID, datasetID, periodTime)
 }
 
 func cstTime(t *testing.T, value string) time.Time {
@@ -126,7 +126,7 @@ func TestStockCN5mAcrossBreaks(t *testing.T) {
 			}
 
 			plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-				Set: set.Set, Members: set.Members, PeriodTime: period, UniverseSubjects: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+				Set: set.Set, Members: set.Members, PeriodTime: period, UniverseSubjects: subjects, CarryColumns: []string{"close", "volume"},
 			})
 			require.NoError(t, err)
 			outcome, err := runner.Run(context.Background(), plan)

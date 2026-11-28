@@ -33,14 +33,22 @@ var wipeScript string
 // inspectTimeout 限制一台主机的检测时长：统计归档目录大小要遍历文件，慢盘上可能很久，但不能一直挂住。
 const inspectTimeout = 10 * time.Minute
 
-// 路线：任一主机有 version.json 就是“装过”，否则“没装过”。
+// 路线：控制机有安装完成标记（install-complete.json）为 installed（已装好）；
+// 否则任一主机有 version.json 为 incomplete（没装完）；都没有为 fresh（没装过）。
 const (
-	RouteFresh     = "fresh"
-	RouteInstalled = "installed"
+	RouteFresh      = "fresh"
+	RouteIncomplete = "incomplete"
+	RouteInstalled  = "installed"
 )
 
-// Notice 是清空预览里固定的提醒：秘密文件只是初始值，管理台里后来改的、新加的密钥只在线上有。
-const Notice = "管理台里改过的密钥只在线上有，清空前先在管理台导出"
+// Notice 是清空预览里固定的提醒：归档文件会一起清掉且可能补不回来，密钥与告警渠道会自动备份，交易账户不纳入备份。
+const Notice = "归档文件（archive/）在部署根下会一起清掉，它是唯一可能补不回来的数据；非系统密钥与告警渠道会在清空前自动备份（moox.backup），交易账户与组合账户不纳入备份"
+
+// ComponentDataFormat 是目标机上单个有状态组件的本地数据存在性与 data-format 文件原文。
+type ComponentDataFormat struct {
+	HasData    bool   `json:"has_data"`
+	FormatText string `json:"format_text,omitempty"`
+}
 
 // HostReport 是一台主机的检测结果。
 type HostReport struct {
@@ -53,6 +61,8 @@ type HostReport struct {
 	Entries []string `json:"entries"`
 	// Installed 表示部署根下有 version.json，这台主机用新路径装过。
 	Installed bool `json:"installed"`
+	// InstallComplete 表示部署根下有 install-complete.json（仅控制机在 setup install 全部验收通过后写出）。
+	InstallComplete bool `json:"install_complete"`
 	// Version 是 version.json 的原文（不超过 64 KiB）；没有或不是合法 JSON 时为空。
 	Version json.RawMessage `json:"version,omitempty"`
 	// Units 是 ~/.config/systemd/user 下的 moox-*.service（排序）。
@@ -71,6 +81,8 @@ type HostReport struct {
 	Linger bool `json:"linger"`
 	// Journald 表示 /var/log/journal 存在（journald 持久化）。
 	Journald bool `json:"journald"`
+	// DataFormats 按组件 ID 记录本机各组件是否有本地数据及 data-format 文件原文。
+	DataFormats map[string]ComponentDataFormat `json:"data_formats,omitempty"`
 }
 
 // Options 是一次检测的参数。
@@ -88,19 +100,21 @@ type Dial func(context.Context, topology.Host) (setupssh.Client, error)
 
 // inspectResult 是 inspect.py 的输出：version.json 以文本带回，由这里判断是不是合法 JSON，保留原文字节。
 type inspectResult struct {
-	Root        string   `json:"root"`
-	RootExists  bool     `json:"root_exists"`
-	Entries     []string `json:"entries"`
-	Installed   bool     `json:"installed"`
-	VersionText string   `json:"version_text"`
-	Units       []string `json:"units"`
-	Active      []string `json:"active"`
-	Disabled    []string `json:"disabled"`
-	Processes   int      `json:"processes"`
-	ArchiveKB   int64    `json:"archive_kb"`
-	DiskFreeKB  int64    `json:"disk_free_kb"`
-	Linger      bool     `json:"linger"`
-	Journald    bool     `json:"journald"`
+	Root            string                         `json:"root"`
+	RootExists      bool                           `json:"root_exists"`
+	Entries         []string                       `json:"entries"`
+	Installed       bool                           `json:"installed"`
+	InstallComplete bool                           `json:"install_complete"`
+	VersionText     string                         `json:"version_text"`
+	Units           []string                       `json:"units"`
+	Active          []string                       `json:"active"`
+	Disabled        []string                       `json:"disabled"`
+	Processes       int                            `json:"processes"`
+	ArchiveKB       int64                          `json:"archive_kb"`
+	DiskFreeKB      int64                          `json:"disk_free_kb"`
+	Linger          bool                           `json:"linger"`
+	Journald        bool                           `json:"journald"`
+	DataFormats     map[string]ComponentDataFormat `json:"data_formats"`
 }
 
 // Scan 只读检测全部启用的主机（并行），结果按 cfg.Hosts() 的顺序。moox.toml 里停用的主机不检测：
@@ -159,20 +173,39 @@ func inspect(ctx context.Context, dial Dial, host topology.Host, root string, si
 	if err := decode(output.Stdout, &result); err != nil || result.Root != root {
 		return report, fmt.Errorf("deployment_inspection_failed: 主机 %s 的检测结果无法解析", host.Name)
 	}
-	report.RootExists, report.Entries, report.Installed = result.RootExists, nonNil(result.Entries), result.Installed
+	report.RootExists, report.Entries, report.Installed, report.InstallComplete = result.RootExists, nonNil(result.Entries), result.Installed, result.InstallComplete
 	if text := []byte(result.VersionText); result.Installed && json.Valid(text) {
 		report.Version = json.RawMessage(text)
 	}
 	report.Units, report.Active, report.Disabled, report.Processes = nonNil(result.Units), nonNil(result.Active), nonNil(result.Disabled), result.Processes
 	report.ArchiveKB, report.DiskFreeKB = result.ArchiveKB, result.DiskFreeKB
 	report.Linger, report.Journald = result.Linger, result.Journald
+	if result.DataFormats != nil {
+		report.DataFormats = result.DataFormats
+	} else {
+		report.DataFormats = map[string]ComponentDataFormat{}
+	}
 	return report, nil
 }
 
-// Route 判定路线：任一主机装过（有 version.json）就是 installed，否则 fresh。
+// Route 判定路线：任一主机有完成标记（install-complete.json）为 installed；
+// 否则任一主机有 version.json 为 incomplete；都没有为 fresh。
 func Route(reports []HostReport) string {
+	return RouteForControl(reports, "")
+}
+
+// RouteForControl 按控制机上的完成标记（install-complete.json）与各主机的 version.json 判定三态路线：
+// - installed（已装好）：控制机存在 install-complete.json（controlHost 为空时检查任意主机）；
+// - incomplete（没装完）：没有完成标记，但至少一台主机存在 version.json；
+// - fresh（没装过）：既无完成标记也无 version.json。
+func RouteForControl(reports []HostReport, controlHost string) string {
+	for _, report := range reports {
+		if report.InstallComplete && (controlHost == "" || report.Host == controlHost) {
+			return RouteInstalled
+		}
+	}
 	if slices.ContainsFunc(reports, func(report HostReport) bool { return report.Installed }) {
-		return RouteInstalled
+		return RouteIncomplete
 	}
 	return RouteFresh
 }

@@ -1,6 +1,6 @@
 ---
 name: moox
-description: 凡是与 MooX 量化系统（MooX quant system）有关的事都用这个 skill：用发布产物安装和部署（安装, 新安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/validate/deploy/init/status/logs, 检测是否已部署）；对生产主机做升级、覆盖更新、卸载或回滚（发布, 上线, 升级, 覆盖更新, 卸载, 回滚, setup update, setup wipe, setup deploy, service catalog rollout, 全新部署, 清空重装）；通过 moox-cli 和 gateway call 做日常管理（采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记）。还包括：查询 MooX采集数据（如 BTC-USDT 等加密货币行情查询 crypto market queries、K-line/K线行情查询 K-line queries），因子表达式 DSL（因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子），策略 DSL（策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略），首页“需要处理”/监控告警排查（moox-cli doctor alerts, monitor-db-check），Linux Host Agent 监控，EventBus 凭据（EventBus credentials）, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View 水位追赶（View watermark catch-up）, repair-view, Factor 周期诊断与补算（Recalc），腾讯云防火墙，CLS 日志查询，CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ENTRY_ADDRESS, 外部入口, external_entry，控制面维护，以及覆盖管理台的 moox-cli 命令集（空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易查询与写操作, host exec, 命令覆盖）。
+description: 凡是与 MooX 量化系统（MooX quant system）有关的事都用这个 skill：用发布产物安装和部署（安装, 新安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/validate/deploy/init/status/logs, 检测是否已部署）；对生产主机做升级、保留数据更新、备份、卸载或回滚（发布, 上线, 升级, 覆盖更新, 保留数据, 卸载, 回滚, setup install --keep, setup install --wipe, setup backup, setup wipe, setup deploy, service catalog rollout, 全新部署, 清空重装）；通过 moox-cli 和 gateway call 做日常管理（采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记）。还包括：查询 MooX采集数据（如 BTC-USDT 等加密货币行情查询 crypto market queries、K-line/K线行情查询 K-line queries），因子表达式 DSL（因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子），策略 DSL（策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略），首页“需要处理”/监控告警排查（moox-cli doctor alerts, monitor-db-check），Linux Host Agent 监控，EventBus 凭据（EventBus credentials）, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View 水位追赶（View watermark catch-up）, repair-view, Factor 周期诊断与补算（Recalc），腾讯云防火墙，CLS 日志查询，CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ENTRY_ADDRESS, 外部入口, external_entry，控制面维护，以及覆盖管理台的 moox-cli 命令集（空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易查询与写操作, host exec, 命令覆盖）。
 ---
 
 # MooX
@@ -13,12 +13,12 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **配置是两份文件**：`moox.toml` 是明文的拓扑与部署参数（没有秘密，可以直接看和改）；同目录的 `moox.secrets.toml` 是加密的秘密，Agent 不直接读取、打印、复制或 `source` 它；要看用 `moox-cli config get --file ./moox.secrets.toml <路径>`（默认打码），改单个值用 `moox-cli config set 表.键=值`（见 [`references/config-access.md`](references/config-access.md)）。Agent 也不打开 `config init` / `config edit` 的本机页面；
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
-- **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`collector function delete`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
-  `setup install`、`setup update` 不带 `--yes` 是预检：把它输出的步骤（连同防火墙放行内容、`manual_steps`，覆盖更新还有每台主机要更新、新装、删掉的组件）作为部署计划一次给用户确认，确认后带 `--yes` 执行，只在计划变化或失败时再问；单独的 `setup deploy`、`setup init` 没有预览，执行前同样先向用户说明会动哪台主机、哪些组件会重启；卸载（`setup wipe`）要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
+- **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`host reboot`、`factor task delete`、`collector function delete`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
+  `setup install` 不带 `--yes` 是只读预检：CLI 不做交互式提问；没装过时把输出的步骤、防火墙放行内容与 `manual_steps` 一次给用户确认后带 `--yes` 执行；装过（没装完或已装好）时把预检并排列出的两个选项（`--keep` 保留数据与 `--wipe <摘要>` 全部覆盖）、数据格式比对结果与待备份条数给用户看，问清保留还是覆盖后再带 `--keep --yes` 或 `--wipe <摘要> --yes` 执行，只在计划变化或失败时再问；单独的 `setup deploy`、`setup init` 没有预览，执行前同样先向用户说明会动哪台主机、哪些组件会重启；单独卸载（`setup wipe`）要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
 - **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
 - **本机身份和线上密钥不碰**：不读取、不打印、不手工拷贝或恢复 `~/.config/moox/` 下的操作员身份，也不读线上部署根的 `secrets/`；不在目标机器上手动执行 `moox-admin-cli bootstrap`、手工改 `version.json` 或单元文件；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
-- **部署方式由检测决定**：`config init` 填完机器后立即 `setup validate`，`deployment.modes` 只有 `install` 就走新安装；有 `update`、`uninstall` 就把每台主机已部署、没部署的组件列给用户，让用户选覆盖更新或卸载（[`references/install.md`](references/install.md) 第 3 节），不替用户选。
+- **部署方式由检测决定**：`config init` 填完机器后立即 `setup validate`，再跑不带 `--yes` 的 `setup install` 预检。目标机没装过（`fresh`）直接走新安装；装过（`incomplete` 没装完或 `installed` 已装好）就把预检里的部署状态、数据格式比对结果、`--keep`（保留数据）与 `--wipe`（全部覆盖）两个选项各自会做什么给用户看，问清保留还是覆盖后再执行（[`references/install.md`](references/install.md) 第 3 节），不替用户选。
 - 交易模块已支持现货、永续多市场执行（按策略目标自动下单，管理台上人工下单、撤单、清仓；保证金率风控触发时系统自动减仓），写操作也有 `trade …` 命令（账户与组合的创建修改、杠杆、成员、暂停恢复、人工下单撤单、清仓、模拟账户开关），默认只预览，`--yes` 才执行；实盘账户上的写操作（下单、撤单、清仓、暂停恢复、改设置、改杠杆）执行前要先得到用户在对话里的明确同意，模拟账户可以直接做。解除下架禁止仍由用户在管理台交易页操作。实盘前必须先跑测试网冒烟（`modules/trade/scripts/testnet-smoke.sh`，由用户或维护者执行，Agent 不执行）；币安统一账户的现货买单资金来源等未核对项要等用户本人小额实测（见 `docs/模块/交易.md` 第 12 节）。
 
 ## 按场景找文档
@@ -63,7 +63,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **排查顺序固定**：先看 CLI 给出的错误码和原因，查 [`references/install.md`](references/install.md) 的常见问题；再用 `setup logs --host <主机> --component <组件>` 看日志（只读，不用再次授权）；还看不清就停下，向用户说清停在哪一步、已确认的事实和不确定的地方。不把产物包源码当主要排查手段，路线走不通时不要自己绕路。
 - **重试**：重试前先说明这次改变了什么；什么都没变就不重试。只有 `ssh_disconnected` 可以直接用同样的参数重跑。
 - **下结论要有证据**：没看到错误码或日志，不说“产物有问题”，不建议回退版本，不把资源不足、端口竞态这类猜测写成结论。
-- **不手工处理进程**：不 `kill`、不上机 `stop`，也不用重启机器解决部署问题，这些都绕过了维护锁和身份核对。端口被占时按占用者处理：非 MooX 程序问用户；装过的机器让用户选覆盖更新（`setup update`）或卸载（`setup wipe`）；失败尝试的残留由 CLI 自动清理。
+- **不手工处理进程**：不 `kill`、不上机 `stop`，也不用重启机器解决部署问题，这些都绕过了维护锁和身份核对。端口被占时按占用者处理：非 MooX 程序问用户；装过的机器让用户通过 `setup install` 预检选保留数据（`--keep`）或全部覆盖（`--wipe`），或单独卸载（`setup wipe`）；失败尝试的残留由 CLI 自动清理。
 - **View 内存**：`moox-storage-view` 常驻内存约为全部 View 索引文件大小的 2.5～3 倍，首次建索引时再加最大索引的 1～1.5 倍。用户新建 View、给 View 加标的或因子列、
   调大 `[storage_retention] view_rows_per_series` 或放宽 `[storage_view.max_age]` 时，按 [`references/storage.md`](references/storage.md) 估算并提醒余量；
   办法是换更大的机器、减少根数、缩短年龄上限或减少 View，不要建议调高单个 DuckDB 的内存上限。

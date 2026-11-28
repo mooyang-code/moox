@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"slices"
 	"time"
@@ -52,7 +51,62 @@ func topologyPage(page *pb.Page, total int) (start, end int, result *pb.PageResu
 func (s *ServiceImpl) GetCatalog(context.Context, *pb.GetCatalogReq) (*pb.GetCatalogRsp, error) {
 	raw := servicecatalog.EmbeddedYAML()
 	sum := sha256.Sum256(raw)
-	return &pb.GetCatalogRsp{RetInfo: retOK(), CatalogYaml: string(raw), Sha256: hex.EncodeToString(sum[:]), ControlHostId: s.adminNodeID}, nil
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return &pb.GetCatalogRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "加载组件目录失败")}, nil
+	}
+	return &pb.GetCatalogRsp{
+		RetInfo:       retOK(),
+		CatalogYaml:   string(raw),
+		Sha256:        hex.EncodeToString(sum[:]),
+		ControlHostId: s.adminNodeID,
+		Catalog:       catalogToProto(catalog),
+	}, nil
+}
+
+func catalogToProto(catalog servicecatalog.Catalog) *pb.ComponentCatalog {
+	out := &pb.ComponentCatalog{
+		Version:    int32(catalog.Version),
+		Identities: make([]*pb.CatalogIdentity, 0, len(catalog.Identities)),
+		Components: make([]*pb.CatalogComponent, 0, len(catalog.Components)),
+	}
+	for _, id := range catalog.Identities {
+		out.Identities = append(out.Identities, &pb.CatalogIdentity{Id: id.ID, External: id.External})
+	}
+	for _, component := range catalog.Components {
+		item := &pb.CatalogComponent{
+			Id:              component.ID,
+			Name:            component.Name,
+			Binary:          component.Binary,
+			Scope:           component.Scope,
+			ExternalProgram: component.ExternalProgram,
+			HealthPort:      int32(component.Health.Port),
+		}
+		for _, port := range component.Ports {
+			item.Ports = append(item.Ports, int32(port))
+		}
+		for _, service := range component.Services {
+			svc := &pb.CatalogService{
+				Path:         service.Path,
+				Port:         int32(service.Port),
+				ConsoleName:  service.ConsoleName,
+				TimeoutMs:    service.TimeoutFor(""),
+				MaxBodyBytes: service.BodyLimit(),
+			}
+			for _, method := range service.Methods {
+				svc.Methods = append(svc.Methods, &pb.CatalogMethod{
+					Name:       method.Name,
+					ReadOnly:   method.ReadOnly,
+					Idempotent: method.Idempotent,
+					TimeoutMs:  service.TimeoutFor(method.Name),
+					Callers:    catalog.MethodCallers(method),
+				})
+			}
+			item.Services = append(item.Services, svc)
+		}
+		out.Components = append(out.Components, item)
+	}
+	return out
 }
 
 func (s *ServiceImpl) ListHosts(ctx context.Context, req *pb.ListDeploymentHostsReq) (*pb.ListDeploymentHostsRsp, error) {
@@ -108,6 +162,7 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
 	// 路由不随快照下发：这里和网关一样按登记的部署与服务目录算一遍，只给人看。
+	// Compile 先核对主机仍在登记表里，已删主机留在内存中的运行态不会被返回。
 	compiled, err := dao.Compile(ctx, req.GetHostId())
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
@@ -117,14 +172,8 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	if err != nil {
 		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
 	}
-	status, err := dao.GetGatewayStatus(ctx, req.GetHostId())
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		status, err = &HostGatewayStatus{HostID: req.GetHostId()}, nil
-	}
-	if err != nil {
-		return &pb.GetHostRoutesRsp{RetInfo: topologyRet(err)}, nil
-	}
-	// 期望哈希总是按当前登记的内容实时计算，包含上次心跳之后的变更；不冗余落库。
+	status, _ := s.statuses.Get(req.GetHostId())
+	// 期望哈希总是按当前登记的内容实时计算，包含上次心跳之后的变更；运行态从进程内存读。
 	response := &pb.GetHostRoutesRsp{RetInfo: retOK(), HostId: compiled.HostID, GatewayStatus: statusToProto(status, snapshot.Hash), SnapshotSchemaVersion: snapshot.SchemaVersion, CompiledAt: compiledAt}
 	for _, route := range compiled.Routes {
 		response.Routes = append(response.Routes, &pb.HostGatewayRoute{ComponentId: route.ComponentID, ServicePath: route.ServicePath, Method: route.Method, Address: route.Address, TimeoutMs: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes, Callers: route.Callers, ReadOnly: route.ReadOnly})
@@ -134,26 +183,10 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 
 // SyncTopology 按 moox.toml 的整份声明覆盖主机与部署的登记。
 func (s *ServiceImpl) SyncTopology(ctx context.Context, req *pb.SyncTopologyReq) (*pb.SyncTopologyRsp, error) {
-	specs := make([]HostSpec, 0, len(req.GetHosts()))
-	for _, host := range req.GetHosts() {
-		spec := HostSpec{HostID: host.GetHostId(), Enabled: host.GetEnabled(), Label: host.GetLabel(), Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(), Region: host.GetRegion(),
-			Reachability: host.GetReachability(), ExternalEntry: host.GetExternalEntry(), Description: host.GetDescription(), Components: host.GetComponentIds(), DisabledComponents: host.GetDisabledComponentIds()}
-		if host.GetSshPort() != 0 {
-			ssh := &SSHSpec{Port: int(host.GetSshPort()), User: host.GetSshUser()}
-			switch host.GetSshAuthType() {
-			case "password":
-				ssh.Password = host.GetSshSecret()
-			case "private_key":
-				ssh.PrivateKey, ssh.Passphrase = host.GetSshSecret(), host.GetSshPassphrase()
-			}
-			spec.SSH = ssh
-		}
-		specs = append(specs, spec)
-	}
 	dao, err := s.topologyDAO()
 	var touched []string
 	if err == nil {
-		touched, err = dao.ReplaceTopology(ctx, specs)
+		touched, err = dao.ReplaceTopology(ctx, req)
 	}
 	// 连接信息变了或主机被删掉：旧终端和文件会话不能继续连着旧凭据或旧地址。
 	for _, hostID := range touched {
@@ -162,14 +195,14 @@ func (s *ServiceImpl) SyncTopology(ctx context.Context, req *pb.SyncTopologyReq)
 	return &pb.SyncTopologyRsp{RetInfo: topologyRet(err)}, nil
 }
 
-func statusToProto(status *HostGatewayStatus, expectedHash string) *pb.HostGatewayRuntimeStatus {
-	result := &pb.HostGatewayRuntimeStatus{ExpectedHash: expectedHash, AppliedHash: status.AppliedHash}
+func statusToProto(status HostGatewayStatus, expectedHash string) *pb.HostGatewayRuntimeStatus {
+	result := &pb.HostGatewayRuntimeStatus{
+		ExpectedHash:  expectedHash,
+		AppliedHash:   status.AppliedHash,
+		RelaySessions: status.RelaySessions,
+	}
 	if status.LastSeenAt != nil {
 		result.LastSeenAt = status.LastSeenAt.UnixMilli()
-	}
-	if status.RelaySessions != "" {
-		// 写入时已校验；读不出时宁可不展示，也不让整个状态查询失败。
-		_ = json.Unmarshal([]byte(status.RelaySessions), &result.RelaySessions)
 	}
 	return result
 }

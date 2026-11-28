@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
-	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
@@ -20,7 +19,7 @@ import (
 
 // RegisterTRPCServices 注册所有 TRPC 服务与控制台本地分派器：
 // - 纯控制台服务（Auth、Ssh）仅注册到进程内 LocalDispatcher，不开多余回环 TCP 端口；
-// - 纯机器服务（Setup、GatewayControl）仅注册到回环 tRPC 端口，不暴露给控制台；
+// - 纯机器服务（GatewayControl）仅注册到回环 tRPC 端口，不暴露给控制台；
 // - 同时面向控制台与机器的服务（SecretMgr、SysDeploy、ActivityLog）双边注册，复用同一实例。
 func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) error {
 	local, err := console.NewLocalDispatcher()
@@ -62,8 +61,8 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 
-	// 2. 网关控制面（独立回环端口 + 专用 SerializationTypeNoop / 验签隔离）与健康端口。
-	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID)
+	// 2. 网关控制面（独立回环端口 + 专用 SerializationTypeNoop / 验签隔离，与 SysDeploy 共用进程内网关运行态存储）与健康端口。
+	control, err := gatewaycontrol.NewService(services.DBManager.GetDB(), cfg.AdminNodeID, services.SysDeploy.GatewayStatuses())
 	if err != nil {
 		return err
 	}
@@ -95,12 +94,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 
-	// 5. 纯机器回环服务：Setup（仅给 moox-cli setup init 调用，不注册到控制台 LocalDispatcher）。
-	if err := registerRPCOnly(&adminpb.SetupServer_ServiceDesc, setuprpc.NewService(services.Setup)); err != nil {
-		return err
-	}
-
-	// 6. 控制台转发客户端与归档只出站中转（复用长生命周期 TopologyDAO）。
+	// 5. 控制台转发客户端与归档只出站中转（复用长生命周期 TopologyDAO）。
 	topology := services.SysDeploy.TopologyDAO()
 	gateway, err := newConsoleGateway(services.DBManager.GetDB(), topology, cfg.AdminNodeID, hostKeyFile())
 	if err != nil {

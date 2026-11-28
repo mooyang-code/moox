@@ -2,17 +2,15 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { computed } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LogicalAccount, ShadowTarget, TradingAccount } from "@/api/trade/types";
+import { AccountEnvironment, ExecutionMode, type LogicalAccount, type ShadowTarget } from "@/api/trade/types";
 
 const api = vi.hoisted(() => ({
   getLogicalAccount: vi.fn(),
-  listTradingAccounts: vi.fn(),
   listShadowTargets: vi.fn(),
   confirmInstance: vi.fn()
 }));
 vi.mock("@/api/trade", () => ({
   getLogicalAccount: api.getLogicalAccount,
-  listTradingAccounts: api.listTradingAccounts,
   listShadowTargets: api.listShadowTargets
 }));
 vi.mock("@/api/strategy", () => ({ confirmInstance: api.confirmInstance }));
@@ -39,15 +37,14 @@ const combo = (patch: Partial<LogicalAccount> = {}) =>
   ({
     logical_account_id: "la-1",
     name: "主组合",
-    execution_mode: 2,
+    execution_mode: ExecutionMode.LIVE,
+    environment: AccountEnvironment.PRODUCTION,
     automation_state: "ACTIVE",
     pause_reason: "",
     ready: true,
     members: [{ trading_account_id: "ta-1", enabled: true, priority: 1 }],
     ...patch
   }) as unknown as LogicalAccount;
-const member = (environment: 1 | 2) =>
-  ({ trading_account_id: "ta-1", execution_mode: 2, live: { environment } }) as unknown as TradingAccount;
 const shadow = (patch: Partial<ShadowTarget> = {}): ShadowTarget => ({
   target_id: "t-1",
   logical_account_id: "la-1",
@@ -68,9 +65,8 @@ const shadow = (patch: Partial<ShadowTarget> = {}): ShadowTarget => ({
 });
 
 let wrapper: VueWrapper;
-const openWith = async (logical: LogicalAccount, accounts: TradingAccount[], targets: ShadowTarget[], onSettled = vi.fn()) => {
+const openWith = async (logical: LogicalAccount, targets: ShadowTarget[], onSettled = vi.fn()) => {
   api.getLogicalAccount.mockResolvedValue({ logical_account: logical });
-  api.listTradingAccounts.mockResolvedValue({ accounts });
   api.listShadowTargets.mockResolvedValue({ targets });
   wrapper = mount(InstanceConfirmDialog, { global: { plugins: [ArcoVue] }, attachTo: document.body });
   const vm = wrapper.vm as unknown as DialogVM;
@@ -81,7 +77,6 @@ const openWith = async (logical: LogicalAccount, accounts: TradingAccount[], tar
 
 beforeEach(() => {
   api.getLogicalAccount.mockReset();
-  api.listTradingAccounts.mockReset();
   api.listShadowTargets.mockReset();
   api.confirmInstance.mockReset().mockResolvedValue({});
 });
@@ -102,12 +97,7 @@ describe("影子目标的展示", () => {
 describe("确认实盘", () => {
   it("生产组合：先列出本次启用的影子目标，输入组合名称后才能确认，确认带上会话", async () => {
     const onSettled = vi.fn();
-    const vm = await openWith(
-      combo(),
-      [member(2)],
-      [shadow(), shadow({ target_id: "t-old", session_id: "session-1" })],
-      onSettled
-    );
+    const vm = await openWith(combo(), [shadow(), shadow({ target_id: "t-old", session_id: "session-1" })], onSettled);
     expect(api.listShadowTargets).toHaveBeenCalledWith("inst-1", 20);
     const text = document.body.textContent || "";
     expect(text).toContain("主组合");
@@ -126,7 +116,7 @@ describe("确认实盘", () => {
   });
 
   it("测试网组合不要求输入名称；本次启用还没有影子目标时写明，仍可确认", async () => {
-    const vm = await openWith(combo(), [member(1)], [shadow({ session_id: "session-1" })]);
+    const vm = await openWith(combo({ environment: AccountEnvironment.TESTNET }), [shadow({ session_id: "session-1" })]);
     const text = document.body.textContent || "";
     expect(text).toContain("测试网");
     expect(text).not.toContain("输入组合名称");
@@ -136,7 +126,7 @@ describe("确认实盘", () => {
 
   it("确认被拒（例如策略池预热没完成）时对话框不关，写出原因", async () => {
     const onSettled = vi.fn();
-    const vm = await openWith(combo(), [member(1)], [shadow()], onSettled);
+    const vm = await openWith(combo({ environment: AccountEnvironment.TESTNET }), [shadow()], onSettled);
     api.confirmInstance.mockRejectedValue(new Error("策略池预热未完成，不能确认实盘"));
     await expect(vm.handleOk()).resolves.toBe(false);
     await flushPromises();
@@ -146,7 +136,7 @@ describe("确认实盘", () => {
 
   it("确认时实例的会话已经变了（停用或重新启用过）：写出原因，不提示已确认", async () => {
     const onSettled = vi.fn();
-    const vm = await openWith(combo(), [member(1)], [shadow()], onSettled);
+    const vm = await openWith(combo({ environment: AccountEnvironment.TESTNET }), [shadow()], onSettled);
     api.confirmInstance.mockRejectedValue(new Error("实例的会话已变化，请刷新后重试"));
     await expect(vm.handleOk()).resolves.toBe(false);
     await flushPromises();
@@ -155,8 +145,7 @@ describe("确认实盘", () => {
   });
 
   it("影子目标或账户读取失败时不能确认，不当成“没有影子目标”放行", async () => {
-    api.getLogicalAccount.mockResolvedValue({ logical_account: combo() });
-    api.listTradingAccounts.mockResolvedValue({ accounts: [member(1)] });
+    api.getLogicalAccount.mockResolvedValue({ logical_account: combo({ environment: AccountEnvironment.TESTNET }) });
     api.listShadowTargets.mockRejectedValue(new Error("交易服务不可用"));
     wrapper = mount(InstanceConfirmDialog, { global: { plugins: [ArcoVue] }, attachTo: document.body });
     const vm = wrapper.vm as unknown as DialogVM;

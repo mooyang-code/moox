@@ -99,7 +99,7 @@ func TestGapChunksKeepASlotWhileSeedFillsItsShare(t *testing.T) {
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
 	counts, err := b.Store.ChunkStatusCounts(ctx, seed.JobIDs[0])
 	require.NoError(t, err)
-	require.Equal(t, 3, counts[store.BackfillPending], "补齐分块退回待执行")
+	require.Equal(t, 3, counts[store.BackfillQueued], "补齐分块退回待执行")
 	require.Zero(t, counts[store.BackfillFailed], "拿不到名额不算失败")
 	require.Equal(t, share, b.functionBusy[key], "补缺口跑完归还了名额")
 
@@ -133,7 +133,7 @@ func TestSeedRunsFewerChunksWhileGapChunksHoldTheFunction(t *testing.T) {
 	require.NoError(t, b.Tick(ctx, "crypto"))
 	require.Eventually(t, func() bool {
 		counts, err := b.Store.ChunkStatusCounts(ctx, seed.JobIDs[0])
-		return err == nil && gate.started.Load() == 2 && counts[store.BackfillPending] == 1
+		return err == nil && gate.started.Load() == 2 && counts[store.BackfillQueued] == 1
 	}, 5*time.Second, 10*time.Millisecond, "两块在调用补采函数，一块退回")
 	b.mu.Lock()
 	busy := b.functionBusy[key]
@@ -164,7 +164,7 @@ func TestGapChunkRequeuesWhenTheFunctionIsFull(t *testing.T) {
 	_, rows, err := b.Store.GetJob(ctx, jobID)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	require.Equal(t, store.BackfillPending, rows[0].Status)
+	require.Equal(t, store.BackfillQueued, rows[0].Status)
 	require.Zero(t, rows[0].Attempts, "退回这次尝试")
 	require.Equal(t, DefaultMaxInFlight, b.functionBusy[key])
 

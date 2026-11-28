@@ -11,28 +11,11 @@ export type FieldValueType =
   | "FIELD_VALUE_TYPE_BYTES"
   | number;
 
-export type TotalMode = "AUTO" | "NONE" | "FORCE_EXACT" | number;
-
-export type TotalState = "UNKNOWN" | "EXACT" | "SKIPPED" | number;
+export type { Page, PageResult, TotalMode, TotalState } from "@/api/page";
 
 export interface RetInfo {
   code: number | string;
   msg: string;
-}
-
-export interface Page {
-  page?: number;
-  size?: number;
-  cursor?: string;
-}
-
-export interface PageResult {
-  page: number;
-  size: number;
-  total: number;
-  has_more: boolean;
-  next_cursor: string;
-  total_state?: TotalState;
 }
 
 export interface TimeRange {
@@ -169,7 +152,7 @@ export interface Dataset {
   description?: string;
   data_kind: DataKind;
   /** 时序 Dataset 的唯一频率；记录型 Dataset 可为空。 */
-  freq?: string;
+  frequency?: string;
   status: string;
   /** 只读的生效保留期："<n>h" 或 "forever"，由 Storage 策略按空间与频率解析。 */
   retention?: string;
@@ -214,52 +197,23 @@ export interface ResultColumn {
   display_name?: string;
 }
 
-export interface TimeSeriesKey {
-  space_id: string;
-  dataset_id: string;
-  subject_id: string;
-  freq: string;
-  series_tag?: string;
-  data_time?: string;
-}
-
 export interface TimeSeriesSelector {
-  space_id: string;
-  dataset_id: string;
   subject_id: string;
-  freq: string;
+  frequency: string;
   series_tag?: string;
-}
-
-export interface TimeSeriesRow {
-  key: TimeSeriesKey;
-  fields?: FieldValue[];
-  attributes?: Record<string, string>;
-}
-
-export interface RecordKey {
-  space_id: string;
-  dataset_id: string;
-  record_id: string;
-  version?: string;
-}
-
-export interface RecordRow {
-  key: RecordKey;
-  fields?: FieldValue[];
-  attributes?: Record<string, string>;
 }
 
 export interface TimeSeriesRowKey {
   subject_id: string;
-  freq: string;
+  frequency: string;
   data_time: string;
   series_tag?: string;
 }
 
 export interface RecordRowKey {
   record_id: string;
-  version: string;
+  /** 检索请求（SearchRecordRows）里省略或空值表示匹配任意版本（由 version_range 约束）；写入与响应中非空。 */
+  version?: string;
 }
 
 export interface RowKey {
@@ -267,4 +221,11 @@ export interface RowKey {
   dataset_id: string;
   time_series?: TimeSeriesRowKey;
   record?: RecordRowKey;
+}
+
+/** Storage 读写共用的行消息；DataView 查询响应与 ReadTimeSeriesRows 不返回 attributes。 */
+export interface Row {
+  key: RowKey;
+  fields?: FieldValue[];
+  attributes?: Record<string, TypedValue>;
 }

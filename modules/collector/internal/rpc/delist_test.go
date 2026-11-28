@@ -32,7 +32,7 @@ func TestRegisterDelistNotice(t *testing.T) {
 	rsp, err := service.RegisterDelistNotice(ctx, &pb.RegisterDelistNoticeReq{Exchange: "binance", Market: "spot", ExchangeSymbol: "FOOUSDT", DelistAt: delistAt.UnixMilli()})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "event_bus")
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "eventbus")
 
 	registrar := &fakeDelistRegistrar{created: true}
 	service.SetDelistRegistrar(registrar)

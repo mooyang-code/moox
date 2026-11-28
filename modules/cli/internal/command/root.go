@@ -113,5 +113,10 @@ func mountCommands(root *cobra.Command) {
 			panic("命令组 factor 不存在")
 		}
 		factor.AddCommand(newFactorImportCommand())
+		fetchPlan, _, err := root.Find([]string{"collector", "fetch-plan"})
+		if err != nil || fetchPlan == root {
+			panic("命令组 collector fetch-plan 不存在")
+		}
+		fetchPlan.AddCommand(collectorFetchPlanPauseCmd)
 	})
 }

@@ -16,7 +16,9 @@ describe("health display", () => {
     });
     expect(alertLink({ type: "dataset", producer: "strategy" }).href).toBe("#/strategy/tasks");
     // 采集数据集的告警直达这个数据集的采集结果，并带上它所在的空间（打开前先切过去）
-    expect(alertLink({ type: "dataset", producer: "collector", dataset_id: "ds_5m", freq: "5m", space_id: "stockcn" })).toEqual({
+    expect(
+      alertLink({ type: "dataset", producer: "collector", dataset_id: "ds_5m", frequency: "5m", space_id: "stockcn" })
+    ).toEqual({
       href: "#/collector/tasks?tab=results&dataset=ds_5m&freq=5m",
       label: "查看采集结果",
       spaceId: "stockcn"
@@ -30,7 +32,7 @@ describe("health display", () => {
       alertLink({ type: "business", kind: "attention", component_id: "trade", attention_kind });
     expect(tradeAttention("delist_detected")).toEqual({ href: "#/trading/blocked", label: "查看下架处理" });
     expect(tradeAttention("delist_failed").href).toBe("#/trading/blocked");
-    // 缺币安只读 Key：首页跳监控页看说明；说明分三种情况写，被禁用的那种给密钥页入口
+    // 缺币安只读 Key：首页跳监控页看说明；说明直接引导在密钥管理页启用或新建
     const readonlyMissing = {
       type: "business",
       kind: "attention",
@@ -39,19 +41,18 @@ describe("health display", () => {
     };
     expect(alertLink(readonlyMissing).href).toBe("#/ops/monitor");
     const note = alertNote(readonlyMissing);
-    expect(note?.link).toEqual({ href: "#/settings/secrets", label: "已禁用的话到密钥管理页启用" });
-    const [disabled, missing, deleted, manual] = note?.lines ?? [];
+    expect(note?.link).toEqual({ href: "#/settings/secrets", label: "前往密钥管理页配置" });
+    const [disabled, missing, manual] = note?.lines ?? [];
     expect(disabled).toContain("被禁用");
     expect(disabled).toContain("启用");
-    expect(missing).toContain("moox-cli config edit");
-    expect(missing).toContain("正式环境");
-    expect(missing).toContain("名称填 readonly");
-    expect(missing).toContain("moox-cli setup init");
-    expect(deleted).toContain("删除过");
-    expect(deleted).toContain("setup init 不会重建");
+    expect(missing).toContain("新建密钥");
+    expect(missing).toContain("binance");
+    expect(missing).toContain("生产环境");
+    expect(missing).toContain("只读密钥");
     expect(manual).toContain("moox-cli collector delist register");
     expect(manual).toContain("下架名单页");
-    expect(note?.lines.join("")).not.toContain("生产环境");
+    expect(note?.lines.join("")).not.toContain("config edit");
+    expect(note?.lines.join("")).not.toContain("setup init");
     expect(
       alertNote({ type: "business", kind: "attention", component_id: "collector", attention_kind: "delist_source_failed" })
     ).toBeNull();

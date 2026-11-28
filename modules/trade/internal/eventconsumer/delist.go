@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sync"
 	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -74,7 +74,7 @@ func RunDelist(ctx context.Context, opts DelistOptions) error {
 	}
 	for ctx.Err() == nil {
 		consumer, openErr := events.NewConsumer(ctx, opts.Client, registry, events.ConsumerConfig{
-			Name: opts.ConsumerName, Event: events.InstrumentDelistScheduled,
+			Consumer: events.TradeDelistConsumer.WithName(opts.ConsumerName),
 			// Collector 可能先于 Trade 发布（全新部署），从头读起。
 			AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 1,
 			FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
@@ -129,7 +129,7 @@ func HandleDelist(ctx context.Context, delivery *jetstream.Delivery, intake Deli
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
-	scheduled, ok := payload.(*storagepb.InstrumentDelistScheduled)
+	scheduled, ok := payload.(*eventpb.InstrumentDelistScheduled)
 	if !ok || message.GetEventName() != events.InstrumentDelistScheduled.Name() {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("trade delist: unexpected event payload %T", payload)}
 	}

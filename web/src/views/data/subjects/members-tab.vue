@@ -166,7 +166,7 @@
 <script setup lang="ts">
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { confirmRemoveMembers } from "./member-actions";
 import { useSpaceStore } from "@/store/modules/space";
@@ -484,31 +484,16 @@ watch(
   }
 );
 
-watch(
-  () => props.spaceId,
-  () => {
-    tagRequests.invalidate();
-    memberRequests.invalidate();
-    rows.value = [];
-    tags.value = [];
-    selectedKeys.value = [];
-    subjectVisible.value = false;
-    selectedAddVisible.value = false;
-    selectedTagId.value = props.initialTagId || "";
-    statusFilter.value = "";
-    pagination.current = 1;
-    void load();
-  },
-  { immediate: true }
-);
+onMounted(() => {
+  void load();
+});
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：batchVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域：弹窗打开/关闭与卸载都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const batchScope = createSubmitScope();
 watch(batchVisible, open => {
   if (open) batchScope.invalidate();
 });
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：subjectVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const subjectScope = createSubmitScope();
 watch(subjectVisible, open => {
   if (open) subjectScope.invalidate();
@@ -517,6 +502,14 @@ watch(subjectVisible, open => {
 const selectedAddScope = createSubmitScope();
 watch(selectedAddVisible, open => {
   if (open) selectedAddScope.invalidate();
+});
+
+onBeforeUnmount(() => {
+  tagRequests.invalidate();
+  memberRequests.invalidate();
+  batchScope.invalidate();
+  subjectScope.invalidate();
+  selectedAddScope.invalidate();
 });
 </script>
 

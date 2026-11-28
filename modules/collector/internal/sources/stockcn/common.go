@@ -8,65 +8,33 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	"github.com/mooyang-code/moox/packages/cnstock"
 )
 
 var shanghaiLocation = mustLoadLocation("Asia/Shanghai")
 
 func SubjectID(code string) (string, error) {
-	code = strings.TrimSpace(code)
-	if len(code) != 6 {
-		return "", fmt.Errorf("%w: China security code must contain six digits", marketdata.ErrUnsupportedSymbol)
+	subjectID, err := cnstock.InstrumentID(code)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", marketdata.ErrUnsupportedSymbol, err)
 	}
-	for _, r := range code {
-		if r < '0' || r > '9' {
-			return "", fmt.Errorf("%w: invalid security code", marketdata.ErrUnsupportedSymbol)
-		}
-	}
-	switch code[0] {
-	case '6':
-		return code + ".XSHG", nil
-	case '0', '2', '3':
-		return code + ".XSHE", nil
-	case '4', '8', '9':
-		return code + ".XBSE", nil
-	default:
-		return "", fmt.Errorf("%w: unsupported exchange for code %s", marketdata.ErrUnsupportedSymbol, code)
-	}
+	return subjectID, nil
 }
 
 func ProviderSymbol(subjectID string) (string, error) {
-	code, exchange, err := splitSubjectID(subjectID)
+	symbol, err := cnstock.TencentSymbol(subjectID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %v", marketdata.ErrUnsupportedSymbol, err)
 	}
-	switch exchange {
-	case "XSHG":
-		return "sh" + code, nil
-	case "XSHE":
-		return "sz" + code, nil
-	case "XBSE":
-		return "bj" + code, nil
-	default:
-		return "", fmt.Errorf("%w: unknown exchange %s", marketdata.ErrUnsupportedSymbol, exchange)
-	}
+	return symbol, nil
 }
 
 func DecodeProviderSymbol(symbol string) (string, error) {
-	symbol = strings.ToLower(strings.TrimSpace(symbol))
-	if len(symbol) != 8 {
-		return "", fmt.Errorf("%w: invalid provider symbol %q", marketdata.ErrUnsupportedSymbol, symbol)
+	subjectID, err := cnstock.FromTencentSymbol(symbol)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", marketdata.ErrUnsupportedSymbol, err)
 	}
-	code := symbol[2:]
-	switch symbol[:2] {
-	case "sh":
-		return SubjectIDWithExchange(code, "XSHG")
-	case "sz":
-		return SubjectIDWithExchange(code, "XSHE")
-	case "bj":
-		return SubjectIDWithExchange(code, "XBSE")
-	default:
-		return "", fmt.Errorf("%w: invalid provider symbol prefix %q", marketdata.ErrUnsupportedSymbol, symbol[:2])
-	}
+	return subjectID, nil
 }
 
 func SubjectIDWithExchange(code, exchange string) (string, error) {
@@ -81,18 +49,14 @@ func SubjectIDWithExchange(code, exchange string) (string, error) {
 }
 
 func EastMoneySecID(subjectID string) (string, error) {
-	code, exchange, err := splitSubjectID(subjectID)
+	code, exchange, err := cnstock.SplitInstrumentID(subjectID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %v", marketdata.ErrUnsupportedSymbol, err)
 	}
-	switch exchange {
-	case "XSHG":
+	if exchange == cnstock.ExchangeShanghai {
 		return "1." + code, nil
-	case "XSHE", "XBSE":
-		return "0." + code, nil
-	default:
-		return "", fmt.Errorf("%w: unknown exchange %s", marketdata.ErrUnsupportedSymbol, exchange)
 	}
+	return "0." + code, nil
 }
 
 func ParseCNMinute(value string) (time.Time, error) {
@@ -185,39 +149,6 @@ func LatestPageLimit(req marketdata.KlineRequest, now time.Time, maxBars int) in
 		return maxBars
 	}
 	return min(max(int(newestOrdinal-firstOrdinal)+3, 3), maxBars)
-}
-
-func splitSubjectID(subjectID string) (string, string, error) {
-	parts := strings.Split(strings.TrimSpace(subjectID), ".")
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("%w: invalid subject_id %q", marketdata.ErrUnsupportedSymbol, subjectID)
-	}
-	if len(parts[0]) != 6 {
-		return "", "", fmt.Errorf("%w: invalid subject code %q", marketdata.ErrUnsupportedSymbol, parts[0])
-	}
-	for _, r := range parts[0] {
-		if r < '0' || r > '9' {
-			return "", "", fmt.Errorf("%w: invalid subject code %q", marketdata.ErrUnsupportedSymbol, parts[0])
-		}
-	}
-	code, exchange := parts[0], strings.ToUpper(parts[1])
-	switch exchange {
-	case "XSHG":
-		if code[0] != '6' {
-			return "", "", fmt.Errorf("%w: code %q does not belong to XSHG", marketdata.ErrUnsupportedSymbol, code)
-		}
-	case "XSHE":
-		if code[0] != '0' && code[0] != '2' && code[0] != '3' {
-			return "", "", fmt.Errorf("%w: code %q does not belong to XSHE", marketdata.ErrUnsupportedSymbol, code)
-		}
-	case "XBSE":
-		if code[0] != '4' && code[0] != '8' && code[0] != '9' {
-			return "", "", fmt.Errorf("%w: code %q does not belong to XBSE", marketdata.ErrUnsupportedSymbol, code)
-		}
-	default:
-		return "", "", fmt.Errorf("%w: unsupported exchange %q", marketdata.ErrUnsupportedSymbol, parts[1])
-	}
-	return code, exchange, nil
 }
 
 func mustLoadLocation(name string) *time.Location {

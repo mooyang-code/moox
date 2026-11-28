@@ -28,7 +28,6 @@ type FunctionalObservability string
 
 const (
 	FunctionalObservabilityActive        FunctionalObservability = "active"
-	FunctionalObservabilityDeferred      FunctionalObservability = "deferred"
 	FunctionalObservabilityNotApplicable FunctionalObservability = "not_applicable"
 )
 
@@ -129,7 +128,7 @@ func (c Component) validate() error {
 		return fmt.Errorf("invalid transport %q", c.Transport)
 	}
 	switch c.FunctionalObservability {
-	case FunctionalObservabilityActive, FunctionalObservabilityDeferred, FunctionalObservabilityNotApplicable:
+	case FunctionalObservabilityActive, FunctionalObservabilityNotApplicable:
 	default:
 		return fmt.Errorf("invalid functional_observability %q", c.FunctionalObservability)
 	}

@@ -123,11 +123,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { GetDataTypeConfigWithFields } from "@/api/collector";
+import { GetDataTypeConfigs } from "@/api/collector";
 import { reportError } from "@/api/http";
-import { createDataSource, listDataSources, updateDataSource } from "@/api/storage/metadata";
+import { listDataSources, upsertDataSource } from "@/api/storage/metadata";
 import type { DataSource } from "@/api/storage/types";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { useSpaceStore } from "@/store/modules/space";
@@ -192,7 +192,7 @@ async function loadExtraFieldSources() {
   extraFieldSources.value = [];
   if (!currentSpace) return;
   try {
-    const options = (await GetDataTypeConfigWithFields("kline")).detail?.extra_fields || [];
+    const options = (await GetDataTypeConfigs()).configs?.find(item => item.data_type === "kline")?.extra_fields || [];
     if (!request.isLatest() || currentSpace !== props.spaceId) return;
     const mine = options.filter(option => (option.market_id || "").trim().toLowerCase() === currentSpace.trim().toLowerCase());
     if (!mine.length) return;
@@ -255,8 +255,7 @@ async function submit(): Promise<boolean> {
   const payload = { ...form, space_id: spaceId };
   const submission = sourceScope.begin();
   try {
-    if (editing.value) await updateDataSource(payload);
-    else await createDataSource(payload);
+    await upsertDataSource(payload, !editing.value);
   } catch (error) {
     reportError(error);
     return false;
@@ -278,16 +277,6 @@ function onPageSizeChange(pageSize: number) {
   void load();
 }
 
-watch(
-  () => props.spaceId,
-  () => {
-    loadRequests.invalidate();
-    pagination.current = 1;
-    void load();
-    void loadExtraFieldSources();
-  }
-);
-
 onMounted(() => {
   void load();
   void loadExtraFieldSources();
@@ -296,6 +285,10 @@ onMounted(() => {
 const sourceScope = createSubmitScope();
 watch(visible, open => {
   if (open) sourceScope.invalidate();
+});
+onBeforeUnmount(() => {
+  loadRequests.invalidate();
+  sourceScope.invalidate();
 });
 
 defineExpose({ openCreate, visible, form });

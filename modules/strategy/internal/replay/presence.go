@@ -5,6 +5,9 @@ import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // presence 记录每个标的在哪些 bar（按日历序号）有行，用于回放中的年龄判定。
@@ -37,7 +40,7 @@ func (p *presence) add(resolved input.Resolved, rows input.RangeRows) {
 		if !ok {
 			onCalendar := false
 			for _, row := range bySubject {
-				boundary, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, row.DataTime)
+				boundary, err := period.FromStorageStart(resolved.Calendar, resolved.Bar, row.DataTime)
 				onCalendar = err == nil
 				index = boundary.BarIndex
 				break
@@ -57,7 +60,7 @@ func (p *presence) add(resolved input.Resolved, rows input.RangeRows) {
 }
 
 // probe 返回本期判定 n 根年龄的探针。
-func (p *presence) probe(n int, bar input.PeriodBoundaries) input.AgeProbe {
+func (p *presence) probe(n int, bar period.PeriodBoundaries) input.AgeProbe {
 	return func(_ context.Context, instruments []string) (map[string]struct{}, error) {
 		passed := p.passedFor(n)
 		wanted := make(map[string]struct{}, len(instruments))
@@ -93,7 +96,7 @@ func (p *presence) probe(n int, bar input.PeriodBoundaries) input.AgeProbe {
 		}
 		// 与实时一致：已证明年龄的标的放行；其余全部不满足且窗口内整个数据集没有数据时，才是历史缺口。
 		if len(instruments) > 0 && len(satisfied) == 0 && !anyRows {
-			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", p.resolved.AgeLabel(n))}
+			return nil, &upstream.SkipError{Reason: upstream.SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", p.resolved.AgeLabel(n))}
 		}
 		return satisfied, nil
 	}

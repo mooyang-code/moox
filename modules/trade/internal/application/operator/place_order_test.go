@@ -14,11 +14,15 @@ func automationState(t *testing.T, f *operatorFixture) string {
 	t.Helper()
 	logical, err := f.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	return logical.AutomationState
+	return logical.AutomationState()
 }
 
 func setControlMode(t *testing.T, f *operatorFixture, mode string) {
 	t.Helper()
+	if mode == "MANUAL" {
+		require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode=?, c_pause_source='', c_pause_reason='', c_margin_reduce_state='' WHERE c_logical_account_id='logical-1'", mode).Error)
+		return
+	}
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode=? WHERE c_logical_account_id='logical-1'", mode).Error)
 }
 
@@ -80,9 +84,9 @@ func TestPlaceOrderRetryKeepsFirstFlow(t *testing.T) {
 		f, s, _ := realSubmissionService(t)
 		first, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 		require.NoError(t, err)
-		before := automationState(t, f)
 		// 重试按已落库的流程走，不按现在的控制模式重新选。
 		setControlMode(t, f, "STRATEGY")
+		before := automationState(t, f)
 
 		replay, _ := s.PlaceOrder(context.Background(), submissionCommand(f))
 

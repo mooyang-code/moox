@@ -120,7 +120,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import type { FundSettings } from "@/api/trade/settings";
-import type { ControlMode } from "@/api/trade/types";
+import { ControlMode } from "@/api/trade/types";
 import {
   bnbReserveHints,
   buildFundSettingsRequest,
@@ -176,7 +176,7 @@ const marginMonitor = computed(() => showsMarginMonitor(scope.value));
 const marginNote = computed(() => marginMonitorHiddenNote(scope.value));
 const mixedNote = computed(() => marginMonitorMixedNote(scope.value));
 const unit = computed(() => (props.settlementAsset || "USDT").toUpperCase());
-const manual = computed(() => props.controlMode === 2);
+const manual = computed(() => props.controlMode === ControlMode.MANUAL);
 
 const model = reactive(fundSettingsToModel(props.settings));
 const formError = ref("");

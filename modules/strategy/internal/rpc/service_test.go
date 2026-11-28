@@ -18,6 +18,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	trpc "trpc.group/trpc-go/trpc-go"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const demoDSL = `name: demo
@@ -41,7 +44,7 @@ type fakeResolver struct {
 	columns       []string
 	loaded        input.Loaded
 	loadErr       error
-	view          input.ViewInfo
+	view          upstream.ViewInfo
 	coverageErr   error
 	// onResolve 在每次解析开始时调用，用来模拟解析期间的并发修改。
 	onResolve func()
@@ -91,7 +94,7 @@ func (f *fakeResolver) Resolve(_ context.Context, _ string, registered map[strin
 	}
 	tasks := map[string]input.TaskBinding{}
 	for i, id := range taskIDs {
-		datasetID, err := input.DatasetIDOfTask(id)
+		datasetID, err := upstream.DatasetIDOfTask(id)
 		if err != nil {
 			return input.Resolved{}, nil, err
 		}
@@ -107,7 +110,7 @@ func (f *fakeResolver) Resolve(_ context.Context, _ string, registered map[strin
 	if err != nil {
 		return input.Resolved{}, nil, err
 	}
-	resolved := input.Resolved{Market: mode, Tasks: tasks, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
+	resolved := input.Resolved{Market: mode, Tasks: tasks, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
 	if f.calendar != "" {
 		resolved.Calendar, resolved.Bar = f.calendar, "1d"
 	}
@@ -206,7 +209,7 @@ func newHarness(t *testing.T) *harness {
 	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	coverage := input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
+	coverage := upstream.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
 	h := &harness{t: t, resolver: &fakeResolver{view: coverage}, trade: &fakeTrade{}, now: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
 	h.service = &Service{Store: repo, Resolver: h.resolver, Trade: h.trade, Now: func() time.Time { return h.now }}
 	ctx := trpc.BackgroundContext()
@@ -365,7 +368,7 @@ func TestStrategySpaceContractDualPaths(t *testing.T) {
 			Markets:  map[string]engine.MarketInput{"spot": {Rows: map[string]engine.Row{"BTC-USDT": {Values: map[string]float64{"close": 2}}}}},
 			Universe: []string{"BTC-USDT"}, Expected: map[string][]string{"r": {"BTC-USDT"}}, AgedOut: map[string][]string{},
 		},
-		Boundary: input.PeriodBoundaries{BarEnd: h.now, StorageStart: h.now.Add(-time.Hour)},
+		Boundary: period.PeriodBoundaries{BarEnd: h.now, StorageStart: h.now.Add(-time.Hour)},
 	}
 	withSpaceTrial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{
 		DslYaml: updatedDSL, FactorTasks: map[string]string{"spot": "ftask_a"},
@@ -776,7 +779,7 @@ func TestValidateStrategy(t *testing.T) {
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "momentum_99")
 	h.resolver.err = nil
 	frame := engine.Frame{BarEnd: h.now, Markets: map[string]engine.MarketInput{"spot": {Rows: map[string]engine.Row{"BTC-USDT": {Values: map[string]float64{"close": 2}}, "ETH-USDT": {Values: map[string]float64{"close": 1}}}}}, Universe: []string{"BTC-USDT", "ETH-USDT"}, Expected: map[string][]string{"r": {"BTC-USDT", "ETH-USDT"}}, AgedOut: map[string][]string{}}
-	h.resolver.loaded = input.Loaded{Frame: frame, Boundary: input.PeriodBoundaries{BarEnd: h.now, StorageStart: h.now.Add(-time.Hour)}}
+	h.resolver.loaded = input.Loaded{Frame: frame, Boundary: period.PeriodBoundaries{BarEnd: h.now, StorageStart: h.now.Add(-time.Hour)}}
 	trial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}})
 	requireOK(t, int32(trial.GetRetInfo().GetCode()), trial.GetRetInfo().GetMsg())
 	if trial.GetTrial().GetStatus() != "ok" || len(trial.GetTrial().GetTargets()) != 1 || trial.GetTrial().GetTargets()[0].GetInstrumentId() != "BTC-USDT" || len(trial.GetTrialItems()) != 2 || trial.GetResolvedJson() == "" {
@@ -804,7 +807,7 @@ func TestS26StartReplayChecksTaskMarkets(t *testing.T) {
 	requireFail(t, int32(noStart.GetRetInfo().GetCode()), noStart.GetRetInfo().GetMsg(), "start_time 必须是正的 Unix 毫秒时刻")
 	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), SpotFeeBps: 10})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
-	if started.GetReplay().GetStatus() != store.ReplayPending || started.GetReplay().GetDslYaml() != demoDSL || started.GetReplay().GetStrategyId() != "s1" {
+	if started.GetReplay().GetStatus() != store.ReplayQueued || started.GetReplay().GetDslYaml() != demoDSL || started.GetReplay().GetStrategyId() != "s1" {
 		t.Fatalf("回放任务不符：%+v", started.GetReplay())
 	}
 	listed, _ := h.service.ListReplays(h.ctx, &strategypb.ListReplaysReq{})
@@ -861,7 +864,7 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只能给出其一")
 	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireFail(t, int32(neither.GetRetInfo().GetCode()), neither.GetRetInfo().GetMsg(), "只能给出其一")
-	h.resolver.view = input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
+	h.resolver.view = upstream.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
 	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "可用起点")
 	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-02"), EndTime: ms("2026-09-30")})
@@ -877,7 +880,7 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bars, err := input.ReplayBars(input.DefaultCalendar, "1h", stored.StartTime, stored.EndTime, input.DefaultReplayMaxBars)
+	bars, err := period.ReplayBars(period.DefaultCalendar, "1h", stored.StartTime, stored.EndTime, input.DefaultReplayMaxBars)
 	if err != nil || len(bars) != 29 {
 		t.Fatalf("落库往返后仍应是 29 根：%d err=%v", len(bars), err)
 	}
@@ -923,8 +926,9 @@ func TestGetStrategyResultFailsWhenSnapshotReadErrors(t *testing.T) {
 	ok, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r1"})
 	requireOK(t, int32(ok.GetRetInfo().GetCode()), ok.GetRetInfo().GetMsg())
 	// 版本表读取出错（这里改掉列名模拟数据库读错误）：整体失败，不返回空 DSL 的成功响应。
-	// ApplySchema 在改动提交之后才校验 schema，会报“旧 schema”；这里要的正是这个被改坏的库，忽略它的错误。
-	_ = h.service.Store.ApplySchema(`ALTER TABLE t_strategy_def_versions RENAME COLUMN c_dsl_yaml TO c_dsl_yaml_broken;`)
+	if err := h.service.Store.ExecForTest(`ALTER TABLE t_strategy_def_versions RENAME COLUMN c_dsl_yaml TO c_dsl_yaml_broken;`); err != nil {
+		t.Fatal(err)
+	}
 	failed, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r1"})
 	if failed.GetRetInfo().GetCode() == 0 {
 		t.Fatalf("快照读取出错应失败：%+v", failed.GetRetInfo())

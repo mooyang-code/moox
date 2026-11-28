@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -30,9 +29,9 @@ func TestCapacityLiveUsesReservationFormulaAndBaseSteps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, _ := newTestServiceForMarket(t, tc.market)
 			account := executableAccount(tc.market)
-			account.Snapshot.AvailableFunds = shared.MustDecimal(tc.funds)
+			account.Snapshot.AvailableFunds = tc.funds
 			for i := range account.Snapshot.Balances {
-				account.Snapshot.Balances[i].Available = shared.MustDecimal(tc.funds)
+				account.Snapshot.Balances[i].Available = tc.funds
 			}
 			s.Validator.Accounts = accountEligibilityStub{account: account}
 			spec := testSpec(s.now())
@@ -77,9 +76,9 @@ func TestCapacityPaperUsesLedgerFeesSlippageAndReservations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, db, adapter := newTestServiceForMarket(t, tc.market)
 			account := executableAccount(tc.market)
-			account.ExecutionMode = exchange.ExecutionModePaper
-			account.Paper = &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("99999"), MakerFeeRate: shared.MustDecimal("0.02"), TakerFeeRate: shared.MustDecimal("0.01"), SlippageBPS: shared.MustDecimal("100")}
-			account.Snapshot = exchange.AccountSnapshot{}
+			account.ExecutionMode = string(exchange.ExecutionModePaper)
+			account.PaperConfig = &store.PaperAccountConfigRecord{InitialBalance: "99999", MakerFeeRate: "0.02", TakerFeeRate: "0.01", SlippageBPS: "100"}
+			account.Snapshot = store.TradingAccountSnapshot{}
 			s.Validator.Accounts = accountEligibilityStub{account: account}
 			s.Adapters = errorBoundarySource{adapter: capacityPaperAdapter{adapterStub: adapter, now: s.now()}}
 			asset := "USDT"
@@ -113,9 +112,9 @@ func TestCapacityPaperUsesLedgerFeesSlippageAndReservations(t *testing.T) {
 func TestCapacityLiveWatermarkDoesNotDoubleDeductReflectedReservations(t *testing.T) {
 	s, db, _ := newTestService(t)
 	account := executableAccount(exchange.MarketTypeSpot)
-	account.SnapshotSourceTime = time.UnixMilli(200) // 余额快照的版本时间是预留抵扣边界，不是本地同步完成时间
-	account.LastSyncAt = time.UnixMilli(9_999)       // 同步完成得再晚也不能让早于快照版本之后提交的挂单被排除
-	account.Snapshot.Balances[0].Available = shared.MustDecimal("202")
+	account.SnapshotSourceTime = 200 // 余额快照的版本时间是预留抵扣边界，不是本地同步完成时间
+	account.LastSyncAt = 9_999       // 同步完成得再晚也不能让早于快照版本之后提交的挂单被排除
+	account.Snapshot.Balances[0].Available = "202"
 	s.Validator.Accounts = accountEligibilityStub{account: account}
 	ctx := context.Background()
 	spec := testSpec(s.now())
@@ -157,7 +156,7 @@ func TestCapacityClipsChildNotionalAndNeverPersistsReservation(t *testing.T) {
 func TestCapacityLiveLimitUsesLimitPriceWithoutMarketFee(t *testing.T) {
 	s, _, _ := newTestService(t)
 	account := executableAccount(exchange.MarketTypeSpot)
-	account.Snapshot.Balances[0].Available = shared.MustDecimal("110")
+	account.Snapshot.Balances[0].Available = "110"
 	s.Validator.Accounts = accountEligibilityStub{account: account}
 	spec := testSpec(s.now())
 	spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyGTC, decimalPointer("110")
@@ -170,8 +169,8 @@ func TestCapacityLiveLimitUsesLimitPriceWithoutMarketFee(t *testing.T) {
 func TestCapacityLiveIncludesUnsubmittedReservation(t *testing.T) {
 	s, _, _ := newTestService(t)
 	account := executableAccount(exchange.MarketTypeSpot)
-	account.LastSyncAt = s.now().Add(time.Hour)
-	account.Snapshot.Balances[0].Available = shared.MustDecimal("202")
+	account.LastSyncAt = s.now().Add(time.Hour).UnixMilli()
+	account.Snapshot.Balances[0].Available = "202"
 	s.Validator.Accounts = accountEligibilityStub{account: account}
 	spec := testSpec(s.now())
 	_, err := s.Place(context.Background(), "space-1", spec)
@@ -186,7 +185,7 @@ func TestCapacityFloorsExactRationalBelowStepBoundary(t *testing.T) {
 	s, _, _ := newTestService(t)
 	account := executableAccount(exchange.MarketTypeSpot)
 	// The quotient is recurring and less than one by much less than 1e-36.
-	account.Snapshot.Balances[0].Available = shared.MustDecimal("101").Sub(shared.MustDecimal("0.0000000000000000000000000000000000000001"))
+	account.Snapshot.Balances[0].Available = shared.MustDecimal("101").Sub(shared.MustDecimal("0.0000000000000000000000000000000000000001")).String()
 	s.Validator.Accounts = accountEligibilityStub{account: account}
 	spec := testSpec(s.now())
 	spec.Quantity = shared.MustDecimal("2")
@@ -241,9 +240,9 @@ func TestCapacityLimitChildCapUsesReferenceNotLimitNotional(t *testing.T) {
 func TestCapacityLiveKeepsDeductingOpenOrderNewerThanSnapshotVersion(t *testing.T) {
 	s, db, _ := newTestService(t)
 	account := executableAccount(exchange.MarketTypeSpot)
-	account.SnapshotSourceTime = time.UnixMilli(1_500) // 快照版本 1_500，早于挂单提交时间 2_000
-	account.LastSyncAt = time.UnixMilli(3_000)         // 本地同步完成时间 3_000 晚于挂单
-	account.Snapshot.Balances[0].Available = shared.MustDecimal("202")
+	account.SnapshotSourceTime = 1_500 // 快照版本 1_500，早于挂单提交时间 2_000
+	account.LastSyncAt = 3_000         // 本地同步完成时间 3_000 晚于挂单
+	account.Snapshot.Balances[0].Available = "202"
 	s.Validator.Accounts = accountEligibilityStub{account: account}
 	ctx := context.Background()
 	spec := testSpec(s.now())
@@ -262,7 +261,7 @@ func TestCapacityLiveKeepsDeductingOpenOrderNewerThanSnapshotVersion(t *testing.
 func TestCheckPaperFundsLetsReduceOnlyCloseNearFullMargin(t *testing.T) {
 	_, db, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	account := executableAccount(exchange.MarketTypeSwap)
-	account.ExecutionMode = exchange.ExecutionModePaper
+	account.ExecutionMode = string(exchange.ExecutionModePaper)
 	require.NoError(t, db.DBForTest().Exec("UPDATE t_trading_accounts SET c_execution_mode='PAPER',c_live_environment='',c_credential_secret_id='' WHERE c_space_id=? AND c_trading_account_id=?", "space-1", "account-1").Error)
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreatePaperAccountConfig(store.PaperAccountConfigRecord{SpaceID: "space-1", TradingAccountID: "account-1", InitialBalance: "1000", MakerFeeRate: "0.001", TakerFeeRate: "0.001", SlippageBPS: "0"})

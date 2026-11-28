@@ -13,8 +13,8 @@ import (
 	paperexec "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -32,7 +32,7 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			logicalSrv := &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}
 			console := &rpc.ConsoleServer{
 				Store:                db,
-				AccountServer:        &rpc.AccountServer{Store: db, Logical: logicalSrv, Accounts: &accountapp.Service{Store: accountapp.Repository{Store: db}}},
+				AccountServer:        &rpc.AccountServer{Store: db, Accounts: &accountapp.Service{Store: db}},
 				LogicalAccountServer: logicalSrv,
 			}
 			marketPB, positionPB := "spot", tradepb.PositionSide_POSITION_SIDE_UNSPECIFIED
@@ -40,18 +40,28 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 				marketPB, positionPB = "swap", tradepb.PositionSide_POSITION_SIDE_NET
 			}
 			created, err := console.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
-				Name: "ordinary-paper", LogicalAccountName: "ordinary-manual", Exchange: "binance",
+				Name: "ordinary-paper", Exchange: "binance",
 				Markets: []string{marketPB}, SettlementAsset: "USDT",
-				Paper:       &tradepb.PaperConfig{InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
-				ControlMode: tradepb.ControlMode_CONTROL_MODE_MANUAL,
+				Paper: &tradepb.PaperConfig{InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0"},
 			})
 			require.NoError(t, err)
 			require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo())
-			logicalID := created.GetLogicalAccount().GetLogicalAccountId()
+			accountID := created.GetAccount().GetTradingAccountId()
+			createdLogical, err := console.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
+				Name: "ordinary-manual", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
+				SettlementAsset: "USDT", ControlMode: tradepb.ControlMode_CONTROL_MODE_MANUAL,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tradepb.ErrorCode_SUCCESS, createdLogical.GetRetInfo().GetCode(), createdLogical.GetRetInfo())
+			logicalID := createdLogical.GetLogicalAccount().GetLogicalAccountId()
+			require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+				return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+					SpaceID: testSpace, LogicalAccountID: logicalID, TradingAccountID: accountID, Enabled: true, Priority: 1,
+				})
+			}))
 			members, err := db.ListLogicalAccountMembers(ctx, testSpace, logicalID, false)
 			require.NoError(t, err)
 			require.Len(t, members, 1)
-			accountID := members[0].TradingAccountID
 			account, err := db.GetTradingAccount(ctx, testSpace, accountID)
 			require.NoError(t, err)
 			fake := newFakeExchange(market)
@@ -110,7 +120,7 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			if market == exchange.MarketTypeSwap {
 				require.Len(t, positions.GetPositions(), 1)
 			} else {
-				require.Empty(t, positions.GetPositions(), "SPOT exposure is held in asset balances")
+				require.Len(t, positions.GetPositions(), 2, "SPOT 统一持仓查询返回结算币与持仓标的余额")
 			}
 			finalAccount, err := db.GetTradingAccount(ctx, testSpace, accountID)
 			require.NoError(t, err)
@@ -133,7 +143,7 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			logical, err := db.GetLogicalAccount(ctx, testSpace, logicalID)
 			require.NoError(t, err)
 			require.Equal(t, "MANUAL", logical.ControlMode)
-			require.Equal(t, "新建的模拟账户，等待恢复自动执行", logical.PauseReason)
+			require.Empty(t, logical.PauseReason)
 			require.NoError(t, db.Close())
 			reopened, err := store.Open(path)
 			require.NoError(t, err)
@@ -156,7 +166,7 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			f := newFixtureWithMode(t, market, fake, exchange.ExecutionModeLive)
 			f.account.LiveTradingEnabled = true // The adapter is the local fake, never a network exchange.
 			logical := &logicalapp.Service{Store: f.store, Syncer: syncBridge{service: f.sync}, Now: func() time.Time { return testNow }}
-			_, err := logical.Create(ctx, testSpace, testLogicalAccount, "manual-live-mock", exchange.ExecutionModeLive, "USDT", "MANUAL")
+			_, err := logical.Create(ctx, testSpace, testLogicalAccount, "manual-live-mock", exchange.AccountEnvironmentTestnet, "USDT", "MANUAL")
 			require.NoError(t, err)
 			_, err = logical.AddMember(ctx, logicalapp.AddMemberCommand{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TradingAccountID: testAccount, Enabled: true, AdoptExistingExposure: true})
 			require.NoError(t, err)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Holding, Position, TargetLane, TargetLaneState } from "@/api/trade/types";
+import type { Position, TargetLane, TargetLaneState } from "@/api/trade/types";
 import { decimalAdd, decimalSub } from "../shared/order-rules";
 import {
   buildCoinRows,
@@ -13,8 +13,8 @@ import {
 
 const swap = (instrument_id: string, signed_quantity: string, mark_price = "") =>
   ({ instrument_id, signed_quantity, mark_price, market_type: "swap" }) as Position;
-const spot = (asset: string, quantity: string, instrument_id = `${asset}-USDT-SPOT`) =>
-  ({ asset, quantity, instrument_id }) as Holding;
+const spot = (asset: string, signed_quantity: string, instrument_id = `${asset}-USDT-SPOT`) =>
+  ({ asset, signed_quantity, instrument_id, market_type: "spot" }) as Position;
 /** 后端给的一条结论：0 未知、1 还会下单、2 已到位、3 低于最小下单额、4 市场规则顺延、5 不足一手、6 没有成员能下单 */
 const lane = (instrument_id: string, state: TargetLaneState, reason = ""): TargetLane => ({ instrument_id, state, reason });
 
@@ -353,8 +353,8 @@ describe("持仓与目标按币合并", () => {
       lanes: [],
       swapPositions: [],
       spotHoldings: [
-        { asset: "600519.XSHG", quantity: "100", instrument_id: "600519.XSHG", trading_account_id: "B" } as Holding,
-        { asset: "600519.XSHG", quantity: "100", instrument_id: "600519.XSHG", trading_account_id: "A" } as Holding
+        { asset: "600519.XSHG", signed_quantity: "100", instrument_id: "600519.XSHG", trading_account_id: "B" } as Position,
+        { asset: "600519.XSHG", signed_quantity: "100", instrument_id: "600519.XSHG", trading_account_id: "A" } as Position
       ],
       converged: false,
       hasTarget: true
@@ -381,7 +381,7 @@ describe("A 股持仓", () => {
       blocked: [{ instrument_id: "600519.XSHG", quantity: "-300", reason: "当日买入，次日可卖", deferred: true }],
       lanes: [],
       swapPositions: [],
-      spotHoldings: [{ asset: "600519.XSHG", quantity: "300", sellable: "100", instrument_id: "600519.XSHG" } as Holding],
+      spotHoldings: [{ asset: "600519.XSHG", signed_quantity: "300", sellable: "100", instrument_id: "600519.XSHG" } as Position],
       converged: true,
       hasTarget: true
     });
@@ -401,7 +401,9 @@ describe("A 股持仓", () => {
         blocked,
         lanes,
         swapPositions: [],
-        spotHoldings: [{ asset: "600519.XSHG", quantity: "300", sellable: "300", instrument_id: "600519.XSHG" } as Holding],
+        spotHoldings: [
+          { asset: "600519.XSHG", signed_quantity: "300", sellable: "300", instrument_id: "600519.XSHG" } as Position
+        ],
         converged: false,
         hasTarget: true
       })[0];
@@ -462,7 +464,7 @@ describe("市值、开仓均价、未实现盈亏", () => {
       blocked: [],
       lanes: [],
       swapPositions: [position("a", "-1", "2100", "100")],
-      spotHoldings: [{ asset: "ETH", quantity: "1", instrument_id: "ETH-USDT-SPOT", mark_price: "2000" } as Holding],
+      spotHoldings: [{ asset: "ETH", signed_quantity: "1", instrument_id: "ETH-USDT-SPOT", mark_price: "2000" } as Position],
       converged: false,
       hasTarget: false
     });

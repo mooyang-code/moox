@@ -464,9 +464,21 @@ func numericOrNull(value any) (float64, bool) {
 	}
 }
 
-func normalizeNumeric(value any) any {
+// finiteNumeric 把合法的有限数值转为 float64；nil、非数值、NaN 与 ±Inf 一律返回 false。
+func finiteNumeric(value any) (float64, bool) {
+	if value == nil {
+		return 0, false
+	}
 	parsed, ok := numericOrNull(value)
 	if !ok || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func normalizeNumeric(value any) any {
+	parsed, ok := finiteNumeric(value)
+	if !ok {
 		return nil
 	}
 	if _, isFloat := value.(float32); isFloat {

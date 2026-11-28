@@ -66,30 +66,30 @@ func (s e2eSource) ResolveSubjects(context.Context, string, []string) ([]domain.
 // e2ePrimary 是内存里的 Primary：源行和目标行放在一起，写入覆盖同一行键。
 type e2ePrimary struct {
 	mu     sync.Mutex
-	rows   map[string]*storagepb.RowFieldUpsert
+	rows   map[string]*storagepb.Row
 	writes int
 }
 
-func newE2EPrimary() *e2ePrimary { return &e2ePrimary{rows: map[string]*storagepb.RowFieldUpsert{}} }
+func newE2EPrimary() *e2ePrimary { return &e2ePrimary{rows: map[string]*storagepb.Row{}} }
 
 func e2eKeyText(key *storagepb.RowKey) string {
 	ts := key.GetTimeSeries()
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%s", key.GetSpaceId(), key.GetDatasetId(), ts.GetSubjectId(), ts.GetFreq(), ts.GetDataTime(), ts.GetSeriesTag())
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%s", key.GetSpaceId(), key.GetDatasetId(), ts.GetSubjectId(), ts.GetFrequency(), ts.GetDataTime(), ts.GetSeriesTag())
 }
 
-func (p *e2ePrimary) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, _ []string) ([]*storagepb.RowFieldValues, error) {
+func (p *e2ePrimary) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, _ []string) ([]*storagepb.Row, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var out []*storagepb.RowFieldValues
+	var out []*storagepb.Row
 	for _, key := range keys {
 		if row := p.rows[e2eKeyText(key)]; row != nil {
-			out = append(out, &storagepb.RowFieldValues{Key: row.Key, Fields: row.Fields, Attributes: row.Attributes})
+			out = append(out, &storagepb.Row{Key: row.Key, Fields: row.Fields, Attributes: row.Attributes})
 		}
 	}
 	return out, nil
 }
 
-func (p *e2ePrimary) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+func (p *e2ePrimary) UpsertFields(_ context.Context, rows []*storagepb.Row) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, row := range rows {
@@ -99,17 +99,17 @@ func (p *e2ePrimary) UpsertFields(_ context.Context, rows []*storagepb.RowFieldU
 	return nil
 }
 
-func e2eRow(space, dataset, subject, freq string, at time.Time, closeValue float64) *storagepb.RowFieldUpsert {
+func e2eRow(space, dataset, subject, freq string, at time.Time, closeValue float64) *storagepb.Row {
 	double := func(name string, value float64) *storagepb.FieldValue {
 		return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}}}
 	}
-	return &storagepb.RowFieldUpsert{
-		Key:    &storagepb.RowKey{SpaceId: space, DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: freq, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"}}},
+	return &storagepb.Row{
+		Key:    &storagepb.RowKey{SpaceId: space, DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Frequency: freq, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"}}},
 		Fields: []*storagepb.FieldValue{double("open", closeValue-1), double("high", closeValue+1), double("low", closeValue-2), double("close", closeValue), double("volume", 2), double("quote_volume", 20), {FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 3}}}},
 	}
 }
 
-func e2eField(row *storagepb.RowFieldUpsert, name string) float64 {
+func e2eField(row *storagepb.Row, name string) float64 {
 	for _, field := range row.GetFields() {
 		if field.GetFieldId() == name {
 			return field.GetValue().GetDoubleValue()
@@ -124,7 +124,7 @@ func e2eHarness(t *testing.T, space, dataset, sourceFreq, targetFreq string) (*s
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	params := fmt.Sprintf(`{"provider":"binance","market_type":"spot","source_dataset_id":%q,"source_frequency":%q,"source_series_tag":"venue:binance","target_dataset_id":"dataset_e2e","target_frequency":%q}`, dataset, sourceFreq, targetFreq)
+	params := fmt.Sprintf(`{"source_dataset_id":%q,"source_frequency":%q,"source_series_tag":"venue:binance","target_frequency":%q}`, dataset, sourceFreq, targetFreq)
 	task := domain.CollectionTask{SpaceID: space, TaskID: "e2e-resample", DataType: "kline_resample", PrepareState: domain.PrepareStateReady, Enabled: true, CollectParams: params, ResultDatasetID: "dataset_e2e"}
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	primary := newE2EPrimary()
@@ -230,7 +230,7 @@ func TestKlineResampleAStockHourlyE2E(t *testing.T) {
 	}
 	require.Len(t, primary.rows, 240+4, "240 根 1m 源 K 线 + 每个交易日 4 根 1h，午休与盘后没有桶")
 
-	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_e2e","target_frequency":"45m"}`
+	params := `{"source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_frequency":"45m"}`
 	bad := task
 	bad.CollectParams = params
 	_, err = resample.NewTaskForSource(bad, sourceInfo)

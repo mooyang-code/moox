@@ -38,8 +38,8 @@ type Service struct {
 
 	// seriesBars 是时序 View 每个序列保留的根数，随查询响应告知调用方。
 	seriesBars uint64
-	// maxAge 是 View 按空间 × 频率的最长保留历史，超期的行不写入；maxAgeEnabled 为假时不限制。now 只供测试替换时钟。
-	maxAge        storagepolicy.Retention
+	// maxAge 是 View 按空间 × 频率的最长保留策略，超期的行不写入；maxAgeEnabled 为假时不限制。now 只供测试替换时钟。
+	maxAge        storagepolicy.Policy
 	maxAgeEnabled bool
 	now           func() time.Time
 	// follow 管理每个 View 跟随变更日志的协程；primaryRange 按时间范围回读时序行。
@@ -90,7 +90,7 @@ func (v *viewSpec) engineName() string {
 func newViewSpec(dataset *pb.Dataset, columns []*pb.DatasetColumn) *viewSpec {
 	spec := &viewSpec{
 		SpaceID: dataset.GetSpaceId(), DatasetID: dataset.GetDatasetId(), DataKind: dataset.GetDataKind(),
-		Freq: dataset.GetFreq(), Status: dataset.GetStatus(), MaintenancePriority: dataset.GetMaintenancePriority(),
+		Freq: dataset.GetFrequency(), Status: dataset.GetStatus(), MaintenancePriority: dataset.GetMaintenancePriority(),
 		CreatedAt: dataset.GetCreatedAt(), DisplayNames: make(map[string]string, len(columns)),
 	}
 	for _, column := range columns {

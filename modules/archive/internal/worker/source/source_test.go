@@ -109,12 +109,15 @@ func tv(v any) *storagepb.TypedValue {
 
 func TestReadRangeConvertsRowsAndPassesTheCursorAndRange(t *testing.T) {
 	cols := []staging.Column{{Name: "close", Type: "double"}, {Name: "n", Type: "int"}, {Name: "tag", Type: "string"}, {Name: "ok", Type: "bool"}}
-	key := func(subject, at, series string) *storagepb.TimeSeriesKey {
-		return &storagepb.TimeSeriesKey{SubjectId: subject, DataTime: at, SeriesTag: series, Freq: "1m"}
+	key := func(subject, at, series string) *storagepb.RowKey {
+		return &storagepb.RowKey{
+			SpaceId: "crypto", DatasetId: "ds",
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, DataTime: at, SeriesTag: series, Frequency: "1m"}},
+		}
 	}
 	gw := &fakeGateway{reads: []*storagepb.ReadTimeSeriesRowsRsp{{
 		RetInfo: ok(), PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "c2"},
-		Rows: []*storagepb.TimeSeriesRow{
+		Rows: []*storagepb.Row{
 			{Key: key("BTC", "2026-10-15T01:00:00Z", ""), Fields: []*storagepb.FieldValue{{FieldId: "close", Value: tv(1.5)}, {FieldId: "n", Value: tv(int64(3))}, {FieldId: "tag", Value: tv("")}, {FieldId: "ok", Value: tv(true)}}},
 			{Key: key("ETH", "2026-10-15T01:00:00.000Z", "x"), Fields: []*storagepb.FieldValue{{FieldId: "close", Value: tv(int64(2))}, {FieldId: "tag", Value: tv(nil)}, {FieldId: "ignored", Value: tv(9.0)}}},
 		},
@@ -151,11 +154,11 @@ func TestReadRangeRejectsBadResponses(t *testing.T) {
 	if err := call(&storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "boom"}}); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err = %v", err)
 	}
-	badTime := &storagepb.ReadTimeSeriesRowsRsp{RetInfo: ok(), Rows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SubjectId: "A", DataTime: "yesterday"}}}}
+	badTime := &storagepb.ReadTimeSeriesRowsRsp{RetInfo: ok(), Rows: []*storagepb.Row{{Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "A", DataTime: "yesterday"}}}}}}
 	if err := call(badTime); err == nil {
 		t.Fatal("坏的 data_time 必须报错")
 	}
-	mismatch := &storagepb.ReadTimeSeriesRowsRsp{RetInfo: ok(), Rows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SubjectId: "A", DataTime: "2026-10-15T00:00:00Z"}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: tv("text")}}}}}
+	mismatch := &storagepb.ReadTimeSeriesRowsRsp{RetInfo: ok(), Rows: []*storagepb.Row{{Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "A", DataTime: "2026-10-15T00:00:00Z"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: tv("text")}}}}}
 	if err := call(mismatch); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("类型不符必须报错: %v", err)
 	}

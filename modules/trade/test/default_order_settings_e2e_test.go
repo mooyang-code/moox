@@ -130,7 +130,7 @@ func TestOpenSystemOrderDoesNotBlockTargetSubmissionOnTheRealOrderService(t *tes
 	require.Equal(t, targetapp.StatusConverged, result.Status)
 	logical, err := f.store.GetLogicalAccount(ctx, testSpace, testLogicalAccount)
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", logical.AutomationState)
+	require.Equal(t, "ACTIVE", logical.AutomationState())
 	system, err = f.orders.Get(ctx, testSpace, string(system.ID))
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Open, system.State, "系统单没被当成目标子单撤掉")

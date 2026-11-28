@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 基线金样（第 0 期）：在现货金样（spot_golden.json）之外补永续与双市场（两个任务）的研究回放，
@@ -75,36 +76,36 @@ var baselineSubjects = []string{"A", "B", "C", "D", "E"}
 
 // baselineClient 在模拟客户端外加上标签成员与五个标的的绑定：标签 majors = A、B、C，meme = C、E。
 type baselineClient struct {
-	input.Client
+	upstream.Client
 	tags map[string][]string
 }
 
-func newBaselineClient(inner input.Client) *baselineClient {
+func newBaselineClient(inner upstream.Client) *baselineClient {
 	return &baselineClient{Client: inner, tags: map[string][]string{"majors": {"A", "B", "C"}, "meme": {"C", "E"}}}
 }
 
-func (c *baselineClient) ListDatasetSubjects(context.Context, string, string) ([]input.Subject, error) {
-	subjects := make([]input.Subject, 0, len(baselineSubjects))
+func (c *baselineClient) ListDatasetSubjects(context.Context, string, string) ([]upstream.Subject, error) {
+	subjects := make([]upstream.Subject, 0, len(baselineSubjects))
 	for _, id := range baselineSubjects {
-		subjects = append(subjects, input.Subject{SubjectID: id, Active: true})
+		subjects = append(subjects, upstream.Subject{SubjectID: id, Active: true})
 	}
 	return subjects, nil
 }
 
-func (c *baselineClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]input.TagMember, error) {
+func (c *baselineClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]upstream.TagMember, error) {
 	if ids, ok := c.tags[tagID]; ok {
-		members := make([]input.TagMember, 0, len(ids))
+		members := make([]upstream.TagMember, 0, len(ids))
 		for _, id := range ids {
-			members = append(members, input.TagMember{SubjectID: id})
+			members = append(members, upstream.TagMember{SubjectID: id})
 		}
 		return members, nil
 	}
 	return c.Client.ListTagMembers(ctx, spaceID, tagID)
 }
 
-func (c *baselineClient) GetTag(ctx context.Context, spaceID, tagID string) (input.TagInfo, error) {
+func (c *baselineClient) GetTag(ctx context.Context, spaceID, tagID string) (upstream.TagInfo, error) {
 	if _, ok := c.tags[tagID]; ok {
-		return input.TagInfo{}, nil
+		return upstream.TagInfo{}, nil
 	}
 	return c.Client.GetTag(ctx, spaceID, tagID)
 }
@@ -212,7 +213,7 @@ portfolio:
 type baselineReplayScenario struct {
 	name   string
 	dsl    string
-	client func() input.Client
+	client func() upstream.Client
 	tasks  map[string]store.ReplayTask
 	hours  int
 	// check 是与金样无关的硬断言：确认场景标注的特性真的发生了。
@@ -222,10 +223,10 @@ type baselineReplayScenario struct {
 func baselineReplayScenarios() []baselineReplayScenario {
 	return []baselineReplayScenario{
 		{name: "swap_universe_pool_rank", dsl: baselineSwapDSL, hours: 16,
-			client: func() input.Client { return newBaselineClient(baselineSwapClient()) },
+			client: func() upstream.Client { return newBaselineClient(baselineSwapClient()) },
 			tasks:  map[string]store.ReplayTask{"swap": swapTask}, check: baselineCheckSwap},
 		{name: "dual_two_tasks", dsl: baselineDualDSL, hours: 16,
-			client: func() input.Client { return newBaselineClient(baselineDualClient()) },
+			client: func() upstream.Client { return newBaselineClient(baselineDualClient()) },
 			tasks:  map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}, check: baselineCheckDual},
 	}
 }
@@ -289,7 +290,7 @@ func baselineReplayDump(t *testing.T, scenario baselineReplayScenario) (map[stri
 	(&Runner{Store: repo, Client: client, ChunkBars: 5, MissingPriceLiquidateBars: 3, InitialEquity: 100}).Execute(context.Background(), job)
 	done, err := repo.GetReplay(context.Background(), "b1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, "场景 %s 应完成：%s", scenario.name, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, "场景 %s 应完成：%s", scenario.name, done.Error)
 	bars := barsOf(t, repo, "b1")
 	return map[string]any{"dsl": scenario.dsl, "metrics": baselineDecode(t, done.MetricsJSON), "bars": baselineBarRecords(t, bars)}, bars
 }

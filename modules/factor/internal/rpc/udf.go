@@ -47,9 +47,6 @@ func (s *Service) udf() UdfAPI {
 
 // PublishUdf 上传 .udfpkg：复核后存为不可变版本（未启用）。
 func (s *Service) PublishUdf(ctx context.Context, req *factorpb.PublishUdfReq) (*factorpb.PublishUdfRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.PublishUdfRsp{RetInfo: unavailable(err)}, nil
-	}
 	api := s.udf()
 	if api == nil {
 		return &factorpb.PublishUdfRsp{RetInfo: inner(errors.New("自定义算子未启用"))}, nil
@@ -143,11 +140,6 @@ func udfInfoToPB(info catalog.UdfInfo, modules []domain.UDFModuleStatus) *factor
 
 // ActivateUdf 切换启用版本；dry_run 只返回影响清单与前提检查。前提不满足时返回 CONFLICT，同时带上完整的检查结果。
 func (s *Service) ActivateUdf(ctx context.Context, req *factorpb.ActivateUdfReq) (*factorpb.ActivateUdfRsp, error) {
-	if !req.GetDryRun() {
-		if err := s.mutationAllowed(); err != nil {
-			return &factorpb.ActivateUdfRsp{RetInfo: unavailable(err)}, nil
-		}
-	}
 	api := s.udf()
 	if api == nil {
 		return &factorpb.ActivateUdfRsp{RetInfo: inner(errors.New("自定义算子未启用"))}, nil

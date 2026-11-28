@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { onBeforeUnmount, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember, exchangeLabel, isTradeAdoptionRequired } from "@/api/trade";
@@ -85,8 +85,9 @@ const error = ref("");
 // 重新启用已停用的成员时，账户上已有持仓或挂单，后端要求确认接管（TRADE_ADOPTION_REQUIRED）：这时才在编辑里显示“接管”勾选。
 const adoptionNeeded = ref(false);
 const form = reactive({ trading_account_id: "", enabled: true, priority: 1, adopt_existing_exposure: false });
-// 打开和关闭都使进行中的保存失效：迟到的响应不能关闭用户重新打开的对话框。
+// 打开、关闭和卸载（含切空间重建）都使进行中的保存失效：迟到的响应不能关闭用户重新打开的对话框。
 const scope = createSubmitScope();
+onBeforeUnmount(() => scope.invalidate());
 // 编辑时打开对话框那一刻的设置，用来判断改了什么；新增时为空。
 const original = ref<MemberSettings | null>(null);
 // 测试网、生产环境下改启停、优先级或接管已有持仓要先确认；确认后才真正保存。

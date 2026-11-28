@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // hkClient 生成港股 5m 的 View：行只落在港股交易时段的 bar 上（午休、收市后、休市日没有行，半日市只有上午），
@@ -17,7 +19,7 @@ type hkClient struct {
 	from, to time.Time
 }
 
-func (c *hkClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+func (c *hkClient) GetView(ctx context.Context, spaceID, datasetID string) (upstream.ViewInfo, error) {
 	view, err := c.fakeClient.GetView(ctx, spaceID, datasetID)
 	view.Frequency = "5m"
 	return view, err
@@ -28,28 +30,28 @@ func (c *hkClient) ViewGeneration(ctx context.Context, spaceID, datasetID string
 	return view.Generation, err
 }
 
-func (c *hkClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
-	return input.DatasetInfo{DatasetID: datasetID, Status: "active", Frequency: "5m", Retention: "forever", Alignment: "session", Attributes: map[string]string{"calendar": "hk_stock", "market_type": "equity"}}, nil
+func (c *hkClient) GetDataset(_ context.Context, _, datasetID string) (upstream.DatasetInfo, error) {
+	return upstream.DatasetInfo{DatasetID: datasetID, Status: "active", Frequency: "5m", Retention: "forever", Alignment: "session", Attributes: map[string]string{"calendar": "hk_stock", "market_type": "equity"}}, nil
 }
 
-func (c *hkClient) ViewCoverage(context.Context, string, input.ViewInfo, bool) (input.Coverage, error) {
-	return input.Coverage{IndexedFrom: c.from, IndexedTo: c.to}, nil
+func (c *hkClient) ViewCoverage(context.Context, string, upstream.ViewInfo, bool) (upstream.Coverage, error) {
+	return upstream.Coverage{IndexedFrom: c.from, IndexedTo: c.to}, nil
 }
 
-func (c *hkClient) QueryRows(_ context.Context, _ string, query input.Query) ([]input.Row, uint64, error) {
+func (c *hkClient) QueryRows(_ context.Context, _ string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	c.queries++
-	bars, err := input.ReplayBars("hk_stock", "5m", query.Start, query.End, 100000)
+	bars, err := period.ReplayBars("hk_stock", "5m", query.Start, query.End, 100000)
 	if err != nil {
 		return nil, 0, err
 	}
-	rows := make([]input.Row, 0, len(bars)*len(query.Subjects))
+	rows := make([]upstream.Row, 0, len(bars)*len(query.Subjects))
 	for _, bar := range bars {
 		if bar.StorageStart.Before(c.from) || bar.StorageStart.After(c.to) {
 			continue
 		}
 		for _, subject := range query.Subjects {
 			value := price(subject.SubjectID, int(bar.BarIndex%1000))
-			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: bar.StorageStart, SeriesTag: "default", Values: map[string]float64{"close": value, "mom": value - price(subject.SubjectID, int(bar.BarIndex%1000)-1)}})
+			rows = append(rows, upstream.Row{SubjectID: subject.SubjectID, DataTime: bar.StorageStart, SeriesTag: "default", Values: map[string]float64{"close": value, "mom": value - price(subject.SubjectID, int(bar.BarIndex%1000)-1)}})
 		}
 	}
 	return rows, 1, nil
@@ -83,14 +85,14 @@ func TestReplayRunsOnHKIntradayData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if done.Status != store.ReplayDone {
+	if done.Status != store.ReplaySucceeded {
 		t.Fatalf("港股回放应跑完：status=%s error=%s", done.Status, done.Error)
 	}
 	metrics := metricsOf(t, done)
 	if metrics.Bars != 66+30 || metrics.OKBars != 66+30 {
 		t.Fatalf("12-23 与 12-24（半日市）共 96 根、每根都求值成功：%+v", metrics)
 	}
-	if got := periodsPerYear("hk_stock", "5m", 5*time.Minute); got != float64(input.StockTradingDaysPerYear*66) {
+	if got := periodsPerYear("hk_stock", "5m", 5*time.Minute); got != float64(period.StockTradingDaysPerYear*66) {
 		t.Fatalf("港股 5m 的年化根数按每日 66 根折算：%v", got)
 	}
 }

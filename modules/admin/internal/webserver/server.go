@@ -147,7 +147,7 @@ func (s *Server) Addr() net.Addr {
 	return s.listener.Addr()
 }
 
-// RefreshCertificate 由每天一次的证书巡检调用：剩余不足 30 天就重签并热替换。
+// RefreshCertificate 由每分钟一次的证书巡检调用：剩余不足 30 天就重签并热替换。
 func (s *Server) RefreshCertificate(context.Context) error { return s.certs.Refresh() }
 
 // Shutdown 先停止接新连接，再等在途请求最多 ShutdownTimeout（默认 30 秒），到时还没完的直接断开。

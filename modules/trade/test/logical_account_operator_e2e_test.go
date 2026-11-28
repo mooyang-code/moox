@@ -81,7 +81,7 @@ func TestManualFlattenThenResumeCanReopenLatestTarget(t *testing.T) {
 		ctx, testSpace, testLogicalAccount,
 	)
 	require.NoError(t, err)
-	require.Equal(t, "ACTIVE", resumed.AutomationState)
+	require.Equal(t, "ACTIVE", resumed.AutomationState())
 
 	reopened, err := executor.Converge(ctx, testSpace, testLogicalAccount)
 	require.NoError(t, err)
@@ -100,9 +100,9 @@ func seedSwapLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount,
-			Name:          "E2E swap logical account",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Name:        "E2E swap logical account",
+			Environment: "PAPER", SettlementAsset: "USDT",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -112,8 +112,6 @@ func seedSwapLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(
-			testSpace, testLogicalAccount, "ACTIVE", "",
-		)
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 }

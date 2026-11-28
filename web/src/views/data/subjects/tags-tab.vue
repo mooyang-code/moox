@@ -150,11 +150,9 @@
           <a-table-column title="数据集名称" data-index="dataset_name" />
           <a-table-column title="采集任务 ID">
             <template #cell="{ record }">
-              <a-link
-                v-if="record.collector_task_id"
-                :href="`#/collector/tasks?detail=${encodeURIComponent(record.collector_task_id)}`"
-                >{{ record.collector_task_id }}</a-link
-              >
+              <a-link v-if="record.collector_task_id" :href="collectorTaskDetailHref(record.collector_task_id)">{{
+                record.collector_task_id
+              }}</a-link>
               <span v-else>-</span>
             </template>
           </a-table-column>
@@ -165,13 +163,15 @@
 </template>
 
 <script setup lang="ts">
+import { collectorTaskDetailHref } from "@/router/links";
 import { RequestError, reportError } from "@/api/http";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { listSubjectListers, listTagSyncStatus, type SubjectLister, type TagSyncStatus } from "@/api/collector";
 import { deleteTag, listTags, upsertTag } from "@/api/storage/metadata";
+import { readAllPages } from "@/api/read-all-pages";
 import type { Tag, TagReference } from "@/api/storage/types";
 import { tagCron, tagMarketType, tagSource, tagTimezone } from "@/views/data/shared/catalog-attributes";
 import { defaultPagination } from "@/views/data/shared/metadata-utils";
@@ -312,14 +312,20 @@ async function submit(): Promise<boolean> {
   if (!isEditing) {
     const tagId = formSnapshot.tag_id.trim().toLowerCase();
     try {
-      for (let page = 1; ; page += 1) {
+      let duplicated = false;
+      await readAllPages(async page => {
         const response = await listTags(spaceId, { page, size: 500 });
-        if (!submission.isCurrent()) return false;
+        if (!submission.isCurrent()) return { items: [], hasMore: false };
         if ((response.tags || []).some(tag => tag.tag_id.trim().toLowerCase() === tagId)) {
-          Message.warning(`标签 ID “${tagId}”已存在，请使用其他 ID`);
-          return false;
+          duplicated = true;
+          return { items: [], hasMore: false };
         }
-        if (!response.page_result?.has_more || !(response.tags || []).length) break;
+        return { items: response.tags || [], hasMore: Boolean(response.page_result?.has_more) };
+      });
+      if (!submission.isCurrent()) return false;
+      if (duplicated) {
+        Message.warning(`标签 ID “${tagId}”已存在，请使用其他 ID`);
+        return false;
       }
     } catch (error) {
       if (!submission.isCurrent()) return false;
@@ -376,25 +382,18 @@ function confirmDelete(tag: Tag) {
   });
 }
 
-watch(
-  () => props.spaceId,
-  () => {
-    loadRequests.invalidate();
-    rows.value = [];
-    syncStatuses.value = {};
-    syncStatusFailed.value = false;
-    visible.value = false;
-    activeTag.value = undefined;
-    pagination.current = 1;
-    void load();
-  },
-  { immediate: true }
-);
+onMounted(() => {
+  void load();
+});
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域：弹窗打开/关闭和卸载都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const tagScope = createSubmitScope();
 // 该弹窗使用 @before-ok（等待提交完成后才关闭）：打开与关闭都使进行中的提交失效，取消但不重新打开也不能继续写入
 watch(visible, () => tagScope.invalidate());
+onBeforeUnmount(() => {
+  loadRequests.invalidate();
+  tagScope.invalidate();
+});
 </script>
 
 <style scoped>

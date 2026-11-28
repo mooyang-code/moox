@@ -18,7 +18,7 @@ func TestUpdateTaskRejectsCrossMarketTagChange(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "single", TaskName: "single", DataType: "kline", Enabled: true, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"target_dataset_id":"bars_single","frequency":"1m"}`, ResultDatasetID: "bars_single",
+		CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "bars_single",
 	}))
 	service := &Service{taskRepo: db.Tasks(), datasetSrc: tagValidationSource{validationDatasetSource: validationDatasetSource{
 		"bars_single": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},
@@ -27,11 +27,11 @@ func TestUpdateTaskRejectsCrossMarketTagChange(t *testing.T) {
 		"binance_swap": {TagId: "binance_swap", Attributes: map[string]string{"sync.source": "binance", "market_type": "swap"}},
 	}}}
 
-	update := func(taskID string, tags ...any) *pb.UpdateTaskRsp {
-		params, err := structpb.NewStruct(map[string]any{"frequency": "1m", "subject_tags": tags})
+	update := func(taskID string, tags ...string) *pb.UpdateTaskRsp {
+		params, err := structpb.NewStruct(map[string]any{"frequency": "1m"})
 		require.NoError(t, err)
 		rsp, callErr := service.UpdateTask(ctx, &pb.UpdateTaskReq{SpaceId: "crypto", TaskId: taskID, Task: &pb.CollectionTask{
-			SpaceId: "crypto", TaskId: taskID, TaskName: taskID, DataType: "kline", CollectParams: params,
+			SpaceId: "crypto", TaskId: taskID, TaskName: taskID, DataType: "kline", TagIds: tags, CollectParams: params,
 		}})
 		require.NoError(t, callErr)
 		return rsp
@@ -51,7 +51,7 @@ func TestUpdateTaskRejectsAnIngestChange(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "spot", TaskName: "spot", DataType: "kline", Ingest: domain.IngestStreaming, Enabled: true, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"target_dataset_id":"bars_spot","frequency":"1m"}`, ResultDatasetID: "bars_spot",
+		CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "bars_spot",
 	}))
 	service := &Service{taskRepo: db.Tasks(), datasetSrc: tagValidationSource{validationDatasetSource: validationDatasetSource{
 		"bars_spot": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},
@@ -59,10 +59,10 @@ func TestUpdateTaskRejectsAnIngestChange(t *testing.T) {
 		"binance_spot": {TagId: "binance_spot", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}},
 	}}}
 	update := func(ingest string) *pb.UpdateTaskRsp {
-		params, err := structpb.NewStruct(map[string]any{"frequency": "1m", "subject_tags": []any{"binance_spot"}})
+		params, err := structpb.NewStruct(map[string]any{"frequency": "1m"})
 		require.NoError(t, err)
 		rsp, callErr := service.UpdateTask(ctx, &pb.UpdateTaskReq{SpaceId: "crypto", TaskId: "spot", Task: &pb.CollectionTask{
-			SpaceId: "crypto", TaskId: "spot", TaskName: "spot", DataType: "kline", Ingest: ingest, CollectParams: params,
+			SpaceId: "crypto", TaskId: "spot", TaskName: "spot", DataType: "kline", Ingest: ingest, TagIds: []string{"binance_spot"}, CollectParams: params,
 		}})
 		require.NoError(t, callErr)
 		return rsp

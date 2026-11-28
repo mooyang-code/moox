@@ -53,11 +53,13 @@
         </a-table-column>
         <a-table-column title="方向" :width="70">
           <template #cell="{ record }"
-            ><span :class="record.side === 1 ? 'tx-pos' : 'tx-neg'">{{ record.side === 1 ? "买入" : "卖出" }}</span></template
+            ><span :class="record.side === OrderSide.BUY ? 'tx-pos' : 'tx-neg'">{{
+              record.side === OrderSide.BUY ? "买入" : "卖出"
+            }}</span></template
           >
         </a-table-column>
         <a-table-column title="类型" :width="70">
-          <template #cell="{ record }">{{ record.order_type === 1 ? "市价" : "限价" }}</template>
+          <template #cell="{ record }">{{ record.order_type === OrderType.MARKET ? "市价" : "限价" }}</template>
         </a-table-column>
         <a-table-column title="数量" :width="110" align="right">
           <template #cell="{ record }"
@@ -107,6 +109,8 @@ import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
+  OrderSide,
+  OrderType,
   canCancelOrderState,
   getOrder,
   isActiveOrderState,

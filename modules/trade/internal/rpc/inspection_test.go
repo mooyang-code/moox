@@ -10,8 +10,8 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +21,7 @@ func inspectionHandler(t *testing.T, inspector inspectorStub) (*AccountServer, *
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tradeStore.Close() })
 	service := &accountapp.Service{
-		Store: accountapp.Repository{Store: tradeStore}, Secrets: secretSourceStub{}, Inspector: inspector,
+		Store: tradeStore, Secrets: secretSourceStub{}, Inspector: inspector,
 	}
 	return &AccountServer{Accounts: service, Store: tradeStore, NewID: func() string { return "account-1" }}, tradeStore
 }

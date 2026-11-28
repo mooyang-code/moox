@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -19,12 +19,12 @@ type recoveryQueryAdapter struct {
 }
 
 type recoveryFillSync struct {
-	reducer *consumer.Reducer
+	reducer *fillreduce.Reducer
 	fill    exchange.Fill
 }
 
 func (s recoveryFillSync) SyncAccount(ctx context.Context, id string) error {
-	_, err := s.reducer.ApplyFill(ctx, s.fill, consumer.Source{SpaceID: "space-1", TradingAccountID: id, Kind: consumer.OriginRESTSnapshot})
+	_, err := s.reducer.ApplyFill(ctx, s.fill, fillreduce.Source{SpaceID: "space-1", TradingAccountID: id, Kind: fillreduce.OriginRESTSnapshot})
 	return err
 }
 
@@ -38,7 +38,7 @@ func TestRecoverCancelTerminalQueryWaitsForRealFillReducer(t *testing.T) {
 	require.NoError(t, err)
 	setStoredOrderState(t, db, string(pending.ID), orderdomain.CancelUnknown, s.now())
 	a.getResult = exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-order-1", Status: exchange.OrderStatusFilled}
-	s.Syncer = recoveryFillSync{reducer: &consumer.Reducer{Store: db}, fill: exchange.Fill{Market: exchange.MarketTypeSpot, ExchangeTradeID: "terminal-fill", ExchangeOrderID: "exchange-order-1", ClientOrderID: spec.ClientOrderID, ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, Quantity: spec.Quantity, Price: shared.MustDecimal("100"), Fee: shared.Zero(), FeeAsset: "USDT", TradedAt: s.now()}}
+	s.Syncer = recoveryFillSync{reducer: &fillreduce.Reducer{Store: db}, fill: exchange.Fill{Market: exchange.MarketTypeSpot, ExchangeTradeID: "terminal-fill", ExchangeOrderID: "exchange-order-1", ClientOrderID: spec.ClientOrderID, ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, Quantity: spec.Quantity, Price: shared.MustDecimal("100"), Fee: shared.Zero(), FeeAsset: "USDT", TradedAt: s.now()}}
 	result, err := s.RecoverCancel(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Filled, result.State)

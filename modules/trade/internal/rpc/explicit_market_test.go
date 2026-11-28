@@ -9,8 +9,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +58,6 @@ type marketLedgerAdapter struct {
 	seen exchange.MarketType
 }
 
-func (a *marketLedgerAdapter) LedgerSupported() bool { return true }
 func (a *marketLedgerAdapter) ListLedger(_ context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	a.seen = query.Market
 	return exchange.LedgerPage{Entries: []exchange.LedgerEntry{

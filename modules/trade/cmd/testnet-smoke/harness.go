@@ -11,7 +11,7 @@ import (
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
@@ -64,7 +64,7 @@ func openLiveHarness(
 		RetryMin: 250 * time.Millisecond, RetryMax: 2 * time.Second,
 	}
 	accounts := &accountapp.Service{
-		Store:              accountapp.Repository{Store: database},
+		Store:              database,
 		SessionState:       manager,
 		Exchanges:          registry,
 		LiveTradingEnabled: false,
@@ -86,7 +86,7 @@ func openLiveHarness(
 	}
 	syncService := &accountsync.Service{
 		Store: database, Adapters: manager, SessionState: manager,
-		Fills: &consumer.Reducer{Store: database}, Orders: orders,
+		Fills: &fillreduce.Reducer{Store: database}, Orders: orders,
 	}
 	probe := newPrivateOrderProbe()
 	syncer := wiring.AccountSyncer{Service: syncService}
@@ -636,7 +636,7 @@ func cleanupTestExposure(
 		contractValue = shared.MustDecimal("1")
 	}
 	step := mustDecimal(instrument.ExchangeQuantityStep).Mul(contractValue)
-	quantity = floorToStep(quantity, step)
+	quantity = shared.FloorToStep(quantity, step)
 	if quantity.Cmp(mustDecimal(instrument.MinExchangeQuantity).Mul(contractValue)) < 0 {
 		return delta, errors.New("test fill is below the Exchange cleanup minimum")
 	}

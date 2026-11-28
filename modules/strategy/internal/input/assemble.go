@@ -3,13 +3,16 @@ package input
 import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // MarketRows 是装配一个市场的输入：本期与上一根的行（按标的归并）、失败证据。实时由 LoadBar 读出，回放由分段读取给出。
 type MarketRows struct {
 	Market   string
-	Current  map[string]Row
-	Previous map[string]Row
+	Current  map[string]upstream.Row
+	Previous map[string]upstream.Row
 	// Failed 是该市场的失败证据（列名 → 标的 → 原因）；回放没有就绪信息，为空。
 	Failed map[string]map[string]string
 }
@@ -18,7 +21,7 @@ type MarketRows struct {
 // 第 10 节），这里不关心它从哪来。
 type Assembly struct {
 	Program  *dsl.Program
-	Boundary PeriodBoundaries
+	Boundary period.PeriodBoundaries
 	Sets     Sets
 	Holdings map[string]engine.HoldingClock
 	// Listed 是各市场本期列出的标的（年龄判定的口径）；MarketPassed 是策略级 min_age_bars 下各市场通过年龄判定的标的

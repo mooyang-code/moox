@@ -129,8 +129,8 @@ func TestRenderedConfigsUseAbsolutePaths(t *testing.T) {
 			if !strings.HasPrefix(name, "config/") || path.Ext(name) != ".yaml" {
 				continue
 			}
-			// 这两份是原样带上的业务种子与健康策略，不含本机路径。
-			if slices.Contains([]string{"collection-tasks.yaml", "dataset-health-policy.yaml"}, path.Base(name)) {
+			// 这份是原样带上的业务种子，不含本机路径。
+			if path.Base(name) == "collection-tasks.yaml" {
 				continue
 			}
 			var document yaml.Node
@@ -389,4 +389,40 @@ func TestStatusAndVersionChange(t *testing.T) {
 	moved := Status("control", []string{"host-gateway"}, version, nil, nil)
 	require.Equal(t, []ComponentStatus{{ID: "host-gateway", State: "missing"}, {ID: "admin", State: "missing", Installed: true, Extra: true}}, moved.Components)
 	require.False(t, Status("storage", []string{"eventbus"}, nil, nil, nil).Installed)
+}
+
+func TestPreflightRenderChecksAllHostsAndRejectsObsoleteOverrides(t *testing.T) {
+	secrets, err := topology.ParseSecrets([]byte(`[admin]
+username = "admin"
+password = "admin-test-password"
+
+[tencent_cloud]
+secret_id = "AKID-test-secret"
+secret_key = "cloud-test-secret"
+
+[logging.cls]
+writer_secret_id = "cls-id"
+writer_secret_key = "cls-key"
+`))
+	require.NoError(t, err)
+
+	// 示例拓扑与带外部对象存储配置的拓扑均可通过预检试渲染。
+	cfg := exampleConfig(t, "\n[archive_object_store]\nendpoint = \"cos.ap-nanjing.myqcloud.com\"\nregion = \"ap-nanjing\"\nbucket = \"moox-archive-1250000000\"\nurl_style = \"virtual\"\nsecret_id = \"archive-cos\"\n")
+	require.NoError(t, PreflightRender(cfg, &secrets, repositoryRoot))
+
+	// 旧键路径在预检阶段即报错，不必等到清空主机后部署才暴露。
+	cases := map[string]string{
+		"collector_event_bus":    "\n[overrides.collector.\"app.yaml\"]\n\"event_bus.credential_file\" = \"/tmp/eb.yaml\"\n",
+		"monitor_page_size":      "\n[overrides.monitor.\"app.yaml\"]\n\"kline_freshness.inventory_page_size\" = 100\n",
+		"monitor_policy_path":    "\n[overrides.monitor.\"app.yaml\"]\n\"metrics.dataset_health_policy_path\" = \"/tmp/p.yaml\"\n",
+		"archive_mgr_retention":  "\n[overrides.\"archive-mgr\".\"app.yaml\"]\n\"retention.other\" = 7\n",
+		"strategy_database_flat": "\n[overrides.strategy.\"app.yaml\"]\n\"database.no_such_key\" = \"/tmp/s.db\"\n",
+	}
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			badCfg := exampleConfig(t, extra)
+			err := PreflightRender(badCfg, &secrets, repositoryRoot)
+			require.ErrorContains(t, err, "config_invalid")
+		})
+	}
 }

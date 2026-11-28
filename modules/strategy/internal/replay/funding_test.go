@@ -26,7 +26,7 @@ func TestReplayFundingColumnChargesSwapHoldings(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if done.Status != store.ReplayDone {
+		if done.Status != store.ReplaySucceeded {
 			return done, nil
 		}
 		return done, barsOf(t, repo, "p1")

@@ -51,7 +51,7 @@ func liveIndexWriteContext(ctx context.Context) (context.Context, context.Cancel
 const slowIndexApplyLog = 50 * time.Millisecond
 
 // observeViewWatermark 按刚写进索引的行推进 Monitor 用的输出水位与各标的的最新一根。
-func (s *Service) observeViewWatermark(spec *viewSpec, rows []*pb.RowFieldUpsert) {
+func (s *Service) observeViewWatermark(spec *viewSpec, rows []*pb.Row) {
 	if s == nil || s.metrics == nil || spec == nil || len(rows) == 0 {
 		return
 	}
@@ -74,7 +74,7 @@ func (s *Service) observeViewWatermark(spec *viewSpec, rows []*pb.RowFieldUpsert
 			watermark = at
 		}
 		subjectID := strings.TrimSpace(timeSeries.GetSubjectId())
-		rowFrequency := strings.TrimSpace(timeSeries.GetFreq())
+		rowFrequency := strings.TrimSpace(timeSeries.GetFrequency())
 		if subjectID == "" || rowFrequency == "" {
 			continue
 		}

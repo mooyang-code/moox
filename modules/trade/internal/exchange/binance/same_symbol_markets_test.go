@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -79,9 +79,9 @@ func TestSameNamedSpotAndSwapEventsDoNotCollideInOneAccount(t *testing.T) {
 		}
 		return nil
 	}))
-	reducer := &consumer.Reducer{Store: tradeStore}
+	reducer := &fillreduce.Reducer{Store: tradeStore}
 	for _, fill := range []exchange.Fill{spot.fills[0], swap.fills[0]} {
-		applied, err := reducer.ApplyFill(context.Background(), fill, consumer.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: consumer.OriginRESTSnapshot})
+		applied, err := reducer.ApplyFill(context.Background(), fill, fillreduce.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: fillreduce.OriginRESTSnapshot})
 		require.NoError(t, err)
 		require.True(t, applied, "同号成交在另一个市场里不算重复：%s", fill.Market)
 	}

@@ -2,18 +2,17 @@ package sqlite
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
-	sqlite "modernc.org/sqlite"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 const sqliteTimeLayout = "2006-01-02 15:04:05"
@@ -83,9 +82,8 @@ func (s *Store) CreateTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
 		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_mode, c_builtin, c_item_json)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, item.GetSpaceId(), item.GetTagId(), item.GetTagName(), item.GetMode(), boolInt(item.GetBuiltin()), raw); err != nil {
-		var sqliteErr *sqlite.Error
-		if errors.As(err, &sqliteErr) && sqliteErr.Code() == 2067 {
-			if strings.Contains(strings.ToLower(sqliteErr.Error()), "c_tag_name") {
+		if code, ok := sqlitedb.ErrorCode(err); ok && code == 2067 {
+			if strings.Contains(strings.ToLower(err.Error()), "c_tag_name") {
 				return nil, storeerr.Conflictf("tag name %q already exists in space %s: %w", item.GetTagName(), item.GetSpaceId(), err)
 			}
 			return nil, storeerr.Conflictf("tag %s/%s already exists: %w", item.GetSpaceId(), item.GetTagId(), err)

@@ -19,15 +19,12 @@ var healthMetricSuffixes = []string{
 	"_runs_total",
 	"_last_success_timestamp_seconds",
 	"_last_error_timestamp_seconds",
-	"_business_watermark_timestamp_seconds",
-	"_input_watermark_timestamp_seconds",
 	"_metrics_errors_total",
 	"_metrics_last_error_timestamp_seconds",
 }
 
 var healthMetricNames = map[string]struct{}{
-	AttentionMetric:         {},
-	ArchiveTaskHealthMetric: {},
+	AttentionMetric: {},
 	"moox_storage_view_output_arrival_timestamp_seconds":         {},
 	"moox_storage_view_output_latest_data_time_seconds":          {},
 	"moox_storage_view_output_tracked_since_data_time_seconds":   {},

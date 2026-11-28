@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/stream"
 	"github.com/stretchr/testify/require"
@@ -74,7 +75,8 @@ func TestRuntimeSubscribesAndCommitsAPlannedPeriod(t *testing.T) {
 	exchange.push("ethusdt@kline_1m", "ETHUSDT", period.UnixMilli())
 	require.Eventually(t, func() bool { return committer.count() == 1 }, 3*time.Second, 10*time.Millisecond)
 	require.Len(t, committer.batches[0].Bars, 2)
-	require.Equal(t, "BTCUSDT", committer.batches[0].Symbols("BTC-USDT"))
+	require.Equal(t, "BTC-USDT", committer.batches[0].Bars[0].SubjectID)
+	require.Equal(t, "ETH-USDT", committer.batches[0].Bars[1].SubjectID)
 
 	// 计划去掉这个市场：订阅在最后负责的周期过去后关闭（这里没有后续份，下一次刷新即关闭）。
 	clock.Advance(10 * time.Second)

@@ -29,11 +29,11 @@ func (c *Client) GetExchangeSecret(
 	if strings.TrimSpace(secretID) == "" {
 		return account.ExchangeSecret{}, account.ErrInvalidCredential
 	}
-	var response getSecretValueRsp
+	var response getExchangeCredentialRsp
 	if err := c.post(
 		ctx,
-		"GetSecretValue",
-		getSecretValueReq{SecretID: secretID},
+		"GetExchangeCredential",
+		getExchangeCredentialReq{SecretID: secretID},
 		&response,
 	); err != nil {
 		return account.ExchangeSecret{}, err
@@ -136,14 +136,14 @@ func (s *secretDTO) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type getSecretValueReq struct {
+type getExchangeCredentialReq struct {
 	SecretID string `json:"secret_id"`
 }
 
-type getSecretValueRsp struct {
+type getExchangeCredentialRsp struct {
 	RetInfo retInfo   `json:"ret_info"`
 	Secret  secretDTO `json:"secret"`
 }
 
-func (r *getSecretValueRsp) retOK() bool        { return r.RetInfo.ok() }
-func (r *getSecretValueRsp) retMessage() string { return r.RetInfo.Msg }
+func (r *getExchangeCredentialRsp) retOK() bool        { return r.RetInfo.ok() }
+func (r *getExchangeCredentialRsp) retMessage() string { return r.RetInfo.Msg }

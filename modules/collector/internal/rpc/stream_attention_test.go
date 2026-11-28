@@ -32,7 +32,7 @@ func TestStreamHeartbeatAttention(t *testing.T) {
 	}
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_ds1", TaskName: "ds1", DataType: domain.DataTypeKline, Ingest: domain.IngestSCF,
 		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds1"}))
-	require.NoError(t, db.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: "crypto", InstanceID: "hk-1", Applied: "{}", Status: "{}", HeartbeatAt: now.Add(-181 * time.Second)}))
+	require.NoError(t, db.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: "crypto", InstanceID: "hk-1", Status: "{}", HeartbeatAt: now.Add(-181 * time.Second)}))
 	require.Empty(t, refresh(build(now.Add(-time.Hour), now)), "没有推送数据集不判断")
 
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_ds2", TaskName: "ds2", DataType: domain.DataTypeKline, Ingest: domain.IngestStreaming,
@@ -42,7 +42,7 @@ func TestStreamHeartbeatAttention(t *testing.T) {
 	require.True(t, strings.HasPrefix(detail, "crypto 最后心跳 "), detail)
 	require.Equal(t, detail, refresh(build(now.Add(-time.Hour), now.Add(10*time.Minute))), "同一次中断 detail 不变")
 
-	require.NoError(t, db.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: "crypto", InstanceID: "hk-1", Applied: "{}", Status: "{}", HeartbeatAt: now}))
+	require.NoError(t, db.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: "crypto", InstanceID: "hk-1", Status: "{}", HeartbeatAt: now}))
 	require.Empty(t, refresh(build(now.Add(-time.Hour), now)), "心跳恢复后回到 0")
 }
 

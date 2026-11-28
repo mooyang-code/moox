@@ -1,4 +1,4 @@
-.PHONY: check-timer-startup build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-proto-time-fields check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-seed-contract test-build-linux-local-contract test-build-version-contract test-collector-scf-package-contract test-release-bundle-manifest test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-moox-ca package-skill clean proto
+.PHONY: check-timer-startup build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-proto-time-fields check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-trpc-plugin-config test-go-workspace-shard-contract test-check-build-env test-build-factor test-storage-boundary test-storage-consistency test-storage-seed-contract test-build-linux-local-contract test-build-version-contract test-collector-scf-package-contract test-release-bundle-manifest test-event-contracts test-eventbus-topology test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-moox-ca package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -54,8 +54,17 @@ test-eventbus-topology:
 test-e2e-gates:
 	bash scripts/test/gates/run-e2e-gates.sh
 
-test-kline-resample:
-	bash scripts/test/e2e/test-kline-resample.sh
+test-trpc-plugin-config:
+	bash scripts/test/contract/test-trpc-plugin-config.sh
+
+test-go-workspace-shard-contract:
+	bash scripts/test/contract/test-go-workspace-shard-contract.sh
+
+test-check-build-env:
+	bash scripts/test/contract/test-check-build-env.sh
+
+test-build-factor:
+	bash scripts/test/contract/test-build-factor.sh
 
 check-format:
 	./scripts/check/check-gofmt.sh
@@ -115,8 +124,8 @@ PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
 # make verify 由下面几组检查组成，PR 上的 CI 按组并行运行（make verify-ci-<组>）；本机和自托管运行器的 make verify 仍然依次全跑。
 # 新增检查时放进某一组，verify 与各组自动保持一致。组之间互不依赖：需要前端依赖的检查都放在 web 组，由 test-web 先安装。
 VERIFY_PR_UNITS := test-deployment-packages test-host-deployment test-host-identity-bundles check-go-module-graph $(PROTO_CHECK) test-greenfield-contract
-VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-seed-contract test-build-linux-local-contract test-build-version-contract test-collector-scf-package-contract test-release-bundle-manifest test-e2e-gates
-VERIFY_CORE_CHECKS := check-boundaries check-proto-time-fields test-quality-gates test-docs-architecture test-moox-ca test-skill-contracts
+VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-seed-contract test-build-linux-local-contract test-build-version-contract test-check-build-env test-build-factor test-collector-scf-package-contract test-release-bundle-manifest test-e2e-gates
+VERIFY_CORE_CHECKS := check-boundaries check-proto-time-fields test-quality-gates test-trpc-plugin-config test-go-workspace-shard-contract test-docs-architecture test-moox-ca test-skill-contracts
 VERIFY_STORAGE_CHECKS := test-storage-boundary test-storage-consistency
 
 verify-pr: $(VERIFY_PR_UNITS) $(VERIFY_PR_CONTRACTS)
@@ -134,13 +143,12 @@ verify: verify-ci-core verify-ci-contracts verify-ci-storage test verify-ci-web
 
 verify-custom-setup:
 	(cd packages/cloudprovider && go test -count=1 ./...)
-	(cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
+	(cd modules/admin && go test -count=1 ./internal/service/secret/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
 	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
 	bash skills/moox/scripts/test-private-network-contract.sh
 
 test-moox-ca:
 	bash scripts/test/contract/test-install-moox-ca.sh
-	bash skills/moox/scripts/test-moox-ca.sh
 
 test-collector-scf-package-contract:
 	bash scripts/build/build-collector-scf-package_test.sh
@@ -150,7 +158,6 @@ test-script-contracts:
 
 test-skill-contracts:
 	bash scripts/build/package-skill_test.sh
-	bash skills/moox/scripts/test-data-query-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
 	bash skills/moox/scripts/test-factor-convert-contract.sh
@@ -170,8 +177,6 @@ proto:
 	$(MAKE) -C packages/gatewayclient/directorypb all
 	$(MAKE) -C packages/metricspb all
 	$(MAKE) -C packages/hostmetricpb all
-	$(MAKE) -C packages/tradeeventpb all
-	$(MAKE) -C packages/storagepb generate
 	$(MAKE) -C packages/events all
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/admin/proto all

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -33,7 +33,7 @@ func TestSyncAccountMissingAdapterClearsReadiness(t *testing.T) {
 	seedSyncAccount(t, db)
 	require.NoError(t, db.DBForTest().Exec("UPDATE t_trading_accounts SET c_ready=1").Error)
 	cause := errors.New("session adapter missing")
-	s := &Service{Store: db, Fills: &consumer.Reducer{Store: db}, Adapters: failedSyncAdapterSource{cause: cause}}
+	s := &Service{Store: db, Fills: &fillreduce.Reducer{Store: db}, Adapters: failedSyncAdapterSource{cause: cause}}
 	_, err := s.SyncAccount(context.Background(), "account-1")
 	require.ErrorIs(t, err, cause)
 	account, err := db.GetTradingAccountByID(context.Background(), "account-1")
@@ -59,7 +59,7 @@ func (a boundarySyncAdapter) ListOpenOrders(ctx context.Context) ([]exchange.Ord
 func TestSyncAccountDeadlinePersistsAccountFailure(t *testing.T) {
 	db := openSyncStore(t)
 	seedSyncAccount(t, db)
-	s := &Service{Store: db, Fills: &consumer.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{syncAdapter: &syncAdapter{}, stage: "deadline"}}}
+	s := &Service{Store: db, Fills: &fillreduce.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{syncAdapter: &syncAdapter{}, stage: "deadline"}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	_, err := s.SyncAccount(ctx, "account-1")
@@ -104,7 +104,7 @@ func TestSyncAccountExternalErrorsCarryAccountIdentity(t *testing.T) {
 				}))
 			}
 			cause := errors.New("adapter plain error")
-			s := &Service{Store: db, Fills: &consumer.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{syncAdapter: &syncAdapter{}, stage: stage, cause: cause}}}
+			s := &Service{Store: db, Fills: &fillreduce.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{syncAdapter: &syncAdapter{}, stage: stage, cause: cause}}}
 			// 对账会推进轮转，每个阶段（含拉成交）都会被走到。
 			_, err := s.SyncAccountReconcile(context.Background(), "account-1")
 			require.ErrorIs(t, err, cause)
@@ -125,7 +125,7 @@ func TestSyncAccountFailureRetainsReadinessWriteFailure(t *testing.T) {
 	dbErr := errors.New("readiness database failure")
 	require.NoError(t, db.DBForTest().Callback().Raw().Before("gorm:raw").Register("test:sync_boundary", func(query *gorm.DB) { query.AddError(dbErr) }))
 	cause := errors.New("quote unavailable")
-	s := &Service{Store: db, Fills: &consumer.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{syncAdapter: &syncAdapter{}, stage: "snapshot", cause: cause}}}
+	s := &Service{Store: db, Fills: &fillreduce.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{syncAdapter: &syncAdapter{}, stage: "snapshot", cause: cause}}}
 	_, err := s.SyncAccount(context.Background(), "account-1")
 	require.ErrorIs(t, err, cause)
 	require.ErrorIs(t, err, dbErr)
@@ -141,7 +141,7 @@ func TestSyncAccountPaperStorageErrorIsNotAccountDependency(t *testing.T) {
 	db := openSyncStore(t)
 	seedSyncAccount(t, db)
 	cause := errors.New("paper ledger read failed")
-	s := &Service{Store: db, Fills: &consumer.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{
+	s := &Service{Store: db, Fills: &fillreduce.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{
 		syncAdapter: &syncAdapter{}, stage: "snapshot", cause: execution.InfrastructureError{Err: cause},
 	}}}
 	_, err := s.SyncAccount(context.Background(), "account-1")

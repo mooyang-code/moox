@@ -103,8 +103,8 @@ func TestSyncerHandsFetchResultToWatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host-agent", "host-policy.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	var fetchErr error
-	syncer, err := New(path, func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
-		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: startedMs}, fetchErr
+	syncer, err := New(path, func(context.Context, *monitorpb.SyncHostAgentReq) (*monitorpb.SyncHostAgentRsp, error) {
+		return &monitorpb.SyncHostAgentRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: startedMs}, fetchErr
 	})
 	require.NoError(t, err)
 	var seen []string
@@ -153,8 +153,8 @@ func TestWatchRecoversOnlyAfterTheAlertWasDelivered(t *testing.T) {
 func TestSyncerLocalWriteFailureIsNotUnreachable(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
-	syncer, err := New(filepath.Join(blocked, "host-policy.json"), func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
-		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: startedMs}, nil
+	syncer, err := New(filepath.Join(blocked, "host-policy.json"), func(context.Context, *monitorpb.SyncHostAgentReq) (*monitorpb.SyncHostAgentRsp, error) {
+		return &monitorpb.SyncHostAgentRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: startedMs}, nil
 	})
 	require.NoError(t, err)
 	h := newWatchHarness()

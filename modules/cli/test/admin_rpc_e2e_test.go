@@ -22,7 +22,6 @@ import (
 type adminRPCWire struct {
 	monitorpb.UnimplementedMonitorMgr
 	adminpb.UnimplementedSecretMgr
-	adminpb.UnimplementedSetup
 	adminpb.UnimplementedSysDeploy
 }
 
@@ -33,7 +32,6 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	service := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTimeout(time.Minute))
 	adminpb.RegisterSecretMgrService(service, wire)
 	monitorpb.RegisterMonitorMgrService(service, wire)
-	adminpb.RegisterSetupService(service, wire)
 	adminpb.RegisterSysDeployService(service, wire)
 	go func() { _ = service.Serve() }()
 	t.Cleanup(func() { _ = service.Close(nil) })
@@ -64,17 +62,15 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "fixture-secret", secret.SecretValue)
 	setup := setupclient.New(gateway)
-	status, err := setup.Status(t.Context(), secrets)
-	require.NoError(t, err)
-	require.Equal(t, "ready", status.State)
 	applied, err := setup.Apply(t.Context(), secrets)
 	require.NoError(t, err)
 	require.Equal(t, "created", applied.Action)
+	require.Equal(t, "tencent-default", applied.SecretID)
 	require.NoError(t, setup.SyncTopology(t.Context(), cfg))
 	doctor := doctorcli.New(gateway)
-	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
+	overview, err := doctor.GetHealthOverview(t.Context(), "")
 	require.NoError(t, err)
-	require.Equal(t, "fixture-doctor-checksum", doctorContext.GetManifestChecksum())
+	require.True(t, overview.GetTopologyKnown())
 	rows, err := doctor.ListDeployments(t.Context(), "control")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -90,12 +86,8 @@ func (w *adminRPCWire) GetSecretValue(_ context.Context, req *adminpb.GetSecretV
 	return &adminpb.GetSecretValueRsp{RetInfo: &adminpb.RetInfo{}, Secret: &adminpb.SecretMaterial{SecretId: req.GetSecretId(), Category: "cloud", Provider: "tencent", Status: "active", KeyId: "fixture-id", SecretValue: "fixture-secret"}}, nil
 }
 
-func (w *adminRPCWire) GetSetupStatus(_ context.Context, req *adminpb.GetSetupStatusReq) (*adminpb.GetSetupStatusRsp, error) {
-	return &adminpb.GetSetupStatusRsp{RetInfo: &adminpb.RetInfo{}, State: "ready"}, nil
-}
-
-func (w *adminRPCWire) ApplySetup(_ context.Context, req *adminpb.ApplySetupReq) (*adminpb.ApplySetupRsp, error) {
-	return &adminpb.ApplySetupRsp{RetInfo: &adminpb.RetInfo{}, Action: "created"}, nil
+func (w *adminRPCWire) EnsureInitialSecret(_ context.Context, req *adminpb.EnsureInitialSecretReq) (*adminpb.EnsureInitialSecretRsp, error) {
+	return &adminpb.EnsureInitialSecretRsp{RetInfo: &commonpb.RetInfo{}, Action: "created", SecretId: req.GetSecret().GetSecretId()}, nil
 }
 
 func (w *adminRPCWire) ListHosts(_ context.Context, req *adminpb.ListDeploymentHostsReq) (*adminpb.ListDeploymentHostsRsp, error) {
@@ -105,11 +97,8 @@ func (w *adminRPCWire) ListDeployments(_ context.Context, req *adminpb.ListDeplo
 	return &adminpb.ListDeploymentsRsp{RetInfo: &adminpb.RetInfo{}, Deployments: []*adminpb.ComponentDeployment{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}, nil
 }
 
-func (*adminRPCWire) GetDoctorContext(_ context.Context, req *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
-	if req.GetNodeId() != "control" {
-		return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM}}, nil
-	}
-	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UnixMilli()}, nil
+func (*adminRPCWire) GetHealthOverview(_ context.Context, _ *monitorpb.GetHealthOverviewReq) (*monitorpb.GetHealthOverviewRsp, error) {
+	return &monitorpb.GetHealthOverviewRsp{RetInfo: &commonpb.RetInfo{}, Overview: &monitorpb.HealthOverview{GeneratedAt: time.Now().UnixMilli(), TopologyKnown: true}}, nil
 }
 
 func (w *adminRPCWire) SyncTopology(_ context.Context, req *adminpb.SyncTopologyReq) (*adminpb.SyncTopologyRsp, error) {

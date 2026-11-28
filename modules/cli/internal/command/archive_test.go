@@ -1,182 +1,157 @@
 package command
 
 import (
-	"bytes"
-	"context"
+	"encoding/json"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
-
-	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
 
-type archiveFakeGateway struct {
-	service, method string
-	req             proto.Message
-	rsp             proto.Message
-	closed          bool
-}
-
-func (g *archiveFakeGateway) Invoke(_ context.Context, service, method string, req, rsp any) error {
-	g.service, g.method, g.req = service, method, req.(proto.Message)
-	if g.rsp != nil {
-		proto.Merge(rsp.(proto.Message), g.rsp)
-	}
-	return nil
-}
-func (g *archiveFakeGateway) Close() error { g.closed = true; return nil }
-func (g *archiveFakeGateway) Forward(context.Context, string, string, int, []byte) ([]byte, error) {
-	return nil, nil
-}
-
-func useArchiveGateway(t *testing.T, g *archiveFakeGateway) {
-	t.Helper()
-	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return g, nil }
-	t.Cleanup(func() { openCommandGateway = previous })
-}
-
-func ok() *commonpb.RetInfo { return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS} }
-
-func TestArchiveCreateSendsTheBackfillAndPrintsProtoFieldNames(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: ok(), Task: &archivepb.ArchiveTask{SpaceId: "crypto", DatasetId: "ds", BackfillFrom: "2026-10-15T00:00:00Z"}}}
-	useArchiveGateway(t, g)
-	var out bytes.Buffer
-	err := runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", BackfillFrom: "2026-10-15T00:00:00Z", Paused: true})
+func TestArchiveCreateSendsBackfillAndDirName(t *testing.T) {
+	g := &rpcFakeGateway{response: `{"ret_info":{"code":0},"task":{"space_id":"crypto","dataset_id":"ds","backfill_from":"2026-10-15T00:00:00Z","purpose":"collect","dir_name":"binance-perp-kline-1m"}}`}
+	useRPCGateway(t, g)
+	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "create"),
+		"--space-id", "crypto", "--dataset-id", "ds", "--backfill-from", "2026-10-15T00:00:00Z", "--disabled", "--dir-name", "binance-perp-kline-1m")
 	require.NoError(t, err)
-	assert.Equal(t, "trpc.moox.archive.ArchiveMgr", g.service)
+	assert.Equal(t, archiveMgrService, g.service)
 	assert.Equal(t, "CreateArchiveTask", g.method)
-	req := g.req.(*archivepb.CreateArchiveTaskReq)
-	assert.Equal(t, "2026-10-15T00:00:00Z", req.GetBackfillFrom())
-	assert.True(t, req.GetPaused())
 	assert.True(t, g.closed)
-	assert.Contains(t, out.String(), `"backfill_from": "2026-10-15T00:00:00Z"`)
+	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds","backfill_from":"2026-10-15T00:00:00Z","disabled":true,"dir_name":"binance-perp-kline-1m"}`, string(g.body))
+	assert.Contains(t, out, `"backfill_from": "2026-10-15T00:00:00Z"`)
+	assert.Contains(t, out, `"dir_name": "binance-perp-kline-1m"`)
 }
 
-func TestArchiveCreateAndPrepareSendTheDirNameAndPrintTheSuggestion(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: ok(), Task: &archivepb.ArchiveTask{SpaceId: "crypto", DatasetId: "ds", Purpose: "collect", DirName: "binance-perp-kline-1m"}}}
-	useArchiveGateway(t, g)
-	var out bytes.Buffer
-	require.NoError(t, runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", DirName: "binance-perp-kline-1m"}))
-	assert.Equal(t, "binance-perp-kline-1m", g.req.(*archivepb.CreateArchiveTaskReq).GetDirName())
-	assert.Contains(t, out.String(), `"dir_name": "binance-perp-kline-1m"`)
+func TestArchivePrepareAndRunsListOptions(t *testing.T) {
+	g := &rpcFakeGateway{response: `{"ret_info":{"code":0},"purpose":"collect","suggested_dir_name":"binance-swap-kline-1m","dir_name_conflict":true}`}
+	useRPCGateway(t, g)
+	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "prepare"),
+		"--space-id", "crypto", "--dataset-id", "ds", "--dir-name", "binance-perp-kline-1m")
+	require.NoError(t, err)
+	assert.Equal(t, "PrepareArchiveTask", g.method)
+	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds","dir_name":"binance-perp-kline-1m"}`, string(g.body))
+	assert.Contains(t, out, `"suggested_dir_name": "binance-swap-kline-1m"`)
+	assert.Contains(t, out, `"dir_name_conflict": true`)
 
-	prep := &archiveFakeGateway{rsp: &archivepb.PrepareArchiveTaskRsp{RetInfo: ok(), Purpose: "collect", SuggestedDirName: "binance-swap-kline-1m", DirNameConflict: true}}
-	useArchiveGateway(t, prep)
-	out.Reset()
-	require.NoError(t, runArchiveTasksPrepare(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", DirName: "binance-perp-kline-1m"}))
-	assert.Equal(t, "binance-perp-kline-1m", prep.req.(*archivepb.PrepareArchiveTaskReq).GetDirName())
-	assert.Contains(t, out.String(), `"suggested_dir_name": "binance-swap-kline-1m"`)
-	assert.Contains(t, out.String(), `"dir_name_conflict": true`)
-	assert.Contains(t, out.String(), `"purpose": "collect"`)
+	runs := &rpcFakeGateway{response: `{"ret_info":{"code":0},"runs":[]}`}
+	useRPCGateway(t, runs)
+	_, _, err = runSpecCommand(t, specByPath(t, "archive", "runs", "list"), "--status", "cancelled")
+	require.NoError(t, err)
+	assert.Equal(t, "ListArchiveRuns", runs.method)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(runs.body, &body))
+	assert.Equal(t, "cancelled", body["status"])
+	_, hasSpace := body["space_id"]
+	assert.False(t, hasSpace, "未传 --space-id 时不限制空间")
 }
 
-func TestArchiveRunsListSendsIncludeFollow(t *testing.T) {
-	runs := &archiveFakeGateway{rsp: &archivepb.ListArchiveRunsRsp{RetInfo: ok()}}
-	useArchiveGateway(t, runs)
-	var out bytes.Buffer
-	require.NoError(t, runArchiveRunsList(context.Background(), &out, archiveFlags{IncludeFollow: true}))
-	assert.True(t, runs.req.(*archivepb.ListArchiveRunsReq).GetIncludeFollow())
-}
+func TestArchiveDestructiveCommandsPreviewWithoutYes(t *testing.T) {
+	g := &rpcFakeGateway{response: `{"ret_info":{"code":0},"removed":[]}`}
+	useRPCGateway(t, g)
 
-func TestArchiveClearUnrecoverableNeedsTheRangeAndConfirmation(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.ClearArchiveUnrecoverableRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-		Removed: []*archivepb.UnrecoverableRange{{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}}}}
-	useArchiveGateway(t, g)
-	var out bytes.Buffer
-	f := archiveFlags{SpaceID: "crypto", DatasetID: "ds", From: "2026-10-01T00:00:00Z", To: "2026-10-05T00:00:00Z"}
-	require.ErrorContains(t, runArchiveTasksClearUnrecoverable(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"}), "--start")
-	require.ErrorContains(t, runArchiveTasksClearUnrecoverable(context.Background(), &out, f), "--yes")
-	assert.Empty(t, g.method)
-	f.Yes = true
-	require.NoError(t, runArchiveTasksClearUnrecoverable(context.Background(), &out, f))
+	// clear-unrecoverable 缺必填参数时拒绝（含 --space-id、--dataset-id）
+	_, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"), "--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z")
+	require.ErrorContains(t, err, "--space-id")
+	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"), "--space-id", "crypto")
+	require.ErrorContains(t, err, "--dataset-id")
+	assert.Zero(t, g.calls)
+
+	// 无 --yes 只预览（支持清空全部：不带 --start/--end），不调用网关
+	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"),
+		"--space-id", "crypto", "--dataset-id", "ds")
+	require.NoError(t, err)
+	assert.Zero(t, g.calls)
+	preview := parsePreview(t, out)
+	assert.Equal(t, "ClearArchiveUnrecoverable", preview["method"])
+
+	// 加 --yes（按范围清空）才调用
+	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"),
+		"--space-id", "crypto", "--dataset-id", "ds", "--start", "2026-10-01T00:00:00Z", "--end", "2026-10-05T00:00:00Z", "--yes")
+	require.NoError(t, err)
+	assert.Equal(t, 1, g.calls)
 	assert.Equal(t, "ClearArchiveUnrecoverable", g.method)
-	req := g.req.(*archivepb.ClearArchiveUnrecoverableReq)
-	assert.Equal(t, "2026-10-01T00:00:00Z", req.GetStart())
-	assert.Equal(t, "2026-10-05T00:00:00Z", req.GetEnd())
-	assert.Contains(t, out.String(), `"removed"`)
+	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds","start":"2026-10-01T00:00:00Z","end":"2026-10-05T00:00:00Z"}`, string(g.body))
+
+	// 加 --yes（留空起止清空全部）
+	_, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "clear-unrecoverable"),
+		"--space-id", "crypto", "--dataset-id", "ds", "--yes")
+	require.NoError(t, err)
+	assert.Equal(t, 2, g.calls)
+	assert.JSONEq(t, `{"space_id":"crypto","dataset_id":"ds"}`, string(g.body))
+
+	// delete 无 --yes 只预览
+	out, _, err = runSpecCommand(t, specByPath(t, "archive", "tasks", "delete"), "--space-id", "crypto", "--dataset-id", "ds")
+	require.NoError(t, err)
+	assert.Equal(t, 2, g.calls)
+	assert.Equal(t, "DeleteArchiveTask", parsePreview(t, out)["method"])
 }
 
-func TestArchiveCommandsValidateInputsBeforeCallingTheGateway(t *testing.T) {
-	g := &archiveFakeGateway{}
-	useArchiveGateway(t, g)
-	ctx := context.Background()
-	var out bytes.Buffer
-	for name, err := range map[string]error{
-		"create without dataset":  runArchiveTasksCreate(ctx, &out, archiveFlags{SpaceID: "crypto"}),
-		"delete without yes":      runArchiveTasksDelete(ctx, &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"}),
-		"backfill without range":  runArchiveTasksBackfill(ctx, &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"}),
-		"run get without id":      runArchiveRunsGet(ctx, &out, archiveFlags{}),
-		"run cancel without id":   runArchiveRunsCancel(ctx, &out, archiveFlags{}),
-		"partition list no space": runArchivePartitionsList(ctx, &out, archiveFlags{}),
-		"partition get no key":    runArchivePartitionsGet(ctx, &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"}),
-		"prepare without dataset": runArchiveTasksPrepare(ctx, &out, archiveFlags{SpaceID: "crypto"}),
+func TestArchiveCommandsValidateRequiredFlagsAndMapMethods(t *testing.T) {
+	g := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
+	useRPCGateway(t, g)
+	for name, tc := range map[string]struct {
+		path []string
+		args []string
+	}{
+		"create without space":     {[]string{"archive", "tasks", "create"}, []string{"--dataset-id", "ds"}},
+		"create without dataset":   {[]string{"archive", "tasks", "create"}, []string{"--space-id", "crypto"}},
+		"prepare without space":    {[]string{"archive", "tasks", "prepare"}, []string{"--dataset-id", "ds"}},
+		"prepare without dataset":  {[]string{"archive", "tasks", "prepare"}, []string{"--space-id", "crypto"}},
+		"update without space":     {[]string{"archive", "tasks", "update"}, []string{"--dataset-id", "ds", "--status", "disabled"}},
+		"run without space":        {[]string{"archive", "tasks", "run"}, []string{"--dataset-id", "ds"}},
+		"backfill without space":   {[]string{"archive", "tasks", "backfill"}, []string{"--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}},
+		"backfill without range":   {[]string{"archive", "tasks", "backfill"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
+		"run get without id":       {[]string{"archive", "runs", "get"}, nil},
+		"run cancel without id":    {[]string{"archive", "runs", "cancel"}, nil},
+		"partitions without space": {[]string{"archive", "partitions", "list"}, nil},
+		"partition get no space":   {[]string{"archive", "partitions", "get"}, []string{"--dataset-id", "ds", "--partition-key", "2026-10-16"}},
+		"partition get no key":     {[]string{"archive", "partitions", "get"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}},
 	} {
+		_, _, err := runSpecCommand(t, specByPath(t, tc.path...), tc.args...)
 		require.Error(t, err, name)
 	}
-	assert.Empty(t, g.method, "参数不全时不应调用网关")
-}
+	assert.Zero(t, g.calls, "参数不全时不应调用网关")
 
-func TestArchiveCommandsMapToTheRightMethods(t *testing.T) {
-	ctx := context.Background()
 	for _, tc := range []struct {
+		path   []string
+		args   []string
 		method string
-		rsp    proto.Message
-		run    func(*bytes.Buffer) error
 	}{
-		{"GetArchiveOverview", &archivepb.GetArchiveOverviewRsp{RetInfo: ok()}, func(b *bytes.Buffer) error { return runArchiveOverview(ctx, b, archiveFlags{}) }},
-		{"ListArchiveTasks", &archivepb.ListArchiveTasksRsp{RetInfo: ok()}, func(b *bytes.Buffer) error { return runArchiveTasksList(ctx, b, archiveFlags{SpaceID: "crypto"}) }},
-		{"PrepareArchiveTask", &archivepb.PrepareArchiveTaskRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchiveTasksPrepare(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds"})
-		}},
-		{"UpdateArchiveTask", &archivepb.UpdateArchiveTaskRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchiveTasksUpdate(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds", Status: "paused"})
-		}},
-		{"DeleteArchiveTask", &archivepb.DeleteArchiveTaskRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchiveTasksDelete(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds", Yes: true})
-		}},
-		{"RunArchiveTaskNow", &archivepb.RunArchiveTaskNowRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchiveTasksRun(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds"})
-		}},
-		{"BackfillArchiveRange", &archivepb.BackfillArchiveRangeRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchiveTasksBackfill(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds", From: "2026-10-16T00:00:00Z", To: "2026-10-17T00:00:00Z"})
-		}},
-		{"ListArchiveRuns", &archivepb.ListArchiveRunsRsp{RetInfo: ok()}, func(b *bytes.Buffer) error { return runArchiveRunsList(ctx, b, archiveFlags{Status: "queued"}) }},
-		{"GetArchiveRun", &archivepb.GetArchiveRunRsp{RetInfo: ok()}, func(b *bytes.Buffer) error { return runArchiveRunsGet(ctx, b, archiveFlags{RunID: "run_1"}) }},
-		{"CancelArchiveRun", &archivepb.CancelArchiveRunRsp{RetInfo: ok()}, func(b *bytes.Buffer) error { return runArchiveRunsCancel(ctx, b, archiveFlags{RunID: "run_1"}) }},
-		{"ListArchivePartitions", &archivepb.ListArchivePartitionsRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchivePartitionsList(ctx, b, archiveFlags{SpaceID: "crypto", FromMonth: "2026-10"})
-		}},
-		{"GetArchivePartition", &archivepb.GetArchivePartitionRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchivePartitionsGet(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds", PartitionKey: "2026-10-16"})
-		}},
+		{[]string{"archive", "overview"}, nil, "GetArchiveOverview"},
+		{[]string{"archive", "tasks", "list"}, []string{"--space-id", "crypto"}, "ListArchiveTasks"},
+		{[]string{"archive", "tasks", "prepare"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}, "PrepareArchiveTask"},
+		{[]string{"archive", "tasks", "update"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--status", "disabled"}, "UpdateArchiveTask"},
+		{[]string{"archive", "tasks", "delete"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--yes"}, "DeleteArchiveTask"},
+		{[]string{"archive", "tasks", "run"}, []string{"--space-id", "crypto", "--dataset-id", "ds"}, "RunArchiveTaskNow"},
+		{[]string{"archive", "tasks", "backfill"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--from", "2026-10-16T00:00:00Z", "--to", "2026-10-17T00:00:00Z"}, "BackfillArchiveRange"},
+		{[]string{"archive", "runs", "list"}, []string{"--status", "queued"}, "ListArchiveRuns"},
+		{[]string{"archive", "runs", "get"}, []string{"--run-id", "run_1"}, "GetArchiveRun"},
+		{[]string{"archive", "runs", "cancel"}, []string{"--run-id", "run_1"}, "CancelArchiveRun"},
+		{[]string{"archive", "partitions", "list"}, []string{"--space-id", "crypto", "--from-month", "2026-10"}, "ListArchivePartitions"},
+		{[]string{"archive", "partitions", "get"}, []string{"--space-id", "crypto", "--dataset-id", "ds", "--partition-key", "2026-10-16"}, "GetArchivePartition"},
 	} {
-		g := &archiveFakeGateway{rsp: tc.rsp}
-		useArchiveGateway(t, g)
-		var out bytes.Buffer
-		require.NoError(t, tc.run(&out), tc.method)
-		assert.Equal(t, tc.method, g.method)
-		assert.Equal(t, "trpc.moox.archive.ArchiveMgr", g.service)
+		gw := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
+		useRPCGateway(t, gw)
+		_, _, err := runSpecCommand(t, specByPath(t, tc.path...), tc.args...)
+		require.NoError(t, err, tc.method)
+		assert.Equal(t, archiveMgrService, gw.service)
+		assert.Equal(t, tc.method, gw.method)
 	}
 }
 
-func TestArchiveSurfacesManagerErrors(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "数据集已有归档任务"}}}
-	useArchiveGateway(t, g)
-	var out bytes.Buffer
-	err := runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "数据集已有归档任务")
-	assert.Empty(t, out.String())
-}
+func TestArchiveSurfacesManagerErrorsAndTreeMounted(t *testing.T) {
+	g := &rpcFakeGateway{response: `{"ret_info":{"code":6,"msg":"数据集已有归档任务"}}`}
+	useRPCGateway(t, g)
+	out, _, err := runSpecCommand(t, specByPath(t, "archive", "tasks", "create"), "--space-id", "crypto", "--dataset-id", "ds")
+	require.ErrorContains(t, err, "数据集已有归档任务")
+	assert.Contains(t, out, "数据集已有归档任务", "业务失败时按统一约定先打印响应再非 0 退出")
 
-func TestArchiveCommandsAreRegistered(t *testing.T) {
+	mountCommands(rootCmd)
+	cmd, rest, err := rootCmd.Find([]string{"archive"})
+	require.NoError(t, err)
+	require.Empty(t, rest)
 	var found []string
-	for _, c := range archiveCmd.Commands() {
+	for _, c := range cmd.Commands() {
 		found = append(found, c.Name())
 	}
 	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions"}, found)

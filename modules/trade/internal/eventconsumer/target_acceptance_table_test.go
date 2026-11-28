@@ -2,6 +2,7 @@ package eventconsumer
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -70,13 +70,13 @@ func acceptanceDelivery(t *testing.T, now time.Time, spec acceptanceTarget) *jet
 	if spec.validMinutes != 0 {
 		validUntil = now.Add(time.Duration(spec.validMinutes) * time.Minute)
 	}
-	var targets []*tradeeventpb.InstrumentWeightTarget
+	var targets []*eventpb.InstrumentWeightTarget
 	if spec.weight != "" {
-		targets = []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: spec.weight}}
+		targets = []*eventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: spec.weight}}
 	}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: spec.id, InstanceId: instance, SessionId: session, SessionStartedAt: startedAt, StrategyId: "strategy-1", LogicalAccountId: "logical-1",
 		Targets: targets, BarEndTime: barEnd.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 	}, events.PublishOptions{EventID: spec.id, OccurredAt: barEnd, SpaceID: "space-1", SubjectID: "logical-1"})
@@ -94,7 +94,7 @@ func acceptanceClose(session string) func(*testing.T, *store.Store) {
 }
 
 func acceptanceManual(t *testing.T, db *store.Store) {
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 }
 
 func TestTargetAcceptanceTable(t *testing.T) {
@@ -203,7 +203,7 @@ func TestTargetAcceptanceTable(t *testing.T) {
 				opts.WakeTarget = func(string, string) { woke = true }
 				opts.Intake = func() bool { return !step.intakeClosed }
 				resolved := false
-				opts.WeightResolver = targetResolverFunc(func(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
+				opts.WeightResolver = targetResolverFunc(func(ctx context.Context, request *eventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
 					resolved = true
 					return testWeightResolver{}.Resolve(ctx, request, space)
 				})

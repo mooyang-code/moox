@@ -165,7 +165,7 @@ func TestDeletedTaskSyncCleansWatermarkGapLedgerAndUnreferencedLocalData(t *test
 		cont.NoteAbsent(id, base, base.Add(2*time.Minute), time.Minute, []string{"BTC"})
 		require.NoError(t, ledger.RecordGaps(ctx, []pipeline.GapEntry{{
 			TaskID: id, Subject: "BTC", Period: base.Add(5 * time.Minute),
-			Member: "bias__var", DefinitionHash: "h1", TriggerEventID: "evt-1",
+			Member: "bias__var", DefinitionHash: "h1",
 		}}))
 		paramMgr.states[id] = []factorwire.MemberParamState{{
 			MemberKey:           "bias__var",
@@ -193,10 +193,9 @@ func TestDeletedTaskSyncCleansWatermarkGapLedgerAndUnreferencedLocalData(t *test
 
 	fakeClient := &cleanupCatalogFake{
 		snapshot: CatalogSnapshot{
-			Hash:               "hash-all-enabled",
-			Sets:               allTasks,
-			ExistingTaskIDs:    []string{"ftask_solo", "ftask_shared_a", "ftask_shared_b"},
-			HasExistingTaskIDs: true,
+			Hash:            "hash-all-enabled",
+			Sets:            allTasks,
+			ExistingTaskIDs: []string{"ftask_solo", "ftask_shared_a", "ftask_shared_b"},
 		},
 	}
 	syncer := &catalogSyncer{client: fakeClient, cache: catalogCache, applied: r.onCatalogApplied}
@@ -212,10 +211,9 @@ func TestDeletedTaskSyncCleansWatermarkGapLedgerAndUnreferencedLocalData(t *test
 	// 步骤 1：仅停用 ftask_solo（仍在 existing_task_ids 中）。
 	// 应释放其独占源数据集 dataset_solo 的窗口，但保留其 watermark、gapledger 与 param_cache。
 	fakeClient.snapshot = CatalogSnapshot{
-		Hash:               "hash-solo-disabled",
-		Sets:               []domain.EngineTask{sharedA, sharedB},
-		ExistingTaskIDs:    []string{"ftask_solo", "ftask_shared_a", "ftask_shared_b"},
-		HasExistingTaskIDs: true,
+		Hash:            "hash-solo-disabled",
+		Sets:            []domain.EngineTask{sharedA, sharedB},
+		ExistingTaskIDs: []string{"ftask_solo", "ftask_shared_a", "ftask_shared_b"},
 	}
 	require.NoError(t, syncer.SyncOnce(ctx))
 	require.False(t, r.preload.Ready("ftask_solo"))
@@ -230,10 +228,9 @@ func TestDeletedTaskSyncCleansWatermarkGapLedgerAndUnreferencedLocalData(t *test
 
 	// 步骤 2：删除已停用的 ftask_solo（从 existing_task_ids 消失）。
 	fakeClient.snapshot = CatalogSnapshot{
-		Hash:               "hash-solo-deleted",
-		Sets:               []domain.EngineTask{sharedA, sharedB},
-		ExistingTaskIDs:    []string{"ftask_shared_a", "ftask_shared_b"},
-		HasExistingTaskIDs: true,
+		Hash:            "hash-solo-deleted",
+		Sets:            []domain.EngineTask{sharedA, sharedB},
+		ExistingTaskIDs: []string{"ftask_shared_a", "ftask_shared_b"},
 	}
 	require.NoError(t, syncer.SyncOnce(ctx))
 
@@ -273,10 +270,9 @@ func TestDeletedTaskSyncCleansWatermarkGapLedgerAndUnreferencedLocalData(t *test
 	// 步骤 3：删除与 ftask_shared_a 共享 dataset_shared 的 ftask_shared_b（如 DeleteBoundTask）。
 	// 必须清理 ftask_shared_b 的本地状态，但绝对不能释放仍在被 ftask_shared_a 使用的 dataset_shared。
 	fakeClient.snapshot = CatalogSnapshot{
-		Hash:               "hash-shared-b-deleted",
-		Sets:               []domain.EngineTask{sharedA},
-		ExistingTaskIDs:    []string{"ftask_shared_a"},
-		HasExistingTaskIDs: true,
+		Hash:            "hash-shared-b-deleted",
+		Sets:            []domain.EngineTask{sharedA},
+		ExistingTaskIDs: []string{"ftask_shared_a"},
 	}
 	require.NoError(t, syncer.SyncOnce(ctx))
 
@@ -292,10 +288,9 @@ func TestDeletedTaskSyncCleansWatermarkGapLedgerAndUnreferencedLocalData(t *test
 
 	// 步骤 4：删除最后一个任务 ftask_shared_a 后，dataset_shared 也被彻底释放，全部本地状态清空。
 	fakeClient.snapshot = CatalogSnapshot{
-		Hash:               "hash-all-deleted",
-		Sets:               nil,
-		ExistingTaskIDs:    []string{},
-		HasExistingTaskIDs: true,
+		Hash:            "hash-all-deleted",
+		Sets:            nil,
+		ExistingTaskIDs: []string{},
 	}
 	require.NoError(t, syncer.SyncOnce(ctx))
 	require.Empty(t, data.Sources())

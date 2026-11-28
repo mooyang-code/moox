@@ -6,7 +6,6 @@ import (
 
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -52,8 +51,8 @@ func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 	}
 }
 
-func validPeriodPayload(datasetID string) *storagepb.DatasetPeriodCompleted {
-	return &storagepb.DatasetPeriodCompleted{
+func validPeriodPayload(datasetID string) *eventpb.DatasetPeriodCompleted {
+	return &eventpb.DatasetPeriodCompleted{
 		DatasetId: datasetID, Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 		CauseEventId: "cause-1", CompletedAt: time.Unix(1786032060, 0).UnixMilli(),
 	}

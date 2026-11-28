@@ -80,7 +80,7 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		series := key.GetTimeSeries()
 		tagPrefix := seriesHistoryPrefix(spaceID, datasetID, seriesSelector{
 			subject: series.GetSubjectId(),
-			freq:    series.GetFreq(),
+			freq:    series.GetFrequency(),
 			tag:     series.GetSeriesTag(),
 			hasTag:  true,
 		})

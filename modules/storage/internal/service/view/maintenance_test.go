@@ -79,7 +79,7 @@ func TestInitialBuildFailureDiscardsPartialIndexAndRetries(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	spec := timeSeriesSpec("space", "market", "1m", "close")
 	svc := newBuildService(engine)
-	reader := &pagedRangeReader{pageSize: 1, failPage: 2, rows: []*pb.TimeSeriesRow{
+	reader := &pagedRangeReader{pageSize: 1, failPage: 2, rows: []*pb.Row{
 		historyRow("A", "2026-08-18T00:00:00Z", ""), historyRow("B", "2026-08-18T00:00:00Z", ""),
 	}}
 	opts := MaintenanceOptions{Metadata: metadataFor(spec), PrimaryRange: reader, Bars: 10, BackfillPageSize: 100}
@@ -251,14 +251,14 @@ func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 // 列停用只是逻辑上的：行里的值还在，只在返回时过滤；重新启用后恢复。
 func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 	key := timeSeriesTestRowKey("")
-	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close"}, {FieldId: "old"}}}}}
+	engine := &queryEngine{rows: []*pb.Row{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close"}, {FieldId: "old"}}}}}
 	svc := queryTestService(engine, true)
 	runtime := svc.runtimeOf(marketRef)
 	query := func() []*pb.FieldValue {
 		t.Helper()
 		rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
 			SpaceId: "space", DatasetId: "market",
-			Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+			Selectors: []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m"}},
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 {
 			t.Fatalf("rsp=%v err=%v", rsp, err)

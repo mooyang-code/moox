@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/report/logsink"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -23,17 +24,16 @@ type Response struct {
 	Ready      bool   `json:"ready"`
 	Status     string `json:"status"`
 	// Reason 是未就绪的原因（组件知道时填写）；没填时由 NotReadyReason 从 Details 推断。
-	Reason                  string         `json:"reason,omitempty"`
-	Version                 string         `json:"version,omitempty"`
-	GitCommit               string         `json:"git_commit,omitempty"`
-	BinarySHA256            string         `json:"binary_sha256,omitempty"`
-	BootID                  string         `json:"boot_id,omitempty"`
-	BuildTime               string         `json:"build_time,omitempty"`
-	ConfigHash              string         `json:"config_hash,omitempty"`
-	DatasetHealthPolicyHash string         `json:"dataset_health_policy_hash,omitempty"`
-	StartTime               time.Time      `json:"start_time,omitempty"`
-	Time                    time.Time      `json:"time"`
-	Details                 map[string]any `json:"details,omitempty"`
+	Reason       string         `json:"reason,omitempty"`
+	Version      string         `json:"version,omitempty"`
+	GitCommit    string         `json:"git_commit,omitempty"`
+	BinarySHA256 string         `json:"binary_sha256,omitempty"`
+	BootID       string         `json:"boot_id,omitempty"`
+	BuildTime    string         `json:"build_time,omitempty"`
+	ConfigHash   string         `json:"config_hash,omitempty"`
+	StartTime    time.Time      `json:"start_time,omitempty"`
+	Time         time.Time      `json:"time"`
+	Details      map[string]any `json:"details,omitempty"`
 }
 
 // SnapshotFunc returns a health snapshot for the current request.
@@ -41,18 +41,17 @@ type SnapshotFunc func(context.Context) Response
 
 // State contains the shared process health state used by module wrappers.
 type State struct {
-	Module                  string
-	InstanceID              string
-	Version                 string
-	GitCommit               string
-	BinarySHA256            string
-	BootID                  string
-	BuildTime               string
-	ConfigHash              string
-	DatasetHealthPolicyHash string
-	StartedAt               time.Time
-	ReadyFlag               atomic.Bool
-	SnapshotFunc            SnapshotFunc
+	Module       string
+	InstanceID   string
+	Version      string
+	GitCommit    string
+	BinarySHA256 string
+	BootID       string
+	BuildTime    string
+	ConfigHash   string
+	StartedAt    time.Time
+	ReadyFlag    atomic.Bool
+	SnapshotFunc SnapshotFunc
 }
 
 // NewState creates a shared health state.
@@ -60,9 +59,9 @@ func NewState(module, instance, version, commit string) *State {
 	return &State{
 		Module: module, InstanceID: instance, Version: runtimeValue(version, "MOOX_VERSION"), GitCommit: runtimeValue(commit, "MOOX_GIT_COMMIT"),
 		BinarySHA256: processBinarySHA256(),
-		BootID:       processBootID(), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
-		ConfigHash: os.Getenv("MOOX_CONFIG_HASH"), DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),
-		StartedAt: time.Now().UTC(),
+		BootID:       logsink.ProcessBootID(), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
+		ConfigHash: os.Getenv("MOOX_CONFIG_HASH"),
+		StartedAt:  time.Now().UTC(),
 	}
 }
 
@@ -136,9 +135,6 @@ func (s *State) enrich(rsp *Response) {
 	}
 	if rsp.ConfigHash == "" {
 		rsp.ConfigHash = s.ConfigHash
-	}
-	if rsp.DatasetHealthPolicyHash == "" {
-		rsp.DatasetHealthPolicyHash = s.DatasetHealthPolicyHash
 	}
 }
 
@@ -226,21 +222,20 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 		status = "ok"
 	}
 	return Response{
-		Module:                  module,
-		Service:                 service,
-		InstanceID:              instanceID,
-		NodeID:                  strings.TrimSpace(os.Getenv("MOOX_NODE_ID")),
-		Ready:                   ready,
-		Status:                  status,
-		Version:                 runtimeValue(version, "MOOX_VERSION"),
-		GitCommit:               runtimeValue(gitCommit, "MOOX_GIT_COMMIT"),
-		BinarySHA256:            processBinarySHA256(),
-		BootID:                  processBootID(),
-		BuildTime:               os.Getenv("MOOX_BUILD_TIME"),
-		ConfigHash:              os.Getenv("MOOX_CONFIG_HASH"),
-		DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),
-		StartTime:               start,
-		Time:                    time.Now(),
+		Module:       module,
+		Service:      service,
+		InstanceID:   instanceID,
+		NodeID:       strings.TrimSpace(os.Getenv("MOOX_NODE_ID")),
+		Ready:        ready,
+		Status:       status,
+		Version:      runtimeValue(version, "MOOX_VERSION"),
+		GitCommit:    runtimeValue(gitCommit, "MOOX_GIT_COMMIT"),
+		BinarySHA256: processBinarySHA256(),
+		BootID:       logsink.ProcessBootID(),
+		BuildTime:    os.Getenv("MOOX_BUILD_TIME"),
+		ConfigHash:   os.Getenv("MOOX_CONFIG_HASH"),
+		StartTime:    start,
+		Time:         time.Now(),
 	}
 }
 

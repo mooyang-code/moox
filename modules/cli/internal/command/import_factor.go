@@ -38,7 +38,7 @@ func (e factorEngine) call(ctx context.Context, method string, req, rsp any, ret
 // Fields 返回数据集的字段表。
 func (e factorEngine) Fields(ctx context.Context, space, dataset, freq string) ([]seriesformat.Field, error) {
 	rsp := &factorpb.GetSeriesFieldsRsp{}
-	if err := e.call(ctx, "GetSeriesFields", &factorpb.GetSeriesFieldsReq{SpaceId: space, DatasetId: dataset, Freq: freq}, rsp, rsp.GetRetInfo); err != nil {
+	if err := e.call(ctx, "GetSeriesFields", &factorpb.GetSeriesFieldsReq{SpaceId: space, DatasetId: dataset, Frequency: freq}, rsp, rsp.GetRetInfo); err != nil {
 		return nil, err
 	}
 	out := make([]seriesformat.Field, 0, len(rsp.GetFields()))
@@ -61,7 +61,7 @@ func (e factorEngine) SubjectInScope(ctx context.Context, space, dataset, subjec
 func (e factorEngine) LocalBounds(space, dataset, freq string) func(ctx context.Context, subject string) (time.Time, time.Time, bool, error) {
 	return func(ctx context.Context, subject string) (time.Time, time.Time, bool, error) {
 		rsp := &factorpb.GetSeriesBoundsRsp{}
-		if err := e.call(ctx, "GetSeriesBounds", &factorpb.GetSeriesBoundsReq{SpaceId: space, DatasetId: dataset, Freq: freq, SubjectId: subject}, rsp, rsp.GetRetInfo); err != nil || !rsp.GetExists() {
+		if err := e.call(ctx, "GetSeriesBounds", &factorpb.GetSeriesBoundsReq{SpaceId: space, DatasetId: dataset, Frequency: freq, SubjectId: subject}, rsp, rsp.GetRetInfo); err != nil || !rsp.GetExists() {
 			return time.Time{}, time.Time{}, false, err
 		}
 		earliest, err := time.Parse(time.RFC3339, rsp.GetEarliest())
@@ -113,7 +113,7 @@ func (t *factorTarget) Write(ctx context.Context, c runner.Chunk) error {
 // writeSeriesRequest 把一批行转成 WriteSeries 请求：每列按字段名给出 null 标记与按类型的值。
 func writeSeriesRequest(c runner.Chunk) *factorpb.WriteSeriesReq {
 	req := &factorpb.WriteSeriesReq{
-		SpaceId: c.Space, DatasetId: c.Dataset, Freq: c.Freq, SubjectId: c.Subject,
+		SpaceId: c.Space, DatasetId: c.Dataset, Frequency: c.Freq, SubjectId: c.Subject,
 		From: c.From.UTC().Format(time.RFC3339), To: c.To.UTC().Format(time.RFC3339),
 		AllowMissing: c.AllowMissing, RecordPending: c.RecordPending, Tags: c.Batch.Tags,
 		Cols: make(map[string]*factorpb.SeriesColumn, len(c.Fields)),

@@ -40,7 +40,7 @@ func (*storageOperationsWire) GetSpace(context.Context, *pb.GetSpaceReq) (*pb.Ge
 }
 
 func (*storageOperationsWire) GetDataset(context.Context, *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {
-	return &pb.GetDatasetRsp{RetInfo: &pb.RetInfo{}, Dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "prices", Freq: "1m"}}, nil
+	return &pb.GetDatasetRsp{RetInfo: &pb.RetInfo{}, Dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "prices", Frequency: "1m"}}, nil
 }
 
 func (*storageOperationsWire) GetSubject(context.Context, *pb.GetSubjectReq) (*pb.GetSubjectRsp, error) {
@@ -66,7 +66,7 @@ func (*storageOperationsWire) ReadTimeSeriesRows(ctx context.Context, req *pb.Re
 	if err := storageOperationSpace(ctx); err != nil {
 		return nil, err
 	}
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}, Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "prices", SubjectId: "BTC-USDT"}}}}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}, Rows: []*pb.Row{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT"}}}}}}, nil
 }
 
 func (w *storageOperationsWire) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {

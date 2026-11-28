@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 // shadowStore 打开一个空库，建好两个空间里的组合 logical-1（目标历史按组合挂外键）。
@@ -21,7 +21,7 @@ func shadowStore(t *testing.T) *store.Store {
 	t.Cleanup(func() { tradeStore.Close() })
 	for _, space := range []string{"space-1", "space-2"} {
 		if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-			return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: space, LogicalAccountID: "logical-1", Name: "shadow", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
+			return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: space, LogicalAccountID: "logical-1", Name: "shadow", Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "test"})
 		}); err != nil {
 			t.Fatal(err)
 		}

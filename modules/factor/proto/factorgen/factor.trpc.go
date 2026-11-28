@@ -89,11 +89,6 @@ type FactorMgrService interface {
 	GetUdf(ctx context.Context, req *GetUdfReq) (*GetUdfRsp, error)
 
 	ActivateUdf(ctx context.Context, req *ActivateUdfReq) (*ActivateUdfRsp, error)
-	// GetLifecycle GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
-	//  暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
-	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
-	// ControlLifecycle ControlLifecycle 暂停、恢复因子管理模块。
-	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
 }
 
 func FactorMgrService_CreateFactorTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -726,42 +721,6 @@ func FactorMgrService_ActivateUdf_Handler(svr interface{}, ctx context.Context, 
 	return rsp, nil
 }
 
-func FactorMgrService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &commonpb.GetLifecycleReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &commonpb.ControlLifecycleReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // FactorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.factor.FactorMgr",
@@ -906,14 +865,6 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.factor.FactorMgr/ActivateUdf",
 			Func: FactorMgrService_ActivateUdf_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/GetLifecycle",
-			Func: FactorMgrService_GetLifecycle_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/ControlLifecycle",
-			Func: FactorMgrService_ControlLifecycle_Handler,
 		},
 	},
 }
@@ -1460,18 +1411,6 @@ func (s *UnimplementedFactorMgr) ActivateUdf(ctx context.Context, req *ActivateU
 	return nil, errors.New("rpc ActivateUdf of service FactorMgr is not implemented")
 }
 
-// GetLifecycle GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
-//
-//	暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
-func (s *UnimplementedFactorMgr) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
-	return nil, errors.New("rpc GetLifecycle of service FactorMgr is not implemented")
-}
-
-// ControlLifecycle ControlLifecycle 暂停、恢复因子管理模块。
-func (s *UnimplementedFactorMgr) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
-	return nil, errors.New("rpc ControlLifecycle of service FactorMgr is not implemented")
-}
-
 type UnimplementedFactorEngine struct{}
 
 func (s *UnimplementedFactorEngine) SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq) (*SyncEngineCatalogRsp, error) {
@@ -1628,11 +1567,6 @@ type FactorMgrClientProxy interface {
 	GetUdf(ctx context.Context, req *GetUdfReq, opts ...client.Option) (rsp *GetUdfRsp, err error)
 
 	ActivateUdf(ctx context.Context, req *ActivateUdfReq, opts ...client.Option) (rsp *ActivateUdfRsp, err error)
-	// GetLifecycle GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
-	//  暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
-	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
-	// ControlLifecycle ControlLifecycle 暂停、恢复因子管理模块。
-	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
 }
 
 type FactorMgrClientProxyImpl struct {
@@ -2338,46 +2272,6 @@ func (c *FactorMgrClientProxyImpl) ActivateUdf(ctx context.Context, req *Activat
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ActivateUdfRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetLifecycle")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("GetLifecycle")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &commonpb.GetLifecycleRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ControlLifecycle")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("ControlLifecycle")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &commonpb.ControlLifecycleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

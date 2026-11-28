@@ -16,16 +16,16 @@ export interface ArrivalChain {
 export function arrivalChains(overview: HealthOverview | undefined, names: NameBook): ArrivalChain[] {
   const storage = (overview?.pipeline || []).find(stage => stage.id === "storage");
   return (storage?.datasets || [])
-    .filter(item => item.space_id && item.dataset_id && item.freq)
+    .filter(item => item.space_id && item.dataset_id && item.frequency)
     .map(item => {
       const id = item.dataset_id || "";
       const name = item.display_name || names.datasets[id] || id;
       return {
-        key: `${item.space_id}/${id}/${item.freq}`,
-        label: `${name} · ${item.freq}`,
+        key: `${item.space_id}/${id}/${item.frequency}`,
+        label: `${name} · ${item.frequency}`,
         spaceId: item.space_id || "",
         datasetId: id,
-        freq: item.freq || "",
+        freq: item.frequency || "",
         timezone: resolveZone(item.timezone)
       };
     })

@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/activitylog"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
-	setupservice "github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
@@ -22,10 +21,8 @@ import (
 type Services struct {
 	DBManager *database.Manager
 
-	SSHService ssh.Service
-	SecretDAO  *secretdao.SecretDAO
-	// Setup is exposed only through the loopback setup listener.
-	Setup       *setupservice.Service
+	SSHService  ssh.Service
+	SecretDAO   *secretdao.SecretDAO
 	SysDeploy   sysdeploy.Service
 	ActivityLog *activitylog.Service
 
@@ -97,14 +94,12 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 
 	log.Info("[Bootstrap] 正在创建秘钥管理服务...")
 	secretDAO := secretdao.NewSecretDAO(db, encryptionKey)
-	setupService := setupservice.NewService(db, encryptionKey)
 
 	log.Info("[Bootstrap] 核心服务创建完成")
 	return &Services{
 		DBManager:   dbManager,
 		SSHService:  sshService,
 		SecretDAO:   secretDAO,
-		Setup:       setupService,
 		SysDeploy:   sysDeployService,
 		ActivityLog: activitylog.NewService(db),
 	}, nil

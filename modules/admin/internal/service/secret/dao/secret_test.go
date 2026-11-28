@@ -75,49 +75,21 @@ func TestSecretDAO_Create_FindByID_RoundTrip_ShouldEncryptBothValueAndExtraConfi
 	assert.Equal(t, `{"passphrase":"updated-pass"}`, got.ExtraConfig)
 }
 
-func TestSecretDAO_HardDeleteAllowsRepeatedDeleteAndRecreateAndManagesTombstone(t *testing.T) {
+func TestSecretDAO_HardDeleteAllowsRepeatedDeleteAndRecreate(t *testing.T) {
 	db := setupSecretDAOTestDB(t)
 	d := NewSecretDAO(db, testSecretKey)
 	ctx := context.Background()
 
-	// 普通随机 UUID 密钥硬删除不污染墓碑表。
-	regular := sampleSecret()
-	require.NoError(t, d.Create(ctx, regular))
-	require.NoError(t, d.Delete(ctx, regular.SecretID))
-	deleted, err := IsDeletedInitialSecret(ctx, db, regular.SecretID)
-	require.NoError(t, err)
-	assert.False(t, deleted, "删除普通 UUID 密钥不得写入墓碑表")
-
-	// 默认腾讯云密钥可反复硬删除与重建，且不写墓碑：setup init 要能按 moox.toml 把它建回来。
-	for range 2 {
-		rec := sampleSecret()
-		rec.SecretID = model.TencentDefaultSecretID
-		require.NoError(t, d.Create(ctx, rec))
-		require.NoError(t, d.Delete(ctx, model.TencentDefaultSecretID))
-		deleted, err := IsDeletedInitialSecret(ctx, db, model.TencentDefaultSecretID)
-		require.NoError(t, err)
-		assert.False(t, deleted, "删除默认腾讯云密钥不得写入墓碑表")
-	}
-
-	// 初始交易所密钥（exchange-*）可反复硬删除与重建，不再撞唯一约束；删除记墓碑，重新导入同 ID 清墓碑。
-	for _, initialID := range []string{model.ExchangeSecretID("binance", "production", "main")} {
-		for range 3 {
+	// 普通随机 UUID 密钥与固定 ID 密钥均物理硬删除，可反复删除与同 ID 重建，不撞唯一约束。
+	for _, id := range []string{GenerateSecretID(), model.TencentDefaultSecretID} {
+		for range 2 {
 			rec := sampleSecret()
-			rec.SecretID = initialID
+			rec.SecretID = id
 			require.NoError(t, d.Create(ctx, rec))
-
-			deleted, err := IsDeletedInitialSecret(ctx, db, initialID)
-			require.NoError(t, err)
-			assert.False(t, deleted, "创建或重新导入同 ID 时清除墓碑: %s", initialID)
-
-			require.NoError(t, d.Delete(ctx, initialID))
+			require.NoError(t, d.Delete(ctx, id))
 			var count int64
-			require.NoError(t, db.Model(&model.Secret{}).Where("c_secret_id = ?", initialID).Count(&count).Error)
-			assert.Zero(t, count, "物理硬删除不留软删除行")
-
-			deleted, err = IsDeletedInitialSecret(ctx, db, initialID)
-			require.NoError(t, err)
-			assert.True(t, deleted, "删除初始密钥后写入墓碑防止 setup init 静默复活: %s", initialID)
+			require.NoError(t, db.Model(&model.Secret{}).Where("c_secret_id = ?", id).Count(&count).Error)
+			assert.Zero(t, count, "物理硬删除不留残留行: %s", id)
 		}
 	}
 }

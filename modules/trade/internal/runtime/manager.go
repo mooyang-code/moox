@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -108,42 +107,17 @@ func (m *Manager) Ready(tradingAccountID string) bool {
 	return entry != nil && !entry.stopping && entry.session.Ready()
 }
 
-func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
+func (m *Manager) ReadyFor(account store.TradingAccountRecord) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	entry := m.sessions[account.ID]
+	entry := m.sessions[account.TradingAccountID]
 	if entry == nil || entry.stopping || !entry.session.Ready() {
 		return false
 	}
-	environment := string(account.Environment)
-	if account.ExecutionMode == exchange.ExecutionModePaper {
-		// Paper has no persisted live environment. Its market-data environment
-		// is derived at bind time, so do not compare the domain sentinel PAPER
-		// with the empty live-environment column.
-		environment = ""
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		account.Environment = ""
 	}
-	// 只填 sameSessionConfig 比较的字段：账户类型和检测指纹也在比较之列，漏填会让实盘账户永远不就绪。
-	current := store.TradingAccountRecord{
-		SpaceID: account.SpaceID, TradingAccountID: account.ID,
-		Exchange: string(account.Exchange), Markets: marketStrings(account.Markets),
-		ExecutionMode:      string(account.ExecutionMode),
-		AccountMode:        string(account.AccountMode),
-		Environment:        environment,
-		CredentialSecretID: account.CredentialSecretID,
-		InspectionJSON:     account.InspectionJSON,
-		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
-		Status: string(account.Status),
-	}
-	if account.Paper != nil {
-		current.PaperConfig = &store.PaperAccountConfigRecord{
-			SpaceID: account.SpaceID, TradingAccountID: account.ID,
-			InitialBalance: account.Paper.InitialBalance.String(),
-			MakerFeeRate:   account.Paper.MakerFeeRate.String(),
-			TakerFeeRate:   account.Paper.TakerFeeRate.String(),
-			SlippageBPS:    account.Paper.SlippageBPS.String(),
-		}
-	}
-	return sameSessionConfig(entry.account, current)
+	return sameSessionConfig(entry.account, account)
 }
 
 // EnsureSymbolConfig 在首次开仓前把全仓和杠杆设置到交易所。
@@ -348,14 +322,6 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	m.reconciled = len(configErrors) == 0
 	m.mu.Unlock()
 	return nil
-}
-
-func marketStrings(markets []exchange.MarketType) []string {
-	result := make([]string, len(markets))
-	for i, market := range markets {
-		result[i] = string(market)
-	}
-	return result
 }
 
 func sameSessionConfig(

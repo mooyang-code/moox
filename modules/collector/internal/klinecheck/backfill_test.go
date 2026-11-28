@@ -149,7 +149,8 @@ func TestBackfillRunsChunksAndVerifiesGaps(t *testing.T) {
 		require.Equal(t, true, data["plan_request"])
 		require.NotContains(t, data, "require_period_commit")
 		item := data["items"].([]any)[0].(map[string]any)
-		require.Contains(t, []any{"BTCUSDT", "ETHUSDT"}, item["symbol"])
+		require.Contains(t, []any{"BTC-USDT", "ETH-USDT"}, item["subject_id"])
+		require.NotContains(t, item, "symbol")
 	}
 	// 已补齐：再提交不会产生作业。
 	again, count, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
@@ -221,7 +222,7 @@ func TestBackfillBeforeTheFirstPlanIsVerifiedByReadingBack(t *testing.T) {
 	step(t, backfiller, 1)
 	_, stored, err := backfiller.Store.GetJob(ctx, jobID)
 	require.NoError(t, err)
-	require.Equal(t, store.BackfillPending, stored[0].Status)
+	require.Equal(t, store.BackfillQueued, stored[0].Status)
 	require.Contains(t, stored[0].LastError, "3 bars are still missing")
 
 	step(t, backfiller, 2)
@@ -277,7 +278,7 @@ func TestBackfillCancelStopsPendingChunks(t *testing.T) {
 	backfiller.Wait()
 	require.Empty(t, invoker.events)
 	status, _ := backfiller.Status(ctx, jobID)
-	require.Equal(t, store.BackfillCanceled, status.Job.Status)
+	require.Equal(t, store.BackfillCancelled, status.Job.Status)
 }
 
 func TestAutoScanAdvancesWatermarkOnlyAfterTheJobSucceeds(t *testing.T) {
@@ -402,7 +403,7 @@ func TestBackfillConfirmsMultiBarSourceGapsAfterTwoIdenticalAttempts(t *testing.
 	step(t, backfiller, 1)
 	_, chunks, err := backfiller.Store.GetJob(ctx, jobID)
 	require.NoError(t, err)
-	require.Equal(t, store.BackfillPending, chunks[0].Status, "第一次缺失还不能确认，退回重跑")
+	require.Equal(t, store.BackfillQueued, chunks[0].Status, "第一次缺失还不能确认，退回重跑")
 	require.NotEmpty(t, chunks[0].Missing)
 
 	step(t, backfiller, 2)
@@ -474,74 +475,6 @@ func TestBackfillTreatsSourceEmptyFailureOfASingleBarAsAbsent(t *testing.T) {
 	require.Empty(t, auto)
 }
 
-// 改过交易所符号的标的：补改名之前的区间取旧符号，之后取新符号（符号从标的时间线取，不倒查历史计划）。
-// 两份计划都已生效：第二份只改了符号（不重新登记快照），对账器在计划建立时就写下从 P 起的新符号行。
-func TestBackfillUsesTheTimelineSymbolOfTheChunk(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
-	require.NoError(t, err)
-	require.NoError(t, db.ApplySchema(schema.AllSQL()))
-	t.Cleanup(func() { _ = db.Close() })
-
-	const slot = 5 * time.Minute
-	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
-	base := now.Add(-2 * time.Hour).Truncate(time.Hour)
-	renamedAt := base.Add(30 * time.Minute)
-	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
-	build := func(previous *fetchplan.FetchPlanContent, external string, p time.Time) *fetchplan.FetchPlanContent {
-		desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
-			Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
-			Subjects: []string{"BTC-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": external},
-		}}, nil)
-		require.NoError(t, err)
-		var prevFunctions map[string]*fetchplan.PlanFunction
-		var prevDatasets map[string]*fetchplan.PlanDataset
-		if previous != nil {
-			prevFunctions, prevDatasets = previous.Applied()
-		}
-		content, _, _, err := fetchplan.BuildPlanContent(prevFunctions, prevDatasets, desired, fetchplan.PlanTiming{Now: p})
-		require.NoError(t, err)
-		return content
-	}
-	first := build(nil, "BTCOLD", base)
-	second := build(first, "BTCNEW", renamedAt)
-	change := second.Datasets["ds|1m"]
-	require.Equal(t, fetchplan.PlanActionSymbols, change.Action, "只改符号也算数据集变更")
-	require.False(t, change.Register, "标的集合没变，不重新登记快照")
-	require.Equal(t, renamedAt.Unix(), change.P)
-	for _, content := range []*fetchplan.FetchPlanContent{first, second} {
-		raw, err := json.Marshal(content)
-		require.NoError(t, err)
-		record, err := db.FetchPlans().Create(ctx, "crypto", string(raw), "{}")
-		require.NoError(t, err)
-		require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanApplied, "{}", "", appliedTimeline("crypto", string(raw))...))
-	}
-
-	rows := &fakeRows{missing: map[string]map[int64]bool{"BTC-USDT": {
-		base.Add(10 * time.Minute).Unix(): true, renamedAt.Add(10 * time.Minute).Unix(): true,
-	}}}
-	invoker := &healingInvoker{rows: rows}
-	backfiller := &Backfiller{
-		Checker: &Checker{Timeline: db.SeriesTimeline(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }},
-		Store:   db.Backfill(), Routes: fakeRoutes{}, Invoker: invoker, BaseCtx: ctx, Now: func() time.Time { return now },
-		Functions: func(string) FunctionProvider { return fakeFunctions{} },
-	}
-	_, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", DatasetID: "ds", From: base, To: base.Add(time.Hour)}, "manual")
-	require.NoError(t, err)
-	require.Equal(t, 2, chunks)
-	require.NoError(t, backfiller.Tick(ctx, "crypto"))
-	backfiller.Wait()
-	symbols := map[string]string{}
-	for _, event := range invoker.events {
-		item := event["data"].(map[string]any)["items"].([]any)[0].(map[string]any)
-		symbols[item["start_time"].(string)] = item["symbol"].(string)
-	}
-	require.Equal(t, map[string]string{
-		base.Add(10 * time.Minute).Format(time.RFC3339):      "BTCOLD",
-		renamedAt.Add(10 * time.Minute).Format(time.RFC3339): "BTCNEW",
-	}, symbols)
-}
-
 // 补采的来源取当前任务：任务删掉后，指定这个数据集的补采明确拒绝；不指定数据集时跳过它，其余数据集照常。
 func TestBackfillRefusesADatasetWithoutATask(t *testing.T) {
 	backfiller, _, _, base := newBackfillFixture(t)
@@ -590,7 +523,7 @@ func (noFunctions) EnsureBackfillFunctionIn(context.Context, string, string) (st
 	return "", errors.New("the backfill function must not be created")
 }
 
-// 数据集的采集方式是 stream：从推送项解析市场与交易所符号，调本地执行端，不建补采函数。
+// 数据集的采集方式是 stream：从推送项解析市场，调本地执行端，不建补采函数。
 func TestBackfillUsesTheLocalExecutorForStreamDatasets(t *testing.T) {
 	backfiller, local, _, base := newBackfillFixtureWithIngest(t, marketfetch.PlanExecutorStreaming)
 	backfiller.Invoker, backfiller.Local = failingInvoker{}, local
@@ -608,7 +541,8 @@ func TestBackfillUsesTheLocalExecutorForStreamDatasets(t *testing.T) {
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status, status.Failed)
 	require.Len(t, local.events, 2)
 	item := local.events[0]["data"].(map[string]any)["items"].([]any)[0].(map[string]any)
-	require.Contains(t, []any{"BTCUSDT", "ETHUSDT"}, item["symbol"])
+	require.Contains(t, []any{"BTC-USDT", "ETH-USDT"}, item["subject_id"])
+	require.NotContains(t, item, "symbol")
 }
 
 // executor=scf 时仍调补采函数。
@@ -859,4 +793,76 @@ func TestMaxInFlightPerSpace(t *testing.T) {
 	}
 	require.Equal(t, LocalMaxInFlight, b.maxInFlight(ctx, "crypto"))
 	require.Equal(t, 7, b.maxInFlight(ctx, "stockcn"), "返回 0 表示用默认")
+}
+
+// 按路由分配的市场（例如美股 CNBC 补齐一块需 15 秒）补采时必须清零 FetchLimits.RequestTimeoutMS，
+// 让函数沿用数据源配置文件的 request_timeout；单一来源市场保留计划的 RequestTimeoutMS。
+func TestChunkRequestClearsRequestTimeoutForRoutedMarkets(t *testing.T) {
+	base := time.Date(2026, 11, 20, 14, 30, 0, 0, time.UTC)
+	fetch := marketfetch.PlanFetch{
+		Concurrency:      4,
+		RPS:              5,
+		Burst:            10,
+		FeedConcurrency:  2,
+		RequestTimeoutMS: 3000,
+		StorageTimeoutMS: 8000,
+	}
+
+	t.Run("routed market clears request timeout", func(t *testing.T) {
+		plan := &marketfetch.Plan{
+			Market: marketfetch.PlanMarket{
+				MarketID:       "stockus",
+				InstrumentType: "equity",
+				MarketType:     "equity",
+				Provider:       "eastmoney",
+				SourceID:       "eastmoney",
+			},
+			Fetch: fetch,
+		}
+		chunk := store.BackfillChunk{
+			ChunkID:   "chunk-us-1",
+			DatasetID: "ds_us_5m",
+			Frequency: "5m",
+			SubjectID: "AAPL.XNAS",
+			From:      base,
+			To:        base.Add(50 * time.Minute),
+		}
+		req, err := chunkRequest("stockus", "moox-backfill-us", plan, chunk, false, 10)
+		require.NoError(t, err)
+		require.Empty(t, req.Provider)
+		require.Empty(t, req.SourceID)
+		require.NotNil(t, req.FetchLimits)
+		require.Zero(t, req.FetchLimits.RequestTimeoutMS, "路由市场补采必须清空 RequestTimeoutMS，避免覆盖数据源 15 秒超时")
+		require.Equal(t, 5, req.FetchLimits.RPS)
+		require.Equal(t, 10, req.FetchLimits.Burst)
+		require.Equal(t, 2, req.FetchLimits.FeedConcurrency)
+		require.Equal(t, 8000, req.FetchLimits.StorageTimeoutMS)
+	})
+
+	t.Run("single-source market keeps request timeout", func(t *testing.T) {
+		plan := &marketfetch.Plan{
+			Market: marketfetch.PlanMarket{
+				MarketID:       "crypto",
+				InstrumentType: "spot",
+				MarketType:     "spot",
+				Provider:       "binance",
+				SourceID:       "spot_http",
+			},
+			Fetch: fetch,
+		}
+		chunk := store.BackfillChunk{
+			ChunkID:   "chunk-crypto-1",
+			DatasetID: "ds_spot_1m",
+			Frequency: "1m",
+			SubjectID: "BTC-USDT",
+			From:      base,
+			To:        base.Add(10 * time.Minute),
+		}
+		req, err := chunkRequest("crypto", "moox-backfill-crypto", plan, chunk, false, 10)
+		require.NoError(t, err)
+		require.Equal(t, "binance", req.Provider)
+		require.Equal(t, "spot_http", req.SourceID)
+		require.NotNil(t, req.FetchLimits)
+		require.Equal(t, 3000, req.FetchLimits.RequestTimeoutMS)
+	})
 }

@@ -8,7 +8,6 @@ import (
 	"os"
 	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -20,7 +19,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
-	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
@@ -38,9 +36,8 @@ type setupDeps struct {
 	loadInitBundle func(string) (setupInitBundle, error)
 	validate       func(context.Context, *setupSnapshot) (setupvalidate.Result, error)
 	trustHost      func(context.Context, *setupSnapshot, string, string) error
-	// applySecrets 把秘密文件里的初始秘密写进管理台（只建不改）；setupStatus 核对它们是否都在。
+	// applySecrets 把秘密文件里的默认腾讯云密钥写进管理台（只建不改）。
 	applySecrets          func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error)
-	setupStatus           func(context.Context, *setupSnapshot) (setupclient.StatusResult, error)
 	registerCloudAccounts func(context.Context, *setupSnapshot) (*setupCloudAccountSummary, error)
 	provisionCLS          func(context.Context, *setupSnapshot) (*setupCLSSummary, error)
 	// ensureSCFPlan 的最后一个参数是源码或产物包目录：云函数代码包从它下面的 modules/collector 构建。
@@ -48,14 +45,11 @@ type setupDeps struct {
 	login           func(context.Context, *setupSnapshot) (setupclient.LoginResult, error)
 	openInitStorage func(context.Context, *setupSnapshot, string) (setupInitStorage, error)
 	openInitFactor  func(context.Context, *setupSnapshot) (setupInitFactor, error)
-	// ensureNotification 在 Monitor 还没有任何告警渠道时写入初始渠道（只建不改）；测试里替换。
-	ensureNotification func(context.Context, *setupSnapshot) (*setupNotificationSummary, error)
-	// ensureArchiveTasks 为已激活且保留期有限的时序数据集幂等创建归档任务（spaceID 为空表示全部空间）。
-	ensureArchiveTasks func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error)
+	// checkNotification 只读检查 Monitor 是否已配置告警渠道（为空时提醒用户到管理台添加）；测试里替换。
+	checkNotification func(context.Context, *setupSnapshot) (*setupNotificationSummary, error)
 	// initStorage 的参数依次是存储机、源码或产物包目录、种子。
-	initStorage       func(context.Context, *setupSnapshot, string, string, setupInitBundle) (setupInitSummary, error)
-	initMetadata      func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error)
-	exportSkillConfig func(context.Context, *setupSnapshot, string) (dataAccessConfig, error)
+	initStorage  func(context.Context, *setupSnapshot, string, string, setupInitBundle) (setupInitSummary, error)
+	initMetadata func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error)
 	// ensureOperatorKey 确保这台电脑的身份目录里有 moox-cli 的签名私钥（已有就复用），返回公钥与是否新生成。
 	ensureOperatorKey func(string) (string, bool, error)
 	// registerIdentity 经 SSH 在控制机上登记（替换）一个不属于主机的身份的公钥。
@@ -67,14 +61,28 @@ type setupDeps struct {
 	wipeHost       func(context.Context, topology.Host, string) (deployscan.HostResult, error)
 	// deployHost 部署一台主机；waitReady 等一台主机上的一组组件就绪，返回到时限还没就绪的组件与原因。
 	deployHost func(context.Context, deploy.Options) (deploy.Result, error)
-	waitReady  func(context.Context, topology.Host, []string, time.Duration) (map[string]string, error)
+	// preflightRender 在不动任何主机前对全部主机与组件做一次纯试渲染（含 [overrides] 应用）。
+	preflightRender func(*setupSnapshot, string) error
+	waitReady       func(context.Context, topology.Host, []string, time.Duration) (map[string]string, error)
 	// operate 对一个组件的用户服务执行 restart、stop、start；readLogs 读组件日志。
 	operate   func(context.Context, topology.Host, string, string) (string, error)
 	readLogs  func(context.Context, topology.Host, string, []string, string, int, bool) ([]deploy.LogSection, error)
 	openStart func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error)
+	// runDoctor 是 setup install 的倒数第二步（按空间验收之前），对全部启用主机跑安装后自检，测试里替换。
+	runDoctor func(context.Context, string, *setupSnapshot) error
 	// verifySpace 是 setup install 的最后一步，测试里替换。
 	verifySpace func(context.Context, string, *setupSnapshot, string) error
-	regionCloud func(*setupSnapshot, string) (setupFunctionCloud, error)
+	// markInstallComplete 在安装验收全部通过后，在控制机部署根下单独写完成标记文件。
+	markInstallComplete func(context.Context, *setupSnapshot, string) error
+	// previewBackup 只读统计清空前将备份的密钥与告警渠道条数（不落盘、不解密）。
+	previewBackup func(context.Context, string, *setupSnapshot) (int, int, error)
+	// backupBeforeWipe 在清空前自动导出密钥与告警渠道到 moox.backup（写出时不带待导入标记，overwritePending 允许覆盖已过期的待导入备份）。
+	backupBeforeWipe func(context.Context, string, *setupSnapshot, string, bool) (setupBackupOutput, error)
+	// restoreBackupSecrets 在控制机 Admin 就绪后、部署其余主机前按覆盖自动导入待恢复密钥（不清除待导入标记）。
+	restoreBackupSecrets func(context.Context, string, *setupSnapshot) (*setupRestoreBackupSummary, error)
+	// restoreBackupChannels 在全部组件（含 Monitor）就绪之后、完整初始化之前按地址幂等覆盖导入告警渠道，完成后清除待导入标记。
+	restoreBackupChannels func(context.Context, string, *setupSnapshot) (*setupRestoreBackupSummary, error)
+	regionCloud           func(*setupSnapshot, string) (setupFunctionCloud, error)
 }
 
 func init() {
@@ -90,8 +98,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.AddCommand(
 		newSetupInstallCommand(deps),
-		newSetupUpdateCommand(deps),
-		newSetupBackupCommand(),
+		newSetupBackupCommand(deps),
 		newSetupOperatorCommand(deps),
 		newSetupDeployCommand(deps),
 		newSetupInitCommand(deps),
@@ -107,303 +114,9 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupHostsCommand(deps),
 		newSetupTrustHostCommand(deps),
 		newSetupTrustBrowserCommand(deps),
-		newSetupBuildLinuxCommand(deps),
 		newSetupPackageComponentsCommand(),
-		newSetupRebootHostCommand(deps),
-		newSetupHostDiagnosticsCommand(deps),
-		newSetupInspectSCFCommand(deps),
-		newSetupAttachSCFVPCCommand(deps),
-		newSetupInvokeSCFCommand(deps),
-		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
 	)
-	return cmd
-}
-
-// newSetupInspectSCFCommand reads a single Tencent SCF function without
-// exposing credentials or the function's full environment. It is used by
-// deployment validation to prove the accepted VPC/subnet and Storage target.
-func newSetupInspectSCFCommand(deps setupDeps) *cobra.Command {
-	var file, region, namespace, functionName string
-	cmd := &cobra.Command{
-		Use:   "inspect-scf",
-		Short: "检查腾讯云函数网络配置",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			region = strings.TrimSpace(region)
-			if region == "" {
-				region = snapshot.Manifest.CloudRegion()
-			}
-			namespace = firstNonEmpty(namespace, "default")
-			if strings.TrimSpace(functionName) == "" {
-				return fmt.Errorf("--function is required")
-			}
-			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
-				SecretID:  snapshot.Secrets.TencentCloud.SecretID,
-				SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
-				Region:    region,
-			})
-			if err != nil {
-				return err
-			}
-			fn, err := network.ForRegion(region).GetSCFFunction(cmd.Context(), namespace, strings.TrimSpace(functionName))
-			if err != nil {
-				return err
-			}
-			entryAddress := ""
-			if fn.Environment != nil {
-				entryAddress = fn.Environment["MOOX_ENTRY_ADDRESS"]
-			}
-			return writeSetupJSON(cmd, map[string]any{
-				"region": region, "namespace": namespace, "function": functionName,
-				"status": fn.Status, "vpc_id": fn.VpcID, "subnet_id": fn.SubnetID,
-				"public_net_status": fn.PublicNetStatus,
-				"entry_address":     entryAddress,
-			})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&region, "region", "", "SCF 地域")
-	cmd.Flags().StringVar(&namespace, "namespace", "default", "SCF 命名空间")
-	cmd.Flags().StringVar(&functionName, "function", "", "SCF 函数名")
-	_ = cmd.MarkFlagRequired("function")
-	return cmd
-}
-
-// newSetupAttachSCFVPCCommand updates one canary function in place. This is
-// kept as a setup diagnostic rather than part of the normal fleet publisher so
-// an operator can validate the VPC route without waiting for the control-plane
-// rollout to finish.
-func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
-	var file, region, namespace, functionName, vpcID, subnetID string
-	var yes bool
-	cmd := &cobra.Command{
-		Use:   "attach-scf-vpc",
-		Short: "为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定）",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			region = firstNonEmpty(strings.TrimSpace(region), snapshot.Manifest.CloudRegion())
-			namespace = firstNonEmpty(strings.TrimSpace(namespace), "default")
-			if strings.TrimSpace(functionName) == "" || strings.TrimSpace(vpcID) == "" || strings.TrimSpace(subnetID) == "" {
-				return fmt.Errorf("--function, --vpc-id and --subnet-id are required")
-			}
-			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
-				SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey, Region: region,
-			})
-			if err != nil {
-				return err
-			}
-			fn, err := network.ForRegion(region).GetSCFFunction(cmd.Context(), namespace, functionName)
-			if err != nil {
-				return err
-			}
-			status := firstNonEmpty(fn.PublicNetStatus, "ENABLE")
-			if !yes {
-				return writePreview(cmd, map[string]any{
-					"action": "attach_scf_vpc", "region": region, "namespace": namespace, "function": functionName,
-					"current_vpc_id": fn.VpcID, "current_subnet_id": fn.SubnetID, "vpc_id": vpcID, "subnet_id": subnetID, "public_net_status": status,
-				})
-			}
-			if err := network.ForRegion(region).UpdateSCFNetwork(cmd.Context(), namespace, functionName, vpcID, subnetID, status, fn.Environment); err != nil {
-				return err
-			}
-			updated, err := network.ForRegion(region).GetSCFFunction(cmd.Context(), namespace, functionName)
-			if err != nil {
-				return err
-			}
-			return writeSetupJSON(cmd, map[string]any{"region": region, "namespace": namespace, "function": functionName, "status": updated.Status, "vpc_id": updated.VpcID, "subnet_id": updated.SubnetID, "public_net_status": updated.PublicNetStatus})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&region, "region", "", "SCF 地域")
-	cmd.Flags().StringVar(&namespace, "namespace", "default", "SCF 命名空间")
-	cmd.Flags().StringVar(&functionName, "function", "", "SCF 函数名")
-	cmd.Flags().StringVar(&vpcID, "vpc-id", "", "VPC ID")
-	cmd.Flags().StringVar(&subnetID, "subnet-id", "", "子网 ID")
-	cmd.Flags().BoolVar(&yes, "yes", false, "确认绑定；不加只预览")
-	_ = cmd.MarkFlagRequired("function")
-	_ = cmd.MarkFlagRequired("vpc-id")
-	_ = cmd.MarkFlagRequired("subnet-id")
-	return cmd
-}
-
-// newSetupInvokeSCFCommand 直接经腾讯云 SCF 的控制接口调用一个函数，不经 Collector；Collector 不可用时用来证明连通性。
-func newSetupInvokeSCFCommand(deps setupDeps) *cobra.Command {
-	var file, region, namespace, functionName, eventJSON string
-	cmd := &cobra.Command{
-		Use:   "invoke-scf",
-		Short: "直接调用腾讯云函数",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			region = firstNonEmpty(strings.TrimSpace(region), snapshot.Manifest.CloudRegion())
-			namespace = firstNonEmpty(strings.TrimSpace(namespace), "default")
-			if strings.TrimSpace(functionName) == "" {
-				return fmt.Errorf("--function is required")
-			}
-			var event any = map[string]any{"action": "market_fetch", "space_id": "crypto", "subject_id": "BTC-USDT"}
-			if strings.TrimSpace(eventJSON) != "" {
-				if err := json.Unmarshal([]byte(eventJSON), &event); err != nil {
-					return fmt.Errorf("event json invalid: %w", err)
-				}
-			}
-			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey, Region: region})
-			if err != nil {
-				return err
-			}
-			result, err := network.ForRegion(region).InvokeSCF(cmd.Context(), namespace, functionName, event)
-			if err != nil {
-				return err
-			}
-			return writeSetupJSON(cmd, map[string]any{"region": region, "namespace": namespace, "function": functionName, "request_id": result.RequestID, "result": result.Result, "log": result.Log})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&region, "region", "", "SCF 地域")
-	cmd.Flags().StringVar(&namespace, "namespace", "default", "SCF 命名空间")
-	cmd.Flags().StringVar(&functionName, "function", "", "SCF 函数名")
-	cmd.Flags().StringVar(&eventJSON, "event", "", "JSON 事件；缺省为 crypto BTC-USDT market_fetch")
-	_ = cmd.MarkFlagRequired("function")
-	return cmd
-}
-
-// newSetupRebootHostCommand provides a narrowly-scoped recovery operation for
-// an unresponsive Tencent CVM. It resolves the host's actual region before
-// issuing RebootInstances, because the setup manifest's home region may differ
-// from the Storage region.
-func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
-	var file, hostName string
-	var yes bool
-	cmd := &cobra.Command{
-		Use:   "reboot-host",
-		Short: "重启无响应的腾讯云主机（默认只预览，--yes 才重启）",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			host, err := findSetupHost(snapshot.Manifest, hostName)
-			if err != nil {
-				return err
-			}
-			if !strings.EqualFold(strings.TrimSpace(host.Provider), "tencent") {
-				return fmt.Errorf("reboot_host_provider_unsupported")
-			}
-			network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
-				SecretID:  snapshot.Secrets.TencentCloud.SecretID,
-				SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
-				Region:    snapshot.Manifest.CloudRegion(),
-			})
-			if err != nil {
-				return err
-			}
-			lighthouse, lighthouseErr := cloudtencent.NewClient(cloudtencent.ClientOptions{
-				SecretID:  snapshot.Secrets.TencentCloud.SecretID,
-				SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
-				Region:    snapshot.Manifest.CloudRegion(),
-			})
-			if lighthouseErr != nil {
-				return lighthouseErr
-			}
-			cloud := tencenthost.TencentCloud{Network: network, Lighthouse: lighthouse}
-			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
-			defer cancel()
-			instance, err := cloud.LookupHost(ctx, host.Address, cloudtencent.DefaultProbeRegions)
-			if err != nil {
-				return fmt.Errorf("reboot host lookup: %w", err)
-			}
-			if !yes {
-				return writePreview(cmd, map[string]any{
-					"action": "reboot_host", "host": host.Name, "instance_id": instance.InstanceID,
-					"region": instance.Region, "zone": instance.Zone, "kind": instance.Kind,
-				})
-			}
-			var requestID string
-			switch instance.Kind {
-			case cloudtencent.KindLighthouse:
-				requestID, err = lighthouse.ForRegion(instance.Region).RebootInstance(ctx, instance.InstanceID)
-			case cloudtencent.KindCVM:
-				cvm, cvmErr := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
-					SecretID:  snapshot.Secrets.TencentCloud.SecretID,
-					SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
-					Region:    instance.Region,
-				})
-				if cvmErr != nil {
-					return cvmErr
-				}
-				requestID, err = cvm.RebootInstance(ctx, instance.InstanceID)
-			default:
-				return fmt.Errorf("reboot_host_kind_unsupported")
-			}
-			if err != nil {
-				return fmt.Errorf("reboot %s: %w", host.Name, err)
-			}
-			return writeSetupJSON(cmd, map[string]any{
-				"status": "reboot_requested", "host": host.Name,
-				"instance_id": instance.InstanceID, "region": instance.Region,
-				"zone": instance.Zone, "request_id": requestID,
-			})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&hostName, "host", "", "目标主机名称")
-	cmd.Flags().BoolVar(&yes, "yes", false, "确认重启；不加只预览目标实例")
-	_ = cmd.MarkFlagRequired("host")
-	return cmd
-}
-
-func newSetupHostDiagnosticsCommand(deps setupDeps) *cobra.Command {
-	var file, hostName string
-	cmd := &cobra.Command{
-		Use:   "host-diagnostics",
-		Short: "检查远端主机磁盘和服务进程",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			host, err := findSetupHost(snapshot.Manifest, hostName)
-			if err != nil {
-				return err
-			}
-			transport, err := dialSetupHost(cmd.Context(), host)
-			if err != nil {
-				return err
-			}
-			defer transport.Close()
-			root := snapshot.Manifest.Paths.DeployRoot
-			result, err := transport.Run(cmd.Context(), []string{"sh", "-lc", `set -eu
-root="$1"
-printf 'df:\n'
-df -h "$root" /
-printf 'processes:\n'
-ps -eo pid,stat,cmd | grep -E 'moox-' | grep -v grep || true
-printf 'sizes:\n'
-du -xh --max-depth=2 "$root/data" "$root/logs" 2>/dev/null | sort -h | tail -40 || true
-printf 'services:\n'
-systemctl --user list-units 'moox-*' --no-pager --no-legend 2>/dev/null || true
-`, "moox-host-diagnostics", root}, nil)
-			if err != nil {
-				return fmt.Errorf("host_diagnostics_failed: %v", err)
-			}
-			return writeSetupJSON(cmd, map[string]any{"host": host.Name, "root": root, "diagnostics": result.Stdout})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&hostName, "host", "control", "主机名称")
 	return cmd
 }
 
@@ -502,16 +215,13 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.validate, defaults.validate)
 	fillSetupDep(&deps.trustHost, defaults.trustHost)
 	fillSetupDep(&deps.applySecrets, defaults.applySecrets)
-	fillSetupDep(&deps.setupStatus, defaults.setupStatus)
 	fillSetupDep(&deps.registerCloudAccounts, defaults.registerCloudAccounts)
 	fillSetupDep(&deps.provisionCLS, defaults.provisionCLS)
 	fillSetupDep(&deps.ensureSCFPlan, defaults.ensureSCFPlan)
 	fillSetupDep(&deps.login, defaults.login)
 	fillSetupDep(&deps.openInitStorage, defaults.openInitStorage)
 	fillSetupDep(&deps.openInitFactor, defaults.openInitFactor)
-	fillSetupDep(&deps.ensureNotification, defaults.ensureNotification)
-	fillSetupDep(&deps.ensureArchiveTasks, defaults.ensureArchiveTasks)
-	fillSetupDep(&deps.exportSkillConfig, defaults.exportSkillConfig)
+	fillSetupDep(&deps.checkNotification, defaults.checkNotification)
 	fillSetupDep(&deps.ensureOperatorKey, defaults.ensureOperatorKey)
 	fillSetupDep(&deps.registerIdentity, defaults.registerIdentity)
 	fillSetupDep(&deps.ensureFirewall, defaults.ensureFirewall)
@@ -519,11 +229,18 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.scanDeployment, defaults.scanDeployment)
 	fillSetupDep(&deps.wipeHost, defaults.wipeHost)
 	fillSetupDep(&deps.deployHost, defaults.deployHost)
+	fillSetupDep(&deps.preflightRender, defaults.preflightRender)
 	fillSetupDep(&deps.waitReady, defaults.waitReady)
 	fillSetupDep(&deps.operate, defaults.operate)
 	fillSetupDep(&deps.readLogs, defaults.readLogs)
 	fillSetupDep(&deps.openStart, defaults.openStart)
+	fillSetupDep(&deps.runDoctor, defaults.runDoctor)
 	fillSetupDep(&deps.verifySpace, defaults.verifySpace)
+	fillSetupDep(&deps.markInstallComplete, defaults.markInstallComplete)
+	fillSetupDep(&deps.previewBackup, defaults.previewBackup)
+	fillSetupDep(&deps.backupBeforeWipe, defaults.backupBeforeWipe)
+	fillSetupDep(&deps.restoreBackupSecrets, defaults.restoreBackupSecrets)
+	fillSetupDep(&deps.restoreBackupChannels, defaults.restoreBackupChannels)
 	fillSetupDep(&deps.regionCloud, defaults.regionCloud)
 	if deps.initStorage == nil {
 		deps.initStorage = func(ctx context.Context, snapshot *setupSnapshot, storageHost, sourceRoot string, bundle setupInitBundle) (setupInitSummary, error) {
@@ -563,16 +280,23 @@ func loadSetupSnapshot(path string) (*setupSnapshot, error) {
 
 func defaultSetupDeps() setupDeps {
 	return setupDeps{
-		load: loadSetupSnapshot,
+		load:      loadSetupSnapshot,
+		runDoctor: defaultSetupDoctor,
 		verifySpace: func(ctx context.Context, file string, snapshot *setupSnapshot, spaceID string) error {
 			_, err := runSetupVerifySpace(ctx, file, snapshot, spaceID, setupVerifyTimeout)
 			return err
 		},
+		markInstallComplete:   defaultSetupMarkInstallComplete,
+		previewBackup:         defaultSetupPreviewBackup,
+		backupBeforeWipe:      defaultSetupBackupBeforeWipe,
+		restoreBackupSecrets:  defaultSetupRestoreBackupSecrets,
+		restoreBackupChannels: defaultSetupRestoreBackupChannels,
 		regionCloud:           defaultSetupRegionCloud,
 		loadInitBundle:        loadSetupInitBundle,
 		scanDeployment:        defaultSetupScanDeployment,
 		wipeHost:              defaultSetupWipeHost,
 		deployHost:            deploy.Deploy,
+		preflightRender:       defaultSetupPreflightRender,
 		waitReady:             defaultSetupWaitReady,
 		operate:               defaultSetupOperate,
 		readLogs:              defaultSetupReadLogs,
@@ -580,7 +304,6 @@ func defaultSetupDeps() setupDeps {
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
 		applySecrets:          defaultSetupApplySecrets,
-		setupStatus:           defaultSetupStatus,
 		registerCloudAccounts: defaultSetupRegisterCloudAccounts,
 		provisionCLS:          defaultSetupProvisionCLS,
 		ensureSCFPlan:         defaultSetupEnsureSCFPlan,
@@ -588,9 +311,7 @@ func defaultSetupDeps() setupDeps {
 		openInitFactor: func(ctx context.Context, snapshot *setupSnapshot) (setupInitFactor, error) {
 			return defaultOpenSetupFactor(ctx, snapshot.Manifest)
 		},
-		ensureNotification:  defaultSetupEnsureNotification,
-		ensureArchiveTasks:  defaultSetupEnsureArchiveTasks,
-		exportSkillConfig:   defaultSetupExportSkillConfig,
+		checkNotification:   defaultSetupCheckNotification,
 		ensureOperatorKey:   defaultSetupEnsureOperatorKey,
 		registerIdentity:    defaultSetupRegisterIdentity,
 		ensureFirewall:      defaultSetupEnsureFirewall,
@@ -606,16 +327,11 @@ func defaultSetupDeps() setupDeps {
 	}
 }
 
-// loginSkippedKeptAdmin 是管理员以管理台为准保留时跳过登录校验的说明。
-const loginSkippedKeptAdmin = "管理员以管理台为准（管理台改过密码或用户名），没有用秘密文件里的密码校验登录"
-
-// verifySetupLogin 用秘密文件里的管理员校验管理台能登录；管理员被保留（kept 含 admin）时秘密文件里的密码不是现在的密码，跳过校验并返回说明。
-func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, kept []string) (setupclient.LoginResult, string, error) {
-	if slices.Contains(kept, "admin") {
-		return setupclient.LoginResult{}, loginSkippedKeptAdmin, nil
+func defaultSetupPreflightRender(snapshot *setupSnapshot, sourceRoot string) error {
+	if snapshot == nil || snapshot.Manifest == nil {
+		return fmt.Errorf("缺少拓扑配置")
 	}
-	login, err := deps.login(ctx, snapshot)
-	return login, "", err
+	return deploy.PreflightRender(snapshot.Manifest, snapshot.Secrets, sourceRoot)
 }
 
 func defaultSetupValidate(ctx context.Context, snapshot *setupSnapshot) (setupvalidate.Result, error) {
@@ -767,15 +483,6 @@ func defaultSetupApplySecrets(ctx context.Context, snapshot *setupSnapshot) (set
 	}
 	defer gateway.Close()
 	return setupclient.New(gateway).Apply(ctx, snapshot.Secrets)
-}
-
-func defaultSetupStatus(ctx context.Context, snapshot *setupSnapshot) (setupclient.StatusResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
-	if err != nil {
-		return setupclient.StatusResult{}, err
-	}
-	defer gateway.Close()
-	return setupclient.New(gateway).Status(ctx, snapshot.Secrets)
 }
 
 func dialSetupHost(ctx context.Context, host topology.Host) (setupssh.Client, error) {

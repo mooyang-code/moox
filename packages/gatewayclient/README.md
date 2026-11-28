@@ -9,15 +9,15 @@
 `Validate` 只检查公开字段，离线命令可以在没有主机 ID 时载入配置；`OpenInternal` 要求完整。客户端由进程或命令持有并在退出时关闭。
 因子引擎、归档 worker 也走这个入口：它们是普通调用方，用因子机的主机密钥直连存储机与控制机的主机网关。
 
-外部身份（`scf-collector`、`moox-skill`）使用 `ExternalFileConfig`，再调用 `OpenExternal(配置文件路径)`；`key_file` 是这个身份自己的私钥，相对配置文件解析，也支持绝对路径。
+外部身份（`scf-collector`）使用 `ExternalFileConfig`，再调用 `OpenExternal(配置文件路径)`；`key_file` 是这个身份自己的私钥，相对配置文件解析，也支持绝对路径。
 逐方法权限取自组件目录。
 
 ```yaml
 gateway_client:
   entry_address: entry.example.test:11004   # 入口主机地址加 11004
   entry_host: storage                       # 入口主机的 ID
-  caller: moox-skill
-  key_file: .moox-skill-keys/moox-skill.key
+  caller: scf-collector
+  key_file: ../../secrets/scf-collector.key
 ```
 
 此入口复用内部客户端的私密文件校验，但不读取主机配置、目录缓存、SSH 或环境凭据；密钥文件缺失或无效即失败。客户端由外部进程持有并关闭。SCF 无需配置文件，由函数入口显式读取部署环境里的私钥，

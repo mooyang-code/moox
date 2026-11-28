@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/events"
 )
 
 func TestStartOrdersBrokerRegistryAndHealth(t *testing.T) {
@@ -39,11 +43,38 @@ func TestStartOrdersBrokerRegistryAndHealth(t *testing.T) {
 	if !rt.Broker.Ready() || !rt.Health.Ready() {
 		t.Fatal("runtime did not become ready")
 	}
+	rec, err := dataformat.ReadFile(filepath.Join(filepath.Dir(storeDir), dataformat.FileName))
+	if err != nil {
+		t.Fatalf("启动后应写入 eventbus 数据格式文件：%v", err)
+	}
+	wantDigest, err := events.MessagesFormatDigest()
+	if err != nil {
+		t.Fatalf("计算期望事件摘要失败：%v", err)
+	}
+	wantTopo := events.TopologyFormatDigest()
+	if rec.Component != "eventbus" || rec.Parts[dataformat.PartEvents] != wantDigest || rec.Parts[dataformat.PartEventBusTopology] != wantTopo {
+		t.Fatalf("eventbus 数据格式记录异常：%+v", rec)
+	}
 	if err := rt.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if rt.Broker.Ready() {
 		t.Fatal("broker remains ready after shutdown")
+	}
+
+	// 已有 JetStream 数据且磁盘上的格式文件与当前拓扑/事件摘要不同时，再次启动必须拒绝并提示 setup install --wipe。
+	stale, err := dataformat.Build("eventbus", map[string]string{
+		dataformat.PartEvents:           wantDigest,
+		dataformat.PartEventBusTopology: "sha256:stale-topology",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dataformat.WriteDir(filepath.Dir(storeDir), stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(ctx, nil, path); !errors.Is(err, dataformat.ErrIncompatibleFormat) || !strings.Contains(err.Error(), "setup install --wipe") {
+		t.Fatalf("期望格式不符拒启，实际 err = %v", err)
 	}
 }
 

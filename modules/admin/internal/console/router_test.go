@@ -45,7 +45,7 @@ func newTestRouter(t *testing.T, store *auth.SessionStore, local *LocalDispatche
 		store, err = auth.NewSessionStore(time.Hour)
 		require.NoError(t, err)
 	}
-	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, store)
+	router, err := NewHTTPRouter(local, gateway, store)
 	require.NoError(t, err)
 	return router
 }
@@ -96,6 +96,7 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	for _, suffix := range []string{
 		"secret/GetSecretValue", "SecretMgr/getsecretvalue", "trpc.moox.ops.SecretMgr/GetSecretValue",
 		"secret/GetCloudCredential", "SecretMgr/getcloudcredential", "trpc.moox.ops.SecretMgr/GetCloudCredential",
+		"secret/GetExchangeCredential", "SecretMgr/getexchangecredential", "trpc.moox.ops.SecretMgr/GetExchangeCredential",
 		"sysdeploy/SyncTopology",
 		"trade/CloseTargetSession", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",
@@ -530,7 +531,7 @@ func TestConsoleInjectsHeaderSpaceIntoStorageBodyWhenAbsent(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	// 空间在嵌套消息里的方法（dataset.space_id）不能回填顶层字段，缺省时直接 400。
 	rr = httptest.NewRecorder()
-	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/UpdateDataset", "space-1", []byte(`{"dataset":{"dataset_id":"dataset_v1"}}`)))
+	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/UpsertDataset", "space-1", []byte(`{"dataset":{"dataset_id":"dataset_v1"}}`)))
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
@@ -584,7 +585,6 @@ func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/api/admin/sysdeploy/SyncTopology",
 		"/api/admin/archive/StartArchiveImport",
-		"/api/admin/archive/ClearArchiveUnrecoverable",
 	} {
 		store, current := setupSessionTest(t)
 		gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })

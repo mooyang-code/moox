@@ -17,6 +17,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // “因子现算”来源（见 docs/模块/策略.md 第 10 节）：主帧不读 View，经主机网关调因子引擎的 EngineControl，按因子机本地 K 线
@@ -109,7 +112,7 @@ type computeSource struct {
 	abort func(context.Context) error
 	// periods 是各会话给出的各期的交集（data_time 的 Unix 秒，升序）；bars 是对应的周期。
 	periods []int64
-	bars    []input.PeriodBoundaries
+	bars    []period.PeriodBoundaries
 	// stepPeriods 是每步请求的期数（按全部会话的序列数合计估算）。
 	stepPeriods int
 	// applied 是最近一段各期实际生效的逐期提交参数（bar_start 的 Unix 秒 → 参数，各会话合并）；rejected 是同一段各期被引擎拒绝的参数的说明。
@@ -130,7 +133,7 @@ type computeSession struct {
 	periods []int64
 	index   map[int64]int
 	// tail 是上一段最后一期（bar_start 为 tailAt）的行：策略用到 bars[-1] 时，下一段第一期的上一根读它。
-	tail   []input.Row
+	tail   []upstream.Row
 	tailAt time.Time
 }
 
@@ -147,7 +150,7 @@ func computeSessionID(replayID, market string, sessions int) string {
 // （进程在回放中途退出时没人关，会话占着整段快照的内存与准入预留，要等引擎 6 小时闲置清理）。尽力而为：关不上只记日志，
 // 会话不存在时引擎返回 closed=false、不报错。回放登记了多个市场的任务时，加市场后缀的会话也逐个关（参考市场的任务没有会话，
 // 多关一次无害）。返回读取运行中回放的错误。
-func CloseInterruptedSessions(ctx context.Context, repo *store.Store, engine input.EngineClient, logf func(format string, args ...any)) error {
+func CloseInterruptedSessions(ctx context.Context, repo *store.Store, engine upstream.EngineClient, logf func(format string, args ...any)) error {
 	if repo == nil || engine == nil {
 		return nil
 	}
@@ -179,7 +182,7 @@ func CloseInterruptedSessions(ctx context.Context, repo *store.Store, engine inp
 				err = engineRetError("CloseReplay", rsp.GetRetInfo())
 			}
 			if err != nil && logf != nil {
-				logf("进程重启：结束回放 %s 留在因子引擎上的会话 %s 失败（由引擎闲置清理）：%v；原始错误：%v", id, sessionID, err, input.RawCause(err))
+				logf("进程重启：结束回放 %s 留在因子引擎上的会话 %s 失败（由引擎闲置清理）：%v；原始错误：%v", id, sessionID, err, upstream.RawCause(err))
 			}
 		}
 	}
@@ -188,7 +191,7 @@ func CloseInterruptedSessions(ctx context.Context, repo *store.Store, engine inp
 
 // newComputeSource 建立“因子现算”的会话：主帧每个市场按提交的区间（bars 的首尾）各调一次 OpenReplay，可回放的各期取各会话给出的交集；
 // 任一会话建不起来时已建的都关掉。返回之后由调用方负责 Close。
-func (r *Runner) newComputeSource(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, markets []*replayMarket, bars []input.PeriodBoundaries, abort func(context.Context) error) (*computeSource, error) {
+func (r *Runner) newComputeSource(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, markets []*replayMarket, bars []period.PeriodBoundaries, abort func(context.Context) error) (*computeSource, error) {
 	if r.Engine == nil {
 		return nil, errors.New("因子引擎客户端未配置，不能用“因子现算”来源回放")
 	}
@@ -268,7 +271,7 @@ func (s *computeSource) adopt(session *computeSession, rsp *factorpb.OpenReplayR
 	}
 	session.index = make(map[int64]int, len(session.periods))
 	for i, at := range session.periods {
-		bar, err := input.FromStorageStart(s.resolved.Calendar, s.resolved.Bar, time.Unix(at, 0).UTC())
+		bar, err := period.FromStorageStart(s.resolved.Calendar, s.resolved.Bar, time.Unix(at, 0).UTC())
 		if err != nil {
 			return "", fmt.Errorf("因子引擎给出的周期 %s：%w", time.Unix(at, 0).UTC().Format(time.RFC3339), err)
 		}
@@ -323,9 +326,9 @@ func (s *computeSource) intersect() error {
 		}
 	}
 	s.periods = common
-	s.bars = make([]input.PeriodBoundaries, 0, len(common))
+	s.bars = make([]period.PeriodBoundaries, 0, len(common))
 	for _, at := range common {
-		bar, err := input.FromStorageStart(s.resolved.Calendar, s.resolved.Bar, time.Unix(at, 0).UTC())
+		bar, err := period.FromStorageStart(s.resolved.Calendar, s.resolved.Bar, time.Unix(at, 0).UTC())
 		if err != nil {
 			return err
 		}
@@ -387,7 +390,7 @@ func (s *computeSource) Close(ctx context.Context) error {
 			err = engineRetError("CloseReplay", rsp.GetRetInfo())
 		}
 		if err != nil {
-			s.runner.logf("回放 %s：结束因子引擎上的会话 %s 失败（由引擎闲置清理）：%v；原始错误：%v", s.job.ReplayID, session.id, err, input.RawCause(err))
+			s.runner.logf("回放 %s：结束因子引擎上的会话 %s 失败（由引擎闲置清理）：%v；原始错误：%v", s.job.ReplayID, session.id, err, upstream.RawCause(err))
 			if first == nil {
 				first = err
 			}
@@ -398,7 +401,7 @@ func (s *computeSource) Close(ctx context.Context) error {
 
 // Load 取一段连续的期：每个会话按每步期数逐步请求，返回不足请求的期数（单步响应放不下）时从下一期接着请求，不请求本段之外的期。
 // nextParams 是上一根策略求出的参数，只交给这一段的第一期（每个会话都给同一份），引擎之后各期沿用。任一会话失效（引擎重启）都整体失败。
-func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundaries, nextParams engine.ParamSet) (map[string]marketSegment, error) {
+func (s *computeSource) Load(ctx context.Context, segment []period.PeriodBoundaries, nextParams engine.ParamSet) (map[string]marketSegment, error) {
 	s.applied = make(map[int64]engine.ParamSet, len(segment))
 	s.rejected = make(map[int64][]string)
 	loaded := make(map[string]marketSegment, len(s.markets)+len(s.refs))
@@ -427,19 +430,19 @@ func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundari
 }
 
 // loadSession 在一个会话上取一段的行、年龄根数（bar_start → 标的 → 根数）与各期生效的参数（bar_start → 参数），被拒的参数并进 rejected。
-func (s *computeSource) loadSession(ctx context.Context, session *computeSession, segment []input.PeriodBoundaries, nextParams engine.ParamSet) ([]input.Row, map[int64]map[string]int, map[int64]engine.ParamSet, error) {
+func (s *computeSource) loadSession(ctx context.Context, session *computeSession, segment []period.PeriodBoundaries, nextParams engine.ParamSet) ([]upstream.Row, map[int64]map[string]int, map[int64]engine.ParamSet, error) {
 	first, ok := session.index[segment[0].StorageStart.Unix()]
 	if !ok || first+len(segment) > len(session.periods) {
 		return nil, nil, nil, fmt.Errorf("周期 %s 不在因子引擎给出的%s回放区间内", segment[0].StorageStart.UTC().Format(time.RFC3339), s.marketPrefix(session))
 	}
 	want := first + len(segment)
-	var rows []input.Row
+	var rows []upstream.Row
 	// 上一根不在本段里：用上一段最后一期的行（同一会话里算出的原样的行）；第一段没有上一段，用引擎给的上一期同名列补出。
 	usesTail := s.program.UsesPreviousBar && session.tail != nil && session.tailAt.Equal(segment[0].PreviousStart)
 	if usesTail {
 		rows = append(rows, session.tail...)
 	}
-	var last []input.Row
+	var last []upstream.Row
 	ages := make(map[int64]map[string]int, len(segment))
 	applied := make(map[int64]engine.ParamSet, len(segment))
 	params := paramsToPB(nextParams)
@@ -466,10 +469,10 @@ func (s *computeSource) loadSession(ctx context.Context, session *computeSession
 			synthesize := cursor+i == first && s.program.UsesPreviousBar && !usesTail && !segment[0].PreviousStart.IsZero()
 			last = last[:0:0]
 			for _, row := range period.GetRows() {
-				current := input.Row{SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag(), DataTime: at, Values: row.GetValues(), Params: rowParams(row.GetParams())}
+				current := upstream.Row{SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag(), DataTime: at, Values: row.GetValues(), Params: rowParams(row.GetParams())}
 				rows, last = append(rows, current), append(last, current)
 				if synthesize && len(row.GetPrevious()) > 0 {
-					rows = append(rows, input.Row{SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag(), DataTime: segment[0].PreviousStart, Values: row.GetPrevious()})
+					rows = append(rows, upstream.Row{SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag(), DataTime: segment[0].PreviousStart, Values: row.GetPrevious()})
 				}
 				recordAge(ages, at.Unix(), row)
 			}
@@ -489,7 +492,7 @@ func (s *computeSource) loadSession(ctx context.Context, session *computeSession
 
 // mergeApplied 把各会话这一段各期生效的参数并成每期一份记录：各会话收到同一份请求，生效的参数通常相同，记录取第一个会话
 // （现货在前）的；某个会话这一期生效的与它不同（例如一边拒绝了参数、沿用上一期，含一边有、一边没有）时写进这一期的说明，不静默丢掉。
-func (s *computeSource) mergeApplied(segment []input.PeriodBoundaries, applied []map[int64]engine.ParamSet) {
+func (s *computeSource) mergeApplied(segment []period.PeriodBoundaries, applied []map[int64]engine.ParamSet) {
 	for _, bar := range segment {
 		at := bar.StorageStart.Unix()
 		first := applied[0][at]
@@ -522,7 +525,7 @@ type engineAges struct {
 	passed map[int]map[string]struct{}
 }
 
-func (a *engineAges) probe(n int, bar input.PeriodBoundaries) input.AgeProbe {
+func (a *engineAges) probe(n int, bar period.PeriodBoundaries) input.AgeProbe {
 	return func(_ context.Context, instruments []string) (map[string]struct{}, error) {
 		if a.passed[n] == nil {
 			a.passed[n] = make(map[string]struct{})

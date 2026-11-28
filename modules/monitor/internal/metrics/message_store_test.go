@@ -33,8 +33,6 @@ func TestMetricMessageStoreNilGuards(t *testing.T) {
 func TestMonotonicMetricRecognizesCanonicalModuleNames(t *testing.T) {
 	for _, name := range []string{
 		"moox_factor_last_success_timestamp_seconds",
-		"moox_monitor_business_watermark_timestamp_seconds",
-		"moox_strategy_input_watermark_timestamp_seconds",
 		"moox_trade_metrics_errors_total",
 		"moox_archive_metrics_last_error_timestamp_seconds",
 		ViewOutputLatestMetric,
@@ -42,6 +40,8 @@ func TestMonotonicMetricRecognizesCanonicalModuleNames(t *testing.T) {
 		require.True(t, monotonicMetric(name), name)
 	}
 	require.False(t, monotonicMetric("moox_factor_runs_total"))
+	require.False(t, monotonicMetric("moox_monitor_business_watermark_timestamp_seconds"))
+	require.False(t, monotonicMetric("moox_strategy_input_watermark_timestamp_seconds"))
 }
 
 func TestMetricMessageStoreViewDatasetTimestampsIgnoreOutOfOrderSnapshot(t *testing.T) {

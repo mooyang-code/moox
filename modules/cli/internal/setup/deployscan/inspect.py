@@ -30,13 +30,91 @@ def size_kb(path):
                 pass
     return total // 1024
 
+def read_text(path, limit=65536):
+    if os.path.isfile(path) and not os.path.islink(path):
+        try:
+            with open(path, "rb") as handle:
+                return handle.read(limit).decode("utf-8", "replace")
+        except OSError:
+            return ""
+    return ""
+
+def nonempty_file(path):
+    if not os.path.isfile(path) or os.path.islink(path):
+        return False
+    try:
+        return os.lstat(path).st_size > 0
+    except OSError:
+        return False
+
+def exists_regular(path):
+    return os.path.isfile(path) and not os.path.islink(path)
+
+def nonempty_dir(path):
+    if not os.path.isdir(path) or os.path.islink(path):
+        return False
+    try:
+        return bool(os.listdir(path))
+    except OSError:
+        return False
+
+def inspect_data_formats(root):
+    def join(*parts):
+        return os.path.join(root, *parts)
+    sqlite_files = {
+        "admin": ("data", "admin", "admin.db"),
+        "monitor": ("data", "monitor", "monitor.db"),
+        "collector": ("data", "collector", "moox_collector.db"),
+        "factor-mgr": ("data", "factor-mgr", "factor.db"),
+        "archive-mgr": ("data", "archive-mgr", "archive.db"),
+        "strategy": ("data", "strategy", "strategy.sqlite"),
+        "trade": ("data", "trade", "moox_trade.db"),
+    }
+    formats = {}
+    for cid, rel in sqlite_files.items():
+        formats[cid] = {
+            "has_data": nonempty_file(join(*rel)),
+            "format_text": read_text(join("data", cid, "data-format")),
+        }
+    formats["storage-primary"] = {
+        "has_data": (
+            nonempty_file(join("data", "storage-primary", "metadata", "storage_metadata.db"))
+            or exists_regular(join("data", "storage-primary", "pebble", "storage-primary", "CURRENT"))
+            or exists_regular(join("data", "storage-primary", "pebble", "CURRENT"))
+        ),
+        "format_text": read_text(join("data", "storage-primary", "data-format")),
+    }
+    formats["storage-view"] = {
+        "has_data": nonempty_dir(join("data", "storage-view", "view-indexes")),
+        "format_text": read_text(join("data", "storage-view", "data-format")),
+    }
+    formats["eventbus"] = {
+        "has_data": nonempty_dir(join("data", "eventbus", "jetstream")),
+        "format_text": read_text(join("data", "eventbus", "data-format")),
+    }
+    formats["factor-engine"] = {
+        "has_data": (
+            exists_regular(join("data", "factor-engine", "seriesstore", "CURRENT"))
+            or exists_regular(join("data", "factor-engine", "engine", "watermarks.json"))
+            or exists_regular(join("data", "factor-engine", "engine", "param_cache.json"))
+            or exists_regular(join("data", "factor-engine", "engine", "lifecycle.json"))
+            or nonempty_dir(join("data", "factor-engine", "gap"))
+        ),
+        "format_text": read_text(join("data", "factor-engine", "data-format")),
+    }
+    formats["archive-worker"] = {
+        "has_data": nonempty_file(join("archive", ".state", "staging.db")),
+        "format_text": read_text(join("archive", ".state", "data-format")),
+    }
+    return formats
+
 request = json.loads(sys.argv[1])
 root, sizes = request.get("root"), bool(request.get("sizes"))
 if not valid_root(root):
     fail("deploy root must be a clean absolute path other than /")
-report = {"root": root, "root_exists": os.path.isdir(root), "entries": [], "installed": False, "version_text": "",
+report = {"root": root, "root_exists": os.path.isdir(root), "entries": [], "installed": False, "install_complete": False, "version_text": "",
           "units": [], "active": [], "disabled": [], "processes": 0, "archive_kb": -1, "disk_free_kb": -1,
-          "linger": False, "journald": os.path.isdir("/var/log/journal")}
+          "linger": False, "journald": os.path.isdir("/var/log/journal"), "data_formats": {}}
 if report["root_exists"]:
     report["entries"] = sorted(os.listdir(root))
     version = os.path.join(root, "version.json")
@@ -45,8 +123,10 @@ if report["root_exists"]:
         with open(version, "rb") as handle:
             raw = handle.read(64 << 10)
         report["version_text"] = raw.decode("utf-8", "replace")
+    report["install_complete"] = exists_regular(os.path.join(root, "install-complete.json"))
     if sizes:
         report["archive_kb"] = size_kb(os.path.join(root, "archive"))
+    report["data_formats"] = inspect_data_formats(root)
 probe = root
 while not os.path.isdir(probe) and probe != "/":
     probe = os.path.dirname(probe)

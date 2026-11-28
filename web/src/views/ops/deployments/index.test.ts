@@ -2,7 +2,6 @@ import { defineComponent } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stringify } from "yaml";
 import { getCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "@/api/admin/sysdeploy";
 import { monitorApi } from "@/api/monitor";
 import type { CatalogComponent, CatalogResponse, DeploymentHost, ComponentDeployment } from "@/api/admin/types";
@@ -22,32 +21,24 @@ const component: CatalogComponent = {
   name: "出口代理",
   binary: "moox-egress-proxy",
   scope: "any",
-  replicas: "multi",
-  protected: false,
-  health: { port: 11013 },
+  health_port: 11013,
   services: [
     {
       path: "test.Service",
       port: 11011,
-      methods: [
-        { name: "Read", callers: ["reader"], operators: [] },
-        { name: "Write", operators: [] }
-      ]
+      methods: [{ name: "Read", callers: ["reader"] }, { name: "Write" }]
     }
   ]
 };
 const definition = (name = "出口代理"): CatalogResponse => ({
-  catalog_yaml: stringify(
-    {
-      version: 2,
-      identities: [],
-      components: [
-        { ...component, name },
-        { ...component, id: "host-gateway", name: "主机网关", protected: true }
-      ]
-    },
-    { aliasDuplicateObjects: false }
-  ),
+  catalog: {
+    version: 2,
+    identities: [],
+    components: [
+      { ...component, name },
+      { ...component, id: "host-gateway", name: "主机网关", scope: "host" }
+    ]
+  },
   control_host_id: "c-main",
   sha256: "a".repeat(64)
 });

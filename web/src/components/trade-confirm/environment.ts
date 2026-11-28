@@ -1,4 +1,4 @@
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { AccountEnvironment, ExecutionMode, type LogicalAccount, type TradingAccount } from "@/api/trade/types";
 import { flatRoutes } from "@/router/route";
 
 /** 账户所处环境：模拟盘不连交易所，测试网和生产环境连交易所对应环境。 */
@@ -42,43 +42,29 @@ export function environmentLabel(env: Environment): string {
   return environmentTabs.find(item => item.key === env)?.label ?? "";
 }
 
+/** 前端三值环境转后端协议枚举（AccountEnvironment）。 */
+export function toAccountEnvironment(env: Environment): AccountEnvironment {
+  if (env === "paper") return AccountEnvironment.PAPER;
+  if (env === "testnet") return AccountEnvironment.TESTNET;
+  return AccountEnvironment.PRODUCTION;
+}
+
 /** 执行账户的环境。实盘账户没有写明环境时按生产环境处理，和后端的规则一致。 */
 export function accountEnvironment(account: Pick<TradingAccount, "execution_mode" | "live">): Environment {
-  if (account.execution_mode === 1) return "paper";
-  return account.live?.environment === 1 ? "testnet" : "prod";
+  if (account.execution_mode === ExecutionMode.PAPER) return "paper";
+  return account.live?.environment === AccountEnvironment.TESTNET ? "testnet" : "prod";
 }
 
-/**
- * 组合账户的环境：后端要求成员环境一致，所以取第一个能找到的成员的环境。
- * 实盘组合没有可判断的成员时（测试账户、实盘账户两个菜单都列出它）用 entered：从哪个菜单进来就按哪个环境显示；
- * 不知道从哪进来（例如直接打开链接）时按生产环境处理，确认也按最严的一档。
- */
-export function logicalEnvironment(
-  logical: Pick<LogicalAccount, "execution_mode" | "members">,
-  accounts: ReadonlyMap<string, TradingAccount>,
-  entered?: Environment
-): Environment {
-  if (logical.execution_mode === 1) return "paper";
-  for (const member of logical.members || []) {
-    const account = accounts.get(member.trading_account_id);
-    if (account) return accountEnvironment(account);
-  }
-  return entered === "testnet" ? "testnet" : "prod";
+/** 组合账户的环境：直接读后端返回的三值 environment（3 模拟盘、1 测试网、2 生产环境）。 */
+export function logicalEnvironment(logical: Pick<LogicalAccount, "environment">): Environment {
+  if (logical.environment === AccountEnvironment.PAPER) return "paper";
+  if (logical.environment === AccountEnvironment.TESTNET) return "testnet";
+  return "prod";
 }
 
-/**
- * 组合是否列在这个环境的菜单里。实盘组合还没有可判断的成员时（例如新建账户加入组合失败后留下的空组合），
- * 测试账户和实盘账户两个菜单都列出它，好让用户在任一处给它加成员或处理掉；其余按 logicalEnvironment 判断。
- */
-export function logicalInEnvironment(
-  logical: Pick<LogicalAccount, "execution_mode" | "members">,
-  accounts: ReadonlyMap<string, TradingAccount>,
-  env: Environment
-): boolean {
-  if (logical.execution_mode === 1) return env === "paper";
-  const known = (logical.members || []).some(member => accounts.has(member.trading_account_id));
-  if (!known) return env !== "paper";
-  return logicalEnvironment(logical, accounts) === env;
+/** 组合是否列在这个环境的菜单里：按后端返回的三值 environment 精确匹配。 */
+export function logicalInEnvironment(logical: Pick<LogicalAccount, "environment">, env: Environment): boolean {
+  return logicalEnvironment(logical) === env;
 }
 
 export interface ConfirmTier {

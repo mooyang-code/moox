@@ -1,5 +1,5 @@
 import { gatewayURL } from "@/api/gateway";
-import { expireBrowserSession } from "@/api/admin/space-client";
+import { expireBrowserSession } from "@/api/admin/session-expiry";
 import type { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import type { ArchiveRecentRowsRsp } from "./types";
 

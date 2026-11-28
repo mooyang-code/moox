@@ -6,7 +6,7 @@
           <a-button type="text" @click="goBackOr(router, instancesLink())"
             ><template #icon><icon-left /></template>返回</a-button
           >
-          <h2>{{ detail.strategy?.name || detail.instance?.strategy_id || "策略实例" }}</h2>
+          <h2>{{ detail.strategy?.name || detail.instance?.strategy_name || detail.instance?.strategy_id || "策略实例" }}</h2>
           <span class="mono">{{ detail.instance?.instance_id || instanceId }}</span>
           <span v-if="readAt" class="muted"> · 状态读取 {{ readAt }}</span>
         </div>
@@ -37,9 +37,8 @@
           <a-button
             size="small"
             @click="
-              router.push({
-                path: `/trading/accounts/${logicalAccount?.logical_account_id}`
-              })
+              logicalAccount?.logical_account_id &&
+              router.push({ path: tradingAccountDetailPath(logicalAccount.logical_account_id) })
             "
             >去恢复</a-button
           >
@@ -60,7 +59,8 @@
             }}</a-tag></a-descriptions-item
           >
           <a-descriptions-item label="策略定义"
-            >{{ detail.strategy?.name || definitionHint }} · <span class="mono">{{ detail.instance.strategy_id }}</span>
+            >{{ detail.strategy?.name || detail.instance.strategy_name || definitionHint }} ·
+            <span class="mono">{{ detail.instance.strategy_id }}</span>
             <div v-if="versionText" class="version-note">{{ versionText }}</div></a-descriptions-item
           >
           <a-descriptions-item label="计算任务"><FactorTaskLinks :tasks="detail.instance.factor_tasks" /></a-descriptions-item>
@@ -70,11 +70,7 @@
           <a-descriptions-item label="组合账户"
             ><a-link
               v-if="detail.instance.logical_account_id"
-              @click="
-                router.push({
-                  path: `/trading/accounts/${detail.instance.logical_account_id}`
-                })
-              "
+              @click="router.push({ path: tradingAccountDetailPath(detail.instance.logical_account_id) })"
               >{{ logicalAccount?.name || detail.instance.logical_account_id }}</a-link
             ><span v-else>未关联账户</span></a-descriptions-item
           >
@@ -106,7 +102,7 @@
         />
         <a-collapse :bordered="false" class="extra-sections">
           <a-collapse-item key="bindings" header="输入绑定（会话固化的结果 View 列与成员契约）"
-            ><ResolvedTable :resolved-json="detail.instance.resolved_json" :pool="isPoolDsl(detail.strategy?.dsl_yaml || '')"
+            ><ResolvedTable :resolved-json="detail.instance.resolved_json"
           /></a-collapse-item>
           <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（最近一次提交、各期投递状态与外显设置）">
             <StrategyFactorParams :instance="detail.instance" />
@@ -125,17 +121,17 @@
 import { goBackOr } from "@/utils/navigate-back";
 import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import InstanceResults from "@/views/strategy/components/strategy-instance-results.vue";
 import OperationPanel from "@/views/strategy/components/strategy-operation-panel.vue";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
-import { isPoolDsl } from "@/views/strategy/dsl";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
 import StrategyFactorParams from "@/views/strategy/components/strategy-factor-params.vue";
 import { parseFactorBinding } from "@/views/strategy/factor-params-model";
+import { tradingAccountDetailPath } from "@/router/links";
 import { instancesLink, replayLink } from "@/views/strategy/links";
 import { runningVersionText } from "@/views/strategy/model";
 import { useInstanceResults } from "@/views/strategy/use-instance-results";
@@ -230,13 +226,6 @@ function openReplay() {
     router.push(replayLink({ instanceId: detail.instance.instance_id, factorTasks: detail.instance.factor_tasks }));
 }
 onMounted(start);
-watch(
-  () => spaceStore.selectedSpaceId,
-  (next, previous) => {
-    if (!next || next === previous) return;
-    if (!leaveIfOtherSpace() && !previous) void load();
-  }
-);
 </script>
 
 <style scoped>

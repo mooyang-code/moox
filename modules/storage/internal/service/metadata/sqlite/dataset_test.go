@@ -20,7 +20,7 @@ func TestDatasetCreateIsActiveAndCarriesColumns(t *testing.T) {
 	seedDatasetParents(t, ctx, store)
 	created, err := store.UpsertDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source",
-		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m",
 		Status: "disabled", Revision: 99,
 	}, &pb.DatasetColumn{ColumnName: "close", DisplayName: "收盘价", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
 	if err != nil {
@@ -56,7 +56,7 @@ func TestDeleteDatasetRemovesItsColumnsInOneCall(t *testing.T) {
 	seedDatasetParents(t, ctx, store)
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset-ordinary", DataSourceId: "source",
-		Name: "Ordinary", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+		Name: "Ordinary", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m",
 	}, &pb.DatasetColumn{ColumnName: "close", DisplayName: "收盘价", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestDatasetMayOmitDataSource(t *testing.T) {
 
 	created, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_collector_result",
-		Name: "Collector Result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+		Name: "Collector Result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-1"},
 	})
 	if err != nil {
@@ -97,7 +97,7 @@ func TestDatasetMayOmitDataSource(t *testing.T) {
 	// data_source_id 对所有数据集都是可选的。
 	if _, err = store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_missing_source",
-		Name: "Missing Source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+		Name: "Missing Source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m",
 	}); err != nil {
 		t.Fatalf("dataset without source err = %v", err)
 	}
@@ -110,7 +110,7 @@ func TestDatasetUpdateKeepsAlignmentAndLateness(t *testing.T) {
 	seedDatasetParents(t, ctx, store)
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_session", Name: "Session",
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Alignment: "session", AllowedLatenessSeconds: 120,
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "5m", Alignment: "session", AllowedLatenessSeconds: 120,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestDatasetUpdateKeepsAlignmentAndLateness(t *testing.T) {
 	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_session", Name: "Renamed", Alignment: "epoch_utc"}); err == nil {
 		t.Fatal("alignment 设置后不能修改")
 	}
-	if _, err := store.CreateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_plain", Name: "Plain", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m"}); err != nil {
+	if _, err := store.CreateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_plain", Name: "Plain", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "5m"}); err != nil {
 		t.Fatal(err)
 	}
 	if filled, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset_plain", Name: "Plain", Alignment: "session", AllowedLatenessSeconds: 90}); err != nil || filled.GetAlignment() != "session" || filled.GetAllowedLatenessSeconds() != 90 {
@@ -144,7 +144,7 @@ func TestDatasetUpdateRevisionAndStatusInvariants(t *testing.T) {
 
 	updated, err := store.UpdateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset", Name: "Dataset v2", Description: "updated",
-		DataSourceId: "source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "disabled", Revision: created.GetRevision(),
+		DataSourceId: "source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m", Status: "disabled", Revision: created.GetRevision(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func createTestDataset(t *testing.T, ctx context.Context, store *Store, datasetI
 	t.Helper()
 	item, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: datasetID, DataSourceId: "source",
-		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+		Name: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -205,8 +205,7 @@ func createTestDataset(t *testing.T, ctx context.Context, store *Store, datasetI
 func openTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 	store, err := Open(ctx, Options{
-		Path:       filepath.Join(t.TempDir(), "metadata.db"),
-		SchemaPath: filepath.Join("..", "..", "..", "..", "schema", "metadata.sql"),
+		Path: filepath.Join(t.TempDir(), "metadata.db"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -237,30 +236,30 @@ func TestTimeSeriesDatasetRequiresOneCanonicalImmutableFreq(t *testing.T) {
 	for _, freq := range []string{"", "1H", "60m", "quarter"} {
 		_, err := store.CreateDataset(ctx, &pb.Dataset{
 			SpaceId: "space", DatasetId: "dataset_bad", DataSourceId: "source",
-			Name: "Bad", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: freq,
+			Name: "Bad", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: freq,
 		})
-		if err == nil || !strings.Contains(err.Error(), "time_series dataset freq must be one of") {
-			t.Fatalf("freq %q error = %v, want canonical freq rejection", freq, err)
+		if err == nil || !strings.Contains(err.Error(), "time_series dataset frequency must be one of") {
+			t.Fatalf("freq %q error = %v, want canonical frequency rejection", freq, err)
 		}
 	}
 	record, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_record", DataSourceId: "source",
-		Name: "Record", DataKind: pb.DataKind_DATA_KIND_RECORD, Freq: "quarter",
+		Name: "Record", DataKind: pb.DataKind_DATA_KIND_RECORD, Frequency: "quarter",
 	})
-	if err != nil || record.GetFreq() != "quarter" {
+	if err != nil || record.GetFrequency() != "quarter" {
 		t.Fatalf("record dataset = %v, %v; a record Dataset keeps a descriptive freq", record, err)
 	}
 
 	created := createTestDataset(t, ctx, store, "dataset")
-	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Freq: "5m"}); err == nil || !strings.Contains(err.Error(), "freq is immutable") {
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Frequency: "5m"}); err == nil || !strings.Contains(err.Error(), "frequency is immutable") {
 		t.Fatalf("freq change error = %v, want immutable", err)
 	}
 	updated, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "dataset", Description: "renamed"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.GetFreq() != created.GetFreq() {
-		t.Fatalf("update without freq changed it to %q", updated.GetFreq())
+	if updated.GetFrequency() != created.GetFrequency() {
+		t.Fatalf("update without freq changed it to %q", updated.GetFrequency())
 	}
 	listed, _, err := store.ListDatasets(ctx, DatasetQuery{SpaceID: "space", Freq: "1m"})
 	if err != nil || len(listed) != 1 || listed[0].GetDatasetId() != "dataset" {
@@ -274,7 +273,7 @@ func TestMetadataStoreErrorsCarryKinds(t *testing.T) {
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
 	created := createTestDataset(t, ctx, store, "dataset")
-	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "Dataset", Freq: "5m"}); retinfo.Code(err) != pb.ErrorCode_INVALID_PARAM {
+	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "Dataset", Frequency: "5m"}); retinfo.Code(err) != pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("改频率 = %v（%v），想要 INVALID_PARAM", retinfo.Code(err), err)
 	}
 	if _, err := store.UpdateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", Name: "stale", Revision: created.GetRevision() + 5}); retinfo.Code(err) != pb.ErrorCode_CONFLICT {

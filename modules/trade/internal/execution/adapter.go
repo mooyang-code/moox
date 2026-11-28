@@ -35,9 +35,8 @@ type ScopedOpenOrderSource interface {
 }
 
 // LedgerSource 是能查询资金流水（手续费、资金费、已实现盈亏、划转等）的场所才实现的能力，只读、即查即用。
-// 同一个适配器服务现货和永续时，LedgerSupported 按账户市场类型说明是否支持（例如币安现货没有统一流水接口）。
+// 同一个适配器服务多个市场但只有部分支持流水时，通过 CapabilityProbe 的 CapabilityLedger 声明。
 type LedgerSource interface {
-	LedgerSupported() bool
 	ListLedger(context.Context, exchange.LedgerQuery) (exchange.LedgerPage, error)
 }
 

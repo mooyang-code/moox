@@ -30,7 +30,7 @@ func deleteOldestTestIndex(t *testing.T) (*IndexManager, time.Time) {
 		for i := 0; i < bars; i++ {
 			writes = append(writes, viewindex.RowWrite{
 				Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-					SubjectId: subject, Freq: "1m", DataTime: base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339), SeriesTag: "venue:x",
+					SubjectId: subject, Frequency: "1m", DataTime: base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339), SeriesTag: "venue:x",
 				}}}},
 				Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i)}}}},
 			})
@@ -155,7 +155,7 @@ func TestDeleteOldestRowsHandlesEmptySeriesTagAndOtherFrequency(t *testing.T) {
 		for i := 0; i < 12; i++ {
 			writes = append(writes, viewindex.RowWrite{
 				Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-					SubjectId: "D", Freq: freq, DataTime: base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339), SeriesTag: "",
+					SubjectId: "D", Frequency: freq, DataTime: base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339), SeriesTag: "",
 				}}}},
 				Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i)}}}},
 			})

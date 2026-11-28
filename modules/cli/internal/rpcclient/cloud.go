@@ -160,16 +160,16 @@ func (c *Client) CreateCloudAccount(ctx context.Context, account *collectorpb.Cl
 	return rsp.GetAccount(), nil
 }
 
-// ListFunctionPackages 返回 Client.SpaceID 空间的代码包，按上传先后倒序。
+// ListFunctionPackages 返回全局代码包列表，按上传先后倒序。
 func (c *Client) ListFunctionPackages(ctx context.Context) ([]*collectorpb.FunctionPackage, error) {
 	rsp := &collectorpb.ListFunctionPackagesRsp{}
-	if err := c.callCollectorProto(ctx, "ListFunctionPackages", &collectorpb.ListFunctionPackagesReq{SpaceId: c.SpaceID}, rsp); err != nil {
+	if err := c.callCollectorProto(ctx, "ListFunctionPackages", &collectorpb.ListFunctionPackagesReq{}, rsp); err != nil {
 		return nil, err
 	}
 	return rsp.GetPackages(), nil
 }
 
-// LatestPackage 返回 Client.SpaceID 空间里指定名称的最新可用代码包 ID；没有则 found=false。
+// LatestPackage 返回指定名称的最新可用代码包 ID；没有则 found=false。
 func (c *Client) LatestPackage(ctx context.Context, name string) (id string, found bool, err error) {
 	packages, err := c.ListFunctionPackages(ctx)
 	if err != nil {
@@ -184,13 +184,8 @@ func (c *Client) LatestPackage(ctx context.Context, name string) (id string, fou
 }
 
 // UploadPackage 两步上传：InitPackageUpload 取预签名地址 → PUT 到 COS → CompletePackageUpload 核对大小与 MD5。
-// 请求里的空间一律取 Client.SpaceID。
 func (c *Client) UploadPackage(ctx context.Context, req *collectorpb.InitPackageUploadReq, data []byte) (*collectorpb.FunctionPackage, error) {
-	if strings.TrimSpace(c.SpaceID) == "" {
-		return nil, fmt.Errorf("上传代码包要指定空间")
-	}
 	init := proto.Clone(req).(*collectorpb.InitPackageUploadReq)
-	init.SpaceId = c.SpaceID
 	initRsp := &collectorpb.InitPackageUploadRsp{}
 	if err := c.callCollectorProto(ctx, "InitPackageUpload", init, initRsp); err != nil {
 		return nil, err
@@ -216,7 +211,7 @@ func (c *Client) UploadPackage(ctx context.Context, req *collectorpb.InitPackage
 	sum := md5.Sum(data)
 	completeRsp := &collectorpb.CompletePackageUploadRsp{}
 	complete := &collectorpb.CompletePackageUploadReq{
-		SpaceId: c.SpaceID, PackageId: initRsp.GetPackage().GetPackageId(), FileMd5: hex.EncodeToString(sum[:]), FileSize: int64(len(data)),
+		PackageId: initRsp.GetPackage().GetPackageId(), FileMd5: hex.EncodeToString(sum[:]), FileSize: int64(len(data)),
 	}
 	if err := c.callCollectorProto(ctx, "CompletePackageUpload", complete, completeRsp); err != nil {
 		return nil, err

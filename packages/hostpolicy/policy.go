@@ -1,18 +1,19 @@
 // Package hostpolicy 定义每台主机上的策略缓存文件 <部署根>/data/host-agent/host-policy.json：全部告警渠道。
-// HostAgent 定期从 Monitor 拉取最新值写入；HostAgent 的对端检查与 Admin 的证书巡检只读这个文件，不联网。
+// HostAgent 定期从 Monitor 拉取最新值写入；非控制机在控制机或 Monitor 不可达、Monitor 反复重启时直推告警只读这个文件，不联网。
 package hostpolicy
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/security"
 )
 
 // Policy 是策略缓存的内容。
@@ -67,15 +68,8 @@ func (p Policy) Hash() string {
 
 // Read 读取策略缓存。文件必须是当前用户的普通私密文件（Unix 上 0600），里面有推送凭据。
 func Read(path string) (Policy, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return Policy{}, err
-	}
-	if !info.Mode().IsRegular() {
-		return Policy{}, errors.New("host policy must be a regular file")
-	}
-	if err := checkPrivate(info); err != nil {
-		return Policy{}, err
+	if err := security.CheckPrivateFile(path); err != nil {
+		return Policy{}, fmt.Errorf("host policy: %w", err)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

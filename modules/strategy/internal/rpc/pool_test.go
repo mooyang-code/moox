@@ -10,6 +10,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const poolRules = `rules:
@@ -54,7 +57,7 @@ func (f *fakeResolver) ResolvePool(_ context.Context, _ string, taskIDs []string
 	columns := []string{"close"}
 	tasks := map[string]input.TaskBinding{}
 	for i, id := range taskIDs {
-		datasetID, err := input.DatasetIDOfTask(id)
+		datasetID, err := upstream.DatasetIDOfTask(id)
 		if err != nil {
 			return input.PoolResolved{}, err
 		}
@@ -65,7 +68,7 @@ func (f *fakeResolver) ResolvePool(_ context.Context, _ string, taskIDs []string
 	if err != nil {
 		return input.PoolResolved{}, err
 	}
-	out := input.PoolResolved{Resolved: input.Resolved{Market: union, Tasks: tasks, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}, Program: program}
+	out := input.PoolResolved{Resolved: input.Resolved{Market: union, Tasks: tasks, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}, Program: program}
 	for _, member := range members {
 		memberTasks := map[string]input.TaskBinding{}
 		for _, market := range member.Strategy.Market.Markets() {
@@ -76,7 +79,7 @@ func (f *fakeResolver) ResolvePool(_ context.Context, _ string, taskIDs []string
 			return input.PoolResolved{}, err
 		}
 		out.Members = append(out.Members, input.PoolMember{ID: member.ID, StrategyID: member.StrategyID, DSLHash: member.DSLHash, DSLYaml: member.DSLYaml,
-			Resolved: input.Resolved{Market: member.Strategy.Market, Tasks: memberTasks, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}})
+			Resolved: input.Resolved{Market: member.Strategy.Market, Tasks: memberTasks, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}})
 		out.Programs = append(out.Programs, compiled)
 	}
 	return out, nil

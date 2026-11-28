@@ -35,7 +35,7 @@ for required in \
   'public_net_status' \
   'ModifyInstancesVpcAttribute' \
   'EventBus' \
-  'setup inspect-scf' \
+  'collector function inspect' \
   './bin/moox-cli setup validate --file ./moox.toml'
 do
   grep -Fq -- "${required}" "${REFERENCE}" || fail "reference is missing ${required}"

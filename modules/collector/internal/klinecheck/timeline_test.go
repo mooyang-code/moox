@@ -93,14 +93,14 @@ func TestTimelineRestartsAtTheReregisteredPeriod(t *testing.T) {
 
 	next.Progress = `{"registered":{"ds|1m":true}}`
 	timeline = plans.timeline()
-	require.Equal(t, []Segment{{From: restart.Unix(), Subjects: []string{"A-USDT", "B-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT", "B-USDT": "BUSDT"}, LatenessS: 15}}, timeline["ds|1m"])
+	require.Equal(t, []Segment{{From: restart.Unix(), Subjects: []string{"A-USDT", "B-USDT"}, LatenessS: 15}}, timeline["ds|1m"])
 
 	next.Status = store.FetchPlanApplied
 	plans.records = append(plans.records, record(t, 4, store.FetchPlanApplied, restart.Add(time.Hour).Unix(), "A-USDT"))
 	timeline = plans.timeline()
 	require.Equal(t, []Segment{
-		{From: restart.Unix(), To: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT", "B-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT", "B-USDT": "BUSDT"}, LatenessS: 15},
-		{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT"}, LatenessS: 15},
+		{From: restart.Unix(), To: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT", "B-USDT"}, LatenessS: 15},
+		{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, LatenessS: 15},
 	}, timeline["ds|1m"], "重新登记之后的计划变更照常延续时间线")
 }
 
@@ -126,7 +126,7 @@ func TestTimelineResetCoversRetiredDatasets(t *testing.T) {
 		recordFor(t, 5, "retired", store.FetchPlanApplied, restart.Add(time.Hour).Unix(), "A-USDT"),
 	)
 	timeline = plans.timeline()
-	require.Equal(t, []Segment{{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT"}, LatenessS: 15}}, timeline["retired|1m"], "重新启用后从新的生效周期开始")
+	require.Equal(t, []Segment{{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, LatenessS: 15}}, timeline["retired|1m"], "重新启用后从新的生效周期开始")
 	require.Equal(t, restart.Unix(), timeline["ds|1m"][0].From)
 }
 
@@ -210,9 +210,9 @@ func (c *countingIncrementalTimeline) ListBySpaceAfter(ctx context.Context, spac
 	return c.repo.ListBySpaceAfter(ctx, spaceID, afterID)
 }
 
-func makeTimelineEntry(space, dataset string, from int64, symbols map[string]string) store.SeriesTimelineEntry {
-	entry := store.SeriesTimelineEntry{SpaceID: space, DatasetID: dataset, Frequency: "1m", EffectiveFrom: from, LatenessS: 15, Symbols: symbols}
-	for subject := range symbols {
+func makeTimelineEntry(space, dataset string, from int64, subjects ...string) store.SeriesTimelineEntry {
+	entry := store.SeriesTimelineEntry{SpaceID: space, DatasetID: dataset, Frequency: "1m", EffectiveFrom: from, LatenessS: 15}
+	for _, subject := range subjects {
 		entry.Series = append(entry.Series, seriesset.Series{SubjectID: subject})
 	}
 	if len(entry.Series) > 0 {
@@ -240,14 +240,12 @@ func TestTimelineCacheHitsIncrementallyUpdatesAndInvalidatesOnReset(t *testing.T
 	require.Zero(t, src.fullCalls.Load())
 
 	// 2. 写入首行后首次冷启动全量加载，之后重复读取全部命中内存缓存（零 JSON 解码）。
-	rec, err := plans.Create(ctx, "crypto", `{"v":1}`, "{}", makeTimelineEntry("crypto", "ds", 100, map[string]string{"BTC-USDT": "BTCUSDT"}))
+	rec, err := plans.Create(ctx, "crypto", `{"v":1}`, "{}", makeTimelineEntry("crypto", "ds", 100, "BTC-USDT"))
 	require.NoError(t, err)
 	tl, err := cache.Load(ctx, src, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, int32(1), src.fullCalls.Load())
-	sym, ok := tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(100, 0).UTC())
-	require.True(t, ok)
-	require.Equal(t, "BTCUSDT", sym)
+	require.Equal(t, []Segment{{From: 100, Subjects: []string{"BTC-USDT"}, LatenessS: 15}}, tl["ds|1m"])
 
 	for range 5 {
 		again, loadErr := cache.Load(ctx, src, "crypto")
@@ -258,28 +256,25 @@ func TestTimelineCacheHitsIncrementallyUpdatesAndInvalidatesOnReset(t *testing.T
 	require.Zero(t, src.afterCalls.Load(), "未变化时不得触发增量查询")
 
 	// 3. 纯追加新行：只走 ListBySpaceAfter 增量解码，不重扫全表。
-	require.NoError(t, plans.Update(ctx, rec.ID, store.FetchPlanApplying, "{}", "", makeTimelineEntry("crypto", "ds", 200, map[string]string{"BTC-USDT": "BTCNEW"})))
+	require.NoError(t, plans.Update(ctx, rec.ID, store.FetchPlanApplying, "{}", "", makeTimelineEntry("crypto", "ds", 200, "BTC-USDT", "ETH-USDT")))
 	tl, err = cache.Load(ctx, src, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, int32(1), src.fullCalls.Load(), "纯追加应走增量路径，不走全量")
 	require.Equal(t, int32(1), src.afterCalls.Load())
-	require.Len(t, tl["ds|1m"], 2)
-	sym, ok = tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(150, 0).UTC())
-	require.True(t, ok)
-	require.Equal(t, "BTCUSDT", sym)
-	sym, ok = tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(200, 0).UTC())
-	require.True(t, ok)
-	require.Equal(t, "BTCNEW", sym)
+	require.Equal(t, []Segment{
+		{From: 100, To: 200, Subjects: []string{"BTC-USDT"}, LatenessS: 15},
+		{From: 200, Subjects: []string{"BTC-USDT", "ETH-USDT"}, LatenessS: 15},
+	}, tl["ds|1m"])
 
 	// 4. 同生效点覆盖（先删旧行再插更大 c_id 的新行）：自动识别旧行删除并全量重建，不留零长度幽灵段。
-	require.NoError(t, plans.Update(ctx, rec.ID, store.FetchPlanApplied, "{}", "", makeTimelineEntry("crypto", "ds", 200, map[string]string{"BTC-USDT": "BTCV3"})))
+	require.NoError(t, plans.Update(ctx, rec.ID, store.FetchPlanApplied, "{}", "", makeTimelineEntry("crypto", "ds", 200, "BTC-USDT", "SOL-USDT")))
 	tl, err = cache.Load(ctx, src, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), src.fullCalls.Load(), "同生效点覆盖删旧行必须自动触发全量重建")
-	require.Len(t, tl["ds|1m"], 2, "不残留零长度幽灵段")
-	sym, ok = tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(200, 0).UTC())
-	require.True(t, ok)
-	require.Equal(t, "BTCV3", sym)
+	require.Equal(t, []Segment{
+		{From: 100, To: 200, Subjects: []string{"BTC-USDT"}, LatenessS: 15},
+		{From: 200, Subjects: []string{"BTC-USDT", "SOL-USDT"}, LatenessS: 15},
+	}, tl["ds|1m"], "不残留零长度幽灵段")
 
 	// 5. 重新登记清库（删光全空间行）：缓存自动清空；随后重新写入更大 c_id 的新行也不残留清库前的旧段。
 	require.NoError(t, plans.ReregisterAppliedPlan(ctx, rec.ID, `{"v":"reset"}`))
@@ -287,15 +282,12 @@ func TestTimelineCacheHitsIncrementallyUpdatesAndInvalidatesOnReset(t *testing.T
 	require.NoError(t, err)
 	require.Empty(t, tl, "清库后时间线必须为空")
 
-	rec2, err := plans.Create(ctx, "crypto", `{"v":2}`, "{}", makeTimelineEntry("crypto", "ds", 500, map[string]string{"ETH-USDT": "ETHUSDT"}))
+	rec2, err := plans.Create(ctx, "crypto", `{"v":2}`, "{}", makeTimelineEntry("crypto", "ds", 500, "ETH-USDT"))
 	require.NoError(t, err)
 	require.NoError(t, plans.Update(ctx, rec2.ID, store.FetchPlanApplied, "{}", ""))
 	tl, err = cache.Load(ctx, src, "crypto")
 	require.NoError(t, err)
-	require.Len(t, tl["ds|1m"], 1)
-	require.Equal(t, int64(500), tl["ds|1m"][0].From)
-	_, ok = tl.SymbolAt("ds|1m", "BTC-USDT", time.Unix(500, 0).UTC())
-	require.False(t, ok, "清库前的旧标的绝不能残留")
+	require.Equal(t, []Segment{{From: 500, Subjects: []string{"ETH-USDT"}, LatenessS: 15}}, tl["ds|1m"], "清库前的旧标的绝不能残留")
 
 	// 6. 并发读取 + 并发追加 + Checker.Check 克隆修改（用于 -race 竞态验证）。
 	checker := &Checker{Timeline: src, Rows: &fakeRows{missing: map[string]map[int64]bool{"ETH-USDT": {}}}, Now: func() time.Time { return time.Unix(1000, 0).UTC() }}
@@ -307,13 +299,13 @@ func TestTimelineCacheHitsIncrementallyUpdatesAndInvalidatesOnReset(t *testing.T
 			for range 10 {
 				got, loadErr := cache.Load(ctx, src, "crypto")
 				require.NoError(t, loadErr)
-				_, _ = got.SymbolAt("ds|1m", "ETH-USDT", time.Unix(600, 0).UTC())
+				require.NotEmpty(t, got["ds|1m"])
 				_, checkErr := checker.Check(ctx, Request{SpaceID: "crypto", From: time.Unix(400, 0).UTC(), To: time.Unix(600, 0).UTC()})
 				require.NoError(t, checkErr)
 			}
 		}()
 	}
-	rec3, err := plans.Create(ctx, "crypto", `{"v":3}`, "{}", makeTimelineEntry("crypto", "ds", 700, map[string]string{"ETH-USDT": "ETHV2"}))
+	rec3, err := plans.Create(ctx, "crypto", `{"v":3}`, "{}", makeTimelineEntry("crypto", "ds", 700, "ETH-USDT", "SOL-USDT"))
 	require.NoError(t, err)
 	require.NoError(t, plans.Update(ctx, rec3.ID, store.FetchPlanApplied, "{}", ""))
 	wg.Wait()

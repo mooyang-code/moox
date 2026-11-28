@@ -214,7 +214,7 @@ func (i *Index) SaveFollowState(_ context.Context, id string, state viewindex.Fo
 	return nil
 }
 
-func (i *Index) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (i *Index) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	h, err := i.get(id)
 	if err != nil {
 		return nil, 0, err
@@ -261,7 +261,7 @@ func (i *Index) Query(ctx context.Context, id string, spec viewindex.QuerySpec) 
 	if err != nil {
 		return nil, 0, err
 	}
-	rows := make([]*pb.RowFieldValues, 0, len(result.Hits))
+	rows := make([]*pb.Row, 0, len(result.Hits))
 	for _, hit := range result.Hits {
 		row, err := storedRow(hit, h.meta)
 		if err != nil {
@@ -653,10 +653,10 @@ func existingDocument(ctx context.Context, index blevelib.Index, id string, meta
 	return doc, nil
 }
 
-func storedRow(hit *blevesearch.DocumentMatch, meta indexMeta) (*pb.RowFieldValues, error) {
+func storedRow(hit *blevesearch.DocumentMatch, meta indexMeta) (*pb.Row, error) {
 	recordID := storedString(hit.Fields["record_id"])
 	version := storedString(hit.Fields["version"])
-	row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: meta.SpaceID, DatasetId: meta.DatasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: recordID, Version: version}}}}
+	row := &pb.Row{Key: &pb.RowKey{SpaceId: meta.SpaceID, DatasetId: meta.DatasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: recordID, Version: version}}}}
 	for name, valueType := range meta.Columns {
 		value, ok := hit.Fields[name]
 		if !ok || value == nil {

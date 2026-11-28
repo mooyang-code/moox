@@ -33,7 +33,7 @@ func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID string, rows 
 	if frequency == "" {
 		return fmt.Errorf("factor result dataset %q has no frequency", datasetID)
 	}
-	upserts := make([]*storagepb.RowFieldUpsert, 0, len(rows))
+	upserts := make([]*storagepb.Row, 0, len(rows))
 	for index, row := range rows {
 		if strings.TrimSpace(row.SubjectID) == "" || row.DataTime.IsZero() {
 			return fmt.Errorf("result row %d requires subject_id and data_time", index)
@@ -57,10 +57,10 @@ func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID string, rows 
 			}
 			fields = append(fields, &storagepb.FieldValue{FieldId: name, Value: value})
 		}
-		upserts = append(upserts, &storagepb.RowFieldUpsert{
+		upserts = append(upserts, &storagepb.Row{
 			Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID,
 				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-					SubjectId: row.SubjectID, Freq: frequency,
+					SubjectId: row.SubjectID, Frequency: frequency,
 					DataTime: row.DataTime.UTC().Format(time.RFC3339Nano), SeriesTag: row.SeriesTag,
 				}},
 			},

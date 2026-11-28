@@ -2,6 +2,9 @@ package test
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
@@ -10,71 +13,95 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type e2eContextClient struct {
-	rsp *monitorpb.GetDoctorContextRsp
+type e2eBootstrapDeployments struct {
+	rows []doctorcli.Deployment
 }
 
-func embeddedManifestChecksum(t *testing.T) string {
+func (d e2eBootstrapDeployments) ListDeployments(context.Context, string) ([]doctorcli.Deployment, error) {
+	return d.rows, nil
+}
+
+type e2eOverviewClient struct {
+	overview *monitorpb.HealthOverview
+}
+
+func (c e2eOverviewClient) GetHealthOverview(context.Context, string) (*monitorpb.HealthOverview, error) {
+	return c.overview, nil
+}
+
+func writeE2EVersion(t *testing.T, root string) {
 	t.Helper()
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
-	return manifest.Checksum
+	raw := fmt.Sprintf(`{"version":"dev","commit":"dev","catalog_sha256":%q,"deployed_at":"2026-11-28T00:00:00Z","components":{}}`, manifest.Checksum)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "version.json"), []byte(raw), 0o600))
 }
 
-func (c e2eContextClient) GetDoctorContext(context.Context, *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
-	return c.rsp, nil
-}
-
-func TestDoctorDiagnoseDistinguishesBusinessHealthFromReporterFailure(t *testing.T) {
-	components := []*monitorpb.DoctorExpectedComponent{
-		{ComponentId: "eventbus", ServiceName: "eventbus", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
-		{ComponentId: "monitor", ServiceName: "monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
-		{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
+func TestDoctorBootstrapCombinesLocalFactsAndMonitorOverview(t *testing.T) {
+	root := t.TempDir()
+	writeE2EVersion(t, root)
+	deployments := []doctorcli.Deployment{
+		{HostID: "node-a", ComponentID: "host-gateway", Status: "enabled"},
+		{HostID: "node-a", ComponentID: "host-agent", Status: "enabled"},
+		{HostID: "node-a", ComponentID: "factor-mgr", Status: "enabled"},
 	}
-	health := []*monitorpb.DoctorObservation{}
-	reporters := []*monitorpb.DoctorObservation{}
-	for _, component := range components {
-		health = append(health, &monitorpb.DoctorObservation{Kind: "health", ComponentId: component.GetComponentId(), Status: "OK"})
-		if component.GetComponentId() != "factor-mgr" {
-			reporters = append(reporters, &monitorpb.DoctorObservation{Kind: "reporter", ComponentId: component.GetComponentId(), Status: "FRESH"})
-		}
+	overview := &monitorpb.HealthOverview{
+		TopologyKnown: true,
+		Components: []*monitorpb.HealthComponent{
+			{HostId: "node-a", ComponentId: "host-gateway", Status: "healthy", Readiness: "ready", Reporter: &monitorpb.HealthSignal{Status: "healthy"}},
+			{HostId: "node-a", ComponentId: "host-agent", Status: "healthy", Reporter: &monitorpb.HealthSignal{Status: "healthy"}},
+			{HostId: "node-a", ComponentId: "factor-mgr", Status: "down", Reason: "监控上报已中断", Reporter: &monitorpb.HealthSignal{Status: "degraded", Reason: "监控上报已中断"}},
+		},
 	}
-	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: components, HealthObservations: health, ReporterObservations: reporters, MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "MISSING"}}}
-	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{
-		NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot},
+	report, err := doctorcli.RunBootstrap(context.Background(), doctorcli.BootstrapOptions{
+		NodeID:        "node-a",
+		LocalNodeID:   "node-a",
+		DeployRoot:    root,
+		CheckIDs:      []string{"service.health:factor-mgr@node-a", "monitor.component:factor-mgr@node-a", "monitor.alerts:node-a"},
+		Client:        e2eBootstrapDeployments{rows: deployments},
+		MonitorClient: e2eOverviewClient{overview: overview},
+		Probe: func(context.Context, string, int, string) (doctorcli.ProbeResult, error) {
+			return doctorcli.ProbeResult{StatusCode: 200}, nil
+		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, core.ConclusionDegraded, report.Conclusion)
+	require.Equal(t, core.ConclusionUnhealthy, report.Conclusion)
 	require.Equal(t, core.StatusPass, report.CheckByID("service.health:factor-mgr@node-a").Status)
-	require.Equal(t, core.StatusWarn, report.CheckByID("monitor.reporter_coverage:factor-mgr@node-a").Status)
+	require.Equal(t, core.StatusFail, report.CheckByID("monitor.component:factor-mgr@node-a").Status)
+	require.Equal(t, core.StatusPass, report.CheckByID("monitor.alerts:node-a").Status)
 	raw, err := doctorcli.Render(report, "json")
 	require.NoError(t, err)
 	require.Contains(t, string(raw), `"schema_version": "doctor.moox.dev/v1"`)
+	require.Contains(t, string(raw), `"mode": "bootstrap"`)
 }
 
-func TestDoctorDiagnoseFailsClosedOnIdentityConflict(t *testing.T) {
-	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ExpectedComponents: []*monitorpb.DoctorExpectedComponent{
-		{ComponentId: "eventbus", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
-		{ComponentId: "monitor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
-		{ComponentId: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"},
-	}, HealthObservations: []*monitorpb.DoctorObservation{
-		{ComponentId: "eventbus", Status: "OK"}, {ComponentId: "monitor", Status: "OK"}, {ComponentId: "factor-mgr", Status: "OK"},
-	}, ReporterObservations: []*monitorpb.DoctorObservation{
-		{ComponentId: "eventbus", Status: "FRESH"}, {ComponentId: "monitor", Status: "FRESH"}, {ComponentId: "factor-mgr", Status: "CONFLICT", Conflict: true},
-	}}
-	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot}})
+func TestDoctorBootstrapReportsCriticalAlertsFromMonitorOverview(t *testing.T) {
+	root := t.TempDir()
+	writeE2EVersion(t, root)
+	deployments := []doctorcli.Deployment{
+		{HostID: "node-a", ComponentID: "host-gateway", Status: "enabled"},
+		{HostID: "node-a", ComponentID: "host-agent", Status: "enabled"},
+		{HostID: "node-a", ComponentID: "factor-mgr", Status: "enabled"},
+	}
+	overview := &monitorpb.HealthOverview{
+		TopologyKnown: true,
+		Components: []*monitorpb.HealthComponent{
+			{HostId: "node-a", ComponentId: "factor-mgr", Status: "healthy", Readiness: "ready", Reporter: &monitorpb.HealthSignal{Status: "healthy"}},
+		},
+		Alerts: []*monitorpb.HealthAlert{
+			{Id: "node-a/ready:node-a:factor-mgr", Severity: "critical", Title: "因子管理未就绪", Object: &monitorpb.HealthObject{Type: "component", HostId: "node-a", ComponentId: "factor-mgr"}},
+		},
+	}
+	report, err := doctorcli.RunBootstrap(context.Background(), doctorcli.BootstrapOptions{
+		NodeID:        "node-a",
+		LocalNodeID:   "node-a",
+		DeployRoot:    root,
+		CheckIDs:      []string{"monitor.component:factor-mgr@node-a", "monitor.alerts:node-a"},
+		Client:        e2eBootstrapDeployments{rows: deployments},
+		MonitorClient: e2eOverviewClient{overview: overview},
+	})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionUnhealthy, report.Conclusion)
-	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:factor-mgr@node-a").Status)
-}
-
-func TestDoctorDiagnoseEscalatesReporterThatNeverAppeared(t *testing.T) {
-	snapshot := &monitorpb.GetDoctorContextRsp{
-		ManifestChecksum:    embeddedManifestChecksum(t),
-		ExpectedComponents:  []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", ServiceName: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
-		MissingObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "FAIL", Stale: true, AgeSeconds: 121, IntervalSeconds: 30}},
-	}
-	report, err := doctorcli.RunDiagnose(context.Background(), doctorcli.DiagnoseOptions{NodeID: "node-a", CheckIDs: []string{"monitor.reporter_coverage:factor-mgr@node-a"}, Client: e2eContextClient{rsp: snapshot}})
-	require.NoError(t, err)
-	require.Equal(t, core.StatusFail, report.CheckByID("monitor.reporter_coverage:factor-mgr@node-a").Status)
+	require.Equal(t, core.StatusPass, report.CheckByID("monitor.component:factor-mgr@node-a").Status)
+	require.Equal(t, core.StatusFail, report.CheckByID("monitor.alerts:node-a").Status)
 }

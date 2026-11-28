@@ -18,21 +18,31 @@ func TestStorageSeparatesSpacesAndRejectsEmptyRecordVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	primary, err := primarystore.New(primarystore.Options{Store: store, Snapshot: activeRequestSnapshot})
+	datasets := newTestDatasetCache(t,
+		[]*pb.Dataset{
+			{SpaceId: "space-a", DatasetId: "shared", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+			{SpaceId: "space-b", DatasetId: "shared", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active"},
+		},
+		[]*pb.DatasetColumn{
+			{SpaceId: "space-a", DatasetId: "shared", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+			{SpaceId: "space-b", DatasetId: "shared", ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active"},
+		},
+	)
+	primary, err := primarystore.New(primarystore.Options{Store: store, Datasets: datasets})
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := func(space, version string) *pb.RowKey {
 		return &pb.RowKey{SpaceId: space, DatasetId: "shared", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: version}}}
 	}
-	row := func(space, version string) *pb.RowFieldUpsert {
-		return &pb.RowFieldUpsert{
+	row := func(space, version string) *pb.Row {
+		return &pb.Row{
 			Key:    key(space, version),
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: space}}}},
 		}
 	}
 	for _, space := range []string{"space-a", "space-b"} {
-		rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{row(space, "1")}}))
+		rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.Row{row(space, "1")}}))
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 1 {
 			t.Fatalf("write %s rsp=%v err=%v", space, rsp, err)
 		}
@@ -43,7 +53,7 @@ func TestStorageSeparatesSpacesAndRejectsEmptyRecordVersion(t *testing.T) {
 			t.Fatalf("read %s rsp=%v err=%v", space, read, err)
 		}
 	}
-	bad, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{row("space-a", "")}}))
+	bad, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.Row{row("space-a", "")}}))
 	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("empty version rsp=%v err=%v", bad, err)
 	}

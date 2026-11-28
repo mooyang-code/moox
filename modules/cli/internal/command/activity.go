@@ -82,7 +82,7 @@ func runActivityList(ctx context.Context, out io.Writer, flags activityListFlags
 			"level": item.GetLevel(), "title": item.GetTitle(), "ref_id": item.GetRefId(), "detail": jsonRawOrString(item.GetDetail()),
 		})
 	}
-	return printJSON(out, map[string]any{"items": items, "total": rsp.GetPage().GetTotal(), "has_more": rsp.GetPage().GetHasMore()})
+	return printJSON(out, map[string]any{"items": items, "total": rsp.GetPageResult().GetTotal(), "has_more": rsp.GetPageResult().GetHasMore()})
 }
 
 func jsonRawOrString(value string) any {
@@ -98,7 +98,7 @@ func activityMillis(name, value string) (int64, error) {
 	if strings.TrimSpace(value) == "" {
 		return 0, nil
 	}
-	text, err := parseKlineTime(name, value)
+	text, err := parseRPCTime(name, value)
 	if err != nil {
 		return 0, err
 	}

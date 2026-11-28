@@ -79,9 +79,9 @@ func newStockExchangeFixture(t *testing.T, exchangeName exchange.Exchange, settl
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   "PAPER",
+			Environment:     "PAPER",
 			SettlementAsset: settlement, OrderSettingsJSON: legacyOrderSettings,
-			AutomationState: "PAUSED", PauseReason: "configure",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -95,7 +95,7 @@ func newStockExchangeFixture(t *testing.T, exchangeName exchange.Exchange, settl
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	return fixture
 }

@@ -37,7 +37,7 @@ describe("回放表单的区间", () => {
       props: {
         modelValue: form,
         strategies: [{ strategy_id: "s1", name: "日线", dsl_yaml: "name: a\n" }] as never,
-        tasks: [{ task_id: "ftask_d", freq: "1d" }] as never,
+        tasks: [{ task_id: "ftask_d", frequency: "1d" }] as never,
         tasksLoading: false
       },
       global: { plugins: [ArcoVue] }
@@ -78,7 +78,7 @@ describe("回放表单的资金费列", () => {
       props: {
         modelValue: form,
         strategies: strategies as never,
-        tasks: [{ task_id: "ftask_b", freq: "1h" }] as never,
+        tasks: [{ task_id: "ftask_b", frequency: "1h" }] as never,
         tasksLoading: false
       },
       global: { plugins: [ArcoVue] }
@@ -106,7 +106,7 @@ describe("回放表单的因子数据来源", () => {
       props: {
         modelValue: form,
         strategies: [{ strategy_id: "s1", name: "策略", dsl_yaml: dsl }] as never,
-        tasks: [{ task_id: "ftask_a", freq: "1h" }] as never,
+        tasks: [{ task_id: "ftask_a", frequency: "1h" }] as never,
         tasksLoading: false
       },
       global: { plugins: [ArcoVue] }
@@ -145,7 +145,37 @@ describe("回放表单的因子数据来源", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("不受 View 保留根数限制");
   });
-}); // 要绑定的任务由后端按 DSL 推出：测试里按 DSL 与登记的定义模拟
-vi.mock("@/views/strategy/use-task-requirement", async () => ({
-  useTaskRequirement: (await import("../../../../tests/strategy-requirement")).useFixtureTaskRequirement
-}));
+
+  it("读取策略要绑定的任务失败时提示读取失败并支持重试，不再误导为请选择计算任务", async () => {
+    const { validateReplayForm } = await import("./replay-form-model");
+    reqMock.error = "策略服务暂不可用";
+    reqMock.reload.mockReset();
+    try {
+      const form = reactive({ ...base(), single_market: "", tasks: {} });
+      const wrapper = mountForm(form, "name: a\n");
+      await flushPromises();
+      expect(form.requirement_error).toBe("策略服务暂不可用");
+      expect(wrapper.text()).toContain("读取策略要绑定的计算任务失败：策略服务暂不可用");
+      expect(validateReplayForm(form)).toBe("读取策略要绑定的计算任务失败：策略服务暂不可用");
+      const retry = wrapper.findAll(".arco-link").find(link => link.text().includes("重试"));
+      expect(retry).toBeDefined();
+      await retry!.trigger("click");
+      expect(reqMock.reload).toHaveBeenCalledTimes(1);
+    } finally {
+      reqMock.error = "";
+    }
+  });
+});
+
+const reqMock = vi.hoisted(() => ({ error: "", reload: vi.fn() }));
+// 要绑定的任务由后端按 DSL 推出：测试里按 DSL 与登记的定义模拟
+vi.mock("@/views/strategy/use-task-requirement", async () => {
+  const { ref } = await import("vue");
+  const { useFixtureTaskRequirement } = await import("../../../../tests/strategy-requirement");
+  return {
+    useTaskRequirement: (source: Parameters<typeof useFixtureTaskRequirement>[0]) =>
+      reqMock.error
+        ? { requirement: ref(null), loading: ref(false), error: ref(reqMock.error), reload: reqMock.reload }
+        : useFixtureTaskRequirement(source)
+  };
+});

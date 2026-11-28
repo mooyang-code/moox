@@ -18,13 +18,11 @@ var allowedStages = stringSet(
 var allowedResults = stringSet("success", "error", "rejected")
 
 const (
-	ModuleMetricRuns              = "runs_total"
-	ModuleMetricLastSuccess       = "last_success_timestamp_seconds"
-	ModuleMetricLastError         = "last_error_timestamp_seconds"
-	ModuleMetricBusinessWatermark = "business_watermark_timestamp_seconds"
-	ModuleMetricInputWatermark    = "input_watermark_timestamp_seconds"
-	ModuleMetricErrors            = "metrics_errors_total"
-	ModuleMetricLastMetricsError  = "metrics_last_error_timestamp_seconds"
+	ModuleMetricRuns             = "runs_total"
+	ModuleMetricLastSuccess      = "last_success_timestamp_seconds"
+	ModuleMetricLastError        = "last_error_timestamp_seconds"
+	ModuleMetricErrors           = "metrics_errors_total"
+	ModuleMetricLastMetricsError = "metrics_last_error_timestamp_seconds"
 )
 
 // ModuleMetricName returns the canonical metric family name for one module.
@@ -38,14 +36,10 @@ type ModuleMetrics struct {
 	runs                *prometheus.CounterVec
 	lastSuccess         *prometheus.GaugeVec
 	lastError           *prometheus.GaugeVec
-	watermark           *prometheus.GaugeVec
-	inputWatermark      *prometheus.GaugeVec
 	errors              *prometheus.CounterVec
 	lastMetricError     prometheus.Gauge
 	mu                  sync.Mutex
 	series              map[string]bool
-	watermarks          map[string]float64
-	inputWatermarks     map[string]float64
 	maxSeries           int
 }
 
@@ -68,20 +62,18 @@ func NewModuleMetrics(registerer prometheus.Registerer, module string, healthChe
 		allowed[healthCheck] = true
 	}
 	m := &ModuleMetrics{
-		module: module, allowedHealthChecks: allowed, series: map[string]bool{}, watermarks: map[string]float64{}, inputWatermarks: map[string]float64{}, maxSeries: MaxModuleMetricSeries,
-		runs:           prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricRuns), Help: "Completed module stage runs."}, []string{"stage", "result", "health_check"}),
-		lastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastSuccess), Help: "Last successful module stage completion."}, []string{"stage", "health_check"}),
-		lastError:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastError), Help: "Last failed module stage completion."}, []string{"stage", "health_check"}),
-		watermark:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricBusinessWatermark), Help: "Monotonic authoritative business output watermark."}, []string{"stage", "health_check"}),
-		inputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricInputWatermark), Help: "Monotonic business timestamp accepted as module input."}, []string{"stage", "health_check"}),
-		errors:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricErrors), Help: "Rejected module metric observations."}, []string{"operation"}),
+		module: module, allowedHealthChecks: allowed, series: map[string]bool{}, maxSeries: MaxModuleMetricSeries,
+		runs:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricRuns), Help: "Completed module stage runs."}, []string{"stage", "result", "health_check"}),
+		lastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastSuccess), Help: "Last successful module stage completion."}, []string{"stage", "health_check"}),
+		lastError:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastError), Help: "Last failed module stage completion."}, []string{"stage", "health_check"}),
+		errors:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricErrors), Help: "Rejected module metric observations."}, []string{"operation"}),
 		lastMetricError: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: ModuleMetricName(module, ModuleMetricLastMetricsError),
 			Help: "Unix timestamp of the latest rejected module metric observation.",
 		}),
 	}
-	registered := make([]prometheus.Collector, 0, 7)
-	for _, collector := range []prometheus.Collector{m.runs, m.lastSuccess, m.lastError, m.watermark, m.inputWatermark, m.errors, m.lastMetricError} {
+	registered := make([]prometheus.Collector, 0, 5)
+	for _, collector := range []prometheus.Collector{m.runs, m.lastSuccess, m.lastError, m.errors, m.lastMetricError} {
 		if err := registerer.Register(collector); err != nil {
 			for _, item := range registered {
 				registerer.Unregister(item)
@@ -117,60 +109,10 @@ func (m *ModuleMetrics) ObserveRun(stage, result, healthCheck string, at time.Ti
 	return nil
 }
 
-func (m *ModuleMetrics) AdvanceWatermark(stage, healthCheck string, value time.Time) error {
-	if err := m.validate(stage, "success", healthCheck); err != nil {
-		return m.recordError("watermark", err)
-	}
-	if value.IsZero() {
-		return m.recordError("watermark", fmt.Errorf("watermark is required"))
-	}
-	seconds := float64(value.UTC().Unix())
-	key := stage + "\x00" + healthCheck
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if previous, ok := m.watermarks[key]; ok && seconds < previous {
-		return m.recordError("watermark", fmt.Errorf("watermark regression for %s/%s: %v < %v", stage, healthCheck, seconds, previous))
-	}
-	if err := m.claimLocked("watermark", stage, "", healthCheck); err != nil {
-		return m.recordErrorLocked("watermark", err)
-	}
-	m.watermarks[key] = seconds
-	m.watermark.WithLabelValues(stage, healthCheck).Set(seconds)
-	return nil
-}
-
-func (m *ModuleMetrics) AdvanceInputWatermark(stage, healthCheck string, value time.Time) error {
-	if err := m.validate(stage, "success", healthCheck); err != nil {
-		return m.recordError("input_watermark", err)
-	}
-	if value.IsZero() {
-		return m.recordError("input_watermark", fmt.Errorf("input watermark is required"))
-	}
-	seconds := float64(value.UTC().Unix())
-	key := stage + "\x00" + healthCheck
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if previous, ok := m.inputWatermarks[key]; ok && seconds < previous {
-		return m.recordError("input_watermark", fmt.Errorf("input watermark regression for %s/%s: %v < %v", stage, healthCheck, seconds, previous))
-	}
-	if err := m.claimLocked("input_watermark", stage, "", healthCheck); err != nil {
-		return m.recordErrorLocked("input_watermark", err)
-	}
-	m.inputWatermarks[key] = seconds
-	m.inputWatermark.WithLabelValues(stage, healthCheck).Set(seconds)
-	return nil
-}
-
 func (m *ModuleMetrics) recordError(operation string, err error) error {
 	if err == nil || m == nil {
 		return err
 	}
-	m.errors.WithLabelValues(operation).Inc()
-	m.lastMetricError.Set(float64(time.Now().UTC().Unix()))
-	return err
-}
-
-func (m *ModuleMetrics) recordErrorLocked(operation string, err error) error {
 	m.errors.WithLabelValues(operation).Inc()
 	m.lastMetricError.Set(float64(time.Now().UTC().Unix()))
 	return err

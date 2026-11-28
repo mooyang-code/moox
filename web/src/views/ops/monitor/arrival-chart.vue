@@ -163,7 +163,7 @@ async function load(options: { refresh?: boolean } = {}) {
     const rsp = await monitorApi.queryArrivalHistory({
       space_id: current.spaceId,
       dataset_id: current.datasetId,
-      freq: current.freq,
+      frequency: current.freq,
       day: day.value,
       task_id: taskId.value || undefined
     });

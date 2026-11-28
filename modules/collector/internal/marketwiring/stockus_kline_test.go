@@ -180,10 +180,15 @@ func TestStockUSKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	require.Equal(t, []string{"5m"}, spec.Frequencies)
 	require.Equal(t, 78, spec.MaxBarsPerRequest)
 	require.True(t, spec.History.SupportsArbitraryRange)
-	// 数据源配置的超时管整次取数，补采函数用它（历史补齐一块是一次约 20 天的请求）；
-	// 实时采集的定时函数按计划的 fetch.request_timeout_ms 设进程环境覆盖它，仍是 3 秒。
+	// 数据源配置的超时管整次取数，补采函数不带 request_timeout_ms 沿用它（历史补齐一块是一次约 20 天的请求）；
+	// 实时采集的定时函数随请求字段 fetch_limits.request_timeout_ms 覆盖它，仍是 3 秒。
 	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 16, Cooldown: time.Second, RequestTimeout: 15 * time.Second}, spec.RateLimit)
 	require.Equal(t, 3000, usPlanOptions().Fetch.RequestTimeoutMS, "实时采集的单次超时不变")
+	realtimePipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockus", marketdata.InstrumentEquity, "5m", "", &marketfetch.FeedLimits{RequestTimeoutMS: 3000})
+	require.NoError(t, err)
+	realtimeSpec, err := realtimePipeline.Router.NewSession().KlineSpec("cnbc")
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Second, realtimeSpec.RateLimit.RequestTimeout, "实时请求带超时覆盖为 3 秒")
 
 	// 东方财富只剩标的同步（交易所对照），不再是美股的 K 线来源。
 	_, err = pipeline.Router.Provider("eastmoney")
@@ -225,10 +230,10 @@ func stockUSPipeline(t *testing.T, storage marketfetch.Storage, now time.Time, l
 
 // usRealtimeRequest 是云函数定时请求（只要目标那一根）：target 是目标那根的开始时刻（UTC）。
 // 美股的来源按路由分配，计划生成的取数项不带 provider、source_id。
-func usRealtimeRequest(subject, symbol string, target time.Time) marketfetch.Request {
+func usRealtimeRequest(subject string, target time.Time) marketfetch.Request {
 	item := domain.CollectionItem{
-		InstanceID: "instance-1", SubjectID: subject, Symbol: symbol, MarketType: "equity", DataType: "kline",
-		DatasetID: usDataset, Frequency: "5m", TargetDataTime: target.Format(time.RFC3339Nano), SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true,
+		InstanceID: "instance-1", SubjectID: subject, MarketType: "equity", DataType: "kline",
+		DatasetID: usDataset, Frequency: "5m", TargetDataTime: target.Format(time.RFC3339Nano),
 	}
 	return marketfetch.Request{
 		BatchID: "scheduled", BatchKind: domain.BatchKindRealtime, SpaceID: "stockus", MarketID: "stockus", InstrumentType: "equity",
@@ -236,19 +241,22 @@ func usRealtimeRequest(subject, symbol string, target time.Time) marketfetch.Req
 		Items: []domain.CollectionItem{item},
 		Targets: []domain.WriteTarget{{
 			ID: "target-1", SpaceID: "stockus", InstanceID: item.InstanceID, TaskID: "task-1", DatasetID: usDataset,
-			SeriesHash: item.SeriesHash, ExpectedCount: 1, Frequency: "5m", TargetDataTime: item.TargetDataTime,
+			SeriesHash: "series-hash", ExpectedCount: 1, Frequency: "5m", TargetDataTime: item.TargetDataTime,
 		}},
 	}
 }
 
 // usBackfillRequest 是补采分块：[start, end) 按 K 线开始时刻（UTC）。
-func usBackfillRequest(subject, symbol string, start, end time.Time) marketfetch.Request {
+func usBackfillRequest(subject string, start, end time.Time) marketfetch.Request {
 	return marketfetch.Request{
 		BatchID: "backfill", BatchKind: domain.BatchKindBackfill, SpaceID: "stockus", MarketID: "stockus", InstrumentType: "equity",
 		DatasetID: usDataset, Frequency: "5m", MarketType: "equity", RequestID: "backfill",
 		Items: []domain.CollectionItem{{
-			SubjectID: subject, Symbol: symbol, MarketType: "equity", DataType: "kline", DatasetID: usDataset, Frequency: "5m",
+			InstanceID: "i1", SubjectID: subject, MarketType: "equity", DataType: "kline", DatasetID: usDataset, Frequency: "5m",
 			StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano), BarLimit: 1000,
+		}},
+		Targets: []domain.WriteTarget{{
+			ID: "t1", SpaceID: "stockus", InstanceID: "i1", TaskID: "backfill", DatasetID: usDataset, Frequency: "5m",
 		}},
 	}
 }
@@ -300,7 +308,7 @@ func TestStockUSScheduledRequestWritesTheTargetBar(t *testing.T) {
 			storage := &capturedStorage{}
 			// 时钟在收盘后 5 秒（结算延迟刚好过去）。
 			pipeline := stockUSPipeline(t, storage, target.Add(5*time.Minute+5*time.Second), nil, server)
-			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", target))
+			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", target))
 			require.NoError(t, err)
 			require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 			require.Equal(t, []string{usBarsPath("AAPL", tc.from, tc.to)}, server.requested())
@@ -325,7 +333,7 @@ func TestStockUSScheduledRequestWritesTheTargetBar(t *testing.T) {
 	target := nyTime("2026-11-23 09:30")
 	server := newUSCNBCServer(t, usSameMinutes(usRecordedMinutes(t, "aapl_1m_20261123.json")))
 	pipeline := stockUSPipeline(t, early, target.Add(5*time.Minute+4*time.Second), nil, server)
-	payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", target))
+	payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", target))
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.Status)
 	require.Empty(t, early.committed)
@@ -356,7 +364,7 @@ func TestStockUSScheduledRequestFailsWhenTheTargetBarIsMissing(t *testing.T) {
 			target := nyTime(tc.target)
 			storage := &capturedStorage{}
 			pipeline := stockUSPipeline(t, storage, target.Add(5*time.Minute+5*time.Second), nil, newUSCNBCServer(t, usSameMinutes(tc.minutes)))
-			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", target))
+			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", target))
 			require.NoError(t, err)
 			require.Equal(t, "failed", payload.Status)
 			require.Contains(t, payload.ErrorSummary, "no closed bar")
@@ -436,7 +444,7 @@ func TestStockUSBackfillWritesOnlyTheRange(t *testing.T) {
 			server := newUSCNBCServer(t, usSameMinutes(tc.minutes))
 			storage := &capturedStorage{}
 			pipeline := stockUSPipeline(t, storage, tc.now, nil, server)
-			payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", nyTime(tc.start), nyTime(tc.end)))
+			payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", nyTime(tc.start), nyTime(tc.end)))
 			require.NoError(t, err)
 			require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 			require.Equal(t, tc.paths, server.requested())
@@ -466,7 +474,7 @@ func TestStockUSHalfDayWritesFortyTwoBars(t *testing.T) {
 	server := newUSCNBCServer(t, usSameMinutes(usSessionMinutes(usDay{"2026-11-27", "13:00"})))
 	storage := &capturedStorage{}
 	pipeline := stockUSPipeline(t, storage, nyTime("2026-11-27 13:10"), nil, server)
-	payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", nyTime("2026-11-27 00:00"), nyTime("2026-11-28 00:00")))
+	payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", nyTime("2026-11-27 00:00"), nyTime("2026-11-28 00:00")))
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 	require.Equal(t, []string{usBarsPath("AAPL", "202611270000", "202611271309")}, server.requested(), "终点不超过当前时刻")
@@ -494,7 +502,7 @@ func TestStockUSRequestsUseExchangeAndDottedCode(t *testing.T) {
 			server := newUSCNBCServer(t, usSameMinutes(minutes))
 			storage := &capturedStorage{}
 			pipeline := stockUSPipeline(t, storage, target.Add(5*time.Minute+5*time.Second), nil, server)
-			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest(tc.subject, tc.symbol, target))
+			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest(tc.subject, target))
 			require.NoError(t, err)
 			require.Equal(t, "succeeded", payload.Status, payload.ErrorSummary)
 			require.Equal(t, []string{usBarsPath(tc.symbol, "202611120945", "202611120949")}, server.requested())
@@ -509,7 +517,6 @@ func TestStockUSRequestsUseExchangeAndDottedCode(t *testing.T) {
 
 // 候选链只有一个数据源，熔断阈值（同时是在途请求上限）按单一来源的口径算：每源尝试次数 × 并发，与港股相同。
 func TestStockUSSingleSourceBreakerThreshold(t *testing.T) {
-	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
 	planned := fetchplan.RouteFetchLimits("stockus")(fetchplan.TaskGroup{Frequency: "5m"}, marketfetch.PlanFetch{})
 	require.Equal(t, 16, planned.FeedConcurrency, "采集计划给美股的源并发")
 	require.Equal(t, 16, planned.Concurrency, "一个函数内同时处理的标的数")
@@ -519,9 +526,7 @@ func TestStockUSSingleSourceBreakerThreshold(t *testing.T) {
 		return pipeline.Router.BreakerThreshold()
 	}
 	require.Equal(t, 48, threshold(&marketfetch.FeedLimits{FeedConcurrency: planned.FeedConcurrency}), "3 × 16")
-	require.Equal(t, 3, threshold(nil), "请求没带限速、进程环境也没设并发时按 1")
-	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "16")
-	require.Equal(t, 48, threshold(nil), "云函数里并发来自计划下发的环境变量")
+	require.Equal(t, 3, threshold(nil), "请求没带限速时按默认并发 1")
 }
 
 // 标的当天一根都没有（全天停牌，或已退市而标签还没同步掉）：补采分块报“没有已收盘的 K 线”（ErrNoClosedBar），
@@ -542,7 +547,7 @@ func TestStockUSSuspendedDayBackfillReportsNoClosedBar(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			storage := &capturedStorage{}
 			pipeline := stockUSPipeline(t, storage, nyTime("2026-11-13 10:00"), nil, newUSCNBCServer(t, usSameMinutes(usSessionMinutes(tc.days...))))
-			payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", nyTime(tc.start), nyTime(tc.end)))
+			payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", nyTime(tc.start), nyTime(tc.end)))
 			require.NoError(t, err)
 			require.Equal(t, "failed", payload.Status)
 			require.Contains(t, payload.ErrorSummary, "no closed bar")

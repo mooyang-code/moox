@@ -10,30 +10,31 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
 type accountEligibilityStub struct {
-	account tradingaccount.Account
+	account store.TradingAccountRecord
 	err     error
 }
 
 type accountEligibilityFunc func(
 	context.Context,
 	string,
-) (tradingaccount.Account, error)
+) (store.TradingAccountRecord, error)
 
 func (f accountEligibilityFunc) ExecutionEligibility(
 	ctx context.Context,
 	tradingAccountID string,
-) (tradingaccount.Account, error) {
+) (store.TradingAccountRecord, error) {
 	return f(ctx, tradingAccountID)
 }
 
 func (s accountEligibilityStub) ExecutionEligibility(
 	context.Context,
 	string,
-) (tradingaccount.Account, error) {
+) (store.TradingAccountRecord, error) {
 	return s.account, s.err
 }
 
@@ -241,13 +242,13 @@ func TestValidatorRejectsNotionalAndInsufficientFunds(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotionalLimit)
 
 	spotBuy := executableAccount(exchange.MarketTypeSpot)
-	spotBuy.Snapshot.Balances[0].Available = shared.MustDecimal("100")
+	spotBuy.Snapshot.Balances[0].Available = "100"
 	validator = testValidator(now, spotBuy, testInstrument(exchange.MarketTypeSpot))
 	_, err = validator.Validate(context.Background(), "space-1", testSpec(now))
 	require.ErrorIs(t, err, ErrInsufficientFunds)
 
 	spotSell := executableAccount(exchange.MarketTypeSpot)
-	spotSell.Snapshot.Balances[1].Available = shared.MustDecimal("0.5")
+	spotSell.Snapshot.Balances[1].Available = "0.5"
 	validator = testValidator(now, spotSell, testInstrument(exchange.MarketTypeSpot))
 	spec := testSpec(now)
 	spec.Side = exchange.SideSell
@@ -255,7 +256,7 @@ func TestValidatorRejectsNotionalAndInsufficientFunds(t *testing.T) {
 	require.ErrorIs(t, err, ErrInsufficientFunds)
 
 	swap := executableAccount(exchange.MarketTypeSwap)
-	swap.Snapshot.AvailableFunds = shared.MustDecimal("20")
+	swap.Snapshot.AvailableFunds = "20"
 	validator = testValidator(now, swap, testInstrument(exchange.MarketTypeSwap))
 	spec = testSpec(now)
 	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
@@ -276,7 +277,7 @@ func TestValidatorRejectsInvalidLeverage(t *testing.T) {
 	require.ErrorIs(t, err, ErrLeverageLimit)
 
 	account = executableAccount(exchange.MarketTypeSwap)
-	account.LeverageSettings[spec.InstrumentID] = shared.MustDecimal("11")
+	account.LeverageSettings[spec.InstrumentID] = "11"
 	validator = testValidator(now, account, instrument)
 	_, err = validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrLeverageLimit)
@@ -319,7 +320,7 @@ func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 func TestValidatorAcceptsPaperLimitForMatcher(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := executableAccount(exchange.MarketTypeSpot)
-	account.ExecutionMode = exchange.ExecutionModePaper
+	account.ExecutionMode = string(exchange.ExecutionModePaper)
 	moveToUnifiedWallet(&account)
 	validator := testValidator(now, account, testInstrument(exchange.MarketTypeSpot))
 	spec := testSpec(now)
@@ -334,7 +335,7 @@ func TestValidatorAcceptsPaperLimitForMatcher(t *testing.T) {
 func TestValidatorAcceptsPaperMarket(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := executableAccount(exchange.MarketTypeSpot)
-	account.ExecutionMode = exchange.ExecutionModePaper
+	account.ExecutionMode = string(exchange.ExecutionModePaper)
 	moveToUnifiedWallet(&account)
 	validator := testValidator(now, account, testInstrument(exchange.MarketTypeSpot))
 
@@ -371,7 +372,7 @@ func TestValidatorRejectsFillPolicyForMarket(t *testing.T) {
 
 func testValidator(
 	now time.Time,
-	account tradingaccount.Account,
+	account store.TradingAccountRecord,
 	instrument exchange.Instrument,
 ) Validator {
 	return Validator{
@@ -385,25 +386,25 @@ func testValidator(
 	}
 }
 
-func executableAccount(market exchange.MarketType) tradingaccount.Account {
-	account := tradingaccount.Account{
-		ID: "account-1", SpaceID: "space-1", Name: "main",
-		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{market},
-		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet,
+func executableAccount(market exchange.MarketType) store.TradingAccountRecord {
+	account := store.TradingAccountRecord{
+		TradingAccountID: "account-1", SpaceID: "space-1", Name: "main",
+		Exchange: string(exchange.ExchangeBinance), Markets: []string{string(market)},
+		ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
 		CredentialSecretID: "secret-1",
-		SettlementAsset:    "USDT", Status: exchange.AccountStatusEnabled, Ready: true,
-		Snapshot: exchange.AccountSnapshot{
-			Balances: []exchange.AssetBalance{
-				{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal("1000")},
-				{Wallet: exchange.WalletSpot, Asset: "BTC", Available: shared.MustDecimal("10")},
+		SettlementAsset:    "USDT", Status: string(exchange.AccountStatusEnabled), Ready: true,
+		Snapshot: store.TradingAccountSnapshot{
+			Balances: []store.AssetBalance{
+				{Wallet: string(exchange.WalletSpot), Asset: "USDT", Available: "1000"},
+				{Wallet: string(exchange.WalletSpot), Asset: "BTC", Available: "10"},
 			},
-			AvailableFunds: shared.MustDecimal("1000"),
+			AvailableFunds: "1000",
 		},
 	}
 	if market == exchange.MarketTypeSwap {
-		account.MarginMode = exchange.MarginModeCross
-		account.LeverageSettings = map[string]shared.Decimal{
-			"BTC-USDT-SWAP": shared.MustDecimal("5"),
+		account.MarginMode = string(exchange.MarginModeCross)
+		account.LeverageSettings = store.LeverageSettings{
+			"BTC-USDT-SWAP": "5",
 		}
 	}
 	return account
@@ -460,8 +461,8 @@ func decimalPointer(raw string) *shared.Decimal {
 }
 
 // 模拟盘只有一个统一钱包，夹具里的余额要跟着放进去。
-func moveToUnifiedWallet(account *tradingaccount.Account) {
+func moveToUnifiedWallet(account *store.TradingAccountRecord) {
 	for i := range account.Snapshot.Balances {
-		account.Snapshot.Balances[i].Wallet = exchange.WalletUnified
+		account.Snapshot.Balances[i].Wallet = string(exchange.WalletUnified)
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"gorm.io/gorm"
 )
 
@@ -142,11 +141,11 @@ func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Wri
 		}
 		h := hosts[target]
 		reachability, _ := servicecatalog.ParseReachability(h.Reachability)
-		material.host = hostbundle.Host{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Reachability: reachability}
-		material.control = hostbundle.Host{HostID: hosts[control].HostID, Address: hosts[control].Address}
+		material.host = bundleHost{hostID: h.HostID, address: h.Address, privateAddress: h.PrivateAddress, reachability: reachability}
+		material.control = bundleHost{hostID: hosts[control].HostID, address: hosts[control].Address}
 		for _, deployment := range deployments {
 			if deployment.HostID == h.HostID {
-				material.host.Components = append(material.host.Components, deployment.ComponentID)
+				material.host.components = append(material.host.components, deployment.ComponentID)
 			}
 		}
 		// 先确认库里的整套拓扑合法，再动签名密钥。

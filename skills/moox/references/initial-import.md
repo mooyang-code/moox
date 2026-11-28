@@ -33,7 +33,7 @@ import-pack/
   {
     "space_id": "crypto",
     "dataset_id": "dataset_xxx",
-    "freq": "5m",
+    "frequency": "5m",
     "series_tag": "venue:binance|market:swap|source:swap_http",
     "files": [
       {"subject_id": "BTC-USDT", "file": "5m/BTC-USDT.csv", "rows": 60000,
@@ -70,7 +70,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli data rows export --file ./moox.toml --
   --subject <任一标的> --columns close --from <最近几分钟> --to <现在> --page-size 2
 ```
 
-`key.series_tag` 与 `manifest.json` 的 `series_tag` 不一致就停下汇报。
+`key.time_series.series_tag` 与 `manifest.json` 的 `series_tag` 不一致就停下汇报。
 
 ## 4. 屏蔽告警推送
 
@@ -87,7 +87,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor mute --for 3h --reason 初始�
 
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill --file ./moox.toml --space-id <空间> --dataset-id <数据集> --force --from <末根+1期> --to <实时起点>
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill-status --file ./moox.toml --space-id <空间> --job-id <作业ID>   # 等到没有 pending/running
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill-status --file ./moox.toml --space-id <空间> --job-id <作业ID>   # 等到没有 queued/running
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill-retry  --file ./moox.toml --space-id <空间> --job-id <作业ID>   # 有失败分块时重试，直到全部成功
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline check --deep --file ./moox.toml --space-id <空间> --dataset-id <数据集> --from <末根+1期> --to <现在>
 ```
@@ -160,7 +160,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 
   退出码非零或有“行数不一致 / 读取失败”的标的就停下汇报（读取失败多半是 Storage 忙，稍后重跑脚本即可）。
 - **因子机本地**：每个标的本地最早一根等于 `manifest.json` 的 `first_utc`；因子机同步器接上之后本地最晚一根等于 Storage 最晚一根；
-  `[文件末根, 现在]` 内没有填充行（有说明缺口没补全）。本地边界用引擎接口：`moox-cli gateway call trpc.moox.factor.EngineControl GetSeriesBounds --file ./moox.toml --data '{"space_id":"…","dataset_id":"…","freq":"…","subject_id":"…"}'`。
+  `[文件末根, 现在]` 内没有填充行（有说明缺口没补全）。本地边界用引擎接口：`moox-cli gateway call trpc.moox.factor.EngineControl GetSeriesBounds --file ./moox.toml --data '{"space_id":"…","dataset_id":"…","frequency":"…","subject_id":"…"}'`。
 
 ## 10. 解除屏蔽
 

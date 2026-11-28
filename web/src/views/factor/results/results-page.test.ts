@@ -63,7 +63,7 @@ function taskInfo(taskId: string, boundInstanceId = ""): FactorTaskInfo {
       task_id: taskId,
       space_id: "crypto",
       source_dataset_id: "kline",
-      freq: "1m",
+      frequency: "1m",
       name: "行情因子",
       result_dataset_id: `r_${taskId}`,
       status: "enabled",

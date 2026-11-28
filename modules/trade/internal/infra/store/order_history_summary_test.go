@@ -38,7 +38,7 @@ func seedSummaryOrders(t *testing.T, s *Store, orders []summarySeedOrder) {
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
+			Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "x",
 		}); err != nil {
 			return err
 		}

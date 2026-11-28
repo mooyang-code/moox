@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
+	setupdataformat "github.com/mooyang-code/moox/modules/cli/internal/setup/dataformat"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fetchunit"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
@@ -178,6 +179,13 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 		options.logf("服务目录和主机 %s 上记的不一样，主机网关一起升级", host.Name)
 	}
 	if selected, err = catalog.StartOrder(selected); err != nil {
+		return result, err
+	}
+	formatReport, err := setupdataformat.CheckHostNow(host.Name, selected, report.DataFormats)
+	if err != nil {
+		return result, err
+	}
+	if err := setupdataformat.IncompatibleError(formatReport); err != nil {
 		return result, err
 	}
 
@@ -423,7 +431,7 @@ func (o Options) binaries(catalog servicecatalog.Catalog, selected []string) (ma
 		component, _ := catalog.Component(id)
 		if o.BinaryDirectory == "" {
 			if o.Bundle == nil {
-				return nil, errors.New("binary_dir_required: 在源码目录里部署要用 --binary-dir 指定预先编译好的 Linux 二进制目录（scripts/build/build-linux-local.sh 或 setup build-linux 的输出）")
+				return nil, errors.New("binary_dir_required: 在源码目录里部署要用 --binary-dir 指定预先编译好的 Linux 二进制目录（scripts/build/build-linux-local.sh 的输出）")
 			}
 			artifact, ok := o.Bundle.Component(id)
 			if !ok {

@@ -9,6 +9,6 @@ import { taskHealth } from "./health";
 
 defineOptions({ name: "FactorHealthTag" });
 
-const props = defineProps<{ set: Pick<FactorTask, "status" | "freq">; lastRun?: TaskRunSummary }>();
+const props = defineProps<{ set: Pick<FactorTask, "status" | "frequency">; lastRun?: TaskRunSummary }>();
 const health = computed(() => taskHealth(props.set, props.lastRun));
 </script>

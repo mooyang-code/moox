@@ -5,24 +5,22 @@ package configinit
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 
+	moox "github.com/mooyang-code/moox"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
 
-// exampleTemplate、secretsTemplate 是仓库根目录 moox.toml.example、moox.secrets.toml.example 的副本（测试保证一致）。
-// 录入页只替换里面的账号、云凭据、通知、交易所密钥和主机拓扑，其余段落（保留期、日志等）保持示例里的默认值。
-//
-//go:embed moox.toml.example
-var exampleTemplate string
-
-//go:embed moox.secrets.toml.example
-var secretsTemplate string
+// exampleTemplate、secretsTemplate 直接嵌入仓库根目录的 moox.toml.example 与 moox.secrets.toml.example。
+// 录入页只替换里面的账号、云凭据与主机拓扑，其余段落（保留期、日志等）保持示例里的默认值。
+var (
+	exampleTemplate = moox.ExampleConfigTemplate
+	secretsTemplate = moox.ExampleSecretsTemplate
+)
 
 // Rendered 是渲染出的两份文件的明文。
 type Rendered struct {
@@ -42,16 +40,12 @@ func Render(ctx context.Context, request *Request, env Environment) (Rendered, e
 		{"admin", "password", tomlString(request.Admin.Password)},
 		{"tencent_cloud", "secret_id", tomlString(request.Tencent.SecretID)},
 		{"tencent_cloud", "secret_key", tomlString(request.Tencent.SecretKey)},
-		{"notification", "channel_type", tomlString(request.Notification.ChannelType)},
-		{"notification", "webhook_url", tomlString(request.Notification.WebhookURL)},
-		{"notification", "secret", tomlString(request.Notification.Secret)},
 	} {
 		var err error
 		if secrets, err = setKey(secrets, edit.section, edit.key, edit.value); err != nil {
 			return Rendered{}, err
 		}
 	}
-	secrets = replaceExchangeKeys(secrets, request.ExchangeKeys)
 	lines, err := setKey(strings.Split(exampleTemplate, "\n"), "logging", "retention_days", strconv.FormatInt(request.Logging.RetentionDays, 10))
 	if err != nil {
 		return Rendered{}, err
@@ -146,7 +140,7 @@ func renderHost(host Host) []string {
 }
 
 // scfAccountID、scfAccountName 是渲染进 [scf_plan.cloud_account] 的云函数账号登记；scfCredentialSecretID 是 Admin 保存
-// 第一步那把腾讯云密钥用的密钥 ID（modules/admin/internal/service/setup 的 tencentSecretID），云函数账号只引用它。
+// 第一步那把腾讯云密钥用的密钥 ID（modules/admin/internal/service/secret/model 的 TencentDefaultSecretID），云函数账号只引用它。
 const (
 	scfAccountID          = "tencent-scf"
 	scfAccountName        = "Tencent SCF"

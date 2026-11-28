@@ -9,7 +9,7 @@ const info = (patch: Partial<FactorTask> = {}): FactorTaskInfo => ({
     task_id: "task_a",
     space_id: "crypto",
     source_dataset_id: "dataset_kline",
-    freq: "1m",
+    frequency: "1m",
     result_dataset_id: "dataset_factor_task_a",
     status: "enabled",
     ...patch
@@ -19,9 +19,8 @@ const info = (patch: Partial<FactorTask> = {}): FactorTaskInfo => ({
 
 const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
   job_id: "job-1",
-  request_id: "factor-recalc-1",
   task_id: "task_a",
-  factor_ids: ["Bias"],
+  members: ["Bias"],
   subjects: [],
   start_time: "2026-10-01T00:00:00Z",
   end_time: "2026-10-03T00:00:00Z",
@@ -125,7 +124,7 @@ describe("计算任务列表顶部的引擎状态", () => {
   it("补算作业分成进行中的与近 24 小时失败的", () => {
     const jobs = [
       job({ job_id: "r", status: "running" }),
-      job({ job_id: "a", status: "accepted" }),
+      job({ job_id: "a", status: "queued" }),
       job({ job_id: "f", status: "failed" }),
       job({ job_id: "old", status: "failed", updated_at: "1790812800000" }),
       job({ job_id: "s", status: "succeeded" })

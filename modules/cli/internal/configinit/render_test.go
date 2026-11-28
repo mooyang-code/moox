@@ -20,8 +20,6 @@ func sampleRequest() Request {
 	request.Admin.Username = "admin"
 	request.Admin.Password = "Adm1n-P@ss"
 	request.Tencent = Keys{SecretID: "AKIDexample", SecretKey: "key-example"}
-	request.Notification.ChannelType = "wecom"
-	request.Notification.WebhookURL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
 	request.Servers.Storage = &Server{SSHTarget: SSHTarget{Address: "198.51.100.11", SSHUser: "ubuntu"}}
 	request.Servers.Control = &Server{SSHTarget: SSHTarget{Address: "198.51.100.10", SSHUser: "ubuntu"}}
 	request.Servers.Overseas = &Server{SSHTarget: SSHTarget{Address: "198.51.100.12", SSHUser: "ubuntu"}}
@@ -33,8 +31,6 @@ type renderedManifest struct {
 	*topology.Config
 	Admin        topology.Admin
 	TencentCloud topology.TencentCloud
-	Notification topology.Notification
-	ExchangeKeys []topology.ExchangeKey
 }
 
 // parseRendered 用 CLI 自己的严格解码与校验解析两份文件。
@@ -44,7 +40,7 @@ func parseRendered(t *testing.T, rendered Rendered) renderedManifest {
 	if err != nil {
 		t.Fatalf("渲染结果应通过 CLI 自己的校验: %v", err)
 	}
-	return renderedManifest{Config: &pair.Config, Admin: pair.Secrets.Admin, TencentCloud: pair.Secrets.TencentCloud, Notification: pair.Secrets.Notification, ExchangeKeys: pair.Secrets.ExchangeKeys}
+	return renderedManifest{Config: &pair.Config, Admin: pair.Secrets.Admin, TencentCloud: pair.Secrets.TencentCloud}
 }
 
 func renderPair(t *testing.T, request Request, prober Prober) (renderedManifest, Rendered) {
@@ -87,9 +83,6 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	}
 	if manifest.TencentCloud.SecretID != "AKIDexample" || manifest.TencentCloud.SecretKey != "key-example" {
 		t.Fatalf("云凭据 = %+v", manifest.TencentCloud)
-	}
-	if manifest.Notification.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc" {
-		t.Fatalf("通知 = %+v", manifest.Notification)
 	}
 	if len(manifest.HostCatalog) != 3 || manifest.HostCatalog["storage"].SSH.PrivateKeyFile != sshKeyTOMLPath || manifest.HostCatalog["control"].Address != "198.51.100.10" {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
@@ -149,9 +142,14 @@ func TestRenderKeepsTheExampleDefaultsAndComments(t *testing.T) {
 			t.Fatalf("moox.toml 应保留示例里的 %q", want)
 		}
 	}
-	for _, want := range []string{"# 告警渠道的初始值", "[logging.cls]", "# 交易所密钥（可选）"} {
+	for _, want := range []string{"# 腾讯云账号的管理密钥", "[logging.cls]"} {
 		if !strings.Contains(secrets, want) {
 			t.Fatalf("moox.secrets.toml 应保留示例里的 %q", want)
+		}
+	}
+	for _, leftover := range []string{"[notification]", "[[exchange_keys]]"} {
+		if strings.Contains(secrets, leftover) {
+			t.Fatalf("moox.secrets.toml 不应残留 %q", leftover)
 		}
 	}
 	for _, leftover := range []string{"203.0.113.", "192.0.2.30", "[hosts.factor]", "[factor_engine]", `"factor-engine", "archive-worker"`, "[factors]", "[local_logs]", "[admin]"} {
@@ -164,19 +162,14 @@ func TestRenderKeepsTheExampleDefaultsAndComments(t *testing.T) {
 // 两份文件分开：页面提交的每个秘密值都只在 moox.secrets.toml 里，不出现在明文的 moox.toml。
 func TestRenderKeepsEverySecretOutOfTheTopologyFile(t *testing.T) {
 	request := sampleRequest()
-	request.Notification.ChannelType, request.Notification.WebhookURL, request.Notification.Secret = "feishu", "https://open.feishu.cn/open-apis/bot/v2/hook/feishu-hook-id", "feishu-sign-secret"
-	request.ExchangeKeys = []ExchangeKeyEntry{{Name: "main", Exchange: "okx", Environment: "production", APIKey: "okx-api-key", SecretKey: "okx-secret-key", Passphrase: "okx-passphrase"}}
-	manifest, rendered := renderPair(t, request, nil)
-	for _, secret := range []string{"Adm1n-P@ss", "AKIDexample", "key-example", "feishu-hook-id", "feishu-sign-secret", "okx-api-key", "okx-secret-key", "okx-passphrase"} {
+	_, rendered := renderPair(t, request, nil)
+	for _, secret := range []string{"Adm1n-P@ss", "AKIDexample", "key-example"} {
 		if strings.Contains(string(rendered.Config), secret) {
 			t.Fatalf("moox.toml 里出现了秘密 %q", secret)
 		}
 		if !strings.Contains(string(rendered.Secrets), secret) {
 			t.Fatalf("moox.secrets.toml 里应有 %q", secret)
 		}
-	}
-	if manifest.ExchangeKeys[0].ID() != "exchange-okx-production-main" || manifest.Notification.ChannelType != "feishu" {
-		t.Fatalf("秘密文件解析结果不对: %+v %+v", manifest.ExchangeKeys, manifest.Notification)
 	}
 }
 
@@ -360,7 +353,6 @@ func TestRenderRejectsInputThatCouldBreakTheFile(t *testing.T) {
 		"管理台不能与因子机共用":     func(r *Request) { r.Servers.Control.SharedWith = RoleFactor },
 		"因子机缺地址":          func(r *Request) { r.Servers.Factor = &SSHTarget{SSHUser: "u"} },
 		"SSH 端口越界":        func(r *Request) { r.Servers.Storage.SSHPort = 70000 },
-		"webhook 不是官方域名":  func(r *Request) { r.Notification.WebhookURL = "https://evil.example/x" },
 		"管理员密码超过 72 字节":   func(r *Request) { r.Admin.Password = strings.Repeat("x", 73) },
 		"字段超长":            func(r *Request) { r.Servers.Control.SSHUser = strings.Repeat("a", 600) },
 	}
@@ -381,7 +373,7 @@ func TestRenderRejectsInputThatCouldBreakTheFile(t *testing.T) {
 	}
 }
 
-// 两份模板必须与仓库根目录的示例保持一致；示例改版而模板没同步时，这里先报警。
+// 两份模板直接嵌入自仓库根目录的示例文件，不存在副本。
 func TestTemplatesMatchTheRepositoryExamples(t *testing.T) {
 	for name, embedded := range map[string]string{"moox.toml.example": exampleTemplate, "moox.secrets.toml.example": secretsTemplate} {
 		root, err := filepath.Abs("../../../../" + name)
@@ -393,7 +385,7 @@ func TestTemplatesMatchTheRepositoryExamples(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(want) != embedded {
-			t.Fatalf("internal/configinit/%s 与仓库根目录的 %s 不一致：改了示例后要同步复制一份", name, name)
+			t.Fatalf("嵌入的 %s 与仓库根目录的 %s 不一致", name, name)
 		}
 	}
 }
@@ -407,16 +399,6 @@ func TestSetKeyFailsLoudlyWhenTheTemplateDrifts(t *testing.T) {
 	}
 	if _, err := replaceTopology([]string{"[admin]"}, nil); err == nil {
 		t.Fatal("找不到拓扑段时必须报错")
-	}
-}
-
-// 告警 Webhook 可以不填，部署后在管理台添加；填了仍要通过官方域名校验。
-func TestRenderAllowsEmptyWebhook(t *testing.T) {
-	request := sampleRequest()
-	request.Notification.WebhookURL = ""
-	manifest, _ := renderWith(t, request, nil)
-	if manifest.Notification.WebhookURL != "" || manifest.Notification.ChannelType != "wecom" {
-		t.Fatalf("告警配置不对: %+v", manifest.Notification)
 	}
 }
 

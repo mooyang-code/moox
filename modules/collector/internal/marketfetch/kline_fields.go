@@ -34,7 +34,7 @@ type fieldOutcome struct {
 	failed map[string]error
 }
 
-// selectedOutputFields 返回这一项显式选中的输出字段：有写入目标时是各目标的并集，否则是取数项自己的。
+// selectedOutputFields 返回这一项在各个写入目标里显式选中的输出字段并集。
 func selectedOutputFields(req Request, item domain.CollectionItem) map[string]struct{} {
 	selected := map[string]struct{}{}
 	add := func(fields []string) {
@@ -43,10 +43,6 @@ func selectedOutputFields(req Request, item domain.CollectionItem) map[string]st
 				selected[field] = struct{}{}
 			}
 		}
-	}
-	if len(req.Targets) == 0 {
-		add(item.OutputFields)
-		return selected
 	}
 	for _, target := range itemTargets(req, item) {
 		add(targetOutputFields(item, target))

@@ -7,18 +7,13 @@ const component: CatalogComponent = {
   name: "出口代理",
   binary: "moox-egress-proxy",
   scope: "any",
-  replicas: "multi",
-  protected: false,
-  health: { port: 11012 },
+  health_port: 11012,
   ports: [11011],
   services: [
     {
       path: "test.Service",
       port: 11011,
-      methods: [
-        { name: "Read", callers: ["reader"], operators: [] },
-        { name: "Write", operators: [] }
-      ]
+      methods: [{ name: "Read", callers: ["reader"] }, { name: "Write" }]
     }
   ]
 };
@@ -48,16 +43,16 @@ describe("deployment presentation", () => {
           { path: "trpc.moox.infra.Auth", port: 0, methods: [] },
           { path: "trpc.moox.ops.SecretMgr", port: 11108, methods: [] }
         ],
-        health: { port: 11010 }
+        health_port: 11010
       })
     ).toEqual([9527, 11010, 11108]);
   });
-  it("uses server observation time for heartbeat age and keeps never-reported distinct", () => {
+  it("uses server observation time for heartbeat age and shows waiting before first report", () => {
     expect(gatewayLabel(snapshot)).toBe("在线");
     expect(gatewayLabel({ ...snapshot, compiled_at: String(Date.parse("2026-10-09T12:02:01Z")) })).toBe("离线");
-    expect(gatewayLabel({ ...snapshot, gateway_status: {} })).toBe("从未上报");
-    // 没拉取过时 Admin 给 "0"
-    expect(gatewayLabel({ ...snapshot, gateway_status: { last_seen_at: "0" } })).toBe("从未上报");
+    expect(gatewayLabel({ ...snapshot, gateway_status: {} })).toBe("等待上报");
+    // Admin 重启后尚未拉取或没拉取过时给 "0"
+    expect(gatewayLabel({ ...snapshot, gateway_status: { last_seen_at: "0" } })).toBe("等待上报");
     expect(gatewayLabel()).toBe("状态未知");
   });
   it("compares the expected and applied snapshot", () => {

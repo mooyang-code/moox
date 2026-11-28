@@ -32,26 +32,8 @@ func (s *Secret) EnvironmentBound() bool {
 	return s.IsSystem() || (s.Category == EventBusCategory && s.Provider == EventBusProvider)
 }
 
-// setup init 管理的固定初始密钥标识：
-// - TencentDefaultSecretID：默认腾讯云密钥；
-// - ExchangeSecretIDPrefix：[[exchange_keys]] 生成的固定交易所密钥前缀。
-const (
-	TencentDefaultSecretID = "tencent-default"
-	ExchangeSecretIDPrefix = "exchange-"
-)
-
-// ExchangeSecretID 返回交易所密钥的固定秘钥 ID：exchange-<交易所>-<环境>-<名称>，三段一律小写。
-// setup apply 按 moox.toml 的 [[exchange_keys]] 写入时用它；Collector 读只读 Key 用的 exchange-binance-production-readonly 也是它。
-func ExchangeSecretID(exchange, environment, name string) string {
-	return strings.ToLower(ExchangeSecretIDPrefix + exchange + "-" + environment + "-" + name)
-}
-
-// IsInitialSecretID 报告秘钥 ID 是否是 [[exchange_keys]] 生成的初始交易所密钥（exchange-*）。
-// 只有这类密钥在管理台硬删除时写墓碑：setup init 对它们只建不改，删掉的作废密钥不能被静默重建。
-// 默认腾讯云密钥（tencent-default）不写墓碑：它是云函数采集必需的，删除后 setup init 按 moox.toml 重建。
-func IsInitialSecretID(secretID string) bool {
-	return strings.HasPrefix(secretID, ExchangeSecretIDPrefix)
-}
+// setup init 管理的固定初始云账号密钥标识。
+const TencentDefaultSecretID = "tencent-default"
 
 // Secret 秘钥管理表（物理硬删除，c_secret_value 与 c_extra_config 均 AES-GCM 加密存储）。
 type Secret struct {
@@ -73,14 +55,4 @@ type Secret struct {
 
 func (s *Secret) TableName() string {
 	return "t_secrets"
-}
-
-// DeletedInitialSecret 记录管理台主动硬删除的密钥 ID，防止 setup init 静默复活作废初始密钥。
-type DeletedInitialSecret struct {
-	SecretID  string `gorm:"primaryKey;column:c_secret_id"`
-	CreatedAt int64  `gorm:"column:c_ctime;not null"`
-}
-
-func (DeletedInitialSecret) TableName() string {
-	return "t_deleted_initial_secrets"
 }

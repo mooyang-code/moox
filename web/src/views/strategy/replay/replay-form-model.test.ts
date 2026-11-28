@@ -8,7 +8,11 @@ import { replaySourceOf, wholeDays, type ReplayFormState } from "./replay-form-m
 function withRequirement(form: ReplayFormState, list: Strategy[]): ReplayFormState {
   const lookup = (id: string) => list.find(item => item.strategy_id === id)?.dsl_yaml ?? null;
   // 从实例发起时按实例引用的定义读
-  const dsl = form.instance_id ? (lookup(form.instance_strategy_id ?? "") ?? "") : model.replayDslText(form, list);
+  const dsl = form.instance_id
+    ? (lookup(form.instance_strategy_id ?? "") ?? "")
+    : form.source === "dsl"
+      ? form.dsl_yaml
+      : (lookup(form.strategy_id) ?? "");
   return { ...form, requirement: dsl ? fixtureRequirement(dsl, lookup) : null };
 }
 const replayPool = (form: ReplayFormState, list: Strategy[]) => model.replayPool(withRequirement(form, list));
@@ -18,11 +22,12 @@ const replayFactorTasks = (form: ReplayFormState, list: Strategy[]) => model.rep
 const replayDateOnly = (form: ReplayFormState, list: Strategy[], tasks: Parameters<typeof model.replayDateOnly>[1]) =>
   model.replayDateOnly(withRequirement(form, list), tasks);
 const replayFundingColumn = (form: ReplayFormState, list: Strategy[] = []) =>
-  model.replayFundingColumn(withRequirement(form, list), list);
+  model.replayFundingColumn(withRequirement(form, list));
 const validateReplayForm = (form: ReplayFormState, list: Strategy[] = []) =>
-  model.validateReplayForm(withRequirement(form, list), list);
-const replayIsPool = (form: ReplayFormState, list: Strategy[]) => model.replayIsPool(withRequirement(form, list), list);
-const { replayDriftHint, replayTuned } = model;
+  model.validateReplayForm(withRequirement(form, list));
+const replayIsPool = (form: ReplayFormState, list: Strategy[]) => model.replayIsPool(withRequirement(form, list));
+const replayDriftHint = (form: ReplayFormState, list: Strategy[]) => model.replayDriftHint(withRequirement(form, list));
+const replayTuned = (form: ReplayFormState, list: Strategy[]) => model.replayTuned(withRequirement(form, list));
 
 const strategies = [
   { strategy_id: "s1", dsl_yaml: "name: a\nmarket: {select: both, prefer: spot}\n" },
@@ -93,6 +98,9 @@ describe("replay form model", () => {
 
   it("requires a source and a task for every market in use", () => {
     expect(validateReplayForm({ ...base, strategy_id: "" }, strategies)).toContain("请选择定义");
+    expect(validateReplayForm({ ...base, strategy_id: "s3", tasks: {}, requirement_error: "后端超时" }, strategies)).toBe(
+      "读取策略要绑定的计算任务失败：后端超时"
+    );
     expect(validateReplayForm({ ...base, tasks: {} }, strategies)).toContain("每个市场");
     expect(validateReplayForm({ ...base, strategy_id: "s1", tasks: { spot: "a" } }, strategies)).toContain("每个市场");
     expect(validateReplayForm({ ...base, strategy_id: "s3" }, strategies)).toContain("先选任务所属的市场");
@@ -113,8 +121,8 @@ describe("replay form model", () => {
 
   it("picks dates only when every chosen task is daily", () => {
     const tasks = [
-      { task_id: "ftask_swap", freq: "1d" },
-      { task_id: "ftask_5m", freq: "5m" }
+      { task_id: "ftask_swap", frequency: "1d" },
+      { task_id: "ftask_5m", frequency: "5m" }
     ];
     expect(replayDateOnly(base, strategies, tasks)).toBe(true);
     expect(replayDateOnly({ ...base, tasks: { swap: "ftask_5m" } }, strategies, tasks)).toBe(false);

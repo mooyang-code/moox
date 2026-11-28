@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -12,7 +14,13 @@ import (
 	marketfiles "github.com/mooyang-code/moox/modules/collector/config/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-go/log"
 )
+
+// ConfigDirEnv 指定一个目录来覆盖编进二进制的路由与数据源配置文件，布局与 config/markets 相同：
+// <目录>/<市场>/route.yaml、<目录>/<市场>/sources/<数据源>.yaml。目录里没有的文件仍读编进去的内容。
+// market.yaml 不在覆盖范围内，始终读编进去的。
+const ConfigDirEnv = "MOOX_MARKET_CONFIG_DIR"
 
 // ErrUnknownMarket 表示市场没有在 Collector 登记（没有 market.yaml 或没有标的规则）。
 var ErrUnknownMarket = errors.New("市场未登记")
@@ -80,9 +88,34 @@ func (c Config) AmountUnit() string { return strings.ToLower(strings.TrimSpace(c
 
 func normalizeID(marketID string) string { return strings.ToLower(strings.TrimSpace(marketID)) }
 
-// ReadFile 读一个市场的数据文件（编进二进制的内容），name 形如 route.yaml、sources/tdx.yaml。
+var missingOverrides sync.Map
+
+// ReadFile 读一个市场的数据文件（name 形如 route.yaml、sources/tdx.yaml）：
+// market.yaml 始终读编进二进制的内容，不在目录覆盖范围内；
+// 其余文件优先读环境变量 MOOX_MARKET_CONFIG_DIR 指定的覆盖目录，没有时回退到编进二进制的内容并按路径记录一次警告。
 func ReadFile(marketID, name string) ([]byte, error) {
-	return marketfiles.FS.ReadFile(normalizeID(marketID) + "/" + name)
+	id := normalizeID(marketID)
+	if id == "" || strings.TrimSpace(name) == "" {
+		return nil, fs.ErrNotExist
+	}
+	if name == "market.yaml" {
+		return marketfiles.FS.ReadFile(id + "/" + name)
+	}
+	override := ""
+	if dir := strings.TrimSpace(os.Getenv(ConfigDirEnv)); dir != "" {
+		override = filepath.Join(dir, id, filepath.FromSlash(name))
+		raw, err := os.ReadFile(override)
+		if err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return raw, err
+		}
+	}
+	raw, err := marketfiles.FS.ReadFile(id + "/" + name)
+	if err == nil && override != "" {
+		if _, warned := missingOverrides.LoadOrStore(override, struct{}{}); !warned {
+			log.Warnf("环境变量 %s 指定的目录里没有 %s，改用编进二进制的 %s/%s", ConfigDirEnv, override, id, name)
+		}
+	}
+	return raw, err
 }
 
 // configs 缓存解析好的 market.yaml：内容编在二进制里，进程内不会变。

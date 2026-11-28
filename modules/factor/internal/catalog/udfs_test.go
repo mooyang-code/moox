@@ -182,9 +182,7 @@ func TestActivationPrerequisites(t *testing.T) {
 	// 引用它的因子加入任务并启用。
 	_, err = svc.CreateFactor(ctx, factorWithSpec("f_mean", "output: udf.ts_mean_udf(close, 3)\n"))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil)
-	require.NoError(t, err)
-	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_mean", domain.MemberStatusEnabled)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil, domain.MemberStatusEnabled)
 	require.NoError(t, err)
 
 	// 第二个版本：同一份 wasm 改写哈希来模拟（元数据完全相同）。
@@ -220,7 +218,7 @@ func TestActivationPrerequisites(t *testing.T) {
 	// 停用成员后，正在运行的作业（刚领取、进度还在起点）仍算已经开始。
 	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_mean", domain.MemberStatusDisabled)
 	require.NoError(t, err)
-	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{JobID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusQueued})
 	require.NoError(t, err)
 	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusRunning, 1; return nil })
 	require.NoError(t, err)
@@ -230,10 +228,10 @@ func TestActivationPrerequisites(t *testing.T) {
 	name, _, _ := db.GetUdf(ctx, "ts_mean_udf")
 	require.Equal(t, v1.Hash, name.ActiveHash, "前提不满足时不改数据")
 
-	// 领取过又被引擎归还的作业（回到 accepted，进度已越过起点）同样拒绝；从未开始的 accepted 作业不拦。
-	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusAccepted, 50; return nil })
+	// 领取过又被引擎归还的作业（回到 queued，进度已越过起点）同样拒绝；从未开始的 queued 作业不拦。
+	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusQueued, 50; return nil })
 	require.NoError(t, err)
-	fresh, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-2", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	fresh, err := db.CreateRecalcJob(ctx, store.RecalcJob{JobID: "req-2", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusQueued})
 	require.NoError(t, err)
 	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
 	require.ErrorContains(t, err, job.JobID)
@@ -266,9 +264,7 @@ func TestUpdateFactorRejectsStartedRecalcJob(t *testing.T) {
 	ctx := context.Background()
 	_, err := svc.CreateFactor(ctx, factorWithSpec("f_plain", "output: ts_mean(close, 3)\n"))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_plain", "", nil)
-	require.NoError(t, err)
-	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_plain", domain.MemberStatusEnabled)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_plain", "", nil, domain.MemberStatusEnabled)
 	require.NoError(t, err)
 
 	_, err = svc.UpdateFactor(ctx, factorWithSpec("f_plain", "output: ts_mean(close, 4)\n"))
@@ -277,7 +273,7 @@ func TestUpdateFactorRejectsStartedRecalcJob(t *testing.T) {
 
 	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_plain", domain.MemberStatusDisabled)
 	require.NoError(t, err)
-	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{JobID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusQueued})
 	require.NoError(t, err)
 	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusRunning, 30; return nil })
 	require.NoError(t, err)
@@ -302,7 +298,7 @@ func TestActivationRejectsIncompatibleVersion(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.CreateFactor(ctx, factorWithSpec("f_mean", "output: udf.ts_mean_udf(close, 3000)\n"))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil, "")
 	require.NoError(t, err)
 
 	// 第二个版本把参数范围收窄到 1..10：定义里写死的 3000 在新版本下编译失败。

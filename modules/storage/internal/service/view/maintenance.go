@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -42,15 +43,10 @@ type MaintenanceOptions struct {
 	// Bars 是时序 View 每个序列保留的最新根数；Primary 不够时有多少建多少。
 	Bars uint64
 	// BackfillPageSize 和 BackfillRequestInterval 限制首次建索引回填 Primary 的请求突发。
-	// 0 表示不限制，线上由配置给默认值。
+	// BackfillPageSize 为 0 时使用 storageconfig.DefaultViewBackfillPageSize（2000）。
 	BackfillPageSize        uint32
 	BackfillRequestInterval time.Duration
 }
-
-// viewBackfillBatchSize 是没有配置 backfill_page_size 时回填每页读取的行数。
-// Primary 历史读取一页就带回字段值，Pebble 还会按单页值数上限截断，宽表的实际页更小；
-// 线上用 backfill_page_size 把页调小，减轻回填对 Pebble 点读的突发压力。索引写入另按 256 行分批。
-const viewBackfillBatchSize = 10000
 
 // initialViewRevision 是索引建成时的修订号，之后每次加列加 1。
 const initialViewRevision uint64 = 1
@@ -104,7 +100,7 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 		opts.Interval = 30 * time.Second
 	}
 	if opts.BackfillPageSize == 0 {
-		opts.BackfillPageSize = viewBackfillBatchSize
+		opts.BackfillPageSize = storageconfig.DefaultViewBackfillPageSize
 	}
 	s.SetSeriesBars(opts.Bars)
 	s.mu.Lock()
@@ -447,13 +443,7 @@ func (s *Service) observeActivatedViewWatermark(runtime *viewRuntime, spec *view
 		log.Warnf("storage view activation metric probe failed space=%s dataset=%s index=%s: %v", spec.SpaceID, spec.DatasetID, runtime.indexID, err)
 		return
 	}
-	keys := make([]*pb.RowFieldUpsert, 0, len(rows))
-	for _, row := range rows {
-		if row != nil && row.GetKey() != nil {
-			keys = append(keys, &pb.RowFieldUpsert{Key: row.GetKey()})
-		}
-	}
-	s.observeViewWatermark(spec, keys)
+	s.observeViewWatermark(spec, rows)
 }
 
 func requireSuccess(ret *pb.RetInfo) error {

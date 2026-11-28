@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { AccountEnvironment, ControlMode, ExecutionMode, type LogicalAccount, type TradingAccount } from "@/api/trade/types";
 import { eligibleAccounts, joinableLogicals, nextPriority } from "./membership";
 
 const logical = (id: string, extra: Partial<LogicalAccount> = {}) =>
   ({
     logical_account_id: id,
-    execution_mode: 1,
+    execution_mode: ExecutionMode.PAPER,
+    environment: AccountEnvironment.PAPER,
     settlement_asset: "USDT",
     automation_state: "PAUSED",
     members: [],
@@ -14,7 +15,7 @@ const logical = (id: string, extra: Partial<LogicalAccount> = {}) =>
 const account = (id: string, extra: Partial<TradingAccount> = {}) =>
   ({
     trading_account_id: id,
-    execution_mode: 1,
+    execution_mode: ExecutionMode.PAPER,
     settlement_asset: "USDT",
     status: "ENABLED",
     markets: ["spot"],
@@ -30,35 +31,30 @@ describe("成员资格", () => {
       account("taken"),
       account("disabled", { status: "DISABLED" }),
       account("asset", { settlement_asset: "USDC" }),
-      account("live", { execution_mode: 2 })
+      account("live", { execution_mode: ExecutionMode.LIVE })
     ];
     expect(eligibleAccounts(list, [target, other], target).map(item => item.trading_account_id)).toEqual(["ok"]);
   });
 
-  it("还没有成员的实盘组合：只列进入页签所在环境的账户（不知道从哪进来按生产环境）；有成员后只收同环境的", () => {
-    const live = (id: string, environment: 1 | 2) =>
-      account(id, { execution_mode: 2, live: { environment, credential_secret_id: "s" } });
-    const list = [live("testnet", 1), live("prod", 2), account("paper")];
-    const empty = logical("empty", { execution_mode: 2 });
-    expect(eligibleAccounts(list, [empty], empty, "testnet").map(item => item.trading_account_id)).toEqual(["testnet"]);
-    expect(eligibleAccounts(list, [empty], empty, "prod").map(item => item.trading_account_id)).toEqual(["prod"]);
-    expect(eligibleAccounts(list, [empty], empty).map(item => item.trading_account_id)).toEqual(["prod"]);
-    const withTestnet = logical("t", {
-      execution_mode: 2,
-      members: [{ trading_account_id: "member", enabled: true, priority: 1 }]
-    });
-    const all = [...list, live("member", 1)];
-    expect(eligibleAccounts(all, [withTestnet], withTestnet).map(item => item.trading_account_id)).toEqual(["testnet"]);
+  it("空组合按自身后端 environment 匹配同环境的执行账户", () => {
+    const live = (id: string, environment: typeof AccountEnvironment.TESTNET | typeof AccountEnvironment.PRODUCTION) =>
+      account(id, { execution_mode: ExecutionMode.LIVE, live: { environment, credential_secret_id: "s" } });
+    const list = [live("testnet", AccountEnvironment.TESTNET), live("prod", AccountEnvironment.PRODUCTION), account("paper")];
+    const emptyTestnet = logical("empty-t", { execution_mode: ExecutionMode.LIVE, environment: AccountEnvironment.TESTNET });
+    const emptyProd = logical("empty-p", { execution_mode: ExecutionMode.LIVE, environment: AccountEnvironment.PRODUCTION });
+    expect(eligibleAccounts(list, [emptyTestnet], emptyTestnet).map(item => item.trading_account_id)).toEqual(["testnet"]);
+    expect(eligibleAccounts(list, [emptyProd], emptyProd).map(item => item.trading_account_id)).toEqual(["prod"]);
   });
 
-  it("只能加入同环境、同结算资产、已暂停的组合，优先级排在成员之后", () => {
+  it("只能加入同环境、同结算资产、可编辑成员（自主下单或已暂停）的组合，优先级排在成员之后", () => {
     const list = [
       logical("ok"),
-      logical("running", { automation_state: "ACTIVE" }),
+      logical("manual", { control_mode: ControlMode.MANUAL, automation_state: "" }),
+      logical("running", { control_mode: ControlMode.STRATEGY, automation_state: "ACTIVE" }),
       logical("other-asset", { settlement_asset: "USDC" }),
-      logical("live", { execution_mode: 2 })
+      logical("live", { execution_mode: ExecutionMode.LIVE, environment: AccountEnvironment.PRODUCTION })
     ];
-    expect(joinableLogicals(list, new Map(), "paper", "usdt").map(item => item.logical_account_id)).toEqual(["ok"]);
+    expect(joinableLogicals(list, "paper", "usdt").map(item => item.logical_account_id)).toEqual(["ok", "manual"]);
     expect(nextPriority(logical("x", { members: [{ trading_account_id: "a", enabled: true, priority: 3 }] }))).toBe(4);
     expect(nextPriority(logical("y"))).toBe(1);
   });

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -56,7 +56,7 @@ func TestPaperMatchesSpotAndSwapOrdersOfOneAccount(t *testing.T) {
 		}
 		return nil
 	}))
-	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}}
+	m := &Matcher{Store: s, Reducer: &fillreduce.Reducer{Store: s}}
 	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) { return matchFill(o), nil }
 
 	for range 2 {

@@ -75,8 +75,11 @@ func newProbingAdapter(adapter execution.ExecutionAdapter, probe *privateOrderPr
 	return probingAdapter{ExecutionAdapter: adapter, marketData: marketData, accountEvents: accountEvents, probe: probe}
 }
 
-func (a probingAdapter) SupportsAccountEvents() bool {
-	return a.accountEvents != nil
+func (a probingAdapter) Supports(capability string) bool {
+	if capability == execution.CapabilityAccountEvents {
+		return a.accountEvents != nil
+	}
+	return execution.Supports(a.ExecutionAdapter, capability)
 }
 
 func (a probingAdapter) Subscribe(

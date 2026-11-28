@@ -16,14 +16,14 @@ import (
 func TestUpsertFieldsWholeRowUpsertOverwritesNullFields(t *testing.T) {
 	store := openFactorRowsStore(t)
 	key := factorRowsKey("row-null")
-	if err := store.UpsertFields(context.Background(), "space", "factor_result", []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{doubleField("close", 10), doubleField("ma", 2)}}}); err != nil {
+	if err := store.UpsertFields(context.Background(), "space", "factor_result", []*pb.Row{{Key: key, Fields: []*pb.FieldValue{doubleField("close", 10), doubleField("ma", 2)}}}); err != nil {
 		t.Fatal(err)
 	}
-	row := &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{
+	row := &pb.Row{Key: key, Fields: []*pb.FieldValue{
 		doubleField("close", 11),
 		{FieldId: "ma", Value: &pb.TypedValue{Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL}}},
 	}}
-	if err := store.UpsertFields(context.Background(), "space", "factor_result", []*pb.RowFieldUpsert{row}); err != nil {
+	if err := store.UpsertFields(context.Background(), "space", "factor_result", []*pb.Row{row}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close", "ma"}, nil)
@@ -45,8 +45,8 @@ func TestUpsertFieldsWholeRowUpsertOverwritesNullFields(t *testing.T) {
 // 准备在 changeMu 之外：并发写入各占一个变更序号，序号连续。
 func TestUpsertFieldsConcurrentWritesKeepChangeSequenceContiguous(t *testing.T) {
 	store := openFactorRowsStore(t)
-	rows := func(value float64) []*pb.RowFieldUpsert {
-		return []*pb.RowFieldUpsert{{Key: factorRowsKey("row-concurrent"), Fields: []*pb.FieldValue{doubleField("close", value)}}}
+	rows := func(value float64) []*pb.Row {
+		return []*pb.Row{{Key: factorRowsKey("row-concurrent"), Fields: []*pb.FieldValue{doubleField("close", value)}}}
 	}
 	var wg sync.WaitGroup
 	errs := make(chan error, 16)
@@ -79,7 +79,7 @@ func TestUpsertFieldsConcurrentWritesKeepChangeSequenceContiguous(t *testing.T) 
 
 func TestUpsertFieldsThenMarkerOrdering(t *testing.T) {
 	store := openFactorRowsStore(t)
-	if err := store.UpsertFields(context.Background(), "space", "factor_result", []*pb.RowFieldUpsert{{Key: factorRowsKey("row-order"), Fields: []*pb.FieldValue{doubleField("close", 10)}}}); err != nil {
+	if err := store.UpsertFields(context.Background(), "space", "factor_result", []*pb.Row{{Key: factorRowsKey("row-order"), Fields: []*pb.FieldValue{doubleField("close", 10)}}}); err != nil {
 		t.Fatal(err)
 	}
 	marker := &pb.DatasetPeriodCompletedMarker{
@@ -132,7 +132,7 @@ func factorRowsKey(recordID string) *pb.RowKey {
 // 一次写入里行键重复时后写覆盖先写。
 func TestUpsertFieldsDuplicateRowKeysLastWins(t *testing.T) {
 	store := openFactorRowsStore(t)
-	rows := []*pb.RowFieldUpsert{
+	rows := []*pb.Row{
 		{Key: factorRowsKey("row-dup"), Fields: []*pb.FieldValue{doubleField("close", 1)}},
 		{Key: factorRowsKey("row-dup"), Fields: []*pb.FieldValue{doubleField("close", 2)}},
 	}
@@ -148,8 +148,8 @@ func TestUpsertFieldsDuplicateRowKeysLastWins(t *testing.T) {
 // 行的数据集必须与请求一致：一次写入只产生一个数据集的一条事件。
 func TestUpsertFieldsRejectsRowsOfAnotherDataset(t *testing.T) {
 	store := openFactorRowsStore(t)
-	row := &pb.RowFieldUpsert{Key: factorRowsKey("row-a"), Fields: []*pb.FieldValue{doubleField("close", 1)}}
-	if err := store.UpsertFields(context.Background(), "space", "another", []*pb.RowFieldUpsert{row}); err == nil {
+	row := &pb.Row{Key: factorRowsKey("row-a"), Fields: []*pb.FieldValue{doubleField("close", 1)}}
+	if err := store.UpsertFields(context.Background(), "space", "another", []*pb.Row{row}); err == nil {
 		t.Fatal("row of another dataset: err = nil")
 	}
 	if head, err := store.ChangeCursor(); err != nil || head.GetSequence() != 0 {

@@ -30,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { createSubmitScope } from "@/utils/submit-scope";
 import EnvMark from "./env-mark.vue";
 import { confirmTier, nameConfirmed, type Environment } from "./environment";
@@ -68,7 +68,7 @@ const canSubmit = computed(
   () => (!props.needReason || reason.value.trim() !== "") && nameConfirmed(tier.value, typedName.value, props.comboName)
 );
 
-// 重新打开或关闭都使进行中的提交失效：迟到的响应不能关闭用户重新打开的对话框。
+// 重新打开、关闭或卸载（含切空间重建）都使进行中的提交失效：迟到的响应不能关闭用户重新打开的对话框。
 const scope = createSubmitScope();
 watch(
   () => props.visible,
@@ -79,6 +79,7 @@ watch(
     error.value = "";
   }
 );
+onBeforeUnmount(() => scope.invalidate());
 
 async function handleOk() {
   if (!canSubmit.value) return false;

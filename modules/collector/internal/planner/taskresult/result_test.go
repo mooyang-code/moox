@@ -104,23 +104,20 @@ func (f *resultMetadataFake) GetDataset(_ context.Context, req *storagepb.GetDat
 	return &storagepb.GetDatasetRsp{RetInfo: resultOK(), Dataset: dataset}, nil
 }
 
-func (f *resultMetadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
-	f.createDatasets++
-	// 和 Storage 一样：数据集建好即启用，列随数据集一起写入。
+func (f *resultMetadataFake) UpsertDataset(_ context.Context, req *storagepb.UpsertDatasetReq) (*storagepb.UpsertDatasetRsp, error) {
 	dataset := req.GetDataset()
-	dataset.Status = "active"
-	f.datasets[dataset.GetDatasetId()] = dataset
-	for _, column := range req.GetColumns() {
-		column.SpaceId, column.DatasetId = dataset.GetSpaceId(), dataset.GetDatasetId()
-		f.columnNames = append(f.columnNames, column.GetColumnName())
-		f.columns = append(f.columns, column)
+	if _, existed := f.datasets[dataset.GetDatasetId()]; !existed {
+		f.createDatasets++
+		// 和 Storage 一样：数据集建好即启用，列随数据集一起写入。
+		dataset.Status = "active"
+		for _, column := range req.GetColumns() {
+			column.SpaceId, column.DatasetId = dataset.GetSpaceId(), dataset.GetDatasetId()
+			f.columnNames = append(f.columnNames, column.GetColumnName())
+			f.columns = append(f.columns, column)
+		}
 	}
-	return &storagepb.CreateDatasetRsp{RetInfo: resultOK(), Dataset: dataset}, nil
-}
-
-func (f *resultMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
-	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
-	return &storagepb.UpdateDatasetRsp{RetInfo: resultOK(), Dataset: req.GetDataset()}, nil
+	f.datasets[dataset.GetDatasetId()] = dataset
+	return &storagepb.UpsertDatasetRsp{RetInfo: resultOK(), Dataset: dataset}, nil
 }
 
 func (f *resultMetadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
@@ -221,11 +218,11 @@ func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	manager := NewManagerWithAPI(fake)
 	ids, err := manager.Ensure(context.Background(), "crypto", "task-5m", "kline", "spot", Config{Frequency: "5m"})
 	require.NoError(t, err)
-	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFreq())
+	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFrequency())
 
 	ids, err = manager.Ensure(context.Background(), "crypto", "task-1h", "kline", "spot", Config{Frequency: "1H"})
 	require.NoError(t, err)
-	require.Equal(t, "1h", fake.datasets[ids.DatasetID].GetFreq(), "a frequency alias is declared in canonical form")
+	require.Equal(t, "1h", fake.datasets[ids.DatasetID].GetFrequency(), "a frequency alias is declared in canonical form")
 }
 
 func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {

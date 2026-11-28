@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	observabilityconsumer "github.com/mooyang-code/moox/modules/monitor/internal/observability/eventconsumer"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -87,7 +88,7 @@ func startObservabilityConsumer(
 	cfg *config.Config,
 	runtime *Runtime,
 	hostStore *hostmetrics.Store,
-	klineInventory *monmetrics.TaskResultInventoryCache,
+	klineInventory *kline.TaskResultInventoryCache,
 ) {
 	if cfg == nil || !cfg.Observability.Enabled || runtime == nil || runtime.Store == nil ||
 		runtime.Store.Ping(ctx) != nil || runtime.Repositories == nil || hostStore == nil {
@@ -114,8 +115,8 @@ func startObservabilityConsumer(
 	runtime.Go(func() {
 		for ctx.Err() == nil {
 			runtime.setObservabilityIngestState(false, errors.New("observability consumer is connecting"))
-			jc := jetstream.ConfigFromEnv(cfg.Observability.EventBusURLs, "moox-monitor-observability")
-			if path := strings.TrimSpace(cfg.Observability.CredentialFile); path != "" {
+			jc := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-monitor-observability")
+			if path := strings.TrimSpace(cfg.EventBus.CredentialFile); path != "" {
 				if err := jc.ApplyCredentialFile(jetstream.ExpandCredentialPath(path)); err != nil {
 					runtime.setObservabilityIngestState(false, fmt.Errorf("observability consumer credential: %w", err))
 					log.WarnContextf(ctx, "observability consumer credential unavailable")
@@ -221,8 +222,7 @@ func metricsObservabilityRoute(
 		observed := time.UnixMilli(message.GetOccurredAt()).UTC()
 		samples, err := monmetrics.ParseSnapshot(metricReport.GetSnapshot(), monmetrics.Envelope{
 			ServiceName: metricReport.GetServiceName(), InstanceID: metricReport.GetInstanceId(),
-			MessageID: message.GetEventId(), ProducerNodeID: metricReport.GetNodeId(),
-			ProducerVersion: metricReport.GetServiceVersion(), ObservedAt: observed,
+			MessageID: message.GetEventId(), ObservedAt: observed,
 		}, monmetrics.DefaultLimits())
 		if err != nil {
 			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectReason(err))

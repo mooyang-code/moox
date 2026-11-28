@@ -7,23 +7,17 @@ import (
 	"hash/fnv"
 	"io/fs"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"gopkg.in/yaml.v3"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// MarketConfigDirEnv 指定一个目录来覆盖编进二进制的路由与数据源运行参数，布局与 config/markets 相同：
-// <目录>/<市场>/route.yaml、<目录>/<市场>/sources/<数据源>.yaml。目录里没有的文件仍读编进去的内容。
-// market.yaml 不在覆盖范围内，始终读编进去的。
-const MarketConfigDirEnv = "MOOX_MARKET_CONFIG_DIR"
+// MarketConfigDirEnv 指定一个目录来覆盖编进二进制的路由与数据源配置文件（与 markets.ConfigDirEnv 相同）。
+const MarketConfigDirEnv = markets.ConfigDirEnv
 
 // Route 是一个市场的路由文件（config/markets/<市场>/route.yaml，编在二进制里）：一个品种的 K 线来源按它分配——
 // 每个频率一条候选链，主源按权重、按标的哈希分配，失败沿链回落。没有路由文件的市场、路由没管的品种，
@@ -238,33 +232,10 @@ func (k KlineRoute) sources(primaryOnly bool) []RouteSource {
 	return sources
 }
 
-// readMarketFile 读一个市场的数据文件（name 形如 route.yaml、sources/tdx.yaml）：环境变量 MOOX_MARKET_CONFIG_DIR
-// 指定的目录里有这个文件就读它，否则读编进二进制的内容；两处都没有时返回 fs.ErrNotExist。
-// 设了目录却没有这个文件、而编进去的内容里有时打一条警告，每个路径只打一次。
-func readMarketFile(marketID, name string) ([]byte, error) {
-	override := ""
-	if dir := strings.TrimSpace(os.Getenv(MarketConfigDirEnv)); dir != "" {
-		override = filepath.Join(dir, marketID, filepath.FromSlash(name))
-		raw, err := os.ReadFile(override)
-		if err == nil || !errors.Is(err, fs.ErrNotExist) {
-			return raw, err
-		}
-	}
-	raw, err := markets.ReadFile(marketID, name)
-	if err == nil && override != "" {
-		if _, warned := missingOverrides.LoadOrStore(override, struct{}{}); !warned {
-			log.Warnf("环境变量 %s 指定的目录里没有 %s，改用编进二进制的 %s/%s", MarketConfigDirEnv, override, marketID, name)
-		}
-	}
-	return raw, err
-}
-
-var missingOverrides sync.Map
-
 // LoadRoute 读市场的路由文件；市场没有路由文件时 found 为 false。
 func LoadRoute(marketID string) (route Route, found bool, err error) {
 	marketID = normalizeMarketID(marketID)
-	raw, err := readMarketFile(marketID, "route.yaml")
+	raw, err := markets.ReadFile(marketID, "route.yaml")
 	if errors.Is(err, fs.ErrNotExist) || marketID == "" {
 		return Route{}, false, nil
 	}
@@ -334,35 +305,10 @@ func assignedSource(sources []RouteSource, routeID, subject string) (RouteSource
 	return selected, selected.Provider != "" && selected.SourceID != ""
 }
 
-type sourceFile struct {
-	Provider sourceFileBody `yaml:"provider"`
-}
-
-type sourceFileBody struct {
-	ID           string              `yaml:"id"`
-	Market       string              `yaml:"market"`
-	EnabledFeeds []string            `yaml:"enabled_feeds"`
-	Hosts        []string            `yaml:"hosts"`
-	Kline        SourceKlineConfig   `yaml:"kline"`
-	RateLimit    sourceRateLimitFile `yaml:"rate_limit"`
-}
-
 // SourceKlineConfig 是数据源配置文件里的 K 线一段。
-type SourceKlineConfig struct {
-	Endpoint          string `yaml:"endpoint"`
-	MaxBarsPerRequest int    `yaml:"max_bars_per_request"`
-}
+type SourceKlineConfig = markets.SourceKlineConfig
 
-type sourceRateLimitFile struct {
-	Scope             string  `yaml:"scope"`
-	RequestsPerSecond float64 `yaml:"requests_per_second"`
-	Burst             int     `yaml:"burst"`
-	MaxConcurrent     int     `yaml:"max_concurrent"`
-	Cooldown          string  `yaml:"cooldown"`
-	RequestTimeout    string  `yaml:"request_timeout"`
-}
-
-// SourceRuntime 是一个数据源的运行参数（config/markets/<市场>/sources/<数据源>.yaml）。
+// SourceRuntime 是一个数据源的运行参数（config/markets/<市场>/sources/<数据源>.yaml 的 provider 段）。
 type SourceRuntime struct {
 	ID                string
 	KlineEnabled      bool
@@ -393,73 +339,38 @@ func LoadSourceRuntimes(route Route) (map[string]SourceRuntime, error) {
 }
 
 // LoadSourceRuntime 按数据源 ID 读某个市场数据源的运行参数：路由里的 K 线来源和只提供附加字段的来源都用它。
-// 没有配置文件、或文件仅承载端点/推送配置（无 provider 段，如 crypto/sources/binance.yaml）时 found 为 false。
+// 没有配置文件、或文件不含 provider 段（例如 crypto/sources/binance.yaml）时 found 为 false。
 func LoadSourceRuntime(marketID, id string) (SourceRuntime, bool, error) {
 	marketID = normalizeMarketID(marketID)
 	id = strings.ToLower(strings.TrimSpace(id))
-	name := "sources/" + id + ".yaml"
-	path := marketID + "/" + name
-	raw, err := readMarketFile(marketID, name)
-	if errors.Is(err, fs.ErrNotExist) || marketID == "" || id == "" {
-		return SourceRuntime{}, false, nil
-	}
-	if err != nil {
+	file, found, err := markets.LoadSourceFile(marketID, id)
+	if err != nil || !found || file.Provider == nil {
 		return SourceRuntime{}, false, err
 	}
-	if isEndpointOnlySourceYAML(raw) {
-		return SourceRuntime{}, false, nil
-	}
-	var file sourceFile
-	decoder := yaml.NewDecoder(bytes.NewReader(raw))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&file); err != nil {
-		return SourceRuntime{}, false, fmt.Errorf("解析数据源配置 %s：%w", path, err)
-	}
-	if err := validateSourceFile(marketID, id, file); err != nil {
+	path := marketID + "/sources/" + id + ".yaml"
+	provider := *file.Provider
+	if err := validateSourceProvider(marketID, id, provider); err != nil {
 		return SourceRuntime{}, false, fmt.Errorf("校验数据源配置 %s：%w", path, err)
 	}
-	baseURL, endpoint, err := splitEndpoint(file.Provider.Kline.Endpoint)
+	baseURL, endpoint, err := splitEndpoint(provider.Kline.Endpoint)
 	if err != nil {
 		return SourceRuntime{}, false, fmt.Errorf("数据源 %q 的 kline.endpoint：%w", id, err)
 	}
-	rateLimit, err := file.Provider.RateLimit.Policy()
+	rateLimit, err := parseSourceRateLimit(provider.RateLimit)
 	if err != nil {
 		return SourceRuntime{}, false, fmt.Errorf("数据源 %q 的 rate_limit：%w", id, err)
 	}
 	return SourceRuntime{
 		ID:                id,
-		KlineEnabled:      containsStringFold(file.Provider.EnabledFeeds, "kline"),
-		InstrumentEnabled: containsStringFold(file.Provider.EnabledFeeds, "instrument"),
+		KlineEnabled:      containsStringFold(provider.EnabledFeeds, "kline"),
+		InstrumentEnabled: containsStringFold(provider.EnabledFeeds, "instrument"),
 		KlineBaseURL:      baseURL,
 		KlineEndpoint:     endpoint,
-		Hosts:             append([]string(nil), file.Provider.Hosts...),
+		Hosts:             append([]string(nil), provider.Hosts...),
 		Port:              providerPort(id),
-		KlineSpec:         file.Provider.Kline,
+		KlineSpec:         provider.Kline,
 		RateLimit:         rateLimit,
 	}, true, nil
-}
-
-// isEndpointOnlySourceYAML 识别只包含直连端点/推送配置（api/stream，不含 provider 运行参数段）的数据源文件，
-// 例如内嵌的 crypto/sources/binance.yaml；其它任何未知顶层键仍交给 KnownFields(true) 严格报错。
-func isEndpointOnlySourceYAML(raw []byte) bool {
-	var top map[string]yaml.Node
-	if err := yaml.Unmarshal(raw, &top); err != nil || len(top) == 0 {
-		return false
-	}
-	if _, hasProvider := top["provider"]; hasProvider {
-		return false
-	}
-	hasEndpoint := false
-	for key := range top {
-		switch key {
-		case "app":
-		case "api", "stream":
-			hasEndpoint = true
-		default:
-			return false
-		}
-	}
-	return hasEndpoint
 }
 
 func providerPort(providerID string) int {
@@ -493,9 +404,8 @@ func splitEndpoint(raw string) (string, string, error) {
 	return "", parsed.EscapedPath(), nil
 }
 
-// validateSourceFile 校验数据源配置；marketID 是文件所在目录的市场，id 是文件名里的数据源 ID。
-func validateSourceFile(marketID, id string, file sourceFile) error {
-	provider := file.Provider
+// validateSourceProvider 校验数据源配置的 provider 段；marketID 是文件所在目录的市场，id 是文件名里的数据源 ID。
+func validateSourceProvider(marketID, id string, provider markets.SourceProviderConfig) error {
 	if strings.TrimSpace(provider.ID) != id {
 		return fmt.Errorf("provider.id %q 与文件名里的数据源 %q 不一致", provider.ID, id)
 	}
@@ -508,7 +418,7 @@ func validateSourceFile(marketID, id string, file sourceFile) error {
 	return nil
 }
 
-func (r sourceRateLimitFile) Policy() (marketdata.RateLimitPolicy, error) {
+func parseSourceRateLimit(r markets.SourceRateLimitFile) (marketdata.RateLimitPolicy, error) {
 	cooldown, err := time.ParseDuration(strings.TrimSpace(r.Cooldown))
 	if err != nil {
 		return marketdata.RateLimitPolicy{}, fmt.Errorf("解析 cooldown：%w", err)

@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -76,7 +76,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	consumers := make(map[string]*events.Consumer, 3)
 	for _, durable := range []string{"factor_collector_period_v1", "collector_resample_period_crypto_v1", "factor_calc"} {
 		consumer, err := events.NewConsumer(context.Background(), client, registry, events.ConsumerConfig{
-			Name: durable, Event: events.DatasetPeriodCompleted, AckWait: time.Minute,
+			Consumer: events.FactorPeriodConsumer.WithName(durable), AckWait: time.Minute,
 			MaxDeliver: 5, MaxAckPending: 256, FetchMaxWait: 100 * time.Millisecond,
 		})
 		if err != nil {
@@ -87,7 +87,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	}
 
 	occurredAt := time.Now().UTC()
-	payload := &storagepb.DatasetPeriodCompleted{
+	payload := &eventpb.DatasetPeriodCompleted{
 		DatasetId: "dataset_binance_kline_1m", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 		CauseEventId: "cause-e2e", CompletedAt: occurredAt.UnixMilli(),
 	}

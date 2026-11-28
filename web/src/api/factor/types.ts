@@ -1,11 +1,12 @@
-import type { Page, PageResult, RetInfo } from "@/api/storage/types";
+import type { Page, PageResult } from "@/api/page";
+import type { RetInfo } from "@/api/storage/types";
 
 export type MemberStatus = "enabled" | "disabled";
 export type FactorTaskStatus = "pending" | "enabled" | "disabled";
 /** 成员类型：fixed 参数固定；var 参数由关联的策略实例逐期提交（成员键以 __var 结尾）。 */
 export type MemberKind = "fixed" | "var";
 export type PeriodFactorStatus = "complete" | "degraded" | "skipped";
-export type RecalcJobStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
+export type RecalcJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 /** 补算作业的标的范围选择：全部（源数据集的全部标的）或指定一组。不是计算任务的属性。 */
 export type RecalcSubjectMode = "all" | "include";
 export type FactorType = "timeseries" | "cross_section";
@@ -17,7 +18,7 @@ export interface FactorTask {
   task_id: string;
   space_id: string;
   source_dataset_id: string;
-  freq: string;
+  frequency: string;
   /** 展示名：直接用作结果数据集的名称（含汉字、不超过 10 个字、空间内唯一）。 */
   name: string;
   result_dataset_id: string;
@@ -250,12 +251,11 @@ export interface RecalcFactorsReq {
   subjects: string[];
   start_time: string;
   end_time: string;
-  request_id: string;
+  job_id: string;
 }
 
 export interface RecalcJob {
   job_id: string;
-  request_id: string;
   task_id: string;
   members: string[];
   subjects: string[];

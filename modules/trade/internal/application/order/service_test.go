@@ -822,8 +822,8 @@ func TestServiceSubmitRevalidatesReadinessAndReferencePrice(t *testing.T) {
 	service.Validator.Accounts = accountEligibilityFunc(func(
 		context.Context,
 		string,
-	) (tradingaccount.Account, error) {
-		return tradingaccount.Account{}, tradingaccount.ErrAccountNotExecutable
+	) (store.TradingAccountRecord, error) {
+		return store.TradingAccountRecord{}, tradingaccount.ErrAccountNotExecutable
 	})
 	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
 	require.ErrorIs(t, err, tradingaccount.ErrAccountNotExecutable)
@@ -1280,33 +1280,31 @@ func newTestServiceForMarket(
 	instrument := testInstrument(market)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: account.SpaceID, TradingAccountID: account.ID, Name: account.Name,
-			Exchange: string(account.Exchange), Markets: []string{string(account.Markets[0])},
-			ExecutionMode:      string(account.ExecutionMode),
-			Environment:        string(account.Environment),
+			SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID, Name: account.Name,
+			Exchange: account.Exchange, Markets: []string{account.Markets[0]},
+			ExecutionMode:      account.ExecutionMode,
+			Environment:        account.Environment,
 			CredentialSecretID: account.CredentialSecretID,
-			SettlementAsset:    account.SettlementAsset, Status: string(account.Status),
+			SettlementAsset:    account.SettlementAsset, Status: account.Status,
 			Ready: true,
 		}); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode:   string(account.ExecutionMode),
+			Environment:     account.Environment,
 			SettlementAsset: account.SettlementAsset,
-			AutomationState: "PAUSED", PauseReason: "configure",
+			PauseReason:     "configure",
 		}); err != nil {
 			return err
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1",
-			TradingAccountID: account.ID, Enabled: true,
+			TradingAccountID: account.TradingAccountID, Enabled: true,
 		}); err != nil {
 			return err
 		}
-		if err := tx.SetLogicalAccountAutomation(
-			account.SpaceID, "logical-1", "ACTIVE", "",
-		); err != nil {
+		if err := tx.ResumeLogicalAccount(account.SpaceID, "logical-1"); err != nil {
 			return err
 		}
 		// 目标订单（setTestOwner 的 owner-1）需要当前会话的有效目标。
@@ -1422,7 +1420,7 @@ func TestConfirmedAbsentMarketRetryRechecksFundsWithFreshQuote(t *testing.T) {
 	pending := expireUnknownOrder(t, service, tradeStore, adapter)
 
 	account := executableAccount(exchange.MarketTypeSpot)
-	account.Snapshot.Balances[0].Available = shared.MustDecimal("150")
+	account.Snapshot.Balances[0].Available = "150"
 	service.Validator.Accounts = accountEligibilityStub{account: account}
 	live.price = "200"
 	_, err := service.Submit(context.Background(), "space-1", string(pending.ID))

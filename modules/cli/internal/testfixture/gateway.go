@@ -25,12 +25,12 @@ func (f HandlerGateway) Forward(ctx context.Context, service, method string, ser
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	alias := map[string]string{"trpc.moox.collector.CollectMgr": "collector", "trpc.moox.ops.SecretMgr": "secret", "trpc.moox.admin.Setup": "setup", "trpc.moox.ops.SysDeploy": "sysdeploy", "trpc.moox.trade.TradeConsoleService": "trade", "trpc.moox.storage.Metadata": "storage-metadata", "trpc.moox.storage.PrimaryStore": "storage-primary", "trpc.moox.storage.DataView": "storage-view"}[service]
+	alias := map[string]string{"trpc.moox.collector.CollectMgr": "collector", "trpc.moox.ops.SecretMgr": "secret", "trpc.moox.ops.SysDeploy": "sysdeploy", "trpc.moox.trade.TradeConsoleService": "trade", "trpc.moox.storage.Metadata": "storage-metadata", "trpc.moox.storage.PrimaryStore": "storage-primary", "trpc.moox.storage.DataView": "storage-view"}[service]
 	if alias == "" || strings.ContainsAny(method, "/?#") || serialization != codec.SerializationTypeJSON {
 		return nil, fmt.Errorf("unexpected gateway fixture call")
 	}
 	path := "/api/admin/" + alias + "/" + method
-	if alias == "setup" || alias == "sysdeploy" || alias == "trade" || strings.HasPrefix(alias, "storage-") {
+	if alias == "sysdeploy" || alias == "trade" || strings.HasPrefix(alias, "storage-") {
 		path = "/" + service + "/" + method
 	}
 	request := httptest.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))

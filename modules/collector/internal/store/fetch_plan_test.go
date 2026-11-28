@@ -107,7 +107,7 @@ func TestBackfillJobChunksClaimAndWatermark(t *testing.T) {
 	require.NoError(t, repo.CreateJob(ctx, BackfillJob{JobID: "job-1", SpaceID: "crypto", DatasetID: "d", Frequency: "1m", From: from, To: from.Add(time.Hour)}, chunks))
 	job, stored, err := repo.GetJob(ctx, "job-1")
 	require.NoError(t, err)
-	require.Equal(t, BackfillPending, job.Status)
+	require.Equal(t, BackfillQueued, job.Status)
 	require.Equal(t, BackfillKindGap, job.Kind)
 	require.Equal(t, BackfillSourceManual, job.Source)
 	require.True(t, job.From.Equal(from) && job.To.Equal(from.Add(time.Hour)))
@@ -129,7 +129,7 @@ func TestBackfillJobChunksClaimAndWatermark(t *testing.T) {
 	require.Equal(t, 1, counts[BackfillSucceeded])
 	require.NoError(t, repo.CancelJob(ctx, "job-1"))
 	job, _, _ = repo.GetJob(ctx, "job-1")
-	require.Equal(t, BackfillCanceled, job.Status)
+	require.Equal(t, BackfillCancelled, job.Status)
 
 	require.NoError(t, repo.SetWatermark(ctx, "crypto", "d", "1m", from.Add(time.Hour)))
 	require.NoError(t, repo.SetWatermark(ctx, "crypto", "d", "1m", from), "水位只前进不后退")
@@ -155,7 +155,7 @@ func TestBackfillRequeueRetryAndListFilters(t *testing.T) {
 	require.ErrorIs(t, repo.RequeueChunk(ctx, claimed[0].ID, claimed[0].Attempts, "1@2", ""), ErrChunkLost, "退回后旧尝试不再持有分块")
 	_, chunks, err := repo.GetJob(ctx, "manual")
 	require.NoError(t, err)
-	require.Equal(t, BackfillPending, chunks[0].Status)
+	require.Equal(t, BackfillQueued, chunks[0].Status)
 	require.Equal(t, "1@2", chunks[0].Missing)
 	require.Equal(t, 1, chunks[0].Attempts, "退回不退尝试次数")
 
@@ -168,9 +168,9 @@ func TestBackfillRequeueRetryAndListFilters(t *testing.T) {
 	require.Equal(t, 1, retried)
 	job, chunks, err := repo.GetJob(ctx, "manual")
 	require.NoError(t, err)
-	require.Equal(t, BackfillPending, job.Status)
+	require.Equal(t, BackfillQueued, job.Status)
 	require.Empty(t, job.LastError)
-	require.Equal(t, BackfillPending, chunks[1].Status)
+	require.Equal(t, BackfillQueued, chunks[1].Status)
 	require.Zero(t, chunks[1].Attempts)
 
 	all, total, err := repo.ListJobs(ctx, "crypto", BackfillJobFilter{}, 1, 10)
@@ -192,8 +192,8 @@ func TestBackfillRequeueRetryAndListFilters(t *testing.T) {
 
 	counts, err := repo.ChunkStatusCountsOf(ctx, []string{"manual", "auto"})
 	require.NoError(t, err)
-	require.Equal(t, 2, counts["manual"][BackfillPending])
-	require.Equal(t, 1, counts["auto"][BackfillPending])
+	require.Equal(t, 2, counts["manual"][BackfillQueued])
+	require.Equal(t, 1, counts["auto"][BackfillQueued])
 	autoChunks, err := repo.AutoChunksSince(ctx, "crypto", from, 100)
 	require.NoError(t, err)
 	require.Len(t, autoChunks, 1)
@@ -292,25 +292,4 @@ func TestFetchPlanPauseSwitchIsPersistedPerSpace(t *testing.T) {
 	paused, _ = repo.PausedSpaces(ctx)
 	require.Equal(t, map[string]bool{"stockcn": true}, paused)
 	require.Error(t, repo.SetPaused(ctx, " ", true))
-}
-
-// 手工暂停和系统暂停各占一列：任一个在空间就是暂停的，清掉一个不影响另一个。
-func TestFetchPlanManualAndSystemPausesAreIndependent(t *testing.T) {
-	ctx := context.Background()
-	repo := openPlanTestStore(t).FetchPlans()
-	require.NoError(t, repo.SetPaused(ctx, "crypto", true))
-	require.NoError(t, repo.SetSystemPaused(ctx, "crypto", true))
-	require.NoError(t, repo.SetSystemPaused(ctx, "stockcn", true))
-
-	require.NoError(t, repo.SetSystemPaused(ctx, "crypto", false))
-	require.NoError(t, repo.SetSystemPaused(ctx, "stockcn", false))
-	paused, err := repo.PausedSpaces(ctx)
-	require.NoError(t, err)
-	require.Equal(t, map[string]bool{"crypto": true}, paused, "系统恢复后手工暂停的空间保持暂停")
-
-	require.NoError(t, repo.SetSystemPaused(ctx, "crypto", true))
-	require.NoError(t, repo.SetPaused(ctx, "crypto", false))
-	paused, _ = repo.PausedSpaces(ctx)
-	require.Equal(t, map[string]bool{"crypto": true}, paused, "手工恢复不放开系统暂停")
-	require.Error(t, repo.SetSystemPaused(ctx, " ", true))
 }

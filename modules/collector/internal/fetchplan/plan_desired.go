@@ -76,34 +76,10 @@ type PlanDatasetState struct {
 	Count        uint32   `json:"count"`
 	LatenessS    int      `json:"lateness_s"`
 	OutputFields []string `json:"output_fields,omitempty"`
-	// Ingest 是数据集所在的执行端（scf、stream、local），空表示 scf。
-	Ingest string `json:"ingest,omitempty"`
-	// Symbols 是每个标的的交易所符号（标的 → 符号，与函数计划的 ExchangeSymbol 一致）。不进 Hash；
-	// 变化时数据集在标的时间线上写一行，补采按时间线取改名前的旧符号。
-	Symbols map[string]string `json:"symbols,omitempty"`
+	// Ingest 是数据集所在的执行端（scf、stream、local）。
+	Ingest string `json:"ingest"`
 	// Stopped 表示已生效状态里这个数据集的头份是停止份（不再采集，生效点还没到）；期望状态里总是 false。
 	Stopped bool `json:"stopped,omitempty"`
-}
-
-// sameSymbols 比较两份交易所符号映射。
-func sameSymbols(left, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for subject, symbol := range left {
-		if other, ok := right[subject]; !ok || other != symbol {
-			return false
-		}
-	}
-	return true
-}
-
-// IngestOrSCF 返回数据集的执行端，空视为 scf。
-func (s PlanDatasetState) IngestOrSCF() string {
-	if s.Ingest == "" {
-		return marketfetch.PlanExecutorSCF
-	}
-	return s.Ingest
 }
 
 // DesiredDataset 是期望状态里的一个数据集，带完整序列（标的加 series_tag，规范顺序，序号即下标）。
@@ -126,8 +102,8 @@ type PlanFunction struct {
 	Name   string `json:"name"`
 	Region string `json:"region"`
 	Market string `json:"market"`
-	// Executor 为空表示 SCF 函数；stream、local 是推送与本地执行端（没有地域与 cron）。
-	Executor string            `json:"executor,omitempty"`
+	// Executor 是执行端（scf、stream 或 local）；stream、local 没有地域与 cron。
+	Executor string            `json:"executor"`
 	Cron     string            `json:"cron"`
 	Plan     *marketfetch.Plan `json:"plan"`
 }
@@ -174,7 +150,6 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		// 按执行端（scf、stream、local）分开的标的全集与数据集。
 		subjects   map[string]map[string]struct{}
 		datasetIDs map[string][]string
-		external   map[string]string
 		pairs      map[string]string
 	}
 	markets := map[string]*market{}
@@ -192,7 +167,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		key := planMarketKey(group)
 		info := markets[key]
 		if info == nil {
-			info = &market{key: key, sample: group, subjects: map[string]map[string]struct{}{}, datasetIDs: map[string][]string{}, external: map[string]string{}, pairs: map[string]string{}}
+			info = &market{key: key, sample: group, subjects: map[string]map[string]struct{}{}, datasetIDs: map[string][]string{}, pairs: map[string]string{}}
 			info.tag = marketfetch.PlanSeriesTag(spaceID, marketfetch.PlanMarket{Provider: group.Provider, SourceID: group.SourceID, MarketType: group.MarketType})
 			markets[key] = info
 		}
@@ -228,9 +203,6 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			}
 			subjectSets[datasetKey][subject] = struct{}{}
 			info.subjects[executor][subject] = struct{}{}
-			if external := strings.TrimSpace(group.ExternalSymbols[subject]); external != "" {
-				info.external[subject] = external
-			}
 			if pair := strings.TrimSpace(group.Pairs[subject]); pair != "" {
 				info.pairs[subject] = pair
 			}
@@ -265,16 +237,6 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			return nil, fmt.Errorf("dataset %s %s: %w", dataset.DatasetID, dataset.Frequency, err)
 		}
 		dataset.Series, dataset.Hash, dataset.Count = set.Series, set.Hash, uint32(len(set.Series))
-		// 交易所符号与函数计划同一规则：有外部符号用它，否则去掉连字符（见 marketfetch.Plan.ExchangeSymbol）。
-		external := markets[datasetMarket[datasetKey]].external
-		dataset.Symbols = make(map[string]string, len(subjectSets[datasetKey]))
-		for subject := range subjectSets[datasetKey] {
-			symbol := external[subject]
-			if symbol == "" {
-				symbol = strings.ReplaceAll(subject, "-", "")
-			}
-			dataset.Symbols[subject] = symbol
-		}
 		dataset.index = make(map[string]uint32, len(set.Series))
 		for i, item := range set.Series {
 			dataset.index[item.Key()] = uint32(i)
@@ -285,23 +247,19 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		info := markets[key]
 		// newPlan 构造一项计划：subjects 是这一项负责的标的，datasetKeys 是它服务的数据集。
 		newPlan := func(executor string, subjects []string, datasetKeys []string) *marketfetch.Plan {
-			plan := &marketfetch.Plan{V: 1, Fetch: opts.planFetch(info.sample), Market: marketfetch.PlanMarket{
+			plan := &marketfetch.Plan{V: 1, Executor: executor, Fetch: opts.planFetch(info.sample), Market: marketfetch.PlanMarket{
 				MarketID: info.sample.MarketID, InstrumentType: info.sample.InstrumentType, Provider: info.sample.Provider,
 				SourceID: info.sample.SourceID, MarketType: info.sample.MarketType,
 			}}
-			if executor != marketfetch.PlanExecutorSCF {
-				plan.Executor = executor
-			}
-			for _, subject := range subjects {
-				derived := strings.ReplaceAll(subject, "-", "")
-				if external := info.external[subject]; external != "" && external != derived {
-					if plan.SymbolExceptions == nil {
-						plan.SymbolExceptions = map[string]string{}
+			if executor == marketfetch.PlanExecutorStreaming {
+				for _, subject := range subjects {
+					pair := info.pairs[subject]
+					if pair == "" {
+						continue
 					}
-					plan.SymbolExceptions[subject] = external
-				}
-				// 交易对只下发给推送：SCF 函数按未知字段拒绝解码计划。
-				if pair := info.pairs[subject]; executor == marketfetch.PlanExecutorStreaming && pair != "" && pair != plan.ExchangeSymbol(subject) {
+					if defaultSymbol, err := marketfetch.ProviderSymbol(plan.Market, subject); err == nil && pair == defaultSymbol {
+						continue
+					}
 					if plan.Pairs == nil {
 						plan.Pairs = map[string]string{}
 					}
@@ -385,7 +343,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 				}
 				sort.Strings(subjects)
 				plan := newPlan(executor, subjects, datasetKeys)
-				state.Functions[name] = &PlanFunction{Name: name, Region: regionOf[name], Market: key, Cron: planCron(plan), Plan: plan}
+				state.Functions[name] = &PlanFunction{Name: name, Region: regionOf[name], Market: key, Executor: executor, Cron: planCron(plan), Plan: plan}
 			}
 		}
 	}
@@ -463,7 +421,7 @@ func (o PlanOptions) fetchFor(marketType string) marketfetch.PlanFetch {
 func previousAssignment(previous map[string]*PlanFunction, marketKey string) map[string]string {
 	result := map[string]string{}
 	for name, function := range previous {
-		if function == nil || function.Plan == nil || function.Market != marketKey || function.Executor != "" {
+		if function == nil || function.Plan == nil || function.Market != marketKey || function.Executor != marketfetch.PlanExecutorSCF {
 			continue
 		}
 		for _, dataset := range function.Plan.Datasets {

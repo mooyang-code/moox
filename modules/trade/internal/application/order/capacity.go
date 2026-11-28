@@ -110,7 +110,7 @@ func minCapacity(a, b shared.Decimal) shared.Decimal {
 
 func availableReservationFunds(tx *store.Tx, validation Validation, adjustment shared.Decimal, now time.Time) (shared.Decimal, error) {
 	if orderPolicyOf(validation, nil).UsesLocalFundsLedger() {
-		balances, err := tx.GetPaperBalanceSnapshot(validation.Account.SpaceID, validation.Account.ID)
+		balances, err := tx.GetPaperBalanceSnapshot(validation.Account.SpaceID, validation.Account.TradingAccountID)
 		if err != nil {
 			return shared.Zero(), err
 		}
@@ -122,9 +122,9 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 	}
 	market := validation.Instrument.MarketType
 	unreflected, err := tx.GetUnreflectedReservation(
-		validation.Account.SpaceID, validation.Account.ID, validation.ReservedAsset,
+		validation.Account.SpaceID, validation.Account.TradingAccountID, validation.ReservedAsset,
 		validation.Account.MarketsSharingFunds(market),
-		validation.Account.SnapshotSourceTime.UnixMilli(),
+		validation.Account.SnapshotSourceTime,
 	)
 	if err != nil {
 		return shared.Zero(), err
@@ -135,10 +135,10 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 // paperT1Locked 是模拟盘卖单当天还不能卖的数量：T+1 的场所（A 股）当日买入的部分。买单和其他场所（港股 T+0、加密货币）返回 0。
 func paperT1Locked(tx *store.Tx, validation Validation, now time.Time) (shared.Decimal, error) {
 	instrument := validation.Instrument
-	if !exchange.RuleAt(validation.Account.Exchange, instrument.MarketType).T1 || validation.ReservedAsset == "" || validation.ReservedAsset != instrument.BaseAsset {
+	if !exchange.RuleAt(exchange.Exchange(validation.Account.Exchange), instrument.MarketType).T1 || validation.ReservedAsset == "" || validation.ReservedAsset != instrument.BaseAsset {
 		return shared.Zero(), nil
 	}
-	bought, err := tx.PaperT1Bought(validation.Account.SpaceID, validation.Account.ID, exchange.T1Since(now).UnixMilli())
+	bought, err := tx.PaperT1Bought(validation.Account.SpaceID, validation.Account.TradingAccountID, exchange.T1Since(now).UnixMilli())
 	if err != nil {
 		return shared.Zero(), err
 	}

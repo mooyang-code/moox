@@ -11,15 +11,6 @@
 
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS t_schema_meta (
-    c_key TEXT NOT NULL PRIMARY KEY,
-    c_value TEXT NOT NULL
-);
-
-INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '21')
-ON CONFLICT(c_key) DO NOTHING;
-
 -- ************ Space ************
 CREATE TABLE IF NOT EXISTS t_spaces (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

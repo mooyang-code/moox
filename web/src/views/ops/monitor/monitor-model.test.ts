@@ -148,11 +148,11 @@ describe("历史补齐中的数据集", () => {
               producer: "storage_view",
               space_id: "mooxsys",
               dataset_id: "ds_new",
-              freq: "1m",
+              frequency: "1m",
               status: "disabled",
               reason: "待生效（上游历史补齐中）"
             },
-            { producer: "storage_view", space_id: "mooxsys", dataset_id: "ds_off", freq: "1m", status: "disabled" }
+            { producer: "storage_view", space_id: "mooxsys", dataset_id: "ds_off", frequency: "1m", status: "disabled" }
           ]
         }
       ]
@@ -319,7 +319,7 @@ describe("layers", () => {
                 producer: "factor",
                 space_id: "crypto",
                 dataset_id: "dataset_abc",
-                freq: "1m",
+                frequency: "1m",
                 status: "healthy",
                 output_watermark_at: at(11),
                 latest_bar_close_at: ms(close),
@@ -332,7 +332,7 @@ describe("layers", () => {
                 producer: "factor",
                 space_id: "crypto",
                 dataset_id: "dataset_late",
-                freq: "1m",
+                frequency: "1m",
                 status: "healthy",
                 output_watermark_at: at(41),
                 latest_bar_close_at: ms(at(40)),
@@ -345,7 +345,7 @@ describe("layers", () => {
                 producer: "factor",
                 space_id: "crypto",
                 dataset_id: "dataset_wait",
-                freq: "1m",
+                frequency: "1m",
                 status: "stale",
                 reason: "等待中",
                 output_watermark_at: at(15),
@@ -359,7 +359,7 @@ describe("layers", () => {
                 producer: "factor",
                 space_id: "stockcn",
                 dataset_id: "dataset_cal",
-                freq: "1m",
+                frequency: "1m",
                 status: "unknown",
                 reason: "日历未覆盖：2027-01-04",
                 clock_issue: "日历未覆盖：2027-01-04",
@@ -400,7 +400,7 @@ describe("layers", () => {
                 producer: "storage_view",
                 space_id: "mooxsys",
                 dataset_id: "view_mooxsys_host_resource",
-                freq: "1m",
+                frequency: "1m",
                 status: "healthy",
                 output_watermark_at: at(1)
               }
@@ -523,7 +523,7 @@ describe("layers", () => {
                 space_id: "crypto",
                 dataset_id: "strategy_26d51f7e-4c40-4e33-b637-4ec72d4cd7e6",
                 display_name: "binance_spot_momentum（26d51f7e）",
-                freq: "1m",
+                frequency: "1m",
                 status: "healthy"
               }
             ]
@@ -544,7 +544,7 @@ describe("expected bar", () => {
     producer: "storage",
     space_id: "crypto",
     dataset_id: "dataset_abc",
-    freq: "1m",
+    frequency: "1m",
     status: "healthy",
     output_watermark_at: at(2),
     latest_bar_close_at: ms(at(1)),
@@ -625,7 +625,7 @@ describe("market time zone", () => {
       producer: "storage",
       space_id: "stockcn",
       dataset_id: "dataset_stockcn_kline_1m",
-      freq: "1m",
+      frequency: "1m",
       status: "healthy" as const,
       timezone: "Asia/Shanghai",
       output_watermark_at: "2026-10-16T01:30:00Z",

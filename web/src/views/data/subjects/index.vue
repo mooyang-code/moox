@@ -16,9 +16,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { useQueryTab } from "@/hooks/useQueryTab";
 import { useSpaceStore } from "@/store/modules/space";
 import MembersTab from "./members-tab.vue";
 import TagsTab from "./tags-tab.vue";
@@ -36,36 +37,24 @@ const spaceStore = useSpaceStore();
 const route = useRoute();
 const router = useRouter();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
-// 页签和所选标签都在 URL 里（?tab=members&tag=）：刷新、后退、分享链接都能回到同一处
-// 换空间时先同步切回“标签”页签（地址写回是异步的），免得成员页签拿新空间多读一轮再跳走
-const switchingTab = ref<SubjectTab | null>(null);
-const activeTab = computed<SubjectTab>(() => switchingTab.value ?? (route.query.tab === "members" ? "members" : "tags"));
 const selectedTagId = computed(() => (typeof route.query.tag === "string" ? route.query.tag : ""));
 
-function writeQuery(tab: SubjectTab, tagId: string) {
-  const query = { ...route.query, tab: tab === "members" ? "members" : undefined, tag: tagId || undefined };
-  void router.replace({ path: route.path, query });
-}
-
-function onTabChange(value: string | number) {
-  writeQuery(value === "members" ? "members" : "tags", selectedTagId.value);
-}
+// 页签和所选标签都在 URL 里（?tab=members&tag=）：刷新、后退、分享链接都能回到同一处
+const { activeTab, setTab: onTabChange } = useQueryTab<SubjectTab>({
+  tabs: ["tags", "members"],
+  buildQuery(tab, currentQuery) {
+    return {
+      ...currentQuery,
+      tab: tab === "members" ? "members" : undefined,
+      tag: selectedTagId.value || undefined
+    };
+  }
+});
 
 function openMembers(tagId: string) {
-  writeQuery("members", tagId);
+  const query = { ...route.query, tab: "members", tag: tagId || undefined };
+  void router.replace({ path: route.path, query });
 }
-
-// 换空间：标签属于原来的空间，回到标签页签
-watch(
-  selectedSpaceId,
-  (next, previous) => {
-    if (!previous || next === previous || route.path !== "/data/subjects") return;
-    switchingTab.value = "tags";
-    const query = { ...route.query, tab: undefined, tag: undefined };
-    void router.replace({ path: route.path, query }).finally(() => (switchingTab.value = null));
-  },
-  { flush: "sync" }
-);
 </script>
 
 <style scoped>

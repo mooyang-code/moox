@@ -130,6 +130,101 @@ func dropSection(lines []string, section string) []string {
 	return out
 }
 
+// isDeprecatedSecretSection 判断表头是否属于已从 moox.secrets.toml 移除的 [notification] / [[exchange_keys]] 及其子表。
+func isDeprecatedSecretSection(name string) bool {
+	return name == "notification" || strings.HasPrefix(name, "notification.") ||
+		name == "exchange_keys" || strings.HasPrefix(name, "exchange_keys.")
+}
+
+// stripDeprecatedSecretLines 删掉秘密文件里已废弃的 [notification] 与 [[exchange_keys]] 段（含子表、数组表、
+// 紧挨在段标题上方的说明注释以及文件根部的同名键）；没有这些段时原样返回。
+func stripDeprecatedSecretLines(lines []string) []string {
+	out := append([]string(nil), lines...)
+	changed := false
+
+	// 1. 清理根部（第一个表头之前）可能出现的 notification = ... / exchange_keys = ... 键。
+	firstHeader := len(out)
+	for i, line := range out {
+		if _, _, ok := tableHeader(line); ok {
+			firstHeader = i
+			break
+		}
+	}
+	for i := 0; i < firstHeader; {
+		if k, _, ok := keyValue(out[i]); ok && (k == "notification" || k == "exchange_keys") {
+			end := valueEnd(out, i) + 1
+			out = append(out[:i], out[end:]...)
+			firstHeader -= end - i
+			changed = true
+			continue
+		}
+		i++
+	}
+
+	// 2. 逐个删除所有匹配的表段（含 [notification]、[notification.*]、[[exchange_keys]] 等）。
+	isComment := func(i int) bool { return strings.HasPrefix(strings.TrimSpace(out[i]), "#") }
+	for {
+		start, end := -1, len(out)
+		for i, line := range out {
+			name, _, ok := tableHeader(line)
+			if !ok {
+				continue
+			}
+			if start >= 0 {
+				end = i
+				break
+			}
+			if isDeprecatedSecretSection(name) {
+				start = i
+			}
+		}
+		if start < 0 {
+			break
+		}
+		changed = true
+		if end < len(out) {
+			for end-1 > start && isComment(end-1) {
+				end--
+			}
+		} else if out[end-1] == "" && end-1 > start {
+			end--
+		}
+		for start > 0 && isComment(start-1) {
+			start--
+		}
+		out = append(out[:start], out[end:]...)
+		for start > 0 && start < len(out) && strings.TrimSpace(out[start-1]) == "" && strings.TrimSpace(out[start]) == "" {
+			out = append(out[:start], out[start+1:]...)
+		}
+		for len(out) > 1 && strings.TrimSpace(out[len(out)-1]) == "" && strings.TrimSpace(out[len(out)-2]) == "" {
+			out = out[:len(out)-1]
+		}
+	}
+	if !changed {
+		return lines
+	}
+	return out
+}
+
+// stripDeprecatedSecretSections 删掉秘密文件原文里已废弃的 [notification] 与 [[exchange_keys]] 段；未出现时原样返回。
+func stripDeprecatedSecretSections(raw []byte) []byte {
+	lines := strings.Split(string(raw), "\n")
+	cleaned := stripDeprecatedSecretLines(lines)
+	if len(cleaned) == len(lines) {
+		same := true
+		for i := range lines {
+			if cleaned[i] != lines[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return raw
+		}
+	}
+	return []byte(strings.Join(cleaned, "\n"))
+}
+
 var (
 	headerPattern = regexp.MustCompile(`^\s*(\[\[?)\s*([^\[\]]+?)\s*(\]\]?)\s*(#.*)?$`)
 	keyPattern2   = regexp.MustCompile(`^\s*([A-Za-z0-9_-]+|"[^"]*")\s*=\s*(.*)$`)

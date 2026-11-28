@@ -47,8 +47,7 @@ const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
   market: { name: "行情源", note: "交易所 / 行情接口" },
   "scf-collector": { name: "SCF 采集函数", note: "腾讯云函数" },
   console: { name: "管理台", note: "浏览器 · HTTPS 9527" },
-  "moox-cli": { name: "moox-cli", note: "运维命令行" },
-  "moox-skill": { name: "Skill", note: "外部调用方" }
+  "moox-cli": { name: "moox-cli", note: "运维命令行" }
 };
 // 管理台入口是 Admin 自己监听的 HTTPS 9527：静态页面、根证书下载与 /api/admin/* 都在这里。
 const ENTRY_LINKS: { from: string; to: string; label: string }[] = [{ from: "ext:console", to: "admin", label: "HTTPS :9527" }];
@@ -263,7 +262,7 @@ export function buildTopology(input: TopologyInput): Topology {
   for (const component of components) {
     for (const service of component.services || []) {
       const targets = placed.get(component.id) || [];
-      const callers = [...new Set(service.methods.flatMap(methodCallerIds))];
+      const callers = [...new Set((service.methods || []).flatMap(methodCallerIds))];
       for (const caller of callers) {
         const sources = sourcesOf(caller, placed, nodeById);
         const category = categoryOf(caller, componentIds.has(caller));
@@ -301,7 +300,7 @@ function collectExternals(catalog?: ComponentCatalog) {
   const ids = new Set<string>(["market", "console"]);
   for (const component of catalog?.components || [])
     for (const service of component.services || [])
-      for (const method of service.methods)
+      for (const method of service.methods || [])
         for (const caller of methodCallerIds(method)) if (!componentIds.has(caller)) ids.add(caller);
   const order = Object.keys(EXTERNAL_LABELS);
   return [...ids]

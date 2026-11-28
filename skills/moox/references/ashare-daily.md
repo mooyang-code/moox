@@ -13,7 +13,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 - **换手率有完整历史，股本这一组只有开通以后的值。** 股本、每股股利、是否 ST 来自只有当日值的接口，补历史时这些列是空的（只有最近一个交易日可能写上）；所以市值、市盈率这类因子只能从开通日起用。平日某天没采到，那一天的股本也补不回来（内置的市值、估值因子会沿用最近 20 个交易日里的值）。
 - **沪深 300 里没有 ST 股**，`is_st` 在这个股票池里基本恒为 0。
 
-全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`（`collector kline`、`collector status`、`collector fetch-plan`、`collector task create/delete` 没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`）都要写 `--space-id stockcn`；`metadata apply`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
+全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 在多数规格命令里默认值是 `crypto`（但 `collector status`、`collector fetch-plan show|pause|resume|reregister`、`collector kline`、`collector resample`、`collector subjects exclude|unexclude|exclusions`、`collector history-seed skip`、`collector task create/delete` 以及 `archive tasks|partitions` 等没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`）都要写 `--space-id stockcn`；`metadata apply`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
 
 ## 0. 前提
 
@@ -25,10 +25,10 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 可采哪些字段、它们的中文名与分组只在 Collector 的字段规格里登记，管理台新建任务的输出字段清单与数据源页都直接取自它，不需要导入字段目录。先看日线能选哪些附加字段：
 
 ```bash
-./bin/moox-cli collector data-type show --data-type kline
+./bin/moox-cli collector data-type list
 ```
 
-输出的 `extra_fields` 里 `market_id=stockcn`、`frequencies` 含 `1d` 的条目应有 `adj_factor`、`sw_l1`～`sw_l3`、`fin_*`、`turnover_rate`、`total_shares`、`float_shares`、`dividend_per_share`、`is_st`，每个都带 `display_name` 与 `group`。结果数据集建列时 Collector 把显示名与分组写在列上，管理台按列自己的显示名与分组展示。
+输出中 `data_type=kline` 的 `extra_fields` 里 `market_id=stockcn`、`frequencies` 含 `1d` 的条目应有 `adj_factor`、`sw_l1`～`sw_l3`、`fin_*`、`turnover_rate`、`total_shares`、`float_shares`、`dividend_per_share`、`is_st`，每个都带 `display_name` 与 `group`。结果数据集建列时 Collector 把显示名与分组写在列上，管理台按列自己的显示名与分组展示。
 
 ## 2. 打开采集任务
 
@@ -93,7 +93,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 
 ```bash
 ./bin/moox-cli collector status --space-id stockcn         # 数据集出现在列表里、level 为 ok
-./bin/moox-cli collector fetch-plan --space-id stockcn     # 计划已生效，函数分配里有这个数据集
+./bin/moox-cli collector fetch-plan show --space-id stockcn     # 计划已生效，函数分配里有这个数据集
 ```
 
 实时采集从计划生效之后的第一个交易日起：那天的日线在下一天北京时间 08:00 到。
@@ -105,7 +105,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 ```bash
 ./bin/moox-cli collector kline backfill --space-id stockcn --dataset-id dataset_<task_id> \
   --from 2025-11-01 --to 2026-11-11 --force
-./bin/moox-cli collector kline backfill-status --space-id stockcn --dataset-id dataset_<task_id>      # 看作业进度
+./bin/moox-cli collector kline backfill-list --space-id stockcn --dataset-id dataset_<task_id>        # 列出作业进度
 ./bin/moox-cli collector kline backfill-status --space-id stockcn --job-id <job_id>                   # 看单个作业与失败分块
 ./bin/moox-cli collector kline backfill-retry --space-id stockcn --job-id <job_id>                    # 重试失败分块
 ```
@@ -165,7 +165,7 @@ output: fin_net_profit_parent_ttm / fin_equity_parent
       name: A股日线
       space_id: stockcn
       source_dataset_id: dataset_<task_id>
-      freq: 1d
+      frequency: 1d
       members:
         - {factor: mom_adj}
         - {factor: roe_ttm}
@@ -242,8 +242,8 @@ portfolio: {max_missing: 0.2}
 
 - `collector status`：日线数据集 `level: ok`，没有失败分块。
 - `kline check`：`status: complete`、`missing: 0`。`--to` 不要晚于“已经采过的最后一个交易日的下一天”，今天的日线明天 08:00 才有。停牌的交易日来源没有数据，补采确认后记在 `absent_at_source`，不算缺口。
-- skill 的 A 股 1d 数据查询（[`data-query.md`](data-query.md)）固定读纯日线任务“A 股 K 线 1d”的结果。只启用了带附加字段的那条时，用 skill 查 1d 查不到数据；要用 skill 查日线就把纯日线任务也启用并补历史。
-- `kline check --deep` 不检查附加字段（它们允许为空）。要看附加字段有没有值，在管理台数据页打开带附加字段那条任务的结果数据集取几行看（skill 的数据查询读的是纯日线任务，看不到这些列）：抽一只近期除过权的股票看 `adj_factor` 在除权日变化；抽一只银行股，`fin_total_revenue` 为空是正常的。
+- 用 `moox-cli data kline get`（[`data-query.md`](data-query.md)）查询 A 股日线时：若同时启用了纯日线与带附加字段两条 1d 任务，直接传 `--dataset-id` 区分（要看附加字段则显式加上 `--columns`）。
+- `kline check --deep` 不检查附加字段（它们允许为空）。要看附加字段有没有值，在管理台数据页打开带附加字段那条任务的结果数据集取几行看（或用 `moox-cli data kline get --space-id stockcn --dataset-id <结果数据集ID> --interval 1d --symbol <标的> --columns open,close,adj_factor,sw_l1,turnover_rate`）：抽一只近期除过权的股票看 `adj_factor` 在除权日变化；抽一只银行股，`fin_total_revenue` 为空是正常的。
 - 管理台“数据采集 › 数据源”页下方的“附加字段来源”应列出复权因子、申万行业、财务报表、换手率、股本与股利五个来源和它们的字段。
 - 换手率、股本：在管理台数据页取最近一个交易日的几行，`turnover_rate` 与行情软件的换手率一致，`total_shares × close` 与总市值一致。股本只在“接口标注的交易日”那一行有值，补出来的历史行为空是正常的。
 
@@ -255,7 +255,7 @@ portfolio: {max_missing: 0.2}
 | 管理台新建任务时看不到复权、行业、财务、换手率、股本字段 | 标签不是 A 股股票、频率不是 `1d` | 检查标签和频率（第 1 步看 `extra_fields` 的适用范围） |
 | 某天的日线整只股票没有行 | 五个附加来源里有一个当时报错，带附加字段的任务整行不写（纯日线任务不受影响）。其中“选股器的数据还停在某天”表示取数时东方财富还没更新到这个交易日 | 等自动补采（隔一天），或手工 `kline backfill` 那一天 |
 | 某只股票 `adj_factor` 一直为空 | 新浪复权接口对少数标的返回空列表 | 目前没有别的来源；因子里按缺数处理 |
-| 启用或停用日线任务后几分钟了 `collector fetch-plan` 还是未生效 | 计划在等下发确认（云函数操作慢、失败），或数据集在等旧份过窗口 | 看 `collector status` 的等待原因与失败原因 |
+| 启用或停用日线任务后几分钟了 `collector fetch-plan show` 还是未生效 | 计划在等下发确认（云函数操作慢、失败），或数据集在等旧份过窗口 | 看 `collector status` 的等待原因与失败原因 |
 | 申万行业全部失败，日志里有证书校验错误 | 申万网站换了证书链，内嵌的中间证书不再适用 | 需要更新程序里内嵌的证书，向用户说明后停下，不要关闭校验 |
 | 某只股票 `sw_l1` 一直为空 | 申万文件里没有它的记录（新股等） | 正常；策略里按缺数处理 |
 | 补出来的历史里 `total_shares` 等股本列全是空的 | 股本来源只有当日值，没有历史 | 正常；市值、估值因子从开通日起才有值 |

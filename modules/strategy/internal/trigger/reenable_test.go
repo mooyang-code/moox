@@ -11,6 +11,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 本文件验证规则状态跨会话沿用：停用再启用产生新会话，DSL 与绑定解析都没变时状态原样沿用，变了才清空。
@@ -42,7 +45,7 @@ portfolio:
 `
 
 func reenableResolved() input.Resolved {
-	return input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
+	return input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: period.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
 }
 
 // newStopHarness：A 先领先入场（入场价 10），第 2 期跌到 8 触发止损并进入 3 根冷却；之后 A 的分数一直最高，
@@ -255,11 +258,11 @@ func TestReenabledSessionDoesNotReevaluateBarsAlreadyInState(t *testing.T) {
 func TestUnparsableRuleStateIsClearedAndRestarts(t *testing.T) {
 	h := newStopHarness(t)
 	h.run(1, 1)
-	if err := h.repo.ApplySchema(`UPDATE t_strategy_states SET c_state_json = '{"rules": 1}' WHERE c_instance_id = 'i1';`); err != nil {
+	if err := h.repo.ExecForTest(`UPDATE t_strategy_states SET c_state_json = '{"rules": 1}' WHERE c_instance_id = 'i1';`); err != nil {
 		t.Fatal(err)
 	}
 	h.run(2, 2)
-	if got := h.resultAt(2); got.Status != store.StatusSkipped || got.SkipReason != input.SkipConfigError {
+	if got := h.resultAt(2); got.Status != store.StatusSkipped || got.SkipReason != upstream.SkipConfigError {
 		t.Fatalf("状态无法解析的那一期应记 config_error：%+v", got)
 	}
 	if _, found, _ := h.repo.GetState(context.Background(), "i1"); found {
@@ -275,13 +278,13 @@ func TestUnparsableRuleStateIsClearedAndRestarts(t *testing.T) {
 func TestPoolWithoutRuleStateIsNotEvaluatedFromScratch(t *testing.T) {
 	h := newPoolHarness(t, poolDSL("{a: 0.5, b: 0.5}"), standardMembers(), nil)
 	h.warm(barStart(1), "")
-	if err := h.repo.ApplySchema(`DELETE FROM t_strategy_states WHERE c_instance_id = 'i1';`); err != nil {
+	if err := h.repo.ExecForTest(`DELETE FROM t_strategy_states WHERE c_instance_id = 'i1';`); err != nil {
 		t.Fatal(err)
 	}
 	h.frame(2, abcFrame(3, 2, 1))
 	h.loader.prices[barStart(2).Unix()] = map[string]float64{"A|spot": 10, "B|spot": 10}
 	expectAck(t, h.deliverWith(2, bothFactors))
-	if got := h.resultAt(2); got.Status != store.StatusSkipped || got.SkipReason != input.SkipConfigError {
+	if got := h.resultAt(2); got.Status != store.StatusSkipped || got.SkipReason != upstream.SkipConfigError {
 		t.Fatalf("池没有状态时应记 config_error：%+v", got)
 	}
 	if _, found, _ := h.repo.GetState(context.Background(), "i1"); found {

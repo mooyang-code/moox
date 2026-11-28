@@ -1,4 +1,12 @@
-import type { CreateTradingAccountReq, Exchange, LiveConfig, MarketType, PaperConfig } from "@/api/trade/types";
+import {
+  AccountEnvironment,
+  ControlMode,
+  type CreateTradingAccountReq,
+  type Exchange,
+  type LiveConfig,
+  type MarketType,
+  type PaperConfig
+} from "@/api/trade/types";
 import { isTradeSessionNotReady } from "@/api/trade";
 import type { Environment } from "@/components/trade-confirm/environment";
 import { DEFAULT_ORDER_RETENTION_DAYS, orderRetentionError } from "../shared/order-retention";
@@ -29,7 +37,7 @@ export interface CreateForm {
   feesEdited: boolean;
   join: "new" | "exist";
   logicalName: string;
-  controlMode: 1 | 2;
+  controlMode: typeof ControlMode.STRATEGY | typeof ControlMode.MANUAL;
   existingLogicalId: string;
   /** 实盘：加入组合时接管账户里已有的持仓和余额（例如抵扣手续费用的 BNB），不勾时账户里有资产就加不进去 */
   adoptExisting: boolean;
@@ -142,7 +150,7 @@ export function createDefaultForm(kind: Environment = "paper"): CreateForm {
     feesEdited: false,
     join: "new",
     logicalName: "",
-    controlMode: 1,
+    controlMode: ControlMode.STRATEGY,
     existingLogicalId: "",
     adoptExisting: false
   };
@@ -225,10 +233,6 @@ export function buildPaperRequest(form: CreateForm): CreateTradingAccountReq & {
   const swap = form.markets.includes("swap");
   return {
     name: form.name.trim(),
-    // 新建组合：后端同时建组合；加入已有组合：后端在同一个事务里把新账户加进去，两者只给一个
-    logical_account_name: form.join === "new" ? form.logicalName.trim() || form.name.trim() : "",
-    logical_account_id: form.join === "exist" ? form.existingLogicalId : undefined,
-    control_mode: form.controlMode,
     exchange: form.exchange,
     markets: [...form.markets],
     settlement_asset: form.settlementAsset.trim().toUpperCase(),
@@ -251,7 +255,10 @@ export function buildLiveRequest(form: CreateForm): CreateTradingAccountReq & { 
     markets: [...form.markets],
     settlement_asset: form.settlementAsset.trim().toUpperCase(),
     margin_mode: form.markets.includes("swap") ? "CROSS" : "",
-    live: { environment: form.kind === "testnet" ? 1 : 2, credential_secret_id: form.secretId }
+    live: {
+      environment: form.kind === "testnet" ? AccountEnvironment.TESTNET : AccountEnvironment.PRODUCTION,
+      credential_secret_id: form.secretId
+    }
   };
 }
 

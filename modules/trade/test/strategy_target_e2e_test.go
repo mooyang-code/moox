@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,7 +18,6 @@ import (
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -244,9 +244,9 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount,
-			Name:          "E2E logical account",
-			ExecutionMode: account.ExecutionMode, SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Name:        "E2E logical account",
+			Environment: string(account.EffectiveEnvironment()), SettlementAsset: "USDT",
+			PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -256,12 +256,7 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		}); err != nil {
 			return err
 		}
-		return tx.SetLogicalAccountAutomation(
-			testSpace,
-			testLogicalAccount,
-			"ACTIVE",
-			"",
-		)
+		return tx.ResumeLogicalAccount(testSpace, testLogicalAccount)
 	}))
 }
 
@@ -291,7 +286,7 @@ func targetDeliveryForMarket(
 		now,
 		targetID,
 		sequence,
-		[]*tradeeventpb.InstrumentWeightTarget{{
+		[]*eventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT",
 			MarketType:   string(market),
 			TargetWeight: quantity,
@@ -304,7 +299,7 @@ func targetDeliveryWithTargets(
 	now time.Time,
 	targetID string,
 	sequence int64,
-	targets []*tradeeventpb.InstrumentWeightTarget,
+	targets []*eventpb.InstrumentWeightTarget,
 ) *jetstream.Delivery {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
@@ -314,7 +309,7 @@ func targetDeliveryWithTargets(
 	bar := now.Add(time.Duration(sequence-3) * time.Millisecond)
 	encoded, err := registry.Encode(
 		events.LogicalAccountTargetWeightRequested,
-		&tradeeventpb.LogicalAccountTargetWeightRequested{
+		&eventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: testRunner,
 			SessionId: "session-e2e", SessionStartedAt: 1_000, StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,

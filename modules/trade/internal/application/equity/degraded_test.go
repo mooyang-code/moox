@@ -63,8 +63,8 @@ func seedDelistingAccount(t *testing.T, haltStatus string) *store.Store {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: string(exchange.ExecutionModeLive),
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", Environment: string(exchange.AccountEnvironmentProduction),
+			SettlementAsset: "USDT", PauseReason: "test",
 		}); err != nil {
 			return err
 		}

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
@@ -16,7 +15,8 @@ import (
 func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	service, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return factorResultSnapshot{} }})
+	datasets := newTestDatasetCache(t, []*pb.Dataset{{SpaceId: "quant", DatasetId: "result", Status: "active"}}, nil)
+	service, err := New(Options{Store: store, Datasets: datasets})
 	require.NoError(t, err)
 	marker := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,
@@ -24,11 +24,11 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 		CauseEventId: "source-ready", CompletedAt: time.Unix(1786032001, 0).UnixMilli(),
 		DetailType: "test.Detail.v1", Detail: []byte{0x0a, 0x00, 0xff, 0x7f},
 	}
-	row := &pb.RowFieldUpsert{
+	row := &pb.Row{
 		Key:    &pb.RowKey{SpaceId: "quant", DatasetId: "result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: 1}}}},
 	}
-	err = store.UpsertFields(ctx, "quant", "result", []*pb.RowFieldUpsert{row})
+	err = store.UpsertFields(ctx, "quant", "result", []*pb.Row{row})
 	require.NoError(t, err)
 	var eventID string
 	for attempt := 0; attempt < 2; attempt++ {
@@ -72,7 +72,8 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	service, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return factorResultSnapshot{} }})
+	datasets := newTestDatasetCache(t, []*pb.Dataset{{SpaceId: "quant", DatasetId: "result", Status: "active"}}, nil)
+	service, err := New(Options{Store: store, Datasets: datasets})
 	require.NoError(t, err)
 	base := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,

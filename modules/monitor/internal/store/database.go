@@ -1,4 +1,4 @@
-// Package store owns monitor's SQLite connection and persistence repositories.
+// Package store 负责 Monitor 的 SQLite 连接与仓储持久化。
 package store
 
 import (
@@ -6,20 +6,18 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/packages/dataformat"
+	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
-// gormLogger keeps GORM's slow-query and error logging but drops
-// ErrRecordNotFound, which the repositories return as an ordinary miss, and
-// the terminal colors that clutter the log file. ParameterizedQueries 让日志里的 SQL
-// 只留占位符：通知渠道的 Webhook 地址和密钥是推送凭据，不能随慢查询或出错的语句写进日志。
+// gormLogger 保留 GORM 的慢查询与出错日志，忽略常规未找到错误并关闭终端颜色。
+// ParameterizedQueries 让日志里的 SQL 只留占位符：通知渠道的 Webhook 地址和密钥是推送凭据，不能随语句写进日志。
 var gormLogger = logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
 	SlowThreshold:             200 * time.Millisecond,
 	LogLevel:                  logger.Warn,
@@ -28,61 +26,41 @@ var gormLogger = logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config
 })
 
 type Store struct {
-	db *gorm.DB
+	db   *gorm.DB
+	path string
 }
 
 func Open(path string) (*Store, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("database path is required")
-	}
-	if path != ":memory:" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, fmt.Errorf("create database directory: %w", err)
-		}
-	}
-	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: gormLogger})
-	if err != nil {
-		return nil, fmt.Errorf("open monitor database: %w", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("open sql database: %w", err)
-	}
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
-	sqlDB.SetConnMaxLifetime(time.Hour)
-	if err := db.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
-		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-	if err := db.Exec("PRAGMA busy_timeout=5000").Error; err != nil {
-		return nil, fmt.Errorf("set busy timeout: %w", err)
-	}
-	return &Store{db: db}, nil
+	return openWithOptions(sqlitedb.Options{
+		Path:            path,
+		MaxOpenConns:    1,
+		MaxIdleConns:    1,
+		ConnMaxLifetime: time.Hour,
+		Logger:          gormLogger,
+	})
 }
 
 func OpenFromConfig(cfg config.DatabaseConfig) (*Store, error) {
-	mgr, err := Open(cfg.Path)
+	lifetime := cfg.ConnMaxLifetime
+	if lifetime <= 0 {
+		lifetime = time.Hour
+	}
+	return openWithOptions(sqlitedb.Options{
+		Path:            cfg.Path,
+		MaxOpenConns:    cfg.MaxOpenConns,
+		MaxIdleConns:    cfg.MaxIdleConns,
+		ConnMaxLifetime: lifetime,
+		ConnMaxIdleTime: cfg.ConnMaxIdleTime,
+		Logger:          gormLogger,
+	})
+}
+
+func openWithOptions(opts sqlitedb.Options) (*Store, error) {
+	db, err := sqlitedb.OpenGORM(opts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("打开监控数据库失败：%w", err)
 	}
-	sqlDB, err := mgr.db.DB()
-	if err != nil {
-		_ = mgr.Close()
-		return nil, fmt.Errorf("open sql database: %w", err)
-	}
-	if cfg.MaxOpenConns > 0 {
-		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-	}
-	if cfg.MaxIdleConns > 0 {
-		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
-	}
-	if cfg.ConnMaxLifetime > 0 {
-		sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	}
-	if cfg.ConnMaxIdleTime > 0 {
-		sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
-	}
-	return mgr, nil
+	return &Store{db: db, path: opts.Path}, nil
 }
 
 // Repositories builds the monitor control-plane repository graph.
@@ -115,14 +93,11 @@ func (m *Store) Ping(ctx context.Context) error {
 	return m.db.WithContext(ctx).Exec("SELECT 1").Error
 }
 
-func (m *Store) ApplySchema(sql string) error {
+func (m *Store) ApplySchema(sqlText string) error {
 	if m == nil || m.db == nil {
-		return fmt.Errorf("monitor database is not open")
+		return fmt.Errorf("监控数据库未打开")
 	}
-	if strings.TrimSpace(sql) == "" {
-		return fmt.Errorf("schema sql is empty")
-	}
-	return m.db.Exec(sql).Error
+	return sqlitedb.EnsureSchemaGORM(m.db, m.path, "monitor", sqlText, dataformat.LifecycleParts(), lifecycle.StateFileForDB(m.path))
 }
 
 func (m *Store) Close() error {

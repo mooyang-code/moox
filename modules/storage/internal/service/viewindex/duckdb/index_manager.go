@@ -502,7 +502,7 @@ func physicalRowKeyID(key *pb.RowKey) string {
 		// Length-prefix every component instead of joining with a delimiter.
 		// User-controlled subject/frequency/tag values may contain any byte
 		// sequence accepted by the protobuf contract, including NUL.
-		return encodePhysicalKeyParts(series.GetSubjectId(), series.GetFreq(), dataTime, series.GetSeriesTag())
+		return encodePhysicalKeyParts(series.GetSubjectId(), series.GetFrequency(), dataTime, series.GetSeriesTag())
 	}
 	return viewindex.RowKeyID(key)
 }
@@ -591,7 +591,7 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 		values[field.GetFieldId()] = value
 	}
 	args := make([]any, 0, len(names))
-	args = append(args, key.GetSubjectId(), key.GetFreq(), when, key.GetSeriesTag())
+	args = append(args, key.GetSubjectId(), key.GetFrequency(), when, key.GetSeriesTag())
 	for _, name := range names[4:] {
 		args = append(args, values[name])
 	}
@@ -622,7 +622,7 @@ func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex
 	return nil, errors.New("invalid JSON value")
 }
 
-func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.Row, int64, error) {
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return nil, 0, err
@@ -686,7 +686,7 @@ type whereClause struct {
 	args []any
 }
 
-func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[string]pb.FieldValueType, spaceID, datasetID string, spec viewindex.QuerySpec, where string, args []any) ([]*pb.RowFieldValues, error) {
+func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[string]pb.FieldValueType, spaceID, datasetID string, spec viewindex.QuerySpec, where string, args []any) ([]*pb.Row, error) {
 	selectColumns := []string{"subject_id", "freq", "data_time", "series_tag"}
 	projected, err := resolveIncludedColumns(columns, spec.Includes)
 	if err != nil {
@@ -719,7 +719,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		return nil, err
 	}
 	defer rows.Close()
-	result := make([]*pb.RowFieldValues, 0)
+	result := make([]*pb.Row, 0)
 	for rows.Next() {
 		values := make([]any, len(selectColumns))
 		dest := make([]any, len(values))
@@ -733,7 +733,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		if err != nil {
 			return nil, err
 		}
-		row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Freq: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
+		row := &pb.Row{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Frequency: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
 		for index, name := range selectColumns[4:] {
 			value := values[index+4]
 			if value == nil {
@@ -1398,7 +1398,7 @@ func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) 
 				return whereClause{}, nil, err
 			}
 			keys = append(keys, "(subject_id = ? AND freq = ? AND data_time = ? AND series_tag = ?)")
-			args = append(args, row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag())
+			args = append(args, row.GetSubjectId(), row.GetFrequency(), when, row.GetSeriesTag())
 		}
 		parts = append(parts, "("+strings.Join(keys, " OR ")+")")
 	}
@@ -1450,16 +1450,16 @@ func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) 
 			args = append(args,
 				when,
 				when, row.GetSubjectId(),
-				when, row.GetSubjectId(), row.GetFreq(),
-				when, row.GetSubjectId(), row.GetFreq(), row.GetSeriesTag(),
+				when, row.GetSubjectId(), row.GetFrequency(),
+				when, row.GetSubjectId(), row.GetFrequency(), row.GetSeriesTag(),
 			)
 		} else {
 			parts = append(parts, "(subject_id > ? OR (subject_id = ? AND freq > ?) OR (subject_id = ? AND freq = ? AND data_time > ?) OR (subject_id = ? AND freq = ? AND data_time = ? AND series_tag > ?))")
 			args = append(args,
 				row.GetSubjectId(),
-				row.GetSubjectId(), row.GetFreq(),
-				row.GetSubjectId(), row.GetFreq(), when,
-				row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag(),
+				row.GetSubjectId(), row.GetFrequency(),
+				row.GetSubjectId(), row.GetFrequency(), when,
+				row.GetSubjectId(), row.GetFrequency(), when, row.GetSeriesTag(),
 			)
 		}
 	}

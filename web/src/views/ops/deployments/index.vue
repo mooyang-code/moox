@@ -98,7 +98,7 @@
                       <span v-if="!row.health?.instances?.length" class="muted">暂无上报</span>
                     </td>
                     <td>
-                      <a-tag v-if="row.definition?.protected">受保护</a-tag
+                      <a-tag v-if="isProtectedComponent(row.deployment.component_id)">受保护</a-tag
                       ><a-tag v-if="row.definition?.external_program">外部程序</a-tag
                       ><span v-if="!row.definition">目录中不存在</span
                       ><a-tag v-else :color="row.deployment.status === 'enabled' ? 'green' : 'gray'">{{
@@ -214,12 +214,12 @@
             <dd>{{ detail.host.host_id }} · {{ detail.host.address }}</dd>
             <dt>部署状态</dt>
             <dd>{{ detail.host.status === "disabled" || detail.row.deployment.status === "disabled" ? "已停用" : "已启用" }}</dd>
-            <dt>范围 / 副本</dt>
-            <dd>{{ detail.row.definition?.scope }} / {{ detail.row.definition?.replicas }}</dd>
+            <dt>范围</dt>
+            <dd>{{ detail.row.definition?.scope }}</dd>
             <dt>端口</dt>
             <dd>{{ componentPorts(detail.row.definition).join(", ") || "无监听端口" }}</dd>
             <dt>健康端口</dt>
-            <dd>{{ detail.row.definition?.health.port ? `${detail.row.definition.health.port}（只听本机）` : "—" }}</dd>
+            <dd>{{ detail.row.definition?.health_port ? `${detail.row.definition.health_port}（只听本机）` : "—" }}</dd>
             <dt>当前健康</dt>
             <dd>{{ statusLabel(detail.row.status) }} · {{ detail.row.health?.reason || "暂无上报" }}</dd>
             <dt>上报</dt>
@@ -236,7 +236,7 @@
           </section>
           <section v-for="service in detail.row.definition?.services || []" :key="service.path" class="service-detail">
             <h4>{{ service.path }}{{ service.port > 0 ? ` :${service.port}` : "（进程内）" }}</h4>
-            <p v-for="method in service.methods" :key="method.name">
+            <p v-for="method in service.methods || []" :key="method.name">
               {{ method.name }}{{ method.read_only ? "（只读）" : "" }} →
               {{ methodCallerIds(method).join(", ") || "无调用方" }}
             </p>
@@ -257,7 +257,7 @@ import { computed, ref, watch } from "vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import RawError from "@/views/ops/monitor/raw-error.vue";
 import { statusColor, statusLabel } from "@/views/ops/monitor/health-display";
-import { componentPorts, gatewayLabel, groupRoutes, methodCallerIds, routeSync } from "./model";
+import { componentPorts, gatewayLabel, groupRoutes, isProtectedComponent, methodCallerIds, routeSync } from "./model";
 import TopologyView from "./topology-view.vue";
 import { useDeployments } from "./use-deployments";
 import { formatInstant } from "@/utils/time-zone";

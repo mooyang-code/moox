@@ -17,10 +17,9 @@ const (
 	FunctionPackageAvailable = "available"
 )
 
-// FunctionPackage 是一次上传的云函数代码包。
+// FunctionPackage 是一次上传的云函数代码包（全局共享，不区分空间）。
 type FunctionPackage struct {
 	ID             int64
-	SpaceID        string
 	PackageID      string
 	PackageName    string
 	Version        string
@@ -38,7 +37,6 @@ type FunctionPackage struct {
 
 type functionPackageRow struct {
 	ID             int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID        string `gorm:"column:c_space_id"`
 	PackageID      string `gorm:"column:c_package_id"`
 	PackageName    string `gorm:"column:c_package_name"`
 	Version        string `gorm:"column:c_version"`
@@ -59,7 +57,6 @@ func (functionPackageRow) TableName() string { return "t_collector_function_pack
 func (row functionPackageRow) pkg() FunctionPackage {
 	return FunctionPackage{
 		ID:             row.ID,
-		SpaceID:        row.SpaceID,
 		PackageID:      row.PackageID,
 		PackageName:    row.PackageName,
 		Version:        row.Version,
@@ -91,12 +88,12 @@ func (r *FunctionPackageRepository) ready() error {
 }
 
 // Get 返回一个代码包；不存在时返回 nil。
-func (r *FunctionPackageRepository) Get(ctx context.Context, spaceID, packageID string) (*FunctionPackage, error) {
+func (r *FunctionPackageRepository) Get(ctx context.Context, packageID string) (*FunctionPackage, error) {
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
 	var row functionPackageRow
-	err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_package_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(packageID)).First(&row).Error
+	err := r.db.WithContext(ctx).Where("c_package_id = ?", strings.TrimSpace(packageID)).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -107,14 +104,14 @@ func (r *FunctionPackageRepository) Get(ctx context.Context, spaceID, packageID 
 	return &pkg, nil
 }
 
-// Latest 返回该空间某个包名最新的可用代码包；没有时返回 nil。
-func (r *FunctionPackageRepository) Latest(ctx context.Context, spaceID, packageName string) (*FunctionPackage, error) {
+// Latest 返回某个包名最新的可用代码包；没有时返回 nil。
+func (r *FunctionPackageRepository) Latest(ctx context.Context, packageName string) (*FunctionPackage, error) {
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
 	var row functionPackageRow
 	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_package_name = ? AND c_status = ?", strings.TrimSpace(spaceID), strings.TrimSpace(packageName), FunctionPackageAvailable).
+		Where("c_package_name = ? AND c_status = ?", strings.TrimSpace(packageName), FunctionPackageAvailable).
 		Order("c_id DESC").First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
@@ -126,17 +123,13 @@ func (r *FunctionPackageRepository) Latest(ctx context.Context, spaceID, package
 	return &pkg, nil
 }
 
-// List 按上传先后倒序返回代码包；spaceID 为空时返回全部空间的。
-func (r *FunctionPackageRepository) List(ctx context.Context, spaceID string) ([]FunctionPackage, error) {
+// List 按上传先后倒序返回全部代码包。
+func (r *FunctionPackageRepository) List(ctx context.Context) ([]FunctionPackage, error) {
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
-	query := r.db.WithContext(ctx).Model(&functionPackageRow{})
-	if spaceID = strings.TrimSpace(spaceID); spaceID != "" {
-		query = query.Where("c_space_id = ?", spaceID)
-	}
 	var rows []functionPackageRow
-	if err := query.Order("c_id DESC").Find(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&functionPackageRow{}).Order("c_id DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	packages := make([]FunctionPackage, len(rows))
@@ -156,7 +149,7 @@ func (r *FunctionPackageRepository) CountByAccount(ctx context.Context, accountI
 	return count, err
 }
 
-// Upsert 按（空间、包 ID）新建或更新一个代码包。
+// Upsert 按包 ID 新建或更新一个代码包。
 func (r *FunctionPackageRepository) Upsert(ctx context.Context, pkg FunctionPackage) error {
 	if err := r.ready(); err != nil {
 		return err
@@ -171,7 +164,6 @@ func (r *FunctionPackageRepository) Upsert(ctx context.Context, pkg FunctionPack
 		status = FunctionPackagePending
 	}
 	row := functionPackageRow{
-		SpaceID:        pkg.SpaceID,
 		PackageID:      pkg.PackageID,
 		PackageName:    pkg.PackageName,
 		Version:        pkg.Version,
@@ -187,7 +179,7 @@ func (r *FunctionPackageRepository) Upsert(ctx context.Context, pkg FunctionPack
 		ModifyTime:     now,
 	}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_package_id"}},
+		Columns: []clause.Column{{Name: "c_package_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"c_package_name", "c_version", "c_runtime", "c_file_size", "c_file_md5", "c_cloud_account_id",
 			"c_cos_region", "c_cos_bucket", "c_cos_path", "c_status", "c_mtime",
@@ -196,9 +188,9 @@ func (r *FunctionPackageRepository) Upsert(ctx context.Context, pkg FunctionPack
 }
 
 // Delete 删除一个代码包记录；记录不存在时不报错。
-func (r *FunctionPackageRepository) Delete(ctx context.Context, spaceID, packageID string) error {
+func (r *FunctionPackageRepository) Delete(ctx context.Context, packageID string) error {
 	if err := r.ready(); err != nil {
 		return err
 	}
-	return r.db.WithContext(ctx).Where("c_space_id = ? AND c_package_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(packageID)).Delete(&functionPackageRow{}).Error
+	return r.db.WithContext(ctx).Where("c_package_id = ?", strings.TrimSpace(packageID)).Delete(&functionPackageRow{}).Error
 }

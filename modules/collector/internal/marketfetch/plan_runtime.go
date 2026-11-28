@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -45,7 +44,6 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	if err != nil {
 		return respond(err.Error())
 	}
-	applyPlanFetchEnvironment(plan.Fetch)
 	return h.RunPlan(ctx, plan, PlanRun{RequestID: requestID, FunctionName: functionName, Scheduled: scheduled, Entry: entry})
 }
 
@@ -200,21 +198,6 @@ func splitPlannedRequests(planned []PlannedRequest, limit int) []PlannedRequest 
 		}
 	}
 	return result
-}
-
-// applyPlanFetchEnvironment 把计划里的拉取参数设置为进程环境，供数据源适配器在每次调用时读取。
-// 一个函数只服务一个市场，计划本身固定，所以进程级设置是确定的。
-func applyPlanFetchEnvironment(fetch PlanFetch) {
-	set := func(name string, value int) {
-		if value > 0 {
-			_ = os.Setenv(name, strconv.Itoa(value))
-		}
-	}
-	set("MOOX_FETCH_RPS", fetch.RPS)
-	set("MOOX_FETCH_BURST", fetch.Burst)
-	set("MOOX_FETCH_FEED_CONCURRENCY", fetch.FeedConcurrency)
-	set("MOOX_FETCH_REQUEST_TIMEOUT_MS", fetch.RequestTimeoutMS)
-	set("MOOX_FETCH_STORAGE_TIMEOUT_MS", fetch.StorageTimeoutMS)
 }
 
 // summarizeBatchFailures 把批次里失败条目的错误按（类型、摘要）归并，取出现最多的几类，

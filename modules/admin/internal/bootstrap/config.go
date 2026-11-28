@@ -44,9 +44,6 @@ func LoadConfigs(ctx context.Context, configPath string) (*Config, error) {
 	// 校验必须针对 tRPC 实际加载的配置文件（-conf 可指定其他路径）；NewServer 已解析该参数，
 	// 此时尚未 Serve，不会有监听被提前打开。
 	listenerConfig := trpc.ServerConfigPath
-	if err := validateSetupListener(listenerConfig); err != nil {
-		return nil, err
-	}
 	if err := validateGatewayControlListener(listenerConfig); err != nil {
 		return nil, err
 	}
@@ -128,55 +125,6 @@ func validateGatewayControlListener(path string) error {
 	}
 	if count != 1 {
 		return fmt.Errorf("exactly one gateway control listener is required")
-	}
-	return nil
-}
-
-func validateSetupListener(path string) error {
-	raw, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return fmt.Errorf("read setup listener config: %w", err)
-	}
-	var document struct {
-		Server struct {
-			Services []struct {
-				Name     string `yaml:"name"`
-				IP       string `yaml:"ip"`
-				Port     int    `yaml:"port"`
-				Address  string `yaml:"address"`
-				Nic      string `yaml:"nic"`
-				Network  string `yaml:"network"`
-				Protocol string `yaml:"protocol"`
-			} `yaml:"service"`
-		} `yaml:"server"`
-	}
-	if err := yaml.Unmarshal(raw, &document); err != nil {
-		return fmt.Errorf("decode setup listener config")
-	}
-	// tRPC 对重名服务以后者覆盖前者，所以必须恰好一项，并校验这一项的全部字段。
-	count := 0
-	for _, service := range document.Server.Services {
-		if service.Name != "trpc.moox.admin.Setup" {
-			continue
-		}
-		count++
-		address := net.ParseIP(strings.TrimSpace(service.IP))
-		if address == nil || !address.IsLoopback() {
-			return fmt.Errorf("setup listener must bind to loopback")
-		}
-		if service.Port != 11110 || service.Network != "tcp" || service.Protocol != "trpc" {
-			return fmt.Errorf("setup listener must use tcp trpc on port 11110")
-		}
-		// tRPC 优先使用 address / nic，会绕过上面的 loopback 校验；Setup 没有签名鉴权，不允许覆盖。
-		if strings.TrimSpace(service.Address) != "" || strings.TrimSpace(service.Nic) != "" {
-			return fmt.Errorf("setup listener must not override the listen address or NIC")
-		}
-	}
-	if count == 0 {
-		return fmt.Errorf("setup listener trpc.moox.admin.Setup is required")
-	}
-	if count != 1 {
-		return fmt.Errorf("exactly one setup listener is required")
 	}
 	return nil
 }

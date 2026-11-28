@@ -22,9 +22,10 @@ func TestBatchLogicalAccountSummariesAndListOrdersForLaneOwnerFilter(t *testing.
 		if err := tx.CreateTradingAccount(TradingAccountRecord{
 			SpaceID: "s1", TradingAccountID: "acc-1", Name: "acc-1",
 			Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot", "swap"},
-			ExecutionMode: string(exchange.ExecutionModePaper), SettlementAsset: "USDT",
+			ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper), SettlementAsset: "USDT",
 			MarginMode: "CROSS", LeverageSettings: LeverageSettings{"*": "3"}, Status: "ENABLED",
 			Snapshot: TradingAccountSnapshot{
+				Equity: "1150",
 				Balances: []AssetBalance{
 					{Wallet: "UNIFIED", Asset: "USDT", Total: "1000", Available: "1000"},
 					{Wallet: "UNIFIED", Asset: "BTC", Total: "0.5", Available: "0.5"},
@@ -37,15 +38,15 @@ func TestBatchLogicalAccountSummariesAndListOrdersForLaneOwnerFilter(t *testing.
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "s1", LogicalAccountID: "log-1", Name: "log-1",
-			ExecutionMode: string(exchange.ExecutionModePaper), SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "init",
+			Environment: string(exchange.AccountEnvironmentPaper), SettlementAsset: "USDT",
+			PauseReason: "init",
 		}); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "s1", LogicalAccountID: "log-2", Name: "log-2",
-			ExecutionMode: string(exchange.ExecutionModePaper), SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "init",
+			Environment: string(exchange.AccountEnvironmentPaper), SettlementAsset: "USDT",
+			PauseReason: "init",
 		}); err != nil {
 			return err
 		}
@@ -148,12 +149,15 @@ func TestBatchLogicalAccountSummariesAndListOrdersForLaneOwnerFilter(t *testing.
 	summaries, err := st.BatchLogicalAccountSummaries(ctx, "s1", []string{"log-1", "log-2"}, now)
 	require.NoError(t, err)
 	require.Equal(t, int32(3), summaries["log-1"].PositionCount)
+	require.NotNil(t, summaries["log-1"].TotalEquity)
+	require.Equal(t, "1150", *summaries["log-1"].TotalEquity)
 	require.NotNil(t, summaries["log-1"].EquityChange24h)
 	require.Equal(t, "150", *summaries["log-1"].EquityChange24h)
 	require.NotNil(t, summaries["log-1"].EquityChangePct24h)
 	require.Equal(t, "0.15", *summaries["log-1"].EquityChangePct24h)
 
 	require.Equal(t, int32(0), summaries["log-2"].PositionCount)
+	require.Nil(t, summaries["log-2"].TotalEquity)
 	require.Nil(t, summaries["log-2"].EquityChange24h)
 	require.Nil(t, summaries["log-2"].EquityChangePct24h)
 
@@ -194,8 +198,8 @@ func TestBatchLogicalAccountSummariesTestnetFallsBackToProduction(t *testing.T) 
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "s1", LogicalAccountID: "log-fb", Name: "log-fb",
-			ExecutionMode: string(exchange.ExecutionModeLive), SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "init",
+			Environment: string(exchange.AccountEnvironmentTestnet), SettlementAsset: "USDT",
+			PauseReason: "init",
 		}); err != nil {
 			return err
 		}
@@ -222,8 +226,8 @@ func TestBatchLogicalAccountSummariesTestnetFallsBackToProduction(t *testing.T) 
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "s1", LogicalAccountID: "log-native", Name: "log-native",
-			ExecutionMode: string(exchange.ExecutionModeLive), SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "init",
+			Environment: string(exchange.AccountEnvironmentTestnet), SettlementAsset: "USDT",
+			PauseReason: "init",
 		}); err != nil {
 			return err
 		}
@@ -264,4 +268,106 @@ func TestBatchLogicalAccountSummariesTestnetFallsBackToProduction(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, int32(1), summaries["log-fb"].PositionCount, "TESTNET 无标的表时应回退 PRODUCTION 统计到 ETH")
 	require.Equal(t, int32(1), summaries["log-native"].PositionCount, "TESTNET 已有标的表时仅使用 TESTNET 标的（只计 BTC）")
+}
+
+// TotalEquity 区分“无已同步权益（nil）”“同步权益合计为 0（"0"）”“多成员求和且排除停用成员”。
+func TestBatchLogicalAccountSummariesTotalEquity(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.Transaction(ctx, func(tx *Tx) error {
+		for _, acc := range []TradingAccountRecord{
+			{
+				SpaceID: "s1", TradingAccountID: "acc-a", Name: "acc-a",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+				Snapshot: TradingAccountSnapshot{Equity: "120.5"},
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-b", Name: "acc-b",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+				Snapshot: TradingAccountSnapshot{Equity: "79.5"},
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-disabled", Name: "acc-disabled",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+				Snapshot: TradingAccountSnapshot{Equity: "999"},
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-zero", Name: "acc-zero",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+				Snapshot: TradingAccountSnapshot{Equity: "0"},
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-empty", Name: "acc-empty",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-partial-synced", Name: "acc-partial-synced",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+				Snapshot: TradingAccountSnapshot{Equity: "300"},
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-partial-unsynced", Name: "acc-partial-unsynced",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+			},
+			{
+				SpaceID: "s1", TradingAccountID: "acc-disabled-empty", Name: "acc-disabled-empty",
+				Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
+				ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
+				SettlementAsset: "USDT", Status: "ENABLED",
+			},
+		} {
+			if err := tx.CreateTradingAccount(acc); err != nil {
+				return err
+			}
+		}
+		for _, id := range []string{"log-sum", "log-zero", "log-unsynced", "log-partial"} {
+			if err := tx.CreateLogicalAccount(LogicalAccountRecord{
+				SpaceID: "s1", LogicalAccountID: id, Name: id,
+				Environment: string(exchange.AccountEnvironmentPaper), SettlementAsset: "USDT", PauseReason: "init",
+			}); err != nil {
+				return err
+			}
+		}
+		for _, member := range []LogicalAccountMemberRecord{
+			{SpaceID: "s1", LogicalAccountID: "log-sum", TradingAccountID: "acc-a", Enabled: true, Priority: 1},
+			{SpaceID: "s1", LogicalAccountID: "log-sum", TradingAccountID: "acc-b", Enabled: true, Priority: 2},
+			{SpaceID: "s1", LogicalAccountID: "log-sum", TradingAccountID: "acc-disabled", Enabled: false, Priority: 3},
+			{SpaceID: "s1", LogicalAccountID: "log-sum", TradingAccountID: "acc-disabled-empty", Enabled: false, Priority: 4},
+			{SpaceID: "s1", LogicalAccountID: "log-zero", TradingAccountID: "acc-zero", Enabled: true, Priority: 1},
+			{SpaceID: "s1", LogicalAccountID: "log-unsynced", TradingAccountID: "acc-empty", Enabled: true, Priority: 1},
+			{SpaceID: "s1", LogicalAccountID: "log-partial", TradingAccountID: "acc-partial-synced", Enabled: true, Priority: 1},
+			{SpaceID: "s1", LogicalAccountID: "log-partial", TradingAccountID: "acc-partial-unsynced", Enabled: true, Priority: 2},
+		} {
+			if err := tx.PutLogicalAccountMember(member); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+
+	summaries, err := st.BatchLogicalAccountSummaries(ctx, "s1", []string{"log-sum", "log-zero", "log-unsynced", "log-partial"}, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, summaries["log-sum"].TotalEquity)
+	require.Equal(t, "200", *summaries["log-sum"].TotalEquity)
+	require.NotNil(t, summaries["log-zero"].TotalEquity)
+	require.Equal(t, "0", *summaries["log-zero"].TotalEquity)
+	require.Nil(t, summaries["log-unsynced"].TotalEquity)
+	require.Nil(t, summaries["log-partial"].TotalEquity, "任一启用成员未同步时返回 nil，避免返回误导性的部分和")
 }

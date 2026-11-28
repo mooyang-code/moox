@@ -43,7 +43,9 @@ function instance(id: string, overrides: Partial<StrategyInstance> = {}): Strate
   return {
     instance_id: id,
     strategy_id: "s1",
+    strategy_name: "动量",
     space_id: "crypto",
+    factor_tasks: {},
     logical_account_id: "",
     enabled: true,
     session_id: "sess",
@@ -51,12 +53,13 @@ function instance(id: string, overrides: Partial<StrategyInstance> = {}): Strate
     health: "ok",
     created_at: "0",
     updated_at: "1791849600000",
+    confirmed_at: "0",
     ...overrides
   };
 }
 function snapshot(validUntil: string, weights: Record<string, string>): StrategyTargetSnapshot {
   return {
-    targets: Object.entries(weights).map(([instrument_id, target_weight]) => ({ instrument_id, target_weight })),
+    targets: Object.entries(weights).map(([instrument_id, target_weight]) => ({ instrument_id, target_weight, market: "" })),
     session_id: "sess",
     bar_end_time: String(NOW - 120_000),
     valid_until: validUntil,
@@ -112,11 +115,11 @@ describe("home data rows", () => {
         {
           name: "存储",
           datasets: [
-            { producer: "storage", dataset_id: "dataset_abc", freq: "1h", status: "healthy" },
+            { producer: "storage", dataset_id: "dataset_abc", frequency: "1h", status: "healthy" },
             {
               producer: "storage",
               dataset_id: "dataset_abc",
-              freq: "1m",
+              frequency: "1m",
               status: "degraded",
               waiting_bars: 850,
               overdue_seconds: "51035",
@@ -126,7 +129,7 @@ describe("home data rows", () => {
         },
         {
           name: "视图",
-          datasets: [{ producer: "storage_view", dataset_id: "dataset_xyz", freq: "1m", status: "healthy" }]
+          datasets: [{ producer: "storage_view", dataset_id: "dataset_xyz", frequency: "1m", status: "healthy" }]
         }
       ]
     };
@@ -142,7 +145,7 @@ describe("home data rows", () => {
   it("summarizes factor tasks of the current space with health and lag", () => {
     const sets = [
       {
-        factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+        factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "dataset_abc", frequency: "1m", status: "enabled" },
         members: [{ status: "enabled" }, { status: "enabled" }, { status: "disabled" }],
         last_run: {
           task_id: "a",
@@ -152,7 +155,7 @@ describe("home data rows", () => {
         }
       },
       {
-        factor_task: { task_id: "b", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+        factor_task: { task_id: "b", space_id: "crypto", source_dataset_id: "dataset_abc", frequency: "1m", status: "enabled" },
         members: [],
         last_run: {
           task_id: "b",
@@ -161,7 +164,10 @@ describe("home data rows", () => {
           lag_seconds: String(engineLag("1m", 600))
         }
       },
-      { factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", freq: "1h", status: "enabled" }, members: [] }
+      {
+        factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", frequency: "1h", status: "enabled" },
+        members: []
+      }
     ] as unknown as FactorTaskInfo[];
     const rows = factorRows(sets, "crypto", names, NOW, "UTC");
     expect(rows.map(row => [row.taskId, row.label, row.factors, row.health.label, row.tone])).toEqual([
@@ -179,10 +185,15 @@ describe("home data rows", () => {
     const rows = strategyRows(
       [instance("a"), instance("off", { enabled: false, session_id: "" })],
       { a: snapshot(later, { "ETH-USDT": "0.1", "BTC-USDT": "0.2", "SOL-USDT": "-0.15" }) },
-      [{ strategy_id: "s1", name: "动量" }] as never,
       NOW
     );
-    expect(rows[0]).toMatchObject({ name: "动量", tone: "ok", lastBar: "2 分钟前", more: 0 });
+    expect(rows[0]).toMatchObject({
+      name: "动量",
+      tone: "ok",
+      lastBar: "2 分钟前",
+      more: 0,
+      link: { name: "strategy-detail", params: { instanceId: "a" } }
+    });
     expect(rows[0].state.label).toBe("目标有效");
     expect(rows[0].holdings.map(item => `${item.id} ${item.weight}${item.short ? " 空" : ""}`)).toEqual([
       "BTC-USDT 20.0%",
@@ -206,8 +217,7 @@ describe("home data rows", () => {
       ],
       strategy: {
         instances: [instance("deg", { health: "degraded" })],
-        targets: {},
-        catalog: [{ strategy_id: "s1", name: "动量" }] as never
+        targets: {}
       },
       freshness: [],
       factors: [
@@ -288,10 +298,9 @@ describe("home data rows", () => {
 
 describe("home tiles", () => {
   const later = String(NOW + 60_000);
-  const catalog = [{ strategy_id: "s1", name: "动量" }] as never;
 
   it("draws weight bars relative to the largest bar, cash included", () => {
-    const [row] = strategyRows([instance("a")], { a: snapshot(later, { "BTC-USDT": "0.2", "ETH-USDT": "0.1" }) }, catalog, NOW);
+    const [row] = strategyRows([instance("a")], { a: snapshot(later, { "BTC-USDT": "0.2", "ETH-USDT": "0.1" }) }, NOW);
     expect(row.gross).toBeCloseTo(0.3);
     expect(row.cash).toEqual({ text: "70.0%", ratio: 1 });
     expect(row.holdings.map(item => item.ratio)).toEqual([0.2 / 0.7, 0.1 / 0.7]);
@@ -300,7 +309,7 @@ describe("home tiles", () => {
 
   it("folds holdings beyond the tile limit into a count", () => {
     const weights = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`T${i}`, String(0.1 - i * 0.001)]));
-    const [row] = strategyRows([instance("a")], { a: snapshot(later, weights) }, catalog, NOW);
+    const [row] = strategyRows([instance("a")], { a: snapshot(later, weights) }, NOW);
     expect(row.holdings).toHaveLength(4);
     expect(row.more).toBe(3);
     expect(row.holdingCount).toBe(7);
@@ -315,7 +324,6 @@ describe("home tiles", () => {
     const strategies = strategyRows(
       [instance("a"), instance("off", { enabled: false })],
       { a: snapshot(later, { "BTC-USDT": "0.2", "ETH-USDT": "0.2" }) },
-      catalog,
       NOW
     );
     const freshness = freshnessRows(
@@ -327,7 +335,7 @@ describe("home tiles", () => {
               {
                 producer: "storage",
                 dataset_id: "d1",
-                freq: "1m",
+                frequency: "1m",
                 status: "degraded",
                 latest_bar_close_at: new Date(NOW - 840_000).toISOString(),
                 waiting_bars: 14,
@@ -336,7 +344,7 @@ describe("home tiles", () => {
               {
                 producer: "storage",
                 dataset_id: "d2",
-                freq: "1m",
+                frequency: "1m",
                 status: "healthy",
                 latest_bar_close_at: new Date(NOW - 5_000).toISOString()
               }
@@ -368,7 +376,7 @@ describe("home tiles", () => {
 
   it("writes the close time on the factor and freshness cards and keeps the abnormal count", () => {
     const set = (id: string, openedSecondsAgo: number, status = "ok") => ({
-      factor_task: { task_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+      factor_task: { task_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", frequency: "1m", status: "enabled" },
       members: [{ status: "enabled" }, { status: "enabled" }],
       last_run: {
         task_id: id,
@@ -400,7 +408,7 @@ describe("home tiles", () => {
         {
           producer: "storage",
           dataset_id: "dataset_abc",
-          freq: "1m",
+          frequency: "1m",
           status: "healthy",
           output_watermark_at: at(120),
           latest_bar_close_at: at(60)
@@ -415,7 +423,7 @@ describe("home tiles", () => {
         {
           producer: "storage",
           dataset_id: "dataset_abc",
-          freq: "1m",
+          frequency: "1m",
           status: "healthy",
           output_watermark_at: at(120),
           latest_bar_close_at: at(60)
@@ -423,7 +431,7 @@ describe("home tiles", () => {
         {
           producer: "storage",
           dataset_id: "dataset_xyz",
-          freq: "1m",
+          frequency: "1m",
           status: "degraded",
           output_watermark_at: at(7200),
           latest_bar_close_at: at(7140),
@@ -465,7 +473,7 @@ describe("home tiles", () => {
               {
                 producer: "storage",
                 dataset_id: "dataset_abc",
-                freq: "1m",
+                frequency: "1m",
                 status: "degraded",
                 waiting_bars: 882,
                 overdue_seconds: "52920"
@@ -473,7 +481,7 @@ describe("home tiles", () => {
               {
                 producer: "storage",
                 dataset_id: "dataset_abc",
-                freq: "1h",
+                frequency: "1h",
                 status: "degraded",
                 waiting_bars: 5,
                 overdue_seconds: "18660"
@@ -485,7 +493,7 @@ describe("home tiles", () => {
       names
     );
     const base = {
-      strategy: { instances: [], targets: {}, catalog: [] },
+      strategy: { instances: [], targets: {} },
       factors: [],
       freshness,
       names,
@@ -501,7 +509,12 @@ describe("home tiles", () => {
     const covered = attentionItems({
       ...base,
       alerts: [
-        { id: "a", severity: "warning", title: "入库落后", object: { type: "dataset", dataset_id: "dataset_abc", freq: "1m" } }
+        {
+          id: "a",
+          severity: "warning",
+          title: "入库落后",
+          object: { type: "dataset", dataset_id: "dataset_abc", frequency: "1m" }
+        }
       ]
     });
     expect(covered.map(item => item.source)).toEqual(["监控", "数据"]);
@@ -536,7 +549,7 @@ describe("home tiles", () => {
     const sets = (lagSeconds: string) =>
       [
         {
-          factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "d", freq: "1m", status: "enabled" },
+          factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "d", frequency: "1m", status: "enabled" },
           members: [],
           last_run: { task_id: "a", last_period_time: "1791900000", last_status: "ok", lag_seconds: lagSeconds }
         }
@@ -702,7 +715,7 @@ describe("首页读取失败与空间范围", () => {
 
   it("别的空间的告警在标题前写空间名，当前空间的不加", () => {
     const base = {
-      strategy: { instances: [], targets: {}, catalog: [] },
+      strategy: { instances: [], targets: {} },
       factors: [],
       freshness: [],
       names,

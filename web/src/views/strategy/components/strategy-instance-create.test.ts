@@ -10,8 +10,7 @@ const api = vi.hoisted(() => ({
   validateStrategy: vi.fn(),
   listInstances: vi.fn(),
   listFactorTasks: vi.fn(),
-  listLogicalAccounts: vi.fn(),
-  listTradingAccounts: vi.fn(async () => ({ accounts: [] }))
+  listLogicalAccounts: vi.fn()
 }));
 vi.mock("@/api/strategy", () => ({
   createInstance: api.createInstance,
@@ -28,7 +27,7 @@ vi.mock("@/api/factor", async () => {
   const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
   return { listFactorTasks: api.listFactorTasks, listAllFactorTasks: allFactorTasksFrom(api.listFactorTasks) };
 });
-vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts, listTradingAccounts: api.listTradingAccounts }));
+vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 const source = readFileSync(resolve(process.cwd(), "src/views/strategy/components/strategy-instance-create.vue"), "utf8");
@@ -93,7 +92,7 @@ describe("strategy instance creation behavior", () => {
     }
   ];
   const taskInfo = (patch: Record<string, unknown> = {}, taskId = "ftask_a") => ({
-    factor_task: { task_id: taskId, name: "现货因子", space_id: "crypto", freq: "1h", status: "enabled", ...patch },
+    factor_task: { task_id: taskId, name: "现货因子", space_id: "crypto", frequency: "1h", status: "enabled", ...patch },
     members: [
       { member_key: "ma", kind: "fixed", output_columns: ["ma"] },
       { member_key: "bias__var", kind: "var", output_columns: ["bias__var"] }
@@ -166,7 +165,7 @@ describe("strategy instance creation behavior", () => {
 
   it("写了参考市场与附加来源时，为参考市场和每个来源各选一个计算任务，按任务键提交", async () => {
     const plainTask = (taskId: string) => ({
-      factor_task: { task_id: taskId, name: taskId, space_id: "crypto", freq: "1h", status: "enabled" },
+      factor_task: { task_id: taskId, name: taskId, space_id: "crypto", frequency: "1h", status: "enabled" },
       members: [{ member_key: "ma", kind: "fixed", output_columns: ["ma"] }]
     });
     api.listFactorTasks.mockResolvedValue({
@@ -333,7 +332,18 @@ describe("strategy instance creation behavior", () => {
       diagnostics: [],
       resolved_json: '{"market":{"select":"equity","prefer":"equity"}}',
       trial: null,
-      trial_items: []
+      trial_items: [],
+      requirement: {
+        pool: false,
+        marketDeclared: true,
+        taskKeys: ["equity"],
+        sources: [],
+        problems: [],
+        referenceMarkets: [],
+        tuned: false,
+        poolAllocationMethod: "",
+        poolDriftStart: ""
+      }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     await wrapper.findAll("select")[1].setValue("ftask_a");
@@ -587,7 +597,18 @@ describe("strategy instance creation behavior", () => {
       diagnostics: [],
       resolved_json: '{"market":{"select":"both","prefer":"swap"}}',
       trial: null,
-      trial_items: []
+      trial_items: [],
+      requirement: {
+        pool: false,
+        marketDeclared: true,
+        taskKeys: ["spot", "swap"],
+        sources: [],
+        problems: [],
+        referenceMarkets: [],
+        tuned: false,
+        poolAllocationMethod: "",
+        poolDriftStart: ""
+      }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     await wrapper.findAll("select")[1].setValue("ftask_a");

@@ -17,9 +17,9 @@ import (
 type recoveryFieldReader struct{ primaryPresent bool }
 
 func (r recoveryFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
-	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+	rows := make([]*pb.Row, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
-		row := &pb.RowFieldValues{Key: key}
+		row := &pb.Row{Key: key}
 		if key.GetDatasetId() == "primary" && r.primaryPresent {
 			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "base", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}})
 			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: "factor", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}})
@@ -59,19 +59,19 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	columns := []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	schema := viewindex.ViewIndexSchema{SpaceID: "quant", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}
 	runtime := prepareActiveIndex(t, svc, timeSeriesSpec("quant", "prices", "1m", "close"), schema)
-	key := &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "venue:okx"}}}
+	key := &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Frequency: "1m", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "venue:okx"}}}
 	value := &pb.FieldValue{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}
 	writeTestRows(t, svc, runtime, schema, []viewindex.RowWrite{{Key: viewindex.RowKey{Key: key}, Fields: []*pb.FieldValue{value}}})
 	tag := "venue:okx"
 	rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 		SpaceId: "quant", DatasetId: "prices",
-		Selectors:   []*pb.TimeSeriesSelector{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &tag}},
+		Selectors:   []*pb.TimeSeriesSelector{{SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: &tag}},
 		ColumnNames: []string{"close"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 || len(rsp.GetRows()[0].GetFields()) != 1 {
 		t.Fatalf("query: rsp=%v err=%v", rsp, err)
 	}
-	if rsp.GetRows()[0].GetKey().GetSeriesTag() != tag {
+	if rsp.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag() != tag {
 		t.Fatalf("query lost exact series tag: rsp=%v", rsp)
 	}
 }
@@ -125,7 +125,7 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 	timeRows := []viewindex.RowWrite{}
 	for _, at := range []string{"2026-07-19T00:00:00Z", "2026-07-20T00:00:00Z"} {
 		timeRows = append(timeRows, viewindex.RowWrite{
-			Key:    viewindex.RowKey{Key: &pb.RowKey{SpaceId: "space", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1d", DataTime: at}}}},
+			Key:    viewindex.RowKey{Key: &pb.RowKey{SpaceId: "space", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Frequency: "1d", DataTime: at}}}},
 			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
 		})
 	}

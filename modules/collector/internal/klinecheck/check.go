@@ -491,7 +491,7 @@ func (c *Checker) counter(request Request) (RowCounter, bool) {
 func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) (map[string]int, error) {
 	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
 	for _, subject := range subjects {
-		selectors = append(selectors, seriesSelector(spaceID, datasetID, subject, frequency))
+		selectors = append(selectors, seriesSelector(subject, frequency))
 	}
 	rsp, err := counter.CountTimeSeriesRows(ctx, &storagepb.CountTimeSeriesRowsReq{
 		SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
@@ -511,8 +511,8 @@ func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, f
 }
 
 // seriesSelector 构造读取一个标的序列的选择器（数据集里每个标的只有一条序列，不带 series_tag）。
-func seriesSelector(spaceID, datasetID, subject, frequency string) *storagepb.TimeSeriesSelector {
-	return &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: frequency}
+func seriesSelector(subject, frequency string) *storagepb.TimeSeriesSelector {
+	return &storagepb.TimeSeriesSelector{SubjectId: subject, Frequency: frequency}
 }
 
 // absentBars 返回每个标的在 bars 里已确认行情源没有的 K 线开始时间。
@@ -628,7 +628,7 @@ func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency
 	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
 	present := make(map[string]map[int64]bool, len(subjects))
 	for _, subject := range subjects {
-		selectors = append(selectors, seriesSelector(spaceID, datasetID, subject, frequency))
+		selectors = append(selectors, seriesSelector(subject, frequency))
 		present[subject] = map[int64]bool{}
 	}
 	cursor := ""
@@ -646,14 +646,15 @@ func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency
 			return nil, fmt.Errorf("read rows: %s", rsp.GetRetInfo().GetMsg())
 		}
 		for _, row := range rsp.GetRows() {
-			barTime, parseErr := time.Parse(time.RFC3339, row.GetKey().GetDataTime())
+			ts := row.GetKey().GetTimeSeries()
+			barTime, parseErr := time.Parse(time.RFC3339, ts.GetDataTime())
 			if parseErr != nil {
 				continue
 			}
 			if deep && !hasFields(row, columns) {
 				continue
 			}
-			if bySubject, ok := present[row.GetKey().GetSubjectId()]; ok {
+			if bySubject, ok := present[ts.GetSubjectId()]; ok {
 				bySubject[barTime.UTC().Unix()] = true
 			}
 		}
@@ -667,7 +668,7 @@ func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency
 	}
 }
 
-func hasFields(row *storagepb.TimeSeriesRow, required []string) bool {
+func hasFields(row *storagepb.Row, required []string) bool {
 	have := map[string]bool{}
 	for _, field := range row.GetFields() {
 		if field.GetValue() != nil && field.GetValue().GetValue() != nil {

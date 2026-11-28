@@ -68,7 +68,7 @@
 
 <script setup lang="ts">
 import { computed, inject, ref, watch } from "vue";
-import { getExecutionCapabilities, listAccountLedger, type LedgerEntry, type MarketType } from "@/api/trade";
+import { ExecutionMode, getExecutionCapabilities, listAccountLedger, type LedgerEntry, type MarketType } from "@/api/trade";
 import { fmtSigned } from "../shared/format";
 import {
   amountClass,
@@ -109,7 +109,9 @@ const memberOptions = computed(() =>
 );
 const accountMarkets = computed(() => accounts.value.get(accountId.value)?.markets || []);
 // 模拟盘由本地成交和资金费记录生成流水，不指定市场时返回全部市场，下拉没有作用
-const showMarket = computed(() => accountMarkets.value.length > 1 && accounts.value.get(accountId.value)?.execution_mode !== 1);
+const showMarket = computed(
+  () => accountMarkets.value.length > 1 && accounts.value.get(accountId.value)?.execution_mode !== ExecutionMode.PAPER
+);
 // 后端给的“能否查流水”标志（账户级）；false 时不发请求，直接说明
 const supportedByAccount = ref<Record<string, boolean>>({});
 const unsupported = computed(() => supportedByAccount.value[accountId.value] === false);

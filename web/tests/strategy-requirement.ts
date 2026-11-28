@@ -32,7 +32,7 @@ function marketRequirement(dslYaml: string): MarketRequirement {
 
 /** 附加来源与参考市场：sources 是 DSL 声明的附加来源（名字与周期，声明顺序），references 是 market.reference 写出的参考市场。 */
 interface SourceRequirement {
-  sources: { name: string; bar: string }[];
+  sources: { name: string; frequency: string }[];
   references: string[];
 }
 
@@ -43,7 +43,7 @@ function sourceRequirement(dslYaml: string): SourceRequirement {
     const sources = document?.sources && typeof document.sources === "object" ? document.sources : {};
     const reference = Array.isArray(document?.market?.reference) ? document.market.reference : [];
     return {
-      sources: Object.entries(sources).map(([name, value]: [string, any]) => ({ name, bar: String(value?.bar ?? "") })),
+      sources: Object.entries(sources).map(([name, value]: [string, any]) => ({ name, frequency: String(value?.bar ?? "") })),
       references: reference.map((item: unknown) => String(item)).filter((item: string) => item === "spot" || item === "swap")
     };
   } catch {
@@ -51,15 +51,36 @@ function sourceRequirement(dslYaml: string): SourceRequirement {
   }
 }
 
-/** 策略池的成员引用；DSL 不是策略池（没有 strategy_pool）或无法解析时返回 null。 */
-function poolMembers(dslYaml: string): { id: string; strategyId: string }[] | null {
+/** 策略池的元数据：成员、分配方式与 drift 起点；不是策略池或无法解析时返回 null。 */
+function poolSpec(dslYaml: string): {
+  members: { id: string; strategyId: string }[];
+  method: string;
+  driftStart: string;
+} | null {
   try {
     const pool = parseDocument(dslYaml).toJS()?.strategy_pool;
     if (pool === undefined || pool === null) return null;
     const members = Array.isArray(pool?.members) ? pool.members : [];
-    return members.map((member: any) => ({ id: String(member?.id ?? ""), strategyId: String(member?.strategy ?? "") }));
+    const allocation = pool?.allocation && typeof pool.allocation === "object" ? pool.allocation : {};
+    const method = typeof allocation.method === "string" ? allocation.method : "";
+    const rawStart = allocation.start ?? allocation.initial?.at;
+    const driftStart = method === "drift" && rawStart !== undefined && rawStart !== null ? String(rawStart) : "";
+    return {
+      members: members.map((member: any) => ({ id: String(member?.id ?? ""), strategyId: String(member?.strategy ?? "") })),
+      method,
+      driftStart
+    };
   } catch {
     return null;
+  }
+}
+
+function isTunedDsl(dslYaml: string): boolean {
+  try {
+    const params = parseDocument(dslYaml).toJS()?.factor_params;
+    return Boolean(params && typeof params === "object" && Object.keys(params).length > 0);
+  } catch {
+    return false;
   }
 }
 
@@ -68,6 +89,8 @@ interface PoolRequirement {
   markets: string[];
   /** 阻止创建的问题（中文）：成员定义读不到、没写 market、是策略池等。 */
   problems: string[];
+  method: string;
+  driftStart: string;
 }
 
 /**
@@ -75,9 +98,10 @@ interface PoolRequirement {
  * lookup 返回成员策略的 DSL 文本；null 表示确认不存在，undefined 表示还在读取。不是策略池时返回 null。
  */
 function poolRequirement(dslYaml: string, lookup: (strategyId: string) => string | null | undefined): PoolRequirement | null {
-  const members = poolMembers(dslYaml);
-  if (!members) return null;
-  if (!members.length) return { markets: [], problems: ["策略池没有写成员（strategy_pool.members）"] };
+  const spec = poolSpec(dslYaml);
+  if (!spec) return null;
+  const { members, method, driftStart } = spec;
+  if (!members.length) return { markets: [], problems: ["策略池没有写成员（strategy_pool.members）"], method, driftStart };
   const problems: string[] = [];
   const markets = new Set<string>();
   // 股票策略不写 market：没写 market 的成员按股票成员处理，池绑定股票任务；股票成员不能与现货、永续成员混用。
@@ -93,7 +117,7 @@ function poolRequirement(dslYaml: string, lookup: (strategyId: string) => string
       problems.push(`正在读取${label}引用的策略 ${member.strategyId}…`);
     } else if (memberDsl === null) {
       problems.push(`${label} 引用的策略 ${member.strategyId} 不存在（定义已删除，或读取失败）`);
-    } else if (poolMembers(memberDsl)) {
+    } else if (poolSpec(memberDsl)) {
       problems.push(`${label} 引用的策略 ${member.strategyId} 本身是策略池，策略池不能嵌套`);
     } else {
       const requirement = marketRequirement(memberDsl);
@@ -106,7 +130,7 @@ function poolRequirement(dslYaml: string, lookup: (strategyId: string) => string
       `${stockMembers.join("、")} 引用的策略没有写 market，按股票成员处理；股票成员不能与现货、永续成员放在同一个池里（现货、永续成员要显式写 market）`
     );
   else if (stockMembers.length) markets.add("equity");
-  return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems };
+  return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems, method, driftStart };
 }
 
 /** 测试里登记的策略定义（ID → DSL）：按 ID 读要求时从这里取。 */
@@ -119,11 +143,32 @@ export function fixtureRequirement(
 ): StrategyTaskRequirement {
   const pool = poolRequirement(dsl, lookup);
   if (pool)
-    return { pool: true, marketDeclared: pool.markets.length > 0, taskKeys: pool.markets, sources: [], problems: pool.problems };
+    return {
+      pool: true,
+      marketDeclared: pool.markets.length > 0,
+      taskKeys: pool.markets,
+      sources: [],
+      problems: pool.problems,
+      referenceMarkets: [],
+      tuned: false,
+      poolAllocationMethod: pool.method,
+      poolDriftStart: pool.driftStart
+    };
   const market = marketRequirement(dsl);
   const extra = sourceRequirement(dsl);
+  const tuned = isTunedDsl(dsl);
   if (!market.declared)
-    return { pool: false, marketDeclared: false, taskKeys: [], sources: extra.sources, problems: [], referenceMarkets: [] };
+    return {
+      pool: false,
+      marketDeclared: false,
+      taskKeys: [],
+      sources: extra.sources,
+      problems: [],
+      referenceMarkets: [],
+      tuned,
+      poolAllocationMethod: "",
+      poolDriftStart: ""
+    };
   const references = extra.references.filter(item => !market.markets.includes(item));
   const sourceKeys = extra.sources.flatMap(source => market.markets.map(item => `${source.name}:${item}`));
   return {
@@ -132,7 +177,10 @@ export function fixtureRequirement(
     taskKeys: [...market.markets, ...references, ...sourceKeys],
     sources: extra.sources,
     problems: [],
-    referenceMarkets: references
+    referenceMarkets: references,
+    tuned,
+    poolAllocationMethod: "",
+    poolDriftStart: ""
   };
 }
 

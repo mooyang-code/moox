@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -29,9 +28,9 @@ const (
 	MaxRealtimeRows = 10
 )
 
-// Request is the JSON payload accepted by a market_fetch SCF invocation.
-// Fetching and persistence are implemented by the common market pipelines;
-// this type only carries the bounded invocation contract.
+// Request 是一次取数调用的负载，只有两种形状：
+//   - 周期提交：BatchKind=realtime 且 RequirePeriodCommit=true，由采集计划构造，每项带 target_data_time 与绑定的 WriteTarget；
+//   - 区间补写：BatchKind=backfill 且 RequirePeriodCommit=false，由补采分块构造，单标的带 start_time/bar_limit 与 WriteTarget。
 type Request struct {
 	BatchID             string           `json:"batch_id"`
 	ScheduleID          string           `json:"schedule_id,omitempty"`
@@ -49,22 +48,17 @@ type Request struct {
 	NodeID              string           `json:"node_id"`
 	FunctionName        string           `json:"function_name,omitempty"`
 	RequestID           string           `json:"request_id,omitempty"`
-	ShardIndex          int              `json:"shard_index,omitempty"`
-	BindingHash         string           `json:"binding_hash,omitempty"`
-	RouteVersion        string           `json:"route_version,omitempty"`
 	RequirePeriodCommit bool             `json:"require_period_commit,omitempty"`
-	RunID               string           `json:"-"`
 	Concurrency         int              `json:"concurrency,omitempty"`
-	// FetchLimits 是计划给出的限流与超时：常驻的本地执行端不能靠进程环境（各市场、各次调用参数可能不同），随请求带上。
+	// FetchLimits 是计划给出的限流与超时，随请求带上，不经过进程环境。
 	FetchLimits *FeedLimits `json:"fetch_limits,omitempty"`
 	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），EntryAt 是函数入口时刻；
 	// 只用于上报，定位“收盘到开始取数”这一段花在触发、启动还是等待收盘后的取数时刻上。
 	TimerLateMS int                     `json:"timer_late_ms,omitempty"`
 	EntryAt     time.Time               `json:"-"`
 	Items       []domain.CollectionItem `json:"items"`
-	// Targets are the destinations attached to a shared acquisition instance.
-	// When present, one fetched result is fanned out to every target.
-	Targets []domain.WriteTarget `json:"targets,omitempty"`
+	// Targets 是写入目标（数据集与输出字段）；一次取数结果按它扇出到各个目标数据集。
+	Targets []domain.WriteTarget `json:"targets"`
 	// PlanRequest 表示由采集计划（或补采）构造的请求：标的上限为 MaxPlanItems，否则为 MaxRealtimeItems。
 	PlanRequest bool `json:"plan_request,omitempty"`
 	// CompleteOnly 表示只用开高低收完整的来源（KlineSpec.CompleteOHLCV），不回落到近似值的来源：强制补采（收市后整天重取、
@@ -74,13 +68,7 @@ type Request struct {
 }
 
 func bindRequestTargetPeriodIdentity(request *Request) {
-	if request == nil {
-		return
-	}
-	for index := range request.Items {
-		request.Items[index].RequirePeriodCommit = request.RequirePeriodCommit
-	}
-	if !request.RequirePeriodCommit || len(request.Targets) == 0 {
+	if request == nil || !request.RequirePeriodCommit || len(request.Targets) == 0 {
 		return
 	}
 	itemByInstance := make(map[string]domain.CollectionItem, len(request.Items))
@@ -115,44 +103,49 @@ func (r *Request) validate() error {
 	if len(r.Items) == 0 {
 		return fmt.Errorf("items must not be empty")
 	}
-	for index, item := range r.Items {
-		if item.RequirePeriodCommit != r.RequirePeriodCommit {
-			return fmt.Errorf("items[%d] require_period_commit differs from request", index)
+	if r.BatchKind == "" {
+		r.BatchKind = domain.BatchKindRealtime
+	}
+	switch r.BatchKind {
+	case domain.BatchKindRealtime:
+		if !r.RequirePeriodCommit {
+			return fmt.Errorf("realtime request requires period commit")
 		}
+	case domain.BatchKindBackfill:
+		if r.RequirePeriodCommit {
+			return fmt.Errorf("backfill request must not require period commit")
+		}
+	default:
+		return fmt.Errorf("unsupported batch_kind %q", r.BatchKind)
 	}
 	r.DatasetID = strings.TrimSpace(r.DatasetID)
-	if r.DatasetID == "" && len(r.Targets) == 0 {
-		return fmt.Errorf("dataset_id is required")
+	if len(r.Targets) == 0 {
+		return fmt.Errorf("targets must not be empty")
 	}
-	if len(r.Targets) > 0 {
-		seen := make(map[string]struct{}, len(r.Targets))
-		for i := range r.Targets {
-			r.Targets[i].DatasetID = strings.TrimSpace(r.Targets[i].DatasetID)
-			if r.Targets[i].DatasetID == "" {
-				return fmt.Errorf("targets[%d].dataset_id is required", i)
-			}
-			identity := r.Targets[i].InstanceID + "\x00" + r.Targets[i].TaskID + "\x00" + r.Targets[i].DatasetID
-			if _, ok := seen[identity]; ok {
-				return fmt.Errorf("targets[%d] target is duplicated", i)
-			}
-			seen[identity] = struct{}{}
-			if r.Targets[i].OutputFields != "" {
-				var fields []string
-				if err := json.Unmarshal([]byte(r.Targets[i].OutputFields), &fields); err != nil {
-					return fmt.Errorf("targets[%d].output_fields_json is invalid: %w", i, err)
-				}
+	seen := make(map[string]struct{}, len(r.Targets))
+	for i := range r.Targets {
+		r.Targets[i].DatasetID = strings.TrimSpace(r.Targets[i].DatasetID)
+		if r.Targets[i].DatasetID == "" {
+			return fmt.Errorf("targets[%d].dataset_id is required", i)
+		}
+		identity := r.Targets[i].InstanceID + "\x00" + r.Targets[i].TaskID + "\x00" + r.Targets[i].DatasetID
+		if _, ok := seen[identity]; ok {
+			return fmt.Errorf("targets[%d] target is duplicated", i)
+		}
+		seen[identity] = struct{}{}
+		if r.Targets[i].OutputFields != "" {
+			var fields []string
+			if err := json.Unmarshal([]byte(r.Targets[i].OutputFields), &fields); err != nil {
+				return fmt.Errorf("targets[%d].output_fields_json is invalid: %w", i, err)
 			}
 		}
-		if r.DatasetID == "" {
-			r.DatasetID = r.Targets[0].DatasetID
-		}
+	}
+	if r.DatasetID == "" {
+		r.DatasetID = r.Targets[0].DatasetID
 	}
 	if r.RequirePeriodCommit {
 		if _, err := marketdata.ParseFrequency(r.Frequency); err != nil {
 			return fmt.Errorf("period commit frequency is required and must be valid: %w", err)
-		}
-		if len(r.Targets) == 0 {
-			return fmt.Errorf("period commit requires at least one bound write target")
 		}
 		itemByID := make(map[string]domain.CollectionItem, len(r.Items))
 		periods := make(map[string]time.Time, len(r.Items))
@@ -197,36 +190,26 @@ func (r *Request) validate() error {
 			}
 		}
 	}
-	if r.BatchKind == "" {
-		r.BatchKind = domain.BatchKindRealtime
-	}
 	maxItems := MaxRealtimeItems
 	if r.PlanRequest {
 		maxItems = MaxPlanItems
 	}
-	switch r.BatchKind {
-	case domain.BatchKindRealtime:
-	case domain.BatchKindBackfill:
+	if r.BatchKind == domain.BatchKindBackfill {
 		maxItems = 1
-	default:
-		return fmt.Errorf("unsupported batch_kind %q", r.BatchKind)
 	}
 	if len(r.Items) > maxItems && !(r.BatchKind == domain.BatchKindRealtime && realtimeBatchNoCap(r.SpaceID)) {
 		return fmt.Errorf("items exceed maximum batch size %d for %s", maxItems, r.BatchKind)
 	}
 	seenInstanceIDs := make(map[string]struct{}, len(r.Items))
 	for index, item := range r.Items {
-		if strings.TrimSpace(item.SubjectID) == "" || strings.TrimSpace(item.Symbol) == "" {
-			return fmt.Errorf("items[%d] subject_id and symbol are required", index)
+		if strings.TrimSpace(item.SubjectID) == "" {
+			return fmt.Errorf("items[%d] subject_id is required", index)
 		}
 		if provider := strings.TrimSpace(r.Provider); provider != "" && strings.TrimSpace(item.Provider) != "" && !strings.EqualFold(provider, strings.TrimSpace(item.Provider)) {
 			return fmt.Errorf("items[%d] source binding provider %q differs from batch provider %q", index, item.Provider, provider)
 		}
 		if sourceID := strings.TrimSpace(r.SourceID); sourceID != "" && strings.TrimSpace(item.SourceID) != "" && !strings.EqualFold(sourceID, strings.TrimSpace(item.SourceID)) {
 			return fmt.Errorf("items[%d] source binding source_id %q differs from batch source_id %q", index, item.SourceID, sourceID)
-		}
-		if len(r.Targets) == 0 && strings.TrimSpace(item.DatasetID) != r.DatasetID {
-			return fmt.Errorf("items[%d] dataset_id differs from batch dataset", index)
 		}
 		if strings.TrimSpace(item.InstanceID) != "" {
 			if _, exists := seenInstanceIDs[item.InstanceID]; exists {
@@ -248,14 +231,11 @@ func (r *Request) validate() error {
 		if item.CandidateIndex < 0 {
 			return fmt.Errorf("items[%d] candidate_index must not be negative", index)
 		}
-		if math.IsNaN(item.RateBudgetRatio) || math.IsInf(item.RateBudgetRatio, 0) || item.RateBudgetRatio < 0 || item.RateBudgetRatio > 1 {
-			return fmt.Errorf("items[%d] rate_budget_ratio must be between 0 and 1", index)
-		}
 		if isHistoricalBatchKind(r.BatchKind) {
 			if strings.TrimSpace(item.StartTime) == "" || item.BarLimit <= 0 || item.BarLimit > 1000 {
 				return fmt.Errorf("historical item requires start_time and bar_limit 1..1000")
 			}
-		} else if r.BatchKind == domain.BatchKindRealtime && item.BarLimit > MaxRealtimeRows {
+		} else if item.BarLimit > MaxRealtimeRows {
 			return fmt.Errorf("realtime bar_limit must be between 1 and %d", MaxRealtimeRows)
 		}
 	}
@@ -279,7 +259,7 @@ func parseRequestTime(raw string) (time.Time, error) {
 
 // Storage is the write boundary shared by the market pipelines.
 type Storage interface {
-	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
+	UpsertFields(context.Context, []*storagepb.Row) error
 }
 
 type periodStorage interface {

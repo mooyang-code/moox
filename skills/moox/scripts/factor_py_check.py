@@ -3,7 +3,7 @@
 
 子命令：
   synthetic    生成合成 OHLCV K 线 CSV（只用标准库）
-  rows-to-csv  把 data-kline.sh / moox-cli data rows export 输出的 JSON 转成 CSV
+  rows-to-csv  把 moox-cli data kline get / moox-cli data rows export 输出的 JSON 转成 CSV
   run-python   按旧契约 compute(df, params, context) 运行原 Python 因子，输出结果 CSV（需要 pandas）
   compare      逐值比较原 Python 结果与 factorexpr eval 的结果，按验收规则给出通过 / 失败（只用标准库）
 
@@ -121,8 +121,11 @@ def cmd_rows_to_csv(args):
         with open(path) as handle:
             payload = json.load(handle)
         for row in payload.get("rows", []):
-            key = row.get("key", {})
-            identity = (format_time(parse_time(key["data_time"])), key.get("subject_id", ""), key.get("series_tag", ""))
+            key = row.get("key") or {}
+            ts = key.get("time_series")
+            if not isinstance(ts, dict):
+                raise SystemExit(f"{path} 含非时序行或缺少 key.time_series：{key!r}")
+            identity = (format_time(parse_time(ts["data_time"])), ts.get("subject_id", ""), ts.get("series_tag", ""))
             values = records.setdefault(identity, {})
             for field in row.get("fields", []):
                 name = field["field_id"]

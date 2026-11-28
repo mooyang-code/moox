@@ -46,7 +46,10 @@ func (*registryStub) SetMarginMode(context.Context, exchange.SymbolKey, exchange
 
 func TestRegistryBindsExecutionAdapter(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(ExchangeDescriptor{Exchange: exchange.ExchangeBinance}, func(config exchange.AccountConfig, credential exchange.Credential) (ExecutionAdapter, error) {
+	marketData := func(config exchange.AccountConfig) (PublicMarketData, error) {
+		return &registryStub{config: config}, nil
+	}
+	registry.Register(ExchangeDescriptor{Exchange: exchange.ExchangeBinance}, marketData, func(config exchange.AccountConfig, credential exchange.Credential) (ExecutionAdapter, error) {
 		return &registryStub{config: config, credential: credential}, nil
 	})
 	config := exchange.AccountConfig{TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "USDT"}
@@ -63,14 +66,29 @@ func TestRegistryBindsExecutionAdapter(t *testing.T) {
 	if err != nil || order.Status != exchange.OrderStatusFilled {
 		t.Fatalf("GetOrder() = %#v, %v", order, err)
 	}
+	paperCfg := config
+	paperCfg.ExecutionMode = exchange.ExecutionModePaper
+	if _, err := registry.Bind(paperCfg, credential); err == nil {
+		t.Fatal("Bind() should reject PAPER mode")
+	}
+	gotMD, err := registry.BindMarketData(paperCfg)
+	if err != nil {
+		t.Fatalf("BindMarketData() error = %v", err)
+	}
+	if _, ok := gotMD.(*registryStub); !ok {
+		t.Fatalf("BindMarketData() = %#v", gotMD)
+	}
 }
 
 func TestRegistryRejectsInvalidBindingAndDuplicate(t *testing.T) {
 	registry := NewRegistry()
+	marketData := func(exchange.AccountConfig) (PublicMarketData, error) {
+		return &registryStub{}, nil
+	}
 	factory := func(exchange.AccountConfig, exchange.Credential) (ExecutionAdapter, error) {
 		return &registryStub{}, nil
 	}
-	registry.Register(ExchangeDescriptor{Exchange: exchange.ExchangeBinance}, factory)
+	registry.Register(ExchangeDescriptor{Exchange: exchange.ExchangeBinance}, marketData, factory)
 	if _, err := registry.Bind(exchange.AccountConfig{Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "USDT"}, exchange.Credential{}); err == nil {
 		t.Fatal("Bind() accepted missing account and credential")
 	}
@@ -79,7 +97,26 @@ func TestRegistryRejectsInvalidBindingAndDuplicate(t *testing.T) {
 			t.Fatal("duplicate Register() did not panic")
 		}
 	}()
-	registry.Register(ExchangeDescriptor{Exchange: exchange.ExchangeBinance}, factory)
+	registry.Register(ExchangeDescriptor{Exchange: exchange.ExchangeBinance}, marketData, factory)
+}
+
+func TestRegistryWithoutLiveFactoryRejectsLiveBindingAndAccountValidation(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(ExchangeDescriptor{
+		Exchange: exchange.ExchangeHKEX,
+		Markets:  []exchange.MarketType{exchange.MarketTypeEquity},
+	}, func(config exchange.AccountConfig) (PublicMarketData, error) {
+		return &registryStub{config: config}, nil
+	}, nil)
+	if err := ValidateAccount(registry, exchange.ExchangeHKEX, []exchange.MarketType{exchange.MarketTypeEquity}, "HKD", exchange.ExecutionModeLive); err == nil {
+		t.Fatal("ValidateAccount() should reject live when live factory is nil")
+	}
+	if _, err := registry.Bind(exchange.AccountConfig{
+		TradingAccountID: "acc-1", Exchange: exchange.ExchangeHKEX,
+		Markets: []exchange.MarketType{exchange.MarketTypeEquity}, ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "HKD",
+	}, exchange.Credential{}); err == nil {
+		t.Fatal("Bind() should reject live when live factory is nil")
+	}
 }
 
 func (*registryStub) LoadInstruments(context.Context) ([]exchange.Instrument, error) { return nil, nil }

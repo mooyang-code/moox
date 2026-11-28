@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/seriesset"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -86,10 +85,10 @@ func goldenRegister(t *testing.T, store *Store, clock *goldenClock, spaceID, dat
 	}
 }
 
-func goldenRow(spaceID, datasetID, frequency string, series seriesset.Series, at time.Time, value float64) *pb.RowFieldUpsert {
-	return &pb.RowFieldUpsert{
+func goldenRow(spaceID, datasetID, frequency string, series seriesset.Series, at time.Time, value float64) *pb.Row {
+	return &pb.Row{
 		Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: series.SubjectID, SeriesTag: series.SeriesTag, Freq: frequency, DataTime: at.UTC().Format(time.RFC3339Nano),
+			SubjectId: series.SubjectID, SeriesTag: series.SeriesTag, Frequency: frequency, DataTime: at.UTC().Format(time.RFC3339Nano),
 		}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}},
 	}
@@ -112,7 +111,7 @@ func goldenStoredClose(t *testing.T, store *Store, key *pb.RowKey) (float64, boo
 
 type goldenMarker struct {
 	message *eventpb.EventMessage
-	payload *storageeventpb.DatasetPeriodCompleted
+	payload *eventpb.DatasetPeriodCompleted
 }
 
 // listMarkerChanges 列出变更日志里的全部完成标记条目，也就是转发协程要发的全部事件，按提交顺序。
@@ -141,7 +140,7 @@ func goldenMarkers(t *testing.T, store *Store, spaceID, datasetID string) []gold
 		if message.GetEventName() != events.DatasetPeriodCompleted.Name() || message.GetSpaceId() != spaceID || message.GetSubjectId() != datasetID {
 			continue
 		}
-		payload := &storageeventpb.DatasetPeriodCompleted{}
+		payload := &eventpb.DatasetPeriodCompleted{}
 		require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
 		out = append(out, goldenMarker{message: message, payload: payload})
 	}

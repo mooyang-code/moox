@@ -22,6 +22,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func ok() *commonpb.RetInfo { return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS} }
+
 // archiveImportGateway 按方法回响应：GetArchiveRun 依次返回 statuses（用完后停在最后一个）。
 type archiveImportGateway struct {
 	mu         sync.Mutex
@@ -54,7 +56,7 @@ func (g *archiveImportGateway) Invoke(_ context.Context, _, method string, req, 
 	case "CancelArchiveRun":
 		out = &archivepb.CancelArchiveRunRsp{RetInfo: ok()}
 	case "ListArchiveRuns":
-		out = &archivepb.ListArchiveRunsRsp{RetInfo: ok(), Runs: []*archivepb.ArchiveRun{{RunId: "run_follow", Kind: "follow", Status: "running"}}}
+		out = &archivepb.ListArchiveRunsRsp{RetInfo: ok(), Runs: []*archivepb.ArchiveRun{{RunId: "run_range", Kind: "range", Status: "running"}}}
 	case "ListArchivePartitions":
 		out = &archivepb.ListArchivePartitionsRsp{RetInfo: ok(), Partitions: g.partitions, PageResult: &commonpb.PageResult{}}
 	}
@@ -218,7 +220,7 @@ func TestArchiveTargetCancelsAfterQueueingTooLongAndNamesTheBlockingRun(t *testi
 	archiveStartQueueLimit = 0
 	err := newArchiveTarget(g).Write(context.Background(), archiveChunk(3, false))
 	require.ErrorContains(t, err, "排队超过")
-	require.ErrorContains(t, err, "run_follow")
+	require.ErrorContains(t, err, "run_range")
 	assert.Equal(t, 1, g.called("CancelArchiveRun"))
 }
 

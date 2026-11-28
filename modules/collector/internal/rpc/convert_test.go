@@ -33,18 +33,16 @@ func TestToPBTaskAndFromPBTask_ShouldRoundTripCoreFields(t *testing.T) {
 	assert.Equal(t, "rule-2", out.TaskID)
 }
 
-func TestToPBTaskRedactsInternalDatasetIDsAndNamesResult(t *testing.T) {
+func TestToPBTaskPassesCollectParamsAndNamesResult(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "币安现货", DataType: "kline",
-		CollectParams: `{"subject_tags":["binance_spot"],"source_dataset_id":"source","target_dataset_id":"target","frequency":"1h"}`,
+		CollectParams: `{"frequency":"1h","output_fields":["open","close"]}`,
 	}
 	pbTask := toPBTask(task)
 	assert.Equal(t, "币安现货 结果", pbTask.GetResult().GetResultName())
 	params := pbTask.GetCollectParams().AsMap()
-	assert.NotContains(t, params, "target_dataset_id")
-	assert.NotContains(t, params, "subject_tags")
-	assert.NotContains(t, params, "source_dataset_id")
 	assert.Equal(t, "1h", params["frequency"])
+	assert.Equal(t, []any{"open", "close"}, params["output_fields"])
 }
 
 func TestCollectionTaskProtoJSONRejectsLegacyRuleFields(t *testing.T) {

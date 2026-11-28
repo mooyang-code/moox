@@ -24,6 +24,7 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
+	"github.com/mooyang-code/moox/packages/dataformat"
 	"github.com/mooyang-code/moox/packages/events"
 	// 注册与 catalog.yaml max_body_bytes(32 MiB) 对齐的 tRPC 帧上限（64 MiB）及有界 zstd 字典压缩。
 	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
@@ -86,7 +87,7 @@ func runPrimaryRole() error {
 		return err
 	}
 	defer meta.Close()
-	if err := meta.ValidateSchemaVersion(trpc.BackgroundContext()); err != nil {
+	if err := meta.ValidateSchema(trpc.BackgroundContext()); err != nil {
 		return fmt.Errorf("metadata schema validation failed: %w", err)
 	}
 	cached, err := metacache.NewDatasetCache(trpc.BackgroundContext(), meta)
@@ -104,6 +105,9 @@ func runPrimaryRole() error {
 		return err
 	}
 	defer store.Close()
+	if err := metasqlite.RecordPrimaryFormat(loadedCfg.Storage.Root, true); err != nil {
+		return fmt.Errorf("verify or write storage-primary data format: %w", err)
+	}
 	if err := observability.RegisterPebbleDiskUsage(prometheus.DefaultRegisterer, store.DiskSpaceUsage); err != nil {
 		return err
 	}
@@ -118,7 +122,7 @@ func runPrimaryRole() error {
 	deadlineRejections := observability.NewDeadlineRejections(attention)
 	attention.AddSource("outbox", storagerelay.OutboxAttention(observability.DefaultViewMetrics))
 	svc, err := primarystore.New(primarystore.Options{
-		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot,
+		Store: store, Datasets: cached,
 		DatasetMetrics: datasetMetrics, DeadlineRejections: deadlineRejections,
 	})
 	if err != nil {
@@ -229,7 +233,7 @@ func (c datasetCleanup) run(ctx context.Context, now time.Time) error {
 }
 
 func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset, now time.Time) error {
-	period, _, err := c.retention.Resolve(dataset.GetSpaceId(), dataset.GetFreq())
+	period, _, err := c.retention.Resolve(dataset.GetSpaceId(), dataset.GetFrequency())
 	if err != nil {
 		return err
 	}
@@ -247,7 +251,7 @@ func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset,
 	elapsed := time.Since(started)
 	c.metrics.ObserveCleanup(dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff, elapsed, deleted)
 	tlog.Infof("storage cleanup space=%s dataset=%s freq=%s retention=%s cutoff=%s deleted_ranges=%d elapsed=%s",
-		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFreq(), period, cutoff.Format(time.RFC3339), deleted, elapsed.Round(time.Millisecond))
+		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFrequency(), period, cutoff.Format(time.RFC3339), deleted, elapsed.Round(time.Millisecond))
 	return nil
 }
 
@@ -263,6 +267,10 @@ func runViewRole() error {
 	policy, err := loadedCfg.LoadPolicy()
 	if err != nil {
 		return err
+	}
+	hadViewData := dataformat.DirHasEntries(loadedCfg.Storage.Devices.ViewIndexRoot)
+	if err := recordStorageViewFormat(loadedCfg.Storage.Root, loadedCfg.Storage.Devices.ViewIndexRoot, hadViewData); err != nil {
+		return fmt.Errorf("verify or write storage-view data format: %w", err)
 	}
 	svc, err := viewservice.New(loadedCfg.Storage.Devices.ViewIndexRoot)
 	if err != nil {
@@ -306,7 +314,7 @@ func runViewRole() error {
 	maintenanceInterval, _ := time.ParseDuration(policy.View.MaintenanceCheckInterval)
 	// 每序列保留根数随 DataView 查询响应告知调用方：不依赖维护器是否启动。
 	svc.SetSeriesBars(policy.View.Bars)
-	svc.SetMaxAge(policy.View.MaxAge)
+	svc.SetMaxAge(policy)
 	maintenanceOptions := viewservice.MaintenanceOptions{
 		Metadata:                metadataProxy,
 		PrimaryRange:            primaryProxy,
@@ -487,6 +495,24 @@ func storageEventBusConfig(loadedCfg storageconfig.LoadedConfig, urls []string, 
 	// without editing shared credentials.
 	cfg.URLs = append([]string(nil), urls...)
 	return cfg, nil
+}
+
+// recordStorageViewFormat 在 storage-view 启动时核对或写入数据目录的格式记录：已有旧格式数据时拒绝启动。
+func recordStorageViewFormat(storageRoot, viewIndexRoot string, hadData bool) error {
+	dir := strings.TrimSpace(storageRoot)
+	if dir == "" {
+		dir = filepath.Dir(strings.TrimSpace(viewIndexRoot))
+	}
+	if dir == "" || dir == "." {
+		return nil
+	}
+	rec, err := dataformat.Build("storage-view", map[string]string{
+		dataformat.PartStorageViewIndex: strconv.Itoa(dataformat.StorageViewIndexVersion),
+	})
+	if err != nil {
+		return err
+	}
+	return dataformat.VerifyOrWriteDir(dir, rec, hadData)
 }
 
 // registerRoleHealth 注册健康检查；返回的状态再交给指标上报，上报里的就绪与 /readyz 是同一个判断。

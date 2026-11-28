@@ -23,11 +23,11 @@ import (
 func TestReadWindowPagesUntilExhausted(t *testing.T) {
 	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
-		{Rows: []*storagepb.TimeSeriesRow{
+		{Rows: []*storagepb.Row{
 			readRow("ETH", base, "", map[string]*storagepb.TypedValue{"close": double(3)}),
 			readRow("BTC", base.Add(time.Minute), "venue:b", map[string]*storagepb.TypedValue{"close": double(2)}),
 		}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
-		{Rows: []*storagepb.TimeSeriesRow{
+		{Rows: []*storagepb.Row{
 			readRow("BTC", base, "venue:a", map[string]*storagepb.TypedValue{"close": double(1)}),
 		}, PageResult: &commonpb.PageResult{HasMore: false}},
 	}}
@@ -48,8 +48,8 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 func TestReadWindowBoundsEachPageWithPageTimeout(t *testing.T) {
 	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
-		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
-		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base.Add(time.Minute), "", map[string]*storagepb.TypedValue{"close": double(2)})}, PageResult: &commonpb.PageResult{HasMore: false}},
+		{Rows: []*storagepb.Row{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
+		{Rows: []*storagepb.Row{readRow("BTC", base.Add(time.Minute), "", map[string]*storagepb.TypedValue{"close": double(2)})}, PageResult: &commonpb.PageResult{HasMore: false}},
 	}}
 	_, err := NewClient(primary, nil).ReadWindow(context.Background(), ReadRequest{
 		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: []string{"BTC"},
@@ -67,8 +67,8 @@ func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
 	earlier := time.Date(2025, 2, 3, 4, 5, 0, 0, time.UTC)
 	later := earlier.Add(time.Hour)
 	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
-		{Rows: []*storagepb.TimeSeriesRow{readRow("subject-000", later, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
-		{Rows: []*storagepb.TimeSeriesRow{readRow("subject-128", earlier, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
+		{Rows: []*storagepb.Row{readRow("subject-000", later, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
+		{Rows: []*storagepb.Row{readRow("subject-128", earlier, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
 	}}
 	subjects := make([]string, 129)
 	for i := range subjects {
@@ -83,7 +83,7 @@ func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
 	for _, request := range primary.readRequests {
 		require.Equal(t, uint32(1), request.GetPage().GetSize())
 		require.Equal(t, "0001-01-01T00:00:00Z", request.GetTimeRange().GetStartTime())
-		require.Equal(t, "1m", request.GetSelectors()[0].GetFreq())
+		require.Equal(t, "1m", request.GetSelectors()[0].GetFrequency())
 	}
 	require.Len(t, primary.readRequests[0].GetSelectors(), earliestPeriodSelectorBatchSize)
 	require.Len(t, primary.readRequests[1].GetSelectors(), 29)
@@ -124,7 +124,7 @@ func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
 	require.Equal(t, []string{"BTC", "ETH"}, []string{selectors[0].GetSubjectId(), selectors[1].GetSubjectId()})
 	for _, selector := range selectors {
 		require.Nil(t, selector.SeriesTag)
-		require.Equal(t, "1m", selector.GetFreq())
+		require.Equal(t, "1m", selector.GetFrequency())
 	}
 	require.Equal(t, base.Format(time.RFC3339Nano), primary.readRequests[0].GetTimeRange().GetStartTime())
 	require.Equal(t, base.Add(time.Minute).Format(time.RFC3339Nano), primary.readRequests[0].GetTimeRange().GetEndTime())
@@ -133,7 +133,7 @@ func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
 func TestWriteRowsEncodesNullFields(t *testing.T) {
 	primary := &primaryFake{}
 	metadata := &metadataFake{dataset: &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: "factor_result", Freq: "1m", Status: "active",
+		SpaceId: "crypto", DatasetId: "factor_result", Frequency: "1m", Status: "active",
 	}}
 	store := NewClient(primary, metadata)
 	err := store.WriteRows(context.Background(), "crypto", "factor_result", []ResultRow{{
@@ -143,7 +143,7 @@ func TestWriteRowsEncodesNullFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, primary.writeRequests, 1)
 	row := primary.writeRequests[0].GetRows()[0]
-	require.Equal(t, "1m", row.GetKey().GetTimeSeries().GetFreq())
+	require.Equal(t, "1m", row.GetKey().GetTimeSeries().GetFrequency())
 	fields := row.GetFields()
 	require.Len(t, fields, 3)
 	for _, field := range fields {
@@ -175,14 +175,14 @@ func TestTransientErrorsWrapErrInfra(t *testing.T) {
 func TestReportComputedBuildsDeterministicEventID(t *testing.T) {
 	marker := PeriodMarker{
 		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m",
-		PeriodTime: 1791115200, Status: "complete", TriggerEventID: "collector-event",
+		PeriodTime: 1791115200, Status: "complete",
 		ComputedAt: time.Date(2026, 10, 4, 12, 0, 1, 0, time.UTC),
 	}
 	primary := &primaryFake{}
 	store := NewClient(primary, nil)
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
-	require.Equal(t, "storage-marker-"+shortHash("producer-period", "crypto", "factor_result", "collector-event", "1791115200"), primary.reportIDs[0])
+	require.Equal(t, "storage-marker-"+shortHash("producer-period", "crypto", "factor_result", PeriodCauseID("factor_result", 1791115200), "1791115200"), primary.reportIDs[0])
 	require.Equal(t, primary.reportIDs[0], primary.reportIDs[1])
 }
 
@@ -190,7 +190,7 @@ func TestReportComputedBuildsDeterministicEventID(t *testing.T) {
 func TestReportComputedInvalidRequestIsNotRetried(t *testing.T) {
 	marker := PeriodMarker{
 		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m",
-		PeriodTime: 1791115200, Status: "complete", TriggerEventID: "collector-event",
+		PeriodTime: 1791115200, Status: "complete",
 	}
 	primary := &primaryFake{reportRet: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "完成标记无法通过事件校验"}}
 	err := NewClient(primary, nil).ReportComputed(context.Background(), marker)
@@ -209,10 +209,11 @@ func TestComputedExistsNotFoundIsFalse(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			primary := &primaryFake{computedRsp: rsp}
-			found, err := NewClient(primary, nil).ComputedExists(context.Background(), "crypto", "factor_result", "collector-event", 123)
+			found, err := NewClient(primary, nil).ComputedExists(context.Background(), "crypto", "factor_result", 123)
 			require.NoError(t, err)
 			require.False(t, found)
 			require.Equal(t, "factor_result", primary.computedReq.GetDatasetId())
+			require.Equal(t, PeriodCauseID("factor_result", 123), primary.computedReq.GetCauseEventId())
 			require.Equal(t, int64(123), primary.computedReq.GetPeriodTime())
 		})
 	}
@@ -248,7 +249,7 @@ func TestCreateResultDatasetUsesSourceOwnershipAndRetention(t *testing.T) {
 	dataset := metadata.createRequests[0].GetDataset()
 	require.Equal(t, spec.DataSourceID, dataset.GetDataSourceId())
 	require.Equal(t, DatasetStatusActive, dataset.GetStatus())
-	require.Equal(t, spec.Frequency, dataset.GetFreq())
+	require.Equal(t, spec.Frequency, dataset.GetFrequency())
 	require.Equal(t, []string{"tag-b", "tag-a"}, dataset.GetSubjectTags())
 	require.Equal(t, DatasetRoleFactorResult, dataset.GetAttributes()["dataset_role"])
 	require.Equal(t, spec.SourceDatasetID, dataset.GetAttributes()["source_dataset_id"])
@@ -394,19 +395,27 @@ type metadataFake struct {
 	getDatasetRsps []*storagepb.GetDatasetRsp
 	columnPages    []*storagepb.ListDatasetColumnsRsp
 	columnRequests []*storagepb.ListDatasetColumnsReq
-	createRequests []*storagepb.CreateDatasetReq
-	createRsp      *storagepb.CreateDatasetRsp
+	createRequests []*storagepb.UpsertDatasetReq
+	createRsp      *storagepb.UpsertDatasetRsp
 	upsertRequests []*storagepb.UpsertDatasetColumnReq
 	deleteRequests []*storagepb.DeleteDatasetReq
 	deleteRsp      *storagepb.DeleteDatasetRsp
 	deleteRsps     []*storagepb.DeleteDatasetRsp
 	subjectPages   []*storagepb.ListDatasetSubjectsRsp
-	updateRequests []*storagepb.UpdateDatasetReq
+	updateRequests []*storagepb.UpsertDatasetReq
 }
 
-func (f *metadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
-	f.updateRequests = append(f.updateRequests, req)
-	return &storagepb.UpdateDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
+func (f *metadataFake) UpsertDataset(_ context.Context, req *storagepb.UpsertDatasetReq, _ ...client.Option) (*storagepb.UpsertDatasetRsp, error) {
+	cloned := proto.Clone(req).(*storagepb.UpsertDatasetReq)
+	if req.GetCreateOnly() {
+		f.createRequests = append(f.createRequests, cloned)
+		if f.createRsp != nil {
+			return f.createRsp, nil
+		}
+		return &storagepb.UpsertDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
+	}
+	f.updateRequests = append(f.updateRequests, cloned)
+	return &storagepb.UpsertDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
 }
 
 func (f *metadataFake) ListDatasetSubjects(_ context.Context, req *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
@@ -443,14 +452,6 @@ func (f *metadataFake) ListDatasetColumns(_ context.Context, req *storagepb.List
 		return rsp, nil
 	}
 	return &storagepb.ListDatasetColumnsRsp{RetInfo: successRet()}, nil
-}
-
-func (f *metadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq, _ ...client.Option) (*storagepb.CreateDatasetRsp, error) {
-	f.createRequests = append(f.createRequests, proto.Clone(req).(*storagepb.CreateDatasetReq))
-	if f.createRsp != nil {
-		return f.createRsp, nil
-	}
-	return &storagepb.CreateDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
 }
 
 func (f *metadataFake) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq, _ ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
@@ -538,13 +539,16 @@ func (f *primaryFake) GetDatasetPeriodCompleted(_ context.Context, req *storagep
 	return &storagepb.GetDatasetPeriodCompletedRsp{RetInfo: successRet()}, nil
 }
 
-func readRow(subject string, at time.Time, tag string, fields map[string]*storagepb.TypedValue) *storagepb.TimeSeriesRow {
+func readRow(subject string, at time.Time, tag string, fields map[string]*storagepb.TypedValue) *storagepb.Row {
 	values := make([]*storagepb.FieldValue, 0, len(fields))
 	for name, value := range fields {
 		values = append(values, &storagepb.FieldValue{FieldId: name, Value: value})
 	}
-	return &storagepb.TimeSeriesRow{
-		Key:    &storagepb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "bars", SubjectId: subject, Freq: "1m", DataTime: at.Format(time.RFC3339Nano), SeriesTag: tag},
+	return &storagepb.Row{
+		Key: &storagepb.RowKey{
+			SpaceId: "crypto", DatasetId: "bars",
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Frequency: "1m", DataTime: at.Format(time.RFC3339Nano), SeriesTag: tag}},
+		},
 		Fields: values,
 	}
 }
@@ -612,7 +616,7 @@ func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
 			{Sequence: 6, DatasetId: "d", Marker: []byte("marker")},
 			{Sequence: 7, DatasetId: "d", Records: []*storagepb.RecordRowKey{{RecordId: "r", Version: "1"}}},
 			{Sequence: 8, DatasetId: "d", Ranges: []*storagepb.DatasetChangeRange{
-				{SubjectId: "BTC", Freq: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00.5Z"},
+				{SubjectId: "BTC", Frequency: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00.5Z"},
 			}},
 		},
 	}}

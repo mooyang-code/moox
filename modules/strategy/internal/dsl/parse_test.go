@@ -28,7 +28,7 @@ func TestParseExample(t *testing.T) {
 		t.Fatalf("rank 规则的 select/weight 不符：%+v / %+v", rank.Select, rank.Weight)
 	}
 	timing := strategy.Rules[1]
-	if timing.Type != RuleTypeRank || !timing.Pool.Explicit || len(timing.Pool.Fixed) != 1 || !timing.AllowEmpty || timing.Hold == nil || timing.Hold.Entry == "" || timing.Hold.Exit == "" || timing.Weight.Total.String() != "0.2" || timing.Side != SideLong {
+	if timing.Type != RuleTypeRank || timing.Universe == nil || !timing.Universe.OverridesMembers() || len(timing.Universe.Include) != 1 || len(timing.Universe.Tags) != 0 || !timing.AllowEmpty || timing.Hold == nil || timing.Hold.Entry == "" || timing.Hold.Exit == "" || timing.Weight.Total.String() != "0.2" || timing.Side != SideLong {
 		t.Fatalf("固定标的择时规则不符：%+v", timing)
 	}
 	if strategy.Portfolio.Leverage.String() != "1" || !strategy.Portfolio.HasMaxWeight || strategy.Portfolio.MaxWeight.String() != "0.3" || strategy.Portfolio.MinUniverse != 20 || strategy.Portfolio.MaxMissing.String() != "0.2" {
@@ -53,8 +53,19 @@ rules:
 		t.Fatalf("portfolio 默认值不符：%+v", strategy.Portfolio)
 	}
 	rule := strategy.Rules[0]
-	if rule.Weight.Total.String() != "1" || rule.Weight.Method != WeightMethodEqual || rule.Side != SideLong || rule.Pool.Explicit {
+	if rule.Type != RuleTypeRank || rule.Weight.Total.String() != "1" || rule.Weight.Method != WeightMethodEqual || rule.Side != SideLong || rule.Universe != nil {
 		t.Fatalf("规则默认值不符：%+v", rule)
+	}
+	// 省略 type 默认为 rank；显式写空串仍拒绝。
+	omitted, err := Parse([]byte("name: omitted_type\nrules:\n  - {id: top1, score: close, select: {top: 1}, weight: 1}\n"))
+	if err != nil {
+		t.Fatalf("省略 type 应默认为 rank：%v", err)
+	}
+	if omitted.Rules[0].Type != RuleTypeRank {
+		t.Fatalf("省略 type 时应补为 rank：%+v", omitted.Rules[0])
+	}
+	if _, err := Parse([]byte("name: empty_type\nrules:\n  - {id: top1, type: \"\", score: close, select: {top: 1}, weight: 1}\n")); err == nil || !strings.Contains(err.Error(), "不能为空") {
+		t.Fatalf("显式空 type 应拒绝：%v", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 <template>
   <a-drawer :visible="visible" width="min(560px, 100vw)" :footer="false" unmount-on-close @cancel="emit('update:visible', false)">
     <template #title>
-      订单 {{ order ? `${instrumentName(order.instrument_id)} ${order.side === 1 ? "买入" : "卖出"}` : "" }}
+      订单 {{ order ? `${instrumentName(order.instrument_id)} ${order.side === OrderSide.BUY ? "买入" : "卖出"}` : "" }}
     </template>
     <template v-if="order">
       <a-descriptions :column="1" size="small" :label-style="{ width: '96px' }">
@@ -20,7 +20,7 @@
         </a-descriptions-item>
         <a-descriptions-item label="市场">{{ marketLabel(order.market_type) }}</a-descriptions-item>
         <a-descriptions-item label="类型">
-          {{ order.order_type === 1 ? "市价" : "限价" }}{{ order.reduce_position_only ? "，只减仓" : "" }}
+          {{ order.order_type === OrderType.MARKET ? "市价" : "限价" }}{{ order.reduce_position_only ? "，只减仓" : "" }}
         </a-descriptions-item>
         <a-descriptions-item label="数量"
           >{{ fmtQty(order.quantity) }}，已成交 {{ fmtQty(order.filled_quantity) }}</a-descriptions-item
@@ -74,7 +74,15 @@
 
 <script setup lang="ts">
 import { inject, ref, watch } from "vue";
-import { canCancelOrderState, listFills, orderOwnerLabels, orderReasonText, orderStateLabels } from "@/api/trade";
+import {
+  OrderSide,
+  OrderType,
+  canCancelOrderState,
+  listFills,
+  orderOwnerLabels,
+  orderReasonText,
+  orderStateLabels
+} from "@/api/trade";
 import type { Fill, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtQty } from "../shared/format";

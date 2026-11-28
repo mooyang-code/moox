@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
@@ -70,24 +71,45 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	}
 	require.Equal(t, 1, validateCalls, "validate must validate the full manifest")
 
-	// validate：一台装过就是 installed；没开 linger 的主机给出要用户执行的命令，journald 没持久化、磁盘不够只提醒。
+	// validate：有 version.json 但控制机无完成标记时是 incomplete；没开 linger 的主机给出要用户执行的命令，journald 没持久化、磁盘不够只提醒。
 	var validated setupValidateOutput
 	require.NoError(t, json.Unmarshal([]byte(outputs["validate"]), &validated))
-	require.Equal(t, deployscan.RouteInstalled, validated.Deployment.Route)
+	require.Equal(t, deployscan.RouteIncomplete, validated.Deployment.Route)
 	require.Len(t, validated.Deployment.ManualSteps, 1)
 	require.Contains(t, validated.Deployment.ManualSteps[0], "sudo loginctl enable-linger ubuntu")
 	require.Len(t, validated.Deployment.Warnings, 2)
 	require.NotEmpty(t, validated.Deployment.NextSteps)
-	// 装过时让用户在覆盖更新与卸载之间选；按组件报告是否已部署，没装过的主机单独提醒。
-	require.Equal(t, []string{setupModeUpdate, setupModeUninstall}, validated.Deployment.Modes)
+	// 装过时让用户在保留数据与全部覆盖之间选（外加单独卸载）；按组件报告是否已部署，没装过的主机单独提醒。
+	require.Equal(t, []string{setupModeKeep, setupModeWipe, setupModeUninstall}, validated.Deployment.Modes)
+	require.NotNil(t, validated.Deployment.DataFormat)
+	require.True(t, validated.Deployment.DataFormat.CanKeep)
 	require.Len(t, validated.Deployment.Components, 2)
 	require.Contains(t, validated.Deployment.Components[0].Components, deploy.ComponentStatus{ID: "admin", State: "active", Installed: true})
 	require.Contains(t, validated.Deployment.Components[0].Components, deploy.ComponentStatus{ID: "collector", State: "missing"})
 	require.Len(t, validated.Deployment.Notes, 2)
 	require.Contains(t, validated.Deployment.Notes[0], "主机 control 装过，但缺这些组件：", "装过的主机缺组件时提醒：可能是上次安装没做完")
 	require.Contains(t, validated.Deployment.Notes[1], "主机 compute 还没装过")
-	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup update")
+	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup install")
 	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup wipe")
+	require.NotContains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup update")
+
+	// 控制机有完成标记时是 installed。
+	installedDeps := setupDeps{load: deps.load, validate: deps.validate, scanDeployment: func(context.Context, *setupSnapshot, deployscan.Options) ([]deployscan.HostReport, error) {
+		return []deployscan.HostReport{
+			{Host: "control", Installed: true, InstallComplete: true, Version: json.RawMessage(`{"version":"v0.0.2","components":{"admin":{}}}`), Units: []string{"moox-admin.service"}, Active: []string{"moox-admin.service"}, Linger: true, Journald: true, DiskFreeKB: 50 << 20},
+			{Host: "compute", Installed: true, Version: json.RawMessage(`{"version":"v0.0.2"}`), Linger: true, Journald: true, DiskFreeKB: 50 << 20},
+		}, nil
+	}}
+	installedCmd := newSetupCommand(installedDeps)
+	var installedOut bytes.Buffer
+	installedCmd.SetOut(&installedOut)
+	installedCmd.SetErr(&bytes.Buffer{})
+	installedCmd.SetArgs([]string{"validate", "--file", "moox.toml"})
+	require.NoError(t, installedCmd.Execute())
+	var installedValidated setupValidateOutput
+	require.NoError(t, json.Unmarshal(installedOut.Bytes(), &installedValidated))
+	require.Equal(t, deployscan.RouteInstalled, installedValidated.Deployment.Route)
+	require.Equal(t, []string{setupModeKeep, setupModeWipe, setupModeUninstall}, installedValidated.Deployment.Modes)
 
 	// 没装过时只有新安装；没有 version.json 的残留单独提醒。
 	fresh := setupDeps{load: deps.load, validate: deps.validate, scanDeployment: func(context.Context, *setupSnapshot, deployscan.Options) ([]deployscan.HostReport, error) {
@@ -108,6 +130,7 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	// status：读 version.json 与各组件的用户服务状态。
 	var status setupStatusOutput
 	require.NoError(t, json.Unmarshal([]byte(outputs["status"]), &status))
+	require.Equal(t, deployscan.RouteIncomplete, status.Route)
 	require.Equal(t, "v0.0.2", status.Hosts[0].Version)
 	require.Contains(t, status.Hosts[0].Components, deploy.ComponentStatus{ID: "admin", State: "active", Installed: true})
 	require.Contains(t, status.Hosts[0].Components, deploy.ComponentStatus{ID: "collector", State: "missing"})
@@ -121,13 +144,31 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"install", "update", "operator", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "build-linux", "export-skill-config", "firewall"} {
+	for _, name := range []string{"install", "backup", "operator", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "firewall"} {
 		require.Contains(t, output.String(), "  "+name+" ")
 	}
-	// 已删除的命令：初始秘密由 setup init 写入，因子任务由 setup start 与 factor task apply 导入，运行配置由部署渲染；
-	// 旧部署路径的命令（bootstrap、deploy-host、deploy-unit、release、watchdog、package）已从注册表摘掉。
-	for _, removed := range []string{"apply ", "factors ", "render-runtime-config", "bootstrap", "deploy-host", "deploy-unit", "release ", "watchdog", "package ", "metadata-import"} {
+	// 已删除或移出的命令：setup update 已合并进 setup install；setup build-linux 已删除；
+	// 云运维命令 inspect-scf/attach-scf-vpc/invoke-scf 迁至 collector function，reboot-host/host-diagnostics 迁至 host；
+	// 初始秘密由 setup init 写入，因子任务由 setup start 与 factor task apply 导入，运行配置由部署渲染；
+	// 旧部署路径的命令（bootstrap、deploy-host、deploy-unit、release、watchdog、package）及 export-skill-config 已从注册表摘掉。
+	for _, removed := range []string{"update ", "apply ", "factors ", "render-runtime-config", "bootstrap", "deploy-host", "deploy-unit", "release ", "watchdog", "package ", "metadata-import", "export-skill-config", "build-linux", "inspect-scf", "attach-scf-vpc", "invoke-scf", "reboot-host", "host-diagnostics"} {
 		require.NotContains(t, output.String(), "  "+removed)
+	}
+}
+
+func TestRelocatedCloudOpsCommandsAreRegistered(t *testing.T) {
+	mountCommands(rootCmd)
+	for _, path := range [][]string{
+		{"collector", "function", "inspect"},
+		{"collector", "function", "attach-vpc"},
+		{"collector", "function", "invoke"},
+		{"host", "reboot"},
+		{"host", "diagnostics"},
+	} {
+		cmd, rest, err := rootCmd.Find(path)
+		require.NoError(t, err, path)
+		require.Empty(t, rest, path)
+		require.Equal(t, path[len(path)-1], cmd.Name())
 	}
 }
 
@@ -406,11 +447,52 @@ password = "admin-test-password"
 [tencent_cloud]
 secret_id = "AKID-test-secret"
 secret_key = "cloud-test-secret"
-
-[notification]
-channel_type = "wecom"
-webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
 `))
 	require.NoError(t, err)
 	return &setupSnapshot{Manifest: &cfg, Secrets: &secrets}
+}
+
+func TestLoadSetupSnapshotAcceptsLegacySecretsFile(t *testing.T) {
+	restore := configcrypt.SetDefaultForTest(&configcrypt.MemoryStore{})
+	t.Cleanup(restore)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "moox.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`[hosts.control]
+address = "203.0.113.8"
+ssh = { port = 22, username = "ubuntu" }
+
+[deployments]
+control = ["admin", "eventbus", "storage-primary", "storage-view", "monitor"]
+`), 0o600))
+	legacySecrets := `[admin]
+username = "admin"
+password = "admin-test-password"
+
+[tencent_cloud]
+secret_id = "AKID-test-secret"
+secret_key = "cloud-test-secret"
+
+[notification]
+channel_type = "wecom"
+webhook_url = "https://example.com/hook"
+secret = ""
+
+[[exchange_keys]]
+name = "readonly"
+exchange = "binance"
+environment = "production"
+api_key = "ak"
+secret_key = "sk"
+readonly = true
+`
+	sealed, err := configcrypt.Encrypt([]byte(legacySecrets), configcrypt.Default())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, topology.SecretsFileName), sealed, 0o600))
+
+	snapshot, err := loadSetupSnapshot(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	assert.Equal(t, "admin", snapshot.Secrets.Admin.Username)
+	assert.Equal(t, "AKID-test-secret", snapshot.Secrets.TencentCloud.SecretID)
 }

@@ -45,7 +45,7 @@ type factorSeedTask struct {
 	Name            string             `yaml:"name"`
 	SpaceID         string             `yaml:"space_id"`
 	SourceDatasetID string             `yaml:"source_dataset_id"`
-	Freq            string             `yaml:"freq"`
+	Freq            string             `yaml:"frequency"`
 	Members         []factorSeedMember `yaml:"members"`
 }
 
@@ -278,7 +278,7 @@ func (s *factorSeed) validate() error {
 		task.ID, task.Name = strings.TrimSpace(task.ID), strings.TrimSpace(task.Name)
 		task.SpaceID, task.SourceDatasetID, task.Freq = strings.TrimSpace(task.SpaceID), strings.TrimSpace(task.SourceDatasetID), strings.TrimSpace(task.Freq)
 		if task.ID == "" || task.Name == "" || task.SpaceID == "" || task.SourceDatasetID == "" || task.Freq == "" {
-			return fmt.Errorf("%s requires id, name, space_id, source_dataset_id and freq", path)
+			return fmt.Errorf("%s requires id, name, space_id, source_dataset_id and frequency", path)
 		}
 		if _, err := factorname.ParseTaskID(task.ID); err != nil {
 			return fmt.Errorf("%s.id is invalid: %v", path, err)
@@ -393,8 +393,7 @@ func newFactorTaskApplyCommand() *cobra.Command {
 - 已有但内容不同（定义的名称、表达式或分类，任务的空间、源数据集、频率或名称，成员的状态或可变成员的默认参数）时，逐项列出差异，一项都不写，退出码非 0；
 - 线上任务里有、文件里没有的成员只报告，不移除。
 导入前按 moox.toml 的 [storage_retention] 核对：保留期必须装得下因子的最大回看根数。逐项结果打到标准错误，摘要（JSON）打到标准输出。
-新建的任务会建出一个结果数据集；它还没有归档任务，装了数据归档时 Monitor 会报“未归档的数据集”。命令结束时逐个给出
-建归档任务的命令（摘要的 next_steps），不代建：moox-cli archive tasks create --space-id <空间> --dataset-id <结果数据集>。`,
+新建的任务会建出一个结果数据集；部署了数据归档时，ArchiveMgr 会自动为有限保留期的结果数据集补齐归档任务，不需要手工创建。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
@@ -469,8 +468,6 @@ type setupFactorSummary struct {
 	Items []setupFactorItem `json:"items,omitempty"`
 	// Warnings 是配置关联的提醒，不阻止导入。
 	Warnings []string `json:"warnings,omitempty"`
-	// NextSteps 是导入后要接着做的事：新建任务的结果数据集还没有归档任务，给出建归档任务的命令。
-	NextSteps []string `json:"next_steps,omitempty"`
 }
 
 type setupInitFactor interface {
@@ -563,7 +560,6 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 	}
 	err = r.write(ctx, writes, &summary)
 	r.reportAll(summary.Items)
-	r.reportNextSteps(summary.NextSteps)
 	return summary, err
 }
 
@@ -699,7 +695,7 @@ func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask
 	got := get.GetFactorTask()
 	var diffs []string
 	for _, field := range []struct{ name, online, file string }{
-		{"空间", got.GetSpaceId(), task.SpaceID}, {"源数据集", got.GetSourceDatasetId(), task.SourceDatasetID}, {"频率", got.GetFreq(), task.Freq}, {"名称", got.GetName(), task.Name},
+		{"空间", got.GetSpaceId(), task.SpaceID}, {"源数据集", got.GetSourceDatasetId(), task.SourceDatasetID}, {"频率", got.GetFrequency(), task.Freq}, {"名称", got.GetName(), task.Name},
 	} {
 		if field.online != field.file {
 			diffs = append(diffs, fmt.Sprintf("%s：线上 %q，文件 %q", field.name, field.online, field.file))
@@ -799,16 +795,13 @@ func (r *remoteSetupFactor) write(ctx context.Context, writes factorWrites, summ
 			created := &factorpb.CreateFactorTaskRsp{}
 			request := &factorpb.CreateFactorTaskReq{FactorTask: &factorpb.FactorTask{
 				TaskId: task.TaskID, Name: task.Name, SpaceId: task.SpaceID, SourceDatasetId: task.SourceDatasetID,
-				Freq: task.Freq, Status: "pending",
+				Frequency: task.Freq, Status: "pending",
 			}}
 			if err := r.call(ctx, "CreateFactorTask", request, created); err != nil {
 				return err
 			}
 			if !write.resume {
 				summary.TasksCreated++
-				if step := archiveTaskNextStep(task, created.GetFactorTask().GetResultDatasetId()); step != "" {
-					summary.NextSteps = append(summary.NextSteps, step)
-				}
 			}
 		}
 		for _, planned := range write.members {
@@ -843,29 +836,6 @@ func (r *remoteSetupFactor) write(ctx context.Context, writes factorWrites, summ
 		}
 	}
 	return nil
-}
-
-// archiveTaskNextStep 是新建因子任务后的提示：结果数据集是有限保留期的时序数据集，装了数据归档（archive-mgr）而没给它建
-// 归档任务时，Monitor 会立刻报 critical 的“未归档的数据集”。归档任务要用户自己决定建不建（目录、回补范围），这里只给出命令，不代建。
-// 响应里没有结果数据集 ID（老版本的 FactorMgr）时不提示。
-func archiveTaskNextStep(task setupFactorTask, resultDatasetID string) string {
-	if resultDatasetID == "" {
-		return ""
-	}
-	return fmt.Sprintf("因子任务 %s 的结果数据集 %s 还没有归档任务：装了数据归档时 Monitor 会报“未归档的数据集”，过保留期的结果会被删除。"+
-		"要归档就运行 moox-cli archive tasks create --space-id %s --dataset-id %s",
-		task.TaskID, resultDatasetID, task.SpaceID, resultDatasetID)
-}
-
-// reportNextSteps 把导入后的下一步逐行打到 out（默认 stderr）。
-func (r *remoteSetupFactor) reportNextSteps(steps []string) {
-	out := r.out
-	if out == nil {
-		out = os.Stderr
-	}
-	for _, step := range steps {
-		fmt.Fprintln(out, "下一步："+step)
-	}
 }
 
 var factorItemLabels = map[string]string{itemExists: "已存在", itemCreated: "新建", itemConflict: "与线上不同", itemOrphan: "文件里没有", itemNotWritten: "线上没有（因有冲突未写入）", itemEnabled: "接着启用"}

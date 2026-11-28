@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 
@@ -199,7 +200,7 @@ func (s *Service) backfillInitialIndex(ctx context.Context, runtime *viewRuntime
 	}
 	pageSize := int(opts.BackfillPageSize)
 	if pageSize <= 0 {
-		pageSize = viewBackfillBatchSize
+		pageSize = int(storageconfig.DefaultViewBackfillPageSize)
 	}
 	written, err := s.backfillPrimaryHistory(ctx, runtime, spec, schema, pageSize, opts.PrimaryRange, bars, newBackfillRequestLimiter(opts.BackfillRequestInterval))
 	if err != nil {
@@ -252,15 +253,12 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, runtime *viewRunti
 		}
 		writes := make([]viewindex.RowWrite, 0, len(rsp.GetRows()))
 		for _, row := range rsp.GetRows() {
-			key := row.GetKey()
-			if key == nil || !strings.EqualFold(strings.TrimSpace(key.GetFreq()), strings.TrimSpace(frequency)) {
+			ts := row.GetKey().GetTimeSeries()
+			if ts == nil || !strings.EqualFold(strings.TrimSpace(ts.GetFrequency()), strings.TrimSpace(frequency)) {
 				continue
 			}
 			writes = append(writes, viewindex.RowWrite{
-				Key: viewindex.RowKey{Key: &pb.RowKey{
-					SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
-					Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}},
-				}},
+				Key:    viewindex.RowKey{Key: row.GetKey()},
 				Fields: row.GetFields(),
 			})
 		}

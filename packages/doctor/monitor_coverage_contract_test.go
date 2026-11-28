@@ -11,8 +11,7 @@ import (
 )
 
 // 监控覆盖契约：Doctor 使用共享的组件目录（packages/servicecatalog/catalog.yaml），Monitor 的数据集健康策略
-// （config/setup/dataset-health-policy.yaml）用版本 2 且只含必需的默认值，Collector 与因子模块都登记了数据集指标清单。
-// 这些原先由 scripts/test/contract/test-monitor-coverage-contract.sh 里的 Python 检查，现在是普通的 Go 测试。
+// （modules/monitor/config/app.yaml 的 metrics.dataset_health）只含必需的默认值，Collector 与因子模块都登记了数据集指标清单。
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -92,29 +91,27 @@ func TestMonitorCoverageComponentCatalog(t *testing.T) {
 
 func TestMonitorCoverageDatasetHealthPolicy(t *testing.T) {
 	root := repoRoot(t)
-	text := string(readFile(t, filepath.Join(root, "config/setup/dataset-health-policy.yaml")))
-	var policy struct {
-		Version            int `yaml:"version"`
-		RealtimeTimeseries struct {
-			Defaults map[string]any `yaml:"defaults"`
-		} `yaml:"realtime_timeseries"`
+	if _, err := os.Stat(filepath.Join(root, "config/setup/dataset-health-policy.yaml")); err == nil {
+		t.Fatal("独立的 dataset-health-policy.yaml 应已并入 Monitor 的 app.yaml")
 	}
-	if err := yaml.Unmarshal([]byte(text), &policy); err != nil {
+	text := string(readFile(t, filepath.Join(root, "modules/monitor/config/app.yaml")))
+	var app struct {
+		Metrics struct {
+			DatasetHealth struct {
+				Defaults map[string]any `yaml:"defaults"`
+			} `yaml:"dataset_health"`
+		} `yaml:"metrics"`
+	}
+	if err := yaml.Unmarshal([]byte(text), &app); err != nil {
 		t.Fatal(err)
-	}
-	if policy.Version != 2 {
-		t.Errorf("monitor policy must use version 2, got %d", policy.Version)
-	}
-	if strings.Contains(text, "crosses_storage_deferred") {
-		t.Error("monitor policy still contains crosses_storage_deferred")
 	}
 	for _, removed := range []string{"canary_subject_id", "market_price_change_ratio", "market_volume_ratio"} {
 		if strings.Contains(text, removed) {
-			t.Errorf("dataset health policy contains unused field %s", removed)
+			t.Errorf("Monitor 配置包含已废弃字段 %s", removed)
 		}
 	}
 	var got []string
-	for key := range policy.RealtimeTimeseries.Defaults {
+	for key := range app.Metrics.DatasetHealth.Defaults {
 		got = append(got, key)
 	}
 	sort.Strings(got)

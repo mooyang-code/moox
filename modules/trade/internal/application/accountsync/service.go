@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -101,7 +101,7 @@ type Service struct {
 	Store          *store.Store
 	Adapters       AdapterSource
 	SessionState   SessionState
-	Fills          *consumer.Reducer
+	Fills          *fillreduce.Reducer
 	Orders         *orderapp.Service
 	Metrics        Metrics
 	Equity         EquityValuer
@@ -603,7 +603,7 @@ func (s *Service) applySnapshot(
 			ctx,
 			account,
 			fill,
-			consumer.OriginRESTSnapshot,
+			fillreduce.OriginRESTSnapshot,
 			batchQuantities[fillBatchKey(fill)],
 		)
 		if applyErr != nil {
@@ -726,7 +726,7 @@ func (s *Service) applySnapshot(
 		snapshot.Ready = false
 		result.Ready = false
 		result.BalancePending = true
-		readinessCause = consumer.AwaitingBalanceReason
+		readinessCause = fillreduce.AwaitingBalanceReason
 		result.Warnings = append(result.Warnings, "balance snapshot does not cover the pending fill or private update; admission stays closed")
 	}
 	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用且没有遗留待确认水位时才能推进；
@@ -874,7 +874,7 @@ func (s *Service) ApplyFill(
 		ctx,
 		account,
 		fill,
-		consumer.OriginPrivateSocket,
+		fillreduce.OriginPrivateSocket,
 		shared.Zero(),
 	)
 	unlock()
@@ -1070,7 +1070,7 @@ func (s *Service) setReady(
 	}
 	if ready && account.HasBalancePending() {
 		// 还有未被完整余额快照覆盖的成交或私有更新：不能仅凭会话就绪恢复准入
-		ready, lastError = false, consumer.AwaitingBalanceReason
+		ready, lastError = false, fillreduce.AwaitingBalanceReason
 	}
 	if ready {
 		// 订单累计成交仍领先已入账成交时也不能恢复：回执没有交易所时间时只记了缺口、没抬水位。
@@ -1079,7 +1079,7 @@ func (s *Service) setReady(
 			return err
 		}
 		if gaps > 0 {
-			ready, lastError = false, consumer.AwaitingBalanceReason
+			ready, lastError = false, fillreduce.AwaitingBalanceReason
 		}
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -1097,7 +1097,7 @@ func (s *Service) applyFill(
 	ctx context.Context,
 	account store.TradingAccountRecord,
 	fill exchange.Fill,
-	kind consumer.FillOrigin,
+	kind fillreduce.FillOrigin,
 	syntheticQuantity shared.Decimal,
 ) (bool, bool, error) {
 	external, err := s.ensureOrderForFill(
@@ -1110,7 +1110,7 @@ func (s *Service) applyFill(
 	if err != nil {
 		return false, false, err
 	}
-	applied, err := s.Fills.ApplyFill(ctx, fill, consumer.Source{
+	applied, err := s.Fills.ApplyFill(ctx, fill, fillreduce.Source{
 		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
 		Kind: kind,
 	})
@@ -1323,7 +1323,7 @@ func (s *Service) observeOrderFills(
 			return err
 		}
 		return tx.UpdateTradingAccountReadiness(
-			account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), consumer.AwaitingBalanceReason,
+			account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), fillreduce.AwaitingBalanceReason,
 		)
 	})
 }
@@ -1660,10 +1660,7 @@ func (s *Service) pauseForExternalFact(
 	if err != nil {
 		return err
 	}
-	// 自主下单账户没有自动执行，用户在交易所手工成交是正常操作。
-	if logicalAccount.ControlMode == "MANUAL" {
-		return nil
-	}
+	// 自主下单组合没有自动执行，PauseLogicalAccount 对自主下单为空操作。
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		// 组合已经被系统自动暂停（例如保证金率风控）时保留原来的原因：
 		// 风控靠这个原因补做减仓、生成关注项，不能被外部订单的原因覆盖。

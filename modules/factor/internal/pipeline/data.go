@@ -86,8 +86,6 @@ type GapEntry struct {
 	Period         time.Time
 	Member         string
 	DefinitionHash string
-	// TriggerEventID 是触发本期的上游事件，截面因子的恢复据此读取冻结全集；人工补算为空。
-	TriggerEventID string
 	Reason         string
 }
 

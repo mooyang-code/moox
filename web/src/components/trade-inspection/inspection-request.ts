@@ -1,4 +1,4 @@
-import type { Exchange, InspectExchangeCredentialReq, MarketType } from "@/api/trade/types";
+import { AccountEnvironment, type Exchange, type InspectExchangeCredentialReq, type MarketType } from "@/api/trade/types";
 import { sortMarkets } from "@/views/trading/accounts/shared/markets";
 
 // 密钥管理里交易所密钥的“提供方”（binance、okx）就是 Trade 的交易所写法；其他提供方不能检测，返回 undefined。
@@ -7,10 +7,12 @@ export function exchangeFromProvider(provider: string | undefined): Exchange | u
   return value === "binance" || value === "okx" ? value : undefined;
 }
 
+export type LiveEnvironment = typeof AccountEnvironment.TESTNET | typeof AccountEnvironment.PRODUCTION;
+
 export interface InspectionRequestInput {
   provider: string | undefined;
   secretId: string;
-  environment: 1 | 2;
+  environment: LiveEnvironment;
   markets: MarketType[];
 }
 
@@ -33,16 +35,25 @@ export function canTestConnection(secret: { category?: string; provider?: string
 }
 
 /**
- * 从密钥 ID 里读环境：setup init 写入的交易所密钥固定为 exchange-<交易所>-<环境>-<名称>，
- * 环境段是 production 或 testnet，对应 Trade 的 2、1。不符合这个格式（例如管理台手工录入的）时返回 0，表示看不出来。
+ * 从 extra_config 的 environment 字段读取交易所密钥所属环境：
+ * "testnet" → TESTNET，"production" → PRODUCTION；缺省或解析不了时返回 UNSPECIFIED。
  */
-export function secretEnvironmentOf(secretId: string | undefined): 0 | 1 | 2 {
-  const match = /^exchange-[a-z0-9]+-(production|testnet)-/.exec((secretId ?? "").trim().toLowerCase());
-  if (!match) return 0;
-  return match[1] === "testnet" ? 1 : 2;
+export function secretEnvironmentOf(extraConfig: string | undefined): typeof AccountEnvironment.UNSPECIFIED | LiveEnvironment {
+  if (!extraConfig) return AccountEnvironment.UNSPECIFIED;
+  try {
+    const parsed = JSON.parse(extraConfig) as Record<string, unknown>;
+    const env = String(parsed?.environment ?? "")
+      .trim()
+      .toLowerCase();
+    if (env === "testnet") return AccountEnvironment.TESTNET;
+    if (env === "production") return AccountEnvironment.PRODUCTION;
+    return AccountEnvironment.UNSPECIFIED;
+  } catch {
+    return AccountEnvironment.UNSPECIFIED;
+  }
 }
 
-/** 只读密钥（extra_config 里 "readonly":"true"）：只用于读行情这类接口，不能建执行账户。 */
+/** 只读密钥（extra_config 里 "readonly":"true"）：只用于读行情与下架检测这类只读接口，不能建执行账户。 */
 export function isReadonlySecret(extraConfig: string | undefined): boolean {
   if (!extraConfig) return false;
   try {

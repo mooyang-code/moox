@@ -162,8 +162,8 @@ func newFixture(t *testing.T, fundSettings string, balances []store.AssetBalance
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "LIVE", SettlementAsset: "USDT",
-			FundSettingsJSON: fundSettings, AutomationState: "PAUSED", PauseReason: "configure",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", Environment: "PRODUCTION", SettlementAsset: "USDT",
+			FundSettingsJSON: fundSettings, PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func newFixture(t *testing.T, fundSettings string, balances []store.AssetBalance
 				return err
 			}
 		}
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+		return tx.ResumeLogicalAccount("space-1", "logical-1")
 	}))
 	adapter := &fakeAdapter{
 		prices: map[string]string{"BNBUSDT": "600", "BTCUSDT": "50000", "USDCUSDT": "1", "FDUSDUSDT": "1"},
@@ -330,13 +330,13 @@ func TestBNBReserveForAStandardAccountTargetsHalfInTheSpotWallet(t *testing.T) {
 func TestSystemTasksSkipPausedAndFlatteningAccounts(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "手动暂停")
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("手动暂停"))
 	}))
 	require.NoError(t, f.run())
 	require.Empty(t, f.orders.specs, "暂停的组合不补买")
 
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", ""); err != nil {
+		if err := tx.ResumeLogicalAccount("space-1", "logical-1"); err != nil {
 			return err
 		}
 		_, err := tx.CreateOperatorAction(store.OperatorActionRecord{
@@ -349,11 +349,11 @@ func TestSystemTasksSkipPausedAndFlatteningAccounts(t *testing.T) {
 	require.Empty(t, f.orders.specs, "正在减仓的组合不补买")
 }
 
-// 自主下单组合没有自动执行（一直是暂停状态）：资金维护不看暂停，照常下单；只在清仓、减仓进行中时不做。
+// 自主下单组合没有自动执行（不带暂停状态）：资金维护不看暂停，照常下单；只在清仓、减仓进行中时不做。
 func TestSystemTasksRunForManualGroups(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
-		c_automation_state = 'PAUSED', c_pause_reason = '自主下单', c_pause_source = 'USER'`).Error)
+		c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = ''`).Error)
 	_, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: "action-1", LogicalAccountID: "logical-1", ActionType: "REDUCE", Reason: "保证金率",
 		RequestJSON: "{}", Status: "RUNNING",

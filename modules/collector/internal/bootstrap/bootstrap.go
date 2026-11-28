@@ -3,7 +3,6 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/eastmoneylimit"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
-	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
@@ -32,6 +30,7 @@ import (
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -126,6 +125,14 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runt
 		CheckKlineFrequency: marketwiring.CheckKlineFrequency,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
+	// 生命周期控制器必须在对账器、补采循环与 StreamCollector 之前建好并注入，
+	// 避免暂停期间重启时，第一轮对账或推送订阅看不到持久化的暂停阶段。
+	control := &collectorControl{}
+	life, err := newCollectorLifecycle(cfg.Database.Path, control)
+	if err != nil {
+		return nil, fmt.Errorf("collector lifecycle state failed to open: %w", err)
+	}
+	svc.SetLifecycle(life)
 	marketFetchMetrics := fetchplan.NewControlMetrics(prometheus.DefaultRegisterer)
 	attn.AddSource("coordination", marketFetchMetrics.CoordinationAttention(attention.KindCoordinationFailing, cfg.PlanHealth.StaleAfter, cfg.PlanHealth.PendingGrace))
 	subjectSyncer, tradingStatus, err := registerSubjectSyncRuntime(s, cfg, process, dbm)
@@ -136,6 +143,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runt
 	svc.SetTradingStatus(tradingStatus)
 	streamService := collectsvc.NewStreamService(dbm, collectsvc.StreamSettings{HeartbeatTimeout: time.Duration(cfg.Stream.HeartbeatTimeoutSeconds) * time.Second, CommitReserveMS: cfg.Stream.CommitReserveMS},
 		fetchplan.NewStreamMetrics(prometheus.DefaultRegisterer), subjectSyncer)
+	streamService.SetSystemPaused(func() bool { return life.Stage() != lifecycle.StageRunning })
 	streamServer := s.Service("trpc.moox.collector.StreamCollector")
 	if streamServer == nil {
 		return nil, fmt.Errorf("trpc_go.yaml 缺少 trpc.moox.collector.StreamCollector 服务")
@@ -153,11 +161,10 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runt
 		return nil, err
 	}
 	bus.start(process)
-	control := &collectorControl{}
-	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, bus, attn); err != nil {
+	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, life, bus, attn); err != nil {
 		return nil, err
 	}
-	healthState, life, err := registerHealth(s, cfg, dbm, process, control, svc)
+	healthState, err := registerHealth(s, cfg, dbm, process, life)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +209,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 			return fmt.Errorf("list collector tasks: %w", err)
 		}
 		for _, task := range tasks {
-			params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+			params, err := domain.ParseCollectParams(task.CollectParams, task.DataType)
 			if err != nil {
 				return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, err)
 			}
@@ -220,7 +227,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				ids, err = manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, "", collectorresult.Config{
 					Name:         task.TaskName,
 					Description:  task.Description,
-					Frequency:    taskResultFrequency(*params),
+					Frequency:    taskResultFrequency(task.DataType, *params),
 					SubjectTags:  append([]string(nil), task.TagIDs...),
 					OutputFields: params.OutputFields,
 				})
@@ -239,35 +246,20 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 	return nil
 }
 
-// persistTaskResultIDs records the result dataset identity on the task row and in
-// its collect params when either differs from what is stored.
+// persistTaskResultIDs 在任务行的结果数据集 ID 与落盘值不同时写回表列。
 func persistTaskResultIDs(ctx context.Context, repo *store.TaskRepository, task *domain.CollectionTask, ids collectorresult.IDs) error {
-	needsUpdate := task.ResultDatasetID != ids.DatasetID
-	task.ResultDatasetID = ids.DatasetID
-	rawParams := map[string]any{}
-	if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
-		return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
-	}
-	if rawParams["target_dataset_id"] != ids.DatasetID {
-		rawParams["target_dataset_id"] = ids.DatasetID
-		needsUpdate = true
-	}
-	if !needsUpdate {
+	if task.ResultDatasetID == ids.DatasetID {
 		return nil
 	}
-	encoded, err := json.Marshal(rawParams)
-	if err != nil {
-		return fmt.Errorf("encode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
-	}
-	task.CollectParams = string(encoded)
+	task.ResultDatasetID = ids.DatasetID
 	if _, err := repo.UpdateByTaskID(ctx, task.SpaceID, task.TaskID, *task); err != nil {
 		return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
 	}
 	return nil
 }
 
-func taskResultFrequency(params domain.CollectParams) string {
-	if strings.EqualFold(params.Collector.DataType, "kline_resample") && strings.TrimSpace(params.TargetFrequency) != "" {
+func taskResultFrequency(dataType string, params domain.CollectParams) string {
+	if strings.EqualFold(strings.TrimSpace(dataType), "kline_resample") && strings.TrimSpace(params.TargetFrequency) != "" {
 		return params.TargetFrequency
 	}
 	if strings.TrimSpace(params.Frequency) != "" {
@@ -286,7 +278,7 @@ type metricsReporter interface {
 }
 
 // registerMetricsReporter 注册指标上报；上报带上与 /readyz 同一个就绪判断和模块级生命周期（首页的系统状态读它）。
-func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler, state *health.State, life *lifecycle.Controller) {
+func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler, state *healthz.State, life *lifecycle.Controller) {
 	if s == nil {
 		return
 	}
@@ -320,38 +312,28 @@ func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metrics
 	}
 }
 
-// registerHealth 注册健康检查，并建好生命周期控制器交给 CollectMgr（GetLifecycle、ControlLifecycle）；
-// 返回的健康状态与控制器再交给指标上报。
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl, svc *collectsvc.Service) (*health.State, *lifecycle.Controller, error) {
+// registerHealth 注册健康检查，并启动已创建的生命周期刷新协程；返回的健康状态交给指标上报。
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, life *lifecycle.Controller) (*healthz.State, error) {
 	if cfg == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
-	state := health.New("collector", "collector", "", "")
+	state := healthz.NewState("collector", "collector", "", "")
 	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state)
 	if s == nil {
-		return nil, nil, fmt.Errorf("collector health service is unavailable")
+		return nil, fmt.Errorf("collector health service is unavailable")
 	}
-	var life *lifecycle.Controller
-	if control != nil && process != nil {
-		var err error
-		life, err = newCollectorLifecycle(cfg.Database.Path, control)
-		if err != nil {
-			return nil, nil, fmt.Errorf("collector lifecycle state failed to open: %w", err)
-		}
-		if svc != nil {
-			svc.SetLifecycle(life)
-		}
+	if life != nil && process != nil {
 		if !process.launch(func() { life.Run(process.ctx, collectorLifecycleRefresh) }) {
-			return nil, nil, fmt.Errorf("collector runtime is closing")
+			return nil, fmt.Errorf("collector runtime is closing")
 		}
 	}
-	if err := health.Register(s.Service("trpc.moox.collector.Health"), state); err != nil {
-		return nil, nil, fmt.Errorf("collector health server failed to start: %w", err)
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.collector.Health"), healthz.StandardMux(state.Snapshot, promhttp.Handler())); err != nil {
+		return nil, fmt.Errorf("collector health server failed to start: %w", err)
 	}
-	return state, life, nil
+	return state, nil
 }
 
-func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
+func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *healthz.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		// Do not synchronously ping SQLite from /readyz. The collector's single
 		// SQLite connection is intentionally shared by the scheduler and the

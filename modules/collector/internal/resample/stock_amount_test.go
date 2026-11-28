@@ -16,11 +16,11 @@ func (f *fakeStorage) putStockSource(subject string, at time.Time, volume float6
 	} else {
 		fields = append(fields, &storagepb.FieldValue{FieldId: "amount", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}})
 	}
-	row := &storagepb.RowFieldUpsert{Key: rowKey("stockcn", "dataset_src", subject, "1m", at, "default"), Fields: fields}
+	row := &storagepb.Row{Key: rowKey("stockcn", "dataset_src", subject, "1m", at, "default"), Fields: fields}
 	f.rows[keyText(row.GetKey())] = row
 }
 
-func amountOf(row *storagepb.RowFieldUpsert) (float64, bool) {
+func amountOf(row *storagepb.Row) (float64, bool) {
 	for _, field := range row.GetFields() {
 		if field.GetFieldId() == "amount" {
 			if _, isNull := field.GetValue().GetValue().(*storagepb.TypedValue_NullValue); isNull {

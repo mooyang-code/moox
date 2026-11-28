@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { FactorMember, FactorTask, FactorTaskInfo } from "@/api/factor/types";
-import { declaresFactorParams, enabledTasks, selectableTask, taskColumns, varMemberBlockReason } from "./task-options";
+import { enabledTasks, selectableTask, taskColumns, varMemberBlockReason } from "./task-options";
 
 const task = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "ftask_a",
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
-  freq: "1m",
+  frequency: "1m",
   name: "现货因子",
   result_dataset_id: "dataset_factor_a",
   status: "enabled",
@@ -75,16 +75,6 @@ describe("varMemberBlockReason", () => {
   it("只拦附加来源的任务；主帧任务（含策略池、双市场，不写 factor_params 时只读）都能选", () => {
     expect(varMemberBlockReason("")).toBe("");
     expect(varMemberBlockReason("daily")).toContain("附加来源的任务不能有可变成员");
-  });
-});
-
-describe("declaresFactorParams", () => {
-  it("is true only when the DSL writes factor_params", () => {
-    expect(declaresFactorParams("name: a\nfactor_params:\n  bias__var:\n    window: 20\n")).toBe(true);
-    expect(declaresFactorParams("name: a\nrules: []\n")).toBe(false);
-    expect(declaresFactorParams("name: a\nfactor_params: {}\n")).toBe(false);
-    expect(declaresFactorParams("name: a\nfactor_params:\n")).toBe(false);
-    expect(declaresFactorParams("name: [")).toBe(false);
   });
 });
 

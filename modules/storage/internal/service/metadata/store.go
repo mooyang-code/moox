@@ -17,26 +17,6 @@ type DatasetQuery struct {
 	Page         *pb.Page
 }
 
-// RequestSnapshot 是一次请求内校验与读写共用的不可变元数据版本，只含写路径用到的部分：数据集与它的列定义。
-// 返回的消息与切片由各请求共享，调用方只读。
-type RequestSnapshot interface {
-	GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool)
-	ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
-}
-
-type requestSnapshotContextKey struct{}
-
-func WithRequestSnapshot(ctx context.Context, snapshot RequestSnapshot) context.Context {
-	return context.WithValue(ctx, requestSnapshotContextKey{}, snapshot)
-}
-
-func RequestSnapshotFromContext(ctx context.Context) RequestSnapshot {
-	if snapshot, ok := ctx.Value(requestSnapshotContextKey{}).(RequestSnapshot); ok {
-		return snapshot
-	}
-	return nil
-}
-
 // Reader 定义元数据存储的只读查询接口。
 type Reader interface {
 	GetSpace(ctx context.Context, spaceID string) (*pb.Space, error)
@@ -64,9 +44,13 @@ type Writer interface {
 	CreateSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
+	// CreateDataSource 原子地创建数据来源，已存在或同空间重名时返回冲突。
+	CreateDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
 	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
 	UpsertDataset(ctx context.Context, item *pb.Dataset, columns ...*pb.DatasetColumn) (*pb.Dataset, error)
+	// CreateDataset 原子地创建数据集及其初始列，已存在或同空间重名时返回冲突。
+	CreateDataset(ctx context.Context, item *pb.Dataset, columns ...*pb.DatasetColumn) (*pb.Dataset, error)
 	DeleteDataset(ctx context.Context, spaceID string, datasetID string) error
 	UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error)
 }

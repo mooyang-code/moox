@@ -6,8 +6,8 @@ import (
 
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 func TestLogicalAccountRPCRejectsMissingSpace(t *testing.T) {
@@ -33,7 +33,7 @@ func TestLogicalAccountRPCCreatesPausedAccount(t *testing.T) {
 	}
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	created, err := handler.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
-		Name: "main", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER,
+		Name: "main", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
 		SettlementAsset: "USDT",
 	})
 	if err != nil {
@@ -57,7 +57,7 @@ func TestCloseTargetSessionRPCValidatesAndReturnsClosedThrough(t *testing.T) {
 	}
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	created, err := handler.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
-		Name: "main", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT",
+		Name: "main", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER, SettlementAsset: "USDT",
 	})
 	if err != nil || created.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS {
 		t.Fatalf("created = %+v, err = %v", created, err)

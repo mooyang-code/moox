@@ -2,11 +2,11 @@ package trigger
 
 import (
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 )
 
 func shadowFlagOf(t *testing.T, result store.Result) bool {
@@ -27,7 +27,7 @@ func shadowFlagOf(t *testing.T, result store.Result) bool {
 	if err != nil {
 		t.Fatalf("目标事件不符合契约：%v", err)
 	}
-	return payload.(*tradeeventpb.LogicalAccountTargetWeightRequested).GetShadow()
+	return payload.(*eventpb.LogicalAccountTargetWeightRequested).GetShadow()
 }
 
 // 门禁关闭：不求值、不留记录、不读输入；门禁放行：求值，已确认实盘的实例发正式目标。

@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"strings"
 	"sync"
 	"testing"
@@ -19,7 +20,6 @@ import (
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
@@ -58,8 +58,8 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: "logical-other", Name: "Other logical account",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
+			Environment: "PAPER", SettlementAsset: "USDT",
+			PauseReason: "configure",
 		})
 	}))
 	prices := &blockedTargetPrice{entered: make(chan struct{}), release: make(chan struct{})}
@@ -79,7 +79,7 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested,
-		&tradeeventpb.LogicalAccountTargetWeightRequested{
+		&eventpb.LogicalAccountTargetWeightRequested{
 			TargetId: "other-target", LogicalAccountId: "logical-other",
 			InstanceId: "instance-other", SessionId: "session-other", SessionStartedAt: 1_000, StrategyId: "strategy-other",
 			BarEndTime: now.UnixMilli(),

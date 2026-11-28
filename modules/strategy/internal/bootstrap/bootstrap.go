@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/paramsubmit"
@@ -30,8 +29,12 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const (
@@ -42,7 +45,7 @@ const (
 
 // Initialize 打开数据库、启动投递与事件消费，并在服务监听前注册 StrategyMgr。
 func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Server, func() error, error) {
-	db, err := store.Open(cfg.Database)
+	db, err := store.Open(cfg.Database.Path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -67,7 +70,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	closers = append(closers, gateway.Close)
 	// “因子现算”来源经同一个网关客户端调因子引擎的 EngineControl：不套 factor.timeout，超时按服务目录的路由超时。
-	engineClient := input.NewEngineClient(gateway)
+	engineClient := upstream.NewEngineClient(gateway)
 	// 先关掉上次运行中途退出的“因子现算”回放留在因子引擎上的会话，再把遗留的运行中回放标成 interrupted。
 	if err := replay.CloseInterruptedSessions(ctx, db, engineClient, log.Warnf); err != nil {
 		return nil, nil, fmt.Errorf("读取运行中的回放失败：%w", err)
@@ -85,10 +88,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 
 	// 实时与回放共用 Storage/Factor 适配；回放按 replay.page_size 分页读取较长的区间。
 	live := newInputClient(cfg, gateway)
-	var inputClient input.Client = live
+	var inputClient upstream.Client = live
 	ranged := *live
 	ranged.PageSize = uint32(cfg.Replay.PageSize)
-	var replayClient input.Client = &ranged
+	var replayClient upstream.Client = &ranged
 	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}}
 	// 启用绑了组合账户的实例前读一次 Trade 的账户；停用后通知 Trade 关闭会话（批 3 的 3.6）。
 	service.Trade = tradeowner.New(cfg.Trade, gateway)
@@ -128,7 +131,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	var consumer *eventconsumer.Consumer
 	var handlerRef atomic.Pointer[trigger.Handler]
 	ready := newModuleCheck(db, eventRuntime.Connected, func() bool { return consumer == nil || consumer.Ready() })
-	life, err := newLifecycle(cfg.Database, lifecycleDeps{db: db, handler: &handlerRef, warm: warm, ready: ready})
+	life, err := newLifecycle(cfg.Database.Path, lifecycleDeps{db: db, handler: &handlerRef, warm: warm, ready: ready})
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开策略生命周期状态：%w", err)
 	}
@@ -196,13 +199,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	service.Lifecycle = life
 	strategypb.RegisterStrategyMgrService(strategyMgr, service)
-	healthState := health.New("strategy", "strategy", "", "")
+	healthState := healthz.NewState("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, healthState, consumer)
 	// 上报带给 Monitor 的就绪与 /readyz 是同一个判断；模块级生命周期也随上报，首页的系统状态读它。
 	reporter.SetReadiness(healthz.Readiness(healthState.Snapshot))
 	reporter.SetLifecycle(life.ReportState)
 	healthState.SetReady(true)
-	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.strategy.Health"), healthz.StandardMux(healthState.Snapshot, promhttp.Handler())); err != nil {
 		return nil, nil, fmt.Errorf("注册策略健康检查失败：%w", err)
 	}
 	keep = true
@@ -286,7 +289,7 @@ func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (
 			continue
 		}
 		calendar := strings.ToLower(strings.TrimSpace(resolved.Calendar))
-		if input.SessionCalendar(calendar) && !slices.Contains(calendars, calendar) {
+		if period.SessionCalendar(calendar) && !slices.Contains(calendars, calendar) {
 			calendars = append(calendars, calendar)
 		}
 	}
@@ -294,10 +297,10 @@ func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (
 	var messages []string
 	down := false
 	for _, calendar := range calendars {
-		err := input.StockCalendarReadiness(calendar, now, calendarWarningWindow, trigger.ValidBars)
+		err := period.StockCalendarReadiness(calendar, now, calendarWarningWindow, trigger.ValidBars)
 		switch {
 		case err == nil:
-		case errors.Is(err, input.ErrCalendarExpiring):
+		case errors.Is(err, period.ErrCalendarExpiring):
 			messages = append(messages, err.Error())
 		default:
 			messages = append(messages, err.Error()+"；使用日历 "+calendar+" 的实例无法求值")
@@ -342,11 +345,11 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 }
 
 // newInputClient 构造 Storage（Metadata、DataView）与 Factor 的窄适配，调用经 gatewayclient 发往本机主机网关。
-func newInputClient(cfg Config, gateway gatewayclient.Invoker) *input.RPCClient {
-	return input.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
+func newInputClient(cfg Config, gateway gatewayclient.Invoker) *upstream.RPCClient {
+	return upstream.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
 }
 
-func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *health.State, consumer *eventconsumer.Consumer) func(context.Context) healthz.Response {
+func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *healthz.State, consumer *eventconsumer.Consumer) func(context.Context) healthz.Response {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := db != nil && db.Ping(ctx) == nil
 		eventBusConnected := eventRuntime != nil && eventRuntime.Connected()

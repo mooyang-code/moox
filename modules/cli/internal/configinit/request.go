@@ -19,12 +19,7 @@ type Request struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	} `json:"admin"`
-	Tencent      Keys `json:"tencent"`
-	Notification struct {
-		ChannelType string `json:"channel_type"`
-		WebhookURL  string `json:"webhook_url"`
-		Secret      string `json:"secret"`
-	} `json:"notification"`
+	Tencent Keys `json:"tencent"`
 	// Logging 是日志服务的设置；保留天数为 0 时用默认的 2 天。
 	Logging struct {
 		RetentionDays int64 `json:"retention_days"`
@@ -36,9 +31,6 @@ type Request struct {
 		Overseas *Server    `json:"overseas"`
 		Factor   *SSHTarget `json:"factor"`
 	} `json:"servers"`
-	// ExchangeKeys 是可选的交易所密钥，写成 [[exchange_keys]]。只有配了海外服务器（Trade 所在的主机）才有用，
-	// 页面没配海外服务器时隐藏这一步；录入页不在本机检测密钥，部署完成后在海外机上检测。
-	ExchangeKeys []ExchangeKeyEntry `json:"exchange_keys"`
 
 	// 以下由 normalize 算出，供渲染使用。
 	hosts  []Host
@@ -101,18 +93,11 @@ const maxFieldBytes = 512
 // 秘密字段原样保留（密码里的空格是有意义的），只拒绝控制字符与超长。
 func (r *Request) normalize(ctx context.Context, env Environment) error {
 	r.Admin.Username = strings.TrimSpace(r.Admin.Username)
-	r.Notification.ChannelType = strings.TrimSpace(r.Notification.ChannelType)
-	r.Notification.WebhookURL = strings.TrimSpace(r.Notification.WebhookURL)
-	r.Notification.Secret = strings.TrimSpace(r.Notification.Secret)
 	for _, field := range []struct {
 		name, value string
 		required    bool
 	}{
 		{"管理员用户名", r.Admin.Username, true}, {"管理员密码", r.Admin.Password, true},
-		{"告警渠道", r.Notification.ChannelType, true},
-		// Webhook 可以留空，部署后在管理台添加。
-		{"告警机器人的 Webhook 地址", r.Notification.WebhookURL, false},
-		{"告警渠道的密钥", r.Notification.Secret, false},
 	} {
 		if err := checkText(field.name, field.value, field.required); err != nil {
 			return err
@@ -124,14 +109,6 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 	if r.Logging.RetentionDays < 1 || r.Logging.RetentionDays > 3600 {
 		return errors.New("日志保留天数要在 1 到 3600 之间")
 	}
-	exchangeKeys, err := normalizeExchangeKeyEntries(r.ExchangeKeys)
-	if err != nil {
-		return err
-	}
-	if len(exchangeKeys) > 0 && r.Servers.Overseas == nil {
-		return errors.New("交易所密钥要在海外服务器上使用（下单和检测都在那里），请先配置海外服务器，或者不填交易所密钥")
-	}
-	r.ExchangeKeys = exchangeKeys
 	keys, err := r.Tencent.normalize()
 	if err != nil {
 		return err

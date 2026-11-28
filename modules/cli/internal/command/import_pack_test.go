@@ -140,9 +140,9 @@ func TestImportPackRejectsBrokenManifestsAndNameMismatch(t *testing.T) {
 	}
 	dir := t.TempDir()
 	for body, want := range map[string]string{
-		`{"space_id":"crypto","dataset_id":"d","freq":"5m","files":[]}`:                 "没有文件",
-		`{"space_id":"crypto","dataset_id":"d","freq":"5m","files":[{}],"surprise":1}`:  "格式不对",
-		`{"dataset_id":"d","freq":"5m","files":[{"subject_id":"A","file":"5m/A.csv"}]}`: "缺少 space_id",
+		`{"space_id":"crypto","dataset_id":"d","frequency":"5m","files":[]}`:                 "没有文件",
+		`{"space_id":"crypto","dataset_id":"d","frequency":"5m","files":[{}],"surprise":1}`:  "格式不对",
+		`{"dataset_id":"d","frequency":"5m","files":[{"subject_id":"A","file":"5m/A.csv"}]}`: "缺少 space_id",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(body), 0o644); err != nil {
 			t.Fatal(err)

@@ -12,6 +12,8 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // 停牌持仓冻结（T5）：停牌标的不在事件名单里、也没有行，经输入层装配后由引擎按 suspended_hold 保持持仓。
@@ -41,15 +43,15 @@ type suspendedBar struct {
 // loadAndEvaluate 装配一根并求值，previous 是上一根的状态。
 func loadAndEvaluate(t *testing.T, client *fakeClient, resolved Resolved, program *dsl.Program, bar suspendedBar, previous engine.State) (Loaded, engine.Decision) {
 	t.Helper()
-	client.rows = func(query Query) ([]Row, uint64, error) {
-		var rows []Row
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
+		var rows []upstream.Row
 		for market, values := range bar.values {
 			// 每个市场一个 View：永续的行只在永续 View 里。
 			if (market == dsl.MarketSwap) != (query.DatasetID == "dataset_factor_swap1h") {
 				continue
 			}
 			for id, value := range values {
-				rows = append(rows, Row{SubjectID: id, SeriesTag: "venue:binance", DataTime: bar.at, Values: map[string]float64{"ma_20": value, "close": 1}})
+				rows = append(rows, upstream.Row{SubjectID: id, SeriesTag: "venue:binance", DataTime: bar.at, Values: map[string]float64{"ma_20": value, "close": 1}})
 			}
 		}
 		return rows, 1, nil
@@ -109,9 +111,9 @@ func suspendedEquityClient(t *testing.T) (*fakeClient, Resolved, *dsl.Program) {
 	client := newFakeClient("equity")
 	client.tagMarkets["binance_equity"] = "equity"
 	client.tags["binance_equity"] = []string{"A", "B", "C", "D", "E"}
-	client.trading = map[string]map[string]string{"binance_equity": {"E": TradingStatusSuspended}}
+	client.trading = map[string]map[string]string{"binance_equity": {"E": upstream.TradingStatusSuspended}}
 	// E 一直停牌、没持有过：不进全集。
-	client.subjects["dataset_factor_1h"] = []Subject{subject("A", true), subject("B", true), subject("C", true), subject("D", true), {SubjectID: "E", SeriesTag: "venue:binance", Suspended: true}}
+	client.subjects["dataset_factor_1h"] = []upstream.Subject{subject("A", true), subject("B", true), subject("C", true), subject("D", true), {SubjectID: "E", SeriesTag: "venue:binance", Suspended: true}}
 	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, suspendedEquityDSL))
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +153,7 @@ func TestSuspendedHoldingFrozenOnEquity(t *testing.T) {
 	state := equityFirstBar(t, client, resolved, program)
 
 	setEquitySubject(client, "A", false, true)
-	client.trading["binance_equity"]["A"] = TradingStatusSuspended
+	client.trading["binance_equity"]["A"] = upstream.TradingStatusSuspended
 	second := suspendedBar{
 		at:     barStart.Add(time.Hour),
 		values: map[string]map[string]float64{"equity": {"B": 1, "C": 3, "D": 2}},
@@ -208,7 +210,7 @@ func TestSuspendedHoldingRemovedOrDelistedIsDropped(t *testing.T) {
 			client.tags["binance_equity"] = []string{"B", "C", "D", "E"}
 		},
 		"已下架": func(client *fakeClient) {
-			client.trading["binance_equity"]["A"] = TradingStatusDelisted
+			client.trading["binance_equity"]["A"] = upstream.TradingStatusDelisted
 		},
 	} {
 		client, resolved, program := suspendedEquityClient(t)
@@ -243,7 +245,7 @@ portfolio: {max_missing: 1}
 func dualSuspendedClient(t *testing.T, raw string) (*fakeClient, Resolved, *dsl.Program) {
 	t.Helper()
 	client := newDualClient()
-	client.subjects["dataset_factor_1h"] = []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true)}
+	client.subjects["dataset_factor_1h"] = []upstream.Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true)}
 	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, raw))
 	if err != nil {
 		t.Fatal(err)
@@ -419,7 +421,7 @@ func TestRPCClientCarriesTradingStatus(t *testing.T) {
 			{Subject: &storagepb.Subject{SubjectId: "B"}, TradingStatus: "suspended"}, {Subject: &storagepb.Subject{SubjectId: "A"}},
 		},
 	}
-	rpc := &RPCClient{Metadata: stub}
+	rpc := &upstream.RPCClient{Metadata: stub}
 	subjects, err := rpc.ListDatasetSubjects(context.Background(), "space", "ds")
 	if err != nil {
 		t.Fatal(err)
@@ -434,7 +436,7 @@ func TestRPCClientCarriesTradingStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(members) != 2 || members[0] != (TagMember{SubjectID: "A"}) || members[1] != (TagMember{SubjectID: "B", TradingStatus: TradingStatusSuspended}) {
+	if len(members) != 2 || members[0] != (upstream.TagMember{SubjectID: "A"}) || members[1] != (upstream.TagMember{SubjectID: "B", TradingStatus: upstream.TradingStatusSuspended}) {
 		t.Fatalf("成员应按 ID 排序并带出交易状态：%+v", members)
 	}
 	if len(stub.memberReqs) != 1 || stub.memberReqs[0].GetStatus() != "active" {

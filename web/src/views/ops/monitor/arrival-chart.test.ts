@@ -31,8 +31,8 @@ const overview: HealthOverview = {
     {
       id: "storage",
       datasets: [
-        { producer: "storage", space_id: "crypto", dataset_id: "dataset_spot_1m", freq: "1m", timezone: "UTC" },
-        { producer: "storage", space_id: "stockcn", dataset_id: "dataset_stockcn_1m", freq: "1m", timezone: "Asia/Shanghai" }
+        { producer: "storage", space_id: "crypto", dataset_id: "dataset_spot_1m", frequency: "1m", timezone: "UTC" },
+        { producer: "storage", space_id: "stockcn", dataset_id: "dataset_stockcn_1m", frequency: "1m", timezone: "Asia/Shanghai" }
       ]
     }
   ]
@@ -64,7 +64,7 @@ describe("arrival chart", () => {
     expect(mockedCallControl).toHaveBeenCalledWith("monitor", "QueryPipelineArrivalHistory", {
       space_id: "crypto",
       dataset_id: "dataset_spot_1m",
-      freq: "1m",
+      frequency: "1m",
       day: "2026-10-16"
     });
     expect(page.text()).toContain("日期（UTC）");
@@ -92,7 +92,7 @@ describe("arrival chart", () => {
     expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "QueryPipelineArrivalHistory", {
       space_id: "stockcn",
       dataset_id: "dataset_stockcn_1m",
-      freq: "1m",
+      frequency: "1m",
       day: "2026-10-17"
     });
     page.unmount();

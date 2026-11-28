@@ -16,7 +16,7 @@
     <a-alert v-if="capabilities && !capabilities.can_place_order" type="error" class="section">
       {{ capabilities.unavailable_reason || "当前账户不可下单" }}
     </a-alert>
-    <a-alert v-if="logical.control_mode === 1" type="warning" class="section">
+    <a-alert v-if="logical.control_mode === ControlMode.STRATEGY" type="warning" class="section">
       这是策略驱动的组合，提交前会暂停整个组合账户并取消活动目标订单，恢复前策略目标不会执行。
     </a-alert>
     <a-alert v-if="submissionError" type="warning" class="section">{{ submissionError }}</a-alert>
@@ -39,24 +39,27 @@
       </a-form-item>
       <a-form-item label="方向" required>
         <a-radio-group v-model="manualForm.side" type="button">
-          <a-radio :value="1">买入</a-radio><a-radio :value="2">卖出</a-radio>
+          <a-radio :value="OrderSide.BUY">买入</a-radio><a-radio :value="OrderSide.SELL">卖出</a-radio>
         </a-radio-group>
       </a-form-item>
       <a-form-item label="订单类型">
         <a-radio-group v-model="manualForm.order_type" type="button">
-          <a-radio v-if="capabilities?.order_types?.includes(1)" :value="1">市价</a-radio>
-          <a-radio v-if="capabilities?.order_types?.includes(2)" :value="2">限价</a-radio>
+          <a-radio v-if="capabilities?.order_types?.includes(OrderType.MARKET)" :value="OrderType.MARKET">市价</a-radio>
+          <a-radio v-if="capabilities?.order_types?.includes(OrderType.LIMIT)" :value="OrderType.LIMIT">限价</a-radio>
         </a-radio-group>
       </a-form-item>
-      <a-form-item v-if="manualForm.order_type === 2" label="成交策略">
+      <a-form-item v-if="manualForm.order_type === OrderType.LIMIT" label="成交策略">
         <a-select v-model="manualForm.fill_policy">
-          <a-option v-for="policy in capabilities?.fill_policies || [1, 2, 3]" :key="policy" :value="policy">{{
-            ["", "一直有效（GTC）", "立即成交（IOC）", "全部成交（FOK）"][policy]
-          }}</a-option>
+          <a-option
+            v-for="policy in capabilities?.fill_policies || [FillPolicy.GTC, FillPolicy.IOC, FillPolicy.FOK]"
+            :key="policy"
+            :value="policy"
+            >{{ fillPolicyLabels[policy] }}</a-option
+          >
         </a-select>
       </a-form-item>
       <a-form-item label="数量" required><a-input v-model="manualForm.quantity" /></a-form-item>
-      <a-form-item v-if="manualForm.order_type === 2" label="限价" required>
+      <a-form-item v-if="manualForm.order_type === OrderType.LIMIT" label="限价" required>
         <a-input v-model="manualForm.limit_price" />
       </a-form-item>
       <a-form-item label="原因" required><a-input v-model="manualForm.reason" /></a-form-item>
@@ -77,7 +80,16 @@
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { RequestError } from "@/api/http";
-import { getExecutionCapabilities, listTradableInstruments, submitOrder } from "@/api/trade";
+import {
+  ControlMode,
+  FillPolicy,
+  OrderSide,
+  OrderType,
+  PositionSide,
+  getExecutionCapabilities,
+  listTradableInstruments,
+  submitOrder
+} from "@/api/trade";
 import type { ExecutionCapabilities, LogicalAccount, SubmitOrderReq, TradableInstrument, TradingAccount } from "@/api/trade";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -113,14 +125,21 @@ const instruments = ref<TradableInstrument[]>([]);
 const memberLoadError = ref("");
 const pendingSubmission = ref<SubmitOrderReq | null>(null);
 const capabilityRequests = createLatestRequestGuard();
+const fillPolicyLabels: Record<FillPolicy, string> = {
+  [FillPolicy.UNSPECIFIED]: "",
+  [FillPolicy.GTC]: "一直有效（GTC）",
+  [FillPolicy.IOC]: "立即成交（IOC）",
+  [FillPolicy.FOK]: "全部成交（FOK）"
+};
+
 const manualForm = reactive({
   action_id: "",
   trading_account_id: "",
   client_order_id: "",
   instrument_id: "",
-  order_type: 1 as 1 | 2,
-  fill_policy: 0 as 0 | 1 | 2 | 3,
-  side: 1 as 1 | 2,
+  order_type: OrderType.MARKET as typeof OrderType.MARKET | typeof OrderType.LIMIT,
+  fill_policy: FillPolicy.UNSPECIFIED as FillPolicy,
+  side: OrderSide.BUY as typeof OrderSide.BUY | typeof OrderSide.SELL,
   quantity: "",
   limit_price: "",
   reason: "",
@@ -130,15 +149,15 @@ const manualForm = reactive({
 
 const tier = computed(() => confirmTier(props.env));
 const nameOk = computed(() => nameConfirmed(tier.value, typedName.value, props.logical.name));
-const orderEntryLabel = computed(() => (props.logical.control_mode === 2 ? "下单" : "接管并下单"));
+const orderEntryLabel = computed(() => (props.logical.control_mode === ControlMode.MANUAL ? "下单" : "接管并下单"));
 const selectedInstrument = computed(() => instruments.value.find(item => item.instrument_id === manualForm.instrument_id));
 // 生产环境确认前再看一眼订单内容：方向、标的、数量、限价或市价，以及下在哪个执行账户上（只有一个成员时上面不显示账户选择）
 const orderSummary = computed(() => {
   const id = manualForm.instrument_id;
   const quantity = manualForm.quantity.trim();
   if (!id || !quantity) return "";
-  const side = manualForm.side === 1 ? "买入" : "卖出";
-  const price = manualForm.order_type === 2 ? `限价 ${manualForm.limit_price.trim() || "未填"}` : "市价";
+  const side = manualForm.side === OrderSide.BUY ? "买入" : "卖出";
+  const price = manualForm.order_type === OrderType.LIMIT ? `限价 ${manualForm.limit_price.trim() || "未填"}` : "市价";
   const account = props.accounts.get(memberId.value)?.name || memberId.value;
   return `${side} ${instrumentName(id)} · ${marketLabel(marketOfInstrument(id))} ${quantity}，${price}，执行账户 ${account}`;
 });
@@ -154,7 +173,7 @@ const memberOptions = computed(() =>
 watch(
   () => manualForm.order_type,
   type => {
-    if (type === 2 && !manualForm.fill_policy) manualForm.fill_policy = 1;
+    if (type === OrderType.LIMIT && !manualForm.fill_policy) manualForm.fill_policy = FillPolicy.GTC;
   }
 );
 // 关闭或切换组合时放弃未确认的请求之外的草稿状态：结果不明的请求保留，不能丢掉它的编号
@@ -184,7 +203,9 @@ function loadMember() {
       capabilities.value = response.capabilities;
       // 场所不支持当前选中的下单方式时（A 股只有限价），改成它支持的第一种，不能让隐藏的市价单被提交
       const types = response.capabilities?.order_types || [];
-      if (types.length && !types.includes(manualForm.order_type)) manualForm.order_type = types[0] as 1 | 2;
+      if (types.length && !types.includes(manualForm.order_type)) {
+        manualForm.order_type = types[0] as typeof OrderType.MARKET | typeof OrderType.LIMIT;
+      }
     })
     .catch(failed);
   listTradableInstruments(accountId)
@@ -195,8 +216,12 @@ function loadMember() {
 }
 
 /** 打开下单对话框。有结果不明的旧请求时，只能对同一个执行账户重试原请求。 */
-function openManual(accountId: string, instrumentId = "", prefill: { side?: 1 | 2; quantity?: string } = {}) {
-  if (![1, 2].includes(props.logical.control_mode)) return;
+function openManual(
+  accountId: string,
+  instrumentId = "",
+  prefill: { side?: typeof OrderSide.BUY | typeof OrderSide.SELL; quantity?: string } = {}
+) {
+  if (!([ControlMode.STRATEGY, ControlMode.MANUAL] as ControlMode[]).includes(props.logical.control_mode)) return;
   if (pendingSubmission.value) {
     const pending = pendingSubmission.value;
     if (pending.trading_account_id !== accountId || pending.logical_account_id !== props.logical.logical_account_id) {
@@ -218,9 +243,9 @@ function openManual(accountId: string, instrumentId = "", prefill: { side?: 1 | 
   Object.assign(manualForm, {
     action_id: createClientId(),
     client_order_id: createClientId().replace(/-/g, ""),
-    order_type: 1,
-    fill_policy: 0,
-    side: prefill.side ?? 1,
+    order_type: OrderType.MARKET,
+    fill_policy: FillPolicy.UNSPECIFIED,
+    side: prefill.side ?? OrderSide.BUY,
     quantity: prefill.quantity ?? "",
     limit_price: "",
     reason: "",
@@ -233,7 +258,11 @@ function openManual(accountId: string, instrumentId = "", prefill: { side?: 1 | 
 }
 
 /** 从页头进入：只有一个启用成员就直接用它，否则用第一个。 */
-function open(instrumentId = "", accountId = "", prefill: { side?: 1 | 2; quantity?: string } = {}) {
+function open(
+  instrumentId = "",
+  accountId = "",
+  prefill: { side?: typeof OrderSide.BUY | typeof OrderSide.SELL; quantity?: string } = {}
+) {
   const first = accountId || memberOptions.value[0]?.id;
   if (!first) {
     Message.warning("组合里没有启用的执行账户");
@@ -243,14 +272,15 @@ function open(instrumentId = "", accountId = "", prefill: { side?: 1 | 2; quanti
 }
 
 async function submitManual() {
-  if (submitting.value || ![1, 2].includes(props.logical.control_mode)) return false;
+  if (submitting.value || !([ControlMode.STRATEGY, ControlMode.MANUAL] as ControlMode[]).includes(props.logical.control_mode))
+    return false;
   if (
     !manualForm.action_id.trim() ||
     !manualForm.client_order_id.trim() ||
     !manualForm.instrument_id.trim() ||
     !manualForm.quantity.trim() ||
     !manualForm.reason.trim() ||
-    (manualForm.order_type === 2 && !manualForm.limit_price.trim())
+    (manualForm.order_type === OrderType.LIMIT && !manualForm.limit_price.trim())
   ) {
     Message.warning("请填写所有必填字段");
     return false;
@@ -260,8 +290,8 @@ async function submitManual() {
     return false;
   }
   if (!pendingSubmission.value) {
-    const limitPrice = manualForm.order_type === 2 ? manualForm.limit_price : undefined;
-    const oddLotSell = marketOfInstrument(manualForm.instrument_id.trim()) === "equity" && manualForm.side === 2;
+    const limitPrice = manualForm.order_type === OrderType.LIMIT ? manualForm.limit_price : undefined;
+    const oddLotSell = marketOfInstrument(manualForm.instrument_id.trim()) === "equity" && manualForm.side === OrderSide.SELL;
     const ruleError = orderRuleError(manualForm.quantity, limitPrice, selectedInstrument.value, oddLotSell);
     if (ruleError) {
       Message.warning(ruleError);
@@ -282,10 +312,10 @@ async function submitManual() {
       instrument_id: instrumentId,
       market_type: market,
       // 只有永续有持仓方向，现货不传
-      position_side: market === "swap" ? 1 : undefined,
+      position_side: market === "swap" ? PositionSide.NET : undefined,
       quantity: manualForm.quantity.trim(),
-      fill_policy: manualForm.order_type === 1 ? 0 : manualForm.fill_policy,
-      limit_price: manualForm.order_type === 2 ? manualForm.limit_price.trim() : undefined,
+      fill_policy: manualForm.order_type === OrderType.MARKET ? FillPolicy.UNSPECIFIED : manualForm.fill_policy,
+      limit_price: manualForm.order_type === OrderType.LIMIT ? manualForm.limit_price.trim() : undefined,
       reason: manualForm.reason.trim(),
       deadline_at: deadline === undefined ? undefined : String(deadline)
     };

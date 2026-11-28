@@ -579,7 +579,7 @@ func TestPortfolioMarginSetMarginModeIsNoOpAndLeverageUsesUMEndpoint(t *testing.
 func TestPortfolioMarginLedgerUsesUMIncome(t *testing.T) {
 	state, server := newPMServer(t, map[string]string{"GET /papi/v1/um/income": samplePath(t, "papi_um_income.json")})
 	pm := testPM(server, exchange.MarketTypeSpot, exchange.MarketTypeSwap)
-	require.True(t, pm.LedgerSupported())
+	require.True(t, pm.Supports(execution.CapabilityLedger))
 	page, err := pm.ListLedger(context.Background(), exchange.LedgerQuery{
 		Start: time.UnixMilli(1570000000000), End: time.UnixMilli(1571000000000), Limit: 10,
 	})

@@ -39,24 +39,24 @@
 # 合成任务：先 collector resample preview --source-task-id <源任务> --target-frequency 5m 看能否合成，再
 # collector task create --space-id <空间> --name "<名称>" --source-task-id <源任务> --frequency 5m（不带 --tag-id；标的、源参数跟源任务走；
 # 不给 --output-field 就输出合成的全部固定字段，资金费率与附加字段不合成）；要历史数据再用 collector resample backfill
-./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
+./bin/moox-cli collector kline check|backfill|backfill-list|backfill-status ...   # 检查、补采与查看补采作业
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
 ./bin/moox-cli collector kline absences-clear ...                    # 行情源后来补上数据时清除“行情源本来没有”的确认
-./bin/moox-cli collector resample preview|backfill|jobs|cancel ...    # 历史 K 线合成
+./bin/moox-cli collector resample preview|backfill|jobs|show|cancel ...    # 历史 K 线合成
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
 ./bin/moox-cli collector ingest-mode get|set                          # 采集方式 stream / scf / local（set --ingest ...，没有 --force）
-./bin/moox-cli collector fetch-plan pause|resume                      # 暂停或恢复整个空间的采集（pause 默认只预览，--yes 才执行）
-./bin/moox-cli collector data-type list|show                          # 可采集的数据类型
+./bin/moox-cli collector fetch-plan show|pause|resume                 # 查看、暂停或恢复整个空间的采集（pause 默认只预览，--yes 才执行）
+./bin/moox-cli collector data-type list                               # 可采集的数据类型、频率与输出字段
 ```
 
 - 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。
 - Storage 数据被清空后，要让采集重新登记序列快照并重置补采状态：`collector fetch-plan reregister --space-id <空间> --yes`（只清了 Storage、保留了 Collector 库时的必做步骤，见 [`fresh-deploy.md`](fresh-deploy.md)）。
 - 云函数由 Collector 的对账器按采集计划自动建、自动修，不需要手工创建或部署：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，落后的函数自动升级）、
   `list`（现场读回计划里的函数与期望比对，`--drift` 只看不一致的；计划外的同前缀函数单列，定时器已被停掉）、`delete`（按名字或前缀删函数，默认只预览；`--namespace`、`--region` 只删这个命名空间、地域里的，删旧命名空间里的同名副本时必带，否则在用的同名函数也会被删；计划里的函数删掉后下一轮重建）、
-  `probe-egress`（取各采集函数此刻的公网出口 IP）。
+  `probe-egress`（取各采集函数此刻的公网出口 IP）、`inspect|attach-vpc|invoke`（直调腾讯云 SCF 检查网络配置、绑定 VPC 子网或直接调用函数）。
 - 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台“数据采集 › 采集运行”的“运行状态”页签里的“云账号”对话框，初始账号由 `setup init` 登记。
-  换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `setup inspect-scf` 查出来再到腾讯云控制台手工删。
-- 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
+  换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `collector function inspect` 查出来再到腾讯云控制台手工删。
+- 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type list` 中 `kline` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
 - **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `attention:collector:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
 - 长历史导入：[`initial-import.md`](initial-import.md)。取 K 线数据：[`data-query.md`](data-query.md)。
 
@@ -129,14 +129,14 @@
 ## 监控
 
 - **做什么**：组件健康、数据新鲜度、主机资源、告警推送（企业微信、飞书、钉钉、通用 Webhook）。管理台首页的“需要处理”来自这里。
-- **常用**：`./bin/moox-cli doctor alerts`（[`monitor-attention.md`](monitor-attention.md)）、`doctor bootstrap`、`doctor diagnose`；
+- **常用**：`./bin/moox-cli doctor alerts`（[`monitor-attention.md`](monitor-attention.md)）、`doctor bootstrap`（健康端口只听 127.0.0.1，远端经 SSH 探测；因子机只能出站，不在局域网时看 `doctor alerts` 与 `host agent status --host factor`）；
   `monitor health|arrival|hosts|host-metrics` 看总览、数据到达历史与主机资源曲线；`monitor logs` 看各服务 Error 及以上的重要日志；`monitor mute|unmute|mute-status` 临时屏蔽推送；
-  告警渠道以管理台「资源与运维 › 监控告警」的“消息通知设置”为准；初始渠道由 `setup init` 在 Monitor 还没有渠道时从 `moox.secrets.toml` 写入一次。
+  告警渠道以管理台「资源与运维 › 监控告警」的“消息通知设置”为准（清空重装经 `moox.backup` 自动备份恢复）。
 
 ## 网关与接入
 
 - **主机网关**：每台主机一个，校验签名和服务目录 ACL 后转发到本机服务；管理台与 CLI 的所有调用都经过它。
-- **外部入口**：主机网关在登记成外部入口的主机（默认存储机与海外机）上另开的 `11004`，SCF、Skill、采集名单工具的签名调用从这里进来；不是独立的组件。
+- **外部入口**：主机网关在登记成外部入口的主机（默认存储机与海外机）上另开的 `11004`，SCF 云函数（`scf-collector`）的签名调用从这里进来；不是独立的组件。
 - **EventBus**：模块间异步事件（NATS JetStream），默认在存储机；`eventbus overview|streams|consumers|consumer|events` 只读查看。凭据轮换必须按 [`eventbus-credentials.md`](eventbus-credentials.md) 同步到所有客户端。
 - **出口代理**：海外机上为采集提供受限的 HTTPS 出口。
 - SCF 与私有网络：[`private-network.md`](private-network.md)。
@@ -146,26 +146,26 @@
 - 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog`、`host agent status|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
 - 部署、升级与回滚：[`source-deploy.md`](source-deploy.md)；主机代理：[`host-agent.md`](host-agent.md)。
-- 腾讯云：`setup firewall`（按拓扑放行所需端口）、`setup reboot-host`（重启无响应的主机）、
-  `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
-- 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup status` 看各主机的版本与组件状态（`setup validate` 同样按组件报告是否已部署，并给出新安装、覆盖更新、卸载三种方式里可选的那些），`setup logs` 看组件日志。
+- 腾讯云：`setup firewall`（按拓扑放行所需端口）、`host reboot`（重启无响应的腾讯云主机）、
+  `collector function attach-vpc`（为函数绑定 VPC 子网）、`collector function inspect|invoke`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
+- 排查与准备：`host diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup status` 看各主机的版本与组件状态（`setup validate` 同样按组件报告是否已部署，并给出新安装、保留数据、全部覆盖、卸载里可选的方式），`setup logs` 看组件日志。
 
 ## 归档
 
-把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。不填执行计划：mgr 每分钟给每个任务生成一条跟随（follow）运行，worker 按 Storage 的变更日志读改动过的行，到期的分区导出、定稿；
-首次运行或位点失效（worker 停机超过 7 天）时从回补起点（默认线上保留期起点）整段重读，crypto 1m 要十几个小时，进度见任务的最近运行。读取 Storage 只在每分钟第 25～55 秒、且避开每小时 :58～:04（写死，worker 的 `pacing.minute_window` 可关掉秒窗口）。
+把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。ArchiveMgr 会自动为已激活且保留期有限的时序数据集补齐归档任务（**注意：手工删除的归档任务会被重新建出来；不想归档某个数据集就把任务停用（`disabled`），停用的任务不会被重建**）。ArchiveMgr 没有模块级生命周期暂停，按任务启停。不填执行计划：worker 自己每分钟本地循环拉取启用任务清单（`ListFollowTasks`），按 Storage 的变更日志读改动过的行，到期的分区导出、定稿，再将跟随结果与重读进度回报给 mgr（`ReportFollowResult`）；运行表只记录一次性运行（`manual` / `range` / `import`）。
+首次运行或位点失效（worker 停机超过 7 天）时从回补起点（默认线上保留期起点）整段重读，crypto 1m 要十几个小时，进度见任务行的跟随列（`rescan_from` / `rescan_until`）。读取 Storage 只在每分钟第 25～55 秒、且避开每小时 :58～:04（写死，worker 的 `pacing.minute_window` 可关掉秒窗口）。
 保留期内的数据只要写进 Storage 就会进归档；保留期之外的历史用 `moox-cli import --target archive` 导入（见 [`initial-import.md`](initial-import.md)）。
-管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验的）、看最新数据，“归档存储”看执行器所在主机、根目录与磁盘；按时间区间清除无法补齐区间只有命令行（`archive tasks clear-unrecoverable`）；整体清除任务累积的无法补齐区间在管理台任务详情“清除这些记录”和 `archive tasks update --clear-unrecoverable` 都能做。
+管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验或本地已导出的）、看最新数据，“归档存储”看执行器所在主机、根目录与磁盘；清除无法补齐区间统一通过 `ClearArchiveUnrecoverable`（管理台任务详情“清除这些记录”或命令行 `archive tasks clear-unrecoverable`，`--start`/`--end` 同时留空清空全部、同时填写只删整段落在 `[start, end)` 内的条目）。
 分区路径 `<空间>/<用途>/<目录名>/<yyyy>/<yyyymmdd>.csv.gz`（1d 及以上是月分区 `<yyyymm>`；worker 配置 `export_format: csv` 时扩展名为 `.csv`），用途 `collect`（采集结果）/ `factor`（因子结果）/ `data`，目录名建任务时定（`tasks prepare` 给建议值，`tasks create --dir-name` 可改），建好后不改；归档根目录的 `datasets.csv` 是目录与数据集的对照表。
 
 ```bash
 ./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期、最早回补起点与建议目录名
-./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> [--backfill-from <RFC3339>]
+./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> [--backfill-from <RFC3339>] [--disabled]
 ./bin/moox-cli archive tasks list
-./bin/moox-cli archive overview | runs list [--include-follow]|get|cancel | partitions list|get
-./bin/moox-cli archive tasks backfill|run|update|delete ...      # run 是整段重读线上保留期
+./bin/moox-cli archive overview | runs list|get|cancel | partitions list|get
+./bin/moox-cli archive tasks backfill|run|update|delete ...      # run 是整段重读线上保留期；update --status enabled|disabled
 ./bin/moox-cli import --space-id crypto --dataset-id <数据集> --frequency 1m --path <文件.csv|.csv.gz|目录> --target archive --series-tag <tag> [--allow-missing] [--dry-run]
-./bin/moox-cli archive tasks clear-unrecoverable --space-id crypto --dataset-id <数据集> --start <RFC3339> --end <RFC3339> --yes
+./bin/moox-cli archive tasks clear-unrecoverable --space-id crypto --dataset-id <数据集> [--start <RFC3339> --end <RFC3339>] --yes
 ```
 
 导入（`import --target archive`）：CLI 先整份校验全部文件（与写 Storage 同一套规则），再建一条占住任务的导入运行，行经 worker 数据端口（只出站主机经 control 中转，较慢）写进暂存区，命令结束时统一导出；同键已归档的一律覆盖，`series_tag` 必须非空；只写归档时可用带 `subject_id` 列的多标的文件、不检查标签范围。

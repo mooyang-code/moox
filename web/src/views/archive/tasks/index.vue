@@ -20,14 +20,10 @@
         @retry="retryMain"
       />
 
-      <UnarchivedList :items="unarchived" :error="unarchivedError" @create="openCreate" @retry="retryDatasets" />
-
       <TaskTable
         :tasks="tasks"
         :loaded="mainLoaded"
         :error="mainError"
-        :unarchived-count="unarchived.length"
-        :datasets-loaded="datasetsLoaded"
         :names="datasetNames"
         :zone="displayZone"
         :now-ms="nowMs"
@@ -68,7 +64,7 @@
       :mode="editor.mode"
       :task="editor.task"
       :preset-dataset-id="editor.presetDatasetId"
-      :datasets="archivableList"
+      :datasets="timeSeriesList"
       :tasks="tasks"
       :zone="displayZone"
       :space-id="spaceId"
@@ -85,7 +81,7 @@
 
 <script setup lang="ts">
 import { reportError } from "@/api/http";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -105,12 +101,11 @@ import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatRetention } from "@/utils/retention";
 import {
-  archivableDataset,
   archiveQueryFor,
+  isTimeSeriesDataset,
   parseArchiveQuery,
   pauseConfirmText,
   rescanConfirmText,
-  unarchivedDatasets,
   type ArchiveQuery
 } from "../shared/archive-model";
 import { invalidateArchiveCoverage, listAllDatasets } from "../shared/archive-coverage";
@@ -119,7 +114,6 @@ import TaskDetailDrawer from "./task-detail-drawer.vue";
 import TaskEditorDrawer from "./task-editor-drawer.vue";
 import TaskTable from "./task-table.vue";
 import { useArchiveWorkerHost } from "../shared/use-archive-worker-host";
-import UnarchivedList from "./unarchived-list.vue";
 import WorkerLine from "./worker-line.vue";
 
 /**
@@ -144,8 +138,6 @@ const mainLoaded = ref(false);
 const mainError = ref("");
 const lastOkAt = ref<number | null>(null);
 const datasets = ref<Dataset[]>([]);
-const datasetsLoaded = ref(false);
-const datasetsError = ref("");
 const nowMs = ref(Date.now());
 // 整段重读、补拉区间成功后加 1：抽屉已经开在运行记录页签时 URL 不变，靠它让运行记录重读
 const runsRefreshKey = ref(0);
@@ -175,20 +167,17 @@ async function loadMain() {
   }
 }
 
-/** 当前空间的全部数据集（翻完所有页）：未归档判定、任务表的中文名、新建抽屉的下拉都用它。 */
+/** 当前空间的全部数据集（翻完所有页）：任务表的中文名、手工新建抽屉的下拉用它。 */
 async function loadDatasets() {
   const space = spaceId.value;
   if (!space) return;
   const token = datasetGate.begin();
-  datasetsError.value = "";
   try {
     const all = await listAllDatasets(space);
     if (!token.isLatest()) return;
     datasets.value = all;
-    datasetsLoaded.value = true;
   } catch (error) {
     if (error instanceof StaleSpaceRequestError || !token.isLatest()) return;
-    datasetsError.value = errorText(error);
   }
 }
 
@@ -201,41 +190,21 @@ function retryMain() {
   void loadMain();
   if (!workerHost.value) void loadWorkerHost();
 }
-function retryDatasets() {
-  void loadDatasets();
-  if (!mainLoaded.value) void loadMain();
-}
 
-watch(
-  spaceId,
-  (next, previous) => {
-    // 切空间：清掉 URL 里属于旧空间的参数；第一次拿到空间（previous 为空）时保留深链接
-    if (previous && next !== previous) void router.replace({ query: {} });
-    overview.value = null;
-    tasks.value = [];
-    datasets.value = [];
-    mainLoaded.value = false;
-    datasetsLoaded.value = false;
-    mainError.value = "";
-    datasetsError.value = "";
-    lastOkAt.value = null;
-    busy.value = {};
-    void loadMain();
-    void loadDatasets();
-  },
-  { immediate: true }
-);
+onMounted(() => {
+  void loadMain();
+  void loadDatasets();
+});
+onBeforeUnmount(() => {
+  mainGate.invalidate();
+  datasetGate.invalidate();
+});
 
 const taskIds = computed(() => tasks.value.map(task => task.dataset_id || ""));
 // worker 报告启用了对象存储时才显示远端副本的列
 const remoteEnabled = computed(() => Boolean(overview.value?.worker?.object_store?.endpoint));
 const datasetNames = computed(() => Object.fromEntries(datasets.value.map(item => [item.dataset_id, item.name || ""])));
-const archivableList = computed(() => datasets.value.filter(item => archivableDataset(item)));
-const unarchived = computed(() =>
-  mainLoaded.value && datasetsLoaded.value ? unarchivedDatasets(datasets.value, tasks.value) : []
-);
-// 两路读取任一失败都不能当成“全部已归档”：首次读取任务失败也算
-const unarchivedError = computed(() => datasetsError.value || (!mainLoaded.value ? mainError.value : ""));
+const timeSeriesList = computed(() => datasets.value.filter(item => isTimeSeriesDataset(item)));
 
 // ---- 任务详情（?task=） ----
 const selectedTask = computed(() =>
@@ -337,7 +306,7 @@ const displayName = (task: ArchiveTask) => datasetNames.value[task.dataset_id ||
 
 function toggleTask(task: ArchiveTask) {
   const id = task.dataset_id || "";
-  if (task.status === "paused") {
+  if (task.status === "disabled") {
     void withBusy(id, async () => {
       try {
         await updateArchiveTask({ dataset_id: id, status: "enabled" });
@@ -358,7 +327,7 @@ function toggleTask(task: ArchiveTask) {
     cancelText: "取消",
     onBeforeOk: async () => {
       try {
-        await updateArchiveTask({ dataset_id: id, status: "paused" });
+        await updateArchiveTask({ dataset_id: id, status: "disabled" });
       } catch (error) {
         reportError(error);
         return false;

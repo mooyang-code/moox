@@ -167,7 +167,7 @@ func undecodedError(keys []toml.Key) error {
 
 // secretSections 是只能写在 moox.secrets.toml 里的段。
 var secretSections = map[string]string{
-	"admin": "[admin]", "tencent_cloud": "[tencent_cloud]", "notification": "[notification]", "exchange_keys": "[[exchange_keys]]",
+	"admin": "[admin]", "tencent_cloud": "[tencent_cloud]",
 }
 
 func removedInConfig(key toml.Key) string {
@@ -191,11 +191,15 @@ func removedInConfig(key toml.Key) string {
 		}
 		return "moox.toml 里出现了 " + section + "：因子段（[factors]、[[factors.tasks]]、[[factors.definitions]]）已移出配置文件。" +
 			"默认因子任务在仓库的 config/setup/factor-tasks.yaml，由 setup start 导入；自己的任务剪到单独的 yaml 文件（键名不变），用 moox-cli factor task apply --file 导入"
-	case "admin", "tencent_cloud", "notification", "exchange_keys":
+	case "admin", "tencent_cloud":
 		if key[0] == "tencent_cloud" && at(1) == "region" {
 			return "tencent_cloud.region 已删除：腾讯云的默认地域取控制机 [hosts.<控制机>] 的 region"
 		}
 		return fmt.Sprintf("moox.toml 里出现了 %s：它是秘密，要写在同目录的 %s 里（moox.toml 只放拓扑与部署参数）", secretSections[key[0]], SecretsFileName)
+	case "notification":
+		return "moox.toml 里出现了 [notification]：告警渠道已移出配置文件，请在安装完成后到管理台「资源与运维 › 监控告警」里配置"
+	case "exchange_keys":
+		return "moox.toml 里出现了 [[exchange_keys]]：交易所密钥已移出配置文件，请在安装完成后到管理台「系统设置 › 密钥管理」里配置"
 	case "local_logs":
 		return "[local_logs] 已删除：日志轮转的大小与份数写在各组件的配置模板里"
 	case "observability":

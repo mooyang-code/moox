@@ -107,7 +107,7 @@ func backfillEnvironment() map[string]string {
 
 func baselinePackage(version string) Package {
 	return Package{
-		SpaceID: baselineSpace, PackageID: "moox-collector_" + version, PackageName: "collector", Version: version, Runtime: "CustomRuntime",
+		PackageID: "moox-collector_" + version, PackageName: "collector", Version: version, Runtime: "CustomRuntime",
 		CloudAccountID: baselineAccount, COSRegion: "ap-guangzhou", COSBucket: "fake-bucket", COSPath: "/packages/collector-" + version + ".zip",
 		Status: store.FunctionPackageAvailable,
 	}

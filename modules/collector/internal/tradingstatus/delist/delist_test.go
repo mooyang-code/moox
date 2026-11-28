@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -157,7 +157,7 @@ func TestRegisterPublishesEachNoticeOnlyOnce(t *testing.T) {
 	event, err := registry.ValidateMessage(message)
 	require.NoError(t, err)
 	require.Equal(t, events.InstrumentDelistScheduled.Name(), event.Name())
-	var payload storagepb.InstrumentDelistScheduled
+	var payload eventpb.InstrumentDelistScheduled
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), &payload))
 	require.Equal(t, events.DelistScopeAll, payload.GetScope())
 	require.Equal(t, notice.DelistAt, time.UnixMilli(payload.GetDelistAt()).UTC())

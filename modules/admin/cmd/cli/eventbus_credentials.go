@@ -14,12 +14,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 	"gorm.io/gorm"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -105,7 +105,12 @@ func openAdminCLIDB(path string) (*gorm.DB, error) {
 	if path == "" {
 		return nil, errors.New("db path is required")
 	}
-	return gorm.Open(sqlite.Open(initSQLiteDSN(path)), &gorm.Config{})
+	return sqlitedb.OpenGORM(sqlitedb.Options{
+		Path:          path,
+		Synchronous:   "FULL",
+		BusyTimeoutMS: 10000,
+		SkipCreateDir: true,
+	})
 }
 func closeAdminCLIDB(db *gorm.DB) {
 	if db != nil {

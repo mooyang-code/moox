@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,7 +27,6 @@ const (
 	// 出站 EventBus 一连上就放行，不用等满一个常规检查周期；通过后或超过窗口回到常规周期。
 	lifecycleStartupRefreshEvery = time.Second
 	lifecycleStartupWindow       = time.Minute
-	lifecycleStateFileName       = "lifecycle.json"
 )
 
 // moduleCheck 是策略模块自身的就绪检查：数据库 Ping、出站 EventBus 已连、就绪事件消费者已连。周期刷新一个结果，
@@ -144,7 +142,7 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 	return lifecycle.New(lifecycle.Options{
 		Audit:     logsink.Audit,
 		Module:    "strategy",
-		StateFile: filepath.Join(filepath.Dir(dbPath), lifecycleStateFileName),
+		StateFile: lifecycle.StateFileForDB(dbPath),
 		Hooks: lifecycle.Hooks{
 			Catchup: deps.catchup,
 			Quiesce: deps.quiesce,

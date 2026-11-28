@@ -65,7 +65,7 @@ func TestDeleteReplaysBeyondRanksOnlyFinished(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("认领失败：found=%v err=%v", found, err)
 		}
-		if err := repo.FinishReplay(ctx, claimed.ReplayID, ReplayDone, []byte(`{}`), "", testNow); err != nil {
+		if err := repo.FinishReplay(ctx, claimed.ReplayID, ReplaySucceeded, []byte(`{}`), "", testNow); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -133,7 +133,8 @@ func TestApplySchemaToleratesFormattingAndIsAtomic(t *testing.T) {
 	if formatted == schema.AllSQL() {
 		t.Fatal("测试未能改写排版")
 	}
-	repo, err := Open(filepath.Join(t.TempDir(), "formatted.sqlite"))
+	formattedPath := filepath.Join(t.TempDir(), "formatted.sqlite")
+	repo, err := Open(formattedPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +142,10 @@ func TestApplySchemaToleratesFormattingAndIsAtomic(t *testing.T) {
 	if err := repo.ApplySchema(formatted); err != nil {
 		t.Fatalf("纯排版差异不应被拒绝：%v", err)
 	}
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatalf("用标准 schema 重新校验纯排版库不应被拒绝：%v", err)
+	}
+
 	changed, err := Open(filepath.Join(t.TempDir(), "changed.sqlite"))
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +155,10 @@ func TestApplySchemaToleratesFormattingAndIsAtomic(t *testing.T) {
 	if semantic == schema.AllSQL() {
 		t.Fatal("测试未能改写默认值")
 	}
-	if err := changed.ApplySchema(semantic); err == nil || !strings.Contains(err.Error(), "t_strategy_replays") {
+	if err := changed.ExecForTest(semantic); err != nil {
+		t.Fatal(err)
+	}
+	if err := changed.ApplySchema(schema.AllSQL()); err == nil || !strings.Contains(err.Error(), "t_strategy_replays") {
 		t.Fatalf("默认值不同应被拒绝：%v", err)
 	}
 

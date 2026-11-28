@@ -1,14 +1,16 @@
 /**
- * 采集任务页用的“是否已归档”：当前空间读一次归档任务和数据集，按数据集给出“已归档 · 健康”或“未归档”。
+ * 采集任务页用的“是否已归档”：当前空间读一次归档任务，已有任务时给出“已归档 · 健康”。
+ * 归档任务已由 ArchiveMgr 自动补齐，前端不再维护“未归档数据集”判定与提示。
  * - 同一空间共用一份模块级缓存，有效期 60 秒；切空间、归档页建任务或删任务后失效。
- * - 任一读取失败（包括 archive-mgr 没部署）时什么都不显示，不能把读不到当成“未归档”。
+ * - 读取失败（包括 archive-mgr 没部署）时什么都不显示。
  */
 import { computed, shallowRef, watch, type Ref } from "vue";
 import { readAllPages } from "@/api/read-all-pages";
 import { listArchiveTasks, type ArchiveTask } from "@/api/archive";
 import { listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
-import { archivableDataset, healthLabel, healthTone, type Tone } from "./archive-model";
+import { archiveTasksPath } from "@/router/links";
+import { healthLabel, healthTone, type Tone } from "./archive-model";
 
 const TTL_MS = 60_000;
 
@@ -16,8 +18,6 @@ export interface ArchiveCoverageData {
   spaceId: string;
   loadedAt: number;
   tasks: Map<string, ArchiveTask>;
-  /** 应该归档的数据集（时序、active、有限保留期） */
-  archivable: Set<string>;
 }
 
 export interface ArchiveCoverage {
@@ -39,32 +39,27 @@ export function listAllDatasets(spaceId: string): Promise<Dataset[]> {
 
 export async function loadArchiveCoverage(spaceId: string, nowMs = Date.now()): Promise<ArchiveCoverageData | null> {
   try {
-    const [taskRsp, datasets] = await Promise.all([listArchiveTasks({ page: 1, size: 100 }), listAllDatasets(spaceId)]);
+    const taskRsp = await listArchiveTasks({ page: 1, size: 100 });
     return {
       spaceId,
       loadedAt: nowMs,
-      tasks: new Map((taskRsp.tasks || []).map(task => [task.dataset_id || "", task])),
-      archivable: new Set(datasets.filter(item => archivableDataset(item)).map(item => item.dataset_id))
+      tasks: new Map((taskRsp.tasks || []).map(task => [task.dataset_id || "", task]))
     };
   } catch {
     return null;
   }
 }
 
-/** 一个数据集的归档状态；没有可显示的（永久保留、不是时序、读取失败、dataset_id 为空）时为 null。 */
+/** 一个数据集的归档状态；没有对应归档任务、读取失败或 dataset_id 为空时为 null。 */
 export function coverageFor(data: ArchiveCoverageData | null, datasetId?: string): ArchiveCoverage | null {
   if (!data || !datasetId) return null;
   const task = data.tasks.get(datasetId);
-  if (task) {
-    return {
-      text: `已归档 · ${healthLabel(task.health)}`,
-      tone: task.health === "ok" ? "muted" : healthTone(task.health),
-      link: `/archive/tasks?task=${encodeURIComponent(datasetId)}`
-    };
-  }
-  return data.archivable.has(datasetId)
-    ? { text: "未归档", tone: "warn", link: `/archive/tasks?create=${encodeURIComponent(datasetId)}` }
-    : null;
+  if (!task) return null;
+  return {
+    text: `已归档 · ${healthLabel(task.health)}`,
+    tone: task.health === "ok" ? "muted" : healthTone(task.health),
+    link: archiveTasksPath(datasetId)
+  };
 }
 
 // ---- 模块级缓存 ----

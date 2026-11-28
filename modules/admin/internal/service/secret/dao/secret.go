@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -84,15 +83,6 @@ func DecryptSecretFields(secret *model.Secret, encryptionKey string) error {
 	return nil
 }
 
-// IsDeletedInitialSecret 报告某秘钥 ID 是否曾在管理台被主动硬删除。
-func IsDeletedInitialSecret(ctx context.Context, db *gorm.DB, secretID string) (bool, error) {
-	var count int64
-	if err := db.WithContext(ctx).Model(&model.DeletedInitialSecret{}).Where("c_secret_id = ?", secretID).Count(&count).Error; err != nil {
-		return false, err
-	}
-	return count > 0, nil
-}
-
 // SecretDAO 秘钥数据访问层（物理硬删除，显式传入主密钥）。
 type SecretDAO struct {
 	db            *gorm.DB
@@ -104,7 +94,7 @@ func NewSecretDAO(db *gorm.DB, encryptionKey string) *SecretDAO {
 	return &SecretDAO{db: db, encryptionKey: strings.TrimSpace(encryptionKey)}
 }
 
-// Create 创建秘钥（拷贝后再加密，不原地污染调用方入参）；若同初始 ID 存在墓碑则一并清除。
+// Create 创建秘钥（拷贝后再加密，不原地污染调用方入参）。
 func (d *SecretDAO) Create(ctx context.Context, secret *model.Secret) error {
 	if secret == nil {
 		return errors.New("secret is nil")
@@ -119,16 +109,7 @@ func (d *SecretDAO) Create(ctx context.Context, secret *model.Secret) error {
 	now := time.Now()
 	record.CreateTime = now
 	record.ModifyTime = now
-	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&record).Error; err != nil {
-			return err
-		}
-		if model.IsInitialSecretID(record.SecretID) {
-			return tx.Where("c_secret_id = ?", record.SecretID).Delete(&model.DeletedInitialSecret{}).Error
-		}
-		return nil
-	})
-	if err != nil {
+	if err := d.db.WithContext(ctx).Create(&record).Error; err != nil {
 		return err
 	}
 	secret.ID = record.ID
@@ -162,28 +143,16 @@ func (d *SecretDAO) Update(ctx context.Context, secret *model.Secret) error {
 	return nil
 }
 
-// Delete 物理硬删除秘钥；仅对初始交易所密钥（exchange-*）写墓碑，防止 setup init 静默重建。
+// Delete 物理硬删除秘钥。
 func (d *SecretDAO) Delete(ctx context.Context, secretID string) error {
-	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Scopes(userSecrets).Where("c_secret_id = ?", secretID).Delete(&model.Secret{})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return ErrSecretNotFound
-		}
-		if !model.IsInitialSecretID(secretID) {
-			return nil
-		}
-		tombstone := model.DeletedInitialSecret{
-			SecretID:  secretID,
-			CreatedAt: time.Now().UTC().UnixMilli(),
-		}
-		return tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "c_secret_id"}},
-			UpdateAll: true,
-		}).Create(&tombstone).Error
-	})
+	result := d.db.WithContext(ctx).Scopes(userSecrets).Where("c_secret_id = ?", secretID).Delete(&model.Secret{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrSecretNotFound
+	}
+	return nil
 }
 
 // FindByID 根据唯一标识查询。

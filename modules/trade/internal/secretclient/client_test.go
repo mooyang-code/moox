@@ -23,9 +23,9 @@ func TestGetExchangeSecretReadsConfiguredSecretThroughNativeGateway(t *testing.T
 	client := New(gatewayFunc(func(_ context.Context, service, method string, serialization int, body []byte) ([]byte, error) {
 		calls++
 		require.Equal(t, "trpc.moox.ops.SecretMgr", service)
-		require.Equal(t, "GetSecretValue", method)
+		require.Equal(t, "GetExchangeCredential", method)
 		require.Equal(t, codec.SerializationTypeJSON, serialization)
-		var request getSecretValueReq
+		var request getExchangeCredentialReq
 		require.NoError(t, json.Unmarshal(body, &request))
 		require.Equal(t, "sec_1", request.SecretID)
 		return json.Marshal(map[string]any{"ret_info": map[string]any{"code": 0}, "secret": map[string]any{

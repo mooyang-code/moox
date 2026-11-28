@@ -156,7 +156,9 @@ func TestEngineResumeCatchesUpThroughLifecycle(t *testing.T) {
 	require.Equal(t, "因子任务 ftask_a", state.Catchup.BlockedBy, "没追平的任务挡住模块")
 	require.False(t, r.gate("ftask_a"))
 	require.True(t, r.catchupGate("ftask_a"))
-	require.True(t, r.writeGate("ftask_a"))
+	releaseWrite, ok := r.beginWrite(ctx, "ftask_a", true, true)
+	require.True(t, ok)
+	releaseWrite()
 
 	close(release)
 	require.Eventually(t, func() bool {

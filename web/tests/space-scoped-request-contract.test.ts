@@ -2,18 +2,21 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { spacePolicyForUrl } from "@/api/admin/space-client";
+import { flatRoutes } from "@/router/route";
 
 function read(path: string) {
   return readFileSync(resolve(__dirname, `../src/views/${path}`), "utf8");
 }
 
 describe("space-scoped request ownership", () => {
-  it("discards stale home requests after a space switch", () => {
-    const source = read("home/home.vue");
+  it("rebuilds home as a space-scoped route and invalidates in-flight loads on unmount", () => {
+    const homeRoute = flatRoutes().find(route => route.name === "home");
+    expect(homeRoute?.meta.scope).toBe("space");
 
+    const source = read("home/home.vue");
     expect(source).toContain("const spaceLoadGate = createLatestRequestGuard()");
     expect(source).toContain("const token = spaceLoadGate.begin()");
-    expect(source).toContain("selectedSpaceId.value === spaceId");
+    expect(source).toContain("spaceLoadGate.invalidate()");
     const ruleCall = source.indexOf('"GetTaskList"');
     expect(source.slice(ruleCall, ruleCall + 180)).toContain("{ space_id: spaceId, page: { page: 1, size: 1 } }");
   });

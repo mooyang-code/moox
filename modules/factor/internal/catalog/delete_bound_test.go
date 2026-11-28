@@ -118,7 +118,7 @@ func TestDeleteBoundTaskRejectsUnboundTask(t *testing.T) {
 func TestDeleteBoundTaskRejectsActiveRecalc(t *testing.T) {
 	ctx := context.Background()
 	svc, db, meta := boundTaskWithEnabledMember(t)
-	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{JobID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusQueued})
 	require.NoError(t, err)
 
 	err = svc.DeleteBoundTask(ctx, testTaskID(), "inst-1")

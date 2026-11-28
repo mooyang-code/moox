@@ -19,6 +19,8 @@ const (
 	CheckKindPresence = "presence"
 	// CheckKindAgent 是只有 host-agent 停止上报：采集器停报，但主机网关心跳正常，主机仍在线。
 	CheckKindAgent = "agent"
+	// CheckKindDiskForecast 是磁盘写满预测：按近 7 天主机快照的日增长率中位数估算耗尽安全余量的剩余天数。
+	CheckKindDiskForecast = "disk_forecast"
 
 	HostMetricCPU             = "cpu"
 	HostMetricMemory          = "memory"
@@ -39,7 +41,7 @@ func ParseCheckID(checkID string) (hostID, kind string, ok bool) {
 		return "", "", false
 	}
 	switch parts[2] {
-	case CheckKindPresence, CheckKindAgent, HostMetricCPU, HostMetricMemory, HostMetricFilesystemUsage:
+	case CheckKindPresence, CheckKindAgent, CheckKindDiskForecast, HostMetricCPU, HostMetricMemory, HostMetricFilesystemUsage:
 		return parts[1], parts[2], true
 	}
 	return "", "", false

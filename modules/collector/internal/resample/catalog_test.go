@@ -70,7 +70,16 @@ func (f *catalogMetadataFake) GetDataset(_ context.Context, req *storagepb.GetDa
 	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
 
-func (f *catalogMetadataFake) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq, _ ...client.Option) (*storagepb.CreateDatasetRsp, error) {
+func (f *catalogMetadataFake) UpsertDataset(_ context.Context, req *storagepb.UpsertDatasetReq, _ ...client.Option) (*storagepb.UpsertDatasetRsp, error) {
+	if _, existed := f.datasets[req.GetDataset().GetDatasetId()]; existed {
+		f.updateDatasets++
+		if err := f.fail("update_dataset"); err != nil {
+			return nil, err
+		}
+		dataset := proto.Clone(req.GetDataset()).(*storagepb.Dataset)
+		f.datasets[dataset.GetDatasetId()] = dataset
+		return &storagepb.UpsertDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
+	}
 	if err := f.fail("create_dataset"); err != nil {
 		return nil, err
 	}
@@ -82,17 +91,7 @@ func (f *catalogMetadataFake) CreateDataset(_ context.Context, req *storagepb.Cr
 	}
 	f.datasetColumns[dataset.GetDatasetId()] = append([]*storagepb.DatasetColumn(nil), req.GetColumns()...)
 	f.datasets[dataset.GetDatasetId()] = dataset
-	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
-}
-
-func (f *catalogMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
-	f.updateDatasets++
-	if err := f.fail("update_dataset"); err != nil {
-		return nil, err
-	}
-	dataset := proto.Clone(req.GetDataset()).(*storagepb.Dataset)
-	f.datasets[dataset.GetDatasetId()] = dataset
-	return &storagepb.UpdateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
+	return &storagepb.UpsertDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
 }
 
 func (f *catalogMetadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq, _ ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
@@ -203,7 +202,7 @@ func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, dom
 	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample"}
 	params := &domain.CollectParams{
 		SourceDatasetID: "source-bars", SourceFrequency: "1m", SourceSeriesTag: "venue:binance",
-		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m",
+		TargetFrequency: "5m",
 	}
 	source := storagesource.DatasetInfo{DataSourceID: "crypto", Alignment: "epoch_utc", ColumnTypes: cryptoColumnTypes()}
 	subjects := []domain.Subject{{SubjectID: "BTC", Status: "active"}}
@@ -266,7 +265,6 @@ func TestPrepareTargetCompensatesCreatedDatasetAfterLaterFailure(t *testing.T) {
 
 	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
-	require.Equal(t, taskresult.ResultIDs(rule.TaskID).DatasetID, params.TargetDatasetID)
 	require.Empty(t, metadata.datasets)
 	require.Equal(t, []string{"dataset"}, metadata.deleteOrder)
 }
@@ -276,7 +274,7 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	ids := taskresult.ResultIDs(rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID,
-		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Alignment: "epoch_utc",
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "5m", Status: "active", Alignment: "epoch_utc",
 		Attributes: map[string]string{
 			"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID,
 			"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
@@ -353,7 +351,7 @@ func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 	}
 	dataset := &storagepb.Dataset{
 		DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Freq:       "5m",
+		Frequency:  "5m",
 		Attributes: cloneStringMap(want),
 	}
 	require.NoError(t, validateTargetDataset(dataset, want, "5m"))
@@ -370,7 +368,7 @@ func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 	wrongSource.DataSourceId = "binance"
 	require.ErrorContains(t, validateTargetDataset(wrongSource, want, "5m"), "must not declare a single data source")
 	monthly := proto.Clone(dataset).(*storagepb.Dataset)
-	monthly.Freq = "1mo"
+	monthly.Frequency = "1mo"
 	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m"), `freq is "1mo", not 5m`)
 }
 

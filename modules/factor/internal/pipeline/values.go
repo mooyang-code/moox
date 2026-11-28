@@ -23,7 +23,7 @@ func PeriodValues(plan Plan, computation Computation, period time.Time) (FactorV
 			out[series][member] = map[string]float64{}
 		}
 		for i, name := range outputs {
-			if v, ok := numericOrNull(values[i]); ok && values[i] != nil {
+			if v, ok := finiteNumeric(values[i]); ok {
 				out[series][member][name] = v
 			}
 		}

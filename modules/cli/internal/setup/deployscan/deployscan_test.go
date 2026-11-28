@@ -78,17 +78,17 @@ func fakeDial(stdout map[string]string, err error) (Dial, map[string][]string) {
 
 func TestScanSendsRootAsJSONAndKeepsHostOrderAndVersionBytes(t *testing.T) {
 	version := `{"version":"v0.0.2",  "catalog_sha256":"sha256:abc"}`
-	encode := func(installed bool, text string, units ...string) string {
+	encode := func(installed, complete bool, text string, units ...string) string {
 		raw, _ := json.Marshal(map[string]any{
 			"root": "/data/moox", "root_exists": true, "entries": []string{"bin", "version.json"}, "installed": installed,
-			"version_text": text, "units": units, "active": units, "processes": 2, "archive_kb": -1,
+			"install_complete": complete, "version_text": text, "units": units, "active": units, "processes": 2, "archive_kb": -1,
 			"disk_free_kb": 1024, "linger": true, "journald": false,
 		})
 		return string(raw)
 	}
 	dial, argv := fakeDial(map[string]string{
-		"control": encode(true, version, "moox-admin.service"),
-		"storage": encode(true, "{broken", "moox-eventbus.service"),
+		"control": encode(true, false, version, "moox-admin.service"),
+		"storage": encode(true, false, "{broken", "moox-eventbus.service"),
 	}, nil)
 	reports, err := Scan(context.Background(), testConfig(t), dial, Options{Sizes: true})
 	require.NoError(t, err)
@@ -97,9 +97,18 @@ func TestScanSendsRootAsJSONAndKeepsHostOrderAndVersionBytes(t *testing.T) {
 	require.Equal(t, version, string(reports[0].Version), "version.json 原文逐字节保留")
 	require.Nil(t, reports[1].Version, "不是合法 JSON 的 version.json 不带回")
 	require.True(t, reports[1].Installed)
+	require.False(t, reports[0].InstallComplete)
 	require.Equal(t, []string{"moox-admin.service"}, reports[0].Units)
 	require.True(t, reports[0].Linger)
+	require.Equal(t, RouteIncomplete, Route(reports))
+	require.Equal(t, RouteIncomplete, RouteForControl(reports, "control"))
+
+	// 控制机有完成标记时判定为 installed；非控制机误放完成标记不算。
+	reports[1].InstallComplete = true
+	require.Equal(t, RouteIncomplete, RouteForControl(reports, "control"))
+	reports[0].InstallComplete = true
 	require.Equal(t, RouteInstalled, Route(reports))
+	require.Equal(t, RouteInstalled, RouteForControl(reports, "control"))
 
 	call := argv["control"]
 	require.Equal(t, []string{"python3", "-c"}, call[:2])
@@ -109,7 +118,7 @@ func TestScanSendsRootAsJSONAndKeepsHostOrderAndVersionBytes(t *testing.T) {
 	require.Equal(t, map[string]any{"root": "/data/moox", "sizes": true}, request)
 
 	// 只查一台。
-	dial, argv = fakeDial(map[string]string{"storage": encode(false, "")}, nil)
+	dial, argv = fakeDial(map[string]string{"storage": encode(false, false, "")}, nil)
 	reports, err = Scan(context.Background(), testConfig(t), dial, Options{Host: "storage"})
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -136,7 +145,8 @@ func TestBuildPlanListsOnlyHostsWithContentAndHasStableDigest(t *testing.T) {
 	}
 	plan := BuildPlan(reports)
 	require.Equal(t, Notice, plan.Notice)
-	require.Equal(t, "管理台里改过的密钥只在线上有，清空前先在管理台导出", plan.Notice)
+	require.Contains(t, plan.Notice, "归档文件")
+	require.Contains(t, plan.Notice, "自动备份")
 	require.Len(t, plan.Hosts, 2)
 	require.Equal(t, []string{"control", "factor"}, []string{plan.Hosts[0].Host, plan.Hosts[1].Host})
 	require.Equal(t, int64(4096), plan.Hosts[1].ArchiveKB)
@@ -269,6 +279,7 @@ func TestInspectScriptIsReadOnlyAndReportsLayout(t *testing.T) {
 		require.True(t, result.RootExists)
 		require.Equal(t, []string{"archive", "bin", "config", "data", "import", "secrets", "version.json"}, result.Entries)
 		require.True(t, result.Installed)
+		require.False(t, result.InstallComplete)
 		require.Equal(t, `{"version":"dev"}`, result.VersionText)
 		require.Equal(t, []string{"moox-admin.service", "moox-monitor.service"}, result.Units)
 		require.GreaterOrEqual(t, result.ArchiveKB, int64(8))
@@ -281,6 +292,15 @@ func TestInspectScriptIsReadOnlyAndReportsLayout(t *testing.T) {
 			require.Empty(t, result.Active)
 			require.False(t, result.Linger)
 		}
+		// 写入完成标记后 install_complete 为 true；卸载清空部署根后自然消失。
+		marker := filepath.Join(env.root, "install-complete.json")
+		require.NoError(t, os.WriteFile(marker, []byte(`{"completed_at":"2026-11-28T00:00:00Z"}`), 0o600))
+		out, err = env.run(t, inspectScript, map[string]any{"root": env.root, "sizes": false})
+		require.NoError(t, err)
+		require.NoError(t, decode(out, &result))
+		require.True(t, result.InstallComplete)
+		require.NoError(t, os.Remove(marker))
+
 		// 不统计大小时是 -1；部署根不存在时没有条目、没装过，可用空间取上级目录。
 		out, err = env.run(t, inspectScript, map[string]any{"root": env.root + "-missing"})
 		require.NoError(t, err)
@@ -415,4 +435,67 @@ factor = ["factor-engine"]
 	_, err = Scan(context.Background(), &cfg, dial, Options{Wipe: true})
 	require.ErrorContains(t, err, "connection refused")
 	require.ErrorContains(t, err, "从 moox.toml 删掉这台主机")
+}
+
+// inspect.py 按各组件真实落盘判据检查有没有数据并读回 data-format，忽略空目录、0 字节库文件与 factor-engine 可重拉目录。
+func TestInspectScriptReportsAllStatefulDataFormats(t *testing.T) {
+	env := newScriptEnv(t, false)
+	// 先建出全部空目录（模拟 install.sh prepare）以及 0 字节库文件、可重拉的 catalog.json / udf/。
+	for _, dir := range []string{
+		"data/admin", "data/monitor", "data/collector", "data/factor-mgr",
+		"data/archive-mgr", "data/strategy", "data/trade",
+		"data/storage-primary/metadata", "data/storage-primary/pebble/storage-primary",
+		"data/storage-view/view-indexes", "data/eventbus/jetstream",
+		"data/factor-engine/seriesstore", "data/factor-engine/engine", "data/factor-engine/gap", "data/factor-engine/udf",
+		"archive/.state",
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Join(env.root, dir), 0o700))
+	}
+	// 0 字节库文件不算有数据；factor-engine 的 catalog.json 与 udf/ 也不算有数据。
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "data/admin/admin.db"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "data/factor-engine/engine/catalog.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "data/factor-engine/udf/demo.wasm"), []byte("wasm"), 0o600))
+
+	out, err := env.run(t, inspectScript, map[string]any{"root": env.root, "sizes": false})
+	require.NoError(t, err)
+	var emptyResult inspectResult
+	require.NoError(t, decode(out, &emptyResult))
+	require.Len(t, emptyResult.DataFormats, 12)
+	for cid, entry := range emptyResult.DataFormats {
+		require.False(t, entry.HasData, "组件 %s 尚无有效数据时应为 false", cid)
+		require.Empty(t, entry.FormatText, "组件 %s 尚未写格式文件时应为空", cid)
+	}
+
+	// 写入各类真实数据文件与格式文件。
+	writeFile := func(rel, content string) {
+		t.Helper()
+		full := filepath.Join(env.root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o700))
+		require.NoError(t, os.WriteFile(full, []byte(content), 0o600))
+	}
+	writeFile("data/admin/admin.db", "sqlite-bytes")
+	writeFile("data/admin/data-format", `{"component":"admin"}`)
+	writeFile("data/storage-primary/pebble/storage-primary/CURRENT", "MANIFEST-000001\n")
+	writeFile("data/storage-primary/data-format", `{"component":"storage-primary"}`)
+	writeFile("data/storage-view/view-indexes/duckdb.db", "idx")
+	writeFile("data/storage-view/data-format", `{"component":"storage-view"}`)
+	writeFile("data/eventbus/jetstream/meta", "js")
+	writeFile("data/eventbus/data-format", `{"component":"eventbus"}`)
+	writeFile("data/factor-engine/engine/watermarks.json", "{}")
+	writeFile("data/factor-engine/data-format", `{"component":"factor-engine"}`)
+	writeFile("archive/.state/staging.db", "staging-bytes")
+	writeFile("archive/.state/data-format", `{"component":"archive-worker"}`)
+
+	out, err = env.run(t, inspectScript, map[string]any{"root": env.root, "sizes": false})
+	require.NoError(t, err)
+	var populated inspectResult
+	require.NoError(t, decode(out, &populated))
+	for _, cid := range []string{"admin", "storage-primary", "storage-view", "eventbus", "factor-engine", "archive-worker"} {
+		entry := populated.DataFormats[cid]
+		require.True(t, entry.HasData, "组件 %s 应判为已有数据", cid)
+		require.Contains(t, entry.FormatText, cid, "组件 %s 应带回 data-format 原文", cid)
+	}
+	for _, cid := range []string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy", "trade"} {
+		require.False(t, populated.DataFormats[cid].HasData, "未写入数据的组件 %s 应仍为 false", cid)
+	}
 }

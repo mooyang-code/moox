@@ -1,4 +1,5 @@
-database: /data/moox/data/strategy/strategy.sqlite
+database:
+  path: /data/moox/data/strategy/strategy.sqlite
 # 调用 Trade 的逻辑账户归属方法经 gateway_client（strategy 身份）发送
 trade:
   timeout: 3s

@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -16,9 +17,8 @@ func TestProviderResponseErrorsRemainRetryableForLaterCandidateWindow(t *testing
 	}
 }
 
-func TestRuntimeKlineBreakerThresholdScalesWithFeedConcurrency(t *testing.T) {
-	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
-	require.Equal(t, KlineProviderAttemptBudget, RuntimeKlineBreakerThreshold())
-	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "50")
-	require.Equal(t, 50*KlineProviderAttemptBudget, RuntimeKlineBreakerThreshold())
+func TestAttemptTimeoutFloorReadsRequestLimitsOnly(t *testing.T) {
+	require.Zero(t, attemptTimeoutFloor(nil))
+	require.Zero(t, attemptTimeoutFloor(&FeedLimits{}))
+	require.Equal(t, 3*time.Second, attemptTimeoutFloor(&FeedLimits{RequestTimeoutMS: 3000}))
 }

@@ -60,17 +60,16 @@ func taskRunSummaryToPBIfPresent(summary domain.TaskRunSummary) *factorpb.TaskRu
 	return factorwire.RunSummaryToPB(summary)
 }
 
-func recalcJobToPB(job RecalcJob) *factorpb.RecalcJob {
+func recalcJobToPB(job store.RecalcJob) *factorpb.RecalcJob {
 	return &factorpb.RecalcJob{
 		JobId:         job.JobID,
-		RequestId:     job.RequestID,
 		TaskId:        job.TaskID,
 		Members:       factorwire.CloneStrings(job.Members),
 		Subjects:      factorwire.CloneStrings(job.Subjects),
-		StartTime:     factorwire.FormatTime(job.StartTime),
-		EndTime:       factorwire.FormatTime(job.EndTime),
+		StartTime:     factorwire.FormatTime(unixTime(job.StartTime)),
+		EndTime:       factorwire.FormatTime(unixTime(job.EndTime)),
 		Status:        job.Status,
-		ProgressTime:  factorwire.FormatTime(job.ProgressTime),
+		ProgressTime:  factorwire.FormatTime(unixTime(job.ProgressTime)),
 		Error:         job.Error,
 		DefaultFilled: defaultFilledToPB(job.DefaultFilled),
 		CreatedAt:     factorwire.Millis(job.CreatedAt),

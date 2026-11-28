@@ -24,7 +24,7 @@ func (noCredentials) Resolve(context.Context, store.CloudAccount) (cloud.Credent
 func newCloudFixture(t *testing.T, inUse func(context.Context, string) error) (*Service, *store.Store) {
 	t.Helper()
 	service, db := newReregisterFixture(t)
-	service.SetCloud(CloudDeps{Accounts: cloud.NewAccounts(db), Packages: cloud.NewPackages(db, noCredentials{}), AccountInUse: inUse, Reconcilers: &fetchplan.Reconcilers{}})
+	service.SetCloud(CloudDeps{Accounts: cloud.NewAccounts(db), Packages: cloud.NewPackages(db, noCredentials{}, "acct"), AccountInUse: inUse, Reconcilers: &fetchplan.Reconcilers{}})
 	return service, db
 }
 
@@ -64,13 +64,13 @@ func TestCloudMethodsValidateParameters(t *testing.T) {
 	deleted, err := service.DeleteCloudAccount(ctx, &pb.DeleteCloudAccountReq{})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, deleted.GetRetInfo().GetCode())
-	upload, err := service.InitPackageUpload(ctx, &pb.InitPackageUploadReq{SpaceId: "crypto", PackageName: "collector"})
+	upload, err := service.InitPackageUpload(ctx, &pb.InitPackageUploadReq{PackageName: "collector"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, upload.GetRetInfo().GetCode())
-	complete, err := service.CompletePackageUpload(ctx, &pb.CompletePackageUploadReq{SpaceId: "crypto", PackageId: "p"})
+	complete, err := service.CompletePackageUpload(ctx, &pb.CompletePackageUploadReq{PackageId: "p"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, complete.GetRetInfo().GetCode())
-	removed, err := service.DeleteFunctionPackage(ctx, &pb.DeleteFunctionPackageReq{SpaceId: "crypto"})
+	removed, err := service.DeleteFunctionPackage(ctx, &pb.DeleteFunctionPackageReq{})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, removed.GetRetInfo().GetCode())
 	for name, code := range map[string]pb.ErrorCode{
@@ -147,7 +147,7 @@ func TestDeleteCloudAccountRefusesWhileTheAccountIsInUse(t *testing.T) {
 	for _, id := range []string{"referenced", "packaged", "free"} {
 		require.NoError(t, db.CloudAccounts().Upsert(ctx, store.CloudAccount{AccountID: id, Provider: "tencent", CredentialSecretID: "s"}))
 	}
-	require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{SpaceID: "crypto", PackageID: "pkg-1", PackageName: "collector", CloudAccountID: "packaged", Status: store.FunctionPackageAvailable}))
+	require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{PackageID: "pkg-1", PackageName: "collector", CloudAccountID: "packaged", Status: store.FunctionPackageAvailable}))
 	referenced, err := service.DeleteCloudAccount(ctx, &pb.DeleteCloudAccountReq{AccountId: "referenced"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_CONFLICT, referenced.GetRetInfo().GetCode())
@@ -171,21 +171,18 @@ func TestDeleteCloudAccountRefusesWhileTheAccountIsInUse(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 }
 
-// 代码包列表按空间返回；删除不存在的包也成功。
+// 代码包列表全局返回；删除不存在的包也成功。
 func TestListAndDeleteFunctionPackages(t *testing.T) {
 	service, db := newCloudFixture(t, notInUse)
 	ctx := context.Background()
-	require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{SpaceID: "crypto", PackageID: "pkg-1", PackageName: "collector", Version: "v1", CloudAccountID: "acct", Status: store.FunctionPackageAvailable}))
-	require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{SpaceID: "stockcn", PackageID: "pkg-2", PackageName: "collector", CloudAccountID: "acct", Status: store.FunctionPackagePending}))
-	list, err := service.ListFunctionPackages(ctx, &pb.ListFunctionPackagesReq{SpaceId: "crypto"})
-	require.NoError(t, err)
-	require.Len(t, list.GetPackages(), 1)
-	require.Equal(t, "pkg-1", list.GetPackages()[0].GetPackageId())
-	require.Equal(t, store.FunctionPackageAvailable, list.GetPackages()[0].GetStatus())
+	require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{PackageID: "pkg-1", PackageName: "collector", Version: "v1", CloudAccountID: "acct", Status: store.FunctionPackageAvailable}))
+	require.NoError(t, db.FunctionPackages().Upsert(ctx, store.FunctionPackage{PackageID: "pkg-2", PackageName: "collector", Version: "v2", CloudAccountID: "acct", Status: store.FunctionPackagePending}))
 	all, err := service.ListFunctionPackages(ctx, &pb.ListFunctionPackagesReq{})
 	require.NoError(t, err)
 	require.Len(t, all.GetPackages(), 2)
-	removed, err := service.DeleteFunctionPackage(ctx, &pb.DeleteFunctionPackageReq{SpaceId: "crypto", PackageId: "absent"})
+	require.Equal(t, "pkg-2", all.GetPackages()[0].GetPackageId())
+	require.Equal(t, store.FunctionPackagePending, all.GetPackages()[0].GetStatus())
+	removed, err := service.DeleteFunctionPackage(ctx, &pb.DeleteFunctionPackageReq{PackageId: "absent"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, removed.GetRetInfo().GetCode())
 }
@@ -244,8 +241,8 @@ func TestCloudTimerMatchesChecksAvailabilityQualifierAndMessage(t *testing.T) {
 // 没有对账器时运行状态不填云上状态（Collector 刚重启、空间不在管理集合里）。
 func TestCollectorStatusLeavesCloudColumnsEmptyWithoutReadbacks(t *testing.T) {
 	service, db := newCloudFixture(t, notInUse)
-	applyPlan(t, db, "crypto", `{"datasets":{},"functions":{"moox-fetch-plan-crypto-spot-nanjing-000":{"name":"moox-fetch-plan-crypto-spot-nanjing-000","region":"ap-nanjing","market":"spot",`+
-		`"target":{"v":1,"market":{"market_id":"crypto","instrument_type":"spot","provider":"binance","source_id":"binance","market_type":"spot"},"fetch":{},"datasets":[{"dataset_id":"ds","frequency":"1m","copies":[{"subjects":[{"id":"BTC-USDT","index":0}],"hash":"h","count":1}]}]}}}}`)
+	applyPlan(t, db, "crypto", `{"datasets":{},"functions":{"moox-fetch-plan-crypto-spot-nanjing-000":{"name":"moox-fetch-plan-crypto-spot-nanjing-000","executor":"scf","region":"ap-nanjing","market":"spot",`+
+		`"target":{"v":1,"executor":"scf","market":{"market_id":"crypto","instrument_type":"spot","provider":"binance","source_id":"binance","market_type":"spot"},"fetch":{},"datasets":[{"dataset_id":"ds","frequency":"1m","copies":[{"subjects":[{"id":"BTC-USDT","index":0}],"hash":"h","count":1}]}]}}}}`)
 	rsp, err := service.GetCollectorStatus(context.Background(), &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())

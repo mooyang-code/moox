@@ -66,12 +66,34 @@ func init() {
 	collectorIngestModeSetCmd.Flags().DurationVar(&ingestModeSetFlags.Wait, "wait", 3*time.Minute, "等待交接计划生成并打印生效周期的最长时间；0 表示不等")
 }
 
-func getIngestMode(ctx context.Context, invoke func(context.Context, string, string, any, any) error, spaceID, datasetID string) (*collectorpb.GetIngestModeRsp, error) {
-	rsp := &collectorpb.GetIngestModeRsp{}
-	if err := invoke(ctx, "trpc.moox.collector.CollectMgr", "GetIngestMode", &collectorpb.GetIngestModeReq{SpaceId: spaceID, DatasetId: datasetID}, rsp); err != nil {
-		return nil, fmt.Errorf("get ingest mode: %w", err)
+type ingestModeSnapshot struct {
+	modes  []*collectorpb.IngestMode
+	stream *collectorpb.StreamWorkerStatus
+}
+
+func (s ingestModeSnapshot) GetModes() []*collectorpb.IngestMode        { return s.modes }
+func (s ingestModeSnapshot) GetStream() *collectorpb.StreamWorkerStatus { return s.stream }
+
+func getIngestMode(ctx context.Context, invoke func(context.Context, string, string, any, any) error, spaceID, datasetID string) (ingestModeSnapshot, error) {
+	rsp := &collectorpb.GetCollectorStatusRsp{}
+	if err := invoke(ctx, "trpc.moox.collector.CollectMgr", "GetCollectorStatus", &collectorpb.GetCollectorStatusReq{SpaceId: spaceID}, rsp); err != nil {
+		return ingestModeSnapshot{}, fmt.Errorf("get collector status: %w", err)
 	}
-	return rsp, collectorRetError("get ingest mode", rsp.GetRetInfo())
+	if err := collectorRetError("get collector status", rsp.GetRetInfo()); err != nil {
+		return ingestModeSnapshot{}, err
+	}
+	datasetID = strings.TrimSpace(datasetID)
+	modes := rsp.GetIngestModes()
+	if datasetID != "" {
+		filtered := make([]*collectorpb.IngestMode, 0, len(modes))
+		for _, mode := range modes {
+			if mode.GetDatasetId() == datasetID {
+				filtered = append(filtered, mode)
+			}
+		}
+		modes = filtered
+	}
+	return ingestModeSnapshot{modes: modes, stream: rsp.GetStream()}, nil
 }
 
 func ingestModeView(rsp interface {
@@ -80,7 +102,12 @@ func ingestModeView(rsp interface {
 }) map[string]any {
 	modes := make([]map[string]any, 0, len(rsp.GetModes()))
 	for _, mode := range rsp.GetModes() {
-		item := map[string]any{"dataset_id": mode.GetDatasetId(), "task_id": mode.GetTaskId(), "ingest": mode.GetIngest()}
+		item := map[string]any{
+			"dataset_id": mode.GetDatasetId(),
+			"task_id":    mode.GetTaskId(),
+			"ingest":     mode.GetIngest(),
+			"enabled":    mode.GetEnabled(),
+		}
 		if len(mode.GetEffectivePeriods()) > 0 {
 			item["effective_periods"] = mode.GetEffectivePeriods()
 		}
@@ -158,7 +185,7 @@ func runIngestModeSet(ctx context.Context, out io.Writer, flags ingestModeFlags)
 		}
 		pending := false
 		for _, item := range current.GetModes() {
-			if item.GetIngest() == ingest && len(item.GetEffectivePeriods()) == 0 {
+			if item.GetEnabled() && item.GetIngest() == ingest && len(item.GetEffectivePeriods()) == 0 {
 				pending = true
 			}
 		}

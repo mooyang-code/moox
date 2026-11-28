@@ -5,16 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
-	monitordeployment "github.com/mooyang-code/moox/modules/monitor/internal/deployment"
-	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
@@ -66,7 +63,9 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		return nil, err
 	}
 	// 观测输入（EventBus 上的主机快照与服务指标）中断或刚恢复时，所有 last_seen 都是旧的：依赖它们的检查（含主机失联）全部冻结，只由"观测输入中断"这一条告警说明。
-	observation := func(now time.Time) observationState { return runtime.observationState(cfg.Observability.Enabled, now) }
+	observation := func(now time.Time) checks.ObservationState {
+		return runtime.observationState(cfg.Observability.Enabled, now)
+	}
 
 	hostSamples, err := store.WithDatabase(mgr, hostmetrics.NewSampleStore)
 	if err != nil {
@@ -99,7 +98,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 	}
 	// 三个评估域（主机、探针、业务）共用一个推进器：在检查定时器的同一个 goroutine 里顺序执行，互不删除对方的检查。
 	applier := &checks.Applier{Checks: runtime.Repositories.Checks, Sender: runtime.alertSender, KlineInterval: cfg.KlineFreshness.EvaluationInterval}
-	collectorStatus, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)
+	collectorStatus, err := kline.NewCollectorInventoryGatewayClient(runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
@@ -107,7 +106,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 	// 行情探针先于业务评估执行，拿不到本轮概览：直接读各服务最近一次上报判断 Collector 是否暂停，读不到时照常跑探针。
 	canaryHalted := func(ctx context.Context) bool {
 		services, err := (monitorobservability.Builder{Metrics: metricsQuery, Topology: runtime.Repositories.Topology}).Services(ctx, time.Now().UTC())
-		return err == nil && collectorHalted(services)
+		return err == nil && checks.CollectorHalted(services)
 	}
 	marketCanary, err := buildMonitorMarketCanary(cfg, runtime, applier, storageMetadata, collectorStatus, canaryHalted)
 	if err != nil {
@@ -119,17 +118,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		return nil, fmt.Errorf("retire market canary checks: %w", err)
 	}
 	monitorSyncFunc(runtimeCtx, s, cfg, runtime)
-	datasetHealthPolicy, policyErr := loadMonitorDatasetHealthPolicy(cfg)
-	if policyErr != nil {
-		_ = runtime.Close()
-		return nil, policyErr
-	}
-	doctorContext := &monitordoctor.Builder{
-		Deployments: monitordeployment.NewClientSource(runtime.Gateway),
-		Services:    monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology},
-		Metrics:     metricsQuery, Hosts: hostStore,
-		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
-	}
+	datasetHealthPolicy := cfg.Metrics.DatasetHealth
 	klineInventory, err := buildTaskResultInventory(cfg, runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
@@ -139,12 +128,11 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		// 最后一份有效的任务清单持久化：采集服务不可用或重启后仍可检查新鲜度。
 		klineInventory.SetStore(store.NewInventoryRepository(runtime.Store))
 	}
-	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory, doctorContext.DatasetHealthPolicy.RealtimeTimeSeries)
+	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory, datasetHealthPolicy)
 	if klineFreshness != nil {
 		// 新上线对象的首次出现时间持久化：Monitor 重启后宽限期不重新计时，部署前的存量对象不给宽限。
 		klineFreshness.SetSubjectFirstSeenStore(store.NewSubjectFirstSeenRepository(runtime.Store))
 	}
-	runtime.klineFreshness = klineFreshness
 	// 两个 Builder 与 K 线新鲜度共用一份“历史补齐空间”记忆：补齐中与结束后 24 小时内，storage-view 的“View 跟随数据变更落后”
 	// 不告警，K 线结果视图落后于已完成的一期也不告警（采集侧已完成的一期过期照样报）。记忆在 Builder 构建概览时记下。
 	seedingMemory := &monitorobservability.SeedingMemory{}
@@ -153,13 +141,12 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		Seeding: seedingMemory,
 		Metrics: metricsQuery, Hosts: hostStore,
 		Topology:  runtime.Repositories.Topology,
-		Policy:    doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
+		Policy:    datasetHealthPolicy,
 		Inventory: inventorySource(klineInventory),
-		Datasets:  archivableDatasets(storageMetadata),
 	}
-	businessFreshness := buildBusinessFreshnessReporterWithInterval(factsBuilder, runtime.Repositories, applier, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
+	businessFreshness := checks.NewBusinessReporter(factsBuilder, runtime.Repositories, applier, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
 	// 主机类检查在检查定时器每一轮的最前面执行（见 checkRound），先于行情探针和业务评估。
-	hostChecksRun := buildHostCheckReporter(factsBuilder, applier, observation)
+	hostChecksRun := checks.NewHostReporter(factsBuilder, applier, observation)
 	runtime.businessEvaluation = businessFreshness != nil
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
@@ -177,8 +164,8 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata), Seeding: seedingMemory}, Checks: runtime.Repositories.Checks, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
-	registerMonitorService(s, cfg, runtime, hostStore, doctorContext, health)
+	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology, Policy: datasetHealthPolicy, Inventory: inventorySource(klineInventory), Seeding: seedingMemory}, Checks: runtime.Repositories.Checks, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
+	registerMonitorService(s, cfg, runtime, hostStore, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
@@ -200,21 +187,21 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 	return s, nil
 }
 
-// buildTaskResultInventory 构造采集任务清单缓存。清单声明了每个空间的市场交易日历，数据集新鲜度按它判断应收的最新一根，
-// 所以不随 K 线新鲜度检查的开关关闭；开关只决定是否运行 K 线新鲜度检查。
-func buildTaskResultInventory(cfg *config.Config, gateway gatewayclient.Invoker) (*monmetrics.TaskResultInventoryCache, error) {
+// buildTaskResultInventory 构造采集任务清单缓存。清单声明了每个空间的市场交易日历和采集结果数据集，
+// 供 K 线新鲜度评估、数据集检查分工和概览按交易日历判断使用。
+func buildTaskResultInventory(cfg *config.Config, gateway gatewayclient.Invoker) (*kline.TaskResultInventoryCache, error) {
 	if cfg == nil {
 		return nil, nil
 	}
-	client, err := monmetrics.NewCollectorInventoryGatewayClient(gateway)
+	client, err := kline.NewCollectorInventoryGatewayClient(gateway)
 	if err != nil {
 		return nil, err
 	}
-	source, err := monmetrics.NewCollectorTaskResultInventorySource(client, cfg.KlineFreshness.SpaceIDs, cfg.KlineFreshness.InventoryPageSize, cfg.KlineFreshness.InventoryMaxEntries)
+	source, err := kline.NewCollectorTaskResultInventorySource(client, cfg.KlineFreshness.SpaceIDs, cfg.KlineFreshness.InventoryMaxEntries)
 	if err != nil {
 		return nil, fmt.Errorf("monitor collector inventory source: %w", err)
 	}
-	cache, err := monmetrics.NewTaskResultInventoryCache(source, cfg.KlineFreshness.InventoryRefreshInterval, cfg.KlineFreshness.InventoryMaxEntries)
+	cache, err := kline.NewTaskResultInventoryCache(source, cfg.KlineFreshness.InventoryRefreshInterval, cfg.KlineFreshness.InventoryMaxEntries)
 	if err != nil {
 		return nil, fmt.Errorf("monitor collector inventory cache: %w", err)
 	}
@@ -222,34 +209,16 @@ func buildTaskResultInventory(cfg *config.Config, gateway gatewayclient.Invoker)
 }
 
 // inventorySource 把可能为空的清单缓存转成接口：没有启用 K 线新鲜度时返回 nil，概览不按交易日历判断。
-func inventorySource(cache *monmetrics.TaskResultInventoryCache) monitorobservability.InventorySource {
+func inventorySource(cache *kline.TaskResultInventoryCache) monitorobservability.InventorySource {
 	if cache == nil {
 		return nil
 	}
 	return cache
 }
 
-// archivableDatasets 在没有启用指标存储（没有 Storage 元数据客户端）时返回 nil，避免把空指针包进接口。
-func archivableDatasets(adapter *monmetrics.StorageAdapter) monitorobservability.ArchivableDatasets {
-	if adapter == nil {
+func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *kline.TaskResultInventoryCache, policy report.RealtimeTimeSeriesPolicy) *kline.KlineFreshnessEvaluator {
+	if query == nil || cfg == nil {
 		return nil
 	}
-	return adapter
-}
-
-func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *monmetrics.TaskResultInventoryCache, policy report.RealtimeTimeSeriesPolicy) *monmetrics.KlineFreshnessEvaluator {
-	if query == nil || cfg == nil || !cfg.KlineFreshness.Enabled {
-		return nil
-	}
-	return monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, inventory, policy, cfg.KlineFreshness.MaxSubjectsPerAlert)
-}
-
-func loadMonitorDatasetHealthPolicy(cfg *config.Config) (report.DatasetHealthPolicy, error) {
-	if strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")) != "" {
-		return report.ValidateDatasetHealthEnvironment()
-	}
-	if cfg == nil || strings.TrimSpace(cfg.Metrics.DatasetHealthPolicyPath) == "" {
-		return report.DatasetHealthPolicy{}, fmt.Errorf("monitor Dataset health policy path is required")
-	}
-	return report.LoadDatasetHealthPolicy(cfg.Metrics.DatasetHealthPolicyPath)
+	return kline.NewKlineFreshnessEvaluatorWithInventory(query, inventory, policy, cfg.KlineFreshness.MaxSubjectsPerAlert)
 }

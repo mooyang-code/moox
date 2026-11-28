@@ -45,11 +45,8 @@ func addTestMember(t *testing.T, s *Store, taskID, factorID, status string) {
 	if _, err := s.GetFactor(ctx, factorID); err != nil {
 		require.NoError(t, s.CreateFactor(ctx, testFactorDef(factorID)))
 	}
-	_, err := s.AddMember(ctx, taskID, factorID, factorID, domain.MemberKindFixed, nil)
+	_, err := s.AddMember(ctx, taskID, factorID, factorID, domain.MemberKindFixed, nil, status)
 	require.NoError(t, err)
-	if status == domain.MemberStatusEnabled {
-		require.NoError(t, s.SetMemberStatus(ctx, taskID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
-	}
 }
 
 func TestImportCatalogRollsBackCategoriesAndFactorsOnConflict(t *testing.T) {
@@ -224,7 +221,7 @@ func TestLifecycleStatusWritesUseExpectedStatus(t *testing.T) {
 
 	factor := testFactorDef("factor_close")
 	require.NoError(t, s.CreateFactor(ctx, factor))
-	_, err = s.AddMember(ctx, set.TaskID, factor.FactorID, factor.FactorID, domain.MemberKindFixed, nil)
+	_, err = s.AddMember(ctx, set.TaskID, factor.FactorID, factor.FactorID, domain.MemberKindFixed, nil, "")
 	require.NoError(t, err)
 	require.NoError(t, s.SetMemberStatus(ctx, set.TaskID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 	require.ErrorIs(t, s.SetMemberStatus(ctx, set.TaskID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusDisabled), ErrConflict)

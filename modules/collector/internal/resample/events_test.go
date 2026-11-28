@@ -8,7 +8,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -37,7 +36,7 @@ func TestNoticePublisherMergesNoticesIntoOneEventPerGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pending, 3, "三个分组各一条事件：同数据集不同来源/作业不合并")
 
-	byJob := map[string]*storagepb.CollectorKlineBackfilled{}
+	byJob := map[string]*eventpb.CollectorKlineBackfilled{}
 	for _, event := range pending {
 		message, err := registry.UnmarshalMessage(event.Payload)
 		require.NoError(t, err)
@@ -56,13 +55,13 @@ func TestNoticePublisherMergesNoticesIntoOneEventPerGroup(t *testing.T) {
 	require.Empty(t, left)
 }
 
-func decodePayload(t *testing.T, registry *events.Registry, message *eventpb.EventMessage) *storagepb.CollectorKlineBackfilled {
+func decodePayload(t *testing.T, registry *events.Registry, message *eventpb.EventMessage) *eventpb.CollectorKlineBackfilled {
 	t.Helper()
 	event, err := registry.ValidateMessage(message)
 	require.NoError(t, err)
 	payload := event.NewPayload()
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
-	return payload.(*storagepb.CollectorKlineBackfilled)
+	return payload.(*eventpb.CollectorKlineBackfilled)
 }
 
 func TestNoticePublisherBatchIDIsDeterministicSoReplayIsIdempotent(t *testing.T) {

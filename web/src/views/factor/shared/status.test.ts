@@ -28,14 +28,15 @@ describe("job helpers", () => {
     expect(jobProgress({ ...job, progress_time: "" })).toBe(0);
   });
 
-  it("only accepted and running jobs are active", () => {
-    expect(isActiveJob({ status: "accepted" })).toBe(true);
+  it("only queued and running jobs are active", () => {
+    expect(isActiveJob({ status: "queued" })).toBe(true);
     expect(isActiveJob({ status: "running" })).toBe(true);
     expect(isActiveJob({ status: "succeeded" })).toBe(false);
   });
 
   it("maps statuses to labels and falls back for unknown values", () => {
     expect(taskStatusTag("pending").label).toBe("创建中");
+    expect(jobStatusTag("queued").label).toBe("排队中");
     expect(jobStatusTag("cancelled").label).toBe("已取消");
     expect(taskStatusTag("???")).toEqual({ label: "???", color: "gray" });
   });

@@ -346,7 +346,7 @@ const handleCancel = () => {
 const providerName = (provider: string) => (provider === "tencent" ? "腾讯云" : provider);
 
 // 提交作用域：重新打开表单会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
-const accountScope = createSubmitScope({ global: true });
+const accountScope = createSubmitScope();
 watch(formVisible, open => {
   if (open) accountScope.invalidate();
 });

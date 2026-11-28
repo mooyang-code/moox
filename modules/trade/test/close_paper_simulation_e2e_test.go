@@ -22,8 +22,8 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: "logical-close", Name: "close",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "test setup",
+			Environment: "PAPER", SettlementAsset: "USDT",
+			PauseReason: "test setup",
 		}); err != nil {
 			return err
 		}
@@ -54,7 +54,15 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 	f.fake.quoteErr = errors.New("closing must not require public quotes")
 	f.fake.mu.Unlock()
 
-	_, err = (&accountapp.Service{Store: accountapp.Repository{Store: f.store}}).ClosePaperAccount(ctx, testSpace, testAccount)
+	accountSvc := &accountapp.Service{Store: f.store}
+	// 仍在组合中的模拟盘账户不能直接关闭，必须先移出组合。
+	_, err = accountSvc.ClosePaperAccount(ctx, testSpace, testAccount)
+	require.ErrorIs(t, err, accountapp.ErrAccountInLogicalAccount)
+	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.DeleteLogicalAccountMember(testSpace, "logical-close", testAccount)
+	}))
+
+	_, err = accountSvc.ClosePaperAccount(ctx, testSpace, testAccount)
 	require.NoError(t, err)
 	closed, err := f.store.GetOrder(ctx, testSpace, string(placed.ID))
 	require.NoError(t, err)
@@ -71,7 +79,7 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 	require.Equal(t, []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Total: "100000", Available: "100000", Locked: "0", Borrowed: "0"}}, account.Snapshot.Balances)
 	logical, err := f.store.GetLogicalAccount(ctx, testSpace, "logical-close")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logical.AutomationState)
+	require.Equal(t, "PAUSED", logical.AutomationState())
 
 	f.close(t)
 	restarted, err := store.Open(f.path)
@@ -123,7 +131,7 @@ func TestClosePaperSimulationPreservesFilledBalancesWithoutQuotesE2E(t *testing.
 			f.fake.mu.Lock()
 			f.fake.quoteErr = errors.New("public quotes unavailable")
 			f.fake.mu.Unlock()
-			service := &accountapp.Service{Store: accountapp.Repository{Store: f.store}}
+			service := &accountapp.Service{Store: f.store}
 			_, err = service.ClosePaperAccount(ctx, testSpace, testAccount)
 			require.NoError(t, err)
 			_, err = service.ClosePaperAccount(ctx, testSpace, testAccount)
@@ -191,7 +199,7 @@ func testClosePositionMarkTimestamp(t *testing.T, unknown bool) {
 	require.NoError(t, err)
 	require.Equal(t, t2.UnixMilli(), before.Snapshot.ExchangeUpdatedAt)
 	f.fake.quoteErr = errors.New("quotes unavailable at close")
-	_, err = (&accountapp.Service{Store: accountapp.Repository{Store: f.store}}).ClosePaperAccount(ctx, testSpace, testAccount)
+	_, err = (&accountapp.Service{Store: f.store}).ClosePaperAccount(ctx, testSpace, testAccount)
 	require.NoError(t, err)
 	closed, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
@@ -252,7 +260,7 @@ func testCloseAfterPositionRefreshFailure(t *testing.T, reduce bool) {
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
 	require.Equal(t, wantMargin, positions[0].UsedMargin)
-	_, err = (&accountapp.Service{Store: accountapp.Repository{Store: f.store}}).ClosePaperAccount(ctx, testSpace, testAccount)
+	_, err = (&accountapp.Service{Store: f.store}).ClosePaperAccount(ctx, testSpace, testAccount)
 	require.NoError(t, err)
 	closed, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)

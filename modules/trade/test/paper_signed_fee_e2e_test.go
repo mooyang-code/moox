@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,7 @@ func TestPaperSnapshotCreditsSignedFeeRebateExactlyOnce(t *testing.T) {
 		Quantity: shared.MustDecimal("0.01"), Price: shared.MustDecimal("50000"),
 		Fee: shared.MustDecimal("-0.5"), FeeAsset: "USDT", TradedAt: testNow,
 	}
-	source := consumer.Source{SpaceID: testSpace, TradingAccountID: testAccount, Kind: consumer.OriginPaperMatcher}
+	source := fillreduce.Source{SpaceID: testSpace, TradingAccountID: testAccount, Kind: fillreduce.OriginPaperMatcher}
 	inserted, err := f.reducer.ApplyFill(ctx, fill, source)
 	require.NoError(t, err)
 	require.True(t, inserted)

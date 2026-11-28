@@ -19,11 +19,6 @@ func TestEmbeddedManifestIsValid(t *testing.T) {
 	if len(manifest.Components) == 0 {
 		t.Fatal("embedded manifest is empty")
 	}
-	for _, component := range manifest.Components {
-		if component.FunctionalObservability == FunctionalObservabilityDeferred {
-			t.Fatalf("component %q still has obsolete deferred observability", component.ComponentID)
-		}
-	}
 }
 
 func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
@@ -113,6 +108,7 @@ func TestManifestValidation(t *testing.T) {
 		{name: "unknown transport", mutate: func(m *Manifest) { m.Components[0].Transport = "push" }},
 		{name: "missing health port", mutate: func(m *Manifest) { m.Components[0].HealthPort = 0 }},
 		{name: "unknown observability", mutate: func(m *Manifest) { m.Components[0].FunctionalObservability = "invalid" }},
+		{name: "removed deferred observability", mutate: func(m *Manifest) { m.Components[0].FunctionalObservability = "deferred" }},
 	}
 
 	for _, tt := range tests {

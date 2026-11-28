@@ -13,7 +13,7 @@ message FactorTask {
   string task_id = 1;
   string space_id = 2;
   string source_dataset_id = 3;
-  string freq = 4;
+  string frequency = 4;
   // name 是任务的展示名，直接用作 Storage 结果数据集的名称（含汉字、不超过 10 个字、空间内唯一）。
   string name = 5;
   string result_dataset_id = 7;
@@ -155,7 +155,6 @@ message FactorTaskInfo {
 
 message RecalcJob {
   string job_id = 1;
-  string request_id = 2;
   string task_id = 3;
   repeated string members = 4;
   repeated string subjects = 5;
@@ -275,6 +274,8 @@ message AddTaskMemberReq {
   string kind = 3;
   // params 是固定成员的固定参数，或可变成员的默认参数；没给的参数取定义的默认值。成员键由服务端推导并在响应里返回。
   map<string, double> params = 4;
+  // status 是初始状态：disabled（默认）或 enabled（一步加入并启用，同时完成校验与结果列对齐）；为空按 disabled。
+  string status = 5;
 }
 message AddTaskMemberRsp {
   common.RetInfo ret_info = 1;
@@ -328,7 +329,7 @@ message RecalcFactorsReq {
   repeated string subjects = 3;
   string start_time = 4;
   string end_time = 5;
-  string request_id = 6;
+  string job_id = 6;
 }
 message RecalcFactorsRsp {
   common.RetInfo ret_info = 1;
@@ -616,11 +617,6 @@ service FactorMgr {
   rpc ListUdfs(ListUdfsReq) returns (ListUdfsRsp);
   rpc GetUdf(GetUdfReq) returns (GetUdfRsp);
   rpc ActivateUdf(ActivateUdfReq) returns (ActivateUdfRsp);
-  // GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
-  // 暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
-  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
-  // ControlLifecycle 暂停、恢复因子管理模块。
-  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
 }
 
 // ---- 自定义算子（wasm UDF）
@@ -760,9 +756,6 @@ message SyncEngineCatalogRsp {
   // existing_task_ids 是管理端库中当前存在的全部因子任务 ID（含停用与待创建任务），
   // 引擎据此区分“停用”与“已删除”，并清理已删除任务的本地水位、跳过账本与参数缓存。
   repeated string existing_task_ids = 5;
-  // has_existing_task_ids 显式标识本响应携带了权威的 existing_task_ids 清单（not_modified 为假时置真），
-  // 避免旧版服务端或异常空响应被引擎误判为“全部任务已删除”。
-  bool has_existing_task_ids = 6;
 }
 
 message EngineRuntimeStatus {
@@ -1056,7 +1049,7 @@ message SeriesColumn {
 message WriteSeriesReq {
   string space_id = 1;
   string dataset_id = 2;
-  string freq = 3;
+  string frequency = 3;
   string subject_id = 4;
   // from、to 是整段替换的区间（RFC3339，左闭右开），行时间与区间都是真实时间。
   string from = 5;
@@ -1089,7 +1082,7 @@ message WriteSeriesRsp {
 message GetSeriesFieldsReq {
   string space_id = 1;
   string dataset_id = 2;
-  string freq = 3;
+  string frequency = 3;
 }
 
 // SeriesField 是数据集的一个字段：type 是 Storage 的字段类型，fill 是缺期时的填充规则（prev、prev_close、zero，空表示留空）。
@@ -1118,7 +1111,7 @@ message CheckSeriesSubjectRsp {
 message GetSeriesBoundsReq {
   string space_id = 1;
   string dataset_id = 2;
-  string freq = 3;
+  string frequency = 3;
   string subject_id = 4;
 }
 

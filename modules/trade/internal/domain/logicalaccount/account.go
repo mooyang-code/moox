@@ -10,8 +10,8 @@ import (
 
 var (
 	ErrInvalidAccount   = errors.New("组合账户参数不合法")
-	ErrMembershipChange = errors.New("修改组合成员前要先暂停组合")
-	ErrInhomogeneous    = errors.New("组合成员必须同为实盘或同为模拟盘、同一环境、同一结算资产")
+	ErrMembershipChange = errors.New("策略驱动的组合账户在修改成员前要先暂停")
+	ErrInhomogeneous    = errors.New("组合成员必须与组合同一环境、同一结算资产")
 	// ErrMemberElsewhere：一个执行账户最多属于一个组合账户，换组合要先从原组合移除。
 	ErrMemberElsewhere = errors.New("执行账户已属于其他组合账户，先从该组合移除")
 	ErrRunnerOwnership = errors.New("组合账户已被别的策略会话占用")
@@ -32,81 +32,50 @@ const (
 	AutomationPaused AutomationState = "PAUSED"
 )
 
-type Account struct {
-	ControlMode     ControlMode
-	SpaceID         string
-	ID              string
-	Name            string
-	ExecutionMode   exchange.ExecutionMode
-	SettlementAsset string
-	AutomationState AutomationState
-	PauseReason     string
-}
+// DefaultPauseReason 是新建策略驱动组合时的初始暂停原因。
+const DefaultPauseReason = "新建的组合账户，等待恢复自动执行"
 
-type Member struct {
-	SpaceID          string
-	LogicalAccountID string
-	TradingAccountID string
-	Enabled          bool
-	Priority         int
-}
-
-func New(
+// ValidateConfig 校验组合账户配置与暂停状态不变量：
+// 自主下单组合不带暂停状态（暂停来源、原因与减仓状态恒为空）；
+// 策略组合的暂停来源与暂停原因同时为空或同时非空，保证金减仓状态仅在来源为 MARGIN 时非空。
+func ValidateConfig(
 	spaceID string,
 	id string,
 	name string,
-	mode exchange.ExecutionMode,
+	environment exchange.AccountEnvironment,
 	settlementAsset string,
 	controlMode ControlMode,
-) (Account, error) {
-	if controlMode == "" {
-		controlMode = ControlStrategy
+	pauseSource string,
+	pauseReason string,
+	marginReduceState string,
+) error {
+	if controlMode != ControlStrategy && controlMode != ControlManual {
+		return fmt.Errorf("%w: 不支持的控制方式 %q", ErrInvalidAccount, controlMode)
 	}
-	account := Account{
-		ControlMode: controlMode,
-		SpaceID:     spaceID, ID: id, Name: name,
-		ExecutionMode:   mode,
-		SettlementAsset: settlementAsset,
-		AutomationState: AutomationPaused,
-		PauseReason:     "新建的组合账户，等待恢复自动执行",
-	}
-	if err := account.Validate(); err != nil {
-		return Account{}, err
-	}
-	return account, nil
-}
-
-func (a Account) Validate() error {
-	if a.ControlMode != ControlStrategy && a.ControlMode != ControlManual {
-		return fmt.Errorf("%w: unsupported control mode %q", ErrInvalidAccount, a.ControlMode)
-	}
-	if a.ControlMode == ControlManual && a.AutomationState == AutomationActive {
-		return fmt.Errorf("%w: manual account cannot have strategy ownership or automation", ErrInvalidAccount)
-	}
-	if blank(a.SpaceID) || blank(a.ID) || blank(a.Name) ||
-		!a.ExecutionMode.Valid() ||
-		blank(a.SettlementAsset) {
+	if blank(spaceID) || blank(id) || blank(name) ||
+		!environment.Valid() ||
+		blank(settlementAsset) {
 		return fmt.Errorf("%w: 缺少必填字段或取值不受支持", ErrInvalidAccount)
 	}
-	switch a.AutomationState {
-	case AutomationActive:
-		if !blank(a.PauseReason) {
-			return fmt.Errorf("%w: active account cannot have a pause reason", ErrAutomationState)
+	if controlMode == ControlManual {
+		if !blank(pauseSource) || !blank(pauseReason) || !blank(marginReduceState) {
+			return fmt.Errorf("%w: 自主下单组合不带暂停状态", ErrAutomationState)
 		}
-	case AutomationPaused:
-		if blank(a.PauseReason) {
-			return fmt.Errorf("%w: paused account requires a reason", ErrAutomationState)
-		}
-	default:
-		return fmt.Errorf("%w: unsupported state %q", ErrAutomationState, a.AutomationState)
+		return nil
+	}
+	if blank(pauseSource) != blank(pauseReason) {
+		return fmt.Errorf("%w: 暂停来源与暂停原因必须同时为空或同时填写", ErrAutomationState)
+	}
+	if (pauseSource == "MARGIN") != !blank(marginReduceState) {
+		return fmt.Errorf("%w: 保证金减仓状态仅在保证金风控暂停时填写", ErrAutomationState)
 	}
 	return nil
 }
 
-func (m Member) Validate() error {
-	if blank(m.SpaceID) || blank(m.LogicalAccountID) ||
-		blank(m.TradingAccountID) {
-		return fmt.Errorf("%w: incomplete member", ErrInvalidAccount)
+// ValidateMember 校验组合账户成员标识是否完整。
+func ValidateMember(spaceID, logicalAccountID, tradingAccountID string) error {
+	if blank(spaceID) || blank(logicalAccountID) || blank(tradingAccountID) {
+		return fmt.Errorf("%w: 组合成员缺少必填标识", ErrInvalidAccount)
 	}
 	return nil
 }

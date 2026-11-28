@@ -50,7 +50,7 @@ type fundingWindowCall struct {
 
 // fundingMarket 是能查资金费率的公共行情替身：按查询窗口返回 rates 里落在窗口内的记录。
 type fundingMarket struct {
-	PublicMarketData
+	execution.PublicMarketData
 	rates []exchange.FundingRate
 	calls []fundingWindowCall
 	// referencePrice 是 GetReferencePrice 返回的现价，为空时返回错误。
@@ -250,7 +250,7 @@ func TestSettleFundingNeedsSwapAndFundingSource(t *testing.T) {
 		t.Fatalf("现货账户不结算资金费：err=%v calls=%d", err, len(market.calls))
 	}
 	// 公共行情没有资金费率（例如 OKX）：不结算。
-	var plain PublicMarketData = struct{ PublicMarketData }{}
+	var plain execution.PublicMarketData = struct{ execution.PublicMarketData }{}
 	if execution.FundingRatesOf(plain) != nil {
 		t.Fatal("替身不应提供资金费率")
 	}

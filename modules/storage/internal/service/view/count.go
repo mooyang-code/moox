@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
@@ -19,14 +20,14 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 	reject := func(code pb.ErrorCode, err error) (*pb.CountTimeSeriesRowsRsp, error) {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(code, err)}, nil
 	}
-	if req == nil || req.GetDatasetId() == "" {
-		return reject(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return reject(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))
 	}
 	if len(req.GetSelectors()) == 0 || len(req.GetSelectors()) > maxCountSelectors || req.GetTimeRange() == nil {
 		return reject(pb.ErrorCode_INVALID_PARAM, errors.New("count requires 1 to 2000 selectors and a time range"))
 	}
 	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetDatasetId())
-	selectors, err := timeSeriesSelectors(req.GetSpaceId(), req.GetDatasetId(), req.GetSelectors())
+	selectors, err := timeSeriesSelectors(req.GetSelectors())
 	if err != nil {
 		return reject(pb.ErrorCode_INVALID_PARAM, err)
 	}

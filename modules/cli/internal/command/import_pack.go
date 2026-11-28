@@ -38,7 +38,7 @@ const (
 type importPack struct {
 	SpaceID   string `json:"space_id"`
 	DatasetID string `json:"dataset_id"`
-	Freq      string `json:"freq"`
+	Freq      string `json:"frequency"`
 	// SeriesTag 是清单里全部文件使用的 series_tag。
 	SeriesTag string           `json:"series_tag"`
 	Files     []importPackFile `json:"files"`
@@ -69,7 +69,7 @@ func loadImportPack(dir string) (*importPack, error) {
 	}
 	pack.dir = dir
 	if pack.SpaceID == "" || pack.DatasetID == "" || pack.Freq == "" {
-		return nil, errors.New("导入包清单缺少 space_id、dataset_id 或 freq")
+		return nil, errors.New("导入包清单缺少 space_id、dataset_id 或 frequency")
 	}
 	if len(pack.Files) == 0 {
 		return nil, errors.New("导入包清单里没有文件")

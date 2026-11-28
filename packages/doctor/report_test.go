@@ -18,7 +18,7 @@ func TestReportJSONMatchesSchemaAndIsStable(t *testing.T) {
 	report := Report{
 		SchemaVersion:    "doctor.moox.dev/v1",
 		RunID:            "run-1",
-		Mode:             ModeDiagnose,
+		Mode:             ModeBootstrap,
 		StartedAt:        now,
 		FinishedAt:       now.Add(time.Second),
 		Conclusion:       ConclusionHealthy,
@@ -64,7 +64,7 @@ func TestReportJSONMatchesSchemaAndIsStable(t *testing.T) {
 func TestReportLimitsFailClosed(t *testing.T) {
 	t.Parallel()
 
-	report := Report{SchemaVersion: "doctor.moox.dev/v1", RunID: "run", Mode: ModeDiagnose, Conclusion: ConclusionHealthy}
+	report := Report{SchemaVersion: "doctor.moox.dev/v1", RunID: "run", Mode: ModeBootstrap, Conclusion: ConclusionHealthy}
 	for i := 0; i <= MaxReportChecks; i++ {
 		report.Checks = append(report.Checks, CheckResult{ID: "check-" + strings.Repeat("x", i%5), Status: StatusPass})
 	}
@@ -76,7 +76,7 @@ func TestReportLimitsFailClosed(t *testing.T) {
 func TestReportRequiresRunID(t *testing.T) {
 	t.Parallel()
 
-	report := Report{SchemaVersion: ReportSchemaVersion, Mode: ModeDiagnose, Conclusion: ConclusionHealthy}
+	report := Report{SchemaVersion: ReportSchemaVersion, Mode: ModeBootstrap, Conclusion: ConclusionHealthy}
 	if _, err := report.MarshalJSONBounded(); err == nil {
 		t.Fatal("report without run_id accepted")
 	}

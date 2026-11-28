@@ -19,7 +19,7 @@ var _ factorpb.FactorEngineService = (*EngineService)(nil)
 
 // EngineHub is the manager-side coordinator behind FactorEngine.
 type EngineHub interface {
-	SnapshotWithExisting(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, []string, error)
+	Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, []string, error)
 	Heartbeat(ctx context.Context, id domain.EngineIdentity, status domain.EngineStatus) (time.Duration, error)
 	Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJob, domain.EngineTask, bool, error)
 	Report(ctx context.Context, id domain.EngineIdentity, jobID string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error)
@@ -66,7 +66,7 @@ func (s *EngineService) SyncEngineCatalog(ctx context.Context, req *factorpb.Syn
 	if strings.TrimSpace(req.GetEngine().GetEngineId()) == "" {
 		return &factorpb.SyncEngineCatalogRsp{RetInfo: invalid(fmt.Errorf("engine.engine_id is required"))}, nil
 	}
-	hash, notModified, sets, existingTaskIDs, err := s.hub.SnapshotWithExisting(ctx, req.GetKnownHash())
+	hash, notModified, sets, existingTaskIDs, err := s.hub.Snapshot(ctx, req.GetKnownHash())
 	if err != nil {
 		return &factorpb.SyncEngineCatalogRsp{RetInfo: engineError(err)}, nil
 	}
@@ -75,12 +75,11 @@ func (s *EngineService) SyncEngineCatalog(ctx context.Context, req *factorpb.Syn
 		out = append(out, factorwire.EngineTaskToPB(set))
 	}
 	return &factorpb.SyncEngineCatalogRsp{
-		RetInfo:            success(),
-		CatalogHash:        hash,
-		NotModified:        notModified,
-		Tasks:              out,
-		ExistingTaskIds:    existingTaskIDs,
-		HasExistingTaskIds: !notModified,
+		RetInfo:         success(),
+		CatalogHash:     hash,
+		NotModified:     notModified,
+		Tasks:           out,
+		ExistingTaskIds: existingTaskIDs,
 	}, nil
 }
 
@@ -109,7 +108,7 @@ func (s *EngineService) PullRecalcJob(ctx context.Context, req *factorpb.PullRec
 		return &factorpb.PullRecalcJobRsp{RetInfo: success()}, nil
 	}
 	return &factorpb.PullRecalcJobRsp{
-		RetInfo: success(), Found: true, Job: recalcJobToPB(JobFromStore(job)), Task: factorwire.EngineTaskToPB(set),
+		RetInfo: success(), Found: true, Job: recalcJobToPB(job), Task: factorwire.EngineTaskToPB(set),
 	}, nil
 }
 

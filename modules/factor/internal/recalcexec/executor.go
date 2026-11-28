@@ -79,7 +79,6 @@ type ParamReader interface {
 type config struct {
 	params       ParamReader
 	history      pipeline.HistorySource
-	gate         func(taskID string) bool
 	begin        func(ctx context.Context, taskID string) (func(), bool)
 	chunkPeriods int
 	memoryBudget int64
@@ -100,12 +99,9 @@ func WithMemoryBudget(budget int64) Option { return func(cfg *config) { cfg.memo
 // WithParamReader 设置已有行 __params 的读取方；没有设置时所有期次都按成员自己的参数计算，也不记录按默认参数新补的期次。
 func WithParamReader(reader ParamReader) Option { return func(cfg *config) { cfg.params = reader } }
 
-// WithGate 设置生命周期门禁：每个分块真正写结果之前（已取得 lock 要的锁）检查，任务不允许写结果时返回 ErrGated。
-// 补算、缺口恢复、失效重算都经过这个执行器，所以暂停、恢复追赶期间这些后台路径不会越过门禁写结果。
-func WithGate(gate func(taskID string) bool) Option { return func(cfg *config) { cfg.gate = gate } }
-
-// WithWriteScope 设置写结果的登记式门禁，设置后取代 WithGate：begin 先登记在途、再检查门禁，不允许写时返回 false，
-// 允许时返回的函数在这次写结果的操作结束后注销登记。暂停的等待收敛据此知道还有写操作在途。
+// WithWriteScope 设置写结果的登记式门禁：每个分块真正写结果之前（已取得 lock 要的锁）先登记在途、再检查门禁，
+// 不允许写时返回 false（执行器以 ErrGated 返回），允许时返回的函数在这次写结果的操作结束后注销登记。
+// 暂停的等待收敛据此知道还有写操作在途。
 func WithWriteScope(begin func(ctx context.Context, taskID string) (func(), bool)) Option {
 	return func(cfg *config) { cfg.begin = begin }
 }
@@ -128,7 +124,6 @@ func WithHistory(source pipeline.HistorySource) Option {
 type Executor struct {
 	params       ParamReader
 	history      pipeline.HistorySource
-	gate         func(taskID string) bool
 	begin        func(ctx context.Context, taskID string) (func(), bool)
 	runner       Runner
 	locks        SetLocker
@@ -153,7 +148,7 @@ func NewExecutor(runner Runner, options ...Option) *Executor {
 		cfg.chunkRetries = 1
 	}
 	return &Executor{
-		params: cfg.params, history: cfg.history, gate: cfg.gate, begin: cfg.begin, runner: runner, locks: cfg.locks, committed: cfg.committed,
+		params: cfg.params, history: cfg.history, begin: cfg.begin, runner: runner, locks: cfg.locks, committed: cfg.committed,
 		chunkPeriods: cfg.chunkPeriods, memoryBudget: cfg.memoryBudget, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
 	}
 }
@@ -388,15 +383,12 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	return segment.end, outcome, false, err
 }
 
-// enter 在写结果之前登记并检查门禁；没有配置任何门禁时直接放行。
+// enter 在写结果之前登记并检查门禁；未配置写门禁时直接放行。
 func (e *Executor) enter(ctx context.Context, taskID string) (func(), bool) {
-	switch {
-	case e.begin != nil:
-		return e.begin(ctx, taskID)
-	case e.gate != nil && !e.gate(taskID):
-		return nil, false
+	if e.begin == nil {
+		return func() {}, true
 	}
-	return func() {}, true
+	return e.begin(ctx, taskID)
 }
 
 // duration 是轴上的周期：补算的区间都在轴上，轴是连续的。

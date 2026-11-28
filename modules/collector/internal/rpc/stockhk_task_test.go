@@ -21,7 +21,7 @@ func TestValidateCollectionTaskTagRoutesStockHK(t *testing.T) {
 		got = []string{marketID, marketType, providerID, frequency}
 		return nil
 	}}
-	task := domain.CollectionTask{SpaceID: "stockhk", DataType: "kline", TagIDs: []string{"hk_hsi"}, CollectParams: `{"target_dataset_id":"bars","frequency":"5m"}`}
+	task := domain.CollectionTask{SpaceID: "stockhk", DataType: "kline", TagIDs: []string{"hk_hsi"}, CollectParams: `{"frequency":"5m"}`}
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
 	require.Equal(t, []string{"stockhk", "equity", "eastmoney", "5m"}, got)
 }

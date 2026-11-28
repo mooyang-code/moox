@@ -34,16 +34,16 @@ func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
 	storageAddress := startKlineStorage(t, storage)
 	gatewayTarget := startKlineNativeGateway(t, storageAddress)
-	configPath := writeKlineConfig(t)
 	operatorHome, manifestPath := writeKlineOperator(t, gatewayTarget)
 
 	binary := buildMooxCLI(t)
 	command := exec.Command(binary, "data", "kline", "get",
-		"--config", configPath,
 		"--file", manifestPath,
-		"--data-type", "crypto",
+		"--space-id", "crypto",
+		"--dataset-id", "dataset_binance_kline_1m",
 		"--symbol", "BTC-USDT",
 		"--interval", "1m",
+		"--series-tag", "venue:binance",
 		"--limit", "1",
 	)
 	command.Env = append(os.Environ(), "HOME="+operatorHome)
@@ -56,8 +56,8 @@ func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	var response pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(output, &response))
 	require.Len(t, response.GetRows(), 1)
-	require.Equal(t, "BTC-USDT", response.GetRows()[0].GetKey().GetSubjectId())
-	require.Equal(t, "2026-08-28T12:34:00Z", response.GetRows()[0].GetKey().GetDataTime())
+	require.Equal(t, "BTC-USDT", response.GetRows()[0].GetKey().GetTimeSeries().GetSubjectId())
+	require.Equal(t, "2026-08-28T12:34:00Z", response.GetRows()[0].GetKey().GetTimeSeries().GetDataTime())
 
 	select {
 	case req := <-storage.requests:
@@ -71,7 +71,7 @@ func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	}
 
 	// 外部身份用自己的私钥直接到主机网关：网关上没有它的公钥，调不了任何方法，更借不到 moox-cli 的身份。
-	headers, err := gatewayauth.Sign(authtest.Identity("moox-skill"), gatewayauth.Request{TargetNode: klineGatewayNode, Callee: "trpc.moox.storage.PrimaryStore", Func: "UpsertFields"}, time.Now())
+	headers, err := gatewayauth.Sign(authtest.Identity("scf-collector"), gatewayauth.Request{TargetNode: klineGatewayNode, Callee: "trpc.moox.storage.PrimaryStore", Func: "UpsertFields"}, time.Now())
 	require.NoError(t, err)
 	options := []client.Option{client.WithTarget(gatewayTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
 	for key, values := range headers {
@@ -131,9 +131,11 @@ func (stub *klineStorageStub) ReadTimeSeriesRows(_ context.Context, req *pb.Read
 	stub.requests <- req
 	return &pb.ReadTimeSeriesRowsRsp{
 		RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
-		Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
-			SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", SubjectId: "BTC-USDT",
-			Freq: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
+		Rows: []*pb.Row{{Key: &pb.RowKey{
+			SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m",
+			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: "BTC-USDT", Frequency: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
+			}},
 		}}},
 	}, nil
 }
@@ -308,24 +310,6 @@ func (buffer *lockedBuffer) String() string {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	return buffer.content.String()
-}
-
-func writeKlineConfig(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "data-access.yaml")
-	content := `version: 1
-data_types:
-  crypto:
-    default_exchange: binance
-    exchanges:
-      binance:
-        space_id: crypto
-        series_tag: venue:binance
-        kline_datasets:
-          1m: dataset_binance_kline_1m
-`
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	return path
 }
 
 func writeKlineOperator(t *testing.T, gatewayTarget string) (string, string) {

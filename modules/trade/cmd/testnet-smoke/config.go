@@ -136,7 +136,7 @@ func planPassiveBuy(
 	if contractValue.Cmp(shared.Zero()) <= 0 {
 		contractValue = shared.MustDecimal("1")
 	}
-	price := floorToStep(reference.Mul(shared.MustDecimal("0.9")), priceTick)
+	price := shared.FloorToStep(reference.Mul(shared.MustDecimal("0.9")), priceTick)
 	if price.Cmp(shared.Zero()) <= 0 {
 		return passiveOrder{}, errors.New("passive test price rounded to zero")
 	}
@@ -157,14 +157,6 @@ func planPassiveBuy(
 		)
 	}
 	return passiveOrder{Price: price, Quantity: base}, nil
-}
-
-func floorToStep(value, step shared.Decimal) shared.Decimal {
-	ratio := value.Div(step)
-	rat := new(big.Rat)
-	rat.SetString(ratio.String())
-	quotient := new(big.Int).Quo(rat.Num(), rat.Denom())
-	return step.Mul(shared.MustDecimal(quotient.String()))
 }
 
 func ceilToStep(value, step shared.Decimal) shared.Decimal {

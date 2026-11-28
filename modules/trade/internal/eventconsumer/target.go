@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
@@ -41,7 +40,7 @@ type TargetOptions struct {
 // TargetWeightResolver converts the strategy-owned target weights into the
 // immutable quantity snapshot consumed by Trade.
 type TargetWeightResolver interface {
-	Resolve(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
+	Resolve(context.Context, *eventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
 }
 
 // conversionAttentionDeliveries 是换算连续失败多少次才告警。
@@ -63,7 +62,7 @@ func HandleTarget(
 // admittedTarget 是通过解码、授权、有效期和标的归一化检查的真实目标。
 type admittedTarget struct {
 	message *eventpb.EventMessage
-	request *tradeeventpb.LogicalAccountTargetWeightRequested
+	request *eventpb.LogicalAccountTargetWeightRequested
 	account store.LogicalAccountRecord
 }
 
@@ -101,7 +100,7 @@ func admitTarget(
 		}
 		return admittedTarget{}, targetRejection("invalid_event", err), true
 	}
-	request, ok := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	request, ok := payload.(*eventpb.LogicalAccountTargetWeightRequested)
 	if !ok ||
 		message.GetEventName() != events.LogicalAccountTargetWeightRequested.Name() ||
 		message.GetEventVersion() != events.LogicalAccountTargetWeightRequested.Version() {
@@ -176,7 +175,7 @@ func admitTarget(
 }
 
 // requestSession 是目标事件所属的策略会话。
-func requestSession(request *tradeeventpb.LogicalAccountTargetWeightRequested) store.TargetSession {
+func requestSession(request *eventpb.LogicalAccountTargetWeightRequested) store.TargetSession {
 	return store.TargetSession{InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StartedAt: request.GetSessionStartedAt()}
 }
 
@@ -249,20 +248,6 @@ func acceptTarget(
 	if opts.Now != nil {
 		now = opts.Now().UTC()
 	}
-	record := store.LogicalAccountTargetRecord{
-		SpaceID:          message.GetSpaceId(),
-		LogicalAccountID: request.GetLogicalAccountId(),
-		TargetID:         request.GetTargetId(),
-		InstanceID:       request.GetInstanceId(),
-		SessionID:        request.GetSessionId(),
-		SessionStartedAt: request.GetSessionStartedAt(),
-		StrategyID:       request.GetStrategyId(),
-		Targets:          make([]store.InstrumentQuantity, 0, len(request.GetTargets())),
-		Status:           "PENDING",
-		AcceptedAt:       now.UnixMilli(),
-	}
-	record.BarEndTime = request.GetBarEndTime()
-	record.ValidUntil = request.GetValidUntil()
 	timeout := opts.ResolveTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -276,16 +261,24 @@ func acceptTarget(
 	if conversionErr != nil {
 		return conversionFailure(delivery, account.Name, "目标换算失败：", conversionErr, now)
 	}
-	record.Targets = append(record.Targets, conversion.QuantityTargets...)
+	quantityTargets := conversion.QuantityTargets
+	if quantityTargets == nil {
+		quantityTargets = []store.InstrumentQuantity{}
+	}
 	referencePrices, marshalErr := json.Marshal(referencePriceByInstrument(conversion))
 	if marshalErr != nil {
 		return retryTarget(marshalErr)
 	}
 	history := store.TargetHistoryRecord{
-		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), SessionStartedAt: request.GetSessionStartedAt(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), BarEndTime: record.BarEndTime, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), RecordedAt: now.UnixMilli(),
+		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), LogicalAccountID: request.GetLogicalAccountId(),
+		InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), SessionStartedAt: request.GetSessionStartedAt(),
+		StrategyID: request.GetStrategyId(), BarEndTime: request.GetBarEndTime(), ValidUntil: request.GetValidUntil(),
+		RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON,
+		Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime,
+		ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(quantityTargets), RecordedAt: now.UnixMilli(),
 	}
 	var accepted bool
-	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithHistoryLocked(ctx, record, history)
+	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithHistoryLocked(ctx, history)
 	if err != nil {
 		// 入口检查之后、拿到组合锁之前会话被关闭、来了更晚会话的目标或组合改成人工控制：落库时按同样的规则分类。
 		if errors.Is(err, store.ErrTargetSuperseded) || errors.Is(err, store.ErrTargetSessionConflict) || errors.Is(err, store.ErrTargetAuthorization) {
@@ -301,7 +294,7 @@ func acceptTarget(
 	}
 	if accepted {
 		if opts.WakeTarget != nil {
-			opts.WakeTarget(record.SpaceID, record.LogicalAccountID)
+			opts.WakeTarget(history.SpaceID, history.LogicalAccountID)
 		} else if opts.Wake != nil {
 			opts.Wake()
 		}
@@ -330,7 +323,7 @@ func handleShadowTarget(
 	opts TargetOptions,
 	spaceID string,
 	accountName string,
-	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	request *eventpb.LogicalAccountTargetWeightRequested,
 	now time.Time,
 ) jetstream.HandlerResult {
 	request, checked, done := checkTargetInstruments(ctx, opts.Store, opts.Exchanges, spaceID, request)
@@ -400,10 +393,10 @@ func marketTypes(markets []string) []exchange.MarketType {
 // normalizeTargetRequest 按每一项自带的 market_type 把标的 ID 标准化成 Trade 内部 ID。
 // 市场不在组合可交易的市场里、或标准化后撞成同一个内部 ID，都按契约错误处理。
 func normalizeTargetRequest(
-	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	request *eventpb.LogicalAccountTargetWeightRequested,
 	tradable []exchange.MarketType,
-) (*tradeeventpb.LogicalAccountTargetWeightRequested, error) {
-	normalized, ok := proto.Clone(request).(*tradeeventpb.LogicalAccountTargetWeightRequested)
+) (*eventpb.LogicalAccountTargetWeightRequested, error) {
+	normalized, ok := proto.Clone(request).(*eventpb.LogicalAccountTargetWeightRequested)
 	if !ok {
 		return nil, fmt.Errorf("trade target: unexpected event payload %T", request)
 	}
@@ -434,8 +427,8 @@ func mustMarshal(value any) string {
 
 // holdTargets 把指定的标的改成“保持”：名单里已经不能交易的标的只跳过这一项，既不买也不卖，
 // 其余照常执行；全部跳过时也不会变成清仓指令。
-func holdTargets(request *tradeeventpb.LogicalAccountTargetWeightRequested, instrumentIDs []string) *tradeeventpb.LogicalAccountTargetWeightRequested {
-	held, ok := proto.Clone(request).(*tradeeventpb.LogicalAccountTargetWeightRequested)
+func holdTargets(request *eventpb.LogicalAccountTargetWeightRequested, instrumentIDs []string) *eventpb.LogicalAccountTargetWeightRequested {
+	held, ok := proto.Clone(request).(*eventpb.LogicalAccountTargetWeightRequested)
 	if !ok {
 		return request
 	}
@@ -456,8 +449,8 @@ func checkTargetInstruments(
 	tradeStore *store.Store,
 	exchanges execution.ExchangeCatalog,
 	spaceID string,
-	request *tradeeventpb.LogicalAccountTargetWeightRequested,
-) (*tradeeventpb.LogicalAccountTargetWeightRequested, jetstream.HandlerResult, bool) {
+	request *eventpb.LogicalAccountTargetWeightRequested,
+) (*eventpb.LogicalAccountTargetWeightRequested, jetstream.HandlerResult, bool) {
 	unsupported, delisted, membersReady, err := unsupportedLogicalTargetInstrument(ctx, tradeStore, spaceID, request)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -485,7 +478,7 @@ func unsupportedLogicalTargetInstrument(
 	ctx context.Context,
 	tradeStore *store.Store,
 	spaceID string,
-	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	request *eventpb.LogicalAccountTargetWeightRequested,
 ) (instrumentID string, delisted []string, membersReady bool, err error) {
 	if len(request.GetTargets()) == 0 {
 		return "", nil, true, nil

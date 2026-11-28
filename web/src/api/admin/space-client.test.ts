@@ -1,143 +1,25 @@
-import { AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { selectedSpaceGeneration, setSelectedSpaceIdCache } from "./space-header";
+import { afterEach, describe, expect, it } from "vitest";
+import { setSelectedSpaceIdCache } from "./space-header";
 import { StaleSpaceRequestError } from "./stale-space";
-import { AuthSessionExpiredError } from "./auth-errors";
-import {
-  expireBrowserSession,
-  installSpaceAwareClient,
-  setSessionExpiredListener,
-  setSpaceInitializer,
-  spacePolicyForUrl
-} from "./space-client";
+import { runWithSpaceContext, setSpaceInitializer, spacePolicyForUrl } from "./space-client";
 
 afterEach(() => {
-  setSessionExpiredListener(null);
-  window.location.hash = "#/";
+  setSpaceInitializer(null);
+  setSelectedSpaceIdCache("");
 });
 
-describe("installSpaceAwareClient", () => {
-  it("registers only the Space header interceptor: no signing headers, the browser carries the session cookie", async () => {
-    const handlers: Array<
-      (config: InternalAxiosRequestConfig) => InternalAxiosRequestConfig | Promise<InternalAxiosRequestConfig>
-    > = [];
-    const client = {
-      interceptors: {
-        request: {
-          use: (
-            handler: (config: InternalAxiosRequestConfig) => InternalAxiosRequestConfig | Promise<InternalAxiosRequestConfig>
-          ) => handlers.push(handler)
-        },
-        response: { use: () => undefined }
-      }
-    };
+describe("runWithSpaceContext", () => {
+  it("空间内请求自动注入当前选中空间，不附带任何签名头或状态污染", async () => {
     setSelectedSpaceIdCache("space-1");
-
-    installSpaceAwareClient(client as never);
-
-    expect(handlers).toHaveLength(1);
-    const config = { headers: new AxiosHeaders(), url: "/api/admin/x/Get" } as InternalAxiosRequestConfig;
-    const prepared = await handlers[0](config);
-    expect(prepared.headers.get("X-Space-Id")).toBe("space-1");
-    for (const name of ["Authorization", "X-Access-Token", "X-Moox-Signature", "X-Moox-Nonce", "X-Moox-Timestamp"]) {
-      expect(prepared.headers.get(name)).toBeUndefined();
-    }
-    setSelectedSpaceIdCache("");
-  });
-
-  it("clears the account and redirects with the current page when the session expires", () => {
-    const cleared = vi.fn();
-    setSessionExpiredListener(cleared);
-    window.location.hash = "#/collector/tasks";
-
-    const error = expireBrowserSession();
-
-    expect(error).toBeInstanceOf(AuthSessionExpiredError);
-    expect(cleared).toHaveBeenCalledTimes(1);
-    // 带着原地址去登录页，登录后回到采集任务页
-    expect(window.location.hash).toBe(`#/login?redirect=${encodeURIComponent("/collector/tasks")}`);
-  });
-
-  it("does not wrap the login page in another redirect", () => {
-    window.location.hash = "#/login?redirect=%2Fhome";
-    expireBrowserSession();
-    expect(window.location.hash).toBe("#/login?redirect=%2Fhome");
-  });
-
-  function responseErrorHandler() {
-    const handlers: Array<(error: unknown) => Promise<unknown>> = [];
-    const client = {
-      interceptors: {
-        request: { use: () => undefined },
-        response: { use: (_ok: unknown, onError?: (error: unknown) => Promise<unknown>) => onError && handlers.push(onError) }
-      }
-    };
-    installSpaceAwareClient(client as never);
-    return handlers[handlers.length - 1];
-  }
-
-  it("expires the session only on 401, and never for login probes or other statuses", async () => {
-    const cleared = vi.fn();
-    setSessionExpiredListener(cleared);
-    window.location.hash = "#/collector/tasks";
-    const onError = responseErrorHandler();
-
-    for (const error of [
-      { response: { status: 403 }, config: {} },
-      { response: { status: 429 }, config: {} },
-      { response: { status: 401 }, config: { authProbe: true } }
-    ]) {
-      await expect(onError(error)).rejects.toBe(error);
-    }
-    expect(cleared).not.toHaveBeenCalled();
-    expect(window.location.hash).toBe("#/collector/tasks");
-
-    const expired = { response: { status: 401 }, config: {} };
-    await expect(onError(expired)).rejects.toBe(expired);
-    expect(cleared).toHaveBeenCalledTimes(1);
-    expect(window.location.hash).toBe(`#/login?redirect=${encodeURIComponent("/collector/tasks")}`);
-  });
-
-  function spaceHandler() {
-    const handlers: Array<(config: InternalAxiosRequestConfig) => Promise<InternalAxiosRequestConfig>> = [];
-    const client = {
-      interceptors: { request: { use: (handler: never) => handlers.push(handler) }, response: { use: () => undefined } }
-    };
-    installSpaceAwareClient(client as never);
-    return handlers[0];
-  }
-
-  it("waits for the Space initializer before sending a Space-scoped request without a selected Space", async () => {
-    setSelectedSpaceIdCache("");
-    let calls = 0;
-    setSpaceInitializer(async () => {
-      calls += 1;
-      await Promise.resolve();
-      setSelectedSpaceIdCache("crypto");
+    let capturedSpace: string | undefined;
+    await runWithSpaceContext({ url: "/api/admin/collector/GetTask", data: {} }, async ctx => {
+      capturedSpace = ctx.spaceId;
+      return { ok: true };
     });
-    const config = { url: "/api/admin/trade/ListOrders", headers: new AxiosHeaders() } as InternalAxiosRequestConfig;
-    const prepared = await spaceHandler()(config);
-    expect(calls).toBe(1);
-    expect(prepared.headers.get("X-Space-Id")).toBe("crypto");
-    setSpaceInitializer(null);
-    setSelectedSpaceIdCache("");
+    expect(capturedSpace).toBe("space-1");
   });
 
-  it("does not wait for the initializer on login and Space list requests", async () => {
-    setSelectedSpaceIdCache("");
-    let calls = 0;
-    setSpaceInitializer(async () => {
-      calls += 1;
-    });
-    for (const url of ["/api/admin/auth/Login", "/api/admin/storage/ListSpaces", "/api/admin/storage/CreateSpace"]) {
-      await spaceHandler()({ url, headers: new AxiosHeaders() } as InternalAxiosRequestConfig);
-    }
-    expect(calls).toBe(0);
-    setSpaceInitializer(null);
-  });
-
-  it("makes concurrent requests wait for the same in-flight Space initialization", async () => {
-    setSelectedSpaceIdCache("");
+  it("未选空间时 space_required 请求等待空间初始化完成，并发请求共用同一次初始化", async () => {
     let calls = 0;
     let finish!: () => void;
     setSpaceInitializer(
@@ -150,97 +32,65 @@ describe("installSpaceAwareClient", () => {
           };
         })
     );
-    const handler = spaceHandler();
-    const config = () => ({ url: "/api/admin/trade/ListOrders", headers: new AxiosHeaders() }) as InternalAxiosRequestConfig;
-    const first = handler(config());
-    const second = handler(config()); // 冷却期内的并发请求也必须等待，而不是不带空间头直接发出
+    const seen: Array<string | undefined> = [];
+    const run = () =>
+      runWithSpaceContext({ url: "/api/admin/trade/ListOrders", data: {} }, async ctx => {
+        seen.push(ctx.spaceId);
+        return ctx.spaceId;
+      });
+    const first = run();
+    const second = run();
     await Promise.resolve();
     finish();
-    const [a, b] = await Promise.all([first, second]);
+    await expect(Promise.all([first, second])).resolves.toEqual(["crypto", "crypto"]);
     expect(calls).toBe(1);
-    expect(a.headers.get("X-Space-Id")).toBe("crypto");
-    expect(b.headers.get("X-Space-Id")).toBe("crypto");
-    setSpaceInitializer(null);
-    setSelectedSpaceIdCache("");
+    expect(seen).toEqual(["crypto", "crypto"]);
   });
 
-  it("rejects stale space reads (late response or aborted) with StaleSpaceRequestError, keeps writes, global services and explicit Space requests", async () => {
-    type ResponseOk = (response: { config: Record<string, unknown>; data: string }) => unknown;
-    type ResponseErr = (error: { config: Record<string, unknown> }) => unknown;
-    let onOk: ResponseOk = () => undefined;
-    let onErr: ResponseErr = () => undefined;
-    let captured = false;
-    const client = {
-      interceptors: {
-        request: { use: () => undefined },
-        response: {
-          use: (ok?: ResponseOk, err?: ResponseErr) => {
-            // 只记录第一个登记的响应拦截器（空间过期处理），后面登记的是会话失效处理
-            if (captured) return;
-            captured = true;
-            if (ok) onOk = ok;
-            if (err) onErr = err;
-          }
-        }
-      }
-    };
-    installSpaceAwareClient(client as never);
-    setSelectedSpaceIdCache("space-b");
-    const gen = selectedSpaceGeneration();
-
-    const staleRead = {
-      config: { url: "/api/admin/collector/GetTaskInstanceList", injectedSpaceId: "space-a", injectedSpaceGeneration: gen - 1 },
-      data: "A"
-    };
-    await expect(Promise.resolve().then(() => onOk(staleRead))).rejects.toBeInstanceOf(StaleSpaceRequestError);
-    await expect(Promise.resolve().then(() => onErr({ config: staleRead.config }))).rejects.toBeInstanceOf(
-      StaleSpaceRequestError
-    );
-    // A→B→A：空间 ID 相同但代次已变
-    const roundTrip = {
-      config: { url: "/api/admin/collector/GetTask", injectedSpaceId: "space-b", injectedSpaceGeneration: gen - 1 },
-      data: "R"
-    };
-    await expect(Promise.resolve().then(() => onOk(roundTrip))).rejects.toBeInstanceOf(StaleSpaceRequestError);
-
-    const sameSpace = {
-      config: { url: "/api/admin/collector/GetTaskInstanceList", injectedSpaceId: "space-b", injectedSpaceGeneration: gen },
-      data: "B"
-    };
-    expect(onOk(sameSpace)).toBe(sameSpace);
-    const staleWrite = {
-      config: { url: "/api/admin/collector/CreateTask", injectedSpaceId: "space-a", injectedSpaceGeneration: gen - 1 },
-      data: "W"
-    };
-    expect(onOk(staleWrite)).toBe(staleWrite);
-    const globalRead = {
-      config: { url: "/api/admin/sysdeploy/GetCatalog", injectedSpaceId: "space-a", injectedSpaceGeneration: gen - 1 },
-      data: "G"
-    };
-    expect(onOk(globalRead)).toBe(globalRead);
-    const explicit = { config: { url: "/api/admin/collector/GetTask" }, data: "E" };
-    expect(onOk(explicit)).toBe(explicit);
-    setSelectedSpaceIdCache("");
-  });
-
-  it("rejects in-flight space reads the moment the Space changes, independent of request progress", async () => {
+  it("全局接口永不等待空间初始化、不注入空间头，也不会被切空间取消", async () => {
+    let initCalls = 0;
+    setSpaceInitializer(async () => {
+      initCalls += 1;
+    });
     setSelectedSpaceIdCache("space-a");
-    const seen: Array<{ url: string; signal?: AbortSignal }> = [];
-    const hang = (url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
-      seen.push({ url, signal: config?.signal });
-      return new Promise(() => undefined);
-    };
-    const client = {
-      interceptors: { request: { use: () => undefined }, response: { use: () => undefined } },
-      post: hang,
-      get: hang,
-      request: (config: { url?: string; signal?: AbortSignal }) => hang(config.url || "", undefined, config)
-    };
-    installSpaceAwareClient(client as never);
-    const read = client.post("/api/admin/collector/GetTask", {});
-    void client.post("/api/admin/sysdeploy/GetCatalog", {});
-    void client.post("/api/admin/collector/ListCloudAccounts", {});
-    void client.post("/api/admin/collector/CreateTask", {});
+    for (const url of [
+      "/api/admin/auth/Login",
+      "/api/admin/storage/ListSpaces",
+      "/api/admin/storage/CreateSpace",
+      "/api/admin/trade/InspectExchangeCredential",
+      "/api/admin/trade/ListBlockedInstruments",
+      "/api/admin/trade/ListDelists",
+      "/api/admin/trade/UnblockInstrument",
+      "/api/admin/strategy/ListStrategies",
+      "/api/admin/collector/DeleteCloudAccount",
+      "/api/admin/factor-mgr/ListFactorCategories"
+    ]) {
+      let seenCtx: { spaceId?: string; signal?: AbortSignal } = {};
+      await runWithSpaceContext({ url, data: {} }, async ctx => {
+        seenCtx = ctx;
+        return { ok: true };
+      });
+      expect(seenCtx.spaceId, url).toBeUndefined();
+      expect(seenCtx.signal, url).toBeUndefined();
+    }
+    expect(initCalls).toBe(0);
+  });
+
+  it("切空间时立即取消在途的空间内只读请求，但保留写入、全局读取与显式空间请求", async () => {
+    setSelectedSpaceIdCache("space-a");
+    const seen: Array<{ url: string; spaceId?: string; signal?: AbortSignal }> = [];
+    const hang = (url: string, explicitSpaceId?: string) =>
+      runWithSpaceContext({ url, data: {}, explicitSpaceId }, ctx => {
+        seen.push({ url, spaceId: ctx.spaceId, signal: ctx.signal });
+        return new Promise(() => undefined);
+      });
+
+    const read = hang("/api/admin/collector/GetTask");
+    void hang("/api/admin/sysdeploy/GetCatalog");
+    void hang("/api/admin/collector/ListCloudAccounts");
+    void hang("/api/admin/collector/CreateTask");
+    void hang("/api/admin/collector/GetTask", "other-space");
+
     const outcome = read.then(
       () => "resolved",
       error => (error instanceof StaleSpaceRequestError ? "stale" : "other")
@@ -248,13 +98,26 @@ describe("installSpaceAwareClient", () => {
     setSelectedSpaceIdCache("space-b");
     expect(await outcome).toBe("stale");
     expect(seen[0].signal?.aborted).toBe(true);
-    for (const exempt of seen.slice(1)) expect(exempt.signal).toBeUndefined(); // 全局读取与写入不被取消
-    setSelectedSpaceIdCache("");
+    for (const exempt of seen.slice(1)) expect(exempt.signal).toBeUndefined();
+    expect(seen[4].spaceId).toBe("other-space");
   });
 
-  it("registers reads issued before the Space initialization finishes, so a later switch still cancels them", async () => {
-    setSelectedSpaceIdCache("");
-    let finishInit: () => void = () => undefined;
+  it("切走又切回原空间（A→B→A）时，旧代次的迟到响应与错误同样被判为 StaleSpaceRequestError", async () => {
+    setSelectedSpaceIdCache("space-a");
+    let resolveRead!: (value: string) => void;
+    const read = runWithSpaceContext({ url: "/api/admin/collector/GetTask", data: {} }, () => {
+      return new Promise<string>(resolve => {
+        resolveRead = resolve;
+      });
+    });
+    setSelectedSpaceIdCache("space-b");
+    setSelectedSpaceIdCache("space-a");
+    resolveRead("stale");
+    await expect(read).rejects.toBeInstanceOf(StaleSpaceRequestError);
+  });
+
+  it("在空间初始化完成前发起的空间读取，在初始化完成后切空间仍会被取消", async () => {
+    let finishInit!: () => void;
     setSpaceInitializer(
       () =>
         new Promise<void>(resolve => {
@@ -265,37 +128,29 @@ describe("installSpaceAwareClient", () => {
         })
     );
     const seen: Array<{ signal?: AbortSignal }> = [];
-    const client = {
-      interceptors: { request: { use: () => undefined }, response: { use: () => undefined } },
-      post: (_url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
-        seen.push({ signal: config?.signal });
-        return new Promise(() => undefined);
-      }
-    };
-    installSpaceAwareClient(client as never);
-    const read = client.post("/api/admin/collector/GetTask", {});
+    const read = runWithSpaceContext({ url: "/api/admin/collector/GetTask", data: {} }, ctx => {
+      seen.push({ signal: ctx.signal });
+      return new Promise(() => undefined);
+    });
     const outcome = read.then(
       () => "resolved",
       error => (error instanceof StaleSpaceRequestError ? "stale" : "other")
     );
     finishInit();
-    await new Promise(resolve => setTimeout(resolve, 0)); // 等初始化链走完，读取在 space-a 下登记
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(seen).toHaveLength(1);
     setSelectedSpaceIdCache("space-b");
     expect(await outcome).toBe("stale");
     expect(seen[0].signal?.aborted).toBe(true);
-    setSpaceInitializer(null);
-    setSelectedSpaceIdCache("");
   });
 
-  it("classifies global, space_optional, and space_required endpoints according to D7", () => {
+  it("按服务目录规则将接口归为 global、space_optional 与 space_required", () => {
     for (const url of [
       "/api/admin/auth/Login",
       "/api/admin/ssh/CreateSession",
       "/api/admin/secret/ListSecrets",
       "/api/admin/sysdeploy/GetCatalog",
       "/api/admin/monitor/GetHealthOverview",
-      "/api/admin/eventbus/GetStatus",
       "/api/admin/storage/ListSpaces",
       "/api/admin/storage/CreateSpace",
       "/api/admin/storage/UpdateSpace",
@@ -305,8 +160,11 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/collector/UpdateCloudAccount",
       "/api/admin/collector/ListCloudRegions",
       "/api/admin/collector/DeleteCloudAccount",
+      "/api/admin/collector/InitPackageUpload",
+      "/api/admin/collector/CompletePackageUpload",
+      "/api/admin/collector/ListFunctionPackages",
+      "/api/admin/collector/DeleteFunctionPackage",
       "/api/admin/collector/GetDataTypeConfigs",
-      "/api/admin/collector/GetDataTypeConfigWithFields",
       "/api/admin/collector/ListSubjectListers",
       "/api/admin/collector/RegisterDelistNotice",
       "/api/admin/collector/GetLifecycle",
@@ -338,11 +196,7 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/factor-mgr/ListUdfs",
       "/api/admin/factor-mgr/GetUdf",
       "/api/admin/factor-mgr/ActivateUdf",
-      "/api/admin/factor-mgr/GetStatus",
-      "/api/admin/factor-mgr/GetLifecycle",
-      "/api/admin/factor-mgr/ControlLifecycle",
-      "/api/admin/archive/GetLifecycle",
-      "/api/admin/archive/ControlLifecycle"
+      "/api/admin/factor-mgr/GetStatus"
     ]) {
       expect(spacePolicyForUrl(url), url).toBe("global");
     }
@@ -364,104 +218,48 @@ describe("installSpaceAwareClient", () => {
       "/api/admin/trade/ListOrders",
       "/api/admin/strategy/ListStrategyInstances",
       "/api/admin/factor-mgr/CreateFactorTask",
-      "/api/admin/archive/ListArchiveTasks"
+      "/api/admin/archive/ListArchiveTasks",
+      "/api/admin/archive/ClearArchiveUnrecoverable"
     ]) {
       expect(spacePolicyForUrl(url), url).toBe("space_required");
     }
   });
 
-  it("never injects X-Space-Id, never waits for space init, and never cancels global endpoints on space switch", async () => {
-    setSelectedSpaceIdCache("space-a");
-    let initCalls = 0;
-    setSpaceInitializer(async () => {
-      initCalls += 1;
-    });
-    const handler = spaceHandler();
-    for (const url of [
-      "/api/admin/trade/InspectExchangeCredential",
-      "/api/admin/trade/ListBlockedInstruments",
-      "/api/admin/trade/ListDelists",
-      "/api/admin/trade/UnblockInstrument",
-      "/api/admin/strategy/ListStrategies",
-      "/api/admin/collector/DeleteCloudAccount",
-      "/api/admin/factor-mgr/ListFactorCategories",
-      "/api/admin/archive/GetLifecycle"
-    ]) {
-      const prepared = await handler({ url, headers: new AxiosHeaders() } as InternalAxiosRequestConfig);
-      expect(prepared.headers.get("X-Space-Id"), url).toBeUndefined();
-      expect(prepared.injectedSpaceId, url).toBeUndefined();
-    }
-
-    const seen: Array<{ url: string; signal?: AbortSignal }> = [];
-    const client = {
-      interceptors: { request: { use: () => undefined }, response: { use: () => undefined } },
-      post: (url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
-        seen.push({ url, signal: config?.signal });
-        return Promise.resolve({ ok: true });
-      }
-    };
-    installSpaceAwareClient(client as never);
-    await expect(client.post("/api/admin/trade/ListBlockedInstruments", {})).resolves.toEqual({ ok: true });
-    await expect(client.post("/api/admin/trade/ListDelists", {})).resolves.toEqual({ ok: true });
-    await expect(client.post("/api/admin/strategy/ListStrategies", {})).resolves.toEqual({ ok: true });
-    setSelectedSpaceIdCache("space-b");
-    for (const item of seen) expect(item.signal, item.url).toBeUndefined();
-    expect(initCalls).toBe(0);
-    setSpaceInitializer(null);
-    setSelectedSpaceIdCache("");
-  });
-
-  it("lets space_optional requests run without blocking when no space is selected, forwards X-Space-Id when selected, and skips injection for global: true", async () => {
-    setSelectedSpaceIdCache("");
+  it("space_optional 无空间时不阻塞，有空间时透传并在切空间时取消，global: true 时不注入也不取消", async () => {
     let initCalls = 0;
     setSpaceInitializer(async () => {
       initCalls += 1;
       setSelectedSpaceIdCache("crypto");
     });
-    const handler = spaceHandler();
 
-    // 无空间时不阻塞也不等空间初始化
     for (const url of [
       "/api/admin/strategy/GetStrategy",
       "/api/admin/strategy/ValidateStrategy",
       "/api/admin/activity/ListActivityLogs",
       "/api/admin/factor-mgr/ListFactorTasks"
     ]) {
-      const prepared = await handler({ url, data: {}, headers: new AxiosHeaders() } as InternalAxiosRequestConfig);
-      expect(prepared.headers.get("X-Space-Id"), url).toBeUndefined();
+      let seenSpace: string | undefined;
+      await runWithSpaceContext({ url, data: {} }, async ctx => {
+        seenSpace = ctx.spaceId;
+        return {};
+      });
+      expect(seenSpace, url).toBeUndefined();
     }
     expect(initCalls).toBe(0);
 
-    // 有选中空间时透传 X-Space-Id，但请求体声明 global: true 时不注入
     setSelectedSpaceIdCache("space-a");
-    const withSpace = await handler({
-      url: "/api/admin/strategy/GetStrategy",
-      data: { strategy_id: "s1" },
-      headers: new AxiosHeaders()
-    } as InternalAxiosRequestConfig);
-    expect(withSpace.headers.get("X-Space-Id")).toBe("space-a");
-    expect(withSpace.injectedSpaceId).toBe("space-a");
+    const seen: Array<{ spaceId?: string; signal?: AbortSignal }> = [];
+    const scopedRead = runWithSpaceContext({ url: "/api/admin/strategy/GetStrategy", data: { strategy_id: "s1" } }, ctx => {
+      seen.push(ctx);
+      return new Promise(() => undefined);
+    });
+    void runWithSpaceContext({ url: "/api/admin/activity/ListActivityLogs", data: { global: true } }, ctx => {
+      seen.push(ctx);
+      return new Promise(() => undefined);
+    });
+    expect(seen[0].spaceId).toBe("space-a");
+    expect(seen[1].spaceId).toBeUndefined();
 
-    const globalActivity = await handler({
-      url: "/api/admin/activity/ListActivityLogs",
-      data: { global: true, page: { page: 1, size: 20 } },
-      headers: new AxiosHeaders()
-    } as InternalAxiosRequestConfig);
-    expect(globalActivity.headers.get("X-Space-Id")).toBeUndefined();
-    expect(globalActivity.injectedSpaceId).toBeUndefined();
-
-    // 带了选中空间的 space_optional 读取在切空间时被取消，global: true 不被取消
-    const seen: Array<{ url: string; signal?: AbortSignal }> = [];
-    const client = {
-      interceptors: { request: { use: () => undefined }, response: { use: () => undefined } },
-      post: (url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
-        seen.push({ url, signal: config?.signal });
-        return new Promise(() => undefined);
-      }
-    };
-    installSpaceAwareClient(client as never);
-    const scopedRead = client.post("/api/admin/strategy/GetStrategy", { strategy_id: "s1" });
-    void client.post("/api/admin/activity/ListActivityLogs", { global: true });
     const outcome = scopedRead.then(
       () => "resolved",
       error => (error instanceof StaleSpaceRequestError ? "stale" : "other")
@@ -470,8 +268,5 @@ describe("installSpaceAwareClient", () => {
     expect(await outcome).toBe("stale");
     expect(seen[0].signal?.aborted).toBe(true);
     expect(seen[1].signal).toBeUndefined();
-
-    setSpaceInitializer(null);
-    setSelectedSpaceIdCache("");
   });
 });

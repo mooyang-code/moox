@@ -20,7 +20,7 @@ import (
 
 const collectMgr = "trpc.moox.collector.CollectMgr"
 
-var externalIdentities = []string{"scf-collector", "moox-skill"}
+var externalIdentities = []string{"scf-collector"}
 
 type remoteFunc func(context.Context, string, string, int, []byte) ([]byte, error)
 
@@ -120,13 +120,13 @@ func TestExternalEntryForwardsLocalServiceWithOnlySpaceAndTrace(t *testing.T) {
 		return nil, nil
 	}))
 	body := []byte{0x0a, 1, 'a'}
-	headers := sign(t, testsnapshot.Credential("moox-skill", ""), primary, "ReadTimeSeriesRows", body)
+	headers := sign(t, testsnapshot.Credential("scf-collector", ""), primary, "CommitTimeSeriesBatch", body)
 	headers.Set("X-Space-Id", "crypto")
 	headers.Set("X-Trace-Id", "trace-1")
 	headers.Set("X-User-Id", "someone")
-	headers.Set(gatewayauth.HeaderOriginCaller, "scf-collector")
+	headers.Set(gatewayauth.HeaderOriginCaller, "moox-cli")
 	headers.Set(gatewayauth.HeaderVerifiedHost, "control")
-	response, err := call(p, true, primary, "ReadTimeSeriesRows", body, headers)
+	response, err := call(p, true, primary, "CommitTimeSeriesBatch", body, headers)
 	require.NoError(t, err)
 	require.Equal(t, body, response)
 	require.Equal(t, codec.MetaData{"X-Space-Id": []byte("crypto"), "X-Trace-Id": []byte("trace-1")}, seen)
@@ -162,14 +162,14 @@ func TestExternalEntryRejectsEverythingButListedExternalCalls(t *testing.T) {
 		calls.Add(1)
 		return body, nil
 	}))
-	skill := testsnapshot.Credential("moox-skill", "")
+	scf := testsnapshot.Credential("scf-collector", "")
 	for name, tc := range map[string]struct {
 		credentials     gatewayauth.Credentials
 		service, method string
 	}{
-		"moox-skill 调名单外的写方法":      {skill, primary, "UpsertFields"},
-		"moox-skill 调采集名单干预":       {skill, collectMgr, "SetSubjectExclusions"},
-		"scf-collector 读行情（不在名单上）": {testsnapshot.Credential("scf-collector", ""), primary, "ReadTimeSeriesRows"},
+		"scf-collector 读行情（不在名单上）": {scf, primary, "ReadTimeSeriesRows"},
+		"scf-collector 调采集名单干预":    {scf, collectMgr, "SetSubjectExclusions"},
+		"已删除的 moox-skill 走外部入口":    {testsnapshot.Credential("moox-skill", ""), primary, "ReadTimeSeriesRows"},
 		"控制机上的 collector 走外部入口":    {testsnapshot.Credential("collector", "control"), primary, "ReadTimeSeriesRows"},
 		"moox-cli 走外部入口":           {testsnapshot.Credential("moox-cli", ""), primary, "ReadTimeSeriesRows"},
 		"入口主机自己的 host-gateway":     {testsnapshot.Credential("host-gateway", "storage"), primary, "ReadTimeSeriesRows"},
@@ -178,25 +178,25 @@ func TestExternalEntryRejectsEverythingButListedExternalCalls(t *testing.T) {
 		_, err := call(p, true, tc.service, tc.method, nil, sign(t, tc.credentials, tc.service, tc.method, nil))
 		requireRejected(t, err, name)
 	}
-	require.EqualValues(t, 2, denials(t, registry, "moox-skill", primary, "UpsertFields", "permission")+denials(t, registry, "moox-skill", collectMgr, "SetSubjectExclusions", "permission"))
-	require.EqualValues(t, 1, denials(t, registry, "unknown", primary, "ReadTimeSeriesRows", "authentication"), "没登记公钥的身份验签不过")
+	require.EqualValues(t, 2, denials(t, registry, "scf-collector", primary, "ReadTimeSeriesRows", "permission")+denials(t, registry, "scf-collector", collectMgr, "SetSubjectExclusions", "permission"))
+	require.EqualValues(t, 2, denials(t, registry, "unknown", primary, "ReadTimeSeriesRows", "authentication"), "没登记公钥或已删除的身份验签不过")
 	// 签名之后改了请求体。
-	_, err := call(p, true, primary, "ReadTimeSeriesRows", []byte("altered"), sign(t, skill, primary, "ReadTimeSeriesRows", []byte("original")))
+	_, err := call(p, true, primary, "CommitTimeSeriesBatch", []byte("altered"), sign(t, scf, primary, "CommitTimeSeriesBatch", []byte("original")))
 	requireRejected(t, err, "请求体被改")
 	require.Zero(t, calls.Load())
 	// 同一个签名第二次出现。
-	headers := sign(t, skill, primary, "ReadTimeSeriesRows", nil)
-	_, err = call(p, true, primary, "ReadTimeSeriesRows", nil, headers)
+	headers := sign(t, scf, primary, "CommitTimeSeriesBatch", nil)
+	_, err = call(p, true, primary, "CommitTimeSeriesBatch", nil, headers)
 	require.NoError(t, err)
-	_, err = call(p, true, primary, "ReadTimeSeriesRows", nil, headers)
+	_, err = call(p, true, primary, "CommitTimeSeriesBatch", nil, headers)
 	requireRejected(t, err, "重放")
-	require.EqualValues(t, 1, denials(t, registry, "moox-skill", primary, "ReadTimeSeriesRows", "replay"))
+	require.EqualValues(t, 1, denials(t, registry, "scf-collector", primary, "CommitTimeSeriesBatch", "replay"))
 	require.EqualValues(t, 1, calls.Load())
 	// 登记里不再是外部入口：一律不接。
 	raw := state.Load().Proto()
 	testsnapshot.Host(t, raw, "storage").ExternalEntry = false
 	applySnapshot(t, state, raw)
-	_, err = call(p, true, primary, "ReadTimeSeriesRows", nil, sign(t, skill, primary, "ReadTimeSeriesRows", nil))
+	_, err = call(p, true, primary, "CommitTimeSeriesBatch", nil, sign(t, scf, primary, "CommitTimeSeriesBatch", nil))
 	require.ErrorContains(t, err, "external entry is not enabled")
 	require.EqualValues(t, 1, calls.Load())
 }
@@ -207,8 +207,8 @@ func TestExternalIdentityCannotUseInternalPorts(t *testing.T) {
 		t.Fatal("不应到达上游")
 		return nil, nil
 	}), nil)
-	_, err := call(p, false, primary, "ReadTimeSeriesRows", nil, sign(t, testsnapshot.Credential("moox-skill", ""), primary, "ReadTimeSeriesRows", nil))
-	requireRejected(t, err, "moox-skill 直接到 11003")
+	_, err := call(p, false, primary, "CommitTimeSeriesBatch", nil, sign(t, testsnapshot.Credential("scf-collector", ""), primary, "CommitTimeSeriesBatch", nil))
+	requireRejected(t, err, "scf-collector 直接到 11003")
 }
 
 // 来源头的三条检查（设计 3.2）：签名的是外部入口主机的 host-gateway、头里是外部身份、该身份在方法名单上，缺一条就拒绝并计数。
@@ -238,14 +238,13 @@ func TestOriginCallerHeaderRequiresEntryHostExternalIdentityAndListedMethod(t *t
 	requireRejected(t, forwarded(testsnapshot.Credential("collector", "control"), "scf-collector", "CommitTimeSeriesBatch"), "带来源头的不是 host-gateway（哪怕它自己在名单上）")
 	require.EqualValues(t, 2, denials(t, registry, "scf-collector", primary, "CommitTimeSeriesBatch", "origin_host"))
 	// 第二条：头里不是外部身份。
-	for _, origin := range []string{"moox-cli", "console", "collector", "host-gateway", "", "unknown"} {
+	for _, origin := range []string{"moox-cli", "moox-skill", "console", "collector", "host-gateway", "", "unknown"} {
 		requireRejected(t, forwarded(entryGateway, origin, "CommitTimeSeriesBatch"), "来源头是 "+origin)
 	}
-	require.EqualValues(t, 6, denials(t, registry, "unknown", primary, "CommitTimeSeriesBatch", "origin_identity"))
+	require.EqualValues(t, 7, denials(t, registry, "unknown", primary, "CommitTimeSeriesBatch", "origin_identity"))
 	// 第三条：外部身份不在这个方法的名单上。
-	requireRejected(t, forwarded(entryGateway, "moox-skill", "CommitTimeSeriesBatch"), "moox-skill 只能读")
 	requireRejected(t, forwarded(entryGateway, "scf-collector", "ReadTimeSeriesRows"), "scf-collector 只能写")
-	require.EqualValues(t, 1, denials(t, registry, "moox-skill", primary, "CommitTimeSeriesBatch", "origin_method"))
+	require.EqualValues(t, 1, denials(t, registry, "scf-collector", primary, "ReadTimeSeriesRows", "origin_method"))
 	// 没有来源头时 host-gateway 只能调它自己名单里的方法（GatewayControl 的两个）。
 	_, err := call(p, false, primary, "CommitTimeSeriesBatch", nil, sign(t, entryGateway, primary, "CommitTimeSeriesBatch", nil))
 	requireRejected(t, err, "不带来源头的 host-gateway")

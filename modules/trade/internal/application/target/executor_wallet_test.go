@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 集成测试：把真实的 wallet.Service（经 NewWalletTransfer）接进执行器，交易所用假交易所（余额、划转记录可控），
+// 集成测试：把真实的 wallet.Service 直接接进执行器，交易所用假交易所（余额、划转记录可控），
 // 覆盖第 4 阶段的整条链路：划转、等到账、等现货钱包快照、买入，以及“划转刚完成就重启”。
 
 func newWalletIntegration(t *testing.T) (*targetFixture, *wallettest.Exchange, func() *Executor) {
@@ -30,7 +30,7 @@ func newWalletIntegration(t *testing.T) (*targetFixture, *wallettest.Exchange, f
 	// 每次调用都新建服务和执行器：等价于进程重启，状态只在库里（划转表）。
 	newExecutor := func() *Executor {
 		executor := f.executor()
-		executor.Transfers = NewWalletTransfer(&wallet.Service{Store: f.store, Adapters: wallettest.Adapters{"account-a": fake}})
+		executor.Transfers = &wallet.Service{Store: f.store, Adapters: wallettest.Adapters{"account-a": fake}}
 		return executor
 	}
 	return f, fake, newExecutor

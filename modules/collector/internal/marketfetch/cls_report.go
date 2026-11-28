@@ -18,7 +18,7 @@ const (
 )
 
 // reportItemFailure 上报一个失败项：包含错误全文、尝试次数与取数耗时，用来判断重试是否有效。
-func (p *KlinePipeline) reportItemFailure(req Request, result domain.ItemResult, provider string, attempts int, elapsed time.Duration, windowStart, windowEnd time.Time, cause error) {
+func (p *KlinePipeline) reportItemFailure(req Request, result domain.ItemResult, symbol, provider string, attempts int, elapsed time.Duration, windowStart, windowEnd time.Time, cause error) {
 	if p == nil || p.Reporter == nil {
 		return
 	}
@@ -29,7 +29,7 @@ func (p *KlinePipeline) reportItemFailure(req Request, result domain.ItemResult,
 	p.Reporter.Report(clsreporter.Entry{Fields: map[string]string{
 		"log_type": clsLogTypeItemFailure, "space_id": firstNonEmptyString(p.SpaceID, req.SpaceID), "function": p.FunctionName,
 		"batch_kind": string(req.BatchKind), "request_id": req.RequestID, "dataset_id": req.DatasetID, "frequency": req.Frequency,
-		"subject_id": result.SubjectID, "symbol": result.Symbol, "provider": provider,
+		"subject_id": result.SubjectID, "symbol": symbol, "provider": provider,
 		"outcome": string(result.Outcome), "error_type": result.ErrorType, "error": message,
 		"attempts": strconv.Itoa(attempts), "fetch_ms": strconv.FormatInt(elapsed.Milliseconds(), 10),
 		"window_start": formatReportTime(windowStart), "window_end": formatReportTime(windowEnd),

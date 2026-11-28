@@ -175,7 +175,7 @@ func TestExpiryBetweenReadAndExistingOrderActionHasNoSideEffects(t *testing.T) {
 			require.Empty(t, f.orders.discarded)
 			logical, err := f.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 			require.NoError(t, err)
-			require.Equal(t, "ACTIVE", logical.AutomationState)
+			require.Equal(t, "ACTIVE", logical.AutomationState())
 		})
 	}
 }

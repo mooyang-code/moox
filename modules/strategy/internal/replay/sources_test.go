@@ -12,6 +12,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 const slowView = "dataset_factor_s"
@@ -20,7 +23,7 @@ const slowView = "dataset_factor_s"
 // 列 sector 是分组用的类别（A、B 同为 1，C 为空）；A 的第 2 根 4h（origin+8h 起）没有行。
 type sourceClient struct {
 	*fakeClient
-	sourceQueries []input.Query
+	sourceQueries []upstream.Query
 }
 
 // C 在实时里是停用的绑定（回放里视为活跃，属于已知差别），它的趋势恒为负，两边都不会选它。
@@ -34,12 +37,12 @@ func slowTrend(id string, k int) float64 {
 	return -1
 }
 
-func (c *sourceClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+func (c *sourceClient) GetView(ctx context.Context, spaceID, datasetID string) (upstream.ViewInfo, error) {
 	if datasetID != slowView {
 		return c.fakeClient.GetView(ctx, spaceID, datasetID)
 	}
-	return input.ViewInfo{DatasetID: slowView, Frequency: "4h", Status: "active", ActiveIndexID: "idx_s", Generation: "idx_s",
-		Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "trend", Attributes: map[string]string{}}, {Name: "sector", Attributes: map[string]string{}}}}, nil
+	return upstream.ViewInfo{DatasetID: slowView, Frequency: "4h", Status: "active", ActiveIndexID: "idx_s", Generation: "idx_s",
+		Columns: []upstream.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "trend", Attributes: map[string]string{}}, {Name: "sector", Attributes: map[string]string{}}}}, nil
 }
 
 func (c *sourceClient) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
@@ -47,20 +50,20 @@ func (c *sourceClient) ViewGeneration(ctx context.Context, spaceID, datasetID st
 	return view.Generation, err
 }
 
-func (c *sourceClient) GetDataset(ctx context.Context, spaceID, datasetID string) (input.DatasetInfo, error) {
+func (c *sourceClient) GetDataset(ctx context.Context, spaceID, datasetID string) (upstream.DatasetInfo, error) {
 	if datasetID != "ds_s" {
 		return c.fakeClient.GetDataset(ctx, spaceID, datasetID)
 	}
-	return input.DatasetInfo{DatasetID: "ds_s", Status: "active", Frequency: "4h", Retention: "forever", Attributes: map[string]string{"market_type": "spot"}}, nil
+	return upstream.DatasetInfo{DatasetID: "ds_s", Status: "active", Frequency: "4h", Retention: "forever", Attributes: map[string]string{"market_type": "spot"}}, nil
 }
 
-func (c *sourceClient) QueryRows(ctx context.Context, spaceID string, query input.Query) ([]input.Row, uint64, error) {
+func (c *sourceClient) QueryRows(ctx context.Context, spaceID string, query upstream.Query) ([]upstream.Row, uint64, error) {
 	if query.DatasetID != slowView {
 		return c.fakeClient.QueryRows(ctx, spaceID, query)
 	}
 	c.sourceQueries = append(c.sourceQueries, query)
 	const step = 4 * time.Hour
-	var rows []input.Row
+	var rows []upstream.Row
 	for at := query.Start.Truncate(step); at.Before(query.End); at = at.Add(step) {
 		if at.Before(query.Start) {
 			continue
@@ -74,7 +77,7 @@ func (c *sourceClient) QueryRows(ctx context.Context, spaceID string, query inpu
 			if subject.SubjectID != "C" && slices.Contains(query.Columns, "sector") {
 				values["sector"] = 1
 			}
-			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: values})
+			rows = append(rows, upstream.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: values})
 		}
 	}
 	return rows, 5, nil
@@ -158,11 +161,11 @@ func replaySourceAgainstLive(t *testing.T, dslYaml string) (*sourceClient, map[t
 	(&Runner{Store: repo, Client: client, ChunkBars: 6, InitialEquity: 100}).Execute(context.Background(), claimed)
 	done, err := repo.GetReplay(context.Background(), "s1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 
 	state, bars := engine.State{}, map[time.Time][]string{}
 	for _, replayed := range barsOf(t, repo, "s1") {
-		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+		boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 		require.NoError(t, err)
 		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, Held: state.HeldMarkets()})
 		require.NoError(t, err)
@@ -218,10 +221,10 @@ portfolio: {max_missing: 1}
 	(&Runner{Store: repo, Client: client, ChunkBars: 5, MissingPriceLiquidateBars: 3, InitialEquity: 100}).Execute(context.Background(), claimed)
 	done, err := repo.GetReplay(context.Background(), "r1")
 	require.NoError(t, err)
-	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	require.Equal(t, store.ReplaySucceeded, done.Status, done.Error)
 	state, compared, agedOut := engine.State{}, 0, false
 	for _, replayed := range barsOf(t, repo, "r1") {
-		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+		boundary, err := period.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 		require.NoError(t, err)
 		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, Held: state.HeldMarkets()})
 		require.NoError(t, err)

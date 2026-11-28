@@ -218,12 +218,11 @@ func TestBaseIncludesOptionalRuntimeIdentityFields(t *testing.T) {
 	t.Setenv("MOOX_BOOT_ID", "boot-a")
 	t.Setenv("MOOX_BUILD_TIME", "2026-07-19T00:00:00Z")
 	t.Setenv("MOOX_CONFIG_HASH", "sha256:config")
-	t.Setenv("MOOX_DATASET_HEALTH_POLICY_HASH", "sha256:dataset-health")
 	t.Setenv("MOOX_VERSION", "release-20260827")
 	t.Setenv("MOOX_GIT_COMMIT", "deadbeef")
 
 	rsp := Base("test", "test@node-a", "", "", time.Now(), true)
-	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.DatasetHealthPolicyHash != "sha256:dataset-health" || len(rsp.BinarySHA256) != 64 || rsp.Version != "release-20260827" || rsp.GitCommit != "deadbeef" {
+	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || len(rsp.BinarySHA256) != 64 || rsp.Version != "release-20260827" || rsp.GitCommit != "deadbeef" {
 		t.Fatalf("runtime identity fields = %+v", rsp)
 	}
 }

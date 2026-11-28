@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -34,7 +34,7 @@ func TestFilterIsolatedPositionsPausesLogicalAccountWithSymbol(t *testing.T) {
 
 	logical, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logical.AutomationState)
+	require.Equal(t, "PAUSED", logical.AutomationState())
 	require.True(t, logical.Pause().Auto())
 	require.Contains(t, logical.PauseReason, "ETHUSDT")
 	require.Contains(t, logical.PauseReason, "逐仓")
@@ -47,14 +47,14 @@ func TestApplyIsolatedPositionEventPausesLogicalAccount(t *testing.T) {
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
 	service := &Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
-		Fills: &consumer.Reducer{Store: tradeStore},
+		Fills: &fillreduce.Reducer{Store: tradeStore},
 	}
 
 	require.NoError(t, service.ApplyPosition(context.Background(), "account-1", isolatedMixedPositions()[1]))
 
 	logical, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logical.AutomationState)
+	require.Equal(t, "PAUSED", logical.AutomationState())
 	require.Contains(t, logical.PauseReason, "ETHUSDT")
 }
 
@@ -71,7 +71,7 @@ func TestFilterIsolatedPositionsLeavesOtherStatesAlone(t *testing.T) {
 	requireLogicalAccountRemainsActive(t, tradeStore)
 
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "用户手动暂停")
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.UserPause("用户手动暂停"))
 	}))
 	_, err = service.FilterIsolatedPositions(context.Background(), "account-1", isolatedMixedPositions())
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestIsolatedPositionAttentionIsNotedEvenWhenNotPaused(t *testing.T) {
 	for name, prepare := range map[string]func(t *testing.T, tradeStore *store.Store){
 		"组合已暂停": func(t *testing.T, tradeStore *store.Store) {},
 		"自主下单": func(t *testing.T, tradeStore *store.Store) {
-			require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'`).Error)
+			require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''`).Error)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -139,7 +139,7 @@ func TestSyncWithIsolatedPositionKeepsCrossPositionsAndPausesLogicalAccount(t *t
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: isolatedPositionAdapter{&syncAdapter{}}},
 		SessionState: readySessionState(true),
-		Fills:        &consumer.Reducer{Store: tradeStore},
+		Fills:        &fillreduce.Reducer{Store: tradeStore},
 	}
 
 	_, err := service.SyncAccount(context.Background(), "account-1")
@@ -151,6 +151,6 @@ func TestSyncWithIsolatedPositionKeepsCrossPositionsAndPausesLogicalAccount(t *t
 	require.Equal(t, "BTC-USDT", positions[0].ExchangeSymbol)
 	logical, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "PAUSED", logical.AutomationState)
+	require.Equal(t, "PAUSED", logical.AutomationState())
 	require.Contains(t, logical.PauseReason, "ETHUSDT")
 }

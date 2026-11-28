@@ -1,4 +1,4 @@
-import { computed, onActivated, onDeactivated, ref, watch } from "vue";
+import { computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
@@ -52,8 +52,7 @@ export interface FactorScopeOptions {
 
 /**
  * 因子页面共用的样板：空间切换加载、?task= 与 store 同步、轮询。
- * query 变化时页面组件不重建。只在空间 id 变化时 reset + load，同一空间重新挂载直接复用 store。
- * 计算任务页内部用 keep-alive 缓存页签：失活期间不跟随 ?task=，重新激活时按 URL 补同步一次。
+ * query 变化时页面组件不重建；只在空间 id 变化时 reset + load，同一空间切页签重新挂载时直接复用 store。
  */
 export function useFactorScope(options: FactorScopeOptions = {}) {
   const requireTask = options.requireTask ?? false;
@@ -62,22 +61,12 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
   const store = useFactorStore();
   const spaceStore = useSpaceStore();
   const ownPath = route.path;
-  const active = ref(true);
 
   const spaceId = computed(() => spaceStore.selectedSpaceId);
   const routeTaskId = computed(() => queryString(route.query.task));
 
-  onActivated(() => {
-    active.value = true;
-    // 失活期间别处可能改了 ?task=（例如从任务详情点“查看结果”）；store 未加载时由空间 watch 负责。
-    if (store.isLoadedFor(spaceId.value)) resolveSelection();
-  });
-  onDeactivated(() => {
-    active.value = false;
-  });
-
   function canWriteRoute() {
-    return active.value && route.path === ownPath;
+    return route.path === ownPath;
   }
 
   function navigate(query: QueryMap) {

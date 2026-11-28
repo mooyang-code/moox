@@ -3,9 +3,11 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/notification"
@@ -50,6 +52,36 @@ func (s *Service) ExportNotificationChannels(ctx context.Context, _ *monitorpb.E
 		})
 	}
 	return &monitorpb.ExportNotificationChannelsRsp{RetInfo: success(), Channels: out}, nil
+}
+
+// ImportNotificationChannels 按 webhook_url 幂等覆盖导入告警渠道，只给 moox-cli 重装恢复使用。
+// 任意一条校验失败（URL、平台、密钥不合法或同批内重复）时整批拒绝，不修改现有渠道。
+func (s *Service) ImportNotificationChannels(ctx context.Context, req *monitorpb.ImportNotificationChannelsReq) (*monitorpb.ImportNotificationChannelsRsp, error) {
+	if s.notifications == nil {
+		return &monitorpb.ImportNotificationChannelsRsp{RetInfo: inner(errNotificationUnavailable)}, nil
+	}
+	raw := req.GetChannels()
+	items := make([]store.NotificationChannelInput, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for i, ch := range raw {
+		typ, url, secret := strings.TrimSpace(ch.GetChannelType()), strings.TrimSpace(ch.GetWebhookUrl()), strings.TrimSpace(ch.GetSecret())
+		if url == "" {
+			return &monitorpb.ImportNotificationChannelsRsp{RetInfo: invalid(fmt.Errorf("第 %d 条渠道的 Webhook URL 不能为空", i+1))}, nil
+		}
+		if _, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(typ), WebhookURL: url, Secret: secret}); err != nil {
+			return &monitorpb.ImportNotificationChannelsRsp{RetInfo: invalid(fmt.Errorf("第 %d 条渠道无效：%w", i+1, err))}, nil
+		}
+		if _, dup := seen[url]; dup {
+			return &monitorpb.ImportNotificationChannelsRsp{RetInfo: invalid(fmt.Errorf("第 %d 条渠道的 Webhook URL 与前面重复", i+1))}, nil
+		}
+		seen[url] = struct{}{}
+		items = append(items, store.NotificationChannelInput{ChannelType: typ, WebhookURL: url, Secret: secret})
+	}
+	created, updated, err := s.notifications.Import(ctx, items)
+	if err != nil {
+		return &monitorpb.ImportNotificationChannelsRsp{RetInfo: inner(err)}, nil
+	}
+	return &monitorpb.ImportNotificationChannelsRsp{RetInfo: success(), Created: int32(created), Updated: int32(updated)}, nil
 }
 
 // AddNotificationChannel 新增一个推送渠道；URL 必须是所选平台的 HTTPS 机器人地址（通用 Webhook 不限域名），同一个 URL 不能重复添加。

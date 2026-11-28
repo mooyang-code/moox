@@ -85,6 +85,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
 import { useRouter } from "vue-router";
+import { tradingAccountDetailPath } from "@/router/links";
 import TimeText from "@/components/time-text/index.vue";
 import { exchangeLabel, listBlockedInstruments } from "@/api/trade";
 import type { BlockedInstrument } from "@/api/trade";
@@ -92,7 +93,7 @@ import { listDelists, type DelistFlatten, type DelistRecord } from "@/api/trade/
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import BlockedTab from "../accounts/blocked-tab.vue";
+import BlockedTab from "./blocked-tab.vue";
 import { marketLabel } from "../accounts/shared/markets";
 import DelistDialog from "./delist-dialog.vue";
 import { actionStatusText, delistStatusColor, delistStatusText, plannedRoundText, scopeLabel, sortDelists } from "./delist-utils";
@@ -139,7 +140,7 @@ function locate(delistId: string) {
 /** 组合账户属于某个空间：先切到那个空间再打开账户详情。 */
 function openAccount(flatten: DelistFlatten) {
   spaceStore.setSelectedSpace(flatten.space_id);
-  void router.push(`/trading/accounts/${encodeURIComponent(flatten.logical_account_id)}`);
+  void router.push(tradingAccountDetailPath(flatten.logical_account_id));
 }
 
 onBeforeUnmount(() => requests.invalidate());

@@ -1,7 +1,7 @@
 # 读取与修改 moox.toml 与 moox.secrets.toml
 
 部署配置是同一目录里的两份文件：`moox.toml` 是明文，只有拓扑与部署参数，不含秘密；
-`moox.secrets.toml` 是秘密（管理员、腾讯云密钥、告警渠道、CLS 写入密钥、交易所密钥），整份 AES-256-GCM 加密，密钥在本机钥匙串，文件里只有信封。
+`moox.secrets.toml` 只保存部署启动所需的秘密（管理员、腾讯云密钥、CLS 写入密钥），整份 AES-256-GCM 加密，密钥在本机钥匙串，文件里只有信封。交易所密钥与告警通知渠道不写进秘密文件，安装完成后在管理台录入，清空重装时通过 `moox.backup` 备份与恢复。
 **Agent 不能 `cat`、`grep`、用 Python 解析秘密文件，也不要 `source` 或复制它**，一律通过 `moox-cli config` 的子命令，用 `--file ./moox.secrets.toml` 指定它。
 下面的命令都在放着这两份文件的目录（主仓库根目录）里执行，或加 `--file <路径>`。
 
@@ -12,13 +12,13 @@ moox-cli config get                                   # 整份 moox.toml（JSON�
 moox-cli config get hosts.storage                     # 一个表
 moox-cli config get storage_retention.defaults.5m     # 一个值
 moox-cli config get deployments.control.0            # 数组用序号，从 0 开始
-moox-cli config get --file ./moox.secrets.toml exchange_keys.0   # 第一把交易所密钥：只看得到 name、exchange、environment、readonly，其余显示为 ***
-moox-cli config get --file ./moox.secrets.toml notification      # 告警渠道：channel_type 可见，webhook_url、secret 显示为 ***
+moox-cli config get --file ./moox.secrets.toml admin              # 管理员：username 可见，password 显示为 ***
+moox-cli config get --file ./moox.secrets.toml tencent_cloud      # 腾讯云密钥：secret_id、secret_key 均显示为 ***
 moox-cli config get hosts.storage.address
 ```
 
 - 路径用点号分隔；路径不存在时报错并列出该层可用的键。
-- 秘密文件默认整份打码：只有用来辨认是哪一项的键可见（`username`、`channel_type`、`name`、`exchange`、`environment`、`readonly`），其余的值（密码、云密钥、交易所密钥、告警 Webhook 地址与签名密钥、CLS 写入密钥）都显示为 `***`。Webhook 地址里带着企业微信的 `key`、钉钉的 `access_token`，同样是秘密。空值不打码，看得出没填。
+- 秘密文件默认整份打码：只有用来辨认账号的 `username` 可见，其余的值（管理员密码、腾讯云密钥、CLS 写入密钥）都显示为 `***`。空值不打码，看得出没填。
 - `moox.toml` 是明文，正常不含秘密；万一写了，键名含 `password`、`passphrase`、`secret`、`token`、`api_key`、`access_key`、`private_key` 的值也显示为 `***`（以 `_file`、`_path` 结尾的路径类键不打码）。
 - `--reveal` 输出明文。**只有任务确实需要这个值才用**（例如用管理员账号登录管理台做页面检查），并且：只把值放进环境变量或标准输入传给下一条命令，不要打印到对话、日志、文档、提交里。要登录管理台时读 `admin.username` 与 `admin.password` 两项即可，不要取整份。
 - 需要的只是“某项有没有配、是什么模式”时，用不加 `--reveal` 的结果就够了。
@@ -41,10 +41,8 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 
 ## 其余情况
 
-- 秘密文件里的数组表：让用户跑 `moox-cli config edit` 在本机网页里改，Agent 不填也不读。
-- 交易所密钥 `[[exchange_keys]]` 是数组表，`config set` 改不了：让用户在 `config init` 录入页（配了海外服务器时有“交易所密钥”一步）或 `config edit` 的“交易所密钥”里填写，Agent 只用 `config get --file ./moox.secrets.toml exchange_keys.<序号>` 看有哪几把（名称、交易所、环境、是否只读；密钥值默认打码，不要 `--reveal`）。
-  字段：`name`（只允许小写字母、数字、连字符）、`exchange`（`binance`、`okx`）、`environment`（`production`、`testnet`）、`api_key`、`secret_key`、`passphrase`（OKX 必填）、`readonly`（可选，默认 false）。
-  `setup init` 把它们写进密钥管理，固定 ID 为 `exchange-<交易所>-<环境>-<名称>`；**只建不改**：管理台里已有这个 ID 的不覆盖（以管理台为准），已在管理台删除的不重建，从秘密文件删掉条目也不会删除管理台里的密钥。部署 Trade 之后用 `trade inspect-credential` 检测。
+- 常用配置与秘密修改：让用户跑 `moox-cli config edit` 在本机网页里改，Agent 不填也不读。
+- 交易所密钥与告警通知渠道已从 `moox.secrets.toml` 移除：不要往秘密文件里手写 `[[exchange_keys]]` 或 `[notification]`（解析时会忽略并提示不再使用）；请用户在管理台「系统设置 › 密钥管理」录入交易所密钥、在「资源与运维 › 监控告警」的“消息通知设置”录入告警渠道，备份与恢复走 `setup backup` / `moox.backup`。
 - 手写的明文 `moox.secrets.toml`：`moox-cli config encrypt` 加密。
 - 新电脑：从原电脑拷两份文件和解密密钥（系统钥匙串里的，或 `~/.config/moox/config.key`）。
 - `config get` 报“这台电脑上没有解密秘密文件的密钥”：文件来自另一台电脑或钥匙串条目被删，把原电脑的解密密钥带过来；不要重新生成密钥覆盖。
@@ -56,7 +54,7 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 1. **`moox.toml`**：复制 `moox.toml.example`，改 `[hosts.*]`（地址、`private_address`、地域、SSH 用户与 `private_key_file`；只支持密钥登录）、`[deployments]`、`[storage_retention]`、`[scf_plan]`（云账号、地域的 VPC 与子网、各空间；某个空间的每函数标的数写在它自己的 `[[scf_plan.spaces]]` 里，如 A 股 `symbols_per_function = 16`）。
    `credential_secret_id` 填 `tencent-default`。因子任务不写在这里（默认任务在 `config/setup/factor-tasks.yaml`，自己的任务用 `factor task apply --file`）。文件权限 0600。
 2. **`moox.secrets.toml`**：按 `moox.secrets.toml.example` 的结构写出明文文件（0600，`O_EXCL` 新建；取值只在写文件的脚本进程内，不打印），随即 `moox-cli config encrypt --file ./moox.toml` 加密。
-   之后用 `moox-cli config get --file ./moox.secrets.toml` 核对（应全是 `***`，交易所密钥条数对得上）。
+   之后用 `moox-cli config get --file ./moox.secrets.toml` 核对（除 `admin.username` 外应全是 `***`）。
 3. `moox-cli setup validate --file ./moox.toml`：每台 `valid`、`route: fresh`、`manual_steps` 为空（没开 linger 的主机会列在这里）。
 
 ## 例子：把 5m 保留期调到 240 天

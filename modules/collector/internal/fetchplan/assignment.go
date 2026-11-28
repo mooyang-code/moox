@@ -9,17 +9,16 @@ import (
 // datasets, frequencies, or market types because those values are part of the
 // function's static environment.
 type TaskGroup struct {
-	Provider        string
-	MarketType      string
-	MarketID        string
-	InstrumentType  string
-	SourceID        string
-	SeriesTag       string
-	DatasetID       string
-	Frequency       string
-	OutputFields    []string
-	Subjects        []string
-	ExternalSymbols map[string]string
+	Provider       string
+	MarketType     string
+	MarketID       string
+	InstrumentType string
+	SourceID       string
+	SeriesTag      string
+	DatasetID      string
+	Frequency      string
+	OutputFields   []string
+	Subjects       []string
 	// Pairs 是交易对与交易所 symbol 不同的标的（币安永续合约的 pair），只下发给 WS 推送。
 	Pairs map[string]string
 	// 以下为定时采集计划使用：每函数标的数（0 为默认）、允许迟到时间（0 为空间默认）。

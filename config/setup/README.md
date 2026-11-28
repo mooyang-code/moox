@@ -1,11 +1,10 @@
 # 系统初始化配置
 
-这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，包含四个固定种子文件：
+这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，包含三个固定种子文件：
 
 | 文件 | 消费方 | 内容 |
 | --- | --- | --- |
 | `metadata.yaml` | `moox-cli setup init` | 业务 Space、数据源、标签、数据集与列（Storage 元数据） |
-| `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康阈值 |
 | `collection-tasks.yaml` | Collector | 默认采集任务 |
 | `factor-tasks.yaml` | `moox-cli setup start` | 默认因子定义与因子任务 |
 
@@ -29,14 +28,13 @@ moox-cli setup init \
 ```
 
 `--storage-host` 必须是 `moox.toml` 中已经部署 Storage 的主机名。`setup init` 读取
-`metadata.yaml` 在 Storage 里创建业务空间并完成元数据初始化；Monitor 的
-`dataset-health-policy.yaml` 和 Collector 的 `collection-tasks.yaml` 由打包与原生安装流程放入各组件配置目录，分别在模块启动时读取。
+`metadata.yaml` 在 Storage 里创建业务空间并完成元数据初始化；Collector 的 `collection-tasks.yaml` 由打包与原生安装流程放入组件配置目录，在模块启动时读取。
 
 启用 SCF 时，采集地域分两种：vpc 地域要有一台同地域、带私网地址、写了 `external_entry = true` 的入口主机，函数在该地域 VPC 里经
 它的外部入口私网地址写入；没有 MooX 主机的地域写 `network = "public"` 和 `entry_host`，函数不绑 VPC，经公网连入口主机的 11004。
 规则见 `skills/moox/references/private-network.md`。
 
-默认因子任务在 `factor-tasks.yaml`：`tasks` 声明因子任务（`id`、`name`、`space_id`、`source_dataset_id`、`freq`），
+默认因子任务在 `factor-tasks.yaml`：`tasks` 声明因子任务（`id`、`name`、`space_id`、`source_dataset_id`、`frequency`），
 任务的成员用内嵌的 `members` 写：`{factor: ema, params: {span: 20, warmup: 50000}}` 是固定成员，`{factor: ma, var: true}` 是可变成员（由关联的策略逐期提交参数）；
 `definitions` 声明因子定义（`factor_id` 加因子库文件，路径相对 `source_dir`，`source_dir` 相对这个文件所在的目录）。
 `setup start --space-id <空间>` 导入这个空间的任务（定义全部导入），没有因子机时跳过。
@@ -47,6 +45,4 @@ moox-cli setup init \
 - `setup start` 重跑会把这种“线上停用、文件启用、参数一致”的成员当作上次没启用完，接着启用，安装能继续；
 - 用户手动执行的 `factor task apply` 仍把它报成“状态不同”、一项都不写（不会把在管理台里手工停用的成员重新启用），确认后用 `moox-cli factor member enable` 启用再重跑。
 
-告警渠道的初始值也只建不改：Monitor 一个渠道都没有时才写入秘密文件里的 `[notification]`。Monitor 删除渠道是硬删除，
-所以在管理台把渠道全部删掉之后再重跑写渠道的那一步（`setup install` 或 `setup init`），会把秘密文件里的旧渠道写回去；
-不想要它就先把秘密文件里的 `webhook_url` 清空。
+告警渠道与交易所密钥不在 `moox.secrets.toml` 里配置，安装完成后在管理台录入（「资源与运维 › 监控告警」的“消息通知设置”、「系统设置 › 密钥管理」），清空重装时通过本机 `moox.backup` 自动备份与恢复。

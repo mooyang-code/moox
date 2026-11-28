@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
@@ -224,8 +225,12 @@ func TestRetryBudgetOnlyLimitsIdempotentWrites(t *testing.T) {
 	require.Equal(t, 1, calls, "剩余预算不足时幂等写放弃重发，交给补采")
 
 	// 只读方法保持改动前的行为：只要调用还没过期就重试，不受 minRetryRemaining 约束。
-	reader := newTestClient(t, Config{Mode: External, Credentials: authtest.Identity("moox-skill"),
-		EntryAddress: "entry.example.test:11004", EntryHost: "storage"})
+	readCfg := tunnelConfig(&sourceStub{directory: versioned(t, DirectoryUpdate{
+		Hosts:       []servicecatalog.Host{{ID: "storage", Address: "storage.example.test", Status: servicecatalog.Enabled}},
+		Deployments: []servicecatalog.Deployment{{HostID: "storage", ComponentID: "storage-primary", Status: servicecatalog.Enabled}},
+	})})
+	readCfg.Tunnels = tunnelFunc(func(context.Context, string) (string, error) { return "127.0.0.1:11002", nil })
+	reader := newTestClient(t, readCfg)
 	readCalls := 0
 	reader.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
 		readCalls++

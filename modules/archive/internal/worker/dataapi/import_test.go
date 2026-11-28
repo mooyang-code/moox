@@ -56,7 +56,7 @@ func TestImportHandlersMapSinkErrorsToStatusCodes(t *testing.T) {
 	}}
 	ts := httptest.NewServer(New(Options{Imports: sink}))
 	t.Cleanup(ts.Close)
-	req := &storagepb.PrimaryUpsertFieldsReq{SpaceId: space, DatasetId: dataset, Rows: []*storagepb.RowFieldUpsert{{}, {}}}
+	req := &storagepb.PrimaryUpsertFieldsReq{SpaceId: space, DatasetId: dataset, Rows: []*storagepb.Row{{}, {}}}
 	body, err := proto.Marshal(req)
 	require.NoError(t, err)
 

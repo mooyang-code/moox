@@ -102,7 +102,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getArchiveOverview, type GetArchiveOverviewRsp } from "@/api/archive";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { formatBytes } from "@/api/modules/host-monitor";
@@ -147,7 +147,8 @@ async function load() {
 }
 
 usePolling(load, 30_000, () => Boolean(spaceId.value));
-watch(spaceId, () => void load(), { immediate: true });
+onMounted(() => void load());
+onBeforeUnmount(() => gate.invalidate());
 
 const { host, error: hostError, load: loadHost } = useArchiveWorkerHost();
 void loadHost();

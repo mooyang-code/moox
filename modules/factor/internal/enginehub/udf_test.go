@@ -38,9 +38,8 @@ func seedUdfTask(t *testing.T, db *store.Store) {
 	require.NoError(t, db.CreateFactor(ctx, domain.FactorDef{FactorID: "fu", Name: "fu", Spec: spec, SpecHash: domain.SpecHash(spec)}))
 	set := domain.FactorTask{TaskID: "task_u", SpaceID: "crypto", Name: "任务u", SourceDatasetID: "dataset_u", Freq: "1m", ResultDatasetID: "dataset_factor_u", Status: domain.TaskStatusEnabled}
 	require.NoError(t, db.CreateTask(ctx, set))
-	_, err := db.AddMember(ctx, "task_u", "fu", "fu", domain.MemberKindFixed, nil)
+	_, err := db.AddMember(ctx, "task_u", "fu", "fu", domain.MemberKindFixed, nil, domain.MemberStatusEnabled)
 	require.NoError(t, err)
-	require.NoError(t, db.SetMemberStatus(ctx, "task_u", "fu", domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 }
 
 // 目录快照携带定义引用的版本；切换版本（spec 不变）时目录哈希改变，引擎据此重新同步。
@@ -52,7 +51,7 @@ func TestSnapshotCarriesUdfBindingsAndTheirSwitchChangesTheCatalogHash(t *testin
 	require.NoError(t, db.SetActiveUdf(ctx, v1.Name, v1.Hash))
 	seedUdfTask(t, db)
 
-	hash1, _, sets, err := hub.Snapshot(ctx, "")
+	hash1, _, sets, _, err := hub.Snapshot(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
 	def := sets[0].Members[0].Factor
@@ -60,7 +59,7 @@ func TestSnapshotCarriesUdfBindingsAndTheirSwitchChangesTheCatalogHash(t *testin
 	require.NotNil(t, def.Compiled())
 
 	require.NoError(t, db.SetActiveUdf(ctx, v2.Name, v2.Hash))
-	hash2, notModified, sets, err := hub.Snapshot(ctx, hash1)
+	hash2, notModified, sets, _, err := hub.Snapshot(ctx, hash1)
 	require.NoError(t, err)
 	require.False(t, notModified)
 	require.NotEqual(t, hash1, hash2, "切换版本后目录指纹变化")

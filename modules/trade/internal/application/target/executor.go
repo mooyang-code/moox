@@ -246,7 +246,7 @@ func (e *Executor) Converge(
 	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
 		return Result{Status: StatusPaused}, err
 	}
-	if logicalAccount.AutomationState != "ACTIVE" {
+	if !logicalAccount.IsActive() {
 		return e.stopWhenInactive(ctx, spaceID, logicalAccountID, logicalAccount, &target)
 	}
 	// 快速路径：只在等当前目标已发出的子单结束时，不加载成员、不逐个标的计算。每笔成交都会唤醒收敛，
@@ -396,7 +396,7 @@ func (e *Executor) spotBuyPrecheck(
 	if quote.Price.Cmp(shared.Zero()) <= 0 {
 		return spotBuyVerdict{}, nil
 	}
-	quantity := floorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
+	quantity := shared.FloorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
 	if env.belowConfiguredMinimum(action, quantity, quote.Price) {
 		return spotBuyVerdict{satisfied: true}, nil
 	}
@@ -899,11 +899,11 @@ func nextLaneAction(
 
 // belowMinimumQuantity 判断数量按步长取整后是否下不了单。
 func belowMinimumQuantity(quantity shared.Decimal, instrument store.InstrumentRecord) bool {
-	step, minimum, err := baseQuantityRules(instrument)
+	step, minimum, err := instrument.BaseQuantityRules()
 	if err != nil {
 		return false
 	}
-	floored := floorToStep(quantity.Abs(), step)
+	floored := shared.FloorToStep(quantity.Abs(), step)
 	return floored.IsZero() || floored.Cmp(minimum) < 0
 }
 
@@ -1180,11 +1180,11 @@ func (e *Executor) submitCandidate(
 	}
 	accountChildren := childrenOfAccount(children, accountID)
 	sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(accountChildren))
-	_, minimum, err := baseQuantityRules(candidate.instrument)
+	_, minimum, err := candidate.instrument.BaseQuantityRules()
 	if err != nil {
-		return placement{}, true, err
+		return placement{}, true, fmt.Errorf("%w: %v", ErrInvalidTarget, err)
 	}
-	maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument))
+	maxQuantity := shared.FloorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument))
 	// 整手市场（A 股）单笔上限不足一手时按一手下单（拆单随机化后也一样）：高价股一手就超过默认的 10 万元上限，
 	// 否则永远下不了单。
 	if exchange.RuleFor(candidate.instrument.MarketType).BoardLot && maxQuantity.Cmp(minimum) < 0 {
@@ -1387,15 +1387,15 @@ func belowMinimumNotional(
 
 // childQuantity 返回动作按步长取整后的下单数量；不到交易所最小数量时返回原因。
 func childQuantity(action laneAction) (shared.Decimal, string, error) {
-	step, minimum, err := baseQuantityRules(action.instrument)
+	step, minimum, err := action.instrument.BaseQuantityRules()
 	if err != nil {
-		return shared.Decimal{}, "", err
+		return shared.Decimal{}, "", fmt.Errorf("%w: %v", ErrInvalidTarget, err)
 	}
 	// 整手市场卖出全部可卖数量时允许零股，不按步长取整。
 	if oddLotFullSell(action) {
 		return action.member.sellable[action.instrument.InstrumentID], "", nil
 	}
-	quantity := floorToStep(action.delta.Abs(), step)
+	quantity := shared.FloorToStep(action.delta.Abs(), step)
 	if quantity.IsZero() || quantity.Cmp(minimum) < 0 {
 		return shared.Zero(), "数量低于交易所最小值", nil
 	}
@@ -1752,41 +1752,12 @@ func (e *Executor) recoverTargetCancel(ctx context.Context, current store.OrderR
 	return errTargetOrderUnresolved
 }
 
-func baseQuantityRules(
-	instrument store.InstrumentRecord,
-) (shared.Decimal, shared.Decimal, error) {
-	step, err := shared.ParseDecimal(instrument.ExchangeQuantityStep)
-	if err != nil || step.Cmp(shared.Zero()) <= 0 {
-		return shared.Decimal{}, shared.Decimal{},
-			fmt.Errorf("%w: quantity step", ErrInvalidTarget)
-	}
-	minimum, err := shared.ParseDecimal(instrument.MinExchangeQuantity)
-	if err != nil || minimum.IsNegative() {
-		return shared.Decimal{}, shared.Decimal{},
-			fmt.Errorf("%w: minimum quantity", ErrInvalidTarget)
-	}
-	if exchange.RuleFor(instrument.MarketType).ContractValue {
-		contractValue, parseErr := shared.ParseDecimal(instrument.ContractValue)
-		if parseErr != nil || contractValue.Cmp(shared.Zero()) <= 0 {
-			return shared.Decimal{}, shared.Decimal{},
-				fmt.Errorf("%w: contract value", ErrInvalidTarget)
-		}
-		step = step.Mul(contractValue)
-		minimum = minimum.Mul(contractValue)
-	}
-	return step, minimum, nil
-}
-
 func mustBaseStep(instrument store.InstrumentRecord) shared.Decimal {
-	step, _, err := baseQuantityRules(instrument)
+	step, _, err := instrument.BaseQuantityRules()
 	if err != nil {
 		return shared.Zero()
 	}
 	return step
-}
-
-func floorToStep(value, step shared.Decimal) shared.Decimal {
-	return shared.FloorToStep(value, step)
 }
 
 func sameSign(left, right shared.Decimal) bool {

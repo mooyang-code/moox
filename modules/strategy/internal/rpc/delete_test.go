@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // fakeFactorTasks 是 Factor 里的任务：任务 ID → 关联的实例。deleteErr 让下一次删除失败一次。
@@ -36,28 +37,28 @@ func (f *fakeFactorTasks) CheckBoundTask(_ context.Context, taskID, instanceID s
 		return f.checkErr
 	}
 	if jobs := f.recalc[taskID]; len(jobs) > 0 {
-		return &input.RejectedError{Operation: "检查因子任务能否删除", Msg: "因子任务 " + taskID + " 有补算正在进行（" + strings.Join(jobs, "、") + "），请先取消补算"}
+		return &upstream.RejectedError{Operation: "检查因子任务能否删除", Msg: "因子任务 " + taskID + " 有补算正在进行（" + strings.Join(jobs, "、") + "），请先取消补算"}
 	}
 	if f.bound[taskID] != instanceID {
-		return &input.RejectedError{Operation: "检查因子任务能否删除", Msg: "关联的不是这个实例"}
+		return &upstream.RejectedError{Operation: "检查因子任务能否删除", Msg: "关联的不是这个实例"}
 	}
 	return nil
 }
 
-func (f *fakeFactorTasks) GetFactorTask(ctx context.Context, taskID string) (input.FactorTaskRecord, error) {
+func (f *fakeFactorTasks) GetFactorTask(ctx context.Context, taskID string) (upstream.FactorTaskRecord, error) {
 	if f.block {
 		<-ctx.Done()
-		return input.FactorTaskRecord{}, ctx.Err()
+		return upstream.FactorTaskRecord{}, ctx.Err()
 	}
 	instanceID, ok := f.bound[taskID]
 	if !ok {
-		return input.FactorTaskRecord{}, fmt.Errorf("%w：%s", input.ErrFactorTaskNotFound, taskID)
+		return upstream.FactorTaskRecord{}, fmt.Errorf("%w：%s", upstream.ErrFactorTaskNotFound, taskID)
 	}
 	space := f.spaces[taskID]
 	if space == "" {
 		space = "crypto"
 	}
-	return input.FactorTaskRecord{SpaceID: space, Status: "enabled", ResultDatasetID: "dataset_of_" + taskID, BoundInstanceID: instanceID}, nil
+	return upstream.FactorTaskRecord{SpaceID: space, Status: "enabled", ResultDatasetID: "dataset_of_" + taskID, BoundInstanceID: instanceID}, nil
 }
 
 func (f *fakeFactorTasks) ListFactorTaskIDs(ctx context.Context) (map[string]bool, error) {
@@ -82,7 +83,7 @@ func (f *fakeFactorTasks) DeleteBoundTask(_ context.Context, taskID, instanceID 
 		return err
 	}
 	if f.bound[taskID] != instanceID {
-		return &input.RejectedError{Operation: "删除因子任务", Msg: "关联的不是这个实例"}
+		return &upstream.RejectedError{Operation: "删除因子任务", Msg: "关联的不是这个实例"}
 	}
 	delete(f.bound, taskID)
 	f.deleted = append(f.deleted, taskID)
@@ -514,7 +515,7 @@ func TestDeleteClearsAgeRecordsOnlyForDeletedTasks(t *testing.T) {
 	tasks.bound["ftask_age_spot"] = "iage"
 	views := map[string]string{}
 	for _, taskID := range []string{"ftask_age_spot", "ftask_age_swap"} {
-		datasetID, err := input.DatasetIDOfTask(taskID)
+		datasetID, err := upstream.DatasetIDOfTask(taskID)
 		if err != nil {
 			t.Fatal(err)
 		}

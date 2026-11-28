@@ -9,6 +9,9 @@ import (
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // stockDay 返回 A 股日线某个交易日期的行键：该日期的 UTC 零点（日期键）。
@@ -26,19 +29,19 @@ func shanghaiMidnight(t *testing.T, year int, month time.Month, day int) time.Ti
 // 内嵌 A 股日历止于 2027-12-31：最后一个交易日本身仍能换算（只是没有下一根），回放区间枚举到它为止；
 // 索引最新一根超出日历时夹回日历之内，历史窗口照常可用；超出范围的报错是中文。
 func TestStockCalendarTail(t *testing.T) {
-	last, err := FromStorageStart("cn_stock", "1d", stockDay(t, 2027, 12, 31))
+	last, err := period.FromStorageStart("cn_stock", "1d", stockDay(t, 2027, 12, 31))
 	if err != nil || !last.NextEnd.IsZero() || last.PreviousStart.IsZero() {
 		t.Fatalf("最后一个交易日应能换算且没有下一根：%+v err=%v", last, err)
 	}
-	bars, err := ReplayBars("cn_stock", "1d", stockDay(t, 2027, 12, 28), stockDay(t, 2028, 3, 1), DefaultReplayMaxBars)
+	bars, err := period.ReplayBars("cn_stock", "1d", stockDay(t, 2027, 12, 28), stockDay(t, 2028, 3, 1), DefaultReplayMaxBars)
 	if err != nil || len(bars) != 4 || !bars[3].StorageStart.Equal(stockDay(t, 2027, 12, 31)) {
 		t.Fatalf("回放区间应枚举到日历的最后一个交易日：%d 根 err=%v", len(bars), err)
 	}
-	if _, err := FromBarEnd("cn_stock", "1d", time.Date(2028, 1, 5, 15, 0, 0, 0, shanghai(t))); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") || strings.Contains(err.Error(), "calendar") {
+	if _, err := period.FromBarEnd("cn_stock", "1d", time.Date(2028, 1, 5, 15, 0, 0, 0, shanghai(t))); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") || strings.Contains(err.Error(), "calendar") {
 		t.Fatalf("超出日历的报错应是中文：%v", err)
 	}
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
-	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2025, 1, 2), IndexedTo: stockDay(t, 2028, 1, 6), SeriesBars: 5000}
+	view := upstream.ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2025, 1, 2), IndexedTo: stockDay(t, 2028, 1, 6), SeriesBars: 5000}
 	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2025, 3, 3), stockDay(t, 2025, 7, 1), testNow)
 	if err != nil || !end.Equal(stockDay(t, 2025, 7, 1)) {
 		t.Fatalf("索引最新一根超出日历时历史窗口应照常可用：%s err=%v", end, err)
@@ -52,10 +55,10 @@ func TestStockCalendarTail(t *testing.T) {
 func TestCoverageBoundsSnapToTradingDays(t *testing.T) {
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	// 10-03 到 10-05 整段是假期：规整后最早一根（10-08）晚于最晚一根（09-30），报出行都不在交易日上。
-	if bounds, err := CoverageBounds(ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 3), IndexedTo: stockDay(t, 2026, 10, 5)}, resolved, testNow); err == nil || !strings.Contains(err.Error(), "都不在 A 股交易日上") {
+	if bounds, err := CoverageBounds(upstream.ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 3), IndexedTo: stockDay(t, 2026, 10, 5)}, resolved, testNow); err == nil || !strings.Contains(err.Error(), "都不在 A 股交易日上") {
 		t.Fatalf("整段落在假期内的覆盖范围应报出原因：%+v err=%v", bounds, err)
 	}
-	view := ViewInfo{IndexedFrom: stockDay(t, 2026, 9, 27), IndexedTo: stockDay(t, 2026, 10, 5), SeriesBars: 5000}
+	view := upstream.ViewInfo{IndexedFrom: stockDay(t, 2026, 9, 27), IndexedTo: stockDay(t, 2026, 10, 5), SeriesBars: 5000}
 	bounds, err := CoverageBounds(view, resolved, testNow)
 	if err != nil || !bounds.From.Equal(stockDay(t, 2026, 9, 28)) || !bounds.To.Equal(stockDay(t, 2026, 9, 30)) || bounds.ToClosed {
 		t.Fatalf("覆盖边界应规整到交易日：%+v err=%v", bounds, err)
@@ -70,14 +73,14 @@ func TestResolveCalendarInheritance(t *testing.T) {
 	strategy := parseStrategy(t, "name: x\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n")
 	build := func(datasetAttributes map[string]string, alignment string) *fakeClient {
 		client := newFakeClient("spot")
-		client.views["dataset_factor_1d"] = ViewInfo{DatasetID: "dataset_factor_1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx", Columns: []ViewColumn{plainColumn("close")}}
-		client.datasets["dataset_factor_1d"] = DatasetInfo{DatasetID: "dataset_factor_1d", Status: "active", Frequency: "1d", Retention: "forever", Alignment: alignment, Attributes: datasetAttributes}
-		client.datasets["ds_source"] = DatasetInfo{DatasetID: "ds_source", Status: "active", Frequency: "1m", Retention: "forever", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "spot"}}
+		client.views["dataset_factor_1d"] = upstream.ViewInfo{DatasetID: "dataset_factor_1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx", Columns: []upstream.ViewColumn{plainColumn("close")}}
+		client.datasets["dataset_factor_1d"] = upstream.DatasetInfo{DatasetID: "dataset_factor_1d", Status: "active", Frequency: "1d", Retention: "forever", Alignment: alignment, Attributes: datasetAttributes}
+		client.datasets["ds_source"] = upstream.DatasetInfo{DatasetID: "ds_source", Status: "active", Frequency: "1m", Retention: "forever", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "spot"}}
 		return client
 	}
 	resample := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "kline_resample_result"}, "epoch_utc")
 	resolved, _, err := Resolve(context.Background(), resample, "space", []string{"ftask_1d"}, strategy)
-	if err != nil || resolved.Calendar != DefaultCalendar {
+	if err != nil || resolved.Calendar != period.DefaultCalendar {
 		t.Fatalf("重采样数据集不应继承源数据集的 A 股日历：%+v err=%v", resolved, err)
 	}
 	factor := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "factor_result"}, "")
@@ -111,23 +114,23 @@ rules:
 func TestAgeProbeCalendarErrorIsConfigError(t *testing.T) {
 	client := newFakeClient("spot")
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}
-	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, ViewInfo{DatasetID: "view_stock"}, "spot", map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
+	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, upstream.ViewInfo{DatasetID: "view_stock"}, "spot", map[string]upstream.Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
 	_, err := probe(context.Background(), []string{"600000.SH"})
-	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "之前没有交易日") {
+	var skip *upstream.SkipError
+	if !errors.As(err, &skip) || skip.Reason != upstream.SkipConfigError || !strings.Contains(skip.Detail, "之前没有交易日") {
 		t.Fatalf("日历换算失败应记 config_error 并给出中文说明：%v", err)
 	}
 }
 
 // 回放提交时同样拒绝永远无法满足的 min_age_bars；覆盖太短、可用起点会落在最新一根之后时直接说明历史不足。
 func TestReplayWindowRejectsUnsatisfiableHistory(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 150}
-	view := ViewInfo{DatasetID: "dataset_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: period.DefaultCalendar, MinAgeBars: 150}
+	view := upstream.ViewInfo{DatasetID: "dataset_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
 		t.Fatalf("N 超过每个序列保留的根数应拒绝：%v", err)
 	}
 	resolved.MinAgeBars = 30
-	view = ViewInfo{DatasetID: "dataset_factor_1h", IndexedFrom: barStart.Add(-10 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
+	view = upstream.ViewInfo{DatasetID: "dataset_factor_1h", IndexedFrom: barStart.Add(-10 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-5*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "暂不能回放") || strings.Contains(err.Error(), "可用起点") {
 		t.Fatalf("可用起点会晚于最新一根时应直接说明历史不足：%v", err)
 	}
@@ -140,13 +143,13 @@ type staleClient struct {
 	reads      int
 }
 
-func (c *staleClient) QueryRows(context.Context, string, Query) ([]Row, uint64, error) {
+func (c *staleClient) QueryRows(context.Context, string, upstream.Query) ([]upstream.Row, uint64, error) {
 	c.reads++
-	return nil, 0, ErrStale
+	return nil, 0, upstream.ErrStale
 }
 
-func (c *staleClient) GetView(_ context.Context, _, datasetID string) (ViewInfo, error) {
-	return ViewInfo{DatasetID: datasetID, ActiveIndexID: "idx_b", Generation: c.generation}, nil
+func (c *staleClient) GetView(_ context.Context, _, datasetID string) (upstream.ViewInfo, error) {
+	return upstream.ViewInfo{DatasetID: datasetID, ActiveIndexID: "idx_b", Generation: c.generation}, nil
 }
 
 func (c *staleClient) ViewGeneration(context.Context, string, string) (string, error) {
@@ -156,7 +159,7 @@ func (c *staleClient) ViewGeneration(context.Context, string, string) (string, e
 // 回放读取期间活动索引换了一代：读取器返回 IndexChangedError 交给调用方复查，不静默改读新索引。
 func TestRangeLoaderReportsIndexChange(t *testing.T) {
 	client := &staleClient{fakeClient: newFakeClient("spot"), generation: "idx_b@b2"}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: upstream.ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}}
 	_, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
 	var changed *IndexChangedError
 	if !errors.As(err, &changed) || changed.View.Generation != "idx_b@b2" || client.reads != 1 || loader.View.Generation != "idx_a@b1" {
@@ -168,9 +171,9 @@ func TestRangeLoaderReportsIndexChange(t *testing.T) {
 // 原地重建后索引 ID 不变、建成序号变，存储重建后 store_id 变，两种情况都算换代。索引还没建好或 storage-view 还没登记
 // 该 View 时活动索引与代次为空，不当作 View 被删；复核代次遇到还没登记返回可重试错误。
 func TestGetViewReadsGenerationFromViewState(t *testing.T) {
-	metadata := &metadataStub{view: &storagepb.Dataset{DatasetId: "ds", Freq: "1h", Status: "active"}}
+	metadata := &metadataStub{view: &storagepb.Dataset{DatasetId: "ds", Frequency: "1h", Status: "active"}}
 	state := &viewStateStub{rsp: builtState("idx_a", "store_1", 7)}
-	client := &RPCClient{Metadata: metadata, DataView: state}
+	client := &upstream.RPCClient{Metadata: metadata, DataView: state}
 	info, err := client.GetView(context.Background(), "space", "ds")
 	if err != nil || info.ActiveIndexID != "idx_a" || info.Generation != "idx_a@store_1#7" {
 		t.Fatalf("活动索引与代次应取自 GetViewState：%+v err=%v", info, err)
@@ -202,7 +205,7 @@ func TestGetViewReadsGenerationFromViewState(t *testing.T) {
 	// storage-view 还没登记（重启后正在恢复）：复核代次返回可重试的传输错误，不能当成空代次误判换代；
 	// GetView 仍以 Metadata 为准，不报 View 已删除。
 	state.rsp = nil
-	var transportErr *TransportError
+	var transportErr *upstream.TransportError
 	if generation, err := client.ViewGeneration(context.Background(), "space", "ds"); !errors.As(err, &transportErr) || generation != "" {
 		t.Fatalf("VIEW_NOT_FOUND 应返回可重试的传输错误：%q err=%v", generation, err)
 	}

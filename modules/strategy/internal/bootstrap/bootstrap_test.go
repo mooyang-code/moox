@@ -53,7 +53,7 @@ func TestInitializeMarksInterruptedReplays(t *testing.T) {
 	}
 	// 网关是必需依赖：用网关桩的配置装配，数据库换成上面预置了遗留回放的那个。
 	cfg, _ := strategyGatewayFixture(t, "")
-	cfg.Database = database
+	cfg.Database.Path = database
 	server, closeFn, err := Initialize(ctx, trpc.NewServerWithConfig(trpcConfig), cfg)
 	if err != nil {
 		t.Fatalf("Initialize() 失败：%v", err)

@@ -18,14 +18,14 @@ const (
 	// sqlSelectFinishedReplaysBefore 取一批创建时间早于截止时间、已结束的回放。
 	sqlSelectFinishedReplaysBefore = `
 		SELECT c_replay_id FROM t_strategy_replays
-		WHERE c_ctime < ? AND c_status IN ('done', 'failed', 'cancelled')
+		WHERE c_ctime < ? AND c_status IN ('succeeded', 'failed', 'cancelled')
 		ORDER BY c_ctime LIMIT 20`
 	// sqlSelectFinishedReplaysBeyond 取每个空间里排在最近 keep 个之后的已结束回放。
 	sqlSelectFinishedReplaysBeyond = `
 		SELECT c_replay_id FROM (
 			SELECT c_replay_id, ROW_NUMBER() OVER (PARTITION BY c_space_id ORDER BY c_ctime DESC, c_replay_id DESC) AS c_rank
 			FROM t_strategy_replays
-			WHERE c_status IN ('done', 'failed', 'cancelled')
+			WHERE c_status IN ('succeeded', 'failed', 'cancelled')
 		)
 		WHERE c_rank > ?`
 	// sqlDeleteReplayBarsBatch 分批删除一个回放的周期记录。

@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -14,62 +15,90 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func openTestAccountStore(t *testing.T) *store.Store {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	return db
+}
+
+func accountCount(t *testing.T, db *store.Store) int64 {
+	t.Helper()
+	var count int64
+	require.NoError(t, db.DBForTest().Table("t_trading_accounts").Count(&count).Error)
+	return count
+}
+
+func seedAccount(t *testing.T, db *store.Store, value store.TradingAccountRecord) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(value)
+	}))
+	if value.Ready {
+		require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+			return tx.UpdateTradingAccountReadiness(value.SpaceID, value.TradingAccountID, true, 1, "")
+		}))
+	}
+}
+
 func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 	tests := []struct {
 		name       string
-		mutate     func(*tradingaccount.Account)
+		mutate     func(*store.TradingAccountRecord)
 		secret     ExchangeSecret
 		want       error
-		wantWrites int
+		wantWrites int64
 	}{
 		{
 			name: "valid SPOT paper account without credential",
-			mutate: func(value *tradingaccount.Account) {
+			mutate: func(value *store.TradingAccountRecord) {
 				value.CredentialSecretID = ""
 			},
 			wantWrites: 1,
 		},
 		{
 			name:   "missing ID",
-			mutate: func(value *tradingaccount.Account) { value.ID = "" },
+			mutate: func(value *store.TradingAccountRecord) { value.TradingAccountID = "" },
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name:   "missing SpaceID",
-			mutate: func(value *tradingaccount.Account) { value.SpaceID = "" },
+			mutate: func(value *store.TradingAccountRecord) { value.SpaceID = "" },
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name:   "missing name",
-			mutate: func(value *tradingaccount.Account) { value.Name = "" },
+			mutate: func(value *store.TradingAccountRecord) { value.Name = "" },
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name:   "missing Exchange",
-			mutate: func(value *tradingaccount.Account) { value.Exchange = exchange.ExchangeUnspecified },
+			mutate: func(value *store.TradingAccountRecord) { value.Exchange = "" },
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name:   "missing market",
-			mutate: func(value *tradingaccount.Account) { value.Markets = nil },
+			mutate: func(value *store.TradingAccountRecord) { value.Markets = nil },
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "missing execution mode",
-			mutate: func(value *tradingaccount.Account) {
-				value.ExecutionMode = exchange.ExecutionModeUnspecified
+			mutate: func(value *store.TradingAccountRecord) {
+				value.ExecutionMode = ""
 			},
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "missing credential secret ID",
-			mutate: func(value *tradingaccount.Account) {
+			mutate: func(value *store.TradingAccountRecord) {
 				setLive(value, exchange.AccountEnvironmentTestnet, "")
 			},
 			secret: validSecret(),
@@ -77,7 +106,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "missing settlement asset",
-			mutate: func(value *tradingaccount.Account) {
+			mutate: func(value *store.TradingAccountRecord) {
 				value.SettlementAsset = ""
 			},
 			secret: validSecret(),
@@ -85,7 +114,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "wrong credential category",
-			mutate: func(value *tradingaccount.Account) {
+			mutate: func(value *store.TradingAccountRecord) {
 				setLive(value, exchange.AccountEnvironmentTestnet, "secret-1")
 			},
 			secret: ExchangeSecret{
@@ -96,7 +125,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "wrong credential Exchange",
-			mutate: func(value *tradingaccount.Account) {
+			mutate: func(value *store.TradingAccountRecord) {
 				setLive(value, exchange.AccountEnvironmentTestnet, "secret-1")
 			},
 			secret: ExchangeSecret{
@@ -107,7 +136,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "inactive credential",
-			mutate: func(value *tradingaccount.Account) {
+			mutate: func(value *store.TradingAccountRecord) {
 				setLive(value, exchange.AccountEnvironmentTestnet, "secret-1")
 			},
 			secret: ExchangeSecret{
@@ -118,22 +147,22 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name:   "SPOT rejects margin",
-			mutate: func(value *tradingaccount.Account) { value.MarginMode = exchange.MarginModeCross },
+			mutate: func(value *store.TradingAccountRecord) { value.MarginMode = string(exchange.MarginModeCross) },
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "SPOT rejects leverage",
-			mutate: func(value *tradingaccount.Account) {
-				value.LeverageSettings = map[string]shared.Decimal{"BTC-USDT": shared.MustDecimal("2")}
+			mutate: func(value *store.TradingAccountRecord) {
+				value.LeverageSettings = store.LeverageSettings{"BTC-USDT": "2"}
 			},
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
 		{
 			name: "SWAP requires CROSS",
-			mutate: func(value *tradingaccount.Account) {
-				value.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
+			mutate: func(value *store.TradingAccountRecord) {
+				value.Markets = []string{string(exchange.MarketTypeSwap)}
 			},
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
@@ -146,120 +175,95 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 			if tt.mutate != nil {
 				tt.mutate(&value)
 			}
-			store := newMemoryStore()
+			db := openTestAccountStore(t)
 			secrets := &fakeSecrets{secret: tt.secret}
-			service := Service{Store: store, Secrets: secrets, Inspector: okInspector}
+			service := Service{Store: db, Secrets: secrets, Inspector: okInspector}
 
 			_, err := service.Create(context.Background(), value)
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("Create() error = %v, want %v", err, tt.want)
 			}
-			if store.createCalls != tt.wantWrites {
-				t.Fatalf("Create() writes = %d, want %d", store.createCalls, tt.wantWrites)
+			if got := accountCount(t, db); got != tt.wantWrites {
+				t.Fatalf("Create() rows = %d, want %d", got, tt.wantWrites)
 			}
 		})
 	}
 }
 
 func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	paper := validAccount()
-	store.accounts[paper.ID] = paper
-	store.nameIndex[paper.SpaceID+"\x00"+paper.Name] = paper.ID
+	seedAccount(t, db, paper)
 
 	live := paper
-	live.ID = "account-live"
+	live.TradingAccountID = "account-live"
 	setLive(&live, exchange.AccountEnvironmentTestnet, "secret-1")
-	secrets := &fakeSecrets{
-		secret: validSecret(),
-	}
-	service := Service{Store: store, Secrets: secrets, Inspector: okInspector}
+	secrets := &fakeSecrets{secret: validSecret()}
+	service := Service{Store: db, Secrets: secrets, Inspector: okInspector}
 
 	_, err := service.Create(context.Background(), live)
-	if !errors.Is(err, ErrAccountConflict) {
-		t.Fatalf("Create() error = %v, want ErrAccountConflict", err)
-	}
-	if got := store.accounts[paper.ID]; got.ExecutionMode != exchange.ExecutionModePaper {
-		t.Fatalf("existing execution mode = %q, want PAPER", got.ExecutionMode)
-	}
-	if store.createCalls != 1 {
-		t.Fatalf("Create() calls = %d, want one rejected insert", store.createCalls)
-	}
+	require.ErrorIs(t, err, store.ErrNameTaken)
+	got, err := db.GetTradingAccountByID(context.Background(), paper.TradingAccountID)
+	require.NoError(t, err)
+	require.Equal(t, string(exchange.ExecutionModePaper), got.ExecutionMode)
+	require.Equal(t, int64(1), accountCount(t, db))
 }
 
 func TestCreateProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
-	secrets := &fakeSecrets{
-		secret: validSecret(),
-	}
-	service := Service{Store: store, Secrets: secrets, Inspector: okInspector}
+	secrets := &fakeSecrets{secret: validSecret()}
+	service := Service{Store: db, Secrets: secrets, Inspector: okInspector}
 
 	_, err := service.Create(context.Background(), value)
-	if !errors.Is(err, ErrLiveTradingDisabled) {
-		t.Fatalf("Create() error = %v, want ErrLiveTradingDisabled", err)
-	}
-	if secrets.getCalls != 0 {
-		t.Fatalf("GetExchangeSecret() calls = %d, want 0", secrets.getCalls)
-	}
-	if store.createCalls != 0 {
-		t.Fatalf("Create() writes = %d, want 0", store.createCalls)
-	}
+	require.ErrorIs(t, err, ErrLiveTradingDisabled)
+	require.Zero(t, secrets.getCalls)
+	require.Zero(t, accountCount(t, db))
 }
 
 func TestCreateProductionAccountWhenLiveTradingIsEnabled(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	service := Service{
 		Inspector:          okInspector,
-		Store:              store,
+		Store:              db,
 		Secrets:            &fakeSecrets{secret: validSecret()},
 		LiveTradingEnabled: true,
 	}
 
-	if _, err := service.Create(context.Background(), value); err != nil {
-		t.Fatalf("Create() error = %v, want nil", err)
-	}
-	if store.createCalls != 1 {
-		t.Fatalf("Create() writes = %d, want 1", store.createCalls)
-	}
+	_, err := service.Create(context.Background(), value)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), accountCount(t, db))
 }
 
 func TestCreatePaperAccountDoesNotRequireSecretSource(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	value.CredentialSecretID = ""
-	service := Service{Store: store}
+	service := Service{Store: db}
 
 	got, err := service.Create(context.Background(), value)
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	if got.CredentialSecretID != "" || store.createCalls != 1 {
-		t.Fatalf("Create() = %+v, writes = %d", got, store.createCalls)
-	}
+	require.NoError(t, err)
+	require.Empty(t, got.CredentialSecretID)
+	require.Equal(t, int64(1), accountCount(t, db))
 }
 
 func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	before := validSwapAccount()
 	setLive(&before, exchange.AccountEnvironmentTestnet, "secret-1")
-	store.accounts[before.ID] = before
-	service := Service{Store: store, Secrets: &fakeSecrets{secret: validSecret()}, Inspector: okInspector}
+	seedAccount(t, db, before)
+	service := Service{Store: db, Secrets: &fakeSecrets{secret: validSecret()}, Inspector: okInspector}
 	name := "renamed"
 
-	got, _, err := service.Update(context.Background(), UpdateCommand{
-		TradingAccountID: before.ID,
+	got, err := service.Update(context.Background(), UpdateCommand{
+		TradingAccountID: before.TradingAccountID,
 		Name:             &name,
 	})
-	if err != nil {
-		t.Fatalf("Update() error = %v", err)
-	}
-	if got.Name != name {
-		t.Fatalf("Name = %q, want %q", got.Name, name)
-	}
+	require.NoError(t, err)
+	require.Equal(t, name, got.Name)
 	if got.Exchange != before.Exchange ||
 		!slices.Equal(got.Markets, before.Markets) ||
 		got.ExecutionMode != before.ExecutionMode ||
@@ -271,53 +275,42 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 }
 
 func TestUpdateEnablingProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
-	value.Status = exchange.AccountStatusDisabled
-	store.accounts[value.ID] = value
+	value.Status = string(exchange.AccountStatusDisabled)
+	seedAccount(t, db, value)
 	status := exchange.AccountStatusEnabled
 	service := Service{
-		Store: store,
-		Secrets: &fakeSecrets{
-			secret: validSecret(),
-		},
+		Store:   db,
+		Secrets: &fakeSecrets{secret: validSecret()},
 	}
 
-	_, _, err := service.Update(context.Background(), UpdateCommand{
-		TradingAccountID: value.ID,
+	_, err := service.Update(context.Background(), UpdateCommand{
+		TradingAccountID: value.TradingAccountID,
 		Status:           &status,
 	})
-	if !errors.Is(err, ErrLiveTradingDisabled) {
-		t.Fatalf("Update() error = %v, want ErrLiveTradingDisabled", err)
-	}
-	if store.updateCalls != 0 {
-		t.Fatalf("Update() writes = %d, want 0", store.updateCalls)
-	}
+	require.ErrorIs(t, err, ErrLiveTradingDisabled)
+	stored, err := db.GetTradingAccountByID(context.Background(), value.TradingAccountID)
+	require.NoError(t, err)
+	require.Equal(t, string(exchange.AccountStatusDisabled), stored.Status)
 }
 
 func TestUpdateDisablingProductionAccountIsAllowedWhileLiveTradingIsDisabled(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
-	value.Status = exchange.AccountStatusEnabled
-	store.accounts[value.ID] = value
+	value.Status = string(exchange.AccountStatusEnabled)
+	seedAccount(t, db, value)
 	status := exchange.AccountStatusDisabled
-	service := Service{Store: store}
+	service := Service{Store: db}
 
-	got, _, err := service.Update(context.Background(), UpdateCommand{
-		TradingAccountID: value.ID,
+	got, err := service.Update(context.Background(), UpdateCommand{
+		TradingAccountID: value.TradingAccountID,
 		Status:           &status,
 	})
-	if err != nil {
-		t.Fatalf("Update() error = %v, want nil", err)
-	}
-	if got.Status != exchange.AccountStatusDisabled {
-		t.Fatalf("Status = %q, want DISABLED", got.Status)
-	}
-	if store.updateCalls != 1 {
-		t.Fatalf("Update() writes = %d, want 1", store.updateCalls)
-	}
+	require.NoError(t, err)
+	require.Equal(t, string(exchange.AccountStatusDisabled), got.Status)
 }
 
 func TestExecutionEligibilityUsesCurrentSessionState(t *testing.T) {
@@ -333,22 +326,21 @@ func TestExecutionEligibilityUsesCurrentSessionState(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := newMemoryStore()
+			db := openTestAccountStore(t)
 			value := validAccount()
-			value.Status = tt.status
+			value.Status = string(tt.status)
 			value.Ready = true // 持久化的同步状态就绪，由会话状态决定当前是否可交易
-			store.accounts[value.ID] = value
+			seedAccount(t, db, value)
 			service := Service{
-				Store:        store,
+				Store:        db,
 				SessionState: fakeSessionState{ready: tt.ready},
 			}
 
-			_, err := service.ExecutionEligibility(context.Background(), value.ID)
-			if tt.wantErr && !errors.Is(err, tradingaccount.ErrAccountNotExecutable) {
-				t.Fatalf("ExecutionEligibility() error = %v", err)
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("ExecutionEligibility() error = %v", err)
+			_, err := service.ExecutionEligibility(context.Background(), value.TradingAccountID)
+			if tt.wantErr {
+				require.ErrorIs(t, err, tradingaccount.ErrAccountNotExecutable)
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -356,107 +348,101 @@ func TestExecutionEligibilityUsesCurrentSessionState(t *testing.T) {
 
 // 私有流的持仓/成交更新把持久化状态置为“等待完整同步”时，会话仍然就绪也不能放行：资金信息尚未同步。
 func TestExecutionEligibilityRequiresPersistedSyncReadiness(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	value.Ready = false
-	store.accounts[value.ID] = value
-	service := Service{Store: store, SessionState: fakeSessionState{ready: true}}
+	seedAccount(t, db, value)
+	service := Service{Store: db, SessionState: fakeSessionState{ready: true}}
 
-	_, err := service.ExecutionEligibility(context.Background(), value.ID)
-	if !errors.Is(err, tradingaccount.ErrAccountNotExecutable) {
-		t.Fatalf("ExecutionEligibility() error = %v, want ErrAccountNotExecutable", err)
-	}
+	_, err := service.ExecutionEligibility(context.Background(), value.TradingAccountID)
+	require.ErrorIs(t, err, tradingaccount.ErrAccountNotExecutable)
 }
 
 func TestExecutionEligibilityRejectsMissingSessionState(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	value.Ready = true
-	store.accounts[value.ID] = value
-	service := Service{Store: store}
+	seedAccount(t, db, value)
+	service := Service{Store: db}
 
-	_, err := service.ExecutionEligibility(context.Background(), value.ID)
-	if !errors.Is(err, ErrServiceNotConfigured) {
-		t.Fatalf("ExecutionEligibility() error = %v, want ErrServiceNotConfigured", err)
-	}
+	_, err := service.ExecutionEligibility(context.Background(), value.TradingAccountID)
+	require.ErrorIs(t, err, ErrServiceNotConfigured)
 }
 
 func TestExecutionEligibilityRejectsProductionWhenLiveTradingDisabled(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
 	value.Ready = true
-	store.accounts[value.ID] = value
-	service := Service{Store: store, SessionState: fakeSessionState{ready: true}}
+	seedAccount(t, db, value)
+	service := Service{Store: db, SessionState: fakeSessionState{ready: true}}
 
-	_, err := service.ExecutionEligibility(context.Background(), value.ID)
-	if !errors.Is(err, ErrLiveTradingDisabled) {
-		t.Fatalf("ExecutionEligibility() error = %v, want ErrLiveTradingDisabled", err)
-	}
+	_, err := service.ExecutionEligibility(context.Background(), value.TradingAccountID)
+	require.ErrorIs(t, err, ErrLiveTradingDisabled)
 
 	service.LiveTradingEnabled = true
-	if _, err := service.ExecutionEligibility(context.Background(), value.ID); err != nil {
-		t.Fatalf("ExecutionEligibility() with live enabled error = %v", err)
-	}
+	_, err = service.ExecutionEligibility(context.Background(), value.TradingAccountID)
+	require.NoError(t, err)
 }
 
 func TestSetLeverageAndPauseUseCommandSpecificWrites(t *testing.T) {
-	store := newMemoryStore()
+	db := openTestAccountStore(t)
 	value := validSwapAccount()
 	setLive(&value, exchange.AccountEnvironmentTestnet, "secret-1")
-	store.accounts[value.ID] = value
-	service := Service{Store: store}
+	seedAccount(t, db, value)
+	service := Service{Store: db}
 
-	if err := service.SetLeverage(
+	err := service.SetLeverage(
 		context.Background(),
-		value.ID,
+		value.TradingAccountID,
 		"ETH-USDT-SWAP",
 		exchange.NewSymbolKey(exchange.MarketTypeSwap, "ETH-USDT"),
 		shared.MustDecimal("3"),
-	); err != nil {
-		t.Fatalf("SetLeverage() error = %v", err)
-	}
-	if store.leverageCalls != 1 || store.updateCalls != 0 {
-		t.Fatalf("leverage writes=%d aggregate writes=%d", store.leverageCalls, store.updateCalls)
-	}
+	)
+	require.NoError(t, err)
+	stored, err := db.GetTradingAccountByID(context.Background(), value.TradingAccountID)
+	require.NoError(t, err)
+	require.Equal(t, "3", stored.LeverageSettings["ETH-USDT-SWAP"])
+	require.Equal(t, "5", stored.LeverageSettings["BTC-USDT"])
 }
 
-func setLive(value *tradingaccount.Account, env exchange.AccountEnvironment, secretID string) {
-	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = env
+func setLive(value *store.TradingAccountRecord, env exchange.AccountEnvironment, secretID string) {
+	value.ExecutionMode = string(exchange.ExecutionModeLive)
+	value.Environment = string(env)
 	value.CredentialSecretID = secretID
-	value.Paper = nil
-	value.Live = &tradingaccount.LiveConfig{Environment: env, CredentialSecretID: secretID}
+	value.PaperConfig = nil
 }
 
-func validAccount() tradingaccount.Account {
-	return tradingaccount.Account{
-		ID:                 "account-1",
+func validAccount() store.TradingAccountRecord {
+	return store.TradingAccountRecord{
+		TradingAccountID:   "account-1",
 		SpaceID:            "space-1",
 		Name:               "main",
-		Exchange:           exchange.ExchangeBinance,
-		Markets:            []exchange.MarketType{exchange.MarketTypeSpot},
-		ExecutionMode:      exchange.ExecutionModePaper,
-		Environment:        exchange.AccountEnvironmentPaper,
+		Exchange:           string(exchange.ExchangeBinance),
+		Markets:            []string{string(exchange.MarketTypeSpot)},
+		ExecutionMode:      string(exchange.ExecutionModePaper),
+		Environment:        string(exchange.AccountEnvironmentPaper),
 		CredentialSecretID: "secret-1",
-		Paper: &tradingaccount.PaperConfig{
-			InitialBalance:     shared.MustDecimal("100000"),
-			MakerFeeRate:       shared.Zero(),
-			TakerFeeRate:       shared.Zero(),
-			SlippageBPS:        shared.Zero(),
+		PaperConfig: &store.PaperAccountConfigRecord{
+			SpaceID:            "space-1",
+			TradingAccountID:   "account-1",
+			InitialBalance:     "100000",
+			MakerFeeRate:       "0",
+			TakerFeeRate:       "0",
+			SlippageBPS:        "0",
 			OrderRetentionDays: tradingaccount.DefaultOrderRetentionDays,
 		},
 		SettlementAsset: "USDT",
-		Status:          exchange.AccountStatusEnabled,
+		Status:          string(exchange.AccountStatusEnabled),
 	}
 }
 
-func validSwapAccount() tradingaccount.Account {
+func validSwapAccount() store.TradingAccountRecord {
 	value := validAccount()
-	value.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
-	value.MarginMode = exchange.MarginModeCross
-	value.LeverageSettings = map[string]shared.Decimal{
-		"BTC-USDT": shared.MustDecimal("5"),
+	value.Markets = []string{string(exchange.MarketTypeSwap)}
+	value.MarginMode = string(exchange.MarginModeCross)
+	value.LeverageSettings = store.LeverageSettings{
+		"BTC-USDT": "5",
 	}
 	return value
 }
@@ -466,98 +452,6 @@ func validSecret() ExchangeSecret {
 		SecretID: "secret-1", Category: "exchange",
 		Exchange: exchange.ExchangeBinance, Status: "active",
 	}
-}
-
-type memoryStore struct {
-	accounts      map[string]tradingaccount.Account
-	nameIndex     map[string]string
-	createCalls   int
-	updateCalls   int
-	leverageCalls int
-	memberships   map[string]string
-}
-
-func newMemoryStore() *memoryStore {
-	return &memoryStore{
-		accounts:  make(map[string]tradingaccount.Account),
-		nameIndex: make(map[string]string),
-	}
-}
-
-func (s *memoryStore) Create(_ context.Context, value tradingaccount.Account) error {
-	s.createCalls++
-	key := value.SpaceID + "\x00" + value.Name
-	if _, found := s.nameIndex[key]; found {
-		return ErrAccountConflict
-	}
-	s.accounts[value.ID] = value
-	s.nameIndex[key] = value.ID
-	return nil
-}
-
-func (s *memoryStore) LogicalAccountName(_ context.Context, _ string, id string) (string, error) {
-	return s.memberships[id], nil
-}
-
-func (s *memoryStore) ListEnabled(context.Context) ([]tradingaccount.Account, error) {
-	var accounts []tradingaccount.Account
-	for _, value := range s.accounts {
-		if value.Status == exchange.AccountStatusEnabled {
-			accounts = append(accounts, value)
-		}
-	}
-	return accounts, nil
-}
-
-func (s *memoryStore) Get(_ context.Context, id string) (tradingaccount.Account, error) {
-	value, found := s.accounts[id]
-	if !found {
-		return tradingaccount.Account{}, ErrAccountNotFound
-	}
-	return value, nil
-}
-
-func (s *memoryStore) Update(_ context.Context, command UpdateCommand) error {
-	s.updateCalls++
-	value, found := s.accounts[command.TradingAccountID]
-	if !found {
-		return ErrAccountNotFound
-	}
-	applyUpdate(&value, command)
-	s.accounts[value.ID] = value
-	return nil
-}
-
-func (s *memoryStore) SetInspection(_ context.Context, id, credentialSecretID string, mode exchange.AccountMode, inspectionJSON string) error {
-	value, found := s.accounts[id]
-	if !found {
-		return ErrAccountNotFound
-	}
-	if credentialSecret(value) != credentialSecretID && value.CredentialSecretID != credentialSecretID {
-		return store.ErrConflict
-	}
-	value.AccountMode, value.InspectionJSON = mode, inspectionJSON
-	s.accounts[id] = value
-	return nil
-}
-
-func (s *memoryStore) SetLeverage(
-	_ context.Context,
-	id string,
-	symbol string,
-	leverage shared.Decimal,
-) error {
-	s.leverageCalls++
-	value, found := s.accounts[id]
-	if !found {
-		return ErrAccountNotFound
-	}
-	if value.LeverageSettings == nil {
-		value.LeverageSettings = make(map[string]shared.Decimal)
-	}
-	value.LeverageSettings[symbol] = leverage
-	s.accounts[id] = value
-	return nil
 }
 
 // okInspector 对任何密钥都检测通过：币安记为普通账户、OKX 记为统一账户，两个市场都能开通。
@@ -606,39 +500,36 @@ func (f *fakeSecrets) GetExchangeSecret(
 
 type fakeSessionState struct{ ready bool }
 
-func (f fakeSessionState) ReadyFor(tradingaccount.Account) bool { return f.ready }
-func (f fakeSessionState) Invalidate(string)                    {}
+func (f fakeSessionState) ReadyFor(store.TradingAccountRecord) bool { return f.ready }
+func (f fakeSessionState) Invalidate(string)                        {}
 
-// 实盘账户的凭据同时存在于外层字段与 Live 配置里，落库读取 Live 的值：更换凭据必须两处一起更新。
-func TestApplyUpdateReplacesLiveCredentialUsedByPersistence(t *testing.T) {
+func TestApplyUpdateReplacesCredential(t *testing.T) {
 	value := validAccount()
 	setLive(&value, exchange.AccountEnvironmentTestnet, "secret-a")
 	next := "secret-b"
 	applyUpdate(&value, UpdateCommand{CredentialSecretID: &next})
-	if got := credentialSecret(value); got != "secret-b" {
-		t.Fatalf("persisted credential = %q, want secret-b", got)
-	}
+	require.Equal(t, "secret-b", value.CredentialSecretID)
 }
 
-func liveCredentialAccount(id string, name exchange.Exchange, market exchange.MarketType) tradingaccount.Account {
+func liveCredentialAccount(id string, name exchange.Exchange, market exchange.MarketType) store.TradingAccountRecord {
 	value := validAccount()
 	if market == exchange.MarketTypeSwap {
 		value = validSwapAccount()
 	}
-	value.ID, value.Name, value.Exchange = id, id, name
+	value.TradingAccountID, value.Name, value.Exchange = id, id, string(name)
 	setLive(&value, exchange.AccountEnvironmentTestnet, "secret-1")
-	value.Status = exchange.AccountStatusEnabled
+	value.Status = string(exchange.AccountStatusEnabled)
 	return value
 }
 
 func TestRejectDuplicateCredentialIsUnconditional(t *testing.T) {
 	ctx := context.Background()
-	service := Service{Store: newMemoryStore()}
-	store := service.Store.(*memoryStore)
+	db := openTestAccountStore(t)
+	service := Service{Store: db}
 
 	for _, name := range []exchange.Exchange{exchange.ExchangeBinance, exchange.ExchangeOKX} {
 		existing := liveCredentialAccount(string(name)+"-spot", name, exchange.MarketTypeSpot)
-		store.accounts[existing.ID] = existing
+		seedAccount(t, db, existing)
 
 		// 一把密钥只能对应一个执行账户：不管交易所、也不管市场是否相同。账户同时做现货和合约。
 		for _, market := range []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap} {
@@ -649,7 +540,8 @@ func TestRejectDuplicateCredentialIsUnconditional(t *testing.T) {
 	}
 
 	// 不同密钥、账户自身、不同环境都不算重复。
-	binance := store.accounts["binance-spot"]
+	binance, err := db.GetTradingAccountByID(ctx, "binance-spot")
+	require.NoError(t, err)
 	other := liveCredentialAccount("binance-other", exchange.ExchangeBinance, exchange.MarketTypeSpot)
 	setLive(&other, exchange.AccountEnvironmentTestnet, "secret-2")
 	require.NoError(t, service.rejectDuplicateCredential(ctx, other))
@@ -659,42 +551,59 @@ func TestRejectDuplicateCredentialIsUnconditional(t *testing.T) {
 	require.NoError(t, service.rejectDuplicateCredential(ctx, production))
 
 	// 停用的账户不占用密钥，重新启用时才检查。
-	binance.Status = exchange.AccountStatusDisabled
-	store.accounts[binance.ID] = binance
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountConfiguration(binance.SpaceID, binance.TradingAccountID, store.TradingAccountConfiguration{
+			Name: binance.Name, CredentialSecretID: binance.CredentialSecretID,
+			SettlementAsset: binance.SettlementAsset, MarginMode: binance.MarginMode, Status: "DISABLED",
+		})
+	}))
 	require.NoError(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-again", exchange.ExchangeBinance, exchange.MarketTypeSpot)))
 }
 
 func TestCreateAcceptsMultiMarketAccount(t *testing.T) {
 	value := validAccount()
-	value.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
-	value.MarginMode = exchange.MarginModeCross
-	value.LeverageSettings = map[string]shared.Decimal{"*": shared.MustDecimal("1")}
+	value.Markets = []string{string(exchange.MarketTypeSpot), string(exchange.MarketTypeSwap)}
+	value.MarginMode = string(exchange.MarginModeCross)
+	value.LeverageSettings = store.LeverageSettings{"*": "1"}
 
-	created, err := (&Service{Store: newMemoryStore()}).Create(context.Background(), value)
+	created, err := (&Service{Store: openTestAccountStore(t)}).Create(context.Background(), value)
 
 	require.NoError(t, err)
 	require.Equal(t, value.Markets, created.Markets)
 }
 
 func TestUpdateRejectsDisablingAccountStillInLogicalAccount(t *testing.T) {
-	store := newMemoryStore()
+	ctx := context.Background()
+	db := openTestAccountStore(t)
 	value := validAccount()
 	setLive(&value, exchange.AccountEnvironmentProduction, "secret-1")
-	value.Status = exchange.AccountStatusEnabled
-	store.accounts[value.ID] = value
-	store.memberships = map[string]string{value.ID: "组合一"}
+	value.Status = string(exchange.AccountStatusEnabled)
+	seedAccount(t, db, value)
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: value.SpaceID, LogicalAccountID: "logical-1", Name: "组合一",
+			Environment: "PRODUCTION", SettlementAsset: "USDT", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: value.SpaceID, LogicalAccountID: "logical-1", TradingAccountID: value.TradingAccountID, Enabled: true, Priority: 1,
+		})
+	}))
 	status := exchange.AccountStatusDisabled
-	service := Service{Store: store}
+	service := Service{Store: db}
 
-	_, _, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, Status: &status})
-	if !errors.Is(err, ErrAccountInLogicalAccount) {
-		t.Fatalf("Update() error = %v, want ErrAccountInLogicalAccount", err)
-	}
-	if store.updateCalls != 0 {
-		t.Fatalf("Update() writes = %d, want 0", store.updateCalls)
-	}
-	delete(store.memberships, value.ID)
-	if _, _, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, Status: &status}); err != nil {
-		t.Fatalf("Update() after removal error = %v", err)
-	}
+	_, err := service.Update(ctx, UpdateCommand{TradingAccountID: value.TradingAccountID, Status: &status})
+	require.ErrorIs(t, err, ErrAccountInLogicalAccount)
+	require.Contains(t, err.Error(), "组合一")
+	stored, err := db.GetTradingAccountByID(ctx, value.TradingAccountID)
+	require.NoError(t, err)
+	require.Equal(t, "ENABLED", stored.Status)
+
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.DeleteLogicalAccountMember(value.SpaceID, "logical-1", value.TradingAccountID)
+	}))
+	updated, err := service.Update(ctx, UpdateCommand{TradingAccountID: value.TradingAccountID, Status: &status})
+	require.NoError(t, err)
+	require.Equal(t, "DISABLED", updated.Status)
 }

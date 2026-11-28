@@ -24,7 +24,7 @@ var openHostRemoteForCommand = func(file string) (*hostRemote, error) { return o
 
 var hostCmd = &cobra.Command{
 	Use:   "host",
-	Short: "主机：登记查询、远程执行与文件传输",
+	Short: "主机：登记查询、远程执行、文件传输、诊断与重启",
 }
 
 func init() {

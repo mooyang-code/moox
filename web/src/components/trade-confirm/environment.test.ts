@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { AccountEnvironment, ExecutionMode, type TradingAccount } from "@/api/trade/types";
 import {
   accountEnvironment,
   confirmTier,
@@ -8,52 +8,42 @@ import {
   logicalDetailPath,
   logicalEnvironment,
   logicalInEnvironment,
-  nameConfirmed
+  nameConfirmed,
+  toAccountEnvironment
 } from "./environment";
 
-const live = (environment: 0 | 1 | 2) =>
-  ({ trading_account_id: "x", execution_mode: 2, live: { environment, credential_secret_id: "s" } }) as TradingAccount;
+const live = (environment: AccountEnvironment) =>
+  ({
+    trading_account_id: "x",
+    execution_mode: ExecutionMode.LIVE,
+    live: { environment, credential_secret_id: "s" }
+  }) as TradingAccount;
 
-describe("环境推导", () => {
-  it("模拟盘、测试网、生产环境；实盘没写明环境时按生产", () => {
-    expect(accountEnvironment({ execution_mode: 1 } as TradingAccount)).toBe("paper");
-    expect(accountEnvironment(live(1))).toBe("testnet");
-    expect(accountEnvironment(live(2))).toBe("prod");
-    expect(accountEnvironment(live(0))).toBe("prod");
-    expect(accountEnvironment({ execution_mode: 2 } as TradingAccount)).toBe("prod");
+describe("环境映射", () => {
+  it("执行账户区分模拟盘、测试网、生产环境；实盘没写明环境时按生产", () => {
+    expect(accountEnvironment({ execution_mode: ExecutionMode.PAPER } as TradingAccount)).toBe("paper");
+    expect(accountEnvironment(live(AccountEnvironment.TESTNET))).toBe("testnet");
+    expect(accountEnvironment(live(AccountEnvironment.PRODUCTION))).toBe("prod");
+    expect(accountEnvironment(live(AccountEnvironment.UNSPECIFIED))).toBe("prod");
+    expect(accountEnvironment({ execution_mode: ExecutionMode.LIVE } as TradingAccount)).toBe("prod");
   });
 
-  it("组合的环境取成员的环境；实盘组合没有成员时按生产", () => {
-    const accounts = new Map([["t", { ...live(1), trading_account_id: "t" }]]);
-    const members = (id: string) => [{ trading_account_id: id, enabled: true, priority: 0 }];
-    expect(logicalEnvironment({ execution_mode: 1, members: [] }, accounts)).toBe("paper");
-    expect(logicalEnvironment({ execution_mode: 2, members: members("t") } as LogicalAccount, accounts)).toBe("testnet");
-    expect(logicalEnvironment({ execution_mode: 2, members: [] } as unknown as LogicalAccount, accounts)).toBe("prod");
-    expect(logicalEnvironment({ execution_mode: 2, members: members("missing") } as LogicalAccount, accounts)).toBe("prod");
+  it("组合账户的环境直接取后端返回的三值 environment，并在对应菜单精确匹配", () => {
+    expect(logicalEnvironment({ environment: AccountEnvironment.PAPER })).toBe("paper");
+    expect(logicalEnvironment({ environment: AccountEnvironment.TESTNET })).toBe("testnet");
+    expect(logicalEnvironment({ environment: AccountEnvironment.PRODUCTION })).toBe("prod");
+
+    const inEnv = (environment: AccountEnvironment) =>
+      (["paper", "testnet", "prod"] as const).filter(env => logicalInEnvironment({ environment }, env));
+    expect(inEnv(AccountEnvironment.PAPER)).toEqual(["paper"]);
+    expect(inEnv(AccountEnvironment.TESTNET)).toEqual(["testnet"]);
+    expect(inEnv(AccountEnvironment.PRODUCTION)).toEqual(["prod"]);
   });
 
-  it("没有可判断成员的实盘组合按进来的页签显示，不知道从哪进来时按生产；有成员时以成员为准", () => {
-    const accounts = new Map([["p", { ...live(0), trading_account_id: "p" }]]);
-    const empty = { execution_mode: 2, members: [] } as unknown as LogicalAccount;
-    expect(logicalEnvironment(empty, accounts, "testnet")).toBe("testnet");
-    expect(logicalEnvironment(empty, accounts, "prod")).toBe("prod");
-    expect(logicalEnvironment(empty, accounts, "paper")).toBe("prod");
-    expect(logicalEnvironment(empty, accounts)).toBe("prod");
-    const withProd = { execution_mode: 2, members: [{ trading_account_id: "p", enabled: true, priority: 0 }] } as LogicalAccount;
-    expect(logicalEnvironment(withProd, accounts, "testnet")).toBe("prod");
-    expect(logicalEnvironment({ execution_mode: 1, members: [] }, accounts, "testnet")).toBe("paper");
-  });
-
-  it("没有可判断成员的实盘组合在测试网和生产环境两个页签都列出，有成员的只在成员所在环境", () => {
-    const accounts = new Map([["t", { ...live(1), trading_account_id: "t" }]]);
-    const empty = { execution_mode: 2, members: [] } as unknown as LogicalAccount;
-    const inEnv = (logical: LogicalAccount) =>
-      (["paper", "testnet", "prod"] as const).filter(env => logicalInEnvironment(logical, accounts, env));
-    expect(inEnv(empty)).toEqual(["testnet", "prod"]);
-    expect(
-      inEnv({ execution_mode: 2, members: [{ trading_account_id: "t", enabled: true, priority: 0 }] } as LogicalAccount)
-    ).toEqual(["testnet"]);
-    expect(inEnv({ execution_mode: 1, members: [] } as unknown as LogicalAccount)).toEqual(["paper"]);
+  it("前端环境与后端协议枚举双向一致", () => {
+    expect(toAccountEnvironment("paper")).toBe(AccountEnvironment.PAPER);
+    expect(toAccountEnvironment("testnet")).toBe(AccountEnvironment.TESTNET);
+    expect(toAccountEnvironment("prod")).toBe(AccountEnvironment.PRODUCTION);
   });
 
   it("页面所属环境读路由 meta.env，没写或不认识时为空", () => {

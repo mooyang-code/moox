@@ -243,7 +243,7 @@ function onPageSizeChange(pageSize: number) {
 onMounted(load);
 
 // 空间是全局资源：提交作用域只受弹窗打开序号约束
-const spaceScope = createSubmitScope({ global: true });
+const spaceScope = createSubmitScope();
 watch(visible, open => {
   if (open) spaceScope.invalidate();
 });

@@ -1,0 +1,1013 @@
+// Package kline 负责采集任务结果清单缓存与 K 线结果新鲜度评估。
+package kline
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/barclock"
+	"github.com/mooyang-code/moox/packages/events"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/report"
+	"trpc.group/trpc-go/trpc-go/log"
+)
+
+const (
+	KlineDefaultSeriesTag               = "default"
+	TaskResultInventoryCheckID          = "kline_freshness:task_result_inventory"
+	KlineReasonTaskResultPrepareStalled = "task_result_prepare_stalled"
+	klineFutureTolerance                = 10 * time.Minute
+	// newSubjectCollectionAllowance 是新上线对象从进入采集清单到采集计划生效、首根数据写入的额外余量：
+	// 采集计划按周期刷新，生产上现货分钟线的新对象要 3～5 分钟才有第一根。
+	newSubjectCollectionAllowance = 10 * time.Minute
+	// taskResultPrepareGrace 是已启用任务在准备状态（pending / unverified）下允许等待的最长时间；
+	// 超过后由 K 线新鲜度检查报失败，避免 View 建索引卡住等情况长期无告警。
+	taskResultPrepareGrace = 30 * time.Minute
+)
+
+type KlineFreshnessRule struct {
+	Enabled    bool
+	SpaceID    string
+	DatasetID  string
+	Frequency  string
+	MarketID   string
+	CalendarID string
+	Timezone   string
+	Sessions   []string
+	// Lateness 是应收的最新一根收线后允许迟到多久：取健康策略按周期给出的值与采集任务声明的允许迟到（数据源自身的
+	// 发布延迟，例如 A 股 90 秒）中较大的一个。缺的根从收线起超过它仍没到，就判为过期。
+	Lateness              time.Duration
+	ResultStatus          string
+	LatestCompletedPeriod time.Time
+	LatestCompletedStatus string
+	ViewLastDataTime      time.Time
+	InventoryObservedAt   time.Time
+	// HistorySeeding、HistorySeedFinishedAt 是结果数据集的历史补齐状态（补齐中、补齐结束时刻），来自 Collector 清单。
+	HistorySeeding        bool
+	HistorySeedFinishedAt time.Time
+}
+
+type KlineFreshnessReport struct {
+	Rule       KlineFreshnessRule
+	CheckID    string
+	Success    bool
+	Skipped    bool
+	Reason     string
+	Diagnostic string
+	// ViewStale means the View as a whole stopped updating, as opposed to
+	// some of its subjects lagging.
+	ViewStale    bool
+	StaleCount   int
+	MissingCount int
+	// PendingCount 是已从 MissingCount 中扣除的新上线对象数：它们还在等首根 K 线的宽限期内，不算过期；
+	// PendingUntil 是其中最晚的宽限截止时间。
+	PendingCount   int
+	PendingUntil   time.Time
+	ObservedCount  int
+	OldestDataTime time.Time
+	StaleAge       time.Duration
+	StaleSubjects  []string
+}
+
+type KlineFreshnessEvaluator struct {
+	query       *monmetrics.QueryService
+	rules       []KlineFreshnessRule
+	maxSubjects int
+	inventory   *TaskResultInventoryCache
+	policy      report.RealtimeTimeSeriesPolicy
+	firstSeen   SubjectFirstSeenStore
+	// seeding 非空时报告空间是否在首次接入的历史补齐中或刚补齐（见 SetSeeding）。
+	seeding func(spaceID string, now time.Time) bool
+
+	pruneMu    sync.Mutex
+	prunedOnce bool
+	lastPruned [][2]string
+
+	pendingMu    sync.Mutex
+	pendingSince map[string]time.Time
+}
+
+// StaticDatasets 返回静态规则声明的采集数据集集合（键为 [空间, 数据集 ID]），供未配清单缓存的测试按规则区分采集与非采集数据集。
+func (e *KlineFreshnessEvaluator) StaticDatasets() map[[2]string]struct{} {
+	if e == nil || len(e.rules) == 0 {
+		return nil
+	}
+	out := make(map[[2]string]struct{}, len(e.rules))
+	for _, rule := range e.rules {
+		if rule.SpaceID != "" && rule.DatasetID != "" {
+			out[[2]string{rule.SpaceID, rule.DatasetID}] = struct{}{}
+		}
+	}
+	return out
+}
+
+// SubjectFirstSeenStore 持久化活跃对象第一次出现在采集清单里的时间。ObserveSubjects 返回新上线对象（不含部署前的存量）
+// 的首次出现时间；没有配置时不给任何对象宽限。
+type SubjectFirstSeenStore interface {
+	ObserveSubjects(ctx context.Context, spaceID, datasetID string, active map[string]struct{}, now time.Time) (map[string]time.Time, error)
+	// DatasetFirstSeen 返回数据集的对象最早出现在采集清单里的时间（含部署前的存量）；还没有记录时 ok 为假。
+	DatasetFirstSeen(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error)
+}
+
+// subjectFirstSeenPruner 是可选的孤立数据集清理能力，由 SubjectFirstSeenRepository 实现。
+type subjectFirstSeenPruner interface {
+	PruneDatasets(ctx context.Context, active map[[2]string]struct{}) (int64, error)
+}
+
+// SetSubjectFirstSeenStore 启用新上线对象的宽限期。
+func (e *KlineFreshnessEvaluator) SetSubjectFirstSeenStore(store SubjectFirstSeenStore) {
+	if e != nil {
+		e.firstSeen = store
+	}
+}
+
+func NewKlineFreshnessEvaluator(query *monmetrics.QueryService, rules []KlineFreshnessRule, maxSubjects int) *KlineFreshnessEvaluator {
+	if maxSubjects <= 0 {
+		maxSubjects = 20
+	}
+	if maxSubjects > 100 {
+		maxSubjects = 100
+	}
+	return &KlineFreshnessEvaluator{query: query, rules: append([]KlineFreshnessRule(nil), rules...), maxSubjects: maxSubjects}
+}
+
+// NewKlineFreshnessEvaluatorWithInventory 按采集任务清单生成规则；允许迟到按健康策略的周期规则给出。
+func NewKlineFreshnessEvaluatorWithInventory(query *monmetrics.QueryService, inventory *TaskResultInventoryCache, policy report.RealtimeTimeSeriesPolicy, maxSubjects int) *KlineFreshnessEvaluator {
+	evaluator := NewKlineFreshnessEvaluator(query, nil, maxSubjects)
+	evaluator.inventory = inventory
+	evaluator.policy = policy
+	return evaluator
+}
+
+// SetSeeding 设置“空间是否在首次接入的历史补齐中或刚补齐”的判断。补齐写入的历史行在变更日志里排在实时写入前面，
+// 结果视图按变更日志顺序追赶，要几个小时才追平：这段时间里视图落后于已完成的一期是预期的，
+// 只要采集侧已完成的一期本身没有过期就不报（见 completedPeriodFresh）；采集真的停了照样报出。
+func (e *KlineFreshnessEvaluator) SetSeeding(seeding func(spaceID string, now time.Time) bool) {
+	if e != nil {
+		e.seeding = seeding
+	}
+}
+
+func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...time.Time) ([]KlineFreshnessReport, error) {
+	if e == nil || e.query == nil {
+		return nil, monmetrics.ErrMetricsStoreUnavailable
+	}
+	now := time.Time{}
+	if len(nowValues) > 0 {
+		now = nowValues[0]
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	rules := e.rules
+	inventoryEvaluated := false
+	inventoryStale := false
+	if e.inventory != nil {
+		inventory, stale, err := e.inventory.GetAllowStale(ctx, now)
+		if err != nil {
+			return nil, &TaskResultInventoryRefreshError{Cause: fmt.Errorf("load task-result inventory: %w", err), State: e.inventory.State(now)}
+		}
+		rules = klineFreshnessRulesFromInventory(inventory, e.policy)
+		inventoryEvaluated = true
+		inventoryStale = stale
+	}
+	if inventoryEvaluated && !inventoryStale {
+		e.pruneDeletedDatasets(ctx, rules)
+	}
+	filters := make([]monmetrics.ViewMetricScope, 0, len(rules))
+	for _, rule := range rules {
+		if !rule.Enabled || rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
+			continue
+		}
+		filters = append(filters, monmetrics.ViewMetricScope{SpaceID: rule.SpaceID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
+	}
+	summaries, err := e.loadViewSummaries(ctx, filters, now)
+	if err != nil {
+		return nil, err
+	}
+
+	reports := make([]KlineFreshnessReport, 0, len(rules)+1)
+	if inventoryEvaluated {
+		state := e.inventory.State(now)
+		inventoryReport := KlineFreshnessReport{
+			Rule:    KlineFreshnessRule{SpaceID: events.SystemSpaceID, DatasetID: "task-result-inventory"},
+			CheckID: TaskResultInventoryCheckID, Success: true, Reason: "inventory_fresh",
+			Diagnostic: fmt.Sprintf("cache_age_seconds=%.0f", state.Age.Seconds()),
+		}
+		if inventoryStale {
+			// 控制面数据过期：继续用最后一份有效清单检查，同时单独告警。
+			inventoryReport.Success, inventoryReport.Reason = false, "inventory_stale"
+			inventoryReport.Diagnostic = fmt.Sprintf("cache_age_seconds=%.0f last_error=%s", state.Age.Seconds(), state.LastError)
+		}
+		reports = append(reports, inventoryReport)
+	}
+	activePending := make(map[string]struct{})
+	for _, rule := range rules {
+		if !rule.Enabled {
+			reports = append(reports, KlineFreshnessReport{
+				Rule: rule, CheckID: KlineFreshnessCheckID(rule), Skipped: true, Reason: "disabled",
+			})
+			continue
+		}
+		report := KlineFreshnessReport{Rule: rule, CheckID: KlineFreshnessCheckID(rule)}
+		if rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
+			activePending[report.CheckID] = struct{}{}
+			age := e.observePending(report.CheckID, now)
+			if age < taskResultPrepareGrace {
+				report.Skipped = true
+				report.Reason = "task_result_not_ready"
+				reports = append(reports, report)
+				continue
+			}
+			report.Success = false
+			report.Reason = KlineReasonTaskResultPrepareStalled
+			report.StaleAge = age
+			report.Diagnostic = fmt.Sprintf("result_status=%s pending_age_seconds=%.0f grace_seconds=%.0f",
+				rule.ResultStatus, age.Seconds(), taskResultPrepareGrace.Seconds())
+			reports = append(reports, report)
+			continue
+		}
+		// 应收的最新一根（E）按市场交易日历算：休市、午休、未开盘时它停在上一时段的最后一根，所以不需要“休市跳过”“开盘预热”。
+		// 日历覆盖不到、市场没有日历、周期对齐无法确认时不推测，按无法判断报出来。
+		clock, freq, expected, clockErr := klineExpectedBar(rule, now)
+		if rule.ResultStatus == "error" {
+			report.Reason = "task_result_error"
+			if clockErr == nil {
+				report.StaleAge, _ = overdueAfter(clock, freq, rule.ViewLastDataTime, expected, now)
+			}
+			report.Diagnostic = formatKlineDiagnostic(report)
+			reports = append(reports, report)
+			continue
+		}
+		if clockErr != nil {
+			report.Reason = klineClockReason(clockErr)
+			report.Diagnostic = clockErr.Error()
+			reports = append(reports, report)
+			continue
+		}
+		summary := summaries.find(rule)
+		var activeSubjects map[string]struct{}
+		if strings.TrimSpace(rule.DatasetID) != "" {
+			var catalogErr error
+			activeSubjects, catalogErr = e.query.ActiveDatasetSubjects(ctx, rule.SpaceID, rule.DatasetID)
+			if catalogErr != nil {
+				report.Success, report.Reason = false, "subject_catalog_unavailable"
+				report.Diagnostic = catalogErr.Error()
+				reports = append(reports, report)
+				continue
+			}
+		}
+		// 首次出现时间要在读到清单的这一轮就记下，不能等 View 正常之后：View 落后、尚无输出的那几轮也算新对象已经在等了。
+		newSubjects := e.newSubjectDeadlines(ctx, rule, clock, freq, activeSubjects, now)
+		if lag, behind := completedPeriodViewLag(clock, freq, rule, summary.latest, now); behind {
+			if e.seeding != nil && e.seeding(rule.SpaceID, now) && completedPeriodFresh(clock, freq, rule, now) {
+				report.Success, report.Reason = true, KlineReasonSeedingViewCatchingUp
+				report.StaleAge, report.OldestDataTime = lag, laterOf(summary.latest, rule.ViewLastDataTime)
+				report.Diagnostic = formatKlineDiagnostic(report)
+				reports = append(reports, report)
+				continue
+			}
+			report.Success = false
+			report.Reason = "view_behind_latest_completed_period"
+			report.StaleAge = lag
+			// The View's latest bar; zero when it has produced nothing yet.
+			report.OldestDataTime = summary.latest
+			if rule.ViewLastDataTime.After(report.OldestDataTime) {
+				report.OldestDataTime = rule.ViewLastDataTime
+			}
+			report.ObservedCount = summary.subjects
+			report.Diagnostic = formatKlineDiagnostic(report)
+			reports = append(reports, report)
+			continue
+		}
+		if summary.latest.IsZero() && summary.snapshotAt.IsZero() && !rule.ViewLastDataTime.IsZero() && !rule.ViewLastDataTime.After(now.Add(klineFutureTolerance)) {
+			// Storage 只在进程内存里记每个 View 的最新输出，重启后要等这个 View 再提交写入才重新上报；休市期间重启（周末、长假）
+			// 就一直读不到这个 View 的摘要。这时用采集结果清单里 View 已建索引的上界当作最新一根（和摘要一样不收未来时间），
+			// 照常按交易日历判逾期：没有对象明细（对象数为 0、跟踪起点为零），只判 View 整体是否停更，不会算出缺失或过期对象。
+			// 有摘要但最新一根为零（例如跟踪的序列超过上限）不是重启，不兜底，仍按无输出报出。
+			summary.latest = rule.ViewLastDataTime
+		}
+		if summary.latest.IsZero() {
+			// 刚建好的数据集在第一根应到的 K 线收线（加允许迟到）之前没有输出是正常的：A 股收盘后、周末启用要等下一个交易时段。
+			if until, waiting := e.firstBarPending(ctx, rule, clock, freq, now); waiting {
+				report.Success, report.Reason, report.PendingUntil = true, "first_bar_pending", until
+				reports = append(reports, report)
+				continue
+			}
+			// An enabled rule with no output is a real failure: a misrouted
+			// View or an unbound consumer must not remain silent.
+			report.Success, report.Reason = false, "no_observation"
+			report.StaleAge, _ = overdueAfter(clock, freq, rule.ViewLastDataTime, expected, now)
+			report.Diagnostic = formatKlineDiagnostic(report)
+			reports = append(reports, report)
+			continue
+		}
+		suffix := expectedKlineSubjectSuffix(e.query.DatasetMarketType(ctx, rule.SpaceID, rule.DatasetID))
+		e.evaluateViewSummary(&report, rule, clock, freq, expected, summary, activeSubjects, suffix, newSubjects, now)
+		reports = append(reports, report)
+	}
+	e.syncPendingState(activePending)
+	sort.Slice(reports, func(i, j int) bool { return reports[i].CheckID < reports[j].CheckID })
+	return reports, nil
+}
+
+// observePending 记录已启用任务首次处于准备状态（pending / unverified）的时刻，并返回已持续等待时长。
+func (e *KlineFreshnessEvaluator) observePending(checkID string, now time.Time) time.Duration {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	if e.pendingSince == nil {
+		e.pendingSince = make(map[string]time.Time)
+	}
+	since, exists := e.pendingSince[checkID]
+	if !exists || now.Before(since) {
+		e.pendingSince[checkID] = now
+		return 0
+	}
+	return now.Sub(since)
+}
+
+// syncPendingState 清理本轮不再处于准备状态的任务计时，确保任务就绪、停用或删除后重新计时。
+func (e *KlineFreshnessEvaluator) syncPendingState(active map[string]struct{}) {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	for checkID := range e.pendingSince {
+		if _, keep := active[checkID]; !keep {
+			delete(e.pendingSince, checkID)
+		}
+	}
+}
+
+// completedPeriodViewLag 判断结果视图是否落后于采集已完成的最新一期；落后时返回该期之后视图还缺的第一根已过收线多久。
+func completedPeriodViewLag(clock marketclock.MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, viewLatest time.Time, now time.Time) (time.Duration, bool) {
+	status := strings.ToLower(strings.TrimSpace(rule.LatestCompletedStatus))
+	if rule.LatestCompletedPeriod.IsZero() || (status != "complete" && status != "degraded") {
+		return 0, false
+	}
+	latestViewTime := rule.ViewLastDataTime
+	if viewLatest.After(latestViewTime) {
+		latestViewTime = viewLatest
+	}
+	if !latestViewTime.IsZero() && !latestViewTime.Before(rule.LatestCompletedPeriod) {
+		return 0, false
+	}
+	completed, err := clock.BarAt(rule.LatestCompletedPeriod, freq)
+	if err != nil {
+		return 0, true
+	}
+	if latestViewTime.IsZero() {
+		return positive(now.Sub(completed.Close)), true
+	}
+	overdue, _ := overdueAfter(clock, freq, latestViewTime, completed, now)
+	return overdue, true
+}
+
+// KlineReasonSeedingViewCatchingUp 是历史补齐中或刚补齐、结果视图在追补齐写入的历史行、采集侧没有过期时的结果（按通过记）。
+const KlineReasonSeedingViewCatchingUp = "history_seeding_view_catching_up"
+
+// completedPeriodFresh 判断采集侧已完成的最新一期（来自采集任务清单）在清单观测的时刻有没有过期：
+// 之后应收的第一根从收线起没超过允许迟到。按清单的观测时刻判断，免得清单刷新间隔里新收线的根被当成逾期；清单本身过期另有检查。
+func completedPeriodFresh(clock marketclock.MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, now time.Time) bool {
+	if rule.LatestCompletedPeriod.IsZero() {
+		return false
+	}
+	at := rule.InventoryObservedAt
+	if at.IsZero() || at.After(now) {
+		at = now
+	}
+	expected, err := clock.LatestClosed(at, freq)
+	if err != nil {
+		return false
+	}
+	overdue, err := overdueAfter(clock, freq, rule.LatestCompletedPeriod, expected, at)
+	return err == nil && overdue <= rule.Lateness
+}
+
+func laterOf(left, right time.Time) time.Time {
+	if right.After(left) {
+		return right
+	}
+	return left
+}
+
+// klineExpectedBar 按规则声明的市场日历算出此刻应已收线的最新一根。
+func klineExpectedBar(rule KlineFreshnessRule, now time.Time) (marketclock.MarketClock, frequencypkg.Frequency, marketclock.Bar, error) {
+	freq, err := frequencypkg.Parse(rule.Frequency)
+	if err != nil {
+		return marketclock.MarketClock{}, "", marketclock.Bar{}, fmt.Errorf("周期 %q 无效：%w", rule.Frequency, err)
+	}
+	clock, err := marketclock.MarketClockFor(rule.MarketID, rule.CalendarID, rule.Timezone, rule.Sessions)
+	if err != nil {
+		return marketclock.MarketClock{}, "", marketclock.Bar{}, err
+	}
+	expected, err := clock.LatestClosed(now, freq)
+	if err != nil {
+		return marketclock.MarketClock{}, "", marketclock.Bar{}, err
+	}
+	return clock, freq, expected, nil
+}
+
+// klineClockReason 把无法按日历判断的原因转成报告原因码。
+func klineClockReason(err error) string {
+	switch {
+	case errors.Is(err, marketclock.ErrCalendarNotCovered):
+		return "calendar_not_covered"
+	case errors.Is(err, marketclock.ErrNoTradingCalendar), errors.Is(err, barclock.ErrUnknownMarket):
+		return "calendar_unknown"
+	case errors.Is(err, marketclock.ErrAlignmentUnconfirmed):
+		return "alignment_unconfirmed"
+	default:
+		return "calendar_error"
+	}
+}
+
+// overdueAfter 返回 latest 之后、截至 expected 还缺的第一根已过收线多久；latest 已经是（或晚于）应收的最新一根时为 0。
+// latest 为零（从未产出）时无法确定缺的是哪一根，返回 0。
+func overdueAfter(clock marketclock.MarketClock, freq frequencypkg.Frequency, latest time.Time, expected marketclock.Bar, now time.Time) (time.Duration, error) {
+	if latest.IsZero() {
+		return 0, nil
+	}
+	bar, err := clock.BarAt(latest, freq)
+	if err != nil {
+		return 0, err
+	}
+	if !bar.Close.Before(expected.Close) {
+		return 0, nil
+	}
+	next, err := clock.Next(bar, freq)
+	if err != nil {
+		return 0, err
+	}
+	return positive(now.Sub(next.Close)), nil
+}
+
+// ReportSnapshotGrace 等已移至 metrics 包；保留 positive 辅助函数。
+func positive(value time.Duration) time.Duration {
+	return max(value, 0)
+}
+
+// activeSubjectName maps a View subject onto the active metadata catalog. It
+// tolerates a subject identity migration that only adds a market suffix to the
+// View output (for example, OPG-USDT -> OPG-USDT-SPOT): a suffix match is used
+// only when it resolves to one active catalog subject. Without a catalog every
+// subject counts as active.
+func activeSubjectName(subjectID string, active map[string]struct{}, aliases map[string][]string, expectedSuffix string) (string, bool) {
+	subjectID = strings.TrimSpace(subjectID)
+	if active == nil {
+		return subjectID, true
+	}
+	if _, ok := active[subjectID]; ok {
+		return subjectID, subjectSuffixCompatible(subjectID, expectedSuffix)
+	}
+	candidates := aliases[canonicalKlineSubjectID(subjectID)]
+	if len(candidates) != 1 || !subjectSuffixCompatible(subjectID, expectedSuffix) || !subjectSuffixCompatible(candidates[0], expectedSuffix) {
+		return "", false
+	}
+	return candidates[0], true
+}
+
+func activeSubjectAliases(active map[string]struct{}) map[string][]string {
+	aliases := make(map[string][]string, len(active))
+	for subjectID := range active {
+		canonical := canonicalKlineSubjectID(subjectID)
+		aliases[canonical] = append(aliases[canonical], subjectID)
+	}
+	return aliases
+}
+
+// expectedKlineSubjectSuffix 按数据集的品种属性给出标的 ID 应带的品种后缀；其他品种（股票等）的标的 ID 不带后缀。
+func expectedKlineSubjectSuffix(marketType string) string {
+	switch marketType {
+	case "spot":
+		return "SPOT"
+	case "swap":
+		return "SWAP"
+	}
+	return ""
+}
+
+func subjectSuffixCompatible(subjectID, expected string) bool {
+	if expected == "" {
+		return true
+	}
+	suffix := subjectProductSuffix(subjectID)
+	return suffix == "" || suffix == expected
+}
+
+func canonicalKlineSubjectID(subjectID string) string {
+	subjectID = strings.TrimSpace(subjectID)
+	upper := strings.ToUpper(subjectID)
+	for _, suffix := range []string{"-SPOT", "-SWAP"} {
+		if strings.HasSuffix(upper, suffix) && len(subjectID) > len(suffix) {
+			return subjectID[:len(subjectID)-len(suffix)]
+		}
+	}
+	return subjectID
+}
+
+func subjectProductSuffix(subjectID string) string {
+	upper := strings.ToUpper(strings.TrimSpace(subjectID))
+	if strings.HasSuffix(upper, "-SPOT") {
+		return "SPOT"
+	}
+	if strings.HasSuffix(upper, "-SWAP") {
+		return "SWAP"
+	}
+	return ""
+}
+
+func KlineFreshnessCheckID(rule KlineFreshnessRule) string {
+	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.DatasetID), strings.TrimSpace(rule.Frequency))
+}
+
+func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, policy report.RealtimeTimeSeriesPolicy) []KlineFreshnessRule {
+	rules := make([]KlineFreshnessRule, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		if !entry.Enabled {
+			rules = append(rules, inventoryRule(entry, false, policy))
+			continue
+		}
+		if entry.ResultStatus == "error" {
+			rules = append(rules, inventoryRule(entry, true, policy))
+			continue
+		}
+		if entry.ResultStatus == "pending" {
+			rules = append(rules, inventoryRule(entry, true, policy))
+			continue
+		}
+		if !entry.OwnershipVerified || entry.ResultStatus != "ready" {
+			unverified := inventoryRule(entry, true, policy)
+			unverified.ResultStatus = "unverified"
+			rules = append(rules, unverified)
+			continue
+		}
+		rules = append(rules, inventoryRule(entry, true, policy))
+	}
+	return rules
+}
+
+func inventoryRule(entry TaskResultInventoryEntry, enabled bool, policy report.RealtimeTimeSeriesPolicy) KlineFreshnessRule {
+	lateness := max(policy.Lateness(entry.SpaceID, entry.DatasetID, entry.Frequency), time.Duration(entry.AllowedLatenessSeconds)*time.Second)
+	return KlineFreshnessRule{
+		Enabled: enabled, SpaceID: entry.SpaceID, DatasetID: entry.DatasetID,
+		Frequency: entry.Frequency, MarketID: entry.MarketID, CalendarID: entry.CalendarID,
+		Timezone: entry.Timezone, Sessions: append([]string(nil), entry.Sessions...), Lateness: lateness,
+		ResultStatus: entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
+		LatestCompletedStatus: entry.LatestCompletedStatus, ViewLastDataTime: entry.ViewLastDataTime,
+		InventoryObservedAt: entry.ObservedAt,
+		HistorySeeding:      entry.HistorySeeding, HistorySeedFinishedAt: entry.HistorySeedFinishedAt,
+	}
+}
+
+type viewSummaryIdentity struct {
+	SpaceID, DatasetID, Frequency string
+}
+
+type laggingSubject struct {
+	subjectID string
+	dataTime  time.Time
+}
+
+// viewSummary is a View's subject summary from the latest Storage View
+// snapshot: its latest bar, the bar it was first tracked at, and its tracked,
+// lagging and most-lagging subjects.
+type viewSummary struct {
+	latest, trackedSince time.Time
+	subjects, lagging    int
+	snapshotAt           time.Time
+	laggingSubjects      []laggingSubject
+}
+
+type viewSummaries map[viewSummaryIdentity]*viewSummary
+
+// find returns the summary of the View a rule watches; with several matches
+// (a rule without a dataset) the most recent View wins.
+func (s viewSummaries) find(rule KlineFreshnessRule) viewSummary {
+	var best *viewSummary
+	for identity, summary := range s {
+		if !viewRuleMatches(rule, identity) {
+			continue
+		}
+		if best == nil || summary.latest.After(best.latest) {
+			best = summary
+		}
+	}
+	if best == nil {
+		return viewSummary{}
+	}
+	return *best
+}
+
+var viewSummaryMetrics = []string{monmetrics.ViewOutputLatestMetric, monmetrics.ViewOutputTrackedSinceMetric, monmetrics.ViewOutputSubjectsMetric, monmetrics.ViewOutputLaggingMetric, monmetrics.ViewOutputLaggingSubjectMetric}
+
+func (e *KlineFreshnessEvaluator) loadViewSummaries(ctx context.Context, filters []monmetrics.ViewMetricScope, now time.Time) (viewSummaries, error) {
+	rowsByMetric := make(map[string][]monmetrics.MetricSeries, len(viewSummaryMetrics))
+	for _, name := range viewSummaryMetrics {
+		rows, err := e.query.ListLatestByViewScopes(ctx, name, filters, 0)
+		if err != nil {
+			return nil, err
+		}
+		rowsByMetric[name] = rows
+	}
+	summaries := make(viewSummaries)
+	at := func(identity viewSummaryIdentity) *viewSummary {
+		summary := summaries[identity]
+		if summary == nil {
+			summary = &viewSummary{}
+			summaries[identity] = summary
+		}
+		return summary
+	}
+	for _, name := range viewSummaryMetrics[:4] {
+		for _, row := range rowsByMetric[name] {
+			identity, _, err := parseViewSummaryLabels(row.LabelsJSON, false)
+			if err != nil || !isValidKlineFrequency(identity.Frequency) {
+				continue
+			}
+			summary := at(identity)
+			switch name {
+			case monmetrics.ViewOutputLatestMetric, monmetrics.ViewOutputTrackedSinceMetric:
+				value, err := klineUnixTime(row.Value)
+				if err != nil || value.After(now.Add(klineFutureTolerance)) {
+					continue
+				}
+				if name == monmetrics.ViewOutputLatestMetric {
+					summary.latest = value
+				} else {
+					summary.trackedSince = value
+				}
+			case monmetrics.ViewOutputSubjectsMetric:
+				summary.subjects, summary.snapshotAt = int(row.Value), row.ObservedAt
+			case monmetrics.ViewOutputLaggingMetric:
+				summary.lagging = int(row.Value)
+			}
+		}
+	}
+	for _, row := range rowsByMetric[monmetrics.ViewOutputLaggingSubjectMetric] {
+		identity, subjectID, err := parseViewSummaryLabels(row.LabelsJSON, true)
+		if err != nil {
+			continue
+		}
+		summary := summaries[identity]
+		// A subject named in an older snapshot may have caught up since; only
+		// names from the View's latest snapshot count.
+		if summary == nil || row.ObservedAt.Before(summary.snapshotAt) {
+			continue
+		}
+		value, err := klineUnixTime(row.Value)
+		if err != nil {
+			continue
+		}
+		summary.laggingSubjects = append(summary.laggingSubjects, laggingSubject{subjectID: subjectID, dataTime: value})
+	}
+	return summaries, nil
+}
+
+func parseViewSummaryLabels(rawLabels string, withSubject bool) (viewSummaryIdentity, string, error) {
+	var labels map[string]string
+	if err := json.Unmarshal([]byte(rawLabels), &labels); err != nil {
+		return viewSummaryIdentity{}, "", err
+	}
+	identity := viewSummaryIdentity{
+		SpaceID:   strings.TrimSpace(labels["space_id"]),
+		DatasetID: strings.TrimSpace(labels["dataset_id"]), Frequency: strings.TrimSpace(labels["freq"]),
+	}
+	subjectID := strings.TrimSpace(labels["subject_id"])
+	if identity.SpaceID == "" || identity.DatasetID == "" || identity.Frequency == "" || (withSubject && subjectID == "") {
+		return viewSummaryIdentity{}, "", fmt.Errorf("required view summary label is empty")
+	}
+	return identity, subjectID, nil
+}
+
+// evaluateViewSummary judges a View that has output. The View is stale as a
+// whole once the bar after its latest bar is overdue. Otherwise its lagging
+// subjects, and active subjects with no output once the View has moved a bar
+// past the start of tracking, are stale.
+func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, clock marketclock.MarketClock, freq frequencypkg.Frequency, expected marketclock.Bar, summary viewSummary, active map[string]struct{}, suffix string, newSubjects map[string]time.Time, now time.Time) {
+	report.ObservedCount = summary.subjects
+	report.OldestDataTime = summary.latest
+	// 摘要是 Storage View 上报快照那一刻的状态（每 30 秒上报一次，整分与半分对齐）：逾期按快照时刻算。按当前时间算会把
+	// 快照之后才写完、还没来得及上报的准时 K 线算成逾期——半分评估若早于那次快照入库，就会误判“整体停止更新”。
+	seen := monmetrics.SnapshotTime(summary.snapshotAt, now)
+	// 视图最新一根之后、应收的最新一根之前还缺的第一根，到快照时已晚超过允许迟到仍没有，就算整体停止更新。
+	// 缺的根按交易日历数：午休、收盘后、节假日不会被算成缺失。
+	overdue, err := overdueAfter(clock, freq, summary.latest, expected, seen)
+	if err != nil {
+		report.Success, report.Reason = false, klineClockReason(err)
+		report.Diagnostic = err.Error()
+		return
+	}
+	report.StaleAge = overdue
+	if overdue > rule.Lateness {
+		report.ViewStale = true
+		report.StaleCount = max(summary.subjects, len(active))
+		report.Reason = "business_data_stale"
+		report.Diagnostic = formatKlineDiagnostic(*report)
+		return
+	}
+	report.StaleAge = 0
+	aliases := activeSubjectAliases(active)
+	stale := make(map[string]struct{})
+	inactive, withinGrace := 0, 0
+	// 重新上架的对象在 Storage 里还留着下架前的水位，会出现在落后名单里：它在宽限期内，同样不算过期。
+	// 这类对象是点了名的，单独计数，并从按数量扣的新对象里去掉，避免重复扣。
+	remaining := make(map[string]time.Time, len(newSubjects))
+	for subjectID, deadline := range newSubjects {
+		remaining[subjectID] = deadline
+	}
+	relisted := 0
+	threshold := rule.Lateness
+	for _, item := range summary.laggingSubjects {
+		name, ok := activeSubjectName(item.subjectID, active, aliases, suffix)
+		if !ok {
+			inactive++
+			continue
+		}
+		if deadline, isNew := remaining[name]; isNew {
+			delete(remaining, name)
+			relisted++
+			if deadline.After(report.PendingUntil) {
+				report.PendingUntil = deadline
+			}
+			continue
+		}
+		// Storage 按连续时间判落后（比视图最新一根落后超过一根加容忍）：A 股午休、隔夜后新时段第一根刚到时，还没到的标的
+		// 也会被它算进来。按交易日历再筛一遍：缺的第一根从收线起还在“允许迟到 + stale_after”之内的，不算过期。
+		age, err := overdueAfter(clock, freq, item.dataTime, expected, seen)
+		if err == nil && age <= threshold {
+			withinGrace++
+			continue
+		}
+		stale[name] = struct{}{}
+		if item.dataTime.Before(report.OldestDataTime) {
+			report.OldestDataTime = item.dataTime
+		}
+		if err == nil && age > report.StaleAge {
+			report.StaleAge = age
+		}
+	}
+	report.StaleCount = max(summary.lagging-inactive-withinGrace-relisted, 0)
+	namesTruncated := active != nil && summary.lagging > len(summary.laggingSubjects)
+	// 名单按最落后在前：名单里的活跃标的都还在允许迟到之内，没列出的落后得更少，同样不算过期。
+	allWithinGrace := withinGrace > 0 && len(stale) == 0
+	if allWithinGrace && namesTruncated {
+		// 没列出的落后对象同样在允许迟到之内：不能再按“落后数减已列出数”把它们算成过期。
+		report.StaleCount = 0
+	}
+	// 视图开始跟踪之后至少又前进了一根（data_time 都是开盘时间，比跟踪起点晚就是后面的根）。
+	trackingMoved := !summary.trackedSince.IsZero() && summary.latest.After(summary.trackedSince)
+	if active != nil && namesTruncated && !allWithinGrace {
+		// 落后对象名单被截断（只上报最落后的若干个）：名单只能用于展示，不能用来扣减完整计数，
+		// 否则超过名单长度的已停用对象会被当作过期持续误报。改用集合算术：没有落后的对象视为活跃，
+		// 活跃集合里放不下它们的那部分才是落后或缺失的；不会低于名单里已确认的活跃过期对象数。
+		if trackingMoved {
+			activeUpToDate := max(summary.subjects-summary.lagging, 0)
+			report.StaleCount = max(len(active)-activeUpToDate-relisted, len(stale))
+			report.MissingCount = 0
+		} else {
+			report.StaleCount = len(stale)
+		}
+	} else if active != nil && trackingMoved {
+		report.MissingCount = max(len(active)-(summary.subjects-inactive), 0)
+		report.StaleCount += report.MissingCount
+	}
+	// 名单被截断且没有确定结论（落后数下界为零）要在扣除新上线对象之前判断：扣除只会让数字变小，不能制造出“下界为零”。
+	undetermined := namesTruncated && report.StaleCount == 0 && !allWithinGrace
+	// 新上线对象还在等首根 K 线：它们没有任何数据是预期内的，从缺失数里扣掉，只作黄色关注。
+	// Monitor 只知道缺几个、不知道缺的是谁（View 摘要不列没有数据的对象），所以按数量扣：min(缺失数, 宽限内新对象数)。
+	// 代价是同一时刻若有老对象也缺数据，会被一并掩盖到宽限结束；宽限期过后照常告警。
+	pending := pendingNewSubjects(report, len(stale), remaining, active != nil && namesTruncated && !allWithinGrace)
+	if pending > 0 {
+		for _, deadline := range remaining {
+			if deadline.After(report.PendingUntil) {
+				report.PendingUntil = deadline
+			}
+		}
+	}
+	report.PendingCount = pending + relisted
+	if report.PendingCount == 0 {
+		report.PendingUntil = time.Time{}
+	}
+	report.StaleSubjects = sortedLimitedSubjects(stale, e.maxSubjects)
+	report.Success = report.StaleCount == 0
+	switch {
+	case !report.Success:
+		report.Reason = "business_data_stale"
+	case report.PendingCount > 0:
+		report.Reason = "new_subjects_pending"
+	default:
+		report.Reason = "fresh"
+	}
+	if undetermined {
+		// 名单被截断，只能推出“落后数下界为零”：无法确认活跃对象是否都在更新，不能据此宣告健康（也不触发新告警）。
+		// 按“无法判定”跳过本轮，已有告警保持，等名单不再截断或有确定结论。
+		report.Skipped, report.Success = true, false
+		report.Reason = "lagging_subjects_truncated"
+	} else if !report.Success && rule.seedingSubjects(now) {
+		// 首次接入的历史补齐中或刚结束：补齐按时间升序写历史行，storage-view 按标的记的最新一根只认本进程见过的写入，
+		// 重启后跟踪表里先出现的标的带着几个月前的时刻、还没补到的标的一根都没有，这里会算成落后、没有数据（11-25 A 股、美股）。
+		// 走到这里时视图整体没有停更（上面按最新一根判过），只是按标的的结论不可信：按通过记，数字留在诊断里。
+		// 采集整体停了照样按整体停更报；实时采集个别标的失败由 Collector 的周期失败标的检查报。
+		report.Success, report.Reason = true, KlineReasonSeedingSubjectsCatchingUp
+	}
+	report.Diagnostic = formatKlineDiagnostic(*report)
+}
+
+// KlineReasonSeedingSubjectsCatchingUp 是结果数据集在历史补齐中或刚补齐、视图整体按时更新、按标的看有落后或缺失时的结果（按通过记）。
+const KlineReasonSeedingSubjectsCatchingUp = "history_seeding_subjects_catching_up"
+
+// seedingSubjectGrace 是补齐结束后仍不按标的判落后的时长：最后一批历史行要等 View 处理完，按标的的最新一根才齐
+// （11-25 A 股补齐 09:45 结束，09:46 按标的的告警消失）。
+const seedingSubjectGrace = 30 * time.Minute
+
+// seedingSubjects 报告结果数据集此刻是否在历史补齐中或刚补齐（Collector 清单给出，见 TaskResultInventoryEntry）。
+func (r KlineFreshnessRule) seedingSubjects(now time.Time) bool {
+	return r.HistorySeeding || (!r.HistorySeedFinishedAt.IsZero() && now.Sub(r.HistorySeedFinishedAt) <= seedingSubjectGrace)
+}
+
+// pendingNewSubjects 从 report 的缺失数里扣掉仍在宽限期内的新上线对象，返回扣掉的个数。
+// 截断分支（unlisted 为 true）里缺失的对象被算进 StaleCount 而 MissingCount 为 0：这时可扣的是 StaleCount 里没有被点名的部分。
+func pendingNewSubjects(report *KlineFreshnessReport, namedStale int, newSubjects map[string]time.Time, unlisted bool) int {
+	if len(newSubjects) == 0 {
+		return 0
+	}
+	deductible := report.MissingCount
+	if unlisted {
+		deductible = max(report.StaleCount-namedStale, 0)
+	}
+	pending := min(deductible, len(newSubjects))
+	if pending == 0 {
+		return 0
+	}
+	report.StaleCount -= pending
+	if !unlisted {
+		report.MissingCount -= pending
+	}
+	return pending
+}
+
+// pruneDeletedDatasets 在采集任务清单新鲜且完整时，清理已删除数据集在 t_monitor_subject_first_seen 中的残留记录。
+// 仅在首次对账或活跃数据集集合发生变化时执行数据库清理，避免稳态轮次额外查库。
+func (e *KlineFreshnessEvaluator) pruneDeletedDatasets(ctx context.Context, rules []KlineFreshnessRule) {
+	pruner, ok := e.firstSeen.(subjectFirstSeenPruner)
+	if !ok {
+		return
+	}
+	active := make(map[[2]string]struct{}, len(rules))
+	keys := make([][2]string, 0, len(rules))
+	for _, rule := range rules {
+		spaceID, datasetID := strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.DatasetID)
+		if spaceID == "" || datasetID == "" {
+			continue
+		}
+		key := [2]string{spaceID, datasetID}
+		if _, exists := active[key]; !exists {
+			active[key] = struct{}{}
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i][0] != keys[j][0] {
+			return keys[i][0] < keys[j][0]
+		}
+		return keys[i][1] < keys[j][1]
+	})
+	e.pruneMu.Lock()
+	unchanged := e.prunedOnce && slices.Equal(e.lastPruned, keys)
+	e.pruneMu.Unlock()
+	if unchanged {
+		return
+	}
+	if _, err := pruner.PruneDatasets(ctx, active); err != nil {
+		log.WarnContextf(ctx, "monitor prune deleted subject first-seen datasets failed: %v", err)
+		return
+	}
+	e.pruneMu.Lock()
+	e.prunedOnce = true
+	e.lastPruned = keys
+	e.pruneMu.Unlock()
+}
+
+// newSubjectDeadlines 返回仍在宽限期内的新上线对象及其宽限截止时间。没有配置存储、清单读取失败或周期无法按日历推算时返回空，
+// 即不给宽限：宁可多告警，也不因为记录问题掩盖真故障。
+func (e *KlineFreshnessEvaluator) newSubjectDeadlines(ctx context.Context, rule KlineFreshnessRule, clock marketclock.MarketClock, freq frequencypkg.Frequency, active map[string]struct{}, now time.Time) map[string]time.Time {
+	if e.firstSeen == nil || active == nil || strings.TrimSpace(rule.DatasetID) == "" {
+		return nil
+	}
+	firstSeen, err := e.firstSeen.ObserveSubjects(ctx, rule.SpaceID, rule.DatasetID, active, now)
+	if err != nil {
+		log.WarnContextf(ctx, "monitor subject first-seen observation failed: %v", err)
+		return nil
+	}
+	deadlines := make(map[string]time.Time)
+	for subjectID, seenAt := range firstSeen {
+		deadline, err := newSubjectDeadline(clock, freq, seenAt, rule.Lateness)
+		if err == nil && deadline.After(now) {
+			deadlines[subjectID] = deadline
+		}
+	}
+	return deadlines
+}
+
+// firstBarPending 判断还没有任何输出的数据集是否仍在等第一根 K 线：从数据集的对象最早出现在清单里算起，
+// 第一根完整 K 线收线再加允许迟到之前都算在等，返回截止时间。没有首次出现记录时不推测，按没有输出报出来。
+func (e *KlineFreshnessEvaluator) firstBarPending(ctx context.Context, rule KlineFreshnessRule, clock marketclock.MarketClock, freq frequencypkg.Frequency, now time.Time) (time.Time, bool) {
+	if e.firstSeen == nil || strings.TrimSpace(rule.DatasetID) == "" {
+		return time.Time{}, false
+	}
+	seenAt, ok, err := e.firstSeen.DatasetFirstSeen(ctx, rule.SpaceID, rule.DatasetID)
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	deadline, err := newSubjectDeadline(clock, freq, seenAt, rule.Lateness)
+	if err != nil || !deadline.After(now) {
+		return time.Time{}, false
+	}
+	return deadline, true
+}
+
+// newSubjectDeadline 返回新对象应当已有首根 K 线的最晚时间：首次出现之后开盘的第一根（出现时正在走的那一根数据不完整）收线，
+// 再加允许迟到和采集生效余量。
+func newSubjectDeadline(clock marketclock.MarketClock, freq frequencypkg.Frequency, firstSeen time.Time, lateness time.Duration) (time.Time, error) {
+	latest, err := clock.LatestClosed(firstSeen, freq)
+	if err != nil {
+		return time.Time{}, err
+	}
+	first, err := clock.Next(latest, freq)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if first.Open.Before(firstSeen) {
+		if first, err = clock.Next(first, freq); err != nil {
+			return time.Time{}, err
+		}
+	}
+	return first.Close.Add(lateness + newSubjectCollectionAllowance), nil
+}
+
+func klineUnixTime(value float64) (time.Time, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 || value > 4102444800 {
+		return time.Time{}, fmt.Errorf("invalid unix timestamp %v", value)
+	}
+	seconds := int64(value)
+	nanos := int64((value - float64(seconds)) * float64(time.Second))
+	result := time.Unix(seconds, nanos).UTC()
+	if result.Year() <= 0 {
+		return time.Time{}, fmt.Errorf("invalid unix timestamp %v", value)
+	}
+	return result, nil
+}
+
+func viewRuleMatches(rule KlineFreshnessRule, identity viewSummaryIdentity) bool {
+	return strings.TrimSpace(rule.DatasetID) == identity.DatasetID && strings.TrimSpace(rule.SpaceID) == identity.SpaceID &&
+		canonicalRuleFrequency(rule.Frequency) == identity.Frequency
+}
+
+// canonicalRuleFrequency lets freshness rules use frequency aliases, while
+// Storage identities are always canonical.
+func canonicalRuleFrequency(raw string) string {
+	canonical, err := frequencypkg.Normalize(raw)
+	if err != nil {
+		return strings.TrimSpace(raw)
+	}
+	return canonical
+}
+
+func isValidKlineFrequency(value string) bool {
+	return frequencypkg.IsCanonical(value)
+}
+
+func sortedLimitedSubjects(subjects map[string]struct{}, limit int) []string {
+	result := make([]string, 0, len(subjects))
+	for subject := range subjects {
+		result = append(result, subject)
+	}
+	sort.Strings(result)
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result
+}
+
+func formatKlineDiagnostic(report KlineFreshnessReport) string {
+	format := func(value time.Time) string {
+		if value.IsZero() {
+			return ""
+		}
+		return value.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("stale_count=%d missing_count=%d pending_count=%d observed_count=%d oldest_output_data_time=%s stale_age=%s latest_completed_period=%s latest_completed_status=%s view_last_data_time=%s inventory_observed_at=%s stale_subjects=%s",
+		report.StaleCount, report.MissingCount, report.PendingCount, report.ObservedCount, format(report.OldestDataTime), report.StaleAge,
+		format(report.Rule.LatestCompletedPeriod), report.Rule.LatestCompletedStatus,
+		format(report.Rule.ViewLastDataTime), format(report.Rule.InventoryObservedAt), strings.Join(report.StaleSubjects, ","))
+}

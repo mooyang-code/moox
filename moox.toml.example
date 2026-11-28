@@ -1,5 +1,5 @@
 # moox.toml：拓扑与部署参数，明文保存，可以放进自己的私有仓库；不写任何秘密。
-# 秘密（管理员、腾讯云密钥、告警渠道、CLS 写入密钥、交易所密钥）写在同目录加密保存的 moox.secrets.toml 里（见 moox.secrets.toml.example）。
+# 秘密（管理员、腾讯云密钥、CLS 写入密钥）写在同目录加密保存的 moox.secrets.toml 里（见 moox.secrets.toml.example）。
 # 两份文件都由 moox-cli config init 生成；拓扑直接编辑这份文件，改完重新部署对应主机生效。
 # 业务初值不在配置文件里：默认因子任务在 config/setup/factor-tasks.yaml（setup start 导入），自己的任务用 moox-cli factor task apply --file 导入。
 
@@ -63,43 +63,13 @@ max_view_file_bytes = 4294967296
 
 # View 按空间 × 频率限制最长历史：data_time 早于“当前时间 − 期限”的行不写入 View，
 # 补采、导入、因子历史重算带来的旧行同样丢弃（Dataset 与因子本地存储照常保留全部历史）。
-# 期限写法同 [storage_retention]；要装得下 view_rows_per_series 根（默认值恰好装下 1 万根）。
+# 默认无需配置：7×24 等无交易时段空间按 view_rows_per_series × 周期向上取整到整天自动推导（日线及以上永久），
+# 有交易时段的空间（stockcn、stockhk、stockus）直接取对应数据集保留期（[storage_retention]）。
+# 只在需要例外覆盖时填写 [storage_view.max_age.defaults] 或 [storage_view.max_age.spaces.<空间>]；
+# 期限写法同 [storage_retention]，默认覆盖仍须装得下 view_rows_per_series 根。
 # 已在 View 里的旧行由定时删除按每序列根数删掉。
-[storage_view.max_age.defaults]
-"30s" = "90h"
-"1m" = "7d"
-"5m" = "35d"
-"15m" = "105d"
-"30m" = "210d"
-"1h" = "420d"
-"4h" = "1700d"
-"1d" = "forever"
-"1w" = "forever"
-"1mo" = "forever"
-
-[storage_view.max_age.spaces.stockcn]
-"1m" = "60d"
-"5m" = "300d"
-"15m" = "900d"
-"30m" = "forever"
-"1h" = "forever"
-"4h" = "forever"
-
-[storage_view.max_age.spaces.stockhk]
-"1m" = "45d"
-"5m" = "300d"
-"15m" = "900d"
-"30m" = "forever"
-"1h" = "forever"
-"4h" = "forever"
-
-[storage_view.max_age.spaces.stockus]
-"1m" = "40d"
-"5m" = "300d"
-"15m" = "900d"
-"30m" = "forever"
-"1h" = "forever"
-"4h" = "forever"
+# [storage_view.max_age.spaces.mooxsys]
+# "1m" = "2d"
 
 # Collector 的旧执行明细、terminal retry 和 period snapshot 按独立期限回收。
 # 活动工作以及未获 Storage complete/degraded 确认的 K 线目标不会被删除。
@@ -179,7 +149,7 @@ enabled = false
 
 # [[scf_plan.spaces]]
 # space_id = "crypto"
-# # package_name 默认 moox-collector-<space>-plan，namespace 默认 moox-<space>-plan，均可覆盖
+# # 代码包名由顶层 scf_plan.package_name 统一指定（默认全局共用 moox-collector-plan）；namespace 默认 moox-<space>-plan，可按空间覆盖
 # # 采集方式不在这里配置：它记在采集任务上（stream / scf / local），建任务不写时用市场默认值（crypto 是 stream，其余是 scf），
 # # 之后用 moox-cli collector ingest-mode set 切换。
 # [scf_plan.spaces.markets]
@@ -216,7 +186,7 @@ enabled = false
 # equity = ["ap-nanjing"]
 
 # 港股：恒生指数成分股 5m K 线（东方财富），与 A 股共用南京的 [scf_plan.regions.ap-nanjing]。
-# 命名空间默认 moox-stockhk-plan，代码包默认 moox-collector-stockhk-plan；固定每函数 25 只标的（95 只共 4 个函数），
+# 命名空间默认 moox-stockhk-plan，代码包默认共用 moox-collector-plan；固定每函数 25 只标的（95 只共 4 个函数），
 # 每 5 分钟触发一次，午休、收市后、非交易日函数直接返回不采集。
 # backfill_region（可选）：补采函数单独放的地域，不写时与定时函数同在市场的第一个地域；写了要有对应的 [scf_plan.regions.<地域>]。
 # 定时函数放别的地域（如 ap-hongkong）、补采留在南京时，补采的重发不占定时函数那批出口地址。
@@ -227,7 +197,7 @@ enabled = false
 # equity = ["ap-nanjing"]
 
 # 美股：标普 500 或纳斯达克 100 成分股 5m K 线（东方财富），与 A 股、港股共用南京的 [scf_plan.regions.ap-nanjing]。
-# 命名空间默认 moox-stockus-plan，代码包默认 moox-collector-stockus-plan；固定每函数 50 只标的（标普 500 共 11 个函数），
+# 命名空间默认 moox-stockus-plan，代码包默认共用 moox-collector-plan；固定每函数 50 只标的（标普 500 共 11 个函数），
 # 每 5 分钟触发一次，盘前、收市后、非交易日（含半日市 13:00 之后）函数直接返回不采集。
 # [[scf_plan.spaces]]
 # space_id = "stockus"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Replay, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
-import { activeReplays, pendingItems, stateOf, type AttentionInput } from "./attention-model";
+import { activeReplays, pendingItems, sortInstancesByPriority, stateOf, type AttentionInput } from "./attention-model";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 
@@ -8,20 +8,23 @@ function instance(id: string, overrides: Partial<StrategyInstance> = {}): Strate
   return {
     instance_id: id,
     strategy_id: "s1",
+    strategy_name: "动量",
     space_id: "crypto",
+    factor_tasks: {},
     logical_account_id: "",
     enabled: true,
     session_id: "sess",
     resolved_json: "{}",
     health: "ok",
-    created_at: "",
+    created_at: "0",
     updated_at: "1791590400000",
+    confirmed_at: "0",
     ...overrides
   };
 }
 function snapshot(validUntil: string, weights: Record<string, string> = { "BTC-USDT": "0.5" }): StrategyTargetSnapshot {
   return {
-    targets: Object.entries(weights).map(([instrument_id, target_weight]) => ({ instrument_id, target_weight })),
+    targets: Object.entries(weights).map(([instrument_id, target_weight]) => ({ instrument_id, target_weight, market: "" })),
     session_id: "sess",
     bar_end_time: "1791630000000",
     valid_until: validUntil,
@@ -29,10 +32,20 @@ function snapshot(validUntil: string, weights: Record<string, string> = { "BTC-U
   };
 }
 function input(overrides: Partial<AttentionInput> = {}): AttentionInput {
-  return { instances: [], targets: {}, catalog: [], nowMs: NOW, ...overrides };
+  return { instances: [], targets: {}, nowMs: NOW, ...overrides };
 }
 
 describe("策略的待处理与进行中的回放", () => {
+  it("orders enabled instances before disabled ones and degraded before healthy", () => {
+    const ordered = sortInstancesByPriority([
+      instance("off", { enabled: false, updated_at: "1791590400000" }),
+      instance("ok-old", { updated_at: "1791504000000" }),
+      instance("deg", { health: "degraded", updated_at: "1791417600000" }),
+      instance("ok-new", { updated_at: "1791590400000" })
+    ]);
+    expect(ordered.map(item => item.instance_id)).toEqual(["deg", "ok-new", "ok-old", "off"]);
+  });
+
   it("derives the target state, treating unread enabled instances as unknown", () => {
     const targets = { a: snapshot("2026-10-10T13:00:00Z"), b: snapshot("2026-10-10T11:30:00Z") };
     expect(stateOf(instance("a"), targets, NOW)).toBe("valid");
@@ -41,7 +54,7 @@ describe("策略的待处理与进行中的回放", () => {
     expect(stateOf(instance("d", { enabled: false }), targets, NOW)).toBe("inactive");
   });
 
-  it("lists one pending item per instance by severity", () => {
+  it("lists one pending item per instance by severity and links to instance detail", () => {
     const items = pendingItems(
       input({
         instances: [
@@ -57,10 +70,11 @@ describe("策略的待处理与进行中的回放", () => {
         }
       })
     );
-    expect(items.map(item => [item.instanceId, item.kind])).toEqual([
-      ["deg", "degraded"],
-      ["exp", "expired"]
+    expect(items.map(item => [item.instanceId, item.kind, item.target])).toEqual([
+      ["deg", "degraded", { name: "strategy-detail", params: { instanceId: "deg" } }],
+      ["exp", "expired", { name: "strategy-detail", params: { instanceId: "exp" } }]
     ]);
+    expect(items[0].title).toBe("动量 · deg");
   });
 
   it("绑定的组合账户已暂停时列为待处理，链接到组合账户", () => {
@@ -75,7 +89,7 @@ describe("策略的待处理与进行中的回放", () => {
     expect(items[0].target).toEqual({ name: "trading-account-detail", params: { logical_account_id: "acc1" } });
   });
 
-  it("keeps only pending and running replays", () => {
-    expect(activeReplays([{ status: "pending" }, { status: "failed" }, { status: "running" }] as Replay[])).toHaveLength(2);
+  it("keeps only queued and running replays", () => {
+    expect(activeReplays([{ status: "queued" }, { status: "failed" }, { status: "running" }] as Replay[])).toHaveLength(2);
   });
 });

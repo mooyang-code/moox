@@ -90,7 +90,7 @@ export interface HealthObject {
   host_id?: string;
   component_id?: string;
   dataset_id?: string;
-  freq?: string;
+  frequency?: string;
   kind?: string;
   space_id?: string;
   producer?: string;
@@ -147,7 +147,7 @@ export interface HealthDataset {
   producer?: string;
   space_id?: string;
   dataset_id?: string;
-  freq?: string;
+  frequency?: string;
   status?: HealthStatus;
   reason?: string;
   raw_error?: string;

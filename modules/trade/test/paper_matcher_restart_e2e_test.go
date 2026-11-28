@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fillreduce"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -40,7 +40,7 @@ func TestPaperMatcherRestingGTCRecoversAfterSQLiteRestart(t *testing.T) {
 	restarted, err := store.Open(f.path)
 	require.NoError(t, err)
 	defer restarted.Close()
-	reducer := &consumer.Reducer{Store: restarted}
+	reducer := &fillreduce.Reducer{Store: restarted}
 	secondMatcher := &paperexec.Matcher{
 		Store:   restarted,
 		Reducer: reducer,

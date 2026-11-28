@@ -144,9 +144,9 @@ func seedSmokeStore(
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: smokeSpaceID, LogicalAccountID: identity.LogicalAccountID,
 			Name:            smokeAccountName(options),
-			ExecutionMode:   string(exchange.ExecutionModeLive),
+			Environment:     string(exchange.AccountEnvironmentTestnet),
 			SettlementAsset: "USDT",
-			AutomationState: "PAUSED",
+			PauseSource:     store.PauseSourceUser,
 			PauseReason:     "testnet smoke isolation",
 		}); err != nil {
 			return err
@@ -176,9 +176,9 @@ func validateSmokeLogicalAccount(
 		return err
 	}
 	if logical.SpaceID != smokeSpaceID ||
-		logical.ExecutionMode != string(exchange.ExecutionModeLive) ||
+		logical.Environment != string(exchange.AccountEnvironmentTestnet) ||
 		logical.SettlementAsset != "USDT" ||
-		logical.AutomationState != "PAUSED" {
+		!logical.IsPaused() {
 		return errors.New("existing smoke LogicalAccount is not isolated and PAUSED")
 	}
 	members, err := database.ListLogicalAccountMembers(

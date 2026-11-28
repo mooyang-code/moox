@@ -114,7 +114,7 @@ func (w *InspectionWorker) Handle(ctx context.Context, spaceID, tradingAccountID
 	if err != nil {
 		return err
 	}
-	if logical.AutomationState == "PAUSED" {
+	if logical.IsPaused() {
 		return nil
 	}
 	reason := "交易账户检测发现账户类型变化，请重新检测确认后再恢复"

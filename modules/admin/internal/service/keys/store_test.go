@@ -36,10 +36,10 @@ func public(label string) string {
 func TestOnlyNonHostIdentitiesCanBeRegistered(t *testing.T) {
 	store, _ := testStore(t)
 	ctx := context.Background()
-	for _, identity := range []string{"moox-cli", "scf-collector", "moox-skill"} {
+	for _, identity := range []string{"moox-cli", "scf-collector"} {
 		require.NoError(t, store.SetIdentity(ctx, identity, public(identity)), identity)
 	}
-	for _, identity := range []string{"console", "host-gateway", "host-gateway@control", "trade", "factor-engine", "archive-worker", "access", "admin", "", "unknown", "MOOX-CLI"} {
+	for _, identity := range []string{"console", "host-gateway", "host-gateway@control", "trade", "factor-engine", "archive-worker", "access", "moox-skill", "admin", "", "unknown", "MOOX-CLI"} {
 		require.ErrorIs(t, store.SetIdentity(ctx, identity, public("x")), ErrInvalidIdentity, identity)
 		_, err := store.EnsureIdentity(ctx, identity, public("x"))
 		require.ErrorIs(t, err, ErrInvalidIdentity, identity)
@@ -49,8 +49,8 @@ func TestOnlyNonHostIdentitiesCanBeRegistered(t *testing.T) {
 	}
 	rows, err := store.Identities(ctx)
 	require.NoError(t, err)
-	require.Len(t, rows, 3)
-	require.Equal(t, []string{"moox-cli", "moox-skill", "scf-collector"}, []string{rows[0].Identity, rows[1].Identity, rows[2].Identity}, "按名字排序")
+	require.Len(t, rows, 2)
+	require.Equal(t, []string{"moox-cli", "scf-collector"}, []string{rows[0].Identity, rows[1].Identity}, "按名字排序")
 }
 
 // 一个身份只有一把公钥：SetIdentity 直接替换（换电脑），EnsureIdentity 只建不改（bootstrap 重复执行）。
@@ -100,10 +100,10 @@ func TestHostPublicKeys(t *testing.T) {
 func TestIdentitiesSkipsRowsThatCouldImpersonateComponents(t *testing.T) {
 	store, db := testStore(t)
 	ctx := context.Background()
-	require.NoError(t, store.SetIdentity(ctx, "moox-skill", public("skill")))
+	require.NoError(t, store.SetIdentity(ctx, "scf-collector", public("scf")))
 	require.NoError(t, db.Exec("INSERT INTO t_identity_keys (c_identity, c_sign_public_key) VALUES ('trade', ?), ('moox-cli', 'corrupt')", public("rogue")).Error)
 	rows, err := store.Identities(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	require.Equal(t, "moox-skill", rows[0].Identity)
+	require.Equal(t, "scf-collector", rows[0].Identity)
 }

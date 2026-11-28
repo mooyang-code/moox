@@ -2,13 +2,13 @@ package eventconsumer
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -42,9 +42,9 @@ func shadowSessionDelivery(t *testing.T, now time.Time, targetID, sessionID stri
 	}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
+	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &eventpb.LogicalAccountTargetWeightRequested{
 		TargetId: targetID, InstanceId: "runner-1", SessionId: sessionID, SessionStartedAt: testSessionStartedAt(sessionID), StrategyId: "strategy-1", LogicalAccountId: "logical-1",
-		Targets:    []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
+		Targets:    []*eventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
 		BarEndTime: barEnd.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 		Shadow: true,
 	}, events.PublishOptions{EventID: targetID, OccurredAt: barEnd, SpaceID: "space-1", SubjectID: "logical-1"})
@@ -78,7 +78,7 @@ func TestShadowTargetSessionTable(t *testing.T) {
 			seedLogicalTargetAccount(t, db, true, true)
 			shadowCurrentSession(t, db, test.current)
 			if test.manual {
-				require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
+				require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_pause_source = '', c_pause_reason = '', c_margin_reduce_state = ''").Error)
 			}
 			now := time.Now().UTC().Truncate(time.Millisecond)
 			woke := false

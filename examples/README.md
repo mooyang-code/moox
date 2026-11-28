@@ -3,7 +3,6 @@
 默认系统初始化文件集中在仓库根目录 [`config/setup/`](../config/setup/)：
 
 - `metadata.yaml`：A 股、港股、美股和加密货币四个业务空间与 Storage 元数据。
-- `dataset-health-policy.yaml`：Monitor 的 Dataset 健康判定阈值。
 - `collection-tasks.yaml`：Collector 默认采集任务。
 - `factor-tasks.yaml`：默认因子定义与因子任务，由 `moox-cli setup start` 导入。
 

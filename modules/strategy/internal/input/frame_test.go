@@ -11,6 +11,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 // single 返回帧里唯一一个市场的输入。
@@ -31,10 +33,10 @@ func rowIDs(frame engine.Frame) []string {
 	return ids
 }
 
-func rowsAt(at time.Time, values map[string]map[string]float64) []Row {
-	rows := make([]Row, 0, len(values))
+func rowsAt(at time.Time, values map[string]map[string]float64) []upstream.Row {
+	rows := make([]upstream.Row, 0, len(values))
 	for id, columns := range values {
-		rows = append(rows, Row{SubjectID: id, SeriesTag: "venue:binance", DataTime: at, Values: columns})
+		rows = append(rows, upstream.Row{SubjectID: id, SeriesTag: "venue:binance", DataTime: at, Values: columns})
 	}
 	return rows
 }
@@ -45,7 +47,7 @@ func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		// 当期与上一根合并成一次范围读取（上一根起、当期止）。
 		rows := rowsAt(barStart, map[string]map[string]float64{
 			"BTC-USDT": {"close": 101, "ma_20": 100},
@@ -101,7 +103,7 @@ func TestLoadBarMapsViewLevelFailuresToAllColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) { return nil, 1, nil }
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) { return nil, 1, nil }
 	loaded, err := Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, Readiness: map[string]readiness.Result{resolved.Market.Select: readiness.Result{FailedSubjects: []string{"ETH-USDT"}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -119,20 +121,20 @@ func TestLoadBarRejectsAmbiguousSeriesAndPropagatesStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
-		return []Row{
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
+		return []upstream.Row{
 			{SubjectID: "ETH-USDT", SeriesTag: "venue:binance", DataTime: query.Start, Values: map[string]float64{"close": 1}},
 			{SubjectID: "ETH-USDT", SeriesTag: "venue:okx", DataTime: query.Start, Values: map[string]float64{"close": 2}},
 		}, 1, nil
 	}
 	loader := Loader{Client: client}
 	_, err = loader.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
-	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipAmbiguousSeries {
+	var skip *upstream.SkipError
+	if !errors.As(err, &skip) || skip.Reason != upstream.SkipAmbiguousSeries {
 		t.Fatalf("多序列应记为 ambiguous_series：%v", err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) { return nil, 0, ErrStale }
-	if _, err := loader.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); !errors.Is(err, ErrStale) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) { return nil, 0, upstream.ErrStale }
+	if _, err := loader.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); !errors.Is(err, upstream.ErrStale) {
 		t.Fatalf("索引变化应透传 ErrStale：%v", err)
 	}
 	client.errors["subjects"] = errors.New("storage timeout")
@@ -151,15 +153,15 @@ func TestLoadBarDetectsConfigDrift(t *testing.T) {
 	view.Columns = view.Columns[:7]
 	client.views["dataset_factor_1h"] = view
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
-	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "已不存在") {
+	var skip *upstream.SkipError
+	if !errors.As(err, &skip) || skip.Reason != upstream.SkipConfigError || !strings.Contains(skip.Detail, "已不存在") {
 		t.Fatalf("列被删除应记为 config_error：%v", err)
 	}
 	view.Columns = newFakeClient("spot").views["dataset_factor_1h"].Columns
 	view.Frequency = "4h"
 	client.views["dataset_factor_1h"] = view
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
-	if !errors.As(err, &skip) || skip.Reason != SkipConfigError {
+	if !errors.As(err, &skip) || skip.Reason != upstream.SkipConfigError {
 		t.Fatalf("周期变化应记为 config_error：%v", err)
 	}
 }
@@ -196,8 +198,8 @@ rules:
 		view.Columns = kept
 		drifted.views["dataset_factor_1h"] = view
 		_, err := Loader{Client: drifted}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
-		var skip *SkipError
-		if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, removed) {
+		var skip *upstream.SkipError
+		if !errors.As(err, &skip) || skip.Reason != upstream.SkipConfigError || !strings.Contains(skip.Detail, removed) {
 			t.Fatalf("删除 %s 应记为 config_error：%v", removed, err)
 		}
 		if len(drifted.queries) != 0 {
@@ -215,7 +217,7 @@ func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
 	}
 	if _, err := (Loader{Client: client}).LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err != nil {
@@ -235,8 +237,8 @@ func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 	client.views["dataset_factor_1h"] = view
 	client.queries = nil
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
-	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "min_age_bars=24") {
+	var skip *upstream.SkipError
+	if !errors.As(err, &skip) || skip.Reason != upstream.SkipHistoryInsufficient || !strings.Contains(skip.Detail, "min_age_bars=24") {
 		t.Fatalf("View 覆盖不足应记为 history_insufficient：%v", err)
 	}
 }
@@ -252,8 +254,8 @@ func TestLoadBarRejectsInactiveView(t *testing.T) {
 	view.Status = "disabled"
 	client.views["dataset_factor_1h"] = view
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
-	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "disabled") {
+	var skip *upstream.SkipError
+	if !errors.As(err, &skip) || skip.Reason != upstream.SkipConfigError || !strings.Contains(skip.Detail, "disabled") {
 		t.Fatalf("非 active 的 View 应记 config_error：%v", err)
 	}
 }
@@ -271,13 +273,13 @@ func TestLoadBarProbesAgeOnTheTaskResultView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.rows = func(query Query) ([]Row, uint64, error) {
+	client.rows = func(query upstream.Query) ([]upstream.Row, uint64, error) {
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
 	}
 
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
-	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient {
+	var skip *upstream.SkipError
+	if !errors.As(err, &skip) || skip.Reason != upstream.SkipHistoryInsufficient {
 		t.Fatalf("结果 View 只覆盖当期应记 history_insufficient：%v", err)
 	}
 

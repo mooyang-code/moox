@@ -72,8 +72,8 @@ func TestCollectorTaskUpdateKeepsNameAndDescriptionWhenOnlyTogglingEnabled(t *te
 
 func TestDatasetUpdateMergesNameAndKeepsImmutableFieldsOut(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"GetDataset":    `{"ret_info":{"code":0},"dataset":{"space_id":"crypto","dataset_id":"d1","data_source_id":"binance","name":"现货 1m","description":"d","data_kind":"DATA_KIND_TIME_SERIES","freq":"1m","status":"active","retention":"840h","revision":"3","attributes":{"a":"b"}}}`,
-		"UpdateDataset": `{"ret_info":{"code":0}}`,
+		"GetDataset":    `{"ret_info":{"code":0},"dataset":{"space_id":"crypto","dataset_id":"d1","data_source_id":"binance","name":"现货 1m","description":"d","data_kind":"DATA_KIND_TIME_SERIES","frequency":"1m","status":"active","retention":"840h","revision":"3","attributes":{"a":"b"}}}`,
+		"UpsertDataset": `{"ret_info":{"code":0}}`,
 	}}
 	useRPCGateway(t, gateway)
 	_, _, err := runSpecCommand(t, specByPath(t, "metadata", "dataset", "update"), "--dataset-id", "d1", "--description", "新说明")
@@ -81,10 +81,10 @@ func TestDatasetUpdateMergesNameAndKeepsImmutableFieldsOut(t *testing.T) {
 	var request struct {
 		Dataset map[string]any `json:"dataset"`
 	}
-	require.NoError(t, json.Unmarshal(gateway.bodies["UpdateDataset"], &request))
+	require.NoError(t, json.Unmarshal(gateway.bodies["UpsertDataset"], &request))
 	assert.Equal(t, "现货 1m", request.Dataset["name"], "服务端要求 name 非空：取回现值")
 	assert.Equal(t, "新说明", request.Dataset["description"])
-	for _, readOnly := range []string{"retention", "revision", "freq", "data_kind"} {
+	for _, readOnly := range []string{"retention", "revision", "frequency", "data_kind"} {
 		assert.NotContains(t, request.Dataset, readOnly, "%s 不能回传（只读或创建后不可变）", readOnly)
 	}
 	assert.NotContains(t, gateway.methods[len(gateway.methods)-1:], "GetDataset")

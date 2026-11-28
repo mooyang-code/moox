@@ -9,8 +9,8 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 type secretSourceStub struct{}
@@ -67,7 +67,7 @@ func TestAccountRPCCreateAndSpaceIsolation(t *testing.T) {
 	}
 	defer tradeStore.Close()
 	service := &accountapp.Service{
-		Store:     accountapp.Repository{Store: tradeStore},
+		Store:     tradeStore,
 		Secrets:   secretSourceStub{},
 		Inspector: inspectorStub{},
 	}
@@ -107,6 +107,7 @@ func TestAccountEnumRoundTrip(t *testing.T) {
 	for _, value := range []tradepb.AccountEnvironment{
 		tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET,
 		tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION,
+		tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
 	} {
 		if got := environmentToPB(string(environmentFromPB(value))); got != value {
 			t.Fatalf("environment round trip = %v, want %v", got, value)

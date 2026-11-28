@@ -112,7 +112,7 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	spaces := map[string]map[string]any{}
 	for _, space := range plan.Spaces {
 		markets[space.SpaceID] = space.Markets
-		override := map[string]any{"package_name": space.PackageName, "namespace": space.Namespace}
+		override := map[string]any{"namespace": space.Namespace}
 		if space.SymbolsPerFunction > 0 {
 			override["symbols_per_function"] = space.SymbolsPerFunction
 		}
@@ -129,6 +129,7 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	}
 	fields := []mappingField{
 		{"cloud_account_id", plan.CloudAccount.AccountID},
+		{"package_name", plan.PackageName},
 		{"memory_mb", plan.MemoryMB},
 		{"symbols_per_function", plan.SymbolsPerFunction},
 	}

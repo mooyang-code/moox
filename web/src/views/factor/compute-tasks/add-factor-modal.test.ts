@@ -6,7 +6,6 @@ import type { FactorDef, FactorTaskInfo } from "@/api/factor/types";
 
 const api = vi.hoisted(() => ({
   addFactorToTask: vi.fn(),
-  setFactorMemberStatus: vi.fn(),
   listFactors: vi.fn(),
   listFactorCategories: vi.fn()
 }));
@@ -36,7 +35,7 @@ const info = (status: "enabled" | "disabled"): FactorTaskInfo =>
       task_id: "t1",
       space_id: "crypto",
       source_dataset_id: "ds",
-      freq: "5m",
+      frequency: "5m",
       name: "任务",
       result_dataset_id: "r",
       status
@@ -54,7 +53,6 @@ beforeEach(() => {
     { category_id: "volume", name: "成交量类" }
   ]);
   api.addFactorToTask.mockImplementation(async (_task: string, factorId: string) => ({ member_key: factorId, kind: "fixed" }));
-  api.setFactorMemberStatus.mockResolvedValue({});
 });
 afterEach(() => {
   wrapper?.unmount();
@@ -80,42 +78,38 @@ async function open(status: "enabled" | "disabled", presetFactorId?: string) {
 }
 
 describe("添加因子弹窗", () => {
-  it("任务启用时默认勾上“立即启用”：每个因子先添加再启用", async () => {
+  it("任务启用时默认勾上“立即启用”：单次 AddTaskMember 传入 status=enabled", async () => {
     const vm = await open("enabled", "f1");
     expect(vm.enableAfterAdd).toBe(true);
     expect(vm.selected).toEqual(["f1"]);
-    const order: string[] = [];
-    api.addFactorToTask.mockImplementation(async (_task: string, factorId: string) => {
-      order.push(`add ${factorId}`);
-      return { member_key: factorId, kind: "fixed" };
-    });
-    api.setFactorMemberStatus.mockImplementation(async (_task: string, key: string) => order.push(`enable ${key}`));
     vm.selected = ["f1", "f2"];
     await vm.submit();
-    expect(order).toEqual(["add f1", "enable f1", "add f2", "enable f2"]);
-    expect(api.setFactorMemberStatus).toHaveBeenCalledWith("t1", "f1", "enabled");
+    expect(api.addFactorToTask).toHaveBeenNthCalledWith(1, "t1", "f1", "fixed", undefined, "enabled");
+    expect(api.addFactorToTask).toHaveBeenNthCalledWith(2, "t1", "f2", "fixed", undefined, "enabled");
   });
 
-  it("启用部分失败时列出没能启用的成员", async () => {
+  it("批量添加部分失败时保留失败项并提示", async () => {
     const warning = vi.spyOn(Message, "warning");
-    api.setFactorMemberStatus.mockImplementation(async (_task: string, key: string) => {
-      if (key === "f2") throw new Error("引擎不可用");
+    api.addFactorToTask.mockImplementation(async (_task: string, factorId: string) => {
+      if (factorId === "f2") throw new Error("引擎不可用");
+      return { member_key: factorId, kind: "fixed" };
     });
     const vm = await open("enabled");
     vm.selected = ["f1", "f2"];
     await vm.submit();
     expect(api.addFactorToTask).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(warning.mock.calls)).toContain("f2（引擎不可用）");
+    expect(vm.selected).toEqual(["f2"]);
+    expect(JSON.stringify(warning.mock.calls)).toContain("1 个已添加，1 个失败");
   });
 
-  it("任务停用时不勾也不能勾“立即启用”，只添加", async () => {
+  it("任务停用时不勾也不能勾“立即启用”，调用时不传 enabled", async () => {
     const vm = await open("disabled");
     expect(vm.enableAfterAdd).toBe(false);
     vm.enableAfterAdd = true; // 即使状态被改，任务停用时也不启用
     vm.selected = ["f1"];
     await vm.submit();
     expect(api.addFactorToTask).toHaveBeenCalledTimes(1);
-    expect(api.setFactorMemberStatus).not.toHaveBeenCalled();
+    expect(api.addFactorToTask).toHaveBeenCalledWith("t1", "f1", "fixed", undefined, undefined);
   });
 
   it("按分类筛选候选因子", async () => {
@@ -131,6 +125,6 @@ describe("添加因子弹窗", () => {
     await flushPromises();
     expect((vm as unknown as { canSubmit: boolean }).canSubmit).toBe(true);
     await vm.submit();
-    expect(api.addFactorToTask).toHaveBeenCalledWith("t1", "f1", "fixed", undefined);
+    expect(api.addFactorToTask).toHaveBeenCalledWith("t1", "f1", "fixed", undefined, "enabled");
   });
 });

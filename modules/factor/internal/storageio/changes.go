@@ -78,7 +78,7 @@ func (c *Client) ReadDatasetChanges(ctx context.Context, spaceID, datasetID stri
 			if startErr != nil || endErr != nil {
 				return Changes{}, fmt.Errorf("read dataset changes: invalid range %q-%q", r.GetStartTime(), r.GetEndTime())
 			}
-			item.Ranges = append(item.Ranges, ChangeRange{Subject: r.GetSubjectId(), Freq: r.GetFreq(), Start: start.UTC(), End: end.UTC()})
+			item.Ranges = append(item.Ranges, ChangeRange{Subject: r.GetSubjectId(), Freq: r.GetFrequency(), Start: start.UTC(), End: end.UTC()})
 		}
 		out.Changes = append(out.Changes, item)
 	}

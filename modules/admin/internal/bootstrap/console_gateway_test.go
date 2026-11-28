@@ -11,6 +11,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -30,11 +31,11 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	topology, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	specs := []sysdeploy.HostSpec{
-		{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin", "collector"}},
-		{HostID: "storage", Enabled: true, Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
+	specs := []*pb.SyncTopologyHost{
+		{HostId: "control", Enabled: true, Address: "control.example.test", ComponentIds: []string{"admin", "collector"}},
+		{HostId: "storage", Enabled: true, Address: "storage.example.test", ComponentIds: []string{"storage-primary", "storage-view"}},
 	}
-	_, err = topology.ReplaceTopology(ctx, specs)
+	_, err = topology.ReplaceTopology(ctx, &pb.SyncTopologyReq{Hosts: specs})
 	require.NoError(t, err)
 	// 管理台用控制机的主机密钥、以 console 的身份签名。
 	keyFile := filepath.Join(t.TempDir(), "host.key")
@@ -47,8 +48,8 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 	first := client.Directory()
 	require.Equal(t, []string{"control"}, first.Services["trpc.moox.collector.CollectMgr"])
 	require.Equal(t, []string{"storage"}, first.Services["trpc.moox.storage.Metadata"])
-	specs[0].DisabledComponents = []string{"collector"}
-	_, err = topology.ReplaceTopology(ctx, specs)
+	specs[0].DisabledComponentIds = []string{"collector"}
+	_, err = topology.ReplaceTopology(ctx, &pb.SyncTopologyReq{Hosts: specs})
 	require.NoError(t, err)
 	require.NoError(t, client.Refresh(ctx))
 	require.NotEqual(t, first.Version, client.Directory().Version)

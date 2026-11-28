@@ -17,7 +17,7 @@ func TestUpdateDatasetAssignsDataSourceOnceThenKeepsItImmutable(t *testing.T) {
 	}
 	created, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "unsourced",
-		Name: "unsourced", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+		Name: "unsourced", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1m",
 		Attributes: collectorOwner,
 	})
 	if err != nil {

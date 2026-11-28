@@ -47,6 +47,10 @@ func (tx *immediateTx) Commit() error {
 	if tx == nil || tx.closed {
 		return nil
 	}
+	if err := tx.ctx.Err(); err != nil {
+		_ = tx.rollbackDetached()
+		return err
+	}
 	if _, err := tx.conn.ExecContext(tx.ctx, "COMMIT"); err != nil {
 		// 提交失败（含请求取消）：事务可能仍处于打开状态，必须回滚后才能归还连接
 		_ = tx.rollbackDetached()

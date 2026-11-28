@@ -161,13 +161,10 @@ func validateUniverseAges(where string, universe Universe) error {
 	return nil
 }
 
-// validateRuleUniverse 校验规则级 universe 与 allow_empty：显式 pool 的规则只能写年龄类字段；
+// validateRuleUniverse 校验规则级 universe 与 allow_empty：
 // 规则实际的 max_age_bars 大于 0 时必须写 allow_empty: true。
 func validateRuleUniverse(prefix string, s *Strategy, rule *Rule) error {
 	if u := rule.Universe; u != nil {
-		if rule.Pool.Explicit && u.OverridesMembers() {
-			return fmt.Errorf("%s 写了显式 pool，规则级 universe 只能写 min_age_bars、max_age_bars、age_markets（标签与黑白名单不作用于显式 pool）", prefix)
-		}
 		if err := validateUniverseAges(prefix+" 的 universe", u.Universe); err != nil {
 			return err
 		}

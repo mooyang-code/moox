@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
@@ -358,24 +357,11 @@ func (s *Service) holderOf(ctx context.Context, account store.TradingAccountReco
 
 // swapDust 判断永续持仓是不是下不了单的零头：按步长取整后低于最小数量（合约按面值折成基础币数量）。
 func swapDust(quantity shared.Decimal, instrument store.InstrumentRecord) bool {
-	step, err := shared.ParseDecimal(instrument.ExchangeQuantityStep)
-	if err != nil || step.Cmp(shared.Zero()) <= 0 {
+	step, minimum, err := instrument.BaseQuantityRules()
+	if err != nil {
 		return false
 	}
-	minimum := shared.Zero()
-	if raw := strings.TrimSpace(instrument.MinExchangeQuantity); raw != "" {
-		if minimum, err = shared.ParseDecimal(raw); err != nil {
-			return false
-		}
-	}
-	if exchange.RuleFor(instrument.MarketType).ContractValue {
-		contractValue, err := shared.ParseDecimal(instrument.ContractValue)
-		if err != nil || contractValue.Cmp(shared.Zero()) <= 0 {
-			return false
-		}
-		step, minimum = step.Mul(contractValue), minimum.Mul(contractValue)
-	}
-	floored := exposure.FloorToStep(quantity, step)
+	floored := shared.FloorToStep(quantity, step)
 	return floored.IsZero() || floored.Cmp(minimum) < 0
 }
 

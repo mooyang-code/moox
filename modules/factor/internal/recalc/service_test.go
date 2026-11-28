@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSubmitIsIdempotentByRequestID(t *testing.T) {
+func TestSubmitIsIdempotentByJobID(t *testing.T) {
 	db := openRecalcStore(t)
 	seedRecalcTask(t, db,
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
@@ -19,14 +19,15 @@ func TestSubmitIsIdempotentByRequestID(t *testing.T) {
 	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
-	one, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "req-1", start, end)
+	one, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "job-1", start, end)
 	require.NoError(t, err)
-	two, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "req-1", start, end)
+	require.Equal(t, store.RecalcStatusQueued, one.Status)
+	two, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "job-1", start, end)
 	require.NoError(t, err)
 	require.Equal(t, one, two)
 }
 
-func TestSubmitRetriesOmittedSelectorsAfterEnvironmentChanges(t *testing.T) {
+func TestSubmitRetriesExistingJobIDDirectly(t *testing.T) {
 	db := openRecalcStore(t)
 	seedRecalcTask(t, db,
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
@@ -35,19 +36,20 @@ func TestSubmitRetriesOmittedSelectorsAfterEnvironmentChanges(t *testing.T) {
 	svc := NewService(db, WithSubjectProvider(subjects))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
-	accepted, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "stable-omitted", start, end)
+	queued, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "stable-job", start, end)
 	require.NoError(t, err)
-	require.Equal(t, []string{"close_factor"}, accepted.Members)
-	require.Equal(t, []string{"BTC"}, accepted.Subjects)
+	require.Equal(t, []string{"close_factor"}, queued.Members)
+	require.Equal(t, []string{"BTC"}, queued.Subjects)
 
 	addRecalcMember(t, db, "ftask_bars_1m", testRecalcFactor("new_factor", domain.MemberStatusEnabled, 1))
 	subjects.values = []string{"BTC", "ETH"}
-	retried, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "stable-omitted", start, end)
+	retried, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "stable-job", start, end)
 	require.NoError(t, err)
-	require.Equal(t, accepted, retried)
+	require.Equal(t, queued, retried)
 
-	_, err = svc.Submit(context.Background(), "ftask_bars_1m", []string{"close_factor"}, nil, "stable-omitted", start, end)
-	require.ErrorContains(t, err, "different recalc request")
+	sameAgain, err := svc.Submit(context.Background(), "ftask_bars_1m", []string{"close_factor"}, nil, "stable-job", start, end)
+	require.NoError(t, err)
+	require.Equal(t, queued, sameAgain)
 }
 
 type changingSubjects struct{ values []string }
@@ -106,12 +108,8 @@ func seedRecalcTask(t *testing.T, db *store.Store, members ...recalcMember) {
 func addRecalcMember(t *testing.T, db *store.Store, taskID string, member recalcMember) {
 	t.Helper()
 	require.NoError(t, db.CreateFactor(context.Background(), member.def))
-	_, err := db.AddMember(context.Background(), taskID, member.def.FactorID, member.def.FactorID, domain.MemberKindFixed, nil)
+	_, err := db.AddMember(context.Background(), taskID, member.def.FactorID, member.def.FactorID, domain.MemberKindFixed, nil, member.status)
 	require.NoError(t, err)
-	if member.status == domain.MemberStatusEnabled {
-		require.NoError(t, db.SetMemberStatus(context.Background(), taskID, member.def.FactorID,
-			domain.MemberStatusDisabled, domain.MemberStatusEnabled))
-	}
 }
 
 func testRecalcFactor(id, status string, lookback int) recalcMember {
@@ -216,10 +214,10 @@ func TestCancelTriggersFinishedRecalcJobPruning(t *testing.T) {
 
 	// 先插入 3 条已完结历史作业与 1 条待取消作业。
 	for _, job := range []store.RecalcJob{
-		{JobID: "hist-1", RequestID: "hist-1", TaskID: "ftask_bars_1m", StartTime: 60, EndTime: 120, Status: store.RecalcStatusSucceeded},
-		{JobID: "hist-2", RequestID: "hist-2", TaskID: "ftask_bars_1m", StartTime: 120, EndTime: 180, Status: store.RecalcStatusFailed},
-		{JobID: "hist-3", RequestID: "hist-3", TaskID: "ftask_bars_1m", StartTime: 180, EndTime: 240, Status: store.RecalcStatusSucceeded},
-		{JobID: "to-cancel", RequestID: "to-cancel", TaskID: "ftask_bars_1m", StartTime: 240, EndTime: 300, Status: store.RecalcStatusAccepted},
+		{JobID: "hist-1", TaskID: "ftask_bars_1m", StartTime: 60, EndTime: 120, Status: store.RecalcStatusSucceeded},
+		{JobID: "hist-2", TaskID: "ftask_bars_1m", StartTime: 120, EndTime: 180, Status: store.RecalcStatusFailed},
+		{JobID: "hist-3", TaskID: "ftask_bars_1m", StartTime: 180, EndTime: 240, Status: store.RecalcStatusSucceeded},
+		{JobID: "to-cancel", TaskID: "ftask_bars_1m", StartTime: 240, EndTime: 300, Status: store.RecalcStatusQueued},
 	} {
 		_, err := db.CreateRecalcJob(ctx, job)
 		require.NoError(t, err)

@@ -22,25 +22,36 @@ import (
 )
 
 type fakeManager struct {
-	mu            sync.Mutex
-	heartbeat     *archivepb.ArchiveWorkerHeartbeatRsp
-	heartbeatErr  error
-	assignments   []*archivepb.RunAssignment
-	pullErr       error
-	progressStop  bool
-	completeErrs  []error
-	heartbeats    []*archivepb.ArchiveWorkerHeartbeatReq
-	pulls         []*archivepb.PullArchiveRunReq
-	progresses    []*archivepb.ReportArchiveRunProgressReq
-	completes     []*archivepb.CompleteArchiveRunReq
-	completeCalls int
-	completed     chan struct{}
-	pullGate      chan struct{} // 非空时 Pull 阻塞到它被关闭
-	pullEntered   chan struct{} // Pull 进入时发出信号
+	mu                sync.Mutex
+	heartbeat         *archivepb.ArchiveWorkerHeartbeatRsp
+	heartbeatErr      error
+	followTasks       []*archivepb.FollowTask
+	listFollowErr     error
+	listFollowReqs    []*archivepb.ListFollowTasksReq
+	followReports     []*archivepb.ReportFollowResultReq
+	reportFollowErrs  []error
+	reportFollowCalls int
+	followReported    chan struct{}
+	assignments       []*archivepb.RunAssignment
+	pullErr           error
+	progressStop      bool
+	completeErrs      []error
+	heartbeats        []*archivepb.ArchiveWorkerHeartbeatReq
+	pulls             []*archivepb.PullArchiveRunReq
+	progresses        []*archivepb.ReportArchiveRunProgressReq
+	completes         []*archivepb.CompleteArchiveRunReq
+	completeCalls     int
+	completed         chan struct{}
+	pullGate          chan struct{} // 非空时 Pull 阻塞到它被关闭
+	pullEntered       chan struct{} // Pull 进入时发出信号
 }
 
 func newFakeManager() *fakeManager {
-	return &fakeManager{heartbeat: &archivepb.ArchiveWorkerHeartbeatRsp{}, completed: make(chan struct{}, 16)}
+	return &fakeManager{
+		heartbeat:      &archivepb.ArchiveWorkerHeartbeatRsp{},
+		completed:      make(chan struct{}, 16),
+		followReported: make(chan struct{}, 16),
+	}
 }
 
 func (f *fakeManager) Heartbeat(_ context.Context, req *archivepb.ArchiveWorkerHeartbeatReq) (*archivepb.ArchiveWorkerHeartbeatRsp, error) {
@@ -48,6 +59,35 @@ func (f *fakeManager) Heartbeat(_ context.Context, req *archivepb.ArchiveWorkerH
 	defer f.mu.Unlock()
 	f.heartbeats = append(f.heartbeats, req)
 	return f.heartbeat, f.heartbeatErr
+}
+
+func (f *fakeManager) ListFollowTasks(_ context.Context, req *archivepb.ListFollowTasksReq) (*archivepb.ListFollowTasksRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listFollowReqs = append(f.listFollowReqs, req)
+	if f.listFollowErr != nil {
+		return nil, f.listFollowErr
+	}
+	return &archivepb.ListFollowTasksRsp{Tasks: append([]*archivepb.FollowTask(nil), f.followTasks...)}, nil
+}
+
+func (f *fakeManager) ReportFollowResult(_ context.Context, req *archivepb.ReportFollowResultReq) (*archivepb.ReportFollowResultRsp, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reportFollowCalls++
+	if len(f.reportFollowErrs) > 0 {
+		err := f.reportFollowErrs[0]
+		f.reportFollowErrs = f.reportFollowErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	f.followReports = append(f.followReports, req)
+	select {
+	case f.followReported <- struct{}{}:
+	default:
+	}
+	return &archivepb.ReportFollowResultRsp{}, nil
 }
 
 func (f *fakeManager) Pull(_ context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error) {
@@ -75,7 +115,7 @@ func (f *fakeManager) Progress(_ context.Context, req *archivepb.ReportArchiveRu
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.progresses = append(f.progresses, req)
-	return &archivepb.ReportArchiveRunProgressRsp{Canceled: f.progressStop}, nil
+	return &archivepb.ReportArchiveRunProgressRsp{Cancelled: f.progressStop}, nil
 }
 
 func (f *fakeManager) Complete(_ context.Context, req *archivepb.CompleteArchiveRunReq) (*archivepb.CompleteArchiveRunRsp, error) {
@@ -95,13 +135,14 @@ func (f *fakeManager) Complete(_ context.Context, req *archivepb.CompleteArchive
 }
 
 type fakeSource struct {
-	mu     sync.Mutex
-	rows   []staging.Row
-	block  bool          // 读取一直阻塞到运行被取消
-	delay  time.Duration // 每次读取的耗时
-	active int
-	maxAct int
-	calls  int
+	mu       sync.Mutex
+	rows     []staging.Row
+	block    bool          // 读取一直阻塞到运行被取消
+	readGate chan struct{} // 非空时 ReadRange 阻塞到它被关闭（或 ctx 取消）
+	delay    time.Duration // 每次读取的耗时
+	active   int
+	maxAct   int
+	calls    int
 }
 
 func (f *fakeSource) Columns(context.Context, string, string) ([]staging.Column, error) {
@@ -124,6 +165,16 @@ func (f *fakeSource) ReadRange(ctx context.Context, req source.Range) (source.Pa
 	if f.block {
 		<-ctx.Done()
 		return source.Page{}, ctx.Err()
+	}
+	f.mu.Lock()
+	gate := f.readGate
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return source.Page{}, ctx.Err()
+		}
 	}
 	if f.delay > 0 {
 		time.Sleep(f.delay)
@@ -192,7 +243,7 @@ func newHarness(t *testing.T) *harness {
 
 func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: runID, LeaseToken: "tok-" + runID, Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
+		RunId: runID, LeaseToken: "tok-" + runID, Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Frequency: "1m", PartitionUnit: "day",
 		Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: rfcMillis("2026-10-17T01:04:43Z"), ScheduledAt: rfcMillis("2026-10-17T01:04:43Z"),
 	}
@@ -442,8 +493,8 @@ func TestIndependentProgressTimerRenewsTheLeaseAndHonorsCancellation(t *testing.
 	h.app.heartbeatOnce(ctx, false)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
-	if req.GetStatus() != "canceled" {
-		t.Fatalf("mgr 在进度上报里要求取消时应以 canceled 收尾: %v", req)
+	if req.GetStatus() != "cancelled" {
+		t.Fatalf("mgr 在进度上报里要求取消时应以 cancelled 收尾: %v", req)
 	}
 	h.mgr.mu.Lock()
 	defer h.mgr.mu.Unlock()
@@ -741,9 +792,9 @@ func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 	}
 	h.app.pullOnce(ctx)
 	row := func(subject string, close float64) *storagepb.PrimaryUpsertFieldsReq {
-		return &storagepb.PrimaryUpsertFieldsReq{SpaceId: "crypto", DatasetId: "ds_1m", Rows: []*storagepb.RowFieldUpsert{{
+		return &storagepb.PrimaryUpsertFieldsReq{SpaceId: "crypto", DatasetId: "ds_1m", Rows: []*storagepb.Row{{
 			Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "ds_1m", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: subject, Freq: "1m", DataTime: "2026-09-01T00:00:00Z"}}},
+				SubjectId: subject, Frequency: "1m", DataTime: "2026-09-01T00:00:00Z"}}},
 			Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: close}}}},
 		}}}
 	}
@@ -786,6 +837,278 @@ func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 	}
 	h.app.cancelAll()
 	h.idle()
+}
+
+func followTask(dataset string, mutate func(*archivepb.FollowTask)) *archivepb.FollowTask {
+	t := &archivepb.FollowTask{
+		SpaceId: "crypto", DatasetId: dataset, TaskId: "1", Purpose: "collect", DirName: "kline-" + strings.ReplaceAll(dataset, "_", "-"),
+		Frequency: "1m", PartitionUnit: "day", Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
+	}
+	if mutate != nil {
+		mutate(t)
+	}
+	return t
+}
+
+func TestFollowOnceListsExecutesReportsAndMarksReportedAfterAck(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 10; i++ {
+		h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day.Add(time.Duration(i) * time.Minute), Values: []any{float64(i)}})
+	}
+	h.mgr.followTasks = []*archivepb.FollowTask{followTask("ds_1m", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) })}
+
+	// 首次心跳成功之前不执行跟随。
+	h.app.FollowOnce(ctx)
+	if len(h.mgr.listFollowReqs) != 0 {
+		t.Fatalf("未心跳前不应拉取跟随清单: %d", len(h.mgr.listFollowReqs))
+	}
+
+	h.app.heartbeatOnce(ctx, false)
+	// 上报被拒绝（ErrConflict，例如任务重建）时停止重试，分区留在待上报里。
+	h.mgr.reportFollowErrs = []error{errors.Join(manager.ErrConflict, errors.New("stale task_id"))}
+	h.app.FollowOnce(ctx)
+	if h.mgr.reportFollowCalls != 1 {
+		t.Fatalf("冲突不应重试: calls=%d", h.mgr.reportFollowCalls)
+	}
+	if pending, _ := h.store.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 1 {
+		t.Fatalf("未确认时分区应留在待上报: %v", pending)
+	}
+
+	// 第二轮上报成功：清除待上报标记，并携带 synced_tasks。
+	h.now = h.now.Add(time.Minute)
+	h.app.FollowOnce(ctx)
+	if len(h.mgr.followReports) != 1 {
+		t.Fatalf("followReports = %d", len(h.mgr.followReports))
+	}
+	rep := h.mgr.followReports[0]
+	if rep.GetStatus() != "succeeded" || rep.GetTaskId() != "1" || len(rep.GetPartitions()) != 1 || rep.GetPartitions()[0].GetRowCount() != 10 {
+		t.Fatalf("report = %v", rep)
+	}
+	if pending, _ := h.store.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 0 {
+		t.Fatalf("确认后应清除待上报标记: %v", pending)
+	}
+	if synced := h.mgr.listFollowReqs[1].GetSyncedTasks(); len(synced) != 1 || synced[0].GetTaskId() != "1" {
+		t.Fatalf("第二轮 ListFollowTasks 应携带 synced_tasks: %v", synced)
+	}
+}
+
+func TestLocalFollowCountsAgainstBusyStorageRunsAndSerializesWithManualRun(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 3, 2
+	h.app.progressEvery = 10 * time.Millisecond
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day, Values: []any{1.0}})
+	h.src.delay = 120 * time.Millisecond
+	h.mgr.followTasks = []*archivepb.FollowTask{followTask("ds_1m", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) })}
+	h.app.heartbeatOnce(ctx, false)
+
+	followDone := make(chan struct{})
+	go func() {
+		h.app.FollowOnce(ctx)
+		close(followDone)
+	}()
+	// 等待本地跟随启动并占住数据集。
+	deadline := time.Now().Add(5 * time.Second)
+	for h.app.Snapshot().Following == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("本地跟随没有启动")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// 跟随进行中拉取一次性运行：busy_storage_runs 必须包含本地跟随，且同数据集的 manual 运行等待跟随结束并在等待期间续租。
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("run_manual", func(a *archivepb.RunAssignment) {
+		a.Kind = "manual"
+		a.BackfillFrom = day.Format(time.RFC3339)
+	})}
+	h.app.pullOnce(ctx)
+	if len(h.mgr.pulls) != 1 || h.mgr.pulls[0].GetBusyStorageRuns() != 1 || h.mgr.pulls[0].GetFreeSlots() != 2 {
+		t.Fatalf("本地跟随期间 pull 请求应计入 busy_storage_runs 与占用槽位: %v", h.mgr.pulls)
+	}
+	<-followDone
+	req := h.waitComplete()
+	h.idle()
+	if req.GetRunId() != "run_manual" || req.GetStatus() != "succeeded" {
+		t.Fatalf("manual complete = %v", req)
+	}
+	if h.src.maxAct != 1 {
+		t.Fatalf("本地跟随与 manual 运行不能并发读写同一数据集: maxAct=%d", h.src.maxAct)
+	}
+	h.mgr.mu.Lock()
+	renewed := len(h.mgr.progresses) > 0
+	h.mgr.mu.Unlock()
+	if !renewed {
+		t.Fatal("manual 运行等待本地跟随期间应照常续租")
+	}
+}
+
+// 并发触发 pullOnce（例如 pullLoop 与 followOnce 同时调用）必须串行领取且按本次预占槽位记账，
+// 不能在领取窗口内超过 max_concurrent_runs。
+func TestConcurrentPullOnceSerializesAndRespectsMaxConcurrentRuns(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 2, 2
+	h.app.heartbeatOnce(ctx, false)
+	h.src.block = true
+
+	gate := make(chan struct{})
+	entered := make(chan struct{})
+	h.mgr.pullGate, h.mgr.pullEntered = gate, entered
+	h.mgr.assignments = []*archivepb.RunAssignment{
+		assignment("run_1", func(a *archivepb.RunAssignment) { a.DatasetId, a.DirName = "ds_1", "kline-1" }),
+		assignment("run_2", func(a *archivepb.RunAssignment) { a.DatasetId, a.DirName = "ds_2", "kline-2" }),
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); h.app.pullOnce(ctx) }()
+	<-entered
+	// 第一次领取正在途中并预占 2 个槽位：此时并发发起第二次领取，以及检查可用槽位，都不应超发。
+	h.app.mu.Lock()
+	reserved := h.app.pulling
+	h.app.mu.Unlock()
+	if reserved != 2 {
+		t.Fatalf("在途领取应预占全部 2 个空槽: pulling=%d", reserved)
+	}
+	go func() { defer wg.Done(); h.app.pullOnce(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+
+	h.app.mu.Lock()
+	reservedAfterSecond := h.app.pulling
+	h.app.mu.Unlock()
+	if reservedAfterSecond != 2 {
+		t.Fatalf("第二次 pullOnce 应被 pullMu 串行阻塞，不能再次预占槽位: pulling=%d", reservedAfterSecond)
+	}
+
+	close(gate)
+	wg.Wait()
+
+	h.mgr.mu.Lock()
+	totalPulls := len(h.mgr.pulls)
+	firstFreeSlots := uint32(0)
+	if totalPulls > 0 {
+		firstFreeSlots = h.mgr.pulls[0].GetFreeSlots()
+	}
+	h.mgr.mu.Unlock()
+	if totalPulls != 1 || firstFreeSlots != 2 {
+		t.Fatalf("首次领取占满 2 个槽位后，串行排队的第二次 pullOnce 不应再发 Pull: pulls=%d firstFreeSlots=%d", totalPulls, firstFreeSlots)
+	}
+	if len(h.app.runningIDs()) != 2 {
+		t.Fatalf("running = %v, want 2 runs", h.app.runningIDs())
+	}
+	h.app.cancelAll()
+	h.idle()
+}
+
+// 总并发 4、读 Storage 上限 2、三个可跟随任务：第三个任务等待 Storage 名额期间，
+// pullOnce 归还预占空位（返回 0 个运行或 mgr 失败）不能再次唤醒 slotFreed，否则会与 followOnce 形成空转。
+func TestFollowOnceWaitDoesNotSpinPullArchiveRun(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 4, 2
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day, Values: []any{1.0}})
+	readGate := make(chan struct{})
+	h.src.readGate = readGate
+	h.mgr.followTasks = []*archivepb.FollowTask{
+		followTask("ds_1", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) }),
+		followTask("ds_2", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) }),
+		followTask("ds_3", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) }),
+	}
+	h.app.heartbeatOnce(ctx, false)
+
+	followDone := make(chan struct{})
+	go func() {
+		h.app.FollowOnce(ctx)
+		close(followDone)
+	}()
+
+	// 等前两个任务占满 2 个 Storage 名额，第三个任务进入 waitSlot 等待。
+	deadline := time.Now().Add(5 * time.Second)
+	for h.app.Snapshot().Following < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("前两个跟随任务没有启动: following=%d", h.app.Snapshot().Following)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// 等待期间模拟 pullLoop 触发拉取（返回 0 个运行）以及 mgr 暂时不可达，均不应唤醒 followOnce 形成连环拉取。
+	h.app.pullOnce(ctx)
+	h.mgr.mu.Lock()
+	h.mgr.pullErr = errors.New("mgr unreachable")
+	h.mgr.mu.Unlock()
+	h.app.pullOnce(ctx)
+	// 再注入一次唤醒（模拟先前的槽位信号）：followOnce 至多试领一次后继续等待，不会自我循环。
+	h.app.notifySlot()
+	time.Sleep(60 * time.Millisecond)
+
+	h.mgr.mu.Lock()
+	pullsWhileWaiting := len(h.mgr.pulls)
+	h.mgr.pullErr = nil
+	h.mgr.mu.Unlock()
+	if pullsWhileWaiting > 3 {
+		t.Fatalf("等待 Storage 名额期间 PullArchiveRun 调用次数应有界（<=3），实际=%d（疑似空转）", pullsWhileWaiting)
+	}
+
+	close(readGate)
+	select {
+	case <-followDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("释放 Storage 阻塞后 FollowOnce 未完成")
+	}
+
+	h.mgr.mu.Lock()
+	totalPulls := len(h.mgr.pulls)
+	totalReports := len(h.mgr.followReports)
+	h.mgr.mu.Unlock()
+	if totalReports != 3 {
+		t.Fatalf("三个跟随任务都应完成上报: reports=%d", totalReports)
+	}
+	if totalPulls > 5 {
+		t.Fatalf("整轮 FollowOnce 的 PullArchiveRun 调用次数应有界（<=5），实际=%d", totalPulls)
+	}
+}
+
+// 即使 pullOnce 正在途中预占了全部槽位、且随后返回 0 个运行不发 slotFreed，followOnce 也不得永久阻塞。
+func TestFollowOnceDoesNotHangWhenCollidingWithIdlePullOnce(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxStorageRuns = 4, 2
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day, Values: []any{1.0}})
+	h.mgr.followTasks = []*archivepb.FollowTask{
+		followTask("ds_1", func(ft *archivepb.FollowTask) { ft.BackfillFrom = day.Format(time.RFC3339) }),
+	}
+	h.app.heartbeatOnce(ctx, false)
+
+	pullGate := make(chan struct{})
+	pullEntered := make(chan struct{})
+	h.mgr.pullGate, h.mgr.pullEntered = pullGate, pullEntered
+	pullDone := make(chan struct{})
+	go func() { h.app.pullOnce(ctx); close(pullDone) }()
+	<-pullEntered
+
+	followDone := make(chan struct{})
+	go func() { h.app.FollowOnce(ctx); close(followDone) }()
+	time.Sleep(20 * time.Millisecond)
+
+	// 放行在途拉取（返回 0 个运行）：followOnce 应立即重判并完成跟随，而不是卡死在 waitSlot。
+	close(pullGate)
+	<-pullDone
+	select {
+	case <-followDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("与空拉取冲突后 FollowOnce 不应卡死")
+	}
+	h.mgr.mu.Lock()
+	reports := len(h.mgr.followReports)
+	h.mgr.mu.Unlock()
+	if reports != 1 {
+		t.Fatalf("reports = %d, want 1", reports)
+	}
 }
 
 func (f *fakeSource) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {

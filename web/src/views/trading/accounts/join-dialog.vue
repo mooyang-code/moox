@@ -52,12 +52,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createSubmitScope } from "@/utils/submit-scope";
-import { accountMapOf } from "./account-list";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import type { Environment } from "@/components/trade-confirm/environment";
@@ -68,7 +67,6 @@ import { ADOPT_EFFECT_TEXT, memberChangeConfirm, type RiskyConfirm } from "./sha
 const props = defineProps<{
   env: Environment;
   logicals: LogicalAccount[];
-  accounts: TradingAccount[];
 }>();
 const emit = defineEmits<{ changed: [] }>();
 
@@ -83,10 +81,11 @@ const confirmVisible = ref(false);
 const pending = ref<(RiskyConfirm & { name: string }) | null>(null);
 
 const options = computed(() =>
-  joining.value ? joinableLogicals(props.logicals, accountMapOf(props.accounts), props.env, joining.value.settlement_asset) : []
+  joining.value ? joinableLogicals(props.logicals, props.env, joining.value.settlement_asset) : []
 );
 
 watch(visible, () => scope.invalidate());
+onBeforeUnmount(() => scope.invalidate());
 
 function open(account: TradingAccount) {
   joining.value = account;

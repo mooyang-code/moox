@@ -296,6 +296,7 @@ import type {
   PreviewFactorRsp,
   ValidateFactorSpecRsp
 } from "@/api/factor/types";
+import { readAllPages } from "@/api/read-all-pages";
 import { listDatasetColumns, listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
 import { AsyncCodeEditor } from "@/components/code-editor/async";
@@ -584,13 +585,12 @@ async function loadReferenceDatasets() {
   }
   datasetsLoading.value = true;
   try {
-    const items: Dataset[] = [];
-    for (let page = 1; ; page += 1) {
+    const items = await readAllPages(async page => {
       const rsp = await listDatasets({ space_id: spaceId, page: { page, size: PAGE_SIZE } });
-      if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
-      items.push(...(rsp.datasets || []));
-      if (!rsp.page_result?.has_more || !(rsp.datasets || []).length) break;
-    }
+      if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return { items: [], hasMore: false };
+      return { items: rsp.datasets || [], hasMore: Boolean(rsp.page_result?.has_more) };
+    });
+    if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
     referenceDatasets.value = items.filter(
       item =>
         item.status === "active" && isTimeSeriesDataKind(item.data_kind) && item.attributes?.dataset_role !== "factor_result"
@@ -614,18 +614,16 @@ async function loadReferenceColumns() {
   const spaceId = spaceStore.selectedSpaceId;
   if (!referenceDatasetId.value || !spaceId) return;
   try {
-    const columns = [];
-    for (let page = 1; ; page += 1) {
+    const columns = await readAllPages(async page => {
       const rsp = await listDatasetColumns({
         space_id: spaceId,
         dataset_id: referenceDatasetId.value,
         page: { page, size: PAGE_SIZE }
       });
-      if (!token.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
-      columns.push(...(rsp.columns || []));
-      if (!rsp.page_result?.has_more || !(rsp.columns || []).length) break;
-    }
-    if (token.isLatest()) referenceColumns.value = sourceInputColumns(columns);
+      if (!token.isLatest() || spaceId !== spaceStore.selectedSpaceId) return { items: [], hasMore: false };
+      return { items: rsp.columns || [], hasMore: Boolean(rsp.page_result?.has_more) };
+    });
+    if (token.isLatest() && spaceId === spaceStore.selectedSpaceId) referenceColumns.value = sourceInputColumns(columns);
   } catch (error) {
     if (token.isLatest()) Message.error(error instanceof Error ? error.message : "数据集列加载失败");
   }
@@ -762,7 +760,7 @@ onMounted(() => {
 });
 
 // 保存作用域：页面卸载或切换因子都会使进行中的保存失效，迟到的响应不能再导航
-const saveScope = createSubmitScope({ global: true });
+const saveScope = createSubmitScope();
 onBeforeUnmount(() => {
   saveScope.invalidate();
   if (validateTimer) clearTimeout(validateTimer);

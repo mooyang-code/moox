@@ -38,8 +38,8 @@ func TestSampleAccountEquityUnchangedAfterPruningManagedOrders(t *testing.T) {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: string(exchange.ExecutionModePaper),
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", Environment: string(exchange.AccountEnvironmentPaper),
+			SettlementAsset: "USDT", PauseReason: "test",
 		}); err != nil {
 			return err
 		}

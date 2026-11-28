@@ -13,11 +13,10 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-// Dataset 是创建任务所需的数据集信息，来自 Storage 的 Metadata.GetDataset。
+// Dataset 是创建与执行任务所需的数据集信息，来自 Storage 的 Metadata.GetDataset / ListDatasets。
 type Dataset struct {
 	SpaceID   string
 	DatasetID string
@@ -42,14 +41,16 @@ type Dataset struct {
 // DatasetProvider 读取数据集与空间信息；数据集或空间不存在时分别返回 ErrDatasetNotFound、ErrSpaceNotFound。
 type DatasetProvider interface {
 	GetDataset(ctx context.Context, spaceID, datasetID string) (Dataset, error)
+	ListDatasets(ctx context.Context) ([]Dataset, error)
 	GetSpaceTimezone(ctx context.Context, spaceID string) (string, error)
 }
 
 // maxListedTasks 是一次列出全部任务时的上限（单用户系统的任务数远小于它）。
 const maxListedTasks = 100000
 
-// spaceTZCacheTTL 是空间时区缓存的有效期（空间时区几乎不变，5 分钟刷新一次，Storage 抖动时沿用旧值）。
-const spaceTZCacheTTL = 5 * time.Minute
+// metadataCacheTTL 是空间时区与数据集元数据（线上保留期、名称等）内存缓存的有效期；
+// 两者统一按同一策略缓存，Storage 抖动时沿用旧值，明确返回不存在时失效。
+const metadataCacheTTL = 5 * time.Minute
 
 var (
 	// ErrDatasetNotFound 表示数据集在 Storage 中不存在。
@@ -63,20 +64,26 @@ type spaceTZEntry struct {
 	fetchedAt time.Time
 }
 
+type datasetCacheEntry struct {
+	ds        Dataset
+	fetchedAt time.Time
+}
+
 // Service 持有 ArchiveMgr 与 ArchiveWorker 共用的状态。
 type Service struct {
 	store    *store.Store
 	cfg      *config.Config
 	datasets DatasetProvider
 	now      func() time.Time
-	// life 是模块的生命周期控制器：ArchiveMgr 的 GetLifecycle、ControlLifecycle 转给它（见 lifecycle.go）。
-	life *lifecycle.Controller
 
-	mu          sync.Mutex
-	lastRefresh time.Time
-	lastCleanup time.Time
-	lastVacuum  time.Time
-	spaceTZ     map[string]spaceTZEntry
+	mu                    sync.Mutex
+	lastRefresh           time.Time
+	lastCleanup           time.Time
+	lastVacuum            time.Time
+	spaceTZ               map[string]spaceTZEntry
+	datasetCache          map[string]datasetCacheEntry
+	ensureIssues          []string
+	listDatasetsFailCount int
 }
 
 // Option 调整 Service。
@@ -84,9 +91,6 @@ type Option func(*Service)
 
 // WithClock 替换时钟，测试使用。
 func WithClock(now func() time.Time) Option { return func(s *Service) { s.now = now } }
-
-// WithLifecycle 设置模块的生命周期控制器；不设置时 GetLifecycle、ControlLifecycle 回答“还没有就绪”。
-func WithLifecycle(life *lifecycle.Controller) Option { return func(s *Service) { s.life = life } }
 
 // New 构造服务。
 func New(db *store.Store, cfg *config.Config, datasets DatasetProvider, opts ...Option) (*Service, error) {
@@ -140,7 +144,7 @@ func fail(err error) *commonpb.RetInfo {
 	}
 }
 
-// spaceTimezone 从 Storage 的空间元数据读取空间时区并按 spaceTZCacheTTL 缓存；
+// spaceTimezone 从 Storage 的空间元数据读取空间时区并按 metadataCacheTTL 缓存；
 // Storage 临时不可用且有缓存时沿用旧值，避免抖动中断任务下发与总览。
 func (s *Service) spaceTimezone(ctx context.Context, spaceID string) (string, error) {
 	spaceID = strings.TrimSpace(spaceID)
@@ -151,7 +155,7 @@ func (s *Service) spaceTimezone(ctx context.Context, spaceID string) (string, er
 	s.mu.Lock()
 	entry, hasCached := s.spaceTZ[spaceID]
 	s.mu.Unlock()
-	if hasCached && now.Sub(entry.fetchedAt) < spaceTZCacheTTL {
+	if hasCached && now.Sub(entry.fetchedAt) < metadataCacheTTL {
 		return entry.tz, nil
 	}
 	tz, err := s.datasets.GetSpaceTimezone(ctx, spaceID)
@@ -183,6 +187,61 @@ func (s *Service) spaceTimezone(ctx context.Context, spaceID string) (string, er
 	s.spaceTZ[spaceID] = spaceTZEntry{tz: tz, fetchedAt: now}
 	s.mu.Unlock()
 	return tz, nil
+}
+
+// datasetInfo 从 Storage 读取数据集元数据（保留期、名称等）并按 metadataCacheTTL 内存缓存（与 spaceTimezone 同一策略）；
+// Storage 明确返回不存在时清除缓存并返回 ErrDatasetNotFound，临时故障且有缓存时沿用旧值。
+func (s *Service) datasetInfo(ctx context.Context, spaceID, datasetID string) (Dataset, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	datasetID = strings.TrimSpace(datasetID)
+	key := spaceID + "/" + datasetID
+	now := s.clock()
+	s.mu.Lock()
+	entry, hasCached := s.datasetCache[key]
+	s.mu.Unlock()
+	if hasCached && now.Sub(entry.fetchedAt) < metadataCacheTTL {
+		return entry.ds, nil
+	}
+	ds, err := s.datasets.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		if errors.Is(err, ErrDatasetNotFound) {
+			if hasCached {
+				s.evictDataset(spaceID, datasetID)
+			}
+			return Dataset{}, err
+		}
+		if hasCached {
+			return entry.ds, nil
+		}
+		return Dataset{}, err
+	}
+	ds.SpaceID = spaceID
+	ds.DatasetID = datasetID
+	s.cacheDataset(ds, now)
+	return ds, nil
+}
+
+func (s *Service) cacheDataset(ds Dataset, now time.Time) {
+	spaceID := strings.TrimSpace(ds.SpaceID)
+	datasetID := strings.TrimSpace(ds.DatasetID)
+	if spaceID == "" || datasetID == "" {
+		return
+	}
+	ds.SpaceID = spaceID
+	ds.DatasetID = datasetID
+	s.mu.Lock()
+	if s.datasetCache == nil {
+		s.datasetCache = map[string]datasetCacheEntry{}
+	}
+	s.datasetCache[spaceID+"/"+datasetID] = datasetCacheEntry{ds: ds, fetchedAt: now}
+	s.mu.Unlock()
+}
+
+func (s *Service) evictDataset(spaceID, datasetID string) {
+	key := strings.TrimSpace(spaceID) + "/" + strings.TrimSpace(datasetID)
+	s.mu.Lock()
+	delete(s.datasetCache, key)
+	s.mu.Unlock()
 }
 
 const spaceIDMetadata = "X-Space-Id"

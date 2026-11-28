@@ -15,7 +15,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { listReplays } from "@/api/strategy";
@@ -57,15 +57,12 @@ function go(replayId: string) {
   void router.push(replayLink({ replayId }));
 }
 
-watch(
-  () => spaceStore.selectedSpaceId,
-  spaceId => {
-    replays.value = [];
-    replayError.value = "";
-    if (spaceId) void load();
-  },
-  { immediate: true }
-);
+onMounted(() => {
+  if (spaceStore.selectedSpaceId) void load();
+});
+onBeforeUnmount(() => {
+  gate.invalidate();
+});
 usePolling(load, 10_000, () => Boolean(spaceStore.selectedSpaceId));
 </script>
 

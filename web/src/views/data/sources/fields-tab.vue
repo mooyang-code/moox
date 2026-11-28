@@ -55,9 +55,7 @@
             <a-option value="spec_only">仅规格可选</a-option>
           </a-select>
         </div>
-        <a-tag v-if="filter.provider" closable color="arcoblue" @close="clearProvider">
-          来源：{{ extraFieldProviderName(filter.provider) }}
-        </a-tag>
+        <a-tag v-if="filter.provider" closable color="arcoblue" @close="clearProvider"> 来源：{{ activeProviderLabel }} </a-tag>
       </div>
       <div class="toolbar-meta">
         <span class="field-total">共 {{ filteredRows.length }} 个字段</span>
@@ -119,15 +117,14 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { GetDataTypeConfigWithFields } from "@/api/collector";
+import { GetDataTypeConfigs } from "@/api/collector";
 import { listAllDatasetColumns, listAllDatasets } from "@/api/storage/metadata";
 import GroupFilterPanel from "@/components/group-filter-panel/index.vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { canonicalFieldValueTypeOptions, defaultPagination, normalizeFieldValueType } from "@/views/data/shared/metadata-utils";
-import { isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
+import { isFactorResultDataset } from "@/views/data/shared/module-attribution";
 import FieldCatalogTable from "./components/FieldCatalogTable.vue";
 import FieldDetailDrawer from "./components/FieldDetailDrawer.vue";
-import { extraFieldProviderName } from "./extra-field-sources";
 import {
   buildFieldGroupItems,
   fieldTabQueryFromRoute,
@@ -167,6 +164,15 @@ let pendingQuerySync = 0;
 const filteredWithoutGroup = computed(() => filterFieldCatalog(allItems.value, { ...filter, group: "" }));
 const groupItems = computed(() => buildFieldGroupItems(allItems.value, filteredWithoutGroup.value));
 const filteredRows = computed(() => filterFieldCatalog(allItems.value, filter));
+const activeProviderLabel = computed(() => {
+  const target = filter.provider.trim().toLowerCase();
+  if (!target) return "";
+  for (const item of allItems.value) {
+    const matched = item.extra_scopes.find(scope => scope.provider_id.toLowerCase() === target);
+    if (matched?.provider_name) return matched.provider_name;
+  }
+  return filter.provider;
+});
 
 const hasActiveFilter = computed(() =>
   Boolean(filter.group || filter.keyword || filter.category || filter.valueType || filter.landed || filter.provider)
@@ -289,25 +295,23 @@ async function load() {
   loadWarning.value = "";
 
   try {
-    const [specResult, datasetsResult] = await Promise.allSettled([
-      GetDataTypeConfigWithFields("kline"),
-      listAllDatasets(spaceId)
-    ]);
-    if (!request.isLatest() || spaceId !== props.spaceId.trim()) return;
+    const [specResult, datasetsResult] = await Promise.allSettled([GetDataTypeConfigs(), listAllDatasets(spaceId)]);
+    if (!request.isLatest()) return;
 
     const specFailed = specResult.status === "rejected";
     const datasetsFailed = datasetsResult.status === "rejected";
-    const detail = specResult.status === "fulfilled" ? specResult.value.detail : undefined;
+    const detail =
+      specResult.status === "fulfilled" ? specResult.value.configs?.find(item => item.data_type === "kline") : undefined;
 
     const bundles: DatasetColumnBundle[] = [];
     let failedColumns = 0;
     if (datasetsResult.status === "fulfilled") {
-      const nonFactorDatasets = datasetsResult.value.filter(dataset => !isLikelyFactorResultDataset(dataset));
+      const nonFactorDatasets = datasetsResult.value.filter(dataset => !isFactorResultDataset(dataset));
       const columnResults = await mapWithConcurrency(nonFactorDatasets, 6, async dataset => ({
         dataset,
         columns: await listAllDatasetColumns(spaceId, dataset.dataset_id)
       }));
-      if (!request.isLatest() || spaceId !== props.spaceId.trim()) return;
+      if (!request.isLatest()) return;
 
       for (const item of columnResults) {
         if (item.status === "fulfilled") bundles.push(item.value);
@@ -367,33 +371,6 @@ watch(
     applyQueryFromRoute(query);
     reconcileGroupFilter();
   }
-);
-
-watch(
-  () => props.spaceId,
-  next => {
-    clearSearchTimer();
-    detailField.value = null;
-    mobileGroupVisible.value = false;
-    // keep-alive 失活期间切空间：只标记需重拉，保留激活时由 URL 带入的筛选参数（例如从附加字段来源跳入）。
-    if (!isActive) {
-      requestedSpaceId = "";
-      allItems.value = [];
-      loadWarning.value = "";
-      return;
-    }
-    Object.assign(filter, fieldTabQueryFromRoute({}));
-    searchKeyword.value = "";
-    pagination.current = 1;
-    if (next.trim()) {
-      void load();
-    } else {
-      requestedSpaceId = "";
-      allItems.value = [];
-      loadWarning.value = "";
-    }
-  },
-  { flush: "sync" }
 );
 
 onMounted(() => {

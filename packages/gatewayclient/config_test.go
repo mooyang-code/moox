@@ -124,7 +124,6 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 	t.Setenv("MOOX_ENTRY_HOST", "unrelated")
 	for _, principal := range []struct{ caller, service, method string }{
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch"},
-		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"},
 	} {
 		t.Run(principal.caller, func(t *testing.T) {
 			root := t.TempDir()
@@ -183,7 +182,7 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 
 func TestExternalFileConfigRejectsPublicConfigurationBeforeReadingKeys(t *testing.T) {
 	valid := ExternalFileConfig{Address: "entry.example.test:11004", Host: "storage",
-		Caller: "moox-skill", KeyFile: "../secrets/skill.key"}
+		Caller: "scf-collector", KeyFile: "../secrets/scf.key"}
 	for _, change := range []struct {
 		name string
 		edit func(*ExternalFileConfig)
@@ -194,6 +193,7 @@ func TestExternalFileConfigRejectsPublicConfigurationBeforeReadingKeys(t *testin
 		{"prefixed-host-id", func(c *ExternalFileConfig) { c.Host = "access@storage" }},
 		{"unknown-host-id", func(c *ExternalFileConfig) { c.Host = "Storage" }},
 		{"internal-caller", func(c *ExternalFileConfig) { c.Caller = "collector" }},
+		{"removed-skill-caller", func(c *ExternalFileConfig) { c.Caller = "moox-skill" }},
 		{"unknown-caller", func(c *ExternalFileConfig) { c.Caller = "other" }},
 		{"component-caller", func(c *ExternalFileConfig) { c.Caller = "factor-engine" }},
 		{"empty-key-file", func(c *ExternalFileConfig) { c.KeyFile = "" }},
@@ -218,7 +218,7 @@ func TestExternalFileConfigPrivateKeyCannotFallBackToEnvironment(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "environment-signing-key-at-least-32-bytes")
 	root := t.TempDir()
 	config := ExternalFileConfig{Address: "entry.example.test:11004", Host: "storage",
-		Caller: "moox-skill", KeyFile: filepath.Join(root, "missing.key")}
+		Caller: "scf-collector", KeyFile: filepath.Join(root, "missing.key")}
 	_, err := config.OpenExternal(filepath.Join(root, "app.yaml"))
 	require.ErrorContains(t, err, "load gateway signing key")
 	keyPath := filepath.Join(root, "invalid.key")

@@ -214,7 +214,7 @@ func (c MarketCanary) runContinuous(ctx context.Context, result Result, now time
 		result.Reason = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
-	bars, err := decodeMarketBars(timeSeriesRows(rsp.GetRows()), *config.SeriesTag)
+	bars, err := decodeMarketBars(rsp.GetRows(), *config.SeriesTag)
 	if err != nil {
 		result.Reason = err.Error()
 		return result
@@ -288,7 +288,7 @@ func (c MarketCanary) runSession(ctx context.Context, result Result, now time.Ti
 		result.Reason = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
-	bars, err := decodeStockMarketBars(timeSeriesRows(rsp.GetRows()), *config.SeriesTag)
+	bars, err := decodeStockMarketBars(rsp.GetRows(), *config.SeriesTag)
 	if err != nil {
 		result.Reason = err.Error()
 		return result
@@ -394,29 +394,12 @@ func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times [
 		keys = append(keys, &storagepb.RowKey{
 			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: config.SubjectID, Freq: frequency,
+				SubjectId: config.SubjectID, Frequency: frequency,
 				DataTime: at.Format(time.RFC3339Nano), SeriesTag: *config.SeriesTag,
 			}},
 		})
 	}
 	return keys
-}
-
-// timeSeriesRows 把精确读取返回的行（只含存在的行）转成解码用的时序行。
-func timeSeriesRows(rows []*storagepb.RowFieldValues) []*storagepb.TimeSeriesRow {
-	out := make([]*storagepb.TimeSeriesRow, 0, len(rows))
-	for _, row := range rows {
-		key := row.GetKey().GetTimeSeries()
-		if key == nil {
-			out = append(out, &storagepb.TimeSeriesRow{Fields: row.GetFields()})
-			continue
-		}
-		out = append(out, &storagepb.TimeSeriesRow{
-			Key:    &storagepb.TimeSeriesKey{SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()},
-			Fields: row.GetFields(),
-		})
-	}
-	return out
 }
 
 func marketCanaryCandidateCount(freshness, interval time.Duration) (int, error) {
@@ -457,16 +440,17 @@ func storageRejectionError(retInfo *storagepb.RetInfo) string {
 	return fmt.Sprintf("storage_rejected_query:%d:%s", retInfo.GetCode(), message)
 }
 
-func decodeMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]marketBar, error) {
+func decodeMarketBars(rows []*storagepb.Row, seriesTag string) ([]marketBar, error) {
 	bars := make([]marketBar, 0, len(rows))
 	for _, row := range rows {
-		if row.GetKey() == nil {
+		key := row.GetKey().GetTimeSeries()
+		if key == nil {
 			return nil, fmt.Errorf("missing_row_key")
 		}
-		if row.GetKey().GetSeriesTag() != seriesTag {
+		if key.GetSeriesTag() != seriesTag {
 			continue
 		}
-		dataTime, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+		dataTime, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
 		if err != nil {
 			return nil, fmt.Errorf("invalid_data_time")
 		}
@@ -489,16 +473,17 @@ func decodeMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]mark
 	return bars, nil
 }
 
-func decodeStockMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]marketBar, error) {
+func decodeStockMarketBars(rows []*storagepb.Row, seriesTag string) ([]marketBar, error) {
 	bars := make([]marketBar, 0, len(rows))
 	for _, row := range rows {
-		if row.GetKey() == nil {
+		key := row.GetKey().GetTimeSeries()
+		if key == nil {
 			return nil, fmt.Errorf("missing_row_key")
 		}
-		if row.GetKey().GetSeriesTag() != seriesTag {
+		if key.GetSeriesTag() != seriesTag {
 			continue
 		}
-		dataTime, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+		dataTime, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
 		if err != nil {
 			return nil, fmt.Errorf("invalid_data_time")
 		}

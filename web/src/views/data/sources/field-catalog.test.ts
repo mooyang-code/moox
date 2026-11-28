@@ -27,6 +27,7 @@ const extraFields: ExtraFieldOption[] = [
     instrument_type: "swap",
     frequencies: ["1h", "1d"],
     provider_id: "binance",
+    provider_name: "Binance",
     value_type: "double",
     fill: "zero"
   },
@@ -38,6 +39,7 @@ const extraFields: ExtraFieldOption[] = [
     instrument_type: "equity",
     frequencies: ["1d"],
     provider_id: "sina_hfq",
+    provider_name: "新浪复权因子",
     value_type: "double",
     fill: "prev"
   },
@@ -49,6 +51,7 @@ const extraFields: ExtraFieldOption[] = [
     instrument_type: "equity",
     frequencies: ["1d"],
     provider_id: "sina_finance",
+    provider_name: "新浪财务报表",
     value_type: "double",
     fill: "prev"
   }
@@ -60,7 +63,7 @@ const klineDataset: Dataset = {
   data_source_id: "tdx",
   name: "A 股日线",
   data_kind: "DATA_KIND_TIME_SERIES",
-  freq: "1d",
+  frequency: "1d",
   status: "active"
 };
 
@@ -150,7 +153,7 @@ describe("mergeFieldCatalog", () => {
     expect(adj.category).toBe("extra");
     expect(adj.value_type).toBe("double");
     expect(adj.fill).toBe("prev");
-    expect(adj.extra_scopes[0].provider_name).toBe("复权因子（新浪）");
+    expect(adj.extra_scopes[0].provider_name).toBe("新浪复权因子");
     expect(adj.datasets.map(d => d.dataset_id)).toEqual(["dataset_cn_kline_1d"]);
 
     const fin = items.find(i => i.field_id === "fin_revenue")!;
@@ -293,6 +296,7 @@ describe("mergeFieldCatalog", () => {
           instrument_type: "equity",
           frequencies: ["1w"],
           provider_id: "sina_hfq",
+          provider_name: "新浪复权因子",
           value_type: "double",
           fill: "prev"
         }
@@ -333,7 +337,7 @@ describe("mergeFieldCatalog", () => {
 
     const adj = items.find(i => i.field_id === "adj_factor")!;
     expect(adj.extra_scopes).toHaveLength(1);
-    expect(adj.extra_scopes[0].provider_name).toBe("复权因子（新浪）");
+    expect(adj.extra_scopes[0].provider_name).toBe("新浪复权因子");
     expect(adj.extra_scopes[0].frequencies).toEqual(["1d", "1w"]);
 
     const margin = items.find(i => i.field_id === "net_margin")!;

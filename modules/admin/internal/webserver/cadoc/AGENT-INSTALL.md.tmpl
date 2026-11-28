@@ -41,7 +41,7 @@ moox-cli setup trust-browser --file moox.toml
 
 这个压缩包是通过管理台自己的 HTTPS 连接下载的，而这台机器**此刻还不信任**这条连接。所以包里的一切（证书、`root.sha256`、本说明、安装脚本）
 都可能在下载途中被同时替换，包内的指纹文件只能防止误操作，**不能证明包没被篡改**。唯一的可信锚点是：**用户通过另一条可信渠道确认过的指纹**
-（运维人员告知、另一台已信任的主机上看到的、或 `skills/moox/scripts/moox-ca.sh fetch --expected-fingerprint`）。
+（运维人员告知、或另一台已信任的主机上看到的）。
 
 ## 给 Agent 的规则
 

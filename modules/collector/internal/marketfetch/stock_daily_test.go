@@ -13,9 +13,10 @@ import (
 // 其他整点不到期。
 func TestPlanBuildRequestsStockDailyIsDueAtNextUTCMidnight(t *testing.T) {
 	plan := &Plan{
-		V:      1,
-		Market: PlanMarket{MarketID: "stockcn", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity"},
-		Fetch:  PlanFetch{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8},
+		V:        1,
+		Executor: PlanExecutorSCF,
+		Market:   PlanMarket{MarketID: "stockcn", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity"},
+		Fetch:    PlanFetch{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8},
 		Datasets: []PlanDataset{{DatasetID: "dataset_stock_1d", Frequency: "1d", LatenessS: 90, Copies: []PlanCopy{
 			{From: 1000, Hash: "h", Count: 1, Subjects: []PlanSubject{{ID: "600519.XSHG", Index: 0}}},
 		}}},
@@ -29,25 +30,12 @@ func TestPlanBuildRequestsStockDailyIsDueAtNextUTCMidnight(t *testing.T) {
 	item := requests[0].Request.Items[0]
 	require.Equal(t, key.Format(time.RFC3339), item.TargetDataTime)
 	require.Equal(t, "1d", item.Frequency)
-	require.True(t, item.RequirePeriodCommit)
+	require.True(t, requests[0].Request.RequirePeriodCommit)
 
 	for _, hour := range []int{1, 7, 8, 16} {
 		requests, err = plan.BuildRequests("stockcn", "fn", "req", key.Add(time.Duration(hour)*time.Hour))
 		require.NoError(t, err)
 		require.Empty(t, requests, "%d 点不到期", hour)
-	}
-}
-
-// 没有周期提交的实时批：此刻对应的上一根日线是交易日才取数。
-func TestLatestClosedIsTradingBarStockDaily(t *testing.T) {
-	for at, want := range map[time.Time]bool{
-		time.Date(2026, 11, 11, 0, 0, 5, 0, time.UTC): true,  // 上一根是 11-10（周二）
-		time.Date(2026, 11, 9, 0, 0, 5, 0, time.UTC):  false, // 上一根是 11-08（周日）
-		time.Date(2026, 11, 7, 0, 0, 5, 0, time.UTC):  true,  // 周六 08:00，上一根是 11-06（周五）
-	} {
-		got, err := latestClosedIsTradingBar(StockCNSpaceID, marketdata.FrequencyDay, at, 0)
-		require.NoError(t, err)
-		require.Equal(t, want, got, at)
 	}
 }
 
@@ -63,7 +51,7 @@ func TestStockKlineRowWritesDailyBarAtTheDateKey(t *testing.T) {
 	row, err := stockKlineRow(bar, testStockDatasetID, StockCNRouteID("1d"), 1, "贵州茅台")
 	require.NoError(t, err)
 	series := row.GetKey().GetTimeSeries()
-	require.Equal(t, "1d", series.GetFreq())
+	require.Equal(t, "1d", series.GetFrequency())
 	require.Equal(t, "2026-11-10T00:00:00Z", series.GetDataTime())
 	fields := map[string]*storagepb.FieldValue{}
 	for _, field := range row.GetFields() {

@@ -13,6 +13,9 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/period"
+	"github.com/mooyang-code/moox/modules/strategy/internal/upstream"
 )
 
 func optionalString(value string) *string {
@@ -63,7 +66,8 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: failure(err)}, nil
 	}
-	if def, err := s.Store.GetDefinition(ctx, instance.StrategyID); err != nil || def.DeletedAt != nil {
+	def, err := s.Store.GetDefinition(ctx, instance.StrategyID)
+	if err != nil || def.DeletedAt != nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", instance.StrategyID))}, nil
 	}
 	// 创建时就按任务源数据集核对“市场 → 任务”：调参的实例启用时会把任务永久占住，填错了实例启用不了又删不掉。
@@ -91,7 +95,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 		if getErr != nil {
 			return &strategypb.CreateStrategyInstanceRsp{
 				RetInfo:  invalid(fmt.Errorf("实例 %q 已创建但未启用，而且读不出它的状态；不要再次 create，先 moox-cli strategy instance show 查看，再用 moox-cli strategy instance enable --instance-id %s 启用：%w", instanceID, instanceID, errors.Join(err, fmt.Errorf("读取已创建的实例：%w", getErr)))),
-				Instance: &strategypb.StrategyInstance{InstanceId: instanceID, StrategyId: instance.StrategyID, SpaceId: instance.SpaceID, FactorTasks: instance.FactorTasks},
+				Instance: &strategypb.StrategyInstance{InstanceId: instanceID, StrategyId: instance.StrategyID, StrategyName: def.Name, SpaceId: instance.SpaceID, FactorTasks: instance.FactorTasks},
 			}
 		}
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("实例 %q 已创建但未启用（启用失败）：%w。不要再次 create；修好原因后用 moox-cli strategy instance enable --instance-id %s 启用，不要了就用 strategy instance delete 删除", instanceID, err, instanceID)), Instance: instanceProto(current)}
@@ -359,7 +363,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 
 // checkLiveCalendar 拒绝在股票市场的内嵌日历过了可用截止日后启用实例：此后每一期都推算不出有效期，结果都会被丢弃。
 func checkLiveCalendar(resolved input.Resolved, now time.Time) error {
-	if err := input.StockCalendarReadiness(resolved.Calendar, now, 0, trigger.ValidBars); err != nil {
+	if err := period.StockCalendarReadiness(resolved.Calendar, now, 0, trigger.ValidBars); err != nil {
 		return fmt.Errorf("不能启用实例：%w", err)
 	}
 	return nil
@@ -383,7 +387,7 @@ func normalizeFactorTasks(raw map[string]string) (map[string]string, error) {
 		if strings.Contains(key, ":") && !dsl.ValidSourceName(source) {
 			return nil, fmt.Errorf("factor_tasks 的键 %q 不合法：来源名必须是小写字母开头的 snake_case", key)
 		}
-		if _, err := input.DatasetIDOfTask(taskID); err != nil {
+		if _, err := upstream.DatasetIDOfTask(taskID); err != nil {
 			return nil, fmt.Errorf("factor_tasks 的 %s 任务 ID 不合法：%w", key, err)
 		}
 		if other, dup := seen[taskID]; dup {

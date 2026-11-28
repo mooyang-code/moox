@@ -14,7 +14,7 @@ MooX 的因子用一份 YAML 表达式定义（spec）描述，由 Go 写的表�
 | `"$SKILL_ROOT/scripts/factor-expr.sh" check --library lib.yaml [--factor-id ID]` | 编译定义，输出类型、输入列、输出列、因子回看与每个输出的回看、规范文本，截面因子另给 `cross_section_points`（见下文“截面函数”）；失败时给字段路径与行列 | Go 工具链 |
 | `"$SKILL_ROOT/scripts/factor-expr.sh" eval --library lib.yaml --factor-id ID --input bars.csv --freq 1m --output dsl.csv` | 共用生产编译器与执行器，按频率建规则网格（`--freq` 必填，1m/5m/15m/30m/1h/4h/1d）；原始 CSV 缺期仍按离线工具的空洞规则屏蔽 | Go 工具链 |
 | `python3 "$SKILL_ROOT/scripts/factor_py_check.py" synthetic` | 生成合成 OHLCV K 线 | 标准库 |
-| `python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv` | 把 `data-kline.sh`、`moox-cli data rows export` 的 JSON 转成 CSV | 标准库 |
+| `python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv` | 把 `moox-cli data kline get`、`moox-cli data rows export` 的 JSON 转成 CSV | 标准库 |
 | `python3 "$SKILL_ROOT/scripts/factor_py_check.py" run-python` | 按旧契约运行原 Python 因子，context 与旧 worker 相同（见第 6 节第 10 条） | pandas、numpy（用用户原来的环境） |
 | `python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare` | 逐值比较原结果与 DSL 结果，按第 5 节的规则判定通过 / 失败 | 标准库 |
 
@@ -450,7 +450,7 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 
 ```bash
 SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
-"$SKILL_ROOT/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT --interval 1m \
+./bin/moox-cli data kline get --space-id crypto --tag-id binance_spot --symbol BTC-USDT --interval 1m \
   --from 2026-10-17T00:00:00Z --to 2026-10-17T16:00:00Z --limit 1000 \
   --columns open,high,low,close,volume,quote_volume,trade_num --output ./factor-convert/btc-1.json
 python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv ./factor-convert/*.json --output ./factor-convert/bars.csv
@@ -524,7 +524,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
        name: 现货一分钟
        space_id: crypto
        source_dataset_id: dataset_dasftksvjhj2jom4vhd0
-       freq: 1m
+       frequency: 1m
        members:
          - {factor: zf_abs_mean, status: disabled}   # → 列 zf_abs_mean
    definitions:

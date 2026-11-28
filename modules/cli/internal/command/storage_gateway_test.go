@@ -32,7 +32,7 @@ func TestStorageImportDoesNotResendAnUnknownWriteResult(t *testing.T) {
 		return failure
 	})
 	writer := gatewayStorageDataWriter{Gateway: gateway, SpaceID: "crypto"}
-	request := &pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto"}}}}
+	request := &pb.PrimaryUpsertFieldsReq{Rows: []*pb.Row{{Key: &pb.RowKey{SpaceId: "crypto"}}}}
 	ctx := gatewayclient.WithCallMetadata(t.Context(), gatewayclient.CallMetadata{UserID: "operator"})
 	require.ErrorIs(t, writer.UpsertFields(ctx, request), failure)
 	require.Equal(t, 1, calls)

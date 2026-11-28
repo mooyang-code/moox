@@ -1,12 +1,5 @@
 import { call } from "@/api/http";
-
-export interface CollectorPage {
-  page?: number;
-  size?: number;
-  total?: number;
-  has_more?: boolean;
-  next_cursor?: string;
-}
+import type { Page, PageResult } from "@/api/page";
 
 export interface CollectorTaskResult {
   result_name?: string;
@@ -65,12 +58,12 @@ export interface GetTaskListRequest {
   enabled?: boolean;
   task_id?: string;
   keyword?: string;
-  page?: { page?: number; size?: number; cursor?: string };
+  page?: Page;
 }
 
 export interface GetTaskListResponse {
   tasks?: CollectorTask[];
-  page?: CollectorPage;
+  page_result?: PageResult;
 }
 
 export interface GetTaskDetailRequest {
@@ -179,30 +172,21 @@ export interface ResampleSourcePreview {
   validation_error?: string;
 }
 
-export interface DataTypeConfig {
-  id: number;
-  data_type: string;
-  type_name: string;
-  type_desc: string;
-  data_source_options?: Record<string, unknown>;
-  sort_order: number;
-  version: number;
-  /** Unix 毫秒（数字字符串）。 */
-  created_at: string;
-  updated_at: string;
+export interface FrequencyOption {
+  value: string;
+  label: string;
 }
 
-export interface DataTypeFieldConfig {
-  id: number;
+export interface DataTypeConfig {
   data_type: string;
-  field_key: string;
-  field_name: string;
-  field_type: string;
-  is_required: boolean;
-  default_value?: unknown;
-  field_options?: Record<string, unknown>;
-  data_source_options?: Record<string, unknown>;
-  sort_order: number;
+  type_name: string;
+  type_desc?: string;
+  /** K 线任务的频率选项；重采样等类型为空 */
+  frequency_options?: FrequencyOption[];
+  /** 任务类型可选的基础输出字段（结果数据集能建的列，按建列顺序） */
+  base_output_fields?: OutputFieldOption[];
+  /** K 线任务可选的附加字段，默认都不选 */
+  extra_fields?: ExtraFieldOption[];
 }
 
 /** K 线任务可以在输出字段里选的一个附加字段及其适用范围；显示名、分组只在 Collector 的字段规格里登记。 */
@@ -220,19 +204,12 @@ export interface ExtraFieldOption {
   frequencies?: string[];
   /** 来源提供方 */
   provider_id: string;
+  /** 来源提供方显示名（取自后端 ProviderDescriptor.DisplayName） */
+  provider_name?: string;
   /** 值类型：double 或 int */
   value_type?: string;
   /** 缺失填充策略：prev（前值填充）、zero（补零）或空 */
   fill?: string;
-}
-
-export interface DataTypeConfigDetail {
-  config?: DataTypeConfig;
-  fields?: DataTypeFieldConfig[];
-  /** K 线任务可选的附加字段，默认都不选 */
-  extra_fields?: ExtraFieldOption[];
-  /** K 线任务可选的基础输出字段（结果数据集能建的列，按建列顺序）；其他任务类型为空 */
-  base_output_fields?: OutputFieldOption[];
 }
 
 /** K 线任务可以选的一个基础输出字段。 */
@@ -286,12 +263,6 @@ export async function DeleteTask(params: DeleteTaskRequest): Promise<Record<stri
 
 export async function GetDataTypeConfigs(): Promise<{ configs?: DataTypeConfig[] }> {
   return call<Record<string, never>, { configs?: DataTypeConfig[] }>("collector", "GetDataTypeConfigs", {});
-}
-
-export async function GetDataTypeConfigWithFields(dataType: string): Promise<{ detail?: DataTypeConfigDetail }> {
-  return call<{ data_type: string }, { detail?: DataTypeConfigDetail }>("collector", "GetDataTypeConfigWithFields", {
-    data_type: dataType
-  });
 }
 
 export async function submitKlineResampleJob(

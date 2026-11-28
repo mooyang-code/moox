@@ -9,7 +9,7 @@
 
 ## 0. 前提与约定
 
-- 两份配置：明文的 `moox.toml`（主机、部署、部署参数）和同目录加密的 `moox.secrets.toml`（管理员、云密钥、交易所密钥、告警渠道）。可以放在任意目录，命令用 `--file <moox.toml 路径>` 指过去。
+- 两份配置：明文的 `moox.toml`（主机、部署、部署参数）和同目录加密的 `moox.secrets.toml`（仅含管理员、腾讯云密钥、CLS 写入密钥）。交易所密钥与告警通知渠道不在秘密文件里，安装完成后在管理台录入，清空重装时通过本机 `moox.backup` 自动备份与恢复。可以放在任意目录，命令用 `--file <moox.toml 路径>` 指过去。
   Agent 不直接读秘密文件、不打印密钥，要看用 `moox-cli config get`（默认打码）。改之前先备份两份文件。
 - 代码在独立 worktree 时，用 worktree 里构建的 CLI，并用 `--source-dir <worktree>` 指向源码：配置模板、systemd 单元模板、元数据种子（`config/setup`）、云函数代码包（`modules/collector`）、默认因子任务和默认策略都从这里取，不看运行命令时的当前目录。
   `setup install` 把同一个目录传给它里面的每一步；单独跑 `setup deploy`、`setup init`、`setup start` 时各自带上同一个 `--source-dir`，否则按当前目录取（在主仓库根运行就会把主仓库那个分支的云函数代码传上去）。种子不在 `<源码目录>/config/setup` 时才写 `--config-dir`。
@@ -24,8 +24,8 @@
 1. Trade 只有纸面账户：`moox-cli trade account list`、`trade order list --only-open` 看有没有实盘账户、持仓和未完成订单；有就停下来问用户。
 2. 四台主机（control、storage、overseas、factor）`setup validate` 都通过；控制机磁盘小，先确认有余量（部署盘可用空间不足 2 GB 时 `setup validate` 的 `warnings` 会提醒）。
 3. 记下要保留的东西：因子机 `/data/moox/import`（历史导入包，重新下载很贵，清空前挪到 `~/moox-import-keep`）。其余数据按用户说法全部删除。
-4. 管理台里后来改过或新加的密钥（交易所密钥、告警渠道、云账号）只在线上有，秘密文件里只是初始值：清空前让用户在管理台导出或记下来。
-5. 手工调过的组件配置应该已经写在 `moox.toml` 的 `[overrides]` 里（重装自动带上）；没写进去的手工改动清空后会丢，汇报时一并说明。保留期以 `[storage_retention]` 为准。
+4. 全部非系统密钥与告警渠道会在 `setup wipe` / `setup install --wipe` 清空前自动加密备份到同目录的 `moox.backup`（交易账户与组合账户不纳入备份），并在重装控制机 Admin 起来后先覆盖导入密钥（确保后续部署 `archive-worker` 等组件时能从 Admin 读到对象存储密钥）、全部组件就绪后再导入告警渠道并清除待导入标记；也可以提前跑一次 `moox-cli setup backup` 做手动备份。
+5. 手工调过的组件配置应该已经写在 `moox.toml` 的 `[overrides]` 里（重装自动带上，`setup install` 预检会先对全部主机和组件试渲染一次，键路径写错时在清空主机之前即拒绝）；没写进去的手工改动清空后会丢，汇报时一并说明。保留期以 `[storage_retention]` 为准。
 
 ## 2. 构建二进制（清空之前做完）
 
@@ -38,7 +38,7 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY ./scripts/build/build.sh cli
 # 全部组件的 Linux 二进制（纯 Go 交叉编译；Storage 与前端在本机 Docker 里，macOS 先 colima start），产物在 $WT/bin-linux
 cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY bash scripts/build/build-linux-local.sh --out $WT/bin-linux \
   admin host-gateway hostagent eventbus egress-proxy collector collector-stream factor-mgr factor-engine \
-  archive-mgr archive-worker strategy strategy-cli trade monitor storage-cli storage
+  archive-mgr archive-worker strategy trade monitor storage-cli storage
 ```
 
 - 目标清单和 `scripts/release/build-release.sh` 里的 `server_targets` 一致（去掉 `collector-scf`）。
@@ -81,22 +81,26 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 0 | `setup operator` | 这台电脑没有 `~/.config/moox/moox-cli.key` 就生成一把签名私钥，有就复用（重跑不换） |
 | 1 | 防火墙 | 放行各主机对外的端口 |
 | 2 | `setup deploy --host control --component admin,host-gateway,host-agent` | 先在控制机上执行 `moox-admin-cli bootstrap`（建库、CA、主密钥、登记这台电脑的 `moox-cli` 公钥、签发控制机的签名密钥，只建不改；全部主机与部署连同启停状态按 `moox.toml` 整份覆盖），再执行 `eventbus-credentials ensure` 与 `user ensure`（EventBus 凭据、管理员只建不改），然后装这三个组件；控制机的根证书同时记到这台电脑 |
-| 3 | `setup deploy --host storage` | Storage、EventBus，存储机的网关同时开外部入口（11004）；Storage 主库启动前自动初始化元数据库 |
-| 4 | `setup init --stage storage` | 业务空间、初始秘密、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
-| 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
-| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker）排最后 |
-| 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
-| 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验、自动为有限保留期的内置时序数据集建归档任务（这些要等 Collector、Monitor、ArchiveMgr 起来） |
-| 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入，同时为该空间新建的因子结果数据集自动建归档任务 |
+| 3 | 自动导入待恢复的密钥备份 | 若本机存在带“卸载后待导入”标记的 `moox.backup`，在部署其余主机前先按覆盖导入密钥（`SecretMgr.ImportSecrets`，保留原密钥 ID），使部署 `archive-worker` 等组件时能读到 `[archive_object_store]` 等外部密钥；此时保留待导入标记，中途失败重跑幂等 |
+| 4 | `setup deploy --host storage` | Storage、EventBus，存储机的网关同时开外部入口（11004）；Storage 主库启动前自动初始化元数据库 |
+| 5 | `setup init --stage storage` | 业务空间、默认云账号密钥（`tencent-default`）、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
+| 6 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
+| 7 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker）排最后 |
+| 8 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
+| 9 | 自动导入待恢复的告警渠道备份 | 若本机存在带“卸载后待导入”标记的 `moox.backup`，在完整初始化前按地址幂等覆盖导入告警渠道（`MonitorMgr.ImportNotificationChannels`），两部分都完成后清掉待导入标记；无备份则跳过并提示 |
+| 10 | `setup init` | 默认云账号密钥（只建不改）、告警渠道只读检查（为空时提醒）、云账户、日志服务、云函数代码包、登录校验、输出管理台入口地址（这些要等 Collector、Monitor 起来） |
+| 11 | `setup start --space-id crypto` | 启动空间，导入默认因子任务与示例策略 |
+| 12 | `doctor bootstrap --node <主机>` | 逐台启用主机执行安装后自检（本机探测 + Monitor 上报、就绪与严重告警，失败报错 `doctor_failed` 并中止，不进入验收） |
+| 13 | `setup verify --space-id crypto` | 按空间验收真实数据；通过后在控制机部署根写出完成标记 `install-complete.json` |
 
-- `setup init` 与 `setup start` 在部署了 `archive-mgr` 时会自动为所有已激活且有限保留期的时序数据集（内置原始 K 线数据集与默认因子结果数据集）幂等创建归档任务，全新安装完成后即覆盖归档、不会触发“未归档的数据集”告警；自己后续手工新建的采集任务或因子任务仍可在管理台“数据归档 › 归档任务”页或用 `moox-cli archive tasks create` 建归档任务。
+- 部署了 `archive-mgr` 时，ArchiveMgr 会自动为所有已激活且有限保留期的时序数据集（含内置原始 K 线数据集与新建的因子结果数据集）补齐归档任务，不再由 `setup init` 或 `setup start` 代建；**手工删除的归档任务会被 ArchiveMgr 重新建出来，不想归档某个数据集应把任务停用（停用的任务不会被重建）**。
 - 全新安装时数据集首次接入要补历史（crypto 两个 1m 数据集要几小时），补齐期间因子任务不计算：`setup verify` 把这些任务算通过，因子检查的说明写“补历史中，下游待生效”，不用为了验收先 `collector history-seed skip`。
 - 任何一步失败先看原因和日志（`setup logs --host <主机> --component <组件> --journal`），修好后重跑同一条 `setup install`：每一步都可以重做，没有变化的组件不重启。
 - 改了代码要重新构建二进制再重跑；`setup deploy` 按二进制摘要判断哪些组件有变化。
 - 另一个空间装完后再启动：`$CLI setup start --source-dir $WT --space-id stockcn`（`setup start` 没有预览，不带 `--yes`）、`$CLI setup verify --space-id stockcn`。
-- 交易所密钥：`setup init` 只写入、不检测。Trade 装好后逐把检测 `readonly = true` 以外的密钥：
-  `$CLI trade inspect-credential --exchange binance --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-main`
-  （固定 ID 是 `exchange-<交易所>-<环境>-<名称>`，OKX 用 `okx`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`），看 `blockers` 有无阻断项；`检测没有完成` 只是交易所接口暂时不可用，稍后重试。
+- 交易所密钥与告警渠道：若没有从 `moox.backup` 恢复，安装完成后由用户在管理台「系统设置 › 密钥管理」（`/#/settings/secrets`）与「资源与运维 › 监控告警」（`/#/ops/monitor`）录入。Trade 装好后对非只读交易所密钥可在管理台点「测试连接」或执行：
+  `$CLI trade inspect-credential --exchange binance --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id <密钥 ID>`
+  （OKX 用 `okx`，测试网用 `ACCOUNT_ENVIRONMENT_TESTNET`，密钥 ID 可经 `$CLI secret list` 查到），看 `blockers` 有无阻断项；`检测没有完成` 只是交易所接口暂时不可用，稍后重试。
 - 因子引擎的窗口与内存：模板默认回看 50000 根、计算内存 4GiB、进程预算不限。要调就在因子机上运行 `/data/moox/bin/moox-factor-engine tune --config /data/moox/config/factor-engine/engine.yaml` 看建议值，
   写进 `moox.toml` 的 `[overrides."factor-engine"."engine.yaml"]`，再 `$CLI setup deploy $SRC --host factor --component factor-engine`。不要直接改目标机上的配置文件，下次部署会被覆盖。
 
@@ -152,8 +156,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 港股按交易时段推进：完整交易日 66 期（09:30～11:55、13:00～15:55），半日市（圣诞前夕、新年前夕、农历新年前夕）只有上午 30 期。港股实例可以挂港股模拟账户（交易模块新建账户时选“港股”，按港元结算）：
 整手（每手股数逐只不同，取自腾讯实时快照）、当日买入可卖、没有涨跌停、港股费用；只有模拟盘，没有实盘通道。规则与已知差别见 `docs/模块/交易.md` 的“港股模拟盘”一节。
 
-`setup start` 导入默认因子任务后会自动为该空间有限保留期的结果数据集补建归档任务；自己手工通过 `factor task apply` 新建的因子任务结果数据集默认不代建归档任务，命令结束时会逐个打出
-`moox-cli archive tasks create --space-id <空间> --dataset-id <结果数据集>`，要归档就执行它。
+部署了数据归档时，ArchiveMgr 会自动为所有已激活且有限保留期的时序数据集（含默认和手工新建的因子结果数据集）补齐归档任务；不想归档某个数据集应将对应任务停用（手工删除会被重新建出来）。
 
 ### 交易日历的年度更新
 
@@ -162,14 +165,13 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 1. 把落在工作日上的休市日写进 `packages/marketcalendar/internal/gencn/main.go` 的 `closures`，在 `packages/marketcalendar` 下运行 `go run ./internal/gencn -year <下一年>`（调休补班的周末照样休市）；它同时重写 `cn_stock.manifest.json` 的 `valid_through` 与 `sha256`，`go test ./packages/marketcalendar/` 校验。交易所 12 月公布休市安排后核对一遍，有出入就改 `closures` 用同一条命令重新生成；交易所日历已进 AkShare 时也可以用 `scripts/marketdata/update-calendar.sh` 整体替换（这个脚本只管 A 股 `cn_stock`；港股、美股没有对应脚本，只用下面第 2、3 项的 `genhk`、`genus`，更新时分别执行）；
 2. 港股：联交所发出下一年的证券市场假期通告后（2026 年是 [CT/075/25](https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2025/SEHK_CT_075_2025?sc_lang=en)，2027 年是 [CT/077/26](https://www.hkex.com.hk/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2026/SEHK_CT_077_2026Jun01162846?sc_lang=en)），把落在工作日上的休市日和半日市（圣诞前夕、新年前夕、农历新年前夕，只开上午市）写进 `packages/marketcalendar/internal/genhk/main.go` 的 `closures`、`earlyCloses`，通告网址写进 `source`，在 `packages/marketcalendar` 下运行 `go run ./internal/genhk`（整份重新生成，只写港股的两个文件）。补登或改动半日市会让之后的交易序号整体平移，因子本地存储要重建；
 3. 美股：纽交所公布下一年的假期表后（[假期与提前收市日](https://www.nyse.com/trade/hours-calendars)），把落在工作日上的休市日和半日市（感恩节次日、平安夜等，13:00 收市）写进 `packages/marketcalendar/internal/genus/main.go` 的 `closures`、`earlyCloses`，网址写进 `source`，在 `packages/marketcalendar` 下运行 `go run ./internal/genus`（整份重新生成，只写美股的两个文件）。不套“节假日逢周六提前一天补休”之类的规则，一律照假期页逐日登记；夏令时不用管，`barclock` 按纽约时区换算。补登或改动半日市会让之后的交易序号整体平移，因子本地存储要重建；
-4. `scripts/marketdata/validate-calendar.sh` 校验全部日历后，重新构建并发布 Collector、因子引擎、Strategy、Monitor、CLI，并重新上传 stockcn、stockhk、stockus 三个 SCF 代码包（`moox-cli collector function upload`，每个空间各传一次）。日历编在代码包里：漏传港股或美股包，旧日历的覆盖期一过，对应函数每期都返回 `no_work`，不报错。
+4. `scripts/marketdata/validate-calendar.sh` 校验全部日历后，重新构建并发布 Collector、因子引擎、Strategy、Monitor、CLI，并重新上传全局 SCF 代码包（`moox-cli collector function upload --collector-root $WT/modules/collector`，代码包为全局一份，全部空间共用）。日历编在代码包里：漏传代码包，旧日历的覆盖期一过，对应函数每期都返回 `no_work`，不报错。
 
 **必须在 12 月中旬前完成**：采集计划预检要求日历覆盖期至少还剩 14 天，否则拒绝新计划，不足 60 天时 Collector 每次预检记一条告警日志；Strategy 把可用截止日算在日历最后一个交易日往前 2 个交易日，到它之前 30 天起提示日历将到期，过了就报未就绪。
 
 ## 6. 验收
 
-1. 四台主机的组件都在运行：`$CLI setup status --file ./moox.toml` 里每台 `installed: true`、各组件 `state: active`；再逐台 `$CLI doctor diagnose --file ./moox.toml --node <主机>`（`control`、`storage`、`overseas`、`factor`）看各组件的健康检查与上报
-   （刚装完时结论是 `INCONCLUSIVE`、退出码 3，唯一没过的是 `host.disk_forecast`“磁盘预测历史不足”，属于正常，其余检查都应是 PASS 或 SKIPPED）；`doctor bootstrap` 只能查运行它的那台机器，在操作电脑上验收目标机不用它。没开 linger 的主机在 `setup install` 预检的 `manual_steps` 里就会列出。
+1. 四台主机的组件都在运行：`$CLI setup status --file ./moox.toml` 里每台 `installed: true`、各组件 `state: active`；再逐台 `$CLI doctor bootstrap --file ./moox.toml --node <主机>`（`control`、`storage`、`overseas`、`factor`）做安装后自检，核对本机探查（服务目录摘要、身份、`/healthz`、目录权限、systemd 自启、`/readyz`）和 Monitor 的上报、就绪与严重告警结论（均应通过）。没开 linger 的主机在 `setup install` 预检的 `manual_steps` 里就会列出。
 2. `moox-cli doctor alerts --file ./moox.toml`：新对象会先有“尚未上报 / 尚无成功运行”，等一个周期；1h 数据集要等第一个整点之后。长时间不消的告警按提示排查。
 3. 一条链路至少跑通一期：`moox-cli collector status --space-id crypto`（各数据集 `level: ok`）→ 因子引擎的输出（`$CLI setup logs --host factor --component factor-engine --journal --grep factor_period_done`）里 `factor_period_done ... status=complete rows=<标的数>`
    （`status=degraded rows=0` 说明有问题，常见是 `factor_memory_budget_exceeded`，看内存配置）。
@@ -182,13 +184,13 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 第 8、9 步要在腾讯云控制台动手，第 21 步会真实下单、只在测试网或模拟盘账户上做，第 29、30 步会停组件、触发告警，这几步都先问用户。
 
 1. **配置**：`$CLI setup validate --file ./moox.toml` 通过。
-2. **进程与库**：`$CLI setup status --file ./moox.toml`、`$CLI doctor diagnose --file ./moox.toml --node control` 的组件清单与 `[deployments]` 一致。
+2. **进程与库**：`$CLI setup status --file ./moox.toml`、`$CLI doctor bootstrap --file ./moox.toml --node control` 的组件清单与 `[deployments]` 一致。
    主机装了 `sqlite3` 时只读看表：Collector 库（`/data/moox/data/collector/moox_collector.db`）有 `t_collector_series_timeline`、`t_collector_cloud_accounts`、`t_collector_function_packages`。命令形如 `$CLI host exec --host control -- sqlite3 -readonly <库文件> .tables`。
-3. **云账号与代码包**：`$CLI collector account list` 有一条云账号；`$CLI collector package list --space-id stockcn` 有可用（`available`）的代码包，每个配置了云函数的空间各查一次。
+3. **云账号与代码包**：`$CLI collector account list` 有一条云账号；`$CLI collector package list` 有可用（`available`）的代码包（全局一份，全部配置了云函数的空间共用）。
 4. **自动接管与计划外函数**（验收前先不清腾讯云上已有的函数）：
    ```bash
    $CLI setup start --file ./moox.toml --source-dir $WT --space-id stockcn
-   $CLI collector fetch-plan --space-id stockcn
+   $CLI collector fetch-plan show --space-id stockcn
    $CLI collector function list --space-id stockcn
    ```
    等计划变成已生效，Collector 日志里没有 `already exists`；函数列表里每个函数存在、定时器一致、代码包最新。上一次安装留下、不在计划里的函数列在 `unplanned`，第一次读回之后定时器都是停用（第二片及以后的命名空间里的也是）。
@@ -218,7 +220,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
    $CLI collector function list --space-id stockcn
    ```
    暂停命令返回完成时全部定时器已停用，5 分钟后复查仍是停用（没有后台操作把它重新打开）；恢复后一轮内全部启用。在计划还没生效、函数还在创建时再做一遍，结果相同。
-10. **代码包升级**：`$CLI collector function upload --space-id stockcn --cloud-account-id <云账号 ID> --version <新版本> --collector-root $WT/modules/collector` 之后几分钟内，`collector function list` 里全部函数的代码包变成新版本，期间采集不中断（有缺口由自动补采补上）。
+10. **代码包升级**：`$CLI collector function upload --version <新版本> --collector-root $WT/modules/collector`（代码包为全局一份，默认复用登记的云账号）之后几分钟内，`collector function list --space-id <空间>` 里全部函数的代码包变成新版本，期间采集不中断（有缺口由自动补采补上）。
 11. **重启续做**：在第 4 步计划还没生效时重启 Collector，计划仍然走完，腾讯云上没有重复或残缺的函数。
 12. **监控**：在管理台“系统设置 › 密钥管理”停用云账号密钥，Monitor 报“调用腾讯云失败”，恢复密钥后告警消除（这一步要用户在管理台操作）。
 13. **依赖边界**（在仓库里）：
@@ -242,7 +244,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 17. **`__params`**：默认合约任务只有固定成员，结果行的 `__params` 为空：
     ```bash
     $CLI data view query --space-id crypto --dataset-id dataset_factor_swap_1m --column __params --limit 3 \
-      --selectors '[{"space_id":"crypto","dataset_id":"dataset_factor_swap_1m","subject_id":"BTC-USDT","freq":"1m"}]'
+      --selectors '[{"subject_id":"BTC-USDT","frequency":"1m"}]'
     ```
     第 16 步那个调参任务的 `__params` 只有 `ma__var` 一个键，`$CLI factor task params --task-id <5m 任务>` 有 `ma__var` 最近一次提交（`t_factor_member_params` 的一行）。
     对固定成员发起一次补算（`factor recalc submit --task-id ftask_swap_1m --member ma__5 --from START --to END`），完成后同一区间的 `ma__5` 与补算前逐位相同，`__params` 仍为空。
@@ -282,7 +284,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     打开控制机终端、下载一个归档分区都成功。重启 Admin 之后要重新登录（会话只在进程内存里）。
 26. **跨主机与出站主机**：`$CLI trade account list`、`$CLI data kline get …` 成功（经控制机到海外机、存储机）；
     `$CLI host agent status --host factor`、`$CLI lifecycle status --module factor-engine` 成功（经控制机中转）。
-27. **外部入口**：`setup export-skill-config` 导出后用 skill 的 `scripts/data-kline.sh` 读到数据（`moox-skill` 身份走 11004）；`setup start --space-id stockcn` 之后等一期，A 股函数写入成功（第 6 步）。
+27. **外部入口**：`setup start --space-id stockcn` 之后等一期，A 股云函数以 `scf-collector` 身份经外部入口 11004 写入成功（第 6 步）。
 28. **隔离**：仓库里没有在真机上发伪造请求的命令，这一条由 `make test-e2e-gates` 的主机网关联调覆盖（场景 `external-entry-local-and-cross-host-forward-acl-and-origin-caller-rules`）。
     要在真机上做时，在因子机上用本机主机密钥对海外机 `11003` 发 Trade 下单请求，四次都应被拒：以 `factor-engine` 身份，被调用名单拒绝；
     以 `host-gateway` 身份带 `X-Moox-Origin-Caller: moox-cli` 或 `scf-collector`，原因都是 `origin_host`（先判签名主机，因子机不是入口主机）；
@@ -298,8 +300,8 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 32. **升级与重跑**：
     - 改一行日志后重新构建，`$CLI setup deploy $SRC --host overseas --component trade`：只重启 Trade，`version.json` 更新，数据目录没动。
     - 给某个服务加一个方法后只部署该组件：这台主机的 `host-gateway` 被一起升级并重启。
-    - 再跑一次 `$CLI setup install $SRC --space-id crypto --yes`：不报错，没有组件被重启，操作电脑的 `~/.config/moox/moox-cli.key` 没有变（它会再执行一次 `setup start`，手工停用过的内置采集任务与默认因子任务成员会被重新启用；只升级用 `setup update`）。
-    - 在控制机第一次装完、存储机装到一半时中断安装，重跑同一条命令能接着装完。
+    - 在已装好系统上执行 `$CLI setup install $SRC --keep --yes`（不需要 `--space-id`）：不报错，只重启有变化的组件，不重跑初始化和 `setup start`，操作电脑的 `~/.config/moox/moox-cli.key` 没有变，控制机完成标记 `install-complete.json` 保留；不带 `--keep` / `--wipe` 直接 `--yes` 应被拒绝（`install_choice_required`）。
+    - 在控制机第一次装完、存储机装到一半时中断安装（状态 `incomplete`），带 `--keep --yes` 重跑 `setup install` 能接着装完并写出完成标记。
 33. **换电脑与清空预览**：另一台电脑上放两份配置文件、SSH 私钥、解密密钥（在系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`），`$CLI setup operator --register` 再 `$CLI setup deploy $SRC --host control`、`$CLI setup status` 成功，原电脑的调用被拒（先问用户，做完要在原电脑上重新登记）。
     `$CLI setup wipe` 的预览单独列出本地归档文件的大小，并提醒先导出管理台里的密钥。
 

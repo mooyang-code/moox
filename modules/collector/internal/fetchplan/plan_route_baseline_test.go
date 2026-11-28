@@ -132,9 +132,9 @@ func TestPlanRouteBaseline(t *testing.T) {
 			keys := make([]string, 0, len(requests))
 			for _, planned := range requests {
 				request := planned.Request
-				keys = append(keys, fmt.Sprintf("%s provider=%q source=%q market=%s instrument=%s market_type=%s items=%d first=%s/%s deadline=%s sha=%s",
+				keys = append(keys, fmt.Sprintf("%s provider=%q source=%q market=%s instrument=%s market_type=%s items=%d first=%s deadline=%s sha=%s",
 					planned.Frequency, request.Provider, request.SourceID, request.MarketID, request.InstrumentType, request.MarketType, len(request.Items),
-					request.Items[0].SubjectID, request.Items[0].Symbol, planned.StorageDeadline.Format(time.RFC3339), baselineSHA(request)))
+					request.Items[0].SubjectID, planned.StorageDeadline.Format(time.RFC3339), baselineSHA(request)))
 			}
 			got.Functions[name] = planRouteBaselineFunction{Region: function.Region, Executor: function.Executor, Cron: function.Cron, Market: function.Plan.Market,
 				Fetch: function.Plan.Fetch, Subjects: len(subjects), PlanSHA256: baselineSHA(function.Plan), RequestKeys: keys}

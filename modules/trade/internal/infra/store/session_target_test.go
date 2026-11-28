@@ -18,8 +18,7 @@ func TestLaterSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
 			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 				return tx.CreateLogicalAccount(LogicalAccountRecord{
 					SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-					ExecutionMode: "PAPER", SettlementAsset: "USDT",
-					AutomationState: "PAUSED", PauseReason: "setup",
+					Environment: "PAPER", SettlementAsset: "USDT", PauseReason: "setup",
 				})
 			}))
 			now := time.Now().UTC()

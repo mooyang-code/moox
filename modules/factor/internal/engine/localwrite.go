@@ -81,7 +81,7 @@ func (w *localWriter) WriteSeries(ctx context.Context, req *factorpb.WriteSeries
 }
 
 func (w *localWriter) write(ctx context.Context, req *factorpb.WriteSeriesReq) (*factorpb.WriteSeriesRsp, error) {
-	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFreq())}
+	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFrequency())}
 	subject := strings.TrimSpace(req.GetSubjectId())
 	if src.SpaceID == "" || src.DatasetID == "" || src.Freq == "" || subject == "" {
 		return nil, invalidWrite("space_id、dataset_id、freq、subject_id 都是必填项")
@@ -224,7 +224,7 @@ func columnsFromWire(fields []seriesstore.Field, req *factorpb.WriteSeriesReq) (
 
 // GetSeriesFields 返回数据集的字段表（名称、Storage 字段类型、填充规则）。
 func (w *localWriter) GetSeriesFields(ctx context.Context, req *factorpb.GetSeriesFieldsReq) (*factorpb.GetSeriesFieldsRsp, error) {
-	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFreq())}
+	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFrequency())}
 	if src.SpaceID == "" || src.DatasetID == "" {
 		return &factorpb.GetSeriesFieldsRsp{RetInfo: writeRetInfo(invalidWrite("space_id、dataset_id 是必填项"))}, nil
 	}
@@ -264,7 +264,7 @@ func (w *localWriter) CheckSeriesSubject(ctx context.Context, req *factorpb.Chec
 
 // GetSeriesBounds 返回标的在本地时序存储里的最早与最新时间。
 func (w *localWriter) GetSeriesBounds(_ context.Context, req *factorpb.GetSeriesBoundsReq) (*factorpb.GetSeriesBoundsRsp, error) {
-	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFreq())}
+	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFrequency())}
 	subject := strings.TrimSpace(req.GetSubjectId())
 	if src.SpaceID == "" || src.DatasetID == "" || src.Freq == "" || subject == "" {
 		return &factorpb.GetSeriesBoundsRsp{RetInfo: writeRetInfo(invalidWrite("space_id、dataset_id、freq、subject_id 都是必填项"))}, nil

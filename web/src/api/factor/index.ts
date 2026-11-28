@@ -8,6 +8,7 @@ import type {
   FactorMember,
   FactorRetRsp,
   MemberKind,
+  MemberStatus,
   FactorTask,
   ListFactorTasksReq,
   ListFactorTasksRsp,
@@ -27,7 +28,7 @@ import type {
   SetTaskMemberStatusResult
 } from "./types";
 
-export type CreateFactorTaskInput = Pick<FactorTask, "space_id" | "source_dataset_id" | "freq" | "name"> &
+export type CreateFactorTaskInput = Pick<FactorTask, "space_id" | "source_dataset_id" | "frequency" | "name"> &
   Partial<Pick<FactorTask, "task_id" | "result_dataset_id" | "status">>;
 
 export async function createFactorTask(factorTask: CreateFactorTaskInput) {
@@ -86,20 +87,28 @@ export function listFactors(params: ListFactorsReq = {}) {
 
 /**
  * 把定义加入计算任务。kind 缺省按 fixed；params 是固定成员的固定参数、或可变成员的默认参数（没给的参数取定义的默认值，
- * 加成员之后不再改）。成员键由服务端推导并在响应里返回。
+ * 加成员之后不再改）；status 缺省按 disabled，传 enabled 可一步加入并启用。成员键由服务端推导并在响应里返回。
  */
 export async function addFactorToTask(
   task_id: string,
   factor_id: string,
   kind: MemberKind = "fixed",
-  params?: Record<string, number>
+  params?: Record<string, number>,
+  status?: MemberStatus
 ) {
-  const body: { task_id: string; factor_id: string; kind: MemberKind; params?: Record<string, number> } = {
+  const body: {
+    task_id: string;
+    factor_id: string;
+    kind: MemberKind;
+    params?: Record<string, number>;
+    status?: MemberStatus;
+  } = {
     task_id,
     factor_id,
     kind
   };
   if (params && Object.keys(params).length) body.params = params;
+  if (status) body.status = status;
   const rsp = await callFactor<typeof body, FactorRetRsp<{ member: FactorMember }>>("AddTaskMember", body);
   return rsp.member;
 }

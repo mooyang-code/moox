@@ -24,7 +24,7 @@ func StockCNRouteID(frequency string) string {
 }
 
 // stockKlineRow 是测试里构造 A 股股票行的简写。
-func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
+func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, routeRank int, instrumentName string) (*storagepb.Row, error) {
 	return equityKlineRow(bar, equityRowKey{SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, DatasetID: datasetID, SeriesTag: "default"}, routeID, routeRank, instrumentName)
 }
 

@@ -54,8 +54,7 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 func TestEachSQLLoadsIntoEmptyDatabase(t *testing.T) {
 	for name, sql := range map[string]string{
 		"account.sql": accountSQL, "instrument.sql": instrumentSQL,
-		"logical_account.sql": logicalAccountSQL, "paper_account_config.sql": paperAccountConfigSQL,
-		"paper_balance.sql": paperBalanceSQL, "paper_funding.sql": paperFundingSQL, "equity.sql": equitySQL,
+		"logical_account.sql": logicalAccountSQL, "paper.sql": paperSQL, "equity.sql": equitySQL,
 		"target_history.sql": targetHistorySQL, "execution.sql": executionSQL,
 		"wallet_transfer.sql": walletTransferSQL, "delist.sql": delistSQL,
 	} {
@@ -184,12 +183,14 @@ func TestInstrumentSchemaUsesApprovedSwapQuantityFields(t *testing.T) {
 	}
 }
 
-func TestLogicalAccountSchemaKeepsSettlementAssetAndUsesAutomationState(t *testing.T) {
+func TestLogicalAccountSchemaKeepsSettlementAssetAndEnvironmentWithoutAutomationColumn(t *testing.T) {
 	sql := AllSQL()
 	require.Contains(t, sql, "c_settlement_asset TEXT NOT NULL")
 	require.Contains(t, sql, "c_live_environment TEXT NOT NULL")
+	require.Contains(t, sql, "c_environment TEXT NOT NULL")
 	require.Contains(t, sql, "c_execution_mode = 'PAPER'")
-	require.Contains(t, sql, "c_automation_state TEXT NOT NULL")
+	require.NotContains(t, sql, "c_automation_state")
+	require.NotContains(t, sql, "c_resumed_at")
 	require.NotContains(t, sql, "c_control_state")
 	require.NotContains(t, sql, "c_control_revision")
 	require.NotContains(t, sql, "c_paused INTEGER")

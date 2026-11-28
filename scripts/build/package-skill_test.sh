@@ -27,37 +27,8 @@ assert_no_transient_files() {
   fi
 }
 
-CONFIG="${TEST_ROOT}/moox.toml"
-ARGS_LOG="${TEST_ROOT}/cli.args"
-FAKE_CLI="${TEST_ROOT}/moox-cli"
 OUT="${TEST_ROOT}/dist/moox-skill.tar.gz"
 EXTRACTED="${TEST_ROOT}/extracted"
-SENTINEL_ROOT='TEST_ONLY_ROOT_SECRET_7hQ2'
-SENTINEL_SSH='TEST_ONLY_SSH_PRIVATE_KEY_4pL9'
-SENTINEL_CLOUD='TEST_ONLY_TENCENT_SECRET_8rW3'
-
-cat >"${CONFIG}" <<EOF
-root_secret = "${SENTINEL_ROOT}"
-ssh_private_key = "${SENTINEL_SSH}"
-tencent_secret_key = "${SENTINEL_CLOUD}"
-EOF
-
-cat >"${FAKE_CLI}" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$@" >"${ARGS_LOG:?}"
-[[ "$#" -eq 8 ]]
-[[ "$1" == setup && "$2" == export-skill-config ]]
-[[ "$3" == --file && "$4" == "${CONFIG:?}" ]]
-[[ "$5" == --space && "$6" == crypto ]]
-[[ "$7" == --output ]]
-mkdir -p "$(dirname "$8")"
-printf '%s\n' 'version: 1' 'gateway_client:' '  entry_address: entry.example:11004' '  entry_host: storage' '  caller: moox-skill' '  key_file: .moox-skill-keys/fixture.key' >"$8"
-mkdir -m 0700 "$(dirname "$8")/.moox-skill-keys"
-printf '%s\n' 'TEST_ONLY_EXPORTED_ACCESS_SIGNING_KEY_32_BYTES' >"$(dirname "$8")/.moox-skill-keys/fixture.key"
-chmod 0600 "$8" "$(dirname "$8")/.moox-skill-keys/fixture.key"
-EOF
-chmod +x "${FAKE_CLI}"
 
 # 技能目录里本地保存的 .env（云凭据）、密钥文件不能进分发包。
 SKILL_FIXTURE="${TEST_ROOT}/skill"
@@ -70,17 +41,16 @@ printf '%s\n' "${SENTINEL_ENV}" >"${SKILL_FIXTURE}/scripts/private.key"
 printf '%s\n' "${SENTINEL_ENV}" >"${SKILL_FIXTURE}/.hidden/token"
 
 mkdir -p "$(dirname "${OUT}")" "${EXTRACTED}"
-SKILL_DIR="${SKILL_FIXTURE}" CONFIG="${CONFIG}" MOOX_CLI="${FAKE_CLI}" OUT="${OUT}" \
-  ARGS_LOG="${ARGS_LOG}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"
+SKILL_DIR="${SKILL_FIXTURE}" OUT="${OUT}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"
 
 [[ -f "${OUT}" && ! -L "${OUT}" ]] || fail "package was not created as a regular file"
 [[ "$(file_mode "${OUT}")" == 600 ]] || fail "package mode is not 0600"
 
 if tar -tzf "${OUT}" >"${TEST_ROOT}/archive.list"; then
-  grep -qx 'moox/config/data-access.yaml' "${TEST_ROOT}/archive.list" || fail "generated config missing from archive"
-  grep -qx 'moox/scripts/data-kline.sh' "${TEST_ROOT}/archive.list" || fail "data-kline wrapper missing from archive"
-  if grep -Eq '(^|/)custom\.toml$' "${TEST_ROOT}/archive.list"; then
-    fail "moox.toml leaked into archive"
+  grep -qx 'moox/SKILL.md' "${TEST_ROOT}/archive.list" || fail "SKILL.md missing from archive"
+  grep -qx 'moox/references/data-query.md' "${TEST_ROOT}/archive.list" || fail "data-query reference missing from archive"
+  if grep -Eq '(^|/)data-access\.yaml$|(^|/)data-kline\.sh$' "${TEST_ROOT}/archive.list"; then
+    fail "removed skill data-access files present in archive"
   fi
   if grep -Eiq '(^|/)(\.ssh/|id_(rsa|ed25519)$|[^/]*credentials?\.json$|[^/]*secrets?\.env$)' "${TEST_ROOT}/archive.list"; then
     fail "credential-shaped file leaked into archive"
@@ -97,43 +67,12 @@ if grep -aq "${SENTINEL_ENV}" "${TEST_ROOT}/archive.content"; then
 fi
 
 tar -xzf "${OUT}" -C "${EXTRACTED}"
-PACKAGED_CONFIG="${EXTRACTED}/moox/config/data-access.yaml"
-[[ -f "${PACKAGED_CONFIG}" && ! -L "${PACKAGED_CONFIG}" ]] || fail "packaged config is not a regular file"
-[[ "$(file_mode "${PACKAGED_CONFIG}")" == 600 ]] || fail "packaged config mode is not 0600"
-[[ -x "${EXTRACTED}/moox/scripts/data-kline.sh" ]] || fail "packaged data-kline wrapper is not executable"
-PACKAGED_KEY="${EXTRACTED}/moox/config/.moox-skill-keys/fixture.key"
-[[ -f "${PACKAGED_KEY}" && ! -L "${PACKAGED_KEY}" ]] || fail "Access signing key missing from archive"
-[[ "$(file_mode "${PACKAGED_KEY}")" == 600 ]] || fail "Access signing key mode is not 0600"
-[[ "$(file_mode "${PACKAGED_KEY%/*}")" == 700 ]] || fail "Access signing key directory mode is not 0700"
-grep -q 'TEST_ONLY_EXPORTED_ACCESS_SIGNING_KEY_32_BYTES' "${PACKAGED_KEY}" || fail "fake CLI key output was not packaged"
-if grep -q 'TEST_ONLY_EXPORTED_ACCESS_SIGNING_KEY_32_BYTES' "${PACKAGED_CONFIG}"; then
-  fail "signing key was inlined into public configuration"
-fi
-if rg --hidden -F "${SENTINEL_ROOT}" "${EXTRACTED}" >/dev/null || \
-   rg --hidden -F "${SENTINEL_SSH}" "${EXTRACTED}" >/dev/null || \
-   rg --hidden -F "${SENTINEL_CLOUD}" "${EXTRACTED}" >/dev/null; then
-  fail "setup secret marker leaked into archive"
-fi
-
-expected_args=$(cat <<EOF
-setup
-export-skill-config
---file
-${CONFIG}
---space
-crypto
---output
-EOF
-)
-actual_prefix="$(sed -n '1,7p' "${ARGS_LOG}")"
-[[ "${actual_prefix}" == "${expected_args}" ]] || fail "export command arguments are incorrect"
-[[ "$(sed -n '8p' "${ARGS_LOG}")" == */moox/config/data-access.yaml ]] || fail "export output did not target staging config"
+[[ -f "${EXTRACTED}/moox/SKILL.md" ]] || fail "extracted SKILL.md missing"
 assert_no_transient_files "${TEST_ROOT}"
 
 BAD_OUT_DIR="${TEST_ROOT}/out-is-directory"
 mkdir "${BAD_OUT_DIR}"
-if CONFIG="${CONFIG}" MOOX_CLI="${FAKE_CLI}" OUT="${BAD_OUT_DIR}" \
-  ARGS_LOG="${ARGS_LOG}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"; then
+if SKILL_DIR="${SKILL_FIXTURE}" OUT="${BAD_OUT_DIR}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"; then
   fail "package accepted OUT pointing to a directory"
 fi
 [[ -d "${BAD_OUT_DIR}" ]] || fail "directory OUT was modified"
@@ -143,8 +82,7 @@ BAD_OUT_TARGET="${TEST_ROOT}/out-directory-target"
 BAD_OUT_LINK="${TEST_ROOT}/out-directory-link"
 mkdir "${BAD_OUT_TARGET}"
 ln -s "${BAD_OUT_TARGET}" "${BAD_OUT_LINK}"
-if CONFIG="${CONFIG}" MOOX_CLI="${FAKE_CLI}" OUT="${BAD_OUT_LINK}" \
-  ARGS_LOG="${ARGS_LOG}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"; then
+if SKILL_DIR="${SKILL_FIXTURE}" OUT="${BAD_OUT_LINK}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"; then
   fail "package accepted OUT pointing to a directory symlink"
 fi
 [[ -L "${BAD_OUT_LINK}" ]] || fail "directory symlink OUT was modified"
@@ -153,13 +91,8 @@ assert_no_transient_files "${TEST_ROOT}"
 
 printf 'old-package\n' >"${OUT}"
 cp "${OUT}" "${TEST_ROOT}/old-package"
-cat >"${FAKE_CLI}" <<'EOF'
-#!/usr/bin/env bash
-exit 42
-EOF
-chmod +x "${FAKE_CLI}"
-if CONFIG="${CONFIG}" MOOX_CLI="${FAKE_CLI}" OUT="${OUT}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"; then
-  fail "package unexpectedly succeeded when config export failed"
+if SKILL_DIR="${TEST_ROOT}/missing-skill" OUT="${OUT}" TMPDIR="${TEST_ROOT}" "${PACKAGE_SCRIPT}"; then
+  fail "package unexpectedly succeeded when skill directory was missing"
 fi
 cmp -s "${OUT}" "${TEST_ROOT}/old-package" || fail "failed package replaced the previous archive"
 assert_no_transient_files "${TEST_ROOT}"

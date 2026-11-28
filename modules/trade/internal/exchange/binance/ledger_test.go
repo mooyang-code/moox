@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 // incomeServer 模拟 /fapi/v1/income：窗口内按时间升序返回最早的至多 limit 条。
@@ -92,7 +93,7 @@ func TestIncomeLedgerWalksBackFromEndWhenDense(t *testing.T) {
 
 func TestSpotLedgerUnsupported(t *testing.T) {
 	adapter := testAdapter(exchange.MarketTypeSpot, "http://unused")
-	if adapter.LedgerSupported() {
+	if adapter.Supports(execution.CapabilityLedger) {
 		t.Fatal("spot must not claim ledger support")
 	}
 	if _, err := adapter.ListLedger(context.Background(), exchange.LedgerQuery{Start: time.Now().Add(-time.Hour), End: time.Now(), Limit: 1}); err == nil {

@@ -49,7 +49,7 @@
             ><span class="tx-num">{{ record.value ? fmtMoney(record.value) : "—" }}</span></template
           >
         </a-table-column>
-        <a-table-column v-if="logical.control_mode === 1" title="目标">
+        <a-table-column v-if="logical.control_mode === ControlMode.STRATEGY" title="目标">
           <a-table-column v-if="showSpot" :title="spotTitle" :width="120" align="right">
             <template #cell="{ record }"
               ><span class="tx-num">{{ targetText(record.targetSpot) }}</span></template
@@ -95,7 +95,7 @@
             ><span class="tx-num" :class="pnlClass(record.unrealizedPnl)">{{ fmtSigned(record.unrealizedPnl) }}</span></template
           >
         </a-table-column>
-        <a-table-column v-if="logical.control_mode === 1" title="偏差" :width="190">
+        <a-table-column v-if="logical.control_mode === ControlMode.STRATEGY" title="偏差" :width="190">
           <template #cell="{ record }">
             <span v-if="record.state === 'blocked'" class="tx-neg">未执行：{{ record.blockedReason }}</span>
             <span v-else-if="record.state === 'extra'" class="tx-st tx-st--warn">不在目标内</span>
@@ -163,6 +163,7 @@
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { ControlMode } from "@/api/trade";
 import { fmtMoney, fmtPrice, fmtQtyShort, fmtSigned, pnlClass } from "../shared/format";
 import { marketLabel } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
@@ -195,7 +196,7 @@ const page = ref(1);
 
 const filters = computed(() => [
   { key: "all" as const, label: "全部", count: coinRows.value.length },
-  ...(logical.value.control_mode === 1
+  ...(logical.value.control_mode === ControlMode.STRATEGY
     ? [{ key: "off" as const, label: "未到位", count: filterCoinRows(coinRows.value, "off", "").length }]
     : []),
   { key: "holding" as const, label: "有持仓", count: filterCoinRows(coinRows.value, "holding", "").length }
@@ -207,7 +208,11 @@ const spotTitle = computed(() => (stockMode.value ? "股票" : "现货"));
 // 组合里完全没有现货（或永续）一侧的目标和持仓时，不显示那一侧的列
 const showSpot = computed(() => stockMode.value || hasSpotSide(coinRows.value));
 const showSwap = computed(() => !stockMode.value && hasSwapSide(coinRows.value));
-const canOrder = computed(() => [1, 2].includes(logical.value.control_mode) && !flattenRunning.value);
+const canOrder = computed(
+  () =>
+    (logical.value.control_mode === ControlMode.STRATEGY || logical.value.control_mode === ControlMode.MANUAL) &&
+    !flattenRunning.value
+);
 
 function targetText(cell?: TargetCell) {
   if (!cell) return "—";

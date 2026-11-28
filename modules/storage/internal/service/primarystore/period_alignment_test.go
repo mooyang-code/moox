@@ -6,27 +6,24 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
 
 func TestValidateSnapshotAlignmentFollowsDatasetAlignment(t *testing.T) {
-	ctx := metadata.WithRequestSnapshot(context.Background(), attrsSnapshot{
-		"epoch":   {"owner_module": "collector", "dataset_role": "raw_collection"},
-		"session": {"owner_module": "collector", "dataset_role": "kline_resample_result", "alignment": "session"},
-	})
+	epoch := &pb.Dataset{SpaceId: "space", DatasetId: "epoch", Status: "active"}
+	session := &pb.Dataset{SpaceId: "space", DatasetId: "session", Status: "active", Alignment: "session"}
 	open := time.Date(2026, 10, 21, 1, 30, 0, 0, time.UTC).Unix() // 北京时间 09:30
 	request := func(dataset, frequency string, at int64) *pb.PrimaryRegisterSeriesSnapshotReq {
 		return &pb.PrimaryRegisterSeriesSnapshotReq{SpaceId: "space", DatasetId: dataset, Frequency: frequency, EffectiveFrom: at}
 	}
 	// epoch 数据集：1h 必须落在整点，09:30 开盘（01:30Z）不行。
-	require.ErrorContains(t, validateSnapshotAlignment(ctx, request("epoch", "1h", open)), "aligned")
-	require.NoError(t, validateSnapshotAlignment(ctx, request("epoch", "1h", open-30*60)))
+	require.ErrorContains(t, validateSnapshotAlignment(epoch, request("epoch", "1h", open)), "aligned")
+	require.NoError(t, validateSnapshotAlignment(epoch, request("epoch", "1h", open-30*60)))
 	// session 数据集：桶从开盘起切分，只要求整分钟，由 DataNode 校验。
-	require.NoError(t, validateSnapshotAlignment(ctx, request("session", "1h", open)))
+	require.NoError(t, validateSnapshotAlignment(session, request("session", "1h", open)))
 	// 日线及以上的边界取决于时区，这一层不检查。
-	require.NoError(t, validateSnapshotAlignment(ctx, request("epoch", "1d", open)))
+	require.NoError(t, validateSnapshotAlignment(epoch, request("epoch", "1d", open)))
 }
 
 // 周期的真实结束时刻只取写入方声明的值：重采样结果带桶的收盘时刻；直采日线（下一交易日早上才采集）不带，
@@ -50,17 +47,21 @@ func TestCommitTimeSeriesBatchUsesDeclaredPeriodEndAt(t *testing.T) {
 					return pebble.DatasetPeriodResult{Status: "waiting", AcceptedSeriesIndexes: []uint32{0}}, nil
 				},
 			}
-			snapshot := fixedDatasetSnapshot{
-				dataset: &pb.Dataset{
+			datasets := newTestDatasetCache(t,
+				[]*pb.Dataset{{
 					SpaceId: "stockcn", DatasetId: "dataset_kline_1d", Status: "active",
-					DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1d",
+					DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: "1d",
 					Alignment: "session", AllowedLatenessSeconds: 300,
 					Attributes: map[string]string{"calendar": "cn_stock"},
-				},
-			}
+				}},
+				[]*pb.DatasetColumn{{
+					SpaceId: "stockcn", DatasetId: "dataset_kline_1d", ColumnName: "close",
+					ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
+				}},
+			)
 			svc, err := New(Options{
 				Store:    store,
-				Snapshot: func() metadata.RequestSnapshot { return snapshot },
+				Datasets: datasets,
 			})
 			require.NoError(t, err)
 
@@ -71,11 +72,11 @@ func TestCommitTimeSeriesBatchUsesDeclaredPeriodEndAt(t *testing.T) {
 				},
 				Items: []*pb.TimeSeriesBatchRow{{
 					SeriesIndex: 0,
-					Row: &pb.RowFieldUpsert{
+					Row: &pb.Row{
 						Key: &pb.RowKey{
 							SpaceId: "stockcn", DatasetId: "dataset_kline_1d",
 							Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-								SubjectId: "SH600519", Freq: "1d", DataTime: periodDay.Format(time.RFC3339Nano), SeriesTag: "default",
+								SubjectId: "SH600519", Frequency: "1d", DataTime: periodDay.Format(time.RFC3339Nano), SeriesTag: "default",
 							}},
 						},
 						Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1500}}}},
@@ -97,19 +98,4 @@ type commitCaptureStore struct {
 
 func (s *commitCaptureStore) CommitTimeSeriesBatch(ctx context.Context, exp pebble.DatasetPeriodExpectation, items []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error) {
 	return s.commitBatchFn(ctx, exp, items)
-}
-
-type fixedDatasetSnapshot struct {
-	dataset *pb.Dataset
-}
-
-func (s fixedDatasetSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	if s.dataset == nil || s.dataset.GetSpaceId() != spaceID || s.dataset.GetDatasetId() != datasetID {
-		return nil, false
-	}
-	return s.dataset, true
-}
-
-func (fixedDatasetSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	return nil, &pb.PageResult{}, nil
 }

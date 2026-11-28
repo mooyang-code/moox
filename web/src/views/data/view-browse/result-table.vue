@@ -94,7 +94,7 @@
                 v-if="mode === 'time_series' && klineAvailable"
                 type="text"
                 size="mini"
-                :disabled="!record.rawKey?.subject_id"
+                :disabled="!record.rawKey?.time_series?.subject_id"
                 @click="emit('rowKline', record)"
                 >K 线</a-button
               >
@@ -147,7 +147,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import type { RecordRow } from "@/api/storage/types";
+import type { Row } from "@/api/storage/types";
 import { formatInstant } from "@/utils/time-zone";
 import { seriesTagDisplay, seriesTagMarketText } from "@/views/data/shared/series-market";
 import { adaptiveColumnWidth, rowsToColumnNames, type ViewBrowseMode, type ViewSortDirection } from "./view-browse-utils";
@@ -213,9 +213,9 @@ function openDetail(row: ViewBrowseTableRow) {
   detailVisible.value = true;
 }
 
-function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
+function rowToSyntheticRecord(row: ViewBrowseTableRow): Row {
   return {
-    key: { space_id: "", dataset_id: "", record_id: row.key, version: row.version },
+    key: { space_id: "", dataset_id: "", record: { record_id: row.key, version: row.version } },
     fields: Object.keys(row.values).map(name => ({
       field_id: name,
       value: { string_value: row.values[name] }

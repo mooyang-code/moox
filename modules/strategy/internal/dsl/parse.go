@@ -218,7 +218,7 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 
 func decodeRules(node *yaml.Node) ([]Rule, error) {
 	if node == nil || node.Kind != yaml.SequenceNode {
-		return nil, errors.New("rules 必须是规则列表，每条规则包含 id、type 等字段")
+		return nil, errors.New("rules 必须是规则列表，每条规则包含 id、score、select、weight 等字段")
 	}
 	rules := make([]Rule, 0, len(node.Content))
 	for i, item := range node.Content {
@@ -236,7 +236,12 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 	if err != nil {
 		return Rule{}, err
 	}
-	rule := Rule{Side: SideLong, Weight: Weight{Method: WeightMethodEqual}}
+	rule := Rule{Type: RuleTypeRank, Side: SideLong, Weight: Weight{Method: WeightMethodEqual}}
+	var (
+		hasPool   bool
+		poolFixed []string
+		poolTags  []string
+	)
 	for _, f := range fields {
 		fieldPath := path + "." + f.key
 		switch f.key {
@@ -250,7 +255,8 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 		case "type":
 			rule.Type, err = scalarRequiredText(f.value, fieldPath)
 		case "pool":
-			rule.Pool, err = decodePool(f.value, fieldPath)
+			hasPool = true
+			poolFixed, poolTags, err = decodePool(f.value, fieldPath)
 		case "universe":
 			rule.Universe, err = decodeRuleUniverse(f.value, fieldPath)
 		case "allow_empty":
@@ -289,41 +295,66 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			return Rule{}, err
 		}
 	}
+	// 规则级 pool 是规则级 universe 的简写：替代策略级标签与黑白名单，保留规则或策略的年龄设置。
+	if hasPool {
+		prefix := path
+		if rule.ID != "" {
+			prefix = "规则 " + rule.ID
+		}
+		if len(poolFixed) == 0 && len(poolTags) == 0 {
+			return Rule{}, fmt.Errorf("%s 的 pool 不能为空", prefix)
+		}
+		if rule.Universe != nil && rule.Universe.OverridesMembers() {
+			return Rule{}, fmt.Errorf("%s 写了显式 pool，规则级 universe 只能写 min_age_bars、max_age_bars、age_markets（标签与黑白名单不作用于显式 pool）", prefix)
+		}
+		if rule.Universe == nil {
+			rule.Universe = &RuleUniverse{Fields: make(map[string]struct{}, 4)}
+		} else if rule.Universe.Fields == nil {
+			rule.Universe.Fields = make(map[string]struct{}, 4)
+		}
+		rule.Universe.Tags = poolTags
+		rule.Universe.Include = poolFixed
+		rule.Universe.ExcludeTags = nil
+		rule.Universe.Exclude = nil
+		rule.Universe.Fields[universeTags] = struct{}{}
+		rule.Universe.Fields[universeInclude] = struct{}{}
+		rule.Universe.Fields[universeExcludeTags] = struct{}{}
+		rule.Universe.Fields[universeExclude] = struct{}{}
+	}
 	return rule, nil
 }
 
-func decodePool(node *yaml.Node, path string) (Pool, error) {
+func decodePool(node *yaml.Node, path string) (fixed, tags []string, err error) {
 	if node == nil {
-		return Pool{}, fmt.Errorf("%s 必须是标的列表或 {tags: [...]}", path)
+		return nil, nil, fmt.Errorf("%s 必须是标的列表或 {tags: [...]}", path)
 	}
 	switch node.Kind {
 	case yaml.SequenceNode:
-		fixed, err := stringList(node, path)
+		fixed, err = stringList(node, path)
 		if err != nil {
-			return Pool{}, err
+			return nil, nil, err
 		}
-		return Pool{Explicit: true, Fixed: fixed}, nil
+		return fixed, nil, nil
 	case yaml.MappingNode:
 		fields, err := mappingFields(node, path)
 		if err != nil {
-			return Pool{}, err
+			return nil, nil, err
 		}
-		pool := Pool{Explicit: true}
 		for _, f := range fields {
 			if f.key != "tags" {
-				return Pool{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
+				return nil, nil, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
 			}
-			pool.Tags, err = stringList(f.value, path+".tags")
+			tags, err = stringList(f.value, path+".tags")
 			if err != nil {
-				return Pool{}, err
+				return nil, nil, err
 			}
 		}
-		if len(pool.Tags) == 0 {
-			return Pool{}, fmt.Errorf("%s.tags 不能为空", path)
+		if len(tags) == 0 {
+			return nil, nil, fmt.Errorf("%s.tags 不能为空", path)
 		}
-		return pool, nil
+		return nil, tags, nil
 	default:
-		return Pool{}, fmt.Errorf("%s 必须是标的列表或 {tags: [...]}", path)
+		return nil, nil, fmt.Errorf("%s 必须是标的列表或 {tags: [...]}", path)
 	}
 }
 

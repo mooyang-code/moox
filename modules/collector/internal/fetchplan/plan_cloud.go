@@ -20,8 +20,8 @@ import (
 // planCloud 是对账器用到的云端能力：云函数的读回与写入（写入只经操作表），加上按包名取最新的可用代码包。
 type planCloud interface {
 	cloud.Functions
-	// LatestPackage 返回空间某个包名最新的可用代码包；没有时返回 nil。
-	LatestPackage(ctx context.Context, spaceID, packageName string) (*cloud.Package, error)
+	// LatestPackage 返回某个包名最新的可用代码包；没有时返回 nil。
+	LatestPackage(ctx context.Context, packageName string) (*cloud.Package, error)
 }
 
 // functionTarget 是一个定时函数应有的计划与 cron。cron 为空表示定时器停用（退役的函数保留原来的环境、只停定时器）。

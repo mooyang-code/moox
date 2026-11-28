@@ -12,6 +12,7 @@ import (
 	watchdogpkg "github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/report"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,6 +24,7 @@ type Config struct {
 	Scheduler      SchedulerConfig          `yaml:"scheduler"`
 	Deployment     DeploymentConfig         `yaml:"deployment"`
 	Observability  ObservabilityConfig      `yaml:"observability"`
+	EventBus       EventBusConfig           `yaml:"eventbus"`
 	Metrics        MetricsConfig            `yaml:"metrics"`
 	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
 	KlineFreshness KlineFreshnessConfig     `yaml:"kline_freshness"`
@@ -52,9 +54,9 @@ type DeploymentConfig struct {
 }
 
 type MetricsConfig struct {
-	Enabled                 bool   `yaml:"enabled"`
-	DatasetHealthPolicyPath string `yaml:"dataset_health_policy_path"`
-	NoDataIntervals         int    `yaml:"no_data_intervals"`
+	Enabled         bool                            `yaml:"enabled"`
+	DatasetHealth   report.RealtimeTimeSeriesPolicy `yaml:"dataset_health"`
+	NoDataIntervals int                             `yaml:"no_data_intervals"`
 	// MaxNewSeriesPerHour / MaxNewSeriesPerDay 限制每小时、每天新建的指标序列数，超出的新序列被丢弃并告警；不写用默认值，负数表示不限。
 	// 现状目录约 500 条序列，全新启动时一小时内要建全，所以默认值留足余量，只拦标签失控这种成倍增长。
 	MaxNewSeriesPerHour int `yaml:"max_new_series_per_hour"`
@@ -62,9 +64,12 @@ type MetricsConfig struct {
 }
 
 type ObservabilityConfig struct {
-	Enabled        bool     `yaml:"enabled"`
-	DeliverPolicy  string   `yaml:"deliver_policy"`
-	EventBusURLs   []string `yaml:"eventbus_urls"`
+	Enabled       bool   `yaml:"enabled"`
+	DeliverPolicy string `yaml:"deliver_policy"`
+}
+
+type EventBusConfig struct {
+	URLs           []string `yaml:"urls"`
 	CredentialFile string   `yaml:"credential_file"`
 }
 
@@ -81,11 +86,9 @@ type MarketCanaryConfig struct {
 }
 
 type KlineFreshnessConfig struct {
-	Enabled                  bool          `yaml:"enabled"`
 	SpaceIDs                 []string      `yaml:"space_ids"`
 	EvaluationInterval       time.Duration `yaml:"evaluation_interval"`
 	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval"`
-	InventoryPageSize        int           `yaml:"inventory_page_size"`
 	InventoryMaxEntries      int           `yaml:"inventory_max_entries"`
 	MaxSubjectsPerAlert      int           `yaml:"max_subjects_per_alert"`
 }
@@ -146,15 +149,16 @@ func Default() *Config {
 			AlertEventRetentionDays: 14,
 		},
 		Deployment:    DeploymentConfig{Enabled: true},
-		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}},
+		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all"},
+		EventBus:      EventBusConfig{URLs: []string{"nats://127.0.0.1:4222"}},
 		// Canary subjects name concrete collection results, so they come only
 		// from deployment config; without subjects the canary stays disabled.
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
 		KlineFreshness: KlineFreshnessConfig{
-			Enabled: false, SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
-			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
+			SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
+			InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealth: report.DefaultRealtimeTimeSeriesPolicy(), NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000},
 	}
 }
 
@@ -190,8 +194,8 @@ func (c *Config) applyDefaults() {
 	if c.Observability.DeliverPolicy == "" {
 		c.Observability.DeliverPolicy = observabilityDefaults.DeliverPolicy
 	}
-	if len(c.Observability.EventBusURLs) == 0 {
-		c.Observability.EventBusURLs = observabilityDefaults.EventBusURLs
+	if len(c.EventBus.URLs) == 0 {
+		c.EventBus.URLs = defaults.EventBus.URLs
 	}
 	canaryDefaults := Default().MarketCanary
 	if c.MarketCanary.Freshness == 0 {
@@ -216,17 +220,11 @@ func (c *Config) applyDefaults() {
 	if c.KlineFreshness.InventoryRefreshInterval == 0 {
 		c.KlineFreshness.InventoryRefreshInterval = klineDefaults.InventoryRefreshInterval
 	}
-	if c.KlineFreshness.InventoryPageSize == 0 {
-		c.KlineFreshness.InventoryPageSize = klineDefaults.InventoryPageSize
-	}
 	if c.KlineFreshness.InventoryMaxEntries == 0 {
 		c.KlineFreshness.InventoryMaxEntries = klineDefaults.InventoryMaxEntries
 	}
 	if c.KlineFreshness.MaxSubjectsPerAlert == 0 {
 		c.KlineFreshness.MaxSubjectsPerAlert = klineDefaults.MaxSubjectsPerAlert
-	}
-	if c.Metrics.DatasetHealthPolicyPath == "" {
-		c.Metrics.DatasetHealthPolicyPath = metricsDefaults.DatasetHealthPolicyPath
 	}
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
@@ -247,18 +245,14 @@ func (c *Config) applyEnv() {
 		c.Instance.InstanceID = v
 	}
 	if v := firstEnv("MOOX_OBSERVABILITY_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
-		c.Observability.EventBusURLs = strings.Split(v, ",")
+		c.EventBus.URLs = strings.Split(v, ",")
 	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_CREDENTIAL_FILE")); v != "" {
-		c.Observability.CredentialFile = v
+		c.EventBus.CredentialFile = v
 	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_DELIVER_POLICY")); v != "" {
 		c.Observability.DeliverPolicy = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")); v != "" {
-		c.Metrics.DatasetHealthPolicyPath = v
-	}
-
 }
 
 func (c *Config) Validate() error {
@@ -269,16 +263,19 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("instance.instance_id must not be empty")
 	}
 	if c.Observability.Enabled {
-		if len(c.Observability.EventBusURLs) == 0 {
-			return fmt.Errorf("observability.eventbus_urls must not be empty")
+		if len(c.EventBus.URLs) == 0 {
+			return fmt.Errorf("eventbus.urls must not be empty")
 		}
-		for _, url := range c.Observability.EventBusURLs {
+		for _, url := range c.EventBus.URLs {
 			if strings.TrimSpace(url) == "" {
-				return fmt.Errorf("observability.eventbus_urls must not contain empty values")
+				return fmt.Errorf("eventbus.urls must not contain empty values")
 			}
 		}
 	}
 	if err := c.validateKlineFreshness(); err != nil {
+		return err
+	}
+	if err := c.Metrics.DatasetHealth.Validate(); err != nil {
 		return err
 	}
 	if c.MarketCanary.Enabled {
@@ -348,9 +345,6 @@ func (c *Config) validateKlineFreshness() error {
 	}
 	if kline.InventoryRefreshInterval < 30*time.Second || kline.InventoryRefreshInterval > 10*time.Minute {
 		return fmt.Errorf("kline_freshness.inventory_refresh_interval must be between 30s and 10m")
-	}
-	if kline.InventoryPageSize < 1 || kline.InventoryPageSize > 100 {
-		return fmt.Errorf("kline_freshness.inventory_page_size must be between 1 and 100")
 	}
 	if kline.InventoryMaxEntries < 1 || kline.InventoryMaxEntries > 1000 {
 		return fmt.Errorf("kline_freshness.inventory_max_entries must be between 1 and 1000")

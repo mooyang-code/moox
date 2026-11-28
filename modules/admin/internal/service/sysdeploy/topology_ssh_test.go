@@ -9,6 +9,7 @@ import (
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
@@ -34,9 +35,8 @@ func readHost(t *testing.T, dao *TopologyDAO, hostID string) HostRecord {
 
 func TestSyncWritesLabelSSHColumnsAndEncryptedCredential(t *testing.T) {
 	dao := sshTopologyDAO(t)
-	spec := topologySpecs()[1]
+	spec := withSSH(topologySpecs()[1], 2222, "ubuntu", "private_key", "-----PRIVATE KEY-----", "phrase")
 	spec.Label = "存储机"
-	spec.SSH = &SSHSpec{Port: 2222, User: "ubuntu", PrivateKey: "-----PRIVATE KEY-----", Passphrase: "phrase"}
 	require.NoError(t, syncHost(dao, spec))
 
 	host := readHost(t, dao, "storage")
@@ -58,7 +58,8 @@ func TestSyncWritesLabelSSHColumnsAndEncryptedCredential(t *testing.T) {
 	require.Equal(t, "phrase", credential.Passphrase)
 
 	// 换成密码：整条记录被替换，类型随之改变。
-	spec.SSH = &SSHSpec{Port: 22, User: "ops", Password: "p4ss"}
+	spec = withSSH(topologySpecs()[1], 22, "ops", "password", "p4ss", "")
+	spec.Label = "存储机"
 	require.NoError(t, syncHost(dao, spec))
 	plain, err = secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("storage"))
 	require.NoError(t, err)
@@ -68,13 +69,10 @@ func TestSyncWritesLabelSSHColumnsAndEncryptedCredential(t *testing.T) {
 
 func TestSyncWithoutSSHClearsPortUserAndCredentialButKeepsFingerprint(t *testing.T) {
 	dao := sshTopologyDAO(t)
-	spec := topologySpecs()[1]
-	spec.SSH = &SSHSpec{Port: 22, User: "ubuntu", Password: "p4ss"}
-	require.NoError(t, syncHost(dao, spec))
+	require.NoError(t, syncHost(dao, withSSH(topologySpecs()[1], 22, "ubuntu", "password", "p4ss", "")))
 	require.NoError(t, dao.db.Exec("UPDATE t_hosts SET c_ssh_fingerprint = '198.51.100.7:22 SHA256:abc' WHERE c_host_id = 'storage'").Error)
 
-	spec.SSH = nil
-	require.NoError(t, syncHost(dao, spec))
+	require.NoError(t, syncHost(dao, topologySpecs()[1]))
 	host := readHost(t, dao, "storage")
 	require.Zero(t, host.SSHPort)
 	require.Empty(t, host.SSHUser)
@@ -86,34 +84,39 @@ func TestSyncWithoutSSHClearsPortUserAndCredentialButKeepsFingerprint(t *testing
 func TestSyncRejectsInvalidSSHAndLabel(t *testing.T) {
 	dao := sshTopologyDAO(t)
 	storage := topologySpecs()[1]
-	outbound := HostSpec{HostID: "factor", Address: "192.168.0.103", Reachability: "outbound", Components: []string{"factor-engine"}}
-	for name, spec := range map[string]HostSpec{
-		"outbound with ssh":   {HostID: outbound.HostID, Address: outbound.Address, Reachability: "outbound", Components: outbound.Components, SSH: &SSHSpec{Port: 22, User: "u", Password: "p"}},
-		"no credential":       withSSH(storage, &SSHSpec{Port: 22, User: "u"}),
-		"both credentials":    withSSH(storage, &SSHSpec{Port: 22, User: "u", Password: "p", PrivateKey: "k"}),
-		"passphrase with pwd": withSSH(storage, &SSHSpec{Port: 22, User: "u", Password: "p", Passphrase: "x"}),
-		"bad port":            withSSH(storage, &SSHSpec{Port: 70000, User: "u", Password: "p"}),
-		"no user":             withSSH(storage, &SSHSpec{Port: 22, Password: "p"}),
+	outbound := &pb.SyncTopologyHost{HostId: "factor", Address: "192.168.0.103", Reachability: "outbound", ComponentIds: []string{"factor-engine"}}
+	for name, spec := range map[string]*pb.SyncTopologyHost{
+		"outbound with ssh":   withSSH(outbound, 22, "u", "password", "p", ""),
+		"no credential":       withSSH(storage, 22, "u", "password", "", ""),
+		"unknown auth type":   withSSH(storage, 22, "u", "other", "p", ""),
+		"passphrase with pwd": withSSH(storage, 22, "u", "password", "p", "x"),
+		"bad port":            withSSH(storage, 70000, "u", "password", "p", ""),
+		"no user":             withSSH(storage, 22, "", "password", "p", ""),
 	} {
 		err := syncHost(dao, spec)
 		require.ErrorIs(t, err, ErrInvalidTopology, name)
 	}
-	long := storage
+	long := proto.Clone(storage).(*pb.SyncTopologyHost)
 	long.Label = string(make([]rune, 65))
 	require.ErrorIs(t, syncHost(dao, long), ErrInvalidTopology)
 	require.Zero(t, readHost(t, dao, "storage").SSHPort)
 }
 
-func withSSH(spec HostSpec, ssh *SSHSpec) HostSpec {
-	spec.SSH = ssh
+func withSSH(base *pb.SyncTopologyHost, port int32, user, authType, secret, passphrase string) *pb.SyncTopologyHost {
+	spec := proto.Clone(base).(*pb.SyncTopologyHost)
+	spec.SshPort = port
+	spec.SshUser = user
+	spec.SshAuthType = authType
+	spec.SshSecret = secret
+	spec.SshPassphrase = passphrase
 	return spec
 }
 
 func TestInvalidSSHRollsBackWholeSync(t *testing.T) {
 	dao, ctx := sshTopologyDAO(t), context.Background()
-	valid := withSSH(topologySpecs()[1], &SSHSpec{Port: 22, User: "u", Password: "p"})
-	bad := withSSH(topologySpecs()[2], &SSHSpec{Port: 22, User: "u"})
-	_, err := dao.ReplaceTopology(ctx, []HostSpec{topologySpecs()[0], valid, bad})
+	valid := withSSH(topologySpecs()[1], 22, "u", "password", "p", "")
+	bad := withSSH(topologySpecs()[2], 22, "u", "password", "", "")
+	_, err := dao.ReplaceTopology(ctx, &pb.SyncTopologyReq{Hosts: []*pb.SyncTopologyHost{topologySpecs()[0], valid, bad}})
 	require.ErrorIs(t, err, ErrInvalidTopology)
 	require.Zero(t, readHost(t, dao, "storage").SSHPort, "同一批里有非法 SSH 信息时，整批不写入")
 	_, err = secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("storage"))
@@ -122,9 +125,9 @@ func TestInvalidSSHRollsBackWholeSync(t *testing.T) {
 
 func TestUndeclaredHostLosesSSHCredential(t *testing.T) {
 	dao, ctx := sshTopologyDAO(t), context.Background()
-	spec := withSSH(topologySpecs()[2], &SSHSpec{Port: 22, User: "u", Password: "p"})
+	spec := withSSH(topologySpecs()[2], 22, "u", "password", "p", "")
 	require.NoError(t, syncHost(dao, spec))
-	_, err := dao.ReplaceTopology(ctx, topologySpecs()[:2])
+	_, err := dao.ReplaceTopology(ctx, &pb.SyncTopologyReq{Hosts: topologySpecs()[:2]})
 	require.NoError(t, err)
 	_, err = secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("overseas"))
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
@@ -136,10 +139,10 @@ func TestLazyEncryptionKeyIsNotRequestedWithoutCredentials(t *testing.T) {
 	dao.WithEncryptionKeyFunc(func() (string, error) { calls++; return sshTestKey, nil })
 	require.NoError(t, syncHost(dao, topologySpecs()[1]))
 	require.Zero(t, calls, "没有 SSH 凭据时不取主密钥")
-	require.NoError(t, syncHost(dao, withSSH(topologySpecs()[1], &SSHSpec{Port: 22, User: "u", Password: "p"})))
+	require.NoError(t, syncHost(dao, withSSH(topologySpecs()[1], 22, "u", "password", "p", "")))
 	require.Equal(t, 1, calls)
 	dao.WithEncryptionKeyFunc(func() (string, error) { return "", errors.New("no key") })
-	require.Error(t, syncHost(dao, withSSH(topologySpecs()[1], &SSHSpec{Port: 22, User: "u", Password: "p"})))
+	require.Error(t, syncHost(dao, withSSH(topologySpecs()[1], 22, "u", "password", "p", "")))
 }
 
 type recordingCloser struct{ hosts []string }

@@ -17,7 +17,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	storagerelay "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/relay"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
@@ -69,7 +69,7 @@ func (e *followEnv) CountViewRows(ctx context.Context, datasetID, subject string
 		Page:      &pb.Page{Page: 1, Size: 1}, TotalMode: pb.TotalMode_FORCE_EXACT,
 	}
 	if subject != "" {
-		req.Selectors = []*pb.TimeSeriesSelector{{SpaceId: readyBenchSpace, DatasetId: datasetID, SubjectId: subject, Freq: readyBenchFreq}}
+		req.Selectors = []*pb.TimeSeriesSelector{{SubjectId: subject, Frequency: readyBenchFreq}}
 	}
 	rsp, err := e.view.QueryTimeSeriesRows(ctx, req)
 	if err != nil {
@@ -102,11 +102,8 @@ type followEnvOptions struct {
 	prebuilt bool
 	// rangeReader 包一层 Primary 的时序读取（用来在建索引中途插入写入）；为空时直接用 Primary。
 	rangeReader func(viewservice.TimeSeriesRangeReader) viewservice.TimeSeriesRangeReader
-	// snapshot 为空时用内存快照登记数据集；e2e 用 SQLite 元数据时传入它的快照。
-	snapshot func() metadata.RequestSnapshot
-	// datasetExists 为空时按内存快照判断。
-	datasetExists func(spaceID, datasetID string) bool
-	validator     primarystore.Validator
+	// datasets 为空时用内存缓存登记数据集；e2e 用 SQLite 元数据时传入它的缓存。
+	datasets *metacache.DatasetCache
 	// setup 在 Primary 建好之后、View 启动之前调用（e2e 在这里经 Metadata 服务建数据集）。
 	setup func(store *pebble.Store)
 }
@@ -151,28 +148,20 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 	env.watcher = newReadyWatcher(t, nc)
 
 	// Primary：Pebble 与 PrimaryStore，写入时按数据集点查确认它仍在；转发协程照常转发周期完成事件。
-	snapshot := newFollowEnvSnapshot(datasets)
-	datasetExists := opts.datasetExists
-	if datasetExists == nil {
-		datasetExists = func(spaceID, datasetID string) bool {
-			_, ok := snapshot.GetDataset(spaceID, datasetID)
-			return ok
-		}
+	datasetsCache := opts.datasets
+	if datasetsCache == nil {
+		datasetsCache = newFollowEnvDatasetCache(t, datasets)
 	}
 	env.store, err = pebble.Open(pebble.Options{
 		Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: followEnvMaxBytes,
 		PeriodNow:     func() time.Time { return time.Unix(0, env.clock.Load()).UTC() },
-		DatasetExists: datasetExists,
+		DatasetExists: datasetsCache.HasDataset,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = env.store.Close() })
-	snapshotFunc := opts.snapshot
-	if snapshotFunc == nil {
-		snapshotFunc = func() metadata.RequestSnapshot { return snapshot }
-	}
-	env.primary, err = primarystore.New(primarystore.Options{Store: env.store, Snapshot: snapshotFunc, Validator: opts.validator})
+	env.primary, err = primarystore.New(primarystore.Options{Store: env.store, Datasets: datasetsCache})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,42 +301,23 @@ func prebuildFollowEnvIndex(t *testing.T, ctx context.Context, root string, stor
 	}
 }
 
-// followEnvSnapshot 是 PrimaryStore 的请求快照：周期提交与完成标记要求数据集在快照里、是时序数据且已启用。
-type followEnvSnapshot struct {
-	datasets map[string]*pb.Dataset
-	columns  map[string][]*pb.DatasetColumn
-}
-
-func newFollowEnvSnapshot(datasets []readyBenchDataset) *followEnvSnapshot {
-	snapshot := &followEnvSnapshot{datasets: make(map[string]*pb.Dataset), columns: make(map[string][]*pb.DatasetColumn)}
+// newFollowEnvDatasetCache 为 PrimaryStore 构造压测/集成用的内存数据集缓存。
+func newFollowEnvDatasetCache(t *testing.T, datasets []readyBenchDataset) *metacache.DatasetCache {
+	t.Helper()
+	dsList := make([]*pb.Dataset, 0, len(datasets))
+	var colList []*pb.DatasetColumn
 	for _, dataset := range datasets {
-		snapshot.datasets[dataset.datasetID] = followEnvDataset(dataset)
-		snapshot.columns[dataset.datasetID] = followEnvColumns(dataset)
+		dsList = append(dsList, followEnvDataset(dataset))
+		colList = append(colList, followEnvColumns(dataset)...)
 	}
-	return snapshot
-}
-
-func (s *followEnvSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
-	if spaceID != readyBenchSpace {
-		return nil, false
-	}
-	dataset, ok := s.datasets[datasetID]
-	return dataset, ok
-}
-
-func (s *followEnvSnapshot) ListDatasetColumns(spaceID, datasetID string, _ *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	if spaceID != readyBenchSpace {
-		return nil, &pb.PageResult{}, nil
-	}
-	columns := s.columns[datasetID]
-	return columns, &pb.PageResult{Total: uint32(len(columns))}, nil
+	return newTestDatasetCache(t, dsList, colList)
 }
 
 // followEnvDataset 是压测数据集的元数据。
 func followEnvDataset(dataset readyBenchDataset) *pb.Dataset {
 	return &pb.Dataset{
 		SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Name: dataset.datasetID,
-		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: readyBenchFreq, Status: "active",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Frequency: readyBenchFreq, Status: "active",
 		AllowedLatenessSeconds: uint32(readyBenchLatenessSeconds), CreatedAt: followEnvDatasetCreatedAt,
 	}
 }

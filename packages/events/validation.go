@@ -9,8 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/storagepb"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -72,7 +70,7 @@ func validateObservabilityLogReported(message *eventpb.EventMessage, value proto
 }
 
 func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.DatasetPeriodCompleted)
+	payload, ok := value.(*eventpb.DatasetPeriodCompleted)
 	if !ok {
 		return fmt.Errorf("dataset period completed payload has type %T", value)
 	}
@@ -116,7 +114,7 @@ func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.M
 }
 
 func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.ViewDataReady)
+	payload, ok := value.(*eventpb.ViewDataReady)
 	if !ok {
 		return fmt.Errorf("view data ready payload has type %T", value)
 	}
@@ -150,7 +148,7 @@ func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) e
 }
 
 func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.CollectorKlineBackfilled)
+	payload, ok := value.(*eventpb.CollectorKlineBackfilled)
 	if !ok {
 		return fmt.Errorf("collector kline backfilled payload has type %T", value)
 	}
@@ -240,7 +238,7 @@ const maxGrossTargetWeight = 20
 var decimalTargetWeightPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
 func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	payload, ok := value.(*eventpb.LogicalAccountTargetWeightRequested)
 	if !ok {
 		return fmt.Errorf("trade target weight payload has type %T", value)
 	}
