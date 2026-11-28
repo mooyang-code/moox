@@ -52,7 +52,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
@@ -85,6 +85,7 @@ const options = computed(() =>
 );
 
 watch(visible, () => scope.invalidate());
+onBeforeUnmount(() => scope.invalidate());
 
 function open(account: TradingAccount) {
   joining.value = account;

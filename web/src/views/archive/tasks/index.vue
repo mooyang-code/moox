@@ -81,7 +81,7 @@
 
 <script setup lang="ts">
 import { reportError } from "@/api/http";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -191,23 +191,14 @@ function retryMain() {
   if (!workerHost.value) void loadWorkerHost();
 }
 
-watch(
-  spaceId,
-  (next, previous) => {
-    // 切空间：清掉 URL 里属于旧空间的参数；第一次拿到空间（previous 为空）时保留深链接
-    if (previous && next !== previous) void router.replace({ query: {} });
-    overview.value = null;
-    tasks.value = [];
-    datasets.value = [];
-    mainLoaded.value = false;
-    mainError.value = "";
-    lastOkAt.value = null;
-    busy.value = {};
-    void loadMain();
-    void loadDatasets();
-  },
-  { immediate: true }
-);
+onMounted(() => {
+  void loadMain();
+  void loadDatasets();
+});
+onBeforeUnmount(() => {
+  mainGate.invalidate();
+  datasetGate.invalidate();
+});
 
 const taskIds = computed(() => tasks.value.map(task => task.dataset_id || ""));
 // worker 报告启用了对象存储时才显示远端副本的列

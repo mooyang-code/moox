@@ -5,11 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 
 const ctx = vi.hoisted(() => ({
   route: null as unknown as { query: Record<string, string> },
-  replace: vi.fn(),
-  space: null as unknown as { selectedSpaceId: string }
+  replace: vi.fn()
 }));
 vi.mock("vue-router", () => ({ useRoute: () => ctx.route, useRouter: () => ({ replace: ctx.replace }) }));
-vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ctx.space }));
 // 页签内容和这里无关，换成空组件
 const stub = vi.hoisted(() => (name: string) => ({ default: { name, render: () => name } }));
 vi.mock("@/views/collector/collection-tasks/collection-tasks.vue", () => stub("tasks"));
@@ -20,7 +18,6 @@ import TaskManagement from "./index.vue";
 
 function setup(query: Record<string, string>) {
   ctx.route = reactive({ query });
-  ctx.space = reactive({ selectedSpaceId: "crypto" });
   ctx.replace.mockReset().mockImplementation(({ query: next }: { query: Record<string, string> }) => {
     ctx.route.query = next;
     return Promise.resolve();
@@ -35,13 +32,6 @@ describe("采集运行的页签容器", () => {
     expect(ctx.route.query).toEqual({ keyword: "btc", page: "2", detail: "t1", tab: "results" });
     (wrapper.vm as unknown as { onTabChange(value: string): void }).onTabChange("tasks");
     expect(ctx.route.query).toEqual({ keyword: "btc", page: "2", detail: "t1" });
-  });
-
-  it("切空间时清掉各页签属于旧空间的参数，只保留当前页签", async () => {
-    setup({ tab: "results", resultTask: "r1", keyword: "btc", job: "j1" });
-    ctx.space.selectedSpaceId = "stockcn";
-    await flushPromises();
-    expect(ctx.route.query).toEqual({ tab: "results" });
   });
 
   it("从菜单进来（地址没有参数）默认看采集结果，首次渲染就不挂载采集任务页签；带参数的链接照原样打开", async () => {

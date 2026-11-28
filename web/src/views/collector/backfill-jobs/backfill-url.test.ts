@@ -24,7 +24,6 @@ vi.mock("@/store/modules/space", async () => {
     useSpaceStore: defineStore("space-test", () => ({ selectedSpaceId: ref("crypto"), selectedSpace: ref({ timezone: "UTC" }) }))
   };
 });
-import { useSpaceStore } from "@/store/modules/space";
 import BackfillJobs from "./index.vue";
 
 Object.defineProperty(window, "matchMedia", {
@@ -38,7 +37,7 @@ const Other = defineComponent({ setup: () => () => h("div") });
 const Host = defineComponent({ setup: () => () => h(KeepAlive, null, [show.value ? h(BackfillJobs) : h(Other)]) });
 
 describe("补采页的 URL 状态", () => {
-  it("URL 带 segment、dataset 时按它筛选，URL 变了跟着变；切空间后筛选回到默认", async () => {
+  it("URL 带 segment、dataset 时按它筛选，URL 变了跟着变", async () => {
     ctx.route = reactive({ query: { tab: "backfills", segment: "manual", dataset: "ds_1m" } });
     ctx.replace.mockReset();
     const wrapper = mount(Host, { global: { plugins: [ArcoVue], stubs: { KlineRangeDialog: true } } });
@@ -59,10 +58,6 @@ describe("补采页的 URL 状态", () => {
     show.value = true;
     await flushPromises();
     expect(api.listKlineBackfills).toHaveBeenLastCalledWith("crypto", { source: "manual" }, 1, 20);
-
-    useSpaceStore().selectedSpaceId = "stockcn";
-    await flushPromises();
-    expect(api.listKlineBackfills).toHaveBeenLastCalledWith("stockcn", { attention: true }, 1, 20);
     wrapper.unmount();
   });
 });

@@ -74,7 +74,15 @@
 
 <script setup lang="ts">
 import { inject, ref, watch } from "vue";
-import { OrderSide, OrderType, canCancelOrderState, listFills, orderOwnerLabels, orderReasonText, orderStateLabels } from "@/api/trade";
+import {
+  OrderSide,
+  OrderType,
+  canCancelOrderState,
+  listFills,
+  orderOwnerLabels,
+  orderReasonText,
+  orderStateLabels
+} from "@/api/trade";
 import type { Fill, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtQty } from "../shared/format";

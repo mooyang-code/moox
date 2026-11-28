@@ -101,9 +101,7 @@ import { addFactorToTask, listFactorCategories, listFactors } from "@/api/factor
 import { readAllPages } from "@/api/read-all-pages";
 import type { FactorCategory, FactorDef, FactorParamDecl, FactorTaskInfo, MemberKind } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
-import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { factorTaskRecalcHref } from "@/router/links";
-import { useSpaceStore } from "@/store/modules/space";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { precheckAddFactor, type PrecheckMember, type PrecheckResult } from "./add-factor-precheck";
 
@@ -270,16 +268,10 @@ function noteClass(row: CandidateRow) {
 }
 
 /** 逐个提交；预检只是提示，失败按行展示后端给出的原因。 */
-const spaceStore = useSpaceStore();
-
 async function submit() {
   const { task_id: taskId } = props.info.factor_task;
-  // 批量添加固定发起空间与代次：每一项请求都按当前空间头发出，空间切换后继续提交会把旧任务的因子写到新空间
-  const submitSpaceId = spaceStore.selectedSpaceId;
-  const submitGeneration = selectedSpaceGeneration();
   const submission = addScope.begin();
-  const stale = () =>
-    !submission.isCurrent() || spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
+  const stale = () => !submission.isCurrent();
   submitting.value = true;
   errors.value = {};
   const done: string[] = [];

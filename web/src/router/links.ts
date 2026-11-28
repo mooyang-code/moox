@@ -101,10 +101,7 @@ export function strategyInstanceDetailLink(instanceId: string): NamedRouteLink {
 }
 
 /** 交易账户列表页（按环境菜单）。 */
-export function tradingAccountsPath(
-  env: "paper" | "testnet" | "live",
-  options: { list?: "execution" } = {}
-): string {
+export function tradingAccountsPath(env: "paper" | "testnet" | "live", options: { list?: "execution" } = {}): string {
   return withQuery(`/trading/${env}`, { list: options.list });
 }
 

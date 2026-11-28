@@ -1,4 +1,4 @@
-import { computed, inject, provide, ref, type InjectionKey } from "vue";
+import { computed, inject, onBeforeUnmount, provide, ref, type InjectionKey } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
 import { GetDataTypeConfigs, GetTaskList, type DataTypeConfig } from "@/api/collector";
@@ -66,10 +66,10 @@ function createCollectionCatalog() {
     try {
       const allTags = await readAllPages(async page => {
         const response = await listTags(spaceID, { page, size: 500 });
-        if (token !== tagListRequestToken || spaceID !== selectedSpaceId.value) return { items: [], hasMore: false };
+        if (token !== tagListRequestToken) return { items: [], hasMore: false };
         return { items: response.tags || [], hasMore: Boolean(response.page_result?.has_more) };
       });
-      if (token !== tagListRequestToken || spaceID !== selectedSpaceId.value) return;
+      if (token !== tagListRequestToken) return;
       tags.value = allTags;
     } catch (error) {
       if (token === tagListRequestToken) {
@@ -93,11 +93,10 @@ function createCollectionCatalog() {
     try {
       const all = await readAllPages(async page => {
         const response = await GetTaskList({ space_id: spaceId, page: { page, size: 200 } });
-        // 整次分页固定发起空间：切换空间或有更新的请求后，旧响应整体丢弃
-        if (token !== sourceListRequestToken || spaceId !== selectedSpaceId.value) return { items: [], hasMore: false };
+        if (token !== sourceListRequestToken) return { items: [], hasMore: false };
         return { items: (response.tasks || []).map(normalizeCollectionTask), hasMore: Boolean(response.page_result?.has_more) };
       });
-      if (token !== sourceListRequestToken || spaceId !== selectedSpaceId.value) return;
+      if (token !== sourceListRequestToken) return;
       sourceTasks.value = all.filter(task => task.data_type === "kline" || task.data_type === "kline_resample");
     } catch (error) {
       if (token !== sourceListRequestToken) return;
@@ -136,12 +135,10 @@ function createCollectionCatalog() {
     }
   }
 
-  /** 切换空间：作废在途的标签与源任务请求，清掉旧空间的数据。 */
-  function resetForSpace() {
+  onBeforeUnmount(() => {
     tagListRequestToken += 1;
     sourceListRequestToken += 1;
-    sourceTasks.value = [];
-  }
+  });
 
   function dataTypeLabel(value?: string) {
     return dataTypeConfigs.value.find(config => config.data_type === value)?.type_name || value || "-";
@@ -203,7 +200,6 @@ function createCollectionCatalog() {
     loadSourceTasks,
     loadDataTypeDetail,
     ensureOutputFieldCatalog,
-    resetForSpace,
     dataTypeLabel,
     taskTagSummary,
     taskRouteSummary,

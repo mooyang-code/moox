@@ -29,7 +29,10 @@ describe("账户列表模型", () => {
     const accounts = accountMapOf([
       account("a"),
       account("b", { exchange: "okx" }),
-      account("t", { execution_mode: ExecutionMode.LIVE, live: { environment: AccountEnvironment.TESTNET, credential_secret_id: "s" } })
+      account("t", {
+        execution_mode: ExecutionMode.LIVE,
+        live: { environment: AccountEnvironment.TESTNET, credential_secret_id: "s" }
+      })
     ]);
     const logicals = [
       logical("p", ["a", "b"], { total_equity: "150" }),

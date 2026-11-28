@@ -269,7 +269,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
 import { call } from "@/api/http";
@@ -500,7 +500,7 @@ async function loadSpaceScoped() {
   const token = spaceLoadGate.begin();
   const spaceId = selectedSpaceId.value;
   if (!spaceId) return;
-  const isCurrent = () => token.isLatest() && selectedSpaceId.value === spaceId;
+  const isCurrent = () => token.isLatest();
   const page = { page: 1, size: 1 };
   await Promise.allSettled([
     listAllDatasets(spaceId).then(datasets => {
@@ -544,7 +544,7 @@ async function loadLive() {
   const token = liveLoadGate.begin();
   const spaceId = selectedSpaceId.value;
   if (!spaceId) return;
-  const isCurrent = () => token.isLatest() && selectedSpaceId.value === spaceId;
+  const isCurrent = () => token.isLatest();
   await Promise.allSettled([
     // 不带空间：首页的健康结论要和监控页一致，别的空间断了数据也要看得到
     // 首页每路读取的失败都写在页面上，后台读取一律不弹全局提示
@@ -630,34 +630,16 @@ async function manualRefresh() {
   }
 }
 
-function resetSpace() {
-  Object.keys(counts).forEach(key => (counts[key] = null));
-  names.datasets = {};
-  overview.value = undefined;
-  monitorError.value = "";
-  factorTasks.value = [];
-  factorLoaded.value = false;
-  instances.value = [];
-  targets.value = {};
-  strategyLoaded.value = false;
-  activityItems.value = [];
-  activityLoaded.value = false;
-  seedsBySpace.value = {};
-  Object.assign(liveErrors, { factor: "", strategy: "", activity: "" });
-  updatedAt.value = "";
-  strategyIndex.value = 0;
-}
-
 usePolling(loadLive, 30_000, () => Boolean(selectedSpaceId.value));
-watch(
-  selectedSpaceId,
-  () => {
-    resetSpace();
-    void loadSpaceScoped();
-    void loadLive();
-  },
-  { immediate: true }
-);
+onMounted(() => {
+  if (!selectedSpaceId.value) return;
+  void loadSpaceScoped();
+  void loadLive();
+});
+onBeforeUnmount(() => {
+  spaceLoadGate.invalidate();
+  liveLoadGate.invalidate();
+});
 </script>
 
 <style lang="scss" scoped>

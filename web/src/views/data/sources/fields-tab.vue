@@ -290,7 +290,7 @@ async function load() {
 
   try {
     const [specResult, datasetsResult] = await Promise.allSettled([GetDataTypeConfigs(), listAllDatasets(spaceId)]);
-    if (!request.isLatest() || spaceId !== props.spaceId.trim()) return;
+    if (!request.isLatest()) return;
 
     const specFailed = specResult.status === "rejected";
     const datasetsFailed = datasetsResult.status === "rejected";
@@ -305,7 +305,7 @@ async function load() {
         dataset,
         columns: await listAllDatasetColumns(spaceId, dataset.dataset_id)
       }));
-      if (!request.isLatest() || spaceId !== props.spaceId.trim()) return;
+      if (!request.isLatest()) return;
 
       for (const item of columnResults) {
         if (item.status === "fulfilled") bundles.push(item.value);
@@ -365,33 +365,6 @@ watch(
     applyQueryFromRoute(query);
     reconcileGroupFilter();
   }
-);
-
-watch(
-  () => props.spaceId,
-  next => {
-    clearSearchTimer();
-    detailField.value = null;
-    mobileGroupVisible.value = false;
-    // keep-alive 失活期间切空间：只标记需重拉，保留激活时由 URL 带入的筛选参数（例如从附加字段来源跳入）。
-    if (!isActive) {
-      requestedSpaceId = "";
-      allItems.value = [];
-      loadWarning.value = "";
-      return;
-    }
-    Object.assign(filter, fieldTabQueryFromRoute({}));
-    searchKeyword.value = "";
-    pagination.current = 1;
-    if (next.trim()) {
-      void load();
-    } else {
-      requestedSpaceId = "";
-      allItems.value = [];
-      loadWarning.value = "";
-    }
-  },
-  { flush: "sync" }
 );
 
 onMounted(() => {

@@ -54,4 +54,38 @@ describe("菜单由路由表生成", () => {
       expect(detail?.path).toBe(`${environmentMenus[env].path}/:logical_account_id`);
     }
   });
+
+  it("所有叶子路由都声明空间归属；带对象参数的空间内详情页声明切空间回退路径", () => {
+    const all = flatRoutes();
+    const paths = new Set(all.map(route => route.path));
+    const leaves = all.filter(route => !route.children?.length);
+
+    for (const route of leaves) {
+      expect(["global", "space"], `${route.name} 的 meta.scope`).toContain(route.meta.scope);
+      if (route.meta.scope === "space" && route.path.includes(":")) {
+        expect(typeof route.meta.spaceRedirect, `${route.name} 缺少 spaceRedirect`).toBe("string");
+        expect(paths.has(String(route.meta.spaceRedirect)), `${route.name} 的 spaceRedirect 不存在`).toBe(true);
+      }
+    }
+
+    const globalNames = leaves
+      .filter(route => route.meta.scope === "global")
+      .map(route => route.name)
+      .sort();
+    expect(globalNames).toEqual([
+      "factor-definition-edit",
+      "factor-definition-new",
+      "factor-definitions",
+      "ops-deployments",
+      "ops-hosts",
+      "ops-logs",
+      "ops-monitor",
+      "settings-secrets",
+      "settings-spaces",
+      "strategy-definition-edit",
+      "strategy-definition-new",
+      "strategy-definitions",
+      "trading-blocked"
+    ]);
+  });
 });

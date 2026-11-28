@@ -123,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { GetDataTypeConfigs } from "@/api/collector";
 import { reportError } from "@/api/http";
@@ -277,16 +277,6 @@ function onPageSizeChange(pageSize: number) {
   void load();
 }
 
-watch(
-  () => props.spaceId,
-  () => {
-    loadRequests.invalidate();
-    pagination.current = 1;
-    void load();
-    void loadExtraFieldSources();
-  }
-);
-
 onMounted(() => {
   void load();
   void loadExtraFieldSources();
@@ -295,6 +285,10 @@ onMounted(() => {
 const sourceScope = createSubmitScope();
 watch(visible, open => {
   if (open) sourceScope.invalidate();
+});
+onBeforeUnmount(() => {
+  loadRequests.invalidate();
+  sourceScope.invalidate();
 });
 
 defineExpose({ openCreate, visible, form });

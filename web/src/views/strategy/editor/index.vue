@@ -352,7 +352,7 @@ watch(
 );
 
 // 保存作用域：页面卸载或切换策略定义都会使进行中的保存失效，迟到的响应不能再导航
-const saveScope = createSubmitScope({ global: true });
+const saveScope = createSubmitScope();
 onBeforeUnmount(() => {
   saveScope.invalidate();
   if (validateTimer) clearTimeout(validateTimer);

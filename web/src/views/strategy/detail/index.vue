@@ -38,7 +38,7 @@
             size="small"
             @click="
               logicalAccount?.logical_account_id &&
-                router.push({ path: tradingAccountDetailPath(logicalAccount.logical_account_id) })
+              router.push({ path: tradingAccountDetailPath(logicalAccount.logical_account_id) })
             "
             >去恢复</a-button
           >
@@ -121,7 +121,7 @@
 import { goBackOr } from "@/utils/navigate-back";
 import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import InstanceResults from "@/views/strategy/components/strategy-instance-results.vue";
@@ -226,13 +226,6 @@ function openReplay() {
     router.push(replayLink({ instanceId: detail.instance.instance_id, factorTasks: detail.instance.factor_tasks }));
 }
 onMounted(start);
-watch(
-  () => spaceStore.selectedSpaceId,
-  (next, previous) => {
-    if (!next || next === previous) return;
-    if (!leaveIfOtherSpace() && !previous) void load();
-  }
-);
 </script>
 
 <style scoped>

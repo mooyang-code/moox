@@ -605,7 +605,7 @@ async function loadStatus(background = false) {
   if (!background) statusLoading.value = true;
   try {
     const data = await getCollectorStatus(spaceId);
-    if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
+    if (!request.isLatest()) return;
     status.value = data;
     loaded.value = true;
     loadError.value = "";
@@ -672,16 +672,8 @@ async function onClearAbsences(record: CollectorDatasetStatus) {
 // 筛选变化时回到第一页，避免停在超出结果页数的空页。
 watch(functionFilters, () => (functionPage.value = 1), { deep: true });
 
-watch(selectedSpaceId, () => {
-  guard.invalidate();
-  status.value = {};
-  loaded.value = false;
-  loadError.value = "";
-  expandedKeys.value = [];
-  functionFilters.value = { keyword: "", region: "", market: "", abnormalOnly: false };
-  void loadStatus();
-});
 onMounted(loadStatus);
+onBeforeUnmount(() => guard.invalidate());
 </script>
 
 <style scoped>

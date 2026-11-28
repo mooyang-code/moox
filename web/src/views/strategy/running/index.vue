@@ -137,7 +137,7 @@
 <script setup lang="ts">
 import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { listLogicalAccounts } from "@/api/trade";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getCollectorStatus, type HistorySeed } from "@/api/collector/runtime-status";
 import type { StrategyInstance } from "@/api/strategy-types";
@@ -179,6 +179,7 @@ const instanceList = useInstanceList();
 const spaceStore = useSpaceStore();
 const logicalNames = ref<Record<string, string>>({});
 let logicalNamesRequestId = 0;
+let unmounted = false;
 async function loadLogicalNames() {
   const spaceId = spaceStore.selectedSpaceId;
   const requestId = ++logicalNamesRequestId;
@@ -188,7 +189,7 @@ async function loadLogicalNames() {
   }
   try {
     const response = await listLogicalAccounts({ page: 1, size: 500 });
-    if (requestId !== logicalNamesRequestId || spaceId !== spaceStore.selectedSpaceId) return;
+    if (requestId !== logicalNamesRequestId) return;
     logicalNames.value = Object.fromEntries((response.logical_accounts || []).map(item => [item.logical_account_id, item.name]));
   } catch {
     // 组合名称只用于表格模式列展示，读取失败时回退为“交易模式”，不影响实例列表。
@@ -223,9 +224,9 @@ async function loadHistorySeeds() {
   if (!spaceId) return;
   try {
     const rsp = await getCollectorStatus(spaceId);
-    if (spaceId === spaceStore.selectedSpaceId) historySeeds.value = rsp.history_seeds || [];
+    if (!unmounted) historySeeds.value = rsp.history_seeds || [];
   } catch {
-    if (spaceId === spaceStore.selectedSpaceId) historySeeds.value = [];
+    if (!unmounted) historySeeds.value = [];
   }
 }
 async function refresh(background = false) {
@@ -341,33 +342,10 @@ onMounted(() => {
   instanceList.clearInstances();
   if (spaceStore.selectedSpaceId) void Promise.all([refresh(), loadCatalog(), loadLogicalNames()]);
 });
-// 空间切换的代次：快速连续切换时，较早的切换流程在等待导航之后发现自己已过期就退出，由最新一次负责读取。
-let spaceGeneration = 0;
-// 空间初始化（无 → 有）只是首次加载，不能清掉深链接参数；真正的 A → B 切换才清空旧空间的实例与选中对象。
-watch(
-  () => spaceStore.selectedSpaceId,
-  async (next, previous) => {
-    if (!next) {
-      spaceGeneration += 1;
-      instanceList.clearInstances();
-      logicalNamesRequestId += 1;
-      logicalNames.value = {};
-      return;
-    }
-    const generation = ++spaceGeneration;
-    if (previous) {
-      instanceList.clearInstances();
-      logicalNamesRequestId += 1;
-      logicalNames.value = {};
-      // 先记下新条件对应的键再改 URL：路由监听据此跳过重复读取，且显式读取用的是已更新的页码。
-      const cleared = { ...state.value, page: 1, create: false };
-      loadedKey = listKey(cleared);
-      await go(cleared);
-      if (generation !== spaceGeneration) return;
-    }
-    void Promise.all([refresh(), loadCatalog(), loadLogicalNames()]);
-  }
-);
+onBeforeUnmount(() => {
+  unmounted = true;
+  logicalNamesRequestId += 1;
+});
 // URL 变化（查询、翻页、前进后退）：同步草稿；只有列表条件变了才重新读取，打开抽屉不触发读取。
 watch(
   () => listKey(state.value),

@@ -436,16 +436,19 @@ describe("strategy replay page", () => {
     expect(wrapper.text()).not.toContain("周期记录加载失败");
   });
 
-  it("drops errors of the previous space when the space changes", async () => {
+  it("starts with clean error state when remounted for another space", async () => {
     api.listFactorTasks.mockRejectedValueOnce(new Error("网络错误"));
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
-    const wrapper = mountPage();
+    const first = mountPage();
     await flushPromises();
-    expect(wrapper.text()).toContain("计算任务列表加载失败：网络错误");
+    expect(first.text()).toContain("计算任务列表加载失败：网络错误");
+    first.unmount();
+
     api.space!.selectedSpaceId = "stock";
-    await nextTick();
+    const second = mountPage();
     await flushPromises();
-    expect(wrapper.text()).not.toContain("计算任务列表加载失败");
+    expect(second.text()).not.toContain("计算任务列表加载失败");
+    second.unmount();
   });
 
   it("starts a replay from an unsaved DSL draft", async () => {
@@ -841,30 +844,35 @@ describe("strategy replay page", () => {
     expect(calls.some(call => !call[1]?.brief)).toBe(true);
   });
 
-  it("drops the previous space state when the space changes", async () => {
+  it("drops in-flight poll and cancel requests on unmount and loads fresh state on remount", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     api.cancelReplay.mockReset();
-    const wrapper = mountPage();
+    const first = mountPage();
     await flushPromises();
     const pendingPoll = deferred<unknown>();
     api.listReplays.mockImplementationOnce(() => pendingPoll.promise);
     await vi.advanceTimersByTimeAsync(5000);
     const pendingCancel = deferred<unknown>();
     api.cancelReplay.mockImplementationOnce(() => pendingCancel.promise);
-    await wrapper.find(".cancel-replay").trigger("click");
+    await first.find(".cancel-replay").trigger("click");
+    first.unmount();
+
+    // 模拟主视图切空间：先清空旧空间的 URL 参数，再按新空间重建页面。
+    nav.route.query = { tab: "replay" };
     const nextList = deferred<unknown>();
     api.listReplays.mockImplementationOnce(() => nextList.promise);
     api.space!.selectedSpaceId = "stock";
+    const second = mountPage();
     await nextTick();
     // 新空间的列表返回之前不显示旧空间的回放。
-    expect(listText(wrapper)).toBe("");
-    // 旧空间的轮询失败不计数，取消返回也不再动新空间的状态。
+    expect(listText(second)).toBe("");
+    // 旧实例的轮询失败不计数，取消返回也不再动新实例的状态。
     pendingPoll.reject(new Error("断网"));
     pendingCancel.resolve({});
     await flushPromises();
-    expect((wrapper.vm as any).pollFailures).toBe(0);
-    expect((wrapper.vm as any).awaitingMetrics).toBeNull();
+    expect((second.vm as any).pollFailures).toBe(0);
+    expect((second.vm as any).awaitingMetrics).toBeNull();
     nextList.resolve({
       items: [
         replay("s1", "succeeded", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })
@@ -875,8 +883,9 @@ describe("strategy replay page", () => {
       replay("s1", "succeeded", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })
     );
     await flushPromises();
-    expect(listText(wrapper)).toContain("ftask_stock");
+    expect(listText(second)).toContain("ftask_stock");
     expect(api.getReplay.mock.calls.at(-1)?.[0]).toBe("s1");
+    second.unmount();
   });
 
   it("waits after its own cancel even when the browser clock is far ahead", async () => {
@@ -969,7 +978,7 @@ describe("strategy replay page", () => {
     expect((wrapper.vm as any).tablePage).toBe(3);
   });
 
-  it("reports a failed cancel once and not after a space switch", async () => {
+  it("reports a failed cancel once and not after unmount", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     const wrapper = mountPage();
@@ -984,9 +993,7 @@ describe("strategy replay page", () => {
     const pending = deferred<unknown>();
     api.cancelReplay.mockImplementationOnce(() => pending.promise);
     await wrapper.find(".cancel-replay").trigger("click");
-    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
-    api.space!.selectedSpaceId = "stock";
-    await nextTick();
+    wrapper.unmount();
     pending.reject(new Error("旧空间的取消失败"));
     await flushPromises();
     expect(api.reportError).toHaveBeenCalledTimes(1);
@@ -1021,30 +1028,38 @@ describe("strategy replay page", () => {
     await flushPromises();
   });
 
-  it("reloads the definition list when the space switches and clears its previous error", async () => {
+  it("reloads the definition list on remount and clears its previous error", async () => {
     api.loadAllStrategies.mockRejectedValueOnce(new Error("定义服务不可用"));
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
-    const wrapper = mountPage();
+    const first = mountPage();
     await flushPromises();
-    expect(wrapper.text()).toContain("策略定义加载失败：定义服务不可用");
+    expect(first.text()).toContain("策略定义加载失败：定义服务不可用");
     const before = api.loadAllStrategies.mock.calls.length;
+    first.unmount();
+
     api.space!.selectedSpaceId = "stock";
-    await nextTick();
+    const second = mountPage();
     await flushPromises();
     expect(api.loadAllStrategies.mock.calls.length).toBe(before + 1);
-    expect(wrapper.text()).not.toContain("策略定义加载失败");
+    expect(second.text()).not.toContain("策略定义加载失败");
+    second.unmount();
   });
 
-  it("waits for the selected space before loading definitions", async () => {
+  it("skips space-scoped loads when selectedSpaceId is empty and loads once mounted with a space", async () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     api.space!.selectedSpaceId = "";
-    mountPage();
+    const empty = mountPage();
     await flushPromises();
     expect(api.loadAllStrategies).not.toHaveBeenCalled();
+    expect(api.listReplays).not.toHaveBeenCalled();
+    empty.unmount();
+
     api.space!.selectedSpaceId = "crypto";
-    await nextTick();
+    const ready = mountPage();
     await flushPromises();
     expect(api.loadAllStrategies).toHaveBeenCalledTimes(1);
+    expect(api.listReplays).toHaveBeenCalledTimes(1);
+    ready.unmount();
   });
 
   it("does not show the table mask while polling", async () => {
@@ -1074,21 +1089,24 @@ describe("strategy replay page", () => {
     await flushPromises();
   });
 
-  it("stops waiting for partial metrics when the space changes", async () => {
+  it("stops waiting for partial metrics when remounted for another space", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     api.cancelReplay.mockResolvedValue({});
-    const wrapper = mountPage();
+    const first = mountPage();
     await flushPromises();
     api.getReplay.mockResolvedValue(justCancelled("r1"));
-    await wrapper.find(".cancel-replay").trigger("click");
+    await first.find(".cancel-replay").trigger("click");
     await flushPromises();
-    expect((wrapper.vm as any).awaitingMetrics).not.toBeNull();
+    expect((first.vm as any).awaitingMetrics).not.toBeNull();
+    first.unmount();
+
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     api.space!.selectedSpaceId = "stock";
-    await nextTick();
+    const second = mountPage();
     await flushPromises();
-    expect((wrapper.vm as any).awaitingMetrics).toBeNull();
+    expect((second.vm as any).awaitingMetrics).toBeNull();
+    second.unmount();
   });
 
   it("keeps the table mask until the latest manual table load finishes", async () => {
@@ -1663,22 +1681,20 @@ describe("strategy replay page URL state and create drawer", () => {
     expect(wrapper.find(".drawer").attributes("data-visible")).toBe("false");
   });
 
-  it("keeps a deep link when the space initializes but clears the context on a real switch", async () => {
+  it("restores a deep link once mounted with a selected space", async () => {
     api.space.selectedSpaceId = "";
     nav.route.query = { tab: "replay", replay_id: "r9", page: "2" };
-    mountPage();
+    const empty = mountPage();
     await flushPromises();
-    api.getReplay.mockClear();
+    expect(api.getReplay).not.toHaveBeenCalled();
+    empty.unmount();
+
     api.space.selectedSpaceId = "crypto";
-    await nextTick();
+    const ready = mountPage();
     await flushPromises();
     expect(api.getReplay.mock.calls.map(call => call[0])).toEqual(["r9"]);
     expect(nav.route.query).toMatchObject({ replay_id: "r9", page: "2" });
-    api.space.selectedSpaceId = "hk";
-    await nextTick();
-    await flushPromises();
-    expect(nav.route.query.replay_id).not.toBe("r9");
-    expect(nav.route.query.page).toBeUndefined();
+    ready.unmount();
   });
 
   it("shows list errors beside the list with a retry", async () => {
@@ -1688,20 +1704,6 @@ describe("strategy replay page URL state and create drawer", () => {
     expect(wrapper.text()).toContain("回放列表加载失败：列表失败");
     await click(wrapper, "重试");
     expect(wrapper.text()).not.toContain("回放列表加载失败");
-  });
-  it("does not re-select the old space's replay on a real space switch (async router)", async () => {
-    nav.async = true;
-    nav.route.query = { tab: "replay", replay_id: "r1" };
-    api.listReplays.mockResolvedValue({ items: [replay("r1", "succeeded")], page: { total: 1 } });
-    mountPage();
-    await flushPromises();
-    api.getReplay.mockClear();
-    api.listReplays.mockResolvedValue({ items: [replay("rB", "succeeded")], page: { total: 1 } });
-    api.space.selectedSpaceId = "hk";
-    await nextTick();
-    await flushPromises();
-    expect(api.getReplay.mock.calls.map(call => call[0])).not.toContain("r1");
-    expect(nav.route.query.replay_id).toBe("rB");
   });
 
   it("keeps the push entry when another write races it (async router)", async () => {

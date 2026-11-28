@@ -136,7 +136,8 @@ const dirty = computed(() =>
     ? retention.value.trim() !== String(orderRetentionDaysOf(props.account))
     : name.value.trim() !== "" &&
       (name.value.trim() !== props.account.name ||
-        (props.account.execution_mode === ExecutionMode.LIVE && secretId.value !== (props.account.live?.credential_secret_id ?? "")))
+        (props.account.execution_mode === ExecutionMode.LIVE &&
+          secretId.value !== (props.account.live?.credential_secret_id ?? "")))
 );
 const leverageRows = computed(() =>
   Object.entries(props.account.leverage_settings || {}).map(([key, value]) => ({

@@ -38,9 +38,7 @@ export function canTestConnection(secret: { category?: string; provider?: string
  * 从 extra_config 的 environment 字段读取交易所密钥所属环境：
  * "testnet" → TESTNET，"production" → PRODUCTION；缺省或解析不了时返回 UNSPECIFIED。
  */
-export function secretEnvironmentOf(
-  extraConfig: string | undefined
-): typeof AccountEnvironment.UNSPECIFIED | LiveEnvironment {
+export function secretEnvironmentOf(extraConfig: string | undefined): typeof AccountEnvironment.UNSPECIFIED | LiveEnvironment {
   if (!extraConfig) return AccountEnvironment.UNSPECIFIED;
   try {
     const parsed = JSON.parse(extraConfig) as Record<string, unknown>;

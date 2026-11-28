@@ -1,7 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
 import { AccountEnvironment, ExecutionMode, type LogicalAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({
@@ -61,7 +60,6 @@ beforeEach(() => {
   mocks.inspectExchangeCredential.mockReset();
 });
 afterEach(() => {
-  setSelectedSpaceIdCache("");
   wrapper?.unmount();
   document.body.innerHTML = "";
 });
@@ -133,7 +131,7 @@ describe("新建账户提交", () => {
   it.each([
     ["成功", false],
     ["失败", true]
-  ])("提交挂着时切换空间，请求%s返回后弹窗仍能关闭、按钮不再转圈", async (_name, fails) => {
+  ])("提交挂着时弹窗关闭再重开，旧请求%s返回后弹窗仍能关闭、按钮不再转圈且不干扰新草稿", async (_name, fails) => {
     const vm = await openDialog();
     let settle!: (fail: boolean) => void;
     mocks.createTradingAccount.mockImplementationOnce(
@@ -147,13 +145,16 @@ describe("新建账户提交", () => {
     await flushPromises();
     const modal = wrapper.findComponent({ name: "Modal" });
     expect(modal.props("closable")).toBe(false);
-    setSelectedSpaceIdCache("another-space");
+    vm.visible = false;
+    await flushPromises();
+    vm.open("paper");
+    await flushPromises();
     settle(fails);
     await submitting;
     await flushPromises();
     expect(modal.props("closable")).toBe(true);
     expect(document.querySelector(".arco-modal .arco-btn-loading")).toBeNull();
-    // 提交已经失效：不动当前界面，不弹错误、不自动关闭
+    // 旧提交已经失效：不动新打开的弹窗，不弹错误、不自动关闭
     expect(vm.visible).toBe(true);
     expect(document.querySelector(".arco-modal .arco-alert")).toBeNull();
   });

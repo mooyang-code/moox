@@ -664,7 +664,7 @@ async function deleteChannel(channel: NotificationChannel) {
 }
 
 // 提交作用域：弹窗关闭或重新打开后，迟到的响应不能再改动重新加载的渠道列表
-const notificationScope = createSubmitScope({ global: true });
+const notificationScope = createSubmitScope();
 watch(notificationVisible, () => notificationScope.invalidate());
 
 // 编辑通知设置时暂停轮询，避免刷新打断表单。

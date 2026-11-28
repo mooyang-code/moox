@@ -136,10 +136,9 @@
 
 <script setup lang="ts">
 import InfoTip from "@/components/info-tip/index.vue";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { strategyInstanceDetailLink } from "@/router/links";
-import { useSpaceStore } from "@/store/modules/space";
 import { ControlMode, listLogicalAccounts, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -165,7 +164,6 @@ const LIST_WIDTH = 230 + 180 + 100 + 200 + 130 + 170 + 130 + 70 + 140;
 
 const route = useRoute();
 const router = useRouter();
-const spaceStore = useSpaceStore();
 
 // 三个环境各一个菜单，共用这个页面：环境写在路由 meta 里
 const env = computed<Environment>(() => environmentOfRoute(route) ?? "paper");
@@ -243,16 +241,6 @@ function onCreated(kind: Environment) {
   else void load();
 }
 
-watch(
-  () => spaceStore.selectedSpaceId,
-  (next, previous) => {
-    if (!next || next === previous) return;
-    listRequests.invalidate();
-    logicals.value = [];
-    accounts.value = [];
-    void load();
-  }
-);
 onBeforeUnmount(() => {
   listRequests.invalidate();
 });

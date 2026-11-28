@@ -340,20 +340,13 @@ describe("附加字段来源与字段定义页签", () => {
     expect(wrapper.find(".field-total").text()).toContain("共 1 个字段");
   });
 
-  it("keep-alive 缓存后切空间并从附加字段来源跳入字段定义，保留提供方筛选并加载新空间字段", async () => {
+  it("切空间重建页面后从附加字段来源跳入字段定义，保留提供方筛选并加载新空间字段", async () => {
     await mountSourcesPage("crypto", { tab: "fields" });
     expect(wrapper.text()).toContain("资金费率");
 
-    // 切回数据源页签，使 FieldsTab 进入 keep-alive 失活态
-    const sourceTabBtn = wrapper.findAll("[role='tab']").find(btn => btn.text().includes("数据源"));
-    expect(sourceTabBtn).toBeDefined();
-    await sourceTabBtn!.trigger("click");
-    await flushPromises();
-
-    // 在数据源页签切换到 stockcn 空间
-    const spaceStore = useSpaceStore();
-    spaceStore.setSelectedSpace("stockcn");
-    await flushPromises();
+    // 模拟主视图切空间重建：旧页面（含内部 keep-alive）卸载，按新空间重新挂载
+    wrapper.unmount();
+    await mountSourcesPage("stockcn", {});
 
     // 点击 stockcn 的附加字段来源「查看 →」跳入字段定义页签
     const viewLink = wrapper

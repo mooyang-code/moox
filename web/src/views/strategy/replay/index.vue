@@ -967,11 +967,10 @@ async function pollTick() {
 usePolling(pollTick, 5000);
 
 onMounted(() => {
-  // 策略定义按空间授权：空间尚未初始化时请求会被拒绝，由下面的空间监听在就绪后补载。
-  if (spaceStore.selectedSpaceId) {
-    loadStrategies();
-    applyRouteSelection();
-  }
+  // 空间内页面在空间初始化或切换时由主视图整页重建；无已选空间时不发起空间内请求。
+  if (!spaceStore.selectedSpaceId) return;
+  loadStrategies();
+  applyRouteSelection();
   loadTasks();
   loadReplays();
 });
@@ -1005,45 +1004,6 @@ watch(
   }
 );
 
-watch(
-  () => spaceStore.selectedSpaceId,
-  (next, previous) => {
-    generation += 1;
-    selectRequest += 1;
-    tableRequest += 1;
-    selectedId.value = "";
-    selected.value = null;
-    detailLoading.value = false;
-    awaitingMetrics.value = null;
-    // 策略定义按空间授权，随空间切换重新加载；各来源的错误随空间切换清空。
-    for (const key of Object.keys(errors) as (keyof typeof errors)[]) errors[key] = "";
-    if (next) void loadStrategies();
-    replays.value = [];
-    replayTotal.value = 0;
-    series.value = [];
-    tableRows.value = [];
-    tableTotal.value = 0;
-    tasks.value = [];
-    // 空间初始化（无 → 有）只是首次加载，保留深链接与预填；真正的 A → B 切换才清空对象、分页、创建上下文。
-    if (previous) {
-      form.tasks = {};
-      form.single_market = "";
-      form.instance_id = "";
-      replayPage.value = 1;
-      writeQuery({ replayId: "", page: 1, barPage: 1, create: false });
-    }
-    listLoading.value = false;
-    tasksLoading.value = false;
-    tableLoading.value = false;
-    pollFailures.value = 0;
-    chart?.release();
-    chart = null;
-    loadTasks();
-    loadReplays();
-    // 只有空间初始化才按 URL 恢复深链接选择；真实切换时旧空间的 replay_id 不属于新空间，由新列表自动选择。
-    if (next && !previous) applyRouteSelection();
-  }
-);
 onBeforeUnmount(() => {
   // 作废进行中的请求：返回后不再翻页读取、不再渲染图表。
   generation += 1;

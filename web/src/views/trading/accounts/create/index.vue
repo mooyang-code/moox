@@ -188,7 +188,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
   AccountEnvironment,
@@ -269,6 +269,7 @@ const marketsExtra = computed(() =>
 );
 
 watch(visible, () => scope.invalidate());
+onBeforeUnmount(() => scope.invalidate());
 // 换密钥、换交易所后，之前的“确认这是生产环境密钥且没有提现权限”作废，要对新的密钥重新确认
 watch(
   () => [form.secretId, form.exchange],

@@ -167,7 +167,7 @@ import { collectorTaskDetailHref } from "@/router/links";
 import { RequestError, reportError } from "@/api/http";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { listSubjectListers, listTagSyncStatus, type SubjectLister, type TagSyncStatus } from "@/api/collector";
 import { deleteTag, listTags, upsertTag } from "@/api/storage/metadata";
@@ -382,25 +382,18 @@ function confirmDelete(tag: Tag) {
   });
 }
 
-watch(
-  () => props.spaceId,
-  () => {
-    loadRequests.invalidate();
-    rows.value = [];
-    syncStatuses.value = {};
-    syncStatusFailed.value = false;
-    visible.value = false;
-    activeTag.value = undefined;
-    pagination.current = 1;
-    void load();
-  },
-  { immediate: true }
-);
+onMounted(() => {
+  void load();
+});
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域：弹窗打开/关闭和卸载都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const tagScope = createSubmitScope();
 // 该弹窗使用 @before-ok（等待提交完成后才关闭）：打开与关闭都使进行中的提交失效，取消但不重新打开也不能继续写入
 watch(visible, () => tagScope.invalidate());
+onBeforeUnmount(() => {
+  loadRequests.invalidate();
+  tagScope.invalidate();
+});
 </script>
 
 <style scoped>

@@ -326,7 +326,7 @@ async function loadMeta() {
   metaError.value = "";
   try {
     const items = await loadTargetedDatasets(space_id, targetedDatasetIds.value);
-    if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
+    if (sequence !== metaLoadSequence) return;
     datasets.value = items;
     ensureSelectedDataset();
     await loadViewContext();
@@ -420,7 +420,7 @@ async function refreshViewIndex() {
   const space_id = selectedSpaceId.value;
   const dataset_id = activeDataset.value?.dataset_id;
   if (!space_id || !dataset_id) return;
-  const isCurrent = () => selectedSpaceId.value === space_id && activeDataset.value?.dataset_id === dataset_id;
+  const isCurrent = () => activeDataset.value?.dataset_id === dataset_id;
   try {
     const state = await getViewState({ space_id, dataset_id });
     if (isCurrent()) viewIndex.value = { status: state.index_id ? "ready" : "building", state };
@@ -445,11 +445,7 @@ async function loadViewContext() {
     const datasetId = dataset.dataset_id;
     void refreshViewIndex();
     const loaded = await listAllDatasetColumns(space_id, datasetId);
-    if (
-      requestSequence !== viewContextSequence ||
-      selectedSpaceId.value !== space_id ||
-      activeDataset.value?.dataset_id !== datasetId
-    ) {
+    if (requestSequence !== viewContextSequence || activeDataset.value?.dataset_id !== datasetId) {
       return;
     }
     columns.value = loaded.filter(column => column.status === "active");
@@ -499,13 +495,9 @@ async function pollRows() {
   await reloadRows(true, { background: true });
 }
 
-/** 结果属于发起时的空间与数据集：切走后迟到的响应丢弃。 */
-function rowsRequestIsCurrent(requestSequence: number, space_id: string, dataset_id: string) {
-  return (
-    requestSequence === viewRowsRequestSequence &&
-    selectedSpaceId.value === space_id &&
-    activeDataset.value?.dataset_id === dataset_id
-  );
+/** 结果属于当前请求与数据集：切换数据集或卸载后迟到的响应丢弃。 */
+function rowsRequestIsCurrent(requestSequence: number, _space_id: string, dataset_id: string) {
+  return requestSequence === viewRowsRequestSequence && activeDataset.value?.dataset_id === dataset_id;
 }
 
 function applyRows(rows: ViewBrowseTableRow[], rawRows: Parameters<typeof rowsToColumnNames>[0], hasMore: boolean) {
@@ -765,17 +757,10 @@ onMounted(loadMeta);
 // 自动刷新（调用方给了间隔时）：页面隐藏时暂停、不叠加；后台读取失败不弹提示，保留上次的数据并标出“待刷新”
 usePolling(pollRows, props.autoRefreshIntervalMs || 60_000, () => (props.autoRefreshIntervalMs || 0) > 0);
 onBeforeUnmount(() => {
-  invalidateKline();
-});
-// 数据集 ID 属于调用方所在的空间：切空间时只清掉旧空间的内容，不拿旧 ID 去新空间读（取不到行会报错）。
-// 调用方换上新空间的数据集 ID（上面的 datasetIds 监听）或重新挂载本组件时再读取。
-watch(selectedSpaceId, () => {
   metaLoadSequence += 1;
-  metaLoading.value = false;
-  metaError.value = "";
-  datasets.value = [];
-  activeDatasetKey.value = "";
-  clearViewState();
+  viewContextSequence += 1;
+  viewRowsRequestSequence += 1;
+  invalidateKline();
 });
 </script>
 

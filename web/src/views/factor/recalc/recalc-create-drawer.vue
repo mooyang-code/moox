@@ -44,11 +44,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { recalcFactors } from "@/api/factor";
-import { selectedSpaceGeneration } from "@/api/admin/space-header";
-import { useSpaceStore } from "@/store/modules/space";
+import { createSubmitScope } from "@/utils/submit-scope";
 import type { FactorTaskInfo, RecalcJob, RecalcSubjectMode } from "@/api/factor/types";
 import SubjectScopeFields from "@/views/factor/recalc/subject-scope-fields.vue";
 import {
@@ -67,13 +66,13 @@ defineOptions({ name: "FactorRecalcCreateDrawer" });
 const props = defineProps<{ info?: FactorTaskInfo }>();
 const emit = defineEmits<{ (e: "submitted", job: RecalcJob): void }>();
 const visible = defineModel<boolean>("visible", { default: false });
-const spaceStore = useSpaceStore();
-// 抽屉打开序号：打开/关闭都会递增；进行中的提交只能收尾它自己那一次打开，不能触发导航或回写新表单
-let openToken = 0;
+// 抽屉打开/关闭/卸载（含切空间重建）都使进行中的提交失效，迟到的响应不能触发导航或回写新表单
+const submitScope = createSubmitScope();
 watch(visible, () => {
-  openToken += 1;
+  submitScope.invalidate();
   submitting.value = false;
 });
+onBeforeUnmount(() => submitScope.invalidate());
 
 const displayZone = useDisplayZone();
 const quickItems = [
@@ -151,11 +150,7 @@ async function submit() {
     Message.warning("指定对象模式至少需要一个对象 ID");
     return false;
   }
-  const token = openToken;
-  const submitSpaceId = spaceStore.selectedSpaceId;
-  const submitGeneration = selectedSpaceGeneration();
-  const stale = () =>
-    token !== openToken || spaceStore.selectedSpaceId !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
+  const submission = submitScope.begin();
   submitting.value = true;
   try {
     const job = await recalcFactors({
@@ -167,16 +162,16 @@ async function submit() {
       job_id: form.job_id.trim() || `factor-recalc-${Date.now()}`
     });
     Message.success("补算作业已提交");
-    // 抽屉已被取消/重新打开或空间已切换：任务已受理，但不能再导航（会重建页面、丢失新表单草稿）
-    if (stale()) return true;
+    // 抽屉已被取消/重新打开或组件已卸载：任务已受理，但不能再导航（会丢失新表单草稿）
+    if (!submission.isCurrent()) return true;
     emit("submitted", job);
     return true;
   } catch (error) {
-    if (stale()) return false;
+    if (!submission.isCurrent()) return false;
     Message.error(error instanceof Error ? error.message : "补算作业提交失败");
     return false;
   } finally {
-    if (!stale()) submitting.value = false;
+    if (submission.isCurrent()) submitting.value = false;
   }
 }
 </script>

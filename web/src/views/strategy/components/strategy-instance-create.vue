@@ -183,7 +183,7 @@
 
 <script setup lang="ts">
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createInstance, getInstance, listInstances, validateStrategy } from "@/api/strategy";
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
@@ -368,7 +368,7 @@ async function loadTasksList() {
   tasksError.value = "";
   try {
     const infos = await listAllFactorTasks();
-    if (requestId !== tasksRequest || props.spaceId !== spaceId) return;
+    if (requestId !== tasksRequest) return;
     tasks.value = enabledTasks(infos, spaceId);
   } catch (err) {
     if (requestId === tasksRequest) tasksError.value = err instanceof Error ? err.message : "计算任务加载失败";
@@ -390,7 +390,7 @@ async function loadAccountsList() {
         .then(rsp => enabledInstanceAccounts(rsp.items))
         .catch(() => null)
     ]);
-    if (requestId !== accountsRequest || props.spaceId !== spaceId) return;
+    if (requestId !== accountsRequest) return;
     accounts.value = nextAccounts.filter(account => account.space_id === spaceId);
     boundInstances.value = bound;
   } catch (err) {
@@ -509,15 +509,14 @@ async function submit() {
       : `请为${taskKeys.value.map(taskLabel).join("、")}各选一个计算任务`;
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
   if (fieldErrors.strategy_id || fieldErrors.factor_tasks || fieldErrors.logical_account_id) return;
-  const spaceId = props.spaceId;
   const requestId = ++submitRequest;
   saving.value = true;
   try {
     // 写了 factor_params 的实例启用后永久占住任务：没有当前有效的预检结果就先预检（服务端会核对市场与任务是否对应），通过了才创建。
     if (!check_result.value?.resolved_json) {
       const result = await check();
-      // 预检被作废（等待期间改了定义、任务或市场）：不创建，按新的选择再点创建
-      if (!result || requestId !== submitRequest || props.spaceId !== spaceId) return;
+      // 预检被作废（等待期间改了定义、任务、市场或组件卸载）：不创建，按新的选择再点创建
+      if (!result || requestId !== submitRequest) return;
       if (!result.resolved_json) {
         error.value = "预检没有通过（原因见下方），没有创建实例";
         return;
@@ -529,8 +528,8 @@ async function submit() {
       factor_tasks: factorTasks(),
       logical_account_id: form.mode === "trade" ? form.logical_account_id : ""
     });
-    if (requestId !== submitRequest || props.spaceId !== spaceId) {
-      Message.info("实例已创建，但当前空间已切换；请在原空间实例列表中确认");
+    if (requestId !== submitRequest) {
+      Message.info("实例已创建，但抽屉已关闭或空间已切换；请在原空间实例列表中确认");
       return;
     }
     // 成功后由父组件统一导航：不再发 update:visible(false)，否则父组件的“关闭抽屉”导航会取消去详情页的导航。
@@ -539,17 +538,16 @@ async function submit() {
     emit("created", instance.instance_id);
     Message.success("策略实例已创建并保持停用");
   } catch (err) {
-    if (requestId !== submitRequest || props.spaceId !== spaceId) return;
+    if (requestId !== submitRequest) return;
     const instanceId = form.instance_id.trim();
     if (instanceId) {
       try {
         await getInstance(instanceId);
-        if (requestId !== submitRequest || props.spaceId !== spaceId) return; // 补查期间空间已切换
+        if (requestId !== submitRequest) return;
         error.value = "创建请求结果未知，但实例 ID 已存在，请返回列表确认，不要重复创建";
         return;
       } catch (lookupErr) {
-        // 补查被切换空间取消：当前表单属于新空间，不写入旧空间的错误，也不能当作“实例不存在”
-        if (lookupErr instanceof StaleSpaceRequestError || requestId !== submitRequest || props.spaceId !== spaceId) return;
+        if (lookupErr instanceof StaleSpaceRequestError || requestId !== submitRequest) return;
         // 实例不存在，展示原始错误。
       }
     }
@@ -571,15 +569,12 @@ watch(
   { immediate: true }
 );
 
-watch(
-  () => props.spaceId,
-  (value, previous) => {
-    if (value !== previous && props.visible) {
-      resetForm();
-      loadMetadata();
-    }
-  }
-);
+onBeforeUnmount(() => {
+  tasksRequest += 1;
+  accountsRequest += 1;
+  submitRequest += 1;
+  checkRequest += 1;
+});
 </script>
 
 <style scoped>

@@ -251,7 +251,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
 import {
@@ -755,20 +755,15 @@ watch([sourceTaskId, normalizedTargetFrequency], () => {
   if (visible.value && editor.data_type === "kline_resample" && !editing.value) scheduleResamplePreview();
 });
 
-// 打开期间切了空间：表单属于旧空间，关掉并提示重新打开。
-watch(selectedSpaceId, () => {
-  if (!visible.value || editor.space_id === selectedSpaceId.value) return;
-  visible.value = false;
-  outputFieldsVisible.value = false;
-  taskTypeFieldRequestToken += 1;
-  Message.info("空间已切换，请重新打开采集任务窗口");
-});
-
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：编辑窗口打开/关闭都会使进行中的保存失效
+// 提交作用域：编辑窗口打开/关闭与卸载（含切空间重建）都会使进行中的保存失效
 const editorScope = createSubmitScope();
 watch(visible, () => {
   editorScope.invalidate();
   submitLoading.value = false;
+});
+onBeforeUnmount(() => {
+  taskTypeFieldRequestToken += 1;
+  editorScope.invalidate();
 });
 </script>
 

@@ -285,7 +285,6 @@ import { computed, onBeforeUnmount, provide, ref, watch } from "vue";
 import { usePolling } from "@/hooks/usePolling";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { useSpaceStore } from "@/store/modules/space";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
@@ -357,7 +356,6 @@ defineOptions({ name: "trading-account-detail" });
 
 const route = useRoute();
 const router = useRouter();
-const spaceStore = useSpaceStore();
 
 const logicalId = computed(() => String(route.params.logical_account_id || ""));
 const tab = computed(() => tabFromQuery(route.query.tab));
@@ -532,13 +530,6 @@ watch(
     void loadFirst();
   },
   { immediate: true }
-);
-// 切换空间后这个组合编号在新空间里不存在，回到列表。
-watch(
-  () => spaceStore.selectedSpaceId,
-  (next, previous) => {
-    if (next && previous && next !== previous) backToList();
-  }
 );
 onBeforeUnmount(() => {
   reloads.invalidate();

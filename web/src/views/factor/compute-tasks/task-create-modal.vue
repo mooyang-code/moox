@@ -28,14 +28,13 @@
 
 <script setup lang="ts">
 import { createSubmitScope } from "@/utils/submit-scope";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createFactorTask } from "@/api/factor";
 import { readAllPages } from "@/api/read-all-pages";
 import { listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { validateTaskName } from "./compute-tasks-model";
 
@@ -80,11 +79,11 @@ async function prepare() {
   datasetsLoading.value = true;
   try {
     const items = await loadSourceDatasets(spaceId);
-    if (spaceId === spaceStore.selectedSpaceId) sourceDatasets.value = items;
+    if (!unmounted) sourceDatasets.value = items;
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "数据集加载失败");
+    if (!unmounted) Message.error(error instanceof Error ? error.message : "数据集加载失败");
   } finally {
-    datasetsLoading.value = false;
+    if (!unmounted) datasetsLoading.value = false;
   }
 }
 
@@ -100,9 +99,6 @@ async function submit() {
     return false;
   }
   const submission = createScope.begin();
-  const submitGeneration = selectedSpaceGeneration();
-  const stale = () =>
-    !submission.isCurrent() || spaceStore.selectedSpaceId !== spaceId || selectedSpaceGeneration() !== submitGeneration;
   submitting.value = true;
   try {
     const created = await createFactorTask({
@@ -111,8 +107,8 @@ async function submit() {
       frequency: sourceFreq.value,
       name: form.name
     });
-    if (stale()) {
-      // 创建请求属于原空间：不在新空间发出 created（父页面会刷新新空间列表并把原空间的任务 ID 写入详情路由）
+    if (!submission.isCurrent()) {
+      // 弹窗已关闭/重新打开或页面已卸载（含切空间重建）：不再发出 created 或打开详情
       Message.info(`计算任务 ${created.task_id} 已创建；弹窗已关闭/重新打开或空间已切换，不再打开详情`);
       return false;
     }
@@ -120,7 +116,7 @@ async function submit() {
     emit("created", created.task_id);
     return true;
   } catch (error) {
-    if (stale()) return false;
+    if (!submission.isCurrent()) return false;
     Message.error(error instanceof Error ? error.message : "创建计算任务失败");
     return false;
   } finally {
@@ -128,10 +124,15 @@ async function submit() {
   }
 }
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：弹窗打开/关闭都会使进行中的创建失效，旧响应不能再发出 created 或关闭新弹窗
+// 提交作用域：弹窗打开/关闭/卸载都会使进行中的创建失效，旧响应不能再发出 created 或关闭新弹窗
 const createScope = createSubmitScope();
+let unmounted = false;
 watch(visible, () => {
   createScope.invalidate();
   submitting.value = false;
+});
+onBeforeUnmount(() => {
+  unmounted = true;
+  createScope.invalidate();
 });
 </script>

@@ -425,10 +425,7 @@ export async function listReplays(params: Page = {}): Promise<PagedList<Replay>>
  * 分页读取回放的周期记录。brief 只返回曲线与摘要字段（每页最多 5000 根），用于权益曲线；
  * 完整记录含目标与持仓（每页最多 100 根），用于表格当前页。
  */
-export async function listReplayBars(
-  replay_id: string,
-  params: Page & { brief?: boolean } = {}
-): Promise<PagedList<ReplayBar>> {
+export async function listReplayBars(replay_id: string, params: Page & { brief?: boolean } = {}): Promise<PagedList<ReplayBar>> {
   const page = pageRequest(params, 50);
   const response = await callStrategy<
     { replay_id: string; page: Page; brief: boolean },

@@ -357,7 +357,7 @@ describe("View 索引状态", () => {
   });
 });
 
-describe("切换空间", () => {
+describe("卸载时作废在途读取", () => {
   beforeEach(() => {
     if (mocks.selectedSpaceId) mocks.selectedSpaceId.value = "crypto";
     mocks.catalog
@@ -373,38 +373,15 @@ describe("切换空间", () => {
     mocks.messageError.mockReset();
   });
 
-  it("只清掉旧空间的内容，不拿调用方旧空间的数据集 ID 去新空间读；换上新 ID 后按新空间读取", async () => {
-    const wrapper = mountPage();
-    await flushPromises();
-    expect(rowKeys(wrapper)).toBe("BTC");
-
-    mocks.selectedSpaceId!.value = "stockcn";
-    await flushPromises();
-    expect(mocks.catalog).not.toHaveBeenCalledWith("stockcn", ["dataset-known"]);
-    expect(mocks.messageError).not.toHaveBeenCalled();
-    expect((wrapper.vm as unknown as { datasets: unknown[] }).datasets).toHaveLength(0);
-    expect(rowKeys(wrapper)).toBe("");
-
-    await wrapper.setProps({ datasetIds: ["dataset-cn"], activeDatasetId: "dataset-cn" });
-    await flushPromises();
-    expect(mocks.catalog).toHaveBeenLastCalledWith("stockcn", ["dataset-cn"]);
-    expect(mocks.queryTimeSeries.mock.lastCall?.[0]).toMatchObject({ space_id: "stockcn", dataset_id: "dataset-cn" });
-    expect(mocks.messageError).not.toHaveBeenCalled();
-    wrapper.unmount();
-  });
-
-  it("切空间时作废在途的元数据读取，迟到的旧空间结果不落到页面上", async () => {
+  it("卸载（含切空间重建）时作废在途的元数据读取，迟到的结果不再触发查询", async () => {
     const pending = deferred<{ space_id: string; dataset_id: string; data_kind: string }[]>();
     mocks.catalog.mockReturnValueOnce(pending.promise);
     const wrapper = mountPage();
-    mocks.selectedSpaceId!.value = "stockcn";
-    await flushPromises();
+    wrapper.unmount();
     pending.resolve([{ space_id: "crypto", dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]);
     await flushPromises();
 
-    expect((wrapper.vm as unknown as { datasets: unknown[]; metaLoading: boolean }).datasets).toHaveLength(0);
-    expect((wrapper.vm as unknown as { metaLoading: boolean }).metaLoading).toBe(false);
     expect(mocks.queryTimeSeries).not.toHaveBeenCalled();
-    wrapper.unmount();
+    expect(mocks.messageError).not.toHaveBeenCalled();
   });
 });

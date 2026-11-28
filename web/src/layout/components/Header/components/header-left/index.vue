@@ -84,7 +84,7 @@ const onSpaceChange = (spaceId: string | number | boolean | Record<string, unkno
 
 const createVisible = ref(false);
 // 空间是全局资源：提交只受弹窗开/关约束（@before-ok 弹窗在打开与关闭时都使进行中的提交失效）
-const createScope = createSubmitScope({ global: true });
+const createScope = createSubmitScope();
 watch(createVisible, () => createScope.invalidate());
 const createForm = reactive({
   space_id: "",

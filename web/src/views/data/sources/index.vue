@@ -16,7 +16,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from "vue";
+import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { useQueryTab } from "@/hooks/useQueryTab";
@@ -51,17 +51,6 @@ function openFieldsForProvider(providerId: string) {
   if (providerId.trim()) query.provider = providerId.trim();
   void router.replace({ path: route.path, query });
 }
-
-// 换空间：清掉旧空间的筛选参数，保持当前所在页签。
-watch(
-  selectedSpaceId,
-  (next, previous) => {
-    if (!previous || next === previous || route.path !== "/data/sources") return;
-    const query = activeTab.value === "fields" ? { tab: "fields" } : {};
-    void router.replace({ path: route.path, query });
-  },
-  { flush: "sync" }
-);
 </script>
 
 <style scoped>
