@@ -100,7 +100,7 @@
             <template #cell="{ record }">
               <span class="tx-num tx-nowrap">
                 <strong>{{ fmtMoney(record.equity) }}</strong>
-                <span class="tx-muted tx-unit">{{ record.settlementAsset }}</span>
+                <span v-if="record.equity !== null" class="tx-muted tx-unit">{{ record.settlementAsset }}</span>
               </span>
             </template>
           </a-table-column>

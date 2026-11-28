@@ -170,10 +170,10 @@ func TestQueryListUnifiesSwapAndSpotPositionsAndIncludesDisabledMembers(t *testi
 	}
 
 	// 按组合账户查：返回启用成员的永续（BTC-USDT-SWAP）、结算资产余额（USDT）与现货（ETH-USDT-SPOT），
-	// 同时包含停用成员仍持有的永续（XRP-USDT-SWAP）与现货（SOL-USDT-SPOT），不含零仓位（DOGE）。
+	// 以及停用成员仍持有的永续（XRP-USDT-SWAP）；不含停用成员的现货余额（SOL-USDT-SPOT）和零仓位（DOGE）。
 	rows, err := query.List(ctx, ListRequest{SpaceID: "space-1", LogicalAccountID: "logical-1"})
 	require.NoError(t, err)
-	require.Len(t, rows, 5)
+	require.Len(t, rows, 4)
 
 	byKey := map[string]Position{}
 	for _, row := range rows {
@@ -213,10 +213,19 @@ func TestQueryListUnifiesSwapAndSpotPositionsAndIncludesDisabledMembers(t *testi
 	require.Equal(t, "swap", xrp.MarketType)
 	require.Equal(t, "100", xrp.SignedQuantity)
 
-	sol := byKey["SOL-USDT-SPOT"]
-	require.Equal(t, "acc-disabled", sol.TradingAccountID)
-	require.Equal(t, "spot", sol.MarketType)
-	require.Equal(t, "5", sol.SignedQuantity)
+	_, hasDisabledSpot := byKey["SOL-USDT-SPOT"]
+	require.False(t, hasDisabledSpot, "按组合查询时停用成员的现货余额不计入")
+
+	// 直接按执行账户查停用成员时，永续持仓与现货余额均照常返回。
+	directDisabled, err := query.List(ctx, ListRequest{SpaceID: "space-1", TradingAccountID: "acc-disabled"})
+	require.NoError(t, err)
+	require.Len(t, directDisabled, 2)
+	directByKey := map[string]Position{}
+	for _, row := range directDisabled {
+		directByKey[row.InstrumentID] = row
+	}
+	require.Equal(t, "100", directByKey["XRP-USDT-SWAP"].SignedQuantity)
+	require.Equal(t, "5", directByKey["SOL-USDT-SPOT"].SignedQuantity)
 
 	// 按 instrument_id 过滤。
 	filtered, err := query.List(ctx, ListRequest{SpaceID: "space-1", LogicalAccountID: "logical-1", InstrumentID: "ETH-USDT-SPOT"})

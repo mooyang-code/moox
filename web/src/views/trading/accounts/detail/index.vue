@@ -65,7 +65,7 @@
           <div>
             <div class="k">权益</div>
             <div class="v tx-num">
-              {{ fmtMoney(totalEquity) }}<small>{{ logical.settlement_asset }}</small>
+              {{ fmtMoney(totalEquity) }}<small v-if="totalEquity !== null">{{ logical.settlement_asset }}</small>
             </div>
             <div class="d">同步于 <TimeText :value="latestSync" :zone="displayZone" precision="minute" /></div>
             <!-- 还没读到权益（新建账户首次同步前）时显示“—”，不能按 0 算成 −100% -->

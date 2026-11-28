@@ -10,7 +10,7 @@ export interface PositionSnapshot {
 }
 
 /**
- * 读组合账户的实际持仓：统一调用一次 ListPositions，由后端返回启用成员的永续合约持仓与现货/股票余额。
+ * 读组合账户的实际持仓：统一调用一次 ListPositions，由后端返回全部成员（含停用成员）的永续合约持仓，以及启用成员的现货/股票余额。
  */
 export async function loadPositionSnapshot(logical: LogicalAccount): Promise<PositionSnapshot> {
   const response = await listPositions({ logical_account_id: logical.logical_account_id });

@@ -76,7 +76,8 @@ func (q *Query) List(ctx context.Context, req ListRequest) ([]Position, error) {
 		return nil, err
 	}
 	result := make([]Position, 0)
-	for _, account := range accounts {
+	for _, item := range accounts {
+		account := item.account
 		if account.HasPositionMarket() {
 			swapRows, listErr := listSwapPositions(ctx, st, req.SpaceID, account.TradingAccountID, instrumentID)
 			if listErr != nil {
@@ -84,7 +85,7 @@ func (q *Query) List(ctx context.Context, req ListRequest) ([]Position, error) {
 			}
 			result = append(result, swapRows...)
 		}
-		if account.HasBalanceMarket() {
+		if item.includeBalance && account.HasBalanceMarket() {
 			balanceRows, listErr := q.listBalancePositions(ctx, st, account, instrumentID)
 			if listErr != nil {
 				return nil, listErr
@@ -95,40 +96,45 @@ func (q *Query) List(ctx context.Context, req ListRequest) ([]Position, error) {
 	return result, nil
 }
 
-func resolveAccounts(ctx context.Context, st *store.Store, req ListRequest) ([]store.TradingAccountRecord, error) {
+type resolvedAccount struct {
+	account        store.TradingAccountRecord
+	includeBalance bool
+}
+
+func resolveAccounts(ctx context.Context, st *store.Store, req ListRequest) ([]resolvedAccount, error) {
 	if req.LogicalAccountID == "" {
 		account, err := st.GetTradingAccount(ctx, req.SpaceID, req.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}
-		return []store.TradingAccountRecord{account}, nil
+		return []resolvedAccount{{account: account, includeBalance: true}}, nil
 	}
 	if _, err := st.GetLogicalAccount(ctx, req.SpaceID, req.LogicalAccountID); err != nil {
 		return nil, err
 	}
-	// 按组合查询时包含停用成员，确保停用成员仍持有的永续仓位与现货余额可见；
+	// 按组合查询时永续持仓包含停用成员（未平仓永续仓位仍可见），现货/股票余额只取启用成员；
 	// 显式指定了成员执行账户时同样校验其属于该组合。
 	members, err := st.ListLogicalAccountMembers(ctx, req.SpaceID, req.LogicalAccountID, true)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(members))
+	matched := make([]store.LogicalAccountMemberRecord, 0, len(members))
 	for _, member := range members {
 		if req.TradingAccountID != "" && member.TradingAccountID != req.TradingAccountID {
 			continue
 		}
-		ids = append(ids, member.TradingAccountID)
+		matched = append(matched, member)
 	}
-	if req.TradingAccountID != "" && len(ids) == 0 {
+	if req.TradingAccountID != "" && len(matched) == 0 {
 		return nil, fmt.Errorf("%w：交易账户 %s，组合账户 %s", ErrNotLogicalMember, req.TradingAccountID, req.LogicalAccountID)
 	}
-	accounts := make([]store.TradingAccountRecord, 0, len(ids))
-	for _, id := range ids {
-		account, err := st.GetTradingAccount(ctx, req.SpaceID, id)
+	accounts := make([]resolvedAccount, 0, len(matched))
+	for _, member := range matched {
+		account, err := st.GetTradingAccount(ctx, req.SpaceID, member.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}
-		accounts = append(accounts, account)
+		accounts = append(accounts, resolvedAccount{account: account, includeBalance: member.Enabled})
 	}
 	return accounts, nil
 }
