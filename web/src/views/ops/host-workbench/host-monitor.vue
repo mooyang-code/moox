@@ -40,7 +40,7 @@
     <a-empty v-else-if="!rows.length" description="还没有登记主机，请通过 moox skill 初始化部署" class="monitor-empty" />
     <template v-else>
       <template v-if="viewMode === 'cards'">
-        <HostMonitorCardGrid :rows="rows" :selected-key="selectedKey" :thresholds="thresholds" @select="selectedKey = $event" />
+        <HostMonitorCardGrid :rows="rows" :selected-key="selectedKey" @select="selectedKey = $event" />
         <HostMonitorDetail :row="selectedRow" :refresh-key="historyRefreshKey" />
       </template>
       <HostMonitorMasterDetail

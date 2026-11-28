@@ -23,6 +23,9 @@ export interface HostMonitorRow {
   cpuUsage: number | null;
   memoryUsage: number | null;
   filesystemUsage: number | null;
+  cpuExceeded: boolean;
+  memoryExceeded: boolean;
+  filesystemExceeded: boolean;
   networkRate: { rx: number; tx: number } | null;
   attention: boolean;
 }
@@ -38,6 +41,9 @@ function summarize(monitor?: HostMetrics, thresholds?: HostAlertThresholds) {
       cpuUsage: null,
       memoryUsage: null,
       filesystemUsage: null,
+      cpuExceeded: false,
+      memoryExceeded: false,
+      filesystemExceeded: false,
       networkRate: null,
       attention: false
     };
@@ -54,16 +60,19 @@ function summarize(monitor?: HostMetrics, thresholds?: HostAlertThresholds) {
   const memoryUsage = memoryRaw !== null ? Math.round(memoryRaw) : null;
   const availableFilesystemUsage = filesystemRaw !== null ? Math.round(filesystemRaw) : null;
   const availableNetworkRate = metricValueAvailable(monitor.status, networkRate !== null) ? networkRate : null;
-  const attention =
-    exceedsThreshold(cpuRaw, thresholds?.cpu) ||
-    exceedsThreshold(memoryRaw, thresholds?.memory) ||
-    exceedsThreshold(filesystemRaw, thresholds?.disk);
+  const cpuExceeded = exceedsThreshold(cpuRaw, thresholds?.cpu);
+  const memoryExceeded = exceedsThreshold(memoryRaw, thresholds?.memory);
+  const filesystemExceeded = exceedsThreshold(filesystemRaw, thresholds?.disk);
+  const attention = cpuExceeded || memoryExceeded || filesystemExceeded;
 
   return {
     state,
     cpuUsage,
     memoryUsage,
     filesystemUsage: availableFilesystemUsage,
+    cpuExceeded,
+    memoryExceeded,
+    filesystemExceeded,
     networkRate: availableNetworkRate,
     attention
   };

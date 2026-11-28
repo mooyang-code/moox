@@ -132,6 +132,9 @@ describe("buildHostMonitorRows", () => {
       cpuUsage: 81,
       memoryUsage: 38,
       filesystemUsage: 78,
+      cpuExceeded: true,
+      memoryExceeded: false,
+      filesystemExceeded: false,
       networkRate: { rx: 120, tx: 50 },
       attention: true
     });
@@ -162,7 +165,12 @@ describe("buildHostMonitorRows", () => {
       ],
       defaultThresholds
     );
-    expect(normal[0].attention).toBe(false);
+    expect(normal[0]).toMatchObject({
+      cpuExceeded: false,
+      memoryExceeded: false,
+      filesystemExceeded: false,
+      attention: false
+    });
 
     // 内存达到 90% 阈值时需关注。
     const memHigh = buildHostMonitorRows(
@@ -170,7 +178,12 @@ describe("buildHostMonitorRows", () => {
       [monitor({ memory: { total: 100, used: 90, available: 10, percent: 90, percent_available: true } })],
       defaultThresholds
     );
-    expect(memHigh[0].attention).toBe(true);
+    expect(memHigh[0]).toMatchObject({
+      cpuExceeded: false,
+      memoryExceeded: true,
+      filesystemExceeded: false,
+      attention: true
+    });
 
     // 磁盘达到 85% 阈值时需关注。
     const diskHigh = buildHostMonitorRows(
@@ -194,11 +207,21 @@ describe("buildHostMonitorRows", () => {
       ],
       defaultThresholds
     );
-    expect(diskHigh[0].attention).toBe(true);
+    expect(diskHigh[0]).toMatchObject({
+      cpuExceeded: false,
+      memoryExceeded: false,
+      filesystemExceeded: true,
+      attention: true
+    });
 
     // 后端未下发阈值（0 或缺省）时不凭前端写死值误判需关注。
     const noThresholds = buildHostMonitorRows([host()], [monitor({ cpu: { usage: 95, usage_available: true, cores: 4 } })]);
-    expect(noThresholds[0].attention).toBe(false);
+    expect(noThresholds[0]).toMatchObject({
+      cpuExceeded: false,
+      memoryExceeded: false,
+      filesystemExceeded: false,
+      attention: false
+    });
   });
 
   it("does not render offline or unavailable values as zero", () => {

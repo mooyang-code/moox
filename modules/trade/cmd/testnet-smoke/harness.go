@@ -59,15 +59,6 @@ func openLiveHarness(
 		return nil, err
 	}
 	registry := newSmokeRegistry()
-	accountRecord, err := database.GetTradingAccountByID(ctx, identity.AccountID)
-	if err != nil {
-		database.Close()
-		return nil, err
-	}
-	if _, err := registry.Bind(smokeAccountConfig(accountRecord), credential); err != nil {
-		database.Close()
-		return nil, err
-	}
 	manager := &traderuntime.Manager{
 		Accounts: database, PollInterval: 250 * time.Millisecond,
 		RetryMin: 250 * time.Millisecond, RetryMax: 2 * time.Second,

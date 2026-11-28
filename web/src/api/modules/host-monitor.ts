@@ -155,7 +155,6 @@ interface HostAgent {
   last_seen_at?: string;
   snapshot?: HostSnapshot;
   reachable?: boolean;
-  stale_seconds?: WireNumber;
 }
 
 interface ListHostAgentsResponse {
