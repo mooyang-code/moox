@@ -1,4 +1,4 @@
-// Package seeding 记录 Collector 正在做历史补齐的数据集：补齐期间读这些数据集的实例不求值、不产生目标。
+// Package seeding 记录 Collector 正在做历史补齐的数据集，供监控观察器把对应实例的期望置为“暂停（历史补齐中）”。
 // 状态每分钟向 Collector 取一次（ListHistorySeeds，只要补齐中的），调不通沿用上一次，从没取到过按没有补齐。
 package seeding
 

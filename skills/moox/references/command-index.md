@@ -314,7 +314,7 @@
 | `strategy display set` | 设置实例要隐藏的分类、成员与列 |
 | `strategy instance confirm` | 确认试运行中的实例转为实盘：下一期起按目标下单（先用 `trade shadow list` 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行；不给 --session-id 时预览里显示当前会话号） |
 | `strategy instance create` | 创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用） |
-| `strategy instance delete` | 删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（没绑定到它的任务如公共任务保留不动；有回放或补算在进行、结果数据集有归档任务时拒绝；默认只预览，--yes 才执行） |
+| `strategy instance delete` | 删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（没绑定到它的任务如公共任务保留不动；有回放或补算在进行时拒绝；默认只预览，--yes 才执行） |
 | `strategy instance disable` | 停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行） |
 | `strategy instance enable` | 启用策略实例（挂了账户的实例启用后先试运行：目标只记为影子目标、不下单，确认实盘后才下单；默认只预览，--yes 才执行） |
 | `strategy instance list` | 列出策略实例（--space-id 过滤空间，默认 crypto） |

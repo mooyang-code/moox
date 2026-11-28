@@ -55,27 +55,32 @@ func evaluateHealth(in healthInput) (string, string) {
 	if in.Task.Status == store.StatusPaused {
 		return HealthPaused, "任务已停用"
 	}
+	sourceMissing := in.Task.BlockedReason == store.BlockedReasonSourceDatasetMissing
 	var errs, warns []string
-	// 异常：最近一次成功运行距今超过「线上保留期 − 2 天」。
-	limit, forever, retentionErr := parseRetention(in.Task.Retention)
-	if retentionErr != nil {
-		errs = append(errs, "没有读到数据集的线上保留期，无法判断是否会漏数据")
-	} else if !forever {
-		threshold := limit - 48*time.Hour
-		if threshold < limit/2 {
-			threshold = limit / 2
+	if sourceMissing {
+		errs = append(errs, store.BlockedReasonSourceDatasetMissing)
+	} else {
+		// 异常：最近一次成功运行距今超过「线上保留期 − 2 天」。
+		limit, forever, retentionErr := parseRetention(in.Task.Retention)
+		if retentionErr != nil {
+			errs = append(errs, "没有读到数据集的线上保留期，无法判断是否会漏数据")
+		} else if !forever {
+			threshold := limit - 48*time.Hour
+			if threshold < limit/2 {
+				threshold = limit / 2
+			}
+			reference := in.Task.LastSuccessAt
+			label := "最近一次成功运行"
+			if reference.IsZero() {
+				reference, label = in.Task.CreatedAt, "任务创建后一直没有成功运行；创建"
+			}
+			if !reference.IsZero() && in.Now.Sub(reference) > threshold {
+				errs = append(errs, fmt.Sprintf("%s距今 %s，已接近线上保留期 %s", label, in.Now.Sub(reference).Truncate(time.Minute), limit))
+			}
 		}
-		reference := in.Task.LastSuccessAt
-		label := "最近一次成功运行"
-		if reference.IsZero() {
-			reference, label = in.Task.CreatedAt, "任务创建后一直没有成功运行；创建"
+		if in.Task.BlockedReason != "" {
+			errs = append(errs, "分区登记被拒："+in.Task.BlockedReason)
 		}
-		if !reference.IsZero() && in.Now.Sub(reference) > threshold {
-			errs = append(errs, fmt.Sprintf("%s距今 %s，已接近线上保留期 %s", label, in.Now.Sub(reference).Truncate(time.Minute), limit))
-		}
-	}
-	if in.Task.BlockedReason != "" {
-		errs = append(errs, "分区登记被拒："+in.Task.BlockedReason)
 	}
 	if len(in.Task.Unrecoverable) > 0 {
 		errs = append(errs, fmt.Sprintf("有 %d 段数据已超出线上保留期、无法补齐", len(in.Task.Unrecoverable)))
@@ -105,12 +110,14 @@ func evaluateHealth(in healthInput) (string, string) {
 		}
 		warns = append(warns, reason)
 	}
-	reference := in.Task.LastSuccessAt
-	if reference.IsZero() {
-		reference = in.Task.CreatedAt
-	}
-	if !reference.IsZero() && in.Now.Sub(reference) > followStaleAfter {
-		warns = append(warns, fmt.Sprintf("最近一次成功的跟随距今超过 %s", followStaleAfter))
+	if !sourceMissing {
+		reference := in.Task.LastSuccessAt
+		if reference.IsZero() {
+			reference = in.Task.CreatedAt
+		}
+		if !reference.IsZero() && in.Now.Sub(reference) > followStaleAfter {
+			warns = append(warns, fmt.Sprintf("最近一次成功的跟随距今超过 %s", followStaleAfter))
+		}
 	}
 	if overdue := overduePartitions(in); overdue > 0 {
 		warns = append(warns, fmt.Sprintf("有 %d 个分区到时间超过 1 小时仍未导出", overdue))

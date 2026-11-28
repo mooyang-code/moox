@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
@@ -79,35 +78,5 @@ func TestHandleWaitsWhileModuleNotReadyThenEvaluatesOnRedelivery(t *testing.T) {
 	expectAck(t, h.deliver(1))
 	if result := h.resultAt(1); result.Status != store.StatusOK {
 		t.Fatalf("就绪后重投的周期应正常求值：%+v", result)
-	}
-}
-
-// 上游数据集历史补齐中：这一期记 skipped(history_seeding)，不读输入、不产生目标；补齐结束后下一期照常求值。
-func TestHandleSkipsWhileUpstreamSeeding(t *testing.T) {
-	account := "acct-1"
-	h := newHarness(t, rankDSL, &account)
-	rows := map[string]map[string]float64{"A": {"m": 2}, "B": {"m": 1}}
-	for n := 1; n <= 2; n++ {
-		h.frame(n, rows)
-	}
-	seeding := true
-	h.handler.Seeding = func(string, input.Resolved) bool { return seeding }
-
-	expectAck(t, h.deliver(1))
-	skipped := h.resultAt(1)
-	if skipped.Status != store.StatusSkipped || skipped.SkipReason != store.SkipHistorySeeding {
-		t.Fatalf("补齐中应记 skipped(history_seeding)：%+v", skipped)
-	}
-	if skipped.PublishStatus != store.PublishNone || string(skipped.TargetsJSON) != "[]" {
-		t.Fatalf("补齐中不应产生目标：%+v", skipped)
-	}
-	if h.loader.calls != 0 {
-		t.Fatalf("补齐中不应读取输入：%d", h.loader.calls)
-	}
-
-	seeding = false
-	expectAck(t, h.deliver(2))
-	if result := h.resultAt(2); result.Status != store.StatusOK {
-		t.Fatalf("补齐结束后的下一期应正常求值：%+v", result)
 	}
 }

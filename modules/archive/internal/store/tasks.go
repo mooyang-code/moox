@@ -34,7 +34,8 @@ type Task struct {
 	UpdatedAt     time.Time
 	// Unrecoverable 是按任务累积的无法补齐区间（超出线上保留期）。
 	Unrecoverable []Unrecoverable
-	// BlockedReason 是分区登记被拒的原因（行数或标的数倒退）；下一次被接受的完成上报清空。
+	// BlockedReason 是任务的阻塞原因：分区登记被拒（行数或标的数倒退，下一次被接受的带分区上报清空），
+	// 或 BlockedReasonSourceDatasetMissing（源数据集在 Storage 中不存在，数据集重现时由维护刷新清空）。
 	BlockedReason string
 }
 
@@ -197,20 +198,41 @@ func (s *Store) DeleteTask(ctx context.Context, spaceID, datasetID string) (int6
 	return deleted, err
 }
 
-// UpdateTaskDataset 刷新任务的线上保留期与数据集元数据（维护定时器每小时从 Storage 读取）。
+// UpdateTaskDataset 刷新任务的线上保留期与数据集元数据（维护定时器每小时从 Storage 读取）；
+// 若任务此前被标为“源数据集不存在”，数据集重新出现时一并清掉该标记（不动分区登记被拒的原因）。
 func (s *Store) UpdateTaskDataset(ctx context.Context, spaceID, datasetID, retention, metaJSON string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_retention = ?, c_meta_json = ? WHERE c_space_id = ? AND c_dataset_id = ?
-AND (c_retention != ? OR c_meta_json != ?)`, retention, metaJSON, spaceID, datasetID, retention, metaJSON)
+	_, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks
+SET c_retention = ?, c_meta_json = ?,
+    c_blocked_reason = CASE WHEN c_blocked_reason = ? THEN '' ELSE c_blocked_reason END
+WHERE c_space_id = ? AND c_dataset_id = ?
+  AND (c_retention != ? OR c_meta_json != ? OR c_blocked_reason = ?)`,
+		retention, metaJSON, BlockedReasonSourceDatasetMissing, spaceID, datasetID, retention, metaJSON, BlockedReasonSourceDatasetMissing)
 	return err
 }
 
-// CreateFollowRuns 在一个事务里给每个启用、且没有排队中或运行中运行的任务生成一条 follow 运行，返回生成的条数。
+// MarkTaskSourceMissing 在 Storage 明确返回数据集不存在时标记任务，并取消它当前排队中的 follow 运行；
+// 不修改 c_status，与人工停用保持区分。
+func (s *Store) MarkTaskSourceMissing(ctx context.Context, spaceID, datasetID string, now time.Time) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = ?
+WHERE c_space_id = ? AND c_dataset_id = ? AND c_blocked_reason != ?`,
+			BlockedReasonSourceDatasetMissing, spaceID, datasetID, BlockedReasonSourceDatasetMissing); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = ?
+WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'follow' AND c_status = 'queued'`,
+			millisOf(now), BlockedReasonSourceDatasetMissing, spaceID, datasetID)
+		return err
+	})
+}
+
+// CreateFollowRuns 在一个事务里给每个启用、源数据集未缺失且没有排队中或运行中运行的任务生成一条 follow 运行，返回生成的条数。
 // 有活动运行（含排队中的导入）的任务这一分钟什么都不写。
 func (s *Store) CreateFollowRuns(ctx context.Context, now time.Time) (int, error) {
 	created := 0
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		// 先读完全部任务再写：库只有一个连接，读游标未关闭时不能执行写入。
-		rows, err := tx.QueryContext(ctx, queryTasks3)
+		rows, err := tx.QueryContext(ctx, queryTasks3, BlockedReasonSourceDatasetMissing)
 		if err != nil {
 			return err
 		}
@@ -262,7 +284,7 @@ const (
 	queryTasks1 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`
 	queryTasks2 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE (? = '' OR c_space_id = ?)
 ORDER BY c_space_id, c_dataset_id LIMIT ? OFFSET ?`
-	queryTasks3    = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_status = 'enabled' ORDER BY c_space_id, c_dataset_id`
+	queryTasks3    = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_status = 'enabled' AND c_blocked_reason != ? ORDER BY c_space_id, c_dataset_id`
 	queryTaskByDir = `SELECT c_dataset_id FROM t_archive_tasks WHERE c_space_id = ? AND c_purpose = ? AND c_dir_name = ?`
 )
 

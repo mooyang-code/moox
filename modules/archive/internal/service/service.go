@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -222,6 +223,16 @@ func resolveSpace(ctx context.Context, requested string, required bool) (string,
 		return "", errors.New("space_id 不能为空")
 	}
 	return requested, nil
+}
+
+// spaceMarket 从共享包 barclock 读取空间的日终时刻（本地 HH:MM，全天交易为空）与是否全天交易；
+// 未登记的空间按全天交易处理。
+func spaceMarket(spaceID string) (dayClose string, allDay bool) {
+	market, err := barclock.MarketFor(spaceID)
+	if err != nil {
+		return "", true
+	}
+	return market.DayClose, market.Alignment != barclock.AlignmentSession
 }
 
 // parseRetention 解析线上保留期："<n>h" 或 "forever"（不限）；空串说明没有读到数据集信息，按错误处理。

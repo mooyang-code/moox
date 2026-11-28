@@ -76,9 +76,8 @@ type Service struct {
 	Replays ReplayWaker
 	// Warmer 为空时不预热（没有策略池的部署）。
 	Warmer Warmer
-	// Tasks 与 Archives 用于删除实例（以及启用前核对任务还在、标出删除未完成的实例）；为空时不能删除实例。
-	Tasks    FactorTaskAdmin
-	Archives ArchiveTasks
+	// Tasks 用于删除实例（以及启用前核对任务还在、标出删除未完成的实例）；为空时不能删除实例。
+	Tasks FactorTaskAdmin
 	// Lifecycle 是模块的生命周期控制器（GetLifecycle、ControlLifecycle 转给它）；为空时两个方法回答“还没有就绪”。
 	Lifecycle *lifecycle.Controller
 	Now       func() time.Time

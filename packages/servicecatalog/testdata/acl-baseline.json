@@ -2577,7 +2577,6 @@
     "storage-primary": [],
     "storage-view": [],
     "strategy": [
-      "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
       "trpc.moox.collector.CollectMgr/ListHistorySeeds",
       "trpc.moox.factor.EngineControl/CloseReplay",
       "trpc.moox.factor.EngineControl/OpenReplay",

@@ -470,10 +470,6 @@ func expectations(values map[string]report.DatasetExpectation) []report.DatasetE
 // （开盘时间），与 Storage、因子的水位同一口径，Monitor 按交易日历算它的收线时间和到达延迟。
 func (o *instanceObserver) ObservePeriod(ctx context.Context, instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string) {
 	o.periods.WithLabelValues(instance.InstanceID, result, reason).Inc()
-	if reason == store.SkipHistorySeeding {
-		// 上游历史补齐中：实例的期望是暂停的，这一期不是运行也不是故障，只计数。
-		return
-	}
 	warming := o.warmingUp(ctx, instance, result, reason)
 	o.mu.Lock()
 	defer o.mu.Unlock()

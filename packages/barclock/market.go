@@ -18,6 +18,10 @@ type Market struct {
 	CalendarID string
 	Timezone   string
 	Sessions   []string
+	// DayClose 是 session 市场的日终时刻（本地 "HH:MM"，24 小时连续市场为空）：
+	// 归档按它加允许迟到判断日分区何时可导出。一般等于最后一个交易时段的收盘；
+	// 港股为 "16:10"（16:00 这根要等到 16:10 并入收市竞价成交），Sessions 本身仍保留到 16:00 用于周期截止与分桶。
+	DayClose string
 	// Name 是给人看的市场名（“A 股”“港股”），ZoneName 是给人看的时区名（“上海”“香港”）；写进报错与周期标识。
 	Name     string
 	ZoneName string
@@ -26,9 +30,9 @@ type Market struct {
 // 当前登记的市场：空间 ID 即市场 ID。
 var markets = map[string]Market{
 	"crypto":  {ID: "crypto", Alignment: AlignmentEpochUTC},
-	"stockcn": {ID: "stockcn", Alignment: AlignmentSession, CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, Name: "A 股", ZoneName: "上海"},
-	"stockhk": {ID: "stockhk", Alignment: AlignmentSession, CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: []string{"09:30-12:00", "13:00-16:00"}, Name: "港股", ZoneName: "香港"},
-	"stockus": {ID: "stockus", Alignment: AlignmentSession, CalendarID: "us_stock", Timezone: "America/New_York", Sessions: []string{"09:30-16:00"}, Name: "美股", ZoneName: "纽约"},
+	"stockcn": {ID: "stockcn", Alignment: AlignmentSession, CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, DayClose: "15:00", Name: "A 股", ZoneName: "上海"},
+	"stockhk": {ID: "stockhk", Alignment: AlignmentSession, CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: []string{"09:30-12:00", "13:00-16:00"}, DayClose: "16:10", Name: "港股", ZoneName: "香港"},
+	"stockus": {ID: "stockus", Alignment: AlignmentSession, CalendarID: "us_stock", Timezone: "America/New_York", Sessions: []string{"09:30-16:00"}, DayClose: "16:00", Name: "美股", ZoneName: "纽约"},
 }
 
 // Markets 返回全部已登记的市场，按 ID 排序。

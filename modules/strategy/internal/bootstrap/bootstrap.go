@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/archivetasks"
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
@@ -93,9 +92,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}}
 	// 启用绑了组合账户的实例前读一次 Trade 的账户；停用后通知 Trade 关闭会话（批 3 的 3.6）。
 	service.Trade = tradeowner.New(cfg.Trade, gateway)
-	// 删除实例：经 Factor 删除关联的任务，删除前经 archive-mgr 确认结果数据集没有归档任务。
+	// 删除实例：经 Factor 删除关联的任务。
 	service.Tasks = live
-	service.Archives = &archivetasks.Client{Gateway: gateway}
 	// 策略池启用后在后台预热：用回放的历史读取从启用时刻往前推进到最新已收盘的一期。
 	warm := &warmup.Manager{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, Logf: log.Infof}
 	closers = append(closers, func() error {
@@ -111,7 +109,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil, nil, err
 	}
 	observer.SetStaleAlertPeriods(cfg.Params.StaleAlertPeriods)
-	// 首次历史补齐：每分钟向 Collector 取一次补齐中的数据集，补齐中的实例不求值、期望置“暂停（历史补齐中）”。
+	// 首次历史补齐：每分钟向 Collector 取一次补齐中的数据集，用于把补齐中的实例在监控期望里置“暂停（历史补齐中）”。
 	seedingTracker := seeding.New(seeding.GatewayLister{Gateway: gateway, Timeout: seedingListTimeout}, log.Warnf)
 	observer.SetSeeding(seedingTracker.Bound)
 
@@ -138,7 +136,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, ready, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure, Seeding: seedingTracker.Bound}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, ready, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure}
 		handlerRef.Store(handler)
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
