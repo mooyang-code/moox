@@ -120,8 +120,6 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.SecretMgr/UpdateSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/DeleteSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/ToggleSecretStatus": secretWriteReason,
-	"trpc.moox.ops.SecretMgr/ExportSecrets":      "密钥整包导出带口令，moox-cli 无权调用，由用户在管理台操作",
-	"trpc.moox.ops.SecretMgr/ImportSecrets":      "密钥整包导入带口令，moox-cli 无权调用，由用户在管理台操作",
 
 	"trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer": walletTransferReason,
 	"trpc.moox.trade.TradeConsoleService/UnblockInstrument":     "解除下架禁止请用户在管理台“交易管理 › 下架名单”里查看与解除（会一并取消进行中的下架处理）：解除后策略会恢复买入，Agent 不代用户解除",

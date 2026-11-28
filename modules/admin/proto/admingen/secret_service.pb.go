@@ -1099,7 +1099,7 @@ func (x *ToggleSecretStatusRsp) GetRetInfo() *commonpb.RetInfo {
 }
 
 // ExportSecretsReq 把全部秘钥（含明文，不含系统秘钥与配置备份）用导出口令加密成一个迁移包，供另一套环境导入。
-// 明文只在 Admin 进程内出现：口令经 PBKDF2-SHA256 派生 AES-256-GCM 密钥，响应里只有密文。仅全局管理员可调用。
+// 明文只在 Admin 进程内出现：口令经 PBKDF2-SHA256 派生 AES-256-GCM 密钥，响应里只有密文。调用权限由服务目录控制（console 与 moox-cli）。
 type ExportSecretsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1210,7 +1210,7 @@ func (x *ExportSecretsRsp) GetCount() int32 {
 	return 0
 }
 
-// ImportSecretsReq 用导出口令解开迁移包，按 secret_id 导入（保留原 secret_id，引用它的配置迁移后仍然有效）。仅全局管理员可调用。
+// ImportSecretsReq 用导出口令解开迁移包，按 secret_id 导入（保留原 secret_id，引用它的配置迁移后仍然有效）。调用权限由服务目录控制（console 与 moox-cli）。
 type ImportSecretsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

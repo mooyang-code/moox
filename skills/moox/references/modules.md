@@ -187,5 +187,5 @@ worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺�
 ## 空间、密钥与配置
 
 - 空间：`space list|show|create|update|delete`（空间只登记在 Storage；`space delete` 会清空该空间全部数据，执行前必须向用户说明）；建好后用 `metadata apply` 从 `config/setup/metadata.yaml` 的写法导入数据来源、数据集、字段。
-- 密钥（交易所、云账户等）：请用户在管理台“系统设置 › 密钥管理”自己填写，Agent 只用 `secret list|show` 看清单（值已打码）。`gateway call` 拒绝返回明文的方法。
+- 密钥（交易所、云账户等）：请用户在管理台“系统设置 › 密钥管理”自己填写，Agent 只用 `secret list|show` 看清单（值已打码），加密迁移包备份与恢复可用 `secret export|import`。`gateway call` 拒绝返回明文的方法。
 - `moox.toml`：Agent 用 `config get` / `config set` 读写（[`config-access.md`](config-access.md)），不直接读文件；用户要看或改时运行 `config edit`，让用户在自己的浏览器里操作；换电脑时把两份文件连同解密密钥一起拷过去。

@@ -126,9 +126,7 @@ components:
           - name: DeleteSecret
           - name: ToggleSecretStatus
           - name: ExportSecrets
-            operators: [console]
           - name: ImportSecrets
-            operators: [console]
           # Collector 只能读固定 ID 只读 Key 的公开标识：用专用方法授权，Collector 拿不到 Trade 的交易密钥。
           - name: GetReadonlyExchangeKey
             read_only: true
