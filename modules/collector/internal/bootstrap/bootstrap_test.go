@@ -10,10 +10,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
-	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +76,7 @@ func TestCollectorHealthSnapshot(t *testing.T) {
 		t.Fatalf("open database: %v", err)
 	}
 	t.Cleanup(func() { _ = dbm.Close() })
-	state := health.New("collector", "collector", "", "")
+	state := healthz.NewState("collector", "collector", "", "")
 	rsp := collectorHealthSnapshot(cfg, dbm, state)(context.Background())
 
 	if rsp.Module != "collector" || !rsp.Ready || rsp.Status != "ok" {

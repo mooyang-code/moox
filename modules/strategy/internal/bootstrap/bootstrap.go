@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/paramsubmit"
@@ -30,6 +29,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 
@@ -199,13 +199,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	service.Lifecycle = life
 	strategypb.RegisterStrategyMgrService(strategyMgr, service)
-	healthState := health.New("strategy", "strategy", "", "")
+	healthState := healthz.NewState("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, healthState, consumer)
 	// 上报带给 Monitor 的就绪与 /readyz 是同一个判断；模块级生命周期也随上报，首页的系统状态读它。
 	reporter.SetReadiness(healthz.Readiness(healthState.Snapshot))
 	reporter.SetLifecycle(life.ReportState)
 	healthState.SetReady(true)
-	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.strategy.Health"), healthz.StandardMux(healthState.Snapshot, promhttp.Handler())); err != nil {
 		return nil, nil, fmt.Errorf("注册策略健康检查失败：%w", err)
 	}
 	keep = true
@@ -349,7 +349,7 @@ func newInputClient(cfg Config, gateway gatewayclient.Invoker) *upstream.RPCClie
 	return upstream.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
 }
 
-func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *health.State, consumer *eventconsumer.Consumer) func(context.Context) healthz.Response {
+func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *healthz.State, consumer *eventconsumer.Consumer) func(context.Context) healthz.Response {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := db != nil && db.Ping(ctx) == nil
 		eventBusConnected := eventRuntime != nil && eventRuntime.Connected()

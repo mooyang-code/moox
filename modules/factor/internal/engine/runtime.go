@@ -17,7 +17,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
-	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
@@ -36,6 +35,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -76,7 +76,7 @@ type Runtime struct {
 	// sources 判断数据源当前能不能计算，运行时就是本地数据层 data。
 	sources sourceGate
 	admit   *memadmit.Admitter
-	health  *factorhealth.State
+	health  *healthz.State
 	life    *lifecycle.Controller
 	checks  taskChecks
 	writes  *inflight
@@ -114,7 +114,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r := &Runtime{
 		writes: newInflight(), cfg: cfg, identity: domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: bootID, Version: version},
 		runs: newRunTracker(), monitor: NewHealth(cfg.Pipeline.PeriodBudgetMax), locks: setlock.New(),
-		lease: &leaseState{}, health: factorhealth.New("factor-engine", cfg.Engine.ID, version, ""),
+		lease: &leaseState{}, health: healthz.NewState("factor-engine", cfg.Engine.ID, version, ""),
 	}
 	appCtx, cancel := context.WithCancel(ctx)
 	r.appCtx = appCtx
@@ -291,7 +291,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, func(ctx context.Context) { r.runTaskChecks(ctx, cfg.Lifecycle.Interval) })
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service(healthService), healthz.StandardMux(r.health.Snapshot, promhttp.Handler())); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
 	factorpb.RegisterEngineControlService(s.Service(engineControlService), r.controlService())

@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/enginehub"
-	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/preview"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
 	factorrpc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
@@ -20,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/packages/factorudf"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -44,7 +44,7 @@ type Runtime struct {
 	stopSeeds   func()
 	cancel      context.CancelFunc
 	udfRuntimes []*factorudf.Runtime
-	health      *factorhealth.State
+	health      *healthz.State
 	once        sync.Once
 	err         error
 }
@@ -62,7 +62,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 		}
 	}
 
-	runtime := &Runtime{health: factorhealth.New("factor", "factor", "", "")}
+	runtime := &Runtime{health: healthz.NewState("factor", "factor", "", "")}
 	appCtx, cancel := context.WithCancel(ctx)
 	runtime.cancel = cancel
 	defer func() {
@@ -138,7 +138,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	if err := registerMetricsReporter(s, hub, healthz.Readiness(runtime.health.Snapshot)); err != nil {
 		return nil, err
 	}
-	if err := factorhealth.Register(s.Service(factorHealthService), runtime.health); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service(factorHealthService), healthz.StandardMux(runtime.health.Snapshot, promhttp.Handler())); err != nil {
 		return nil, fmt.Errorf("register factor health service: %w", err)
 	}
 	runtime.health.SetReady(true)

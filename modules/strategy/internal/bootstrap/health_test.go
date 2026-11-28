@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	strategyhealth "github.com/mooyang-code/moox/modules/strategy/internal/health"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
@@ -80,7 +80,7 @@ func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	state := strategyhealth.New("strategy", "strategy", "", "")
+	state := healthz.NewState("strategy", "strategy", "", "")
 	state.SetReady(true)
 	response := strategyHealthSnapshot(repo, runtime, state, nil)(context.Background())
 	if response.Ready {
@@ -146,7 +146,7 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 	for !runtime.Connected() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	state := strategyhealth.New("strategy", "strategy", "", "")
+	state := healthz.NewState("strategy", "strategy", "", "")
 	state.SetReady(true)
 	response := strategyHealthSnapshot(repo, runtime, state, nil)(context.Background())
 	if response.Ready || response.Details["outbox_stalled"] != true || response.Details["eventbus_connected"] != true {

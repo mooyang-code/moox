@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/eastmoneylimit"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
-	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
@@ -31,6 +30,7 @@ import (
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -278,7 +278,7 @@ type metricsReporter interface {
 }
 
 // registerMetricsReporter 注册指标上报；上报带上与 /readyz 同一个就绪判断和模块级生命周期（首页的系统状态读它）。
-func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler, state *health.State, life *lifecycle.Controller) {
+func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler, state *healthz.State, life *lifecycle.Controller) {
 	if s == nil {
 		return
 	}
@@ -313,11 +313,11 @@ func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metrics
 }
 
 // registerHealth 注册健康检查，并启动已创建的生命周期刷新协程；返回的健康状态交给指标上报。
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, life *lifecycle.Controller) (*health.State, error) {
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, life *lifecycle.Controller) (*healthz.State, error) {
 	if cfg == nil {
 		return nil, nil
 	}
-	state := health.New("collector", "collector", "", "")
+	state := healthz.NewState("collector", "collector", "", "")
 	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state)
 	if s == nil {
 		return nil, fmt.Errorf("collector health service is unavailable")
@@ -327,13 +327,13 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Ru
 			return nil, fmt.Errorf("collector runtime is closing")
 		}
 	}
-	if err := health.Register(s.Service("trpc.moox.collector.Health"), state); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.collector.Health"), healthz.StandardMux(state.Snapshot, promhttp.Handler())); err != nil {
 		return nil, fmt.Errorf("collector health server failed to start: %w", err)
 	}
 	return state, nil
 }
 
-func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
+func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *healthz.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		// Do not synchronously ping SQLite from /readyz. The collector's single
 		// SQLite connection is intentionally shared by the scheduler and the
