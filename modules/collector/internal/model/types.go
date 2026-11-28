@@ -37,13 +37,3 @@ type Response struct {
 	RequestID string      `json:"request_id,omitempty"`
 	Timestamp time.Time   `json:"timestamp"`
 }
-
-// CollectParams describes one source collection request.
-type CollectParams struct {
-	Symbol    string                 `json:"symbol"`
-	Interval  string                 `json:"interval,omitempty"`
-	StartTime *time.Time             `json:"start_time,omitempty"`
-	EndTime   *time.Time             `json:"end_time,omitempty"`
-	Limit     int                    `json:"limit,omitempty"`
-	Options   map[string]interface{} `json:"options,omitempty"`
-}

@@ -18,17 +18,11 @@ import (
 
 func TestMetricMessageStoreNilGuards(t *testing.T) {
 	var store *MetricMessageStore
-	_, err := store.IsDuplicate(context.Background(), "msg")
-	require.Error(t, err)
-	_, err = store.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m"}, &metricspb.MetricReport{}, nil)
+	_, err := store.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m"}, &metricspb.MetricReport{}, nil)
 	require.Error(t, err)
 
 	empty := NewMetricMessageStore(nil)
 	require.NotNil(t, empty)
-	_, err = empty.IsDuplicate(context.Background(), "")
-	require.Error(t, err)
-	_, err = empty.IsDuplicate(context.Background(), "id")
-	require.Error(t, err)
 	_, err = empty.CommitIngest(context.Background(), nil, nil, nil)
 	require.Error(t, err)
 	_, err = empty.CommitIngest(context.Background(), &eventpb.EventMessage{}, &metricspb.MetricReport{}, nil)

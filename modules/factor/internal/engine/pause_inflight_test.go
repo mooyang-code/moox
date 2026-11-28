@@ -81,7 +81,7 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 	ctx := context.Background()
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
-	executor := recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond),
+	executor := recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) {
 			return r.beginWrite(ctx, taskID, true, true)
 		}))
@@ -102,7 +102,7 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 			}()
 			require.Eventually(t, func() bool { return !r.life.Running() }, 5*time.Second, time.Millisecond)
 		}
-	}}, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond),
+	}}, recalcexec.WithChunkPeriods(2),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) {
 			return r.beginWrite(ctx, taskID, true, true)
 		}))
@@ -127,7 +127,7 @@ func TestJobPulledBeforePauseDoesNotContinueDuringCatchup(t *testing.T) {
 	ctx := context.Background()
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
-	executor := recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond),
+	executor := recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) {
 			return r.beginWrite(ctx, taskID, true, true)
 		}))

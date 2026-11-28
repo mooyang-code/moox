@@ -91,6 +91,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 	cmd.AddCommand(
 		newSetupInstallCommand(deps),
 		newSetupUpdateCommand(deps),
+		newSetupBackupCommand(),
 		newSetupOperatorCommand(deps),
 		newSetupDeployCommand(deps),
 		newSetupInitCommand(deps),

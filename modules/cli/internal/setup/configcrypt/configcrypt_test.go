@@ -104,3 +104,27 @@ func TestSetDefaultForTestReplacesAndRestores(t *testing.T) {
 	}
 	restore()
 }
+
+func TestDeriveKeyIsDeterministicAndDomainSeparated(t *testing.T) {
+	store := &MemoryStore{}
+	if _, _, err := DeriveKey(store, "setup-backup", false); !errors.Is(err, ErrKeyMissing) {
+		t.Fatalf("未创建密钥且 create=false 时应返回 ErrKeyMissing，实际 %v", err)
+	}
+	key1, fp1, err := DeriveKey(store, "setup-backup", true)
+	if err != nil || len(key1) != keySize || fp1 == "" {
+		t.Fatalf("首次派生失败: len=%d fp=%q err=%v", len(key1), fp1, err)
+	}
+	key2, fp2, err := DeriveKey(store, "setup-backup", false)
+	if err != nil || string(key1) != string(key2) || fp1 != fp2 {
+		t.Fatalf("同密钥同用途应派生一致结果: fp1=%q fp2=%q err=%v", fp1, fp2, err)
+	}
+	otherPurpose, fp3, err := DeriveKey(store, "other-purpose", false)
+	if err != nil || string(otherPurpose) == string(key1) || fp3 != fp1 {
+		t.Fatalf("不同用途应派生不同子密钥且保持同一主密钥指纹: fp=%q err=%v", fp3, err)
+	}
+	otherStore := &MemoryStore{}
+	otherKey, otherFP, err := DeriveKey(otherStore, "setup-backup", true)
+	if err != nil || string(otherKey) == string(key1) || otherFP == fp1 {
+		t.Fatalf("不同主密钥应得到不同派生密钥与指纹: fp=%q err=%v", otherFP, err)
+	}
+}

@@ -25,12 +25,14 @@ func TestSyncAccountLockWaitHonorsDeadline(t *testing.T) {
 			}))
 			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}, SessionState: readySessionState(true)}
 			var unlock func()
+			var lockErr error
 			switch kind {
 			case "execution":
-				unlock = db.LockLogicalAccountExecution("space-1", "logical-1")
+				unlock, lockErr = db.LockLogicalAccountExecutionContext(context.Background(), "space-1", "logical-1")
 			case "account":
-				unlock = db.LockTradingAccount("account-1")
+				unlock, lockErr = db.LockTradingAccountContext(context.Background(), "account-1")
 			}
+			require.NoError(t, lockErr)
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
 			done := make(chan error, 1)
@@ -68,7 +70,8 @@ type lockDeadlineAdapter struct{ syncAdapter }
 func TestSyncAccountDoesNotWaitForMembershipLock(t *testing.T) {
 	db := openSyncStore(t)
 	seedSyncAccount(t, db)
-	unlock := db.LockLogicalAccountMembership()
+	unlock, lockErr := db.LockLogicalAccountMembershipContext(context.Background())
+	require.NoError(t, lockErr)
 	defer unlock()
 	svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -88,7 +91,8 @@ func TestSyncAccountLockFailureRetainsCleanupDatabaseError(t *testing.T) {
 			} else {
 				require.NoError(t, db.DBForTest().Callback().Raw().Before("gorm:raw").Register("test:lock_cleanup", func(query *gorm.DB) { query.AddError(dbErr) }))
 			}
-			unlock := db.LockTradingAccount("account-1")
+			unlock, lockErr := db.LockTradingAccountContext(context.Background(), "account-1")
+			require.NoError(t, lockErr)
 			defer unlock()
 			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -123,7 +127,8 @@ func TestSyncUnknownTailPropagatesLockDeadline(t *testing.T) {
 	}))
 	adapters := syncAdapterSource{adapter: &lockDeadlineAdapter{}}
 	svc := &Service{Store: db, Orders: &orderapp.Service{Store: db, Adapters: adapters}, Now: func() time.Time { return time.UnixMilli(3_000) }}
-	unlock := db.LockTradingAccount("account-1")
+	unlock, lockErr := db.LockTradingAccountContext(context.Background(), "account-1")
+	require.NoError(t, lockErr)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)

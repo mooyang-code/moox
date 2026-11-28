@@ -125,7 +125,7 @@ func TestCollectionTaskRepository_ListKeywordMatchesNameOrTaskID(t *testing.T) {
 	}
 }
 
-func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t *testing.T) {
+func TestCollectionTaskRepository_UpdateValidatedPreservesTaskIdentityAndResult(t *testing.T) {
 	s := newCollectorStore(t)
 	repo := s.Tasks()
 	ctx := context.Background()
@@ -136,7 +136,7 @@ func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t 
 		ResultDatasetID: "dataset-original",
 	}))
 
-	updated, err := repo.UpdateMutableByTaskID(ctx, "crypto", "task-1", domain.CollectionTask{
+	updated, err := repo.UpdateValidatedTaskByTaskID(ctx, "crypto", "task-1", domain.CollectionTask{
 		SpaceID: "other", TaskID: "other", TaskName: "renamed", Description: "after",
 		DataType: "kline", CollectParams: `{"target_dataset_id":"dataset-other"}`, Enabled: false,
 		Creator: "other", PrepareState: domain.PrepareStateReady, ResultDatasetID: "dataset-other",

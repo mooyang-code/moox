@@ -30,6 +30,28 @@ func (s *Service) ListNotificationChannels(ctx context.Context, _ *monitorpb.Lis
 	return &monitorpb.ListNotificationChannelsRsp{RetInfo: success(), Channels: out}, nil
 }
 
+// ExportNotificationChannels 导出全部推送渠道（含完整 Webhook URL 与签名密钥），只给 moox-cli 卸载前备份使用。
+func (s *Service) ExportNotificationChannels(ctx context.Context, _ *monitorpb.ExportNotificationChannelsReq) (*monitorpb.ExportNotificationChannelsRsp, error) {
+	if s.notifications == nil {
+		return &monitorpb.ExportNotificationChannelsRsp{RetInfo: inner(errNotificationUnavailable)}, nil
+	}
+	channels, err := s.notifications.List(ctx)
+	if err != nil {
+		return &monitorpb.ExportNotificationChannelsRsp{RetInfo: inner(err)}, nil
+	}
+	out := make([]*monitorpb.ExportedNotificationChannel, 0, len(channels))
+	for _, channel := range channels {
+		out = append(out, &monitorpb.ExportedNotificationChannel{
+			ChannelId:   channel.ChannelID,
+			ChannelType: channel.ChannelType,
+			WebhookUrl:  channel.WebhookURL,
+			Secret:      channel.Secret,
+			CreatedAt:   millis(channel.CreatedAt),
+		})
+	}
+	return &monitorpb.ExportNotificationChannelsRsp{RetInfo: success(), Channels: out}, nil
+}
+
 // AddNotificationChannel 新增一个推送渠道；URL 必须是所选平台的 HTTPS 机器人地址（通用 Webhook 不限域名），同一个 URL 不能重复添加。
 // 密钥选填：飞书（签名校验）、钉钉（加签）、通用 Webhook（签名头）使用，企业微信不接受；要改密钥就删掉渠道重加。
 func (s *Service) AddNotificationChannel(ctx context.Context, req *monitorpb.AddNotificationChannelReq) (*monitorpb.AddNotificationChannelRsp, error) {

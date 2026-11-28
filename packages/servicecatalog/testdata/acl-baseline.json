@@ -3,9 +3,9 @@
   "summary": {
     "components": 16,
     "services": 24,
-    "methods": 295,
-    "read_only_methods": 137,
-    "retryable_methods": 139,
+    "methods": 296,
+    "read_only_methods": 138,
+    "retryable_methods": 140,
     "callers": 20,
     "principals": 2
   },
@@ -985,6 +985,12 @@
           "name": "DeleteNotificationChannel",
           "read_only": false,
           "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ExportNotificationChannels",
+          "read_only": true,
+          "retryable": true,
           "timeout_ms": 5000
         },
         {
@@ -2437,6 +2443,7 @@
       "trpc.moox.hostagent.HostAgentMgr/RunOnce",
       "trpc.moox.monitor.MonitorMgr/AddNotificationChannel",
       "trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel",
+      "trpc.moox.monitor.MonitorMgr/ExportNotificationChannels",
       "trpc.moox.monitor.MonitorMgr/GetAlertMute",
       "trpc.moox.monitor.MonitorMgr/GetDoctorContext",
       "trpc.moox.monitor.MonitorMgr/GetHealthOverview",
@@ -2449,8 +2456,10 @@
       "trpc.moox.monitor.MonitorMgr/UnmuteAlerts",
       "trpc.moox.ops.SecretMgr/CreateSecret",
       "trpc.moox.ops.SecretMgr/DeleteSecret",
+      "trpc.moox.ops.SecretMgr/ExportSecrets",
       "trpc.moox.ops.SecretMgr/GetSecret",
       "trpc.moox.ops.SecretMgr/GetSecretValue",
+      "trpc.moox.ops.SecretMgr/ImportSecrets",
       "trpc.moox.ops.SecretMgr/ListSecrets",
       "trpc.moox.ops.SecretMgr/ToggleSecretStatus",
       "trpc.moox.ops.SecretMgr/UpdateSecret",
@@ -2575,7 +2584,6 @@
     "storage-primary": [],
     "storage-view": [],
     "strategy": [
-      "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
       "trpc.moox.collector.CollectMgr/ListHistorySeeds",
       "trpc.moox.factor.EngineControl/CloseReplay",
       "trpc.moox.factor.EngineControl/OpenReplay",

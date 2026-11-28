@@ -132,7 +132,6 @@ type StorageConfig struct {
 	// PolicyFile names storage-policy.json (Dataset retention and View
 	// limits), relative to the package root unless absolute.
 	PolicyFile string          `yaml:"policy_file"`
-	Roles      []string        `yaml:"roles"`
 	Metadata   StorageMetadata `yaml:"metadata"`
 	Devices    StorageDevices  `yaml:"devices"`
 	EventBus   StorageEventBus `yaml:"eventbus"`
@@ -171,9 +170,6 @@ func (c *RuntimeConfig) ApplyDefaults() {
 func (c *StorageConfig) ApplyDefaults() {
 	if c.Root == "" {
 		c.Root = "./var/storage"
-	}
-	if len(c.Roles) == 0 {
-		c.Roles = []string{"primary", "view"}
 	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")
@@ -245,20 +241,6 @@ func rebasePathWithinRoot(path string, oldRoot string, newRoot string) (string, 
 		return "", false
 	}
 	return filepath.Join(newRoot, rel), true
-}
-
-func (c *StorageConfig) HasRole(role string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(role))
-	if normalized == "" {
-		return false
-	}
-	for _, candidate := range c.Roles {
-		candidate = strings.ToLower(strings.TrimSpace(candidate))
-		if candidate == normalized {
-			return true
-		}
-	}
-	return false
 }
 
 // NewConfigLoader 创建配置加载器

@@ -8,10 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCollectionTask_TableName_ShouldReturnCollectorTasksTable(t *testing.T) {
-	assert.Equal(t, "t_collector_tasks", (&CollectionTask{}).TableName())
-}
-
 func TestCollectionTaskPrepareStateValidation(t *testing.T) {
 	for _, state := range []CollectionTaskPrepareState{PrepareStatePending, PrepareStateWaitingView, PrepareStateReady, PrepareStateError} {
 		assert.True(t, state.Valid(), state)

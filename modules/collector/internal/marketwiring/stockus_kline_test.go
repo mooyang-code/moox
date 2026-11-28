@@ -509,7 +509,6 @@ func TestStockUSRequestsUseExchangeAndDottedCode(t *testing.T) {
 
 // 候选链只有一个数据源，熔断阈值（同时是在途请求上限）按单一来源的口径算：每源尝试次数 × 并发，与港股相同。
 func TestStockUSSingleSourceBreakerThreshold(t *testing.T) {
-	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "")
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
 	planned := fetchplan.RouteFetchLimits("stockus")(fetchplan.TaskGroup{Frequency: "5m"}, marketfetch.PlanFetch{})
 	require.Equal(t, 16, planned.FeedConcurrency, "采集计划给美股的源并发")

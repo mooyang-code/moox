@@ -9,13 +9,14 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
 // handOverSession 模拟策略换实例：新实例的会话开始得更晚，它的目标直接覆盖旧会话的目标行（Trade 不存归属，不经认领、释放）。
 func (f *targetFixture) handOverSession(t *testing.T, quantity string) {
 	t.Helper()
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(context.Background(), f.store, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TargetID: "target-next", InstanceID: "runner-2", SessionID: "session-2", SessionStartedAt: 2000, StrategyID: "strategy-1",
 		BarEndTime: f.now.UnixMilli(), ValidUntil: time.Now().Add(time.Hour).UnixMilli(),

@@ -126,9 +126,13 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	invalid := proto.Clone(report).(*metricspb.MetricReport)
 	invalid.Snapshot.Data = []byte("corrupted")
 	require.ErrorContains(t, ingest(encode("invalid-snapshot", now, invalid)), "checksum mismatch")
-	duplicate, err := messages.IsDuplicate(t.Context(), "invalid-snapshot")
+	dedupeCount, err := store.WithDatabase(manager, func(db *gorm.DB) int64 {
+		var count int64
+		require.NoError(t, db.Model(&monmetrics.MetricIngestMessage{}).Where("c_message_id = ?", "invalid-snapshot").Count(&count).Error)
+		return count
+	})
 	require.NoError(t, err)
-	require.False(t, duplicate)
+	require.Zero(t, dedupeCount)
 	old := proto.Clone(report).(*metricspb.MetricReport)
 	old.ServiceName, old.InstanceId = "archive", "archive@control"
 	require.NoError(t, ingest(encode("old-report", now.Add(-time.Hour), old)))

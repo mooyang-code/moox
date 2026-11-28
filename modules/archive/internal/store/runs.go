@@ -446,13 +446,6 @@ OR (c_kind != 'follow' AND c_finished_at < ?))`,
 // followOtherRetention 是失败、取消的 follow 的保留期：每分钟可能一条，按其余运行的 90 天保留会堆积十几万条，拖慢每分钟的检查。
 const followOtherRetention = 7 * 24 * time.Hour
 
-// CountQueued 返回排队中的运行数。
-func (s *Store) CountQueued(ctx context.Context) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_runs WHERE c_status = 'queued'`).Scan(&n)
-	return n, err
-}
-
 // mergeUnrecoverable 按 (subject_id, series_tag) 归并重叠或相邻的无法补齐区间，再截断到 maxUnrecoverable 条并序列化为 JSON。
 func mergeUnrecoverable(items []Unrecoverable) string {
 	if len(items) == 0 {

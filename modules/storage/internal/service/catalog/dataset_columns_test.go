@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
@@ -126,8 +127,9 @@ func TestDatasetCacheRefreshOnlyTriggeredByDatasetMutations(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rspCol.GetRetInfo().GetCode())
 	require.Equal(t, 1, refreshes)
-	_, err = cached.GetDatasetColumn(ctx, dataset.GetSpaceId(), dataset.GetDatasetId(), "rsi_14")
+	cols, _, err := cached.ListDatasetColumns(ctx, dataset.GetSpaceId(), dataset.GetDatasetId(), nil)
 	require.NoError(t, err)
+	require.True(t, slices.ContainsFunc(cols, func(col *pb.DatasetColumn) bool { return col.GetColumnName() == "rsi_14" }))
 
 	rspDel, err := service.DeleteDataset(ctx, &pb.DeleteDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
 	require.NoError(t, err)

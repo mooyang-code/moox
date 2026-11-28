@@ -38,13 +38,13 @@ func TestTargetExpiryCASDoesNotOverwriteNewerTarget(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
-	old, accepted, err := s.AcceptLogicalAccountTarget(ctx, validLogicalAccountTarget())
+	old, accepted, err := acceptTargetForTest(ctx, s, validLogicalAccountTarget())
 	require.NoError(t, err)
 	require.True(t, accepted)
 	next := old
 	next.TargetID = "new-target"
 	setTargetBar(&next, 2)
-	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, next)
+	_, accepted, err = acceptTargetForTest(ctx, s, next)
 	require.NoError(t, err)
 	require.True(t, accepted)
 	old.Status = "EXPIRED"

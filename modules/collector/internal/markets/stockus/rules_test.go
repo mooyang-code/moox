@@ -20,9 +20,7 @@ func TestDefaultInstrumentType(t *testing.T) {
 	for _, marketType := range []string{"", "equity", " Index ", "spot"} {
 		require.Equal(t, marketdata.InstrumentEquity, rules.DefaultInstrumentType(marketType), marketType)
 	}
-	hasTradeCount, err := markets.HasTradeCount("stockus", "")
-	require.NoError(t, err)
-	require.False(t, hasTradeCount)
+	require.False(t, rules.DefaultInstrumentType("").HasTradeCount())
 }
 
 func TestParseSubject(t *testing.T) {

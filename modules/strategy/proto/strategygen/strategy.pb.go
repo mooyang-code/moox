@@ -110,9 +110,9 @@ func (x *Strategy) GetUpdatedAt() int64 {
 	return 0
 }
 
-// StrategyInstance 把定义绑定到一个空间、一个或两个（现货、永续各一个）因子任务和可选的组合账户。因子任务在创建时写定、
-// 不能修改，实例第一次启用时才与任务正式关联（一个任务只关联一个实例，直到随实例删除）；读取的 View 是任务结果数据集的默认 View，
-// 由任务 ID 推导。
+// StrategyInstance 把定义绑定到一个空间、一个或多个因子任务（按市场及可选的附加来源、参考市场登记）和可选的组合账户。
+// 因子任务在创建时写定、不能修改；一个任务可被多个实例引用，只有声明了 factor_params 的实例在首次启用时才与主帧任务独占关联（直到随实例删除）；
+// 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。
 type StrategyInstance struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

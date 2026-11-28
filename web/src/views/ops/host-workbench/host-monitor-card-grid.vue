@@ -30,13 +30,18 @@
         </div>
       </div>
       <div class="progress-list">
-        <a-progress :percent="ratio(row.cpuUsage)" :show-text="false" size="small" :color="progressColor(row.cpuUsage)" />
-        <a-progress :percent="ratio(row.memoryUsage)" :show-text="false" size="small" :color="progressColor(row.memoryUsage)" />
+        <a-progress :percent="ratio(row.cpuUsage)" :show-text="false" size="small" :color="progressColor(row.cpuExceeded)" />
+        <a-progress
+          :percent="ratio(row.memoryUsage)"
+          :show-text="false"
+          size="small"
+          :color="progressColor(row.memoryExceeded)"
+        />
         <a-progress
           :percent="ratio(row.filesystemUsage)"
           :show-text="false"
           size="small"
-          :color="progressColor(row.filesystemUsage)"
+          :color="progressColor(row.filesystemExceeded)"
         />
       </div>
       <div class="network-row">
@@ -58,8 +63,7 @@ defineEmits<{ select: [key: string] }>();
 
 const percent = (value: number | null) => (value === null ? "--" : `${value}%`);
 const ratio = (value: number | null) => (value === null ? 0 : value / 100);
-const progressColor = (value: number | null) =>
-  value !== null && value >= 80 ? "#dc2626" : value !== null && value >= 60 ? "#d97706" : "#16a34a";
+const progressColor = (exceeded: boolean) => (exceeded ? "#dc2626" : "#16a34a");
 const stateText = (row: HostMonitorRow) => (row.state === "online" ? "在线" : row.state === "offline" ? "离线" : "未上报");
 const lastSeenText = (row: HostMonitorRow) => {
   if (!row.monitor) return "尚未收到主机指标";

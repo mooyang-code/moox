@@ -106,10 +106,8 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "waiting", result.Status)
 	require.Equal(t, deadline.Unix(), result.DeadlineAt)
-	// 后台判定和这里抢同一期，只断言最终只发出一个标记，不断言是谁判定的。
+	// 推进时钟到截止时刻，等待后台每秒运行的周期判定器自动封口并发出唯一标记。
 	now.Store(deadline.UnixNano())
-	_, err = store.FinalizeWaitingDatasetPeriods(ctx, deadline)
-	require.NoError(t, err)
 	select {
 	case <-publisher.entered:
 	case <-ctx.Done():

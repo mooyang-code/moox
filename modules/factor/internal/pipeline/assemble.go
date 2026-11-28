@@ -27,13 +27,7 @@ type assembledRow struct {
 	params map[string]map[string]float64
 }
 
-// Assemble 把计算结果组装成要写入的行；逐项结果见 AssembleWithReport。
-func (r *Runner) Assemble(plan Plan, loaded LoadResult, computation Computation) ([]storageio.ResultRow, error) {
-	rows, _, err := r.AssembleWithReport(plan, loaded, computation)
-	return rows, err
-}
-
-// AssembleWithReport 在 Assemble 之外返回逐 (因子, 标的, 周期) 的结果，补算与填充据此确认哪些项已取得有效值。
+// AssembleWithReport 把计算结果组装成要写入的行，并返回逐 (因子, 标的, 周期) 的结果，补算与填充据此确认哪些项已取得有效值。
 func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Computation) ([]storageio.ResultRow, AssembleReport, error) {
 	if r == nil || r.clock == nil {
 		return nil, AssembleReport{}, fmt.Errorf("factor period clock is required")

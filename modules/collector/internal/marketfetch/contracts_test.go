@@ -50,7 +50,7 @@ func TestRequestValidateRejectsMalformedOrReversedCoverage(t *testing.T) {
 func TestRequestValidateAcceptsRFC3339NanoCoverage(t *testing.T) {
 	req := Request{
 		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
-		BatchKind: domain.BatchKindGapRepair,
+		BatchKind: domain.BatchKindBackfill,
 		Items: []domain.CollectionItem{{
 			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID,
 			StartTime: "2026-08-30T01:00:00.123456789Z", EndTime: "2026-08-30T01:01:00Z", BarLimit: 3,

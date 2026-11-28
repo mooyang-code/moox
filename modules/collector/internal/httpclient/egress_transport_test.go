@@ -104,7 +104,7 @@ func TestEgressHTTPClientKeepsOtherDomainsDirectAndProxyErrorsClosed(t *testing.
 	transport.CloseIdleConnections()
 }
 
-func TestEgressHTTPClientSnapshotIPsCannotBypassProxy(t *testing.T) {
+func TestEgressHTTPClientRoutesAllowedHostThroughProxy(t *testing.T) {
 	calls := 0
 	client, err := NewEgressHTTPClient(egressInvoker(func(_ context.Context, _, _ string, req, rsp any) error {
 		calls++
@@ -115,7 +115,7 @@ func TestEgressHTTPClientSnapshotIPsCannotBypassProxy(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 	var result map[string]bool
-	require.NoError(t, client.GetWithIPs(context.Background(), "api.binance.com", []string{"127.0.0.1", "1.1.1.1"}, "/api", nil, &result))
+	require.NoError(t, client.Get(context.Background(), "api.binance.com", "/api", nil, &result))
 	require.True(t, result["ok"])
 	require.Equal(t, 1, calls)
 }

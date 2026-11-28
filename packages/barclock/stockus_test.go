@@ -25,7 +25,7 @@ func TestStockUSMarket(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Market{
 		ID: "stockus", Alignment: AlignmentSession, CalendarID: "us_stock", Timezone: "America/New_York",
-		Sessions: []string{"09:30-16:00"}, Name: "美股", ZoneName: "纽约",
+		Sessions: []string{"09:30-16:00"}, DayClose: "16:00", Name: "美股", ZoneName: "纽约",
 	}, market)
 
 	// 日内周期要整除 390 分钟的交易时段：5m、15m、30m 可以，1h 不行（390 不能被 60 整除）。

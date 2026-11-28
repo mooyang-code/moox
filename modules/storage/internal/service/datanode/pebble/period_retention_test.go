@@ -107,14 +107,14 @@ func TestPeriodFinalizerRecoversFullBitmapLeftWaiting(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, [][]byte{key}, keys, "windowed=%t", windowed)
 	}
-	finalized, err := store.FinalizeWaitingDatasetPeriods(ctx, now)
+	finalized, err := store.finalizeDuePeriods(ctx, now, false)
 	require.ErrorContains(t, err, "已损坏")
 	require.Equal(t, 1, finalized)
 	require.Equal(t, "complete", goldenPeriodStatus(t, store, goldenSpace, goldenDataset, goldenFreq, goldenPeriod.Unix()))
 	markers := goldenMarkers(t, store, goldenSpace, goldenDataset)
 	require.Len(t, markers, 1)
 	require.Equal(t, "complete", markers[0].payload.GetStatus())
-	_, err = store.FinalizeWaitingDatasetPeriods(ctx, now.Add(time.Minute))
+	_, err = store.finalizeDuePeriods(ctx, now.Add(time.Minute), false)
 	require.ErrorContains(t, err, "已损坏")
 	require.Len(t, goldenMarkers(t, store, goldenSpace, goldenDataset), 1)
 }

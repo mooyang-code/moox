@@ -523,8 +523,9 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 	for _, task := range tasks {
 		key := task.SpaceID + "/" + task.DatasetID
 		view := s.taskToPB(task)
+		dayClose, _ := spaceMarket(task.SpaceID)
 		in := healthInput{Now: now, Task: task, OpenParts: openByTask[key], OldestQueued: queued[key], WorkerLastSeen: status.lastSeen,
-			Lateness: s.cfg.AllowedLateness, SpaceTZ: spaceTZs[task.SpaceID], SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose,
+			Lateness: s.cfg.AllowedLateness, SpaceTZ: spaceTZs[task.SpaceID], SpaceLocalClose: dayClose,
 			RemoteEnabled: status.remoteEnabled, Remote: backlogs[key]}
 		if run, ok := lastRuns[key]; ok {
 			copied := run

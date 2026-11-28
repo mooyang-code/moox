@@ -602,21 +602,10 @@ func validateTaskResultIdentityConflict(ctx context.Context, tx *gorm.DB, task d
 	return nil
 }
 
-// UpdateMutableByTaskID updates only public mutable task fields. Task identity,
-// collection configuration, result identities, and preparer-owned runtime
-// state are intentionally absent from the update set.
-func (r *TaskRepository) UpdateMutableByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
-	return r.updateMutableByTaskID(ctx, spaceID, taskID, task, false)
-}
-
 // UpdateValidatedTaskByTaskID is used after the RPC layer has validated that
-// the collection definition is semantically unchanged. It also persists the
-// canonical collect_params in the same SQL update.
+// the collection definition is semantically unchanged. It persists the mutable
+// task fields and canonical collect_params in the same SQL update.
 func (r *TaskRepository) UpdateValidatedTaskByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
-	return r.updateMutableByTaskID(ctx, spaceID, taskID, task, true)
-}
-
-func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask, persistCollectParams bool) (*domain.CollectionTask, error) {
 	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
 	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
 		return nil, err
@@ -626,14 +615,12 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 	}
 	now := nowUnixMilli()
 	updates := map[string]any{
-		"c_task_name":   task.TaskName,
-		"c_description": task.Description,
-		"c_enabled":     task.Enabled,
-		"c_mtime":       now,
-	}
-	if persistCollectParams {
-		updates["c_collect_params"] = task.CollectParams
-		updates["c_definition_hash"] = task.DefinitionHash
+		"c_task_name":       task.TaskName,
+		"c_description":     task.Description,
+		"c_enabled":         task.Enabled,
+		"c_collect_params":  task.CollectParams,
+		"c_definition_hash": task.DefinitionHash,
+		"c_mtime":           now,
 	}
 	query := r.db.WithContext(ctx).Model(&taskRow{}).
 		Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID))

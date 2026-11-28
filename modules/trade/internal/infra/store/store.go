@@ -170,13 +170,6 @@ func initializeTradeStore(db *gorm.DB) error {
 	return nil
 }
 
-func (s *Store) LockTradingAccount(tradingAccountID string) func() {
-	value, _ := s.accountLocks.LoadOrStore(tradingAccountID, &sync.Mutex{})
-	mutex := value.(*sync.Mutex)
-	mutex.Lock()
-	return mutex.Unlock
-}
-
 // A background scan can defer a busy account without waiting behind its sync.
 func (s *Store) TryLockTradingAccount(tradingAccountID string) (func(), bool) {
 	value, _ := s.accountLocks.LoadOrStore(tradingAccountID, &sync.Mutex{})
@@ -198,22 +191,6 @@ func (s *Store) LockLogicalAccount(spaceID string, logicalAccountID string) func
 func (s *Store) LockLogicalAccountContext(ctx context.Context, spaceID, logicalAccountID string) (func(), error) {
 	value, _ := s.logicalLocks.LoadOrStore(spaceID+"\x00"+logicalAccountID, &sync.Mutex{})
 	return lockContext(ctx, value.(*sync.Mutex))
-}
-
-func (s *Store) LockLogicalAccountExecution(
-	spaceID string,
-	logicalAccountID string,
-) func() {
-	key := spaceID + "\x00" + logicalAccountID
-	value, _ := s.executionLocks.LoadOrStore(key, &sync.Mutex{})
-	mutex := value.(*sync.Mutex)
-	mutex.Lock()
-	return mutex.Unlock
-}
-
-func (s *Store) LockLogicalAccountMembership() func() {
-	s.logicalMembershipLock.Lock()
-	return s.logicalMembershipLock.Unlock
 }
 
 func validateExistingTradeSchema(db *gorm.DB) error {

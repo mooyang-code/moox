@@ -139,7 +139,7 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 		return &model.Response{Success: false, Message: fmt.Sprintf("market_fetch space_id %q does not match function space %q", req.SpaceID, expectedSpaceID), RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
 	}
 	if req.Concurrency == 0 {
-		req.Concurrency = envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
+		req.Concurrency = DefaultConcurrency
 	}
 	invocationHandler, closeGateway, err := h.prepareInvocation()
 	if err != nil {
@@ -365,7 +365,7 @@ func storageCommitReserve(storage, cls time.Duration) time.Duration {
 }
 
 func executionContext(parent context.Context) (context.Context, context.CancelFunc) {
-	seconds := envInt("MOOX_FETCH_TIMEOUT_SECONDS", envInt("MOOX_MARKET_FETCH_TIMEOUT_SECONDS", tencent.CollectorTimerTimeoutSeconds))
+	seconds := envInt("MOOX_FETCH_TIMEOUT_SECONDS", tencent.CollectorTimerTimeoutSeconds)
 	budget := time.Duration(seconds) * time.Second
 	if deadline, ok := parent.Deadline(); ok {
 		remaining := time.Until(deadline)

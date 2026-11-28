@@ -6,8 +6,6 @@ provider:
   kline:
     endpoint: /api/qt/stock/kline/get
     max_bars_per_request: 1205
-    volume_unit: shares
-    amount_unit: CNY
   rate_limit:
     scope: egress_ip
     # 2026-11-06 南京实测单个出口 IP 512 并发突发、每秒 640 次持续（各 3840 次）都是 100% 成功，没有触顶；

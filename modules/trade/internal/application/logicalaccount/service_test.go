@@ -320,7 +320,7 @@ func modernSessionStartedAt(session string) int64 {
 func acceptModernSessionTarget(t *testing.T, tradeStore *store.Store, session string) store.LogicalAccountTargetRecord {
 	t.Helper()
 	now := time.Now().UTC()
-	target, accepted, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	target, accepted, err := storetest.AcceptTarget(context.Background(), tradeStore, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-" + session,
 		InstanceID: "instance-1", SessionID: session, SessionStartedAt: modernSessionStartedAt(session), StrategyID: "strategy-1",
 		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
@@ -429,7 +429,8 @@ func setLogicalFixtureReady(
 // 目标执行或完整同步持锁时，带期限的逻辑账户业务调用必须按期限返回，并释放已取得的锁（尤其不能占住全局成员锁）。
 func TestLogicalAccountOperationsHonorDeadlineWhileLocksAreHeld(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
-	unlockExecution := tradeStore.LockLogicalAccountExecution("space-1", "logical-1")
+	unlockExecution, err := tradeStore.LockLogicalAccountExecutionContext(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
 	defer unlockExecution()
 
 	for name, call := range map[string]func(context.Context) error{
@@ -466,7 +467,7 @@ func TestLogicalAccountOperationsHonorDeadlineWhileLocksAreHeld(t *testing.T) {
 // acceptSessionTarget 写入 runner-1/session-1 的一份有效目标（目标数量 1 张 BTC-USDT-SWAP）。
 func acceptSessionTarget(t *testing.T, tradeStore *store.Store, targetID string) {
 	t.Helper()
-	_, _, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, _, err := storetest.AcceptTarget(context.Background(), tradeStore, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
 		InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1000, StrategyID: "strategy-1",
 		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),

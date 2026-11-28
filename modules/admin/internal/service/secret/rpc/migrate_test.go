@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go"
@@ -191,19 +192,23 @@ func TestImportSecretsReportsInvalidItems(t *testing.T) {
 	require.Contains(t, rsp.GetFailed(), "NoID：创建失败")
 }
 
-// 只有已登录用户可以导出、导入；导出口令太短拒绝。
-func TestSecretMigrationRequiresLoginAndStrongPassphrase(t *testing.T) {
-	service := NewService(newMemSecrets(model.Secret{SecretID: "sec_a", Name: "A", Category: "other", SecretValue: "v"}))
-	for _, ctx := range []context.Context{trpc.BackgroundContext()} {
-		exported, err := service.ExportSecrets(ctx, &pb.ExportSecretsReq{Passphrase: testPassphrase})
-		require.NoError(t, err)
-		require.Equal(t, pb.ErrorCode_NO_PERMISSION, exported.GetRetInfo().GetCode())
-		require.Empty(t, exported.GetBundle())
-		imported, err := service.ImportSecrets(ctx, &pb.ImportSecretsReq{Bundle: "{}", Passphrase: testPassphrase})
-		require.NoError(t, err)
-		require.Equal(t, pb.ErrorCode_NO_PERMISSION, imported.GetRetInfo().GetCode())
-	}
-	short, err := service.ExportSecrets(userCtx(), &pb.ExportSecretsReq{Passphrase: "short-口令"})
+// 非登录调用方（经服务目录放行的 moox-cli）允许导出与导入，操作者记为 moox-cli；导出口令太短拒绝。
+func TestSecretMigrationAllowsNonLoginCallerAndRejectsWeakPassphrase(t *testing.T) {
+	source := newMemSecrets(model.Secret{SecretID: "sec_a", Name: "A", Category: "other", SecretValue: "v"})
+	exported, err := NewService(source).ExportSecrets(trpc.BackgroundContext(), &pb.ExportSecretsReq{Passphrase: testPassphrase})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, exported.GetRetInfo().GetCode(), exported.GetRetInfo().GetMsg())
+	require.EqualValues(t, 1, exported.GetCount())
+	require.NotEmpty(t, exported.GetBundle())
+
+	target := newMemSecrets()
+	imported, err := NewService(target).ImportSecrets(trpc.BackgroundContext(), &pb.ImportSecretsReq{Bundle: exported.GetBundle(), Passphrase: testPassphrase})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, imported.GetRetInfo().GetCode(), imported.GetRetInfo().GetMsg())
+	require.EqualValues(t, 1, imported.GetCreated())
+	require.Equal(t, servicecatalog.OperatorMooxCLI, target.byID["sec_a"].Creator)
+
+	short, err := NewService(source).ExportSecrets(userCtx(), &pb.ExportSecretsReq{Passphrase: "short-口令"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, short.GetRetInfo().GetCode())
 	require.Empty(t, short.GetBundle())

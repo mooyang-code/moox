@@ -539,7 +539,7 @@ func TestExpiryCancelStuckTimerRestartsForAnotherTarget(t *testing.T) {
 	require.Error(t, err)
 
 	f.now = start.Add(expiryStuckAfter - time.Minute)
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(context.Background(), f.store, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-next",
 		InstanceID: "runner-2", SessionID: "session-2", SessionStartedAt: sessionStartedAt("session-2"), StrategyID: "strategy-1",
 		BarEndTime: f.now.Add(-2 * time.Second).UnixMilli(), ValidUntil: f.now.Add(-time.Second).UnixMilli(),

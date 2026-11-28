@@ -40,7 +40,7 @@ func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.Coll
 		domains := c.client.SpotDomains()
 		for index, domain := range domains {
 			attemptCtx, cancel := endpointAttemptContext(binanceapi.SingleAttempt(ctx), len(domains)-index)
-			symbols, err := c.spotAPI.GetExchangeInfoWithDomainIPs(attemptCtx, domain, nil)
+			symbols, err := c.spotAPI.GetExchangeInfoWithDomain(attemptCtx, domain)
 			cancel()
 			if err == nil {
 				return symbols, nil
@@ -56,7 +56,7 @@ func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.Coll
 		domains := c.client.SwapDomains()
 		for index, domain := range domains {
 			attemptCtx, cancel := endpointAttemptContext(binanceapi.SingleAttempt(ctx), len(domains)-index)
-			symbols, err := c.swapAPI.GetExchangeInfoWithDomainIPs(attemptCtx, domain, nil)
+			symbols, err := c.swapAPI.GetExchangeInfoWithDomain(attemptCtx, domain)
 			cancel()
 			if err == nil {
 				return symbols, nil

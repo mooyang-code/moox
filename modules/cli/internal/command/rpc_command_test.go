@@ -96,7 +96,10 @@ func TestGatewayCallRefusesSecretPlaintextWithoutConnecting(t *testing.T) {
 	useRPCGateway(t, gateway)
 	for _, target := range [][2]string{
 		{"trpc.moox.ops.SecretMgr", "GetSecretValue"},
+		{"trpc.moox.ops.SecretMgr", "ExportSecrets"},
+		{"trpc.moox.ops.SecretMgr", "ImportSecrets"},
 		{"trpc.moox.monitor.MonitorMgr", "ListNotificationChannels"},
+		{"trpc.moox.monitor.MonitorMgr", "ExportNotificationChannels"},
 	} {
 		cmd := newGatewayCallCommand()
 		cmd.SetArgs([]string{target[0], target[1]})

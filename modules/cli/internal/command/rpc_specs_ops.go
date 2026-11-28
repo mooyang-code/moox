@@ -1,7 +1,7 @@
 package command
 
-// 运维只读视图：监控、EventBus、主机与部署、主机代理、密钥（只列打码后的信息）。
-// 主机与部署的增删、启停走 setup，这里只提供查询。
+// 运维视图：监控、EventBus、主机与部署、主机代理、密钥（只列清单与打码后的信息）。
+// 主机与部署的增删、启停走 setup，密钥加密备份走 setup backup，这里只提供查询。
 
 const (
 	monitorMgr   = "trpc.moox.monitor.MonitorMgr"

@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -238,7 +239,7 @@ func TestHourlyCapDeferralSurvivesANewTargetAndNeverBlocksItsReductions(t *testi
 	require.Empty(t, f.orders.specs)
 
 	// 新目标（还是加仓）：额度仍是本小时已用满，继续顺延，blocked_targets 换成新目标的。
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(context.Background(), f.store, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-next", InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1000, StrategyID: "strategy-1",
 		BarEndTime: f.now.UnixMilli() + 1, ValidUntil: fixtureValidUntil(f.now),
 		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "200"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli() + 1,

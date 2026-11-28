@@ -26,14 +26,11 @@ func NewSwapAPI(client *Client) *SwapAPI {
 // GetKline 获取永续合约K线数据
 // API: GET https://fapi.binance.com/fapi/v1/klines
 func (api *SwapAPI) GetKline(ctx context.Context, req *KlineRequest) ([]*Kline, error) {
-	return api.GetKlineWithIPs(ctx, req, nil)
+	return api.GetKlineWithDomain(ctx, req, api.client.SwapDomain())
 }
 
-func (api *SwapAPI) GetKlineWithIPs(ctx context.Context, req *KlineRequest, ips []string) ([]*Kline, error) {
-	return api.GetKlineWithDomainIPs(ctx, req, api.client.SwapDomain(), ips)
-}
-
-func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *KlineRequest, domain string, ips []string) ([]*Kline, error) {
+// GetKlineWithDomain 按显式指定的官方永续端点获取 K 线。
+func (api *SwapAPI) GetKlineWithDomain(ctx context.Context, req *KlineRequest, domain string) ([]*Kline, error) {
 	if api == nil || api.client == nil || req == nil {
 		return nil, fmt.Errorf("永续合约 K 线请求无效")
 	}
@@ -60,7 +57,7 @@ func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *KlineRequest
 	var rawKlines []CandleStick
 	err := retryBinance(ctx,
 		func() error {
-			return api.client.GetDirectWithIPs(ctx, domain, ips, SwapKlineEndpoint, params, &rawKlines)
+			return api.client.GetDirect(ctx, domain, SwapKlineEndpoint, params, &rawKlines)
 		},
 	)
 	if err != nil {
@@ -82,27 +79,15 @@ func (api *SwapAPI) GetKlineWithDomainIPs(ctx context.Context, req *KlineRequest
 // GetExchangeInfo 获取永续合约交易所信息（交易规则和交易对）
 // API: GET https://fapi.binance.com/fapi/v1/exchangeInfo
 func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*SymbolInfo, error) {
-	return api.getExchangeInfo(ctx, nil)
+	return api.getExchangeInfoWithDomain(ctx, api.client.SwapDomain(), nil)
 }
 
-func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*SymbolInfo, error) {
-	return api.getExchangeInfoWithIPs(ctx, query, nil)
+// GetExchangeInfoWithDomain 按显式指定的官方永续端点获取交易对元数据。
+func (api *SwapAPI) GetExchangeInfoWithDomain(ctx context.Context, domain string) ([]*SymbolInfo, error) {
+	return api.getExchangeInfoWithDomain(ctx, domain, nil)
 }
 
-func (api *SwapAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*SymbolInfo, error) {
-	return api.GetExchangeInfoWithDomainIPs(ctx, api.client.SwapDomain(), ips)
-}
-
-// GetExchangeInfoWithDomainIPs requests swap exchange metadata from the explicitly selected official endpoint.
-func (api *SwapAPI) GetExchangeInfoWithDomainIPs(ctx context.Context, domain string, ips []string) ([]*SymbolInfo, error) {
-	return api.getExchangeInfoWithDomainIPs(ctx, domain, nil, ips)
-}
-
-func (api *SwapAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*SymbolInfo, error) {
-	return api.getExchangeInfoWithDomainIPs(ctx, api.client.SwapDomain(), query, ips)
-}
-
-func (api *SwapAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain string, query url.Values, ips []string) ([]*SymbolInfo, error) {
+func (api *SwapAPI) getExchangeInfoWithDomain(ctx context.Context, domain string, query url.Values) ([]*SymbolInfo, error) {
 	var symbols []*SymbolInfo
 	var total int
 	domain = strings.TrimSpace(domain)
@@ -112,7 +97,7 @@ func (api *SwapAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain str
 
 	err := retryBinance(ctx,
 		func() error {
-			return api.client.GetDirectStreamWithIPs(ctx, domain, ips, SwapExchangeInfoEndpoint, query, func(reader io.Reader) error {
+			return api.client.GetDirectStream(ctx, domain, SwapExchangeInfoEndpoint, query, func(reader io.Reader) error {
 				var decodeErr error
 				// 只要永续合约（含交割中的 PERPETUAL_DELIVERING），状态不限：交易状态由 Collector 的交易状态检测判定。
 				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
@@ -253,7 +238,7 @@ func (api *SwapAPI) fundingRatePage(ctx context.Context, pacer FundingPacer, sym
 	params.Set("endTime", strconv.FormatInt(to-1, 10))
 	params.Set("limit", strconv.Itoa(FundingRatePageLimit))
 	var rows []FundingRateRecord
-	err := api.client.GetDirectWithIPs(ctx, api.client.SwapDomain(), nil, SwapFundingRateEndpoint, params, &rows)
+	err := api.client.GetDirect(ctx, api.client.SwapDomain(), SwapFundingRateEndpoint, params, &rows)
 	if pacer != nil {
 		pacer.Done(err)
 	}

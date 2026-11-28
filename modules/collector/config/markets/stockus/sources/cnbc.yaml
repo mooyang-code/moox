@@ -7,8 +7,6 @@ provider:
   kline:
     # 能力声明：一只标的一个交易日 78 根 5m。历史补齐跨交易日合并的分块（至多 1000 根）在源内按 31 天一次取完。
     max_bars_per_request: 78
-    volume_unit: shares
-    amount_unit: USD
   rate_limit:
     scope: egress_ip
     # 2026-11-23 实测：本机、控制机并发 64、约 6000 次请求没有一次失败；南京云函数 11 个函数同时取标普 500，

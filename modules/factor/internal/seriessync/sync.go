@@ -129,13 +129,6 @@ func (s *Syncer) prunePulled(src seriesstore.Source, cursor storageio.ChangeCurs
 	}
 }
 
-// HasPulled 报告数据源下某标的是否还留有拉取记录（观测与测试用）。
-func (s *Syncer) HasPulled(src seriesstore.Source, subject string) bool {
-	s.pulledMu.Lock()
-	defer s.pulledMu.Unlock()
-	return len(s.pulled[src][subject]) > 0
-}
-
 // ClearPulled 清掉数据源的拉取记录：本地数据被拉取之外的途径覆盖（导入、对账）之后，不能再用「拉取已反映」跳过变更。
 func (s *Syncer) ClearPulled(src seriesstore.Source) { s.clearPulled(src) }
 

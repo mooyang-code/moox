@@ -136,7 +136,7 @@ describe("instance delete flow", () => {
     expect(api.Message.error.mock.calls[0][0]).toContain(DELETE_INCOMPLETE_TIP);
 
     vi.clearAllMocks();
-    const notStarted = "读不到归档任务，暂不能删除";
+    const notStarted = "读取因子任务 ftask_spot 失败，暂不能删除";
     api.deleteInstance.mockRejectedValue(new RequestError(notStarted, { ret_info: { code: 4, msg: notStarted } } as never));
     await confirmInstanceDelete(instance);
     lastDialog().onOk();
@@ -145,12 +145,12 @@ describe("instance delete flow", () => {
   });
 
   it("shows a refusal as is", async () => {
-    const message = "结果数据集 dataset_factor_spot 有归档任务，请先到归档页删除这些归档任务，再删除实例";
+    const message = "有回放正在读取这个实例的数据（rep-1），请先取消回放，再删除实例";
     api.deleteInstance.mockRejectedValue(new RequestError(message, { ret_info: { code: 1, msg: message } } as never));
     await confirmInstanceDelete(instance);
     lastDialog().onOk();
     await flushPromises();
     expect(api.Message.error.mock.calls[0][0]).not.toContain(DELETE_INCOMPLETE_TIP);
-    expect(api.Message.error.mock.calls[0][0]).toContain("归档任务");
+    expect(api.Message.error.mock.calls[0][0]).toContain("请先取消回放");
   });
 });

@@ -175,7 +175,8 @@ func TestMatcherBusyAccountDoesNotBlockHealthyAccountOrClearFault(t *testing.T) 
 		return matchFill(o), nil
 	}
 	m.failAccount("a", errors.New("previous quote failure"))
-	unlock := s.LockTradingAccount("a")
+	unlock, err := s.LockTradingAccountContext(context.Background(), "a")
+	require.NoError(t, err)
 	var once sync.Once
 	release := func() { once.Do(unlock) }
 	defer release()
@@ -227,7 +228,8 @@ func TestMatcherEnqueuesAfterUnlockAndRefresh(t *testing.T) {
 	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) { return matchFill(o), nil }
 	m.Enqueue = func(id string) {
 		require.True(t, refreshed)
-		unlock := s.LockTradingAccount(id)
+		unlock, err := s.LockTradingAccountContext(context.Background(), id)
+		require.NoError(t, err)
 		unlock()
 	}
 	done := make(chan error, 1)
@@ -256,7 +258,8 @@ func TestMatcherWakesTargetAfterFillIsCommitted(t *testing.T) {
 		current, getErr := s.GetOrder(context.Background(), "s", "a")
 		require.NoError(t, getErr)
 		require.Equal(t, "FILLED", current.State)
-		unlock := s.LockTradingAccount("a")
+		unlock, err := s.LockTradingAccountContext(context.Background(), "a")
+		require.NoError(t, err)
 		unlock()
 		woken = append(woken, spaceID+"/"+logicalAccountID)
 	}

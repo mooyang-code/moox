@@ -1,5 +1,4 @@
 import { call } from "@/api/http";
-import { toInstantMs } from "@/utils/time-zone";
 import {
   aggregateNetworkRate,
   filesystemUsageAvailable,
@@ -142,12 +141,27 @@ interface HostSnapshot {
 
 type WireNumber = number | string;
 
+/** 主机资源告警阈值（百分比，由 Monitor 返回）；0 表示没有对应的告警规则。 */
+export interface HostAlertThresholds {
+  cpu: number;
+  memory: number;
+  disk: number;
+}
+
 interface HostAgent {
   host_id?: string;
   hostname?: string;
   /** 毫秒，数字字符串。 */
   last_seen_at?: string;
   snapshot?: HostSnapshot;
+  reachable?: boolean;
+}
+
+interface ListHostAgentsResponse {
+  agents?: HostAgent[];
+  cpu_threshold?: number;
+  memory_threshold?: number;
+  disk_threshold?: number;
 }
 
 interface HostHistoryPoint {
@@ -158,8 +172,13 @@ interface HostHistoryPoint {
 }
 
 export const getCurrentMetrics = () => {
-  return call<Record<string, never>, { agents?: HostAgent[] }>("monitor", "ListHostAgents", {}).then(response => ({
-    metrics: (response.agents ?? []).map(agent => toHostMetrics(agent))
+  return call<Record<string, never>, ListHostAgentsResponse>("monitor", "ListHostAgents", {}).then(response => ({
+    metrics: (response.agents ?? []).map(agent => toHostMetrics(agent)),
+    thresholds: {
+      cpu: response.cpu_threshold ?? 0,
+      memory: response.memory_threshold ?? 0,
+      disk: response.disk_threshold ?? 0
+    }
   }));
 };
 
@@ -191,7 +210,8 @@ export const toHostMetrics = (agent: HostAgent): HostMetrics => {
   return {
     host_id: agent.host_id ?? "",
     hostname: agent.hostname ?? "",
-    status: isFresh(agent.last_seen_at) ? "online" : "offline",
+    // 在线状态直接取后端按停报时限（3 分钟）判出的 reachable，不用浏览器时钟重算。
+    status: agent.reachable === true ? "online" : "offline",
     timestamp: agent.last_seen_at ?? "",
     cpu: {
       usage: cpu.usage_percent ?? 0,
@@ -260,11 +280,6 @@ const toHistoryPoint = (point: HostHistoryPoint): HistoryPoint => {
     network_tx_speed: networkRate?.tx ?? 0,
     network_available: networkRate !== null
   };
-};
-
-const isFresh = (value?: string) => {
-  const at = toInstantMs(value);
-  return at !== null && Date.now() - at < 60_000;
 };
 
 const toNumber = (value?: WireNumber) => {

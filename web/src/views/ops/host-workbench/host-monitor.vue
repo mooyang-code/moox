@@ -59,7 +59,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { usePolling } from "@/hooks/usePolling";
-import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
+import { getCurrentMetrics, type HostAlertThresholds, type HostMetrics } from "@/api/modules/host-monitor";
 import { listAllDeploymentHosts } from "@/api/admin/sysdeploy";
 import type { DeploymentHost } from "@/api/admin/types";
 import HostMonitorCardGrid from "./host-monitor-card-grid.vue";
@@ -74,6 +74,7 @@ const VIEW_MODE_KEY = "moox.host-monitor.view-mode";
 const loading = ref(false);
 const autoRefresh = ref(true);
 const monitors = ref<HostMetrics[]>([]);
+const thresholds = ref<HostAlertThresholds>();
 const hosts = ref<DeploymentHost[]>([]);
 const loadError = ref("");
 const selectedKey = ref("");
@@ -81,7 +82,7 @@ const historyRefreshKey = ref(0);
 const viewMode = ref<MonitorViewMode>(normalizeMonitorViewMode(localStorage.getItem(VIEW_MODE_KEY)));
 let requestID = 0;
 
-const rows = computed(() => buildHostMonitorRows(hosts.value, monitors.value));
+const rows = computed(() => buildHostMonitorRows(hosts.value, monitors.value, thresholds.value));
 const selectedRow = computed(() => rows.value.find(row => row.key === selectedKey.value) || null);
 const onlineCount = computed(() => rows.value.filter(row => row.state === "online").length);
 const attentionCount = computed(() => rows.value.filter(row => row.attention || row.state === "offline").length);
@@ -97,6 +98,7 @@ async function refreshData(refreshHistory = false) {
   const errors: string[] = [];
   if (monitorResult.status === "fulfilled") {
     monitors.value = monitorResult.value.metrics;
+    thresholds.value = monitorResult.value.thresholds;
   } else {
     errors.push("Monitor 实时数据加载失败，继续显示上次成功结果");
   }

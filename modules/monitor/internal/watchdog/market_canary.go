@@ -89,14 +89,6 @@ func MarketCanaryCheckID(config MarketCanaryConfig) string {
 	return strings.Join([]string{"market_canary", config.DatasetID, config.SubjectID, config.Frequency, tag}, ":")
 }
 
-func MarketCanaryTarget(config MarketCanaryConfig) string {
-	tag := "<missing>"
-	if config.SeriesTag != nil {
-		tag = *config.SeriesTag
-	}
-	return strings.Join([]string{config.SpaceID, config.DatasetID, config.SubjectID, config.Frequency, tag}, "/")
-}
-
 // Result 是一次探针的结果：Success 为假时 Reason 是失败原因；Diagnostic 是阈值明细等机器诊断，只随告警事件记下。
 type Result struct {
 	SpaceID, CheckID string

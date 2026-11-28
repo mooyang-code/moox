@@ -126,9 +126,7 @@ components:
           - name: DeleteSecret
           - name: ToggleSecretStatus
           - name: ExportSecrets
-            operators: [console]
           - name: ImportSecrets
-            operators: [console]
           # Collector 只能读固定 ID 只读 Key 的公开标识：用专用方法授权，Collector 拿不到 Trade 的交易密钥。
           - name: GetReadonlyExchangeKey
             read_only: true
@@ -253,6 +251,10 @@ components:
             read_only: true
           - name: ListNotificationChannels
             read_only: true
+          # 卸载前备份导出告警渠道（含完整 Webhook URL 与签名密钥），只给 moox-cli。
+          - name: ExportNotificationChannels
+            read_only: true
+            operators: [moox-cli]
           - name: AddNotificationChannel
           - name: DeleteNotificationChannel
           - name: ListHostAgents
@@ -590,10 +592,8 @@ components:
         methods:
           - name: GetArchiveOverview
             read_only: true
-          # strategy 删除策略实例前确认结果数据集没有归档任务。
           - name: ListArchiveTasks
             read_only: true
-            callers: [strategy]
           - name: PrepareArchiveTask
             read_only: true
           - name: CreateArchiveTask

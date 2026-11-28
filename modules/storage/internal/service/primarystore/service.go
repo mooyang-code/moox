@@ -163,10 +163,6 @@ func requireActiveDataset(ctx context.Context, spaceID, datasetID string) error 
 	return nil
 }
 
-func attrEquals(attrs map[string]string, key, want string) bool {
-	return strings.EqualFold(strings.TrimSpace(attrs[key]), want)
-}
-
 func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed bool) {
 	if s == nil || s.metrics == nil {
 		return

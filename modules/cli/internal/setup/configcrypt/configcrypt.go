@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -105,6 +106,34 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(block)
+}
+
+// DeriveKey 用本机主密钥按用途派生一把 32 字节子密钥，并返回主密钥短指纹（用于换电脑时提前判断）。
+// create 为 true 时若本机还没有主密钥则生成一把并保存；为 false 时缺少主密钥返回 ErrKeyMissing。
+func DeriveKey(store KeyStore, purpose string, create bool) ([]byte, string, error) {
+	if strings.TrimSpace(purpose) == "" {
+		return nil, "", errors.New("派生密钥必须指定用途")
+	}
+	var (
+		key []byte
+		err error
+	)
+	if create {
+		key, err = store.LoadOrCreate()
+	} else {
+		key, err = store.Load()
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	defer clear(key)
+	if len(key) != keySize {
+		return nil, "", errors.New("加密密钥长度不对")
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("moox-derived-key-v1\x00"))
+	mac.Write([]byte(purpose))
+	return mac.Sum(nil), fingerprint(key), nil
 }
 
 // fingerprint 是密钥的短指纹，用来在解密前判断密钥对不对，不泄露密钥本身。

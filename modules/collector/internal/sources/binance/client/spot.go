@@ -24,16 +24,11 @@ func NewSpotAPI(client *Client) *SpotAPI {
 // GetKline 获取现货K线数据
 // API: GET https://api.binance.com/api/v3/klines
 func (api *SpotAPI) GetKline(ctx context.Context, req *KlineRequest) ([]*Kline, error) {
-	return api.GetKlineWithIPs(ctx, req, nil)
+	return api.GetKlineWithDomain(ctx, req, api.client.SpotDomain())
 }
 
-// GetKlineWithIPs uses the collector's DNS snapshot when one is available.
-func (api *SpotAPI) GetKlineWithIPs(ctx context.Context, req *KlineRequest, ips []string) ([]*Kline, error) {
-	return api.GetKlineWithDomainIPs(ctx, req, api.client.SpotDomain(), ips)
-}
-
-// GetKlineWithDomainIPs requests one explicitly selected official Spot endpoint.
-func (api *SpotAPI) GetKlineWithDomainIPs(ctx context.Context, req *KlineRequest, domain string, ips []string) ([]*Kline, error) {
+// GetKlineWithDomain 按显式指定的官方现货端点获取 K 线。
+func (api *SpotAPI) GetKlineWithDomain(ctx context.Context, req *KlineRequest, domain string) ([]*Kline, error) {
 	if api == nil || api.client == nil || req == nil {
 		return nil, fmt.Errorf("现货 K 线请求无效")
 	}
@@ -60,7 +55,7 @@ func (api *SpotAPI) GetKlineWithDomainIPs(ctx context.Context, req *KlineRequest
 	var rawKlines []CandleStick
 	err := retryBinance(ctx,
 		func() error {
-			return api.client.GetDirectWithIPs(ctx, domain, ips, SpotKlineEndpoint, params, &rawKlines)
+			return api.client.GetDirect(ctx, domain, SpotKlineEndpoint, params, &rawKlines)
 		},
 	)
 	if err != nil {
@@ -81,27 +76,15 @@ func (api *SpotAPI) GetKlineWithDomainIPs(ctx context.Context, req *KlineRequest
 // GetExchangeInfo 获取现货交易所信息（交易规则和交易对）
 // API: GET https://api.binance.com/api/v3/exchangeInfo
 func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*SymbolInfo, error) {
-	return api.getExchangeInfo(ctx, nil)
+	return api.getExchangeInfoWithDomain(ctx, api.client.SpotDomain(), nil)
 }
 
-func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*SymbolInfo, error) {
-	return api.getExchangeInfoWithIPs(ctx, query, nil)
+// GetExchangeInfoWithDomain 按显式指定的官方现货端点获取交易对元数据。
+func (api *SpotAPI) GetExchangeInfoWithDomain(ctx context.Context, domain string) ([]*SymbolInfo, error) {
+	return api.getExchangeInfoWithDomain(ctx, domain, nil)
 }
 
-func (api *SpotAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*SymbolInfo, error) {
-	return api.GetExchangeInfoWithDomainIPs(ctx, api.client.SpotDomain(), ips)
-}
-
-// GetExchangeInfoWithDomainIPs requests Spot exchange metadata from the explicitly selected official endpoint.
-func (api *SpotAPI) GetExchangeInfoWithDomainIPs(ctx context.Context, domain string, ips []string) ([]*SymbolInfo, error) {
-	return api.getExchangeInfoWithDomainIPs(ctx, domain, nil, ips)
-}
-
-func (api *SpotAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*SymbolInfo, error) {
-	return api.getExchangeInfoWithDomainIPs(ctx, api.client.SpotDomain(), query, ips)
-}
-
-func (api *SpotAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain string, query url.Values, ips []string) ([]*SymbolInfo, error) {
+func (api *SpotAPI) getExchangeInfoWithDomain(ctx context.Context, domain string, query url.Values) ([]*SymbolInfo, error) {
 	var symbols []*SymbolInfo
 	var total int
 	domain = strings.TrimSpace(domain)
@@ -111,7 +94,7 @@ func (api *SpotAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain str
 
 	err := retryBinance(ctx,
 		func() error {
-			return api.client.GetDirectStreamWithIPs(ctx, domain, ips, SpotExchangeInfoEndpoint, query, func(reader io.Reader) error {
+			return api.client.GetDirectStream(ctx, domain, SpotExchangeInfoEndpoint, query, func(reader io.Reader) error {
 				var decodeErr error
 				total, symbols, decodeErr = decodeExchangeInfo(reader, func(*exchangeInfoSymbolRaw) bool { return true })
 				return decodeErr

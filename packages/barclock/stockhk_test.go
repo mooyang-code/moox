@@ -13,7 +13,7 @@ func TestStockHKMarket(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Market{
 		ID: "stockhk", Alignment: AlignmentSession, CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong",
-		Sessions: []string{"09:30-12:00", "13:00-16:00"}, Name: "港股", ZoneName: "香港",
+		Sessions: []string{"09:30-12:00", "13:00-16:00"}, DayClose: "16:10", Name: "港股", ZoneName: "香港",
 	}, market)
 
 	// 日内周期要整除上午 150 分钟和下午 180 分钟：5m、15m、30m 可以，1h 不行。

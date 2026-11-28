@@ -5,8 +5,6 @@ provider:
   hosts: [web.ifzq.gtimg.cn]
   kline:
     max_bars_per_request: 320
-    volume_unit: shares
-    amount_unit: CNY
   rate_limit:
     scope: egress_ip
     requests_per_second: 5

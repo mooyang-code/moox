@@ -132,7 +132,7 @@ func testJob(subjects ...string) PulledJob {
 }
 
 func newTestLoop(client *jobClientFake, runner *planRecorder, source *sourceFake) *recalcLoop {
-	executor := recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+	executor := recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2))
 	return &recalcLoop{client: client, executor: executor, source: source, poll: time.Millisecond}
 }
 
@@ -248,7 +248,7 @@ func TestRecalcLoopReportsFailedWithLatestProgress(t *testing.T) {
 			return pipeline.Outcome{}, errors.New("factor compute failed")
 		}
 		return pipeline.Outcome{Status: "complete"}, nil
-	}), recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+	}), recalcexec.WithChunkPeriods(2))
 
 	_, err := loop.RunOnce(context.Background())
 
@@ -376,7 +376,7 @@ func TestRecalcLoopExtendsLocalHistoryBeforeRunning(t *testing.T) {
 func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	var attempts int
 	executor := func(runner *planRecorder) *recalcexec.Executor {
-		return recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond),
+		return recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2),
 			recalcexec.WithGate(func(string) bool { attempts++; return attempts > 2 }))
 	}
 	client := &jobClientFake{job: testJob("BTC"), found: true}
@@ -409,7 +409,7 @@ func TestRecalcLoopGivesTheJobBackWhenTheReportFailsOnShutdown(t *testing.T) {
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
 	stopping := recalcexec.NewExecutor(&hookRunner{inner: runner, after: func() { client.err = context.Canceled; cancel() }},
-		recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+		recalcexec.WithChunkPeriods(2))
 	loop := &recalcLoop{client: client, executor: stopping, source: &sourceFake{}, poll: time.Millisecond}
 
 	_, err := loop.RunOnce(ctx)
@@ -424,7 +424,7 @@ func TestRecalcLoopGivesTheJobBackOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
-	stopping := recalcexec.NewExecutor(&hookRunner{inner: runner, after: cancel}, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+	stopping := recalcexec.NewExecutor(&hookRunner{inner: runner, after: cancel}, recalcexec.WithChunkPeriods(2))
 	loop := &recalcLoop{client: client, executor: stopping, source: &sourceFake{}, poll: time.Millisecond}
 
 	_, err := loop.RunOnce(ctx)
@@ -532,7 +532,7 @@ func TestRecalcLoopKeepsOriginalProgressBeforeFirstChunkOnSessionCalendar(t *tes
 			return pipeline.Outcome{}, errors.New("second chunk failed")
 		}
 		return pipeline.Outcome{Status: "complete"}, nil
-	}), recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+	}), recalcexec.WithChunkPeriods(2))
 	_, err = chunkLoop.RunOnce(context.Background())
 	require.NoError(t, err)
 	require.Len(t, chunkClient.reports, 2)

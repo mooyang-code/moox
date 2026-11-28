@@ -206,7 +206,7 @@ func (r *Request) validate() error {
 	}
 	switch r.BatchKind {
 	case domain.BatchKindRealtime:
-	case domain.BatchKindCatchup, domain.BatchKindBackfill, domain.BatchKindGapRepair:
+	case domain.BatchKindBackfill:
 		maxItems = 1
 	default:
 		return fmt.Errorf("unsupported batch_kind %q", r.BatchKind)

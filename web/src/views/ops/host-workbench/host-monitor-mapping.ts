@@ -2,6 +2,7 @@ import {
   aggregateNetworkRate,
   maxAvailableFilesystemUsage,
   metricValueAvailable,
+  type HostAlertThresholds,
   type HostMetrics
 } from "@/api/modules/host-monitor";
 import type { DeploymentHost } from "@/api/admin/types";
@@ -22,17 +23,27 @@ export interface HostMonitorRow {
   cpuUsage: number | null;
   memoryUsage: number | null;
   filesystemUsage: number | null;
+  cpuExceeded: boolean;
+  memoryExceeded: boolean;
+  filesystemExceeded: boolean;
   networkRate: { rx: number; tx: number } | null;
   attention: boolean;
 }
 
-function summarize(monitor?: HostMetrics) {
+function exceedsThreshold(value: number | null, threshold: number | undefined): boolean {
+  return value !== null && threshold !== undefined && threshold > 0 && value >= threshold;
+}
+
+function summarize(monitor?: HostMetrics, thresholds?: HostAlertThresholds) {
   if (!monitor) {
     return {
       state: "unmonitored" as const,
       cpuUsage: null,
       memoryUsage: null,
       filesystemUsage: null,
+      cpuExceeded: false,
+      memoryExceeded: false,
+      filesystemExceeded: false,
       networkRate: null,
       attention: false
     };
@@ -41,29 +52,38 @@ function summarize(monitor?: HostMetrics) {
   const state = monitor.status === "online" ? ("online" as const) : ("offline" as const);
   const filesystemUsage = maxAvailableFilesystemUsage(monitor.filesystems);
   const networkRate = aggregateNetworkRate(monitor.networks);
-  const cpuUsage = metricValueAvailable(monitor.status, monitor.cpu.usage_available) ? Math.round(monitor.cpu.usage) : null;
-  const memoryUsage = metricValueAvailable(monitor.status, monitor.memory.percent_available)
-    ? Math.round(monitor.memory.percent)
-    : null;
-  const availableFilesystemUsage =
-    metricValueAvailable(monitor.status, filesystemUsage !== null) && filesystemUsage !== null
-      ? Math.round(filesystemUsage)
-      : null;
+  const cpuRaw = metricValueAvailable(monitor.status, monitor.cpu.usage_available) ? monitor.cpu.usage : null;
+  const memoryRaw = metricValueAvailable(monitor.status, monitor.memory.percent_available) ? monitor.memory.percent : null;
+  const filesystemRaw =
+    metricValueAvailable(monitor.status, filesystemUsage !== null) && filesystemUsage !== null ? filesystemUsage : null;
+  const cpuUsage = cpuRaw !== null ? Math.round(cpuRaw) : null;
+  const memoryUsage = memoryRaw !== null ? Math.round(memoryRaw) : null;
+  const availableFilesystemUsage = filesystemRaw !== null ? Math.round(filesystemRaw) : null;
   const availableNetworkRate = metricValueAvailable(monitor.status, networkRate !== null) ? networkRate : null;
-  const attention = [cpuUsage, memoryUsage, availableFilesystemUsage].some(value => value !== null && value >= 80);
+  const cpuExceeded = exceedsThreshold(cpuRaw, thresholds?.cpu);
+  const memoryExceeded = exceedsThreshold(memoryRaw, thresholds?.memory);
+  const filesystemExceeded = exceedsThreshold(filesystemRaw, thresholds?.disk);
+  const attention = cpuExceeded || memoryExceeded || filesystemExceeded;
 
   return {
     state,
     cpuUsage,
     memoryUsage,
     filesystemUsage: availableFilesystemUsage,
+    cpuExceeded,
+    memoryExceeded,
+    filesystemExceeded,
     networkRate: availableNetworkRate,
     attention
   };
 }
 
 // 每台登记主机一行：Monitor 按主机 ID 记录上报，直接按 host_id 对上。
-export function buildHostMonitorRows(hosts: DeploymentHost[], monitors: HostMetrics[]): HostMonitorRow[] {
+export function buildHostMonitorRows(
+  hosts: DeploymentHost[],
+  monitors: HostMetrics[],
+  thresholds?: HostAlertThresholds
+): HostMonitorRow[] {
   const byHost = new Map(monitors.map(monitor => [monitor.host_id, monitor]));
   return hosts.map(host => {
     const monitor = byHost.get(host.host_id);
@@ -74,7 +94,7 @@ export function buildHostMonitorRows(hosts: DeploymentHost[], monitors: HostMetr
       monitor,
       displayName: host.label || host.host_id,
       displayAddress: host.address || "--",
-      ...summarize(monitor)
+      ...summarize(monitor, thresholds)
     };
   });
 }

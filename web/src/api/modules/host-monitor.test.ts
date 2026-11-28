@@ -1,11 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { formatBytes, toHostMetrics } from "./host-monitor";
+import { describe, expect, it, vi } from "vitest";
+import { call } from "@/api/http";
+import { formatBytes, getCurrentMetrics, toHostMetrics } from "./host-monitor";
+
+vi.mock("@/api/http", () => ({
+  call: vi.fn()
+}));
 
 describe("host monitor wire conversion", () => {
   it("converts protobuf JSON uint64 strings into numeric metrics", () => {
     const metrics = toHostMetrics({
       host_id: "control",
       last_seen_at: String(Date.now()),
+      reachable: true,
       snapshot: {
         memory: {
           total_bytes: "8589934592",
@@ -55,7 +61,28 @@ describe("host monitor wire conversion", () => {
 describe("host monitor identity mapping", () => {
   it("keeps the registered host id and never fakes an address", () => {
     const metrics = toHostMetrics({ host_id: "control", hostname: "VM-0-1" });
-    expect(metrics).toMatchObject({ host_id: "control", hostname: "VM-0-1" });
+    expect(metrics).toMatchObject({ host_id: "control", hostname: "VM-0-1", status: "offline" });
     expect(metrics).not.toHaveProperty("address");
+  });
+
+  it("uses backend reachable flag instead of browser clock for online status", () => {
+    // 上报时间已超过 60 秒但后端判 reachable 为真时，应显示在线。
+    const staleByOldClock = String(Date.now() - 120_000);
+    expect(toHostMetrics({ host_id: "control", last_seen_at: staleByOldClock, reachable: true }).status).toBe("online");
+    // 上报时间是刚刚但后端判 reachable 为假时，应显示离线。
+    expect(toHostMetrics({ host_id: "control", last_seen_at: String(Date.now()), reachable: false }).status).toBe("offline");
+  });
+
+  it("maps backend alert thresholds from ListHostAgents", async () => {
+    vi.mocked(call).mockResolvedValueOnce({
+      agents: [{ host_id: "control", hostname: "VM-0-1", reachable: true }],
+      cpu_threshold: 80,
+      memory_threshold: 90,
+      disk_threshold: 85
+    });
+    const result = await getCurrentMetrics();
+    expect(result.metrics).toHaveLength(1);
+    expect(result.metrics[0].status).toBe("online");
+    expect(result.thresholds).toEqual({ cpu: 80, memory: 90, disk: 85 });
   });
 });

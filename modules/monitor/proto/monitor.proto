@@ -258,6 +258,16 @@ message NotificationChannel {
 }
 message ListNotificationChannelsReq {}
 message ListNotificationChannelsRsp { common.RetInfo ret_info = 1; repeated NotificationChannel channels = 2; }
+// ExportedNotificationChannel 是备份导出用的告警渠道，含完整 Webhook URL 与签名密钥（未设置时为空），只给 moox-cli 使用。
+message ExportedNotificationChannel {
+  string channel_id = 1;
+  string channel_type = 2;
+  string webhook_url = 3;
+  string secret = 4;
+  int64 created_at = 5;
+}
+message ExportNotificationChannelsReq {}
+message ExportNotificationChannelsRsp { common.RetInfo ret_info = 1; repeated ExportedNotificationChannel channels = 2; }
 // secret 选填：飞书机器人的签名校验密钥、钉钉机器人的加签密钥，或通用 Webhook 的签名密钥；企业微信不接受。
 message AddNotificationChannelReq { string channel_type = 1; string webhook_url = 2; string secret = 3; }
 message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannel channel = 2; }
@@ -302,7 +312,14 @@ message HostAgentInfo {
   int64 stale_seconds = 7;
 }
 message ListHostAgentsReq {}
-message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; }
+message ListHostAgentsRsp {
+  common.RetInfo ret_info = 1;
+  repeated HostAgentInfo agents = 2;
+  // 主机资源告警阈值（百分比），与主机告警规则和 GetHealthOverview 的 HealthHost 一致。
+  double cpu_threshold = 3;
+  double memory_threshold = 4;
+  double disk_threshold = 5;
+}
 message HostMetricHistoryPoint {
   string host_id = 1;
   int64 observed_at = 2;
@@ -517,6 +534,7 @@ message QueryLogRecordsRsp {
 service MonitorMgr {
   rpc GetHealthOverview(GetHealthOverviewReq) returns (GetHealthOverviewRsp);
   rpc ListNotificationChannels(ListNotificationChannelsReq) returns (ListNotificationChannelsRsp);
+  rpc ExportNotificationChannels(ExportNotificationChannelsReq) returns (ExportNotificationChannelsRsp);
   rpc AddNotificationChannel(AddNotificationChannelReq) returns (AddNotificationChannelRsp);
   rpc DeleteNotificationChannel(DeleteNotificationChannelReq) returns (DeleteNotificationChannelRsp);
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);

@@ -146,7 +146,7 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 		routes  int
 		callers []string
 	}{
-		"control":  {162, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
+		"control":  {163, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
 		"storage":  {49, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
 		"overseas": {48, []string{"collector", "console", "moox-cli", "strategy"}},
 	}
@@ -412,8 +412,8 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 		t.Fatalf("CreateArchiveTask route = %+v", create)
 	}
 	list := routes["trpc.moox.archive.ArchiveMgr/ListArchiveTasks"]
-	if !slices.Equal(list.Callers, []string{"console", "moox-cli", "strategy"}) || !list.ReadOnly {
-		t.Fatalf("ListArchiveTasks 只读方法允许 console/moox-cli/strategy: %+v", list)
+	if !slices.Equal(list.Callers, []string{"console", "moox-cli"}) || !list.ReadOnly {
+		t.Fatalf("ListArchiveTasks 只读方法允许 console/moox-cli: %+v", list)
 	}
 	// ArchiveWorker 的方法只有归档 worker 能调：它用所在主机的密钥直接到网关，不是外部身份。
 	pull := routes["trpc.moox.archive.ArchiveWorker/PullArchiveRun"]

@@ -74,7 +74,7 @@ func varietyWord(value string) string {
 }
 
 // suggestDirName 按“交易所 + 品种 + 类型 + 频率”拼出建议的目录名。
-// source 是决定交易所与品种的数据集（因子结果为其源数据集）；allDay 表示空间全天交易（mgr 配置的 local_close 为空，即加密货币），
+// source 是决定交易所与品种的数据集（因子结果为其源数据集）；allDay 表示空间全天交易（barclock 里非 session 对齐，即加密货币），
 // 只有这种空间写交易所（data_source_id），其他空间的 data_source_id 是 API 来源，不写。
 // 品种依次取：source 的标签命中对照表的值、market_type、instrument_type；类型只有采集结果写 kline；频率取本数据集的。
 // 品种或频率拼不出来时回退为数据集 ID 去掉 dataset_ 前缀、下划线换成连字符。
@@ -146,5 +146,6 @@ func (s *Service) suggestedDirName(ctx context.Context, spaceID string, ds Datas
 	if err != nil {
 		return "", err
 	}
-	return suggestDirName(ds, source, s.cfg.Space(spaceID).LocalClose == ""), nil
+	_, allDay := spaceMarket(spaceID)
+	return suggestDirName(ds, source, allDay), nil
 }

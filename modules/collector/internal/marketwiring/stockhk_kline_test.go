@@ -217,7 +217,6 @@ func TestStockHKBackfillRequestWritesEveryBarInTheRange(t *testing.T) {
 // max_concurrent（4）限制。有多个主源的（A 股 1m、5m）仍是候选链长度 × 每源尝试次数，不随并发变；A 股 1d 只有通达信一个主源，
 // 与港股同一口径。
 func TestSinglePrimaryRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
-	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "")
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
 	threshold := func(marketID, frequency string, limits *marketfetch.FeedLimits) int {
 		pipeline, err := NewKlinePipeline(timerHandlerStorage{}, marketID, marketdata.InstrumentEquity, frequency, "", limits)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -84,22 +85,37 @@ func (s *Service) Maintain(ctx context.Context) error {
 	return firstErr
 }
 
-// refreshDatasets 从 Storage 读取各任务数据集的线上保留期与元数据。单个数据集失败不影响其他数据集。
+// refreshDatasets 从 Storage 读取各任务数据集的线上保留期与元数据。单个数据集失败不影响其他数据集；
+// 仅在 Storage 明确返回“不存在”时在任务上记“源数据集不存在”并停止生成跟随（不停用任务，也不触发每分钟重试），
+// 后续刷新发现数据集重新出现时自动清掉标记继续归档。网络或存储故障不动任务状态，照常下一分钟重试。
 func (s *Service) refreshDatasets(ctx context.Context) error {
 	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
 	if err != nil {
 		return err
 	}
+	now := s.clock()
 	var failed int
 	for _, task := range tasks {
 		ds, err := s.datasets.GetDataset(ctx, task.SpaceID, task.DatasetID)
 		if err != nil {
+			if errors.Is(err, ErrDatasetNotFound) {
+				if markErr := s.store.MarkTaskSourceMissing(ctx, task.SpaceID, task.DatasetID, now); markErr != nil {
+					return markErr
+				}
+				if !task.SourceMissing {
+					log.WarnContextf(ctx, "归档维护：数据集 %s/%s 在 Storage 中不存在，已标记并暂停生成跟随运行", task.SpaceID, task.DatasetID)
+				}
+				continue
+			}
 			failed++
 			log.WarnContextf(ctx, "archive maintain: refresh dataset %s/%s: %v", task.SpaceID, task.DatasetID, err)
 			continue
 		}
 		if err := s.store.UpdateTaskDataset(ctx, task.SpaceID, task.DatasetID, ds.Retention, metaJSON(ds)); err != nil {
 			return err
+		}
+		if task.SourceMissing {
+			log.InfoContextf(ctx, "归档维护：数据集 %s/%s 已重新出现，恢复生成跟随运行", task.SpaceID, task.DatasetID)
 		}
 	}
 	if failed > 0 {

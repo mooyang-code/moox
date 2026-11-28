@@ -351,9 +351,6 @@ type sourceFileBody struct {
 type SourceKlineConfig struct {
 	Endpoint          string `yaml:"endpoint"`
 	MaxBarsPerRequest int    `yaml:"max_bars_per_request"`
-	VolumeUnit        string `yaml:"volume_unit"`
-	AmountUnit        string `yaml:"amount_unit"`
-	CompleteOHLCV     *bool  `yaml:"complete_ohlcv"`
 }
 
 type sourceRateLimitFile struct {

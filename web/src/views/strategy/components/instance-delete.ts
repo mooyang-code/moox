@@ -56,7 +56,7 @@ export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[])
 
 /**
  * 删除失败时是否要提示“删除未完成，请稍后重试”：服务端答复了的，按答复里的 incomplete（删除已经开始、没做完）判断，
- * 什么都还没删的失败（例如读不到归档任务、被拒绝）原样显示；没拿到答复的（超时、连接中断、框架错误）删除可能已经做了一部分。
+ * 什么都还没删的失败（例如前置检查失败、被拒绝）原样显示；没拿到答复的（超时、连接中断、框架错误）删除可能已经做了一部分。
  */
 export function isDeleteIncomplete(error: unknown): boolean {
   if (error instanceof RequestError && error.response?.ret_info) {
