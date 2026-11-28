@@ -30,7 +30,6 @@ type Options struct {
 }
 
 type Service struct {
-	monitorpb.UnimplementedMonitorMgr
 	alerts        *store.AlertRepository
 	notifications *store.NotificationRepository
 	logs          *store.LogRecordRepository

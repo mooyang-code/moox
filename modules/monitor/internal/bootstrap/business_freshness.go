@@ -20,9 +20,6 @@ import (
 // klineCheckPrefix 是 K 线新鲜度检查的前缀：K 线本轮没有评估（没到评估时间、Collector 暂停、评估失败）时整类冻结。
 const klineCheckPrefix = "kline_freshness:"
 
-// archiveOwner 是“未归档的数据集”检查依赖的上报方：archive-mgr 停止上报时这项检查保持原状态。
-const archiveOwner = "archive-mgr"
-
 func unixSeconds(value time.Time) float64 {
 	if value.IsZero() {
 		return 0
@@ -176,7 +173,7 @@ func buildBusinessFreshnessReporterWithInterval(
 		for _, fact := range moduleFacts {
 			add(fact)
 		}
-		// 上报方停止上报（本轮有它的 reporter: 失败事实）时，它的关注项、数据集检查、未归档数据集检查保持原状态，
+		// 上报方停止上报（本轮有它的 reporter: 失败事实）时，它的关注项、数据集检查保持原状态，
 		// 以组件“停止上报”为准，不推假恢复；组件停用后 reporter: 不再产出，这些检查随之删除。
 		silent := silentReporters(facts)
 		round.FreezeWhen = func(key store.CheckKey) bool {
@@ -186,7 +183,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			if owner, ok := datasetOwners[key]; ok {
 				return silent[owner]
 			}
-			return strings.HasPrefix(key.CheckID, "archive_coverage:") && silent[archiveOwner]
+			return false
 		}
 		// 观测输入（EventBus 上的服务指标，含主机网关的组件上报与 storage-view 视图摘要）中断，或刚恢复、上报方还没补上样本时：
 		// 依赖它们的检查（含 K 线新鲜度）全部冻结——既不新增告警，也不恢复已有告警——只留"观测输入"这一项说明原因；

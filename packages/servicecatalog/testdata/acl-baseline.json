@@ -5,7 +5,7 @@
     "services": 23,
     "methods": 295,
     "read_only_methods": 136,
-    "retryable_methods": 138,
+    "retryable_methods": 139,
     "callers": 19,
     "principals": 1
   },
@@ -996,7 +996,7 @@
         {
           "name": "ImportNotificationChannels",
           "read_only": false,
-          "retryable": false,
+          "retryable": true,
           "timeout_ms": 5000
         },
         {
@@ -1938,7 +1938,8 @@
     "admin": [],
     "archive-mgr": [
       "trpc.moox.storage.Metadata/GetDataset",
-      "trpc.moox.storage.Metadata/GetSpace"
+      "trpc.moox.storage.Metadata/GetSpace",
+      "trpc.moox.storage.Metadata/ListDatasets"
     ],
     "archive-worker": [
       "trpc.moox.archive.ArchiveWorker/ArchiveWorkerHeartbeat",

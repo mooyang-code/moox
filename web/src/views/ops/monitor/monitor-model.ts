@@ -673,7 +673,6 @@ const KIND_LABELS: Record<string, string> = {
   market_canary: "行情探针",
   metrics_ingest: "指标入库",
   module: "模块运行",
-  archive_coverage: "数据归档",
   observation: "观测输入",
   attention: "关注项",
   subject_tag: "标的标签巡检"

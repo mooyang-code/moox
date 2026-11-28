@@ -1,6 +1,7 @@
 package hostmetrics
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -51,4 +52,33 @@ func TestForecastDisksUsesDailySamplesInsteadOfBurstRate(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Greater(t, got[0].GrowthBytesPerDay, 0.5*float64(gib))
 	require.GreaterOrEqual(t, got[0].ValidIntervals, 3)
+}
+
+func TestDailyLatestHistoryMatchesFullHistoryForecast(t *testing.T) {
+	samples := NewSampleStore(openRegistryTestDB(t))
+	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	const gib = uint64(1 << 30)
+	ctx := context.Background()
+
+	// 每天写多条快照，另外写入窗口外的一条旧样本。
+	require.NoError(t, samples.Write(ctx, "storage", now.Add(-8*24*time.Hour), &hostmetricpb.HostSnapshot{
+		Filesystems: []*hostmetricpb.FilesystemMetric{{Mountpoint: "/", TotalBytes: 100 * gib, UsedBytes: 10 * gib}},
+	}))
+	for day := 5; day >= 0; day-- {
+		for step := 0; step < 3; step++ {
+			at := now.Add(-time.Duration(day)*24*time.Hour - time.Duration(2-step)*time.Hour)
+			used := uint64(60+(5-day)*3)*gib + uint64(step)*100*(1<<20)
+			require.NoError(t, samples.Write(ctx, "storage", at, &hostmetricpb.HostSnapshot{
+				Filesystems: []*hostmetricpb.FilesystemMetric{{Mountpoint: "/", TotalBytes: 100 * gib, UsedBytes: used}},
+			}))
+		}
+	}
+
+	start := now.Add(-DiskForecastWindow)
+	full, err := samples.History(ctx, "storage", start, now, ForecastHistoryLimit)
+	require.NoError(t, err)
+	daily, err := samples.DailyLatestHistory(ctx, "storage", start, now)
+	require.NoError(t, err)
+	require.Len(t, daily, 6)
+	require.Equal(t, ForecastDisks(full, now), ForecastDisks(daily, now))
 }

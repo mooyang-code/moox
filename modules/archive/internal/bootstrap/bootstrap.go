@@ -111,7 +111,7 @@ func registerTimer(s *server.Server, service, name string, timeout time.Duration
 	return nil
 }
 
-// registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态、对象存储可用状态与各任务的健康等级并上报指标快照，Monitor 据此告警。
+// registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态、对象存储可用状态、任务异常状态与自动补齐失败状态并上报关注项，Monitor 据此告警。
 // 上报同时带上 archive-mgr 自己的就绪判断与模块级生命周期，以及代归档 worker 上报的一行（worker 只给管理端发心跳）。
 func registerMetricsReporter(s *server.Server, svc *service.Service, readiness func(context.Context) (bool, string), life *lifecycle.Controller) error {
 	handler, err := report.NewHandler(report.DefaultConfig("archive", "archive-mgr"))
@@ -134,10 +134,6 @@ func registerMetricsReporter(s *server.Server, svc *service.Service, readiness f
 	if err != nil {
 		return fmt.Errorf("create archive attention metric: %w", err)
 	}
-	taskHealth, err := report.NewArchiveTaskHealth(prometheus.DefaultRegisterer)
-	if err != nil {
-		return fmt.Errorf("create archive task health metric: %w", err)
-	}
 	return registerTimer(s, metricsService, "archive_metrics", metricsTimeout, func(ctx context.Context) error {
 		if state, workerID, last, err := svc.Presence(ctx); err != nil {
 			log.WarnContextf(ctx, "archive worker presence not evaluated: %v", err)
@@ -149,12 +145,12 @@ func registerMetricsReporter(s *server.Server, svc *service.Service, readiness f
 		} else {
 			attention.Set("object_store", map[string][]string{attentionObjectStoreDown: objectStoreAttention(ok, workerID, state, probeError)})
 		}
-		if levels, err := svc.TaskHealthLevels(ctx); err != nil {
+		if failing, err := svc.FailingTasks(ctx); err != nil {
 			log.WarnContextf(ctx, "archive task health not evaluated: %v", err)
 		} else {
-			taskHealth.Set(levels)
-			attention.Set("tasks", map[string][]string{attentionTaskFailing: taskAttention(levels)})
+			attention.Set("tasks", map[string][]string{attentionTaskFailing: taskAttention(failing)})
 		}
+		attention.Set("ensure", map[string][]string{attentionTaskEnsureFailed: ensureAttention(svc.EnsureIssues())})
 		return handler.Handle(ctx)
 	})
 }

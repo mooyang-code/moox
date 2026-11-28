@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
+	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -30,7 +34,8 @@ func (s *Service) Trigger(ctx context.Context) error {
 	return nil
 }
 
-// Maintain 是维护定时器（每分钟一次）：回收过期租约；每小时刷新各任务的保留期与数据集元数据、清理运行记录；每天回收空闲页。
+// Maintain 是维护定时器（每分钟一次）：回收过期租约；为符合条件的数据集自动补齐归档任务；
+// 每小时刷新各任务的保留期与数据集元数据、清理运行记录；每天回收空闲页。
 func (s *Service) Maintain(ctx context.Context) error {
 	now := s.clock()
 	worker, ok, err := s.store.GetWorker(ctx)
@@ -59,6 +64,9 @@ func (s *Service) Maintain(ctx context.Context) error {
 			s.lastRefresh = now
 			s.mu.Unlock()
 		}
+	}
+	if err := s.ensureTasks(ctx, now); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	if doCleanup {
 		removed, err := s.store.CleanupRuns(ctx, now, followSuccessRetention, s.cfg.Retention.Other)
@@ -122,4 +130,126 @@ func (s *Service) refreshDatasets(ctx context.Context) error {
 		return fmt.Errorf("%d archive datasets could not be refreshed", failed)
 	}
 	return nil
+}
+
+// isAutoArchivable 报告数据集是否应自动建立归档任务：已激活（active）、时序类型（time_series）、有限保留期（非空且非 forever）。
+func isAutoArchivable(ds Dataset) bool {
+	if strings.TrimSpace(ds.SpaceID) == "" || strings.TrimSpace(ds.DatasetID) == "" {
+		return false
+	}
+	if !strings.EqualFold(ds.DataKind, timeSeriesKind) || !strings.EqualFold(ds.Status, datasetActive) {
+		return false
+	}
+	retention := strings.TrimSpace(ds.Retention)
+	return retention != "" && !strings.EqualFold(retention, "forever")
+}
+
+// EnsureIssues 返回最近一次自动补齐归档任务未能处理的问题列表（供指标上报为关注项）；全部补齐或尚未失败时为空。
+func (s *Service) EnsureIssues() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.ensureIssues) == 0 {
+		return nil
+	}
+	out := make([]string, len(s.ensureIssues))
+	copy(out, s.ensureIssues)
+	return out
+}
+
+func (s *Service) setEnsureIssues(issues []string) {
+	s.mu.Lock()
+	s.ensureIssues = issues
+	s.mu.Unlock()
+}
+
+// ensureTasks 从 Storage 读取全部数据集，为符合条件但还没有归档任务的数据集按默认参数补齐任务。
+// 已有任务（含人工停用的任务）一律跳过，不会重建也不会改回启用；手工删除的任务会被重新建出。
+// Storage 读取失败或个别数据集无法建出任务时记录到 ensureIssues（由指标定时上报关注项），不中断其他数据集的补齐。
+func (s *Service) ensureTasks(ctx context.Context, now time.Time) error {
+	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
+	if err != nil {
+		return fmt.Errorf("列出已有归档任务失败: %w", err)
+	}
+	existing := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		existing[task.SpaceID+"/"+task.DatasetID] = struct{}{}
+	}
+	datasets, err := s.datasets.ListDatasets(ctx)
+	if err != nil {
+		log.WarnContextf(ctx, "归档维护：自动补齐读取 Storage 数据集清单失败: %v", err)
+		s.setEnsureIssues([]string{"读取 Storage 数据集清单失败（详见 archive-mgr 日志）"})
+		return nil
+	}
+	candidates := make([]Dataset, 0, len(datasets))
+	seen := make(map[string]struct{}, len(datasets))
+	for _, ds := range datasets {
+		if !isAutoArchivable(ds) {
+			continue
+		}
+		ds.SpaceID = strings.TrimSpace(ds.SpaceID)
+		ds.DatasetID = strings.TrimSpace(ds.DatasetID)
+		key := ds.SpaceID + "/" + ds.DatasetID
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		if _, has := existing[key]; has {
+			continue
+		}
+		candidates = append(candidates, ds)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].SpaceID+"/"+candidates[i].DatasetID < candidates[j].SpaceID+"/"+candidates[j].DatasetID
+	})
+	var issues []string
+	for _, ds := range candidates {
+		if issue := s.ensureDatasetTask(ctx, ds, now); issue != "" {
+			issues = append(issues, issue)
+		}
+	}
+	s.setEnsureIssues(issues)
+	return nil
+}
+
+// ensureDatasetTask 为单个符合条件的数据集按默认参数创建归档任务；成功或并发已创建时返回空串，失败返回稳定的关注项描述。
+func (s *Service) ensureDatasetTask(ctx context.Context, ds Dataset, now time.Time) string {
+	key := ds.SpaceID + "/" + ds.DatasetID
+	unit, err := schedule.PartitionUnit(ds.Freq)
+	if err != nil {
+		log.WarnContextf(ctx, "归档维护：自动补齐 %s 失败: %v", key, err)
+		return fmt.Sprintf("%s：%s", key, err.Error())
+	}
+	backfill, err := createBackfill("", ds.Retention, now)
+	if err != nil {
+		log.WarnContextf(ctx, "归档维护：自动补齐 %s 失败: %v", key, err)
+		return fmt.Sprintf("%s：%s", key, err.Error())
+	}
+	dirName, err := s.suggestedDirName(ctx, ds.SpaceID, ds)
+	if err != nil {
+		log.WarnContextf(ctx, "归档维护：自动补齐 %s 解析建议目录名失败: %v", key, err)
+		return fmt.Sprintf("%s：读取源数据集失败（详见 archive-mgr 日志）", key)
+	}
+	if err := validateDirName(dirName); err != nil {
+		log.WarnContextf(ctx, "归档维护：自动补齐 %s 目录名不合规: %v", key, err)
+		return fmt.Sprintf("%s：%s", key, err.Error())
+	}
+	task := store.Task{
+		MetaJSON: metaJSON(ds), Purpose: purposeOf(ds), DirName: dirName,
+		SpaceID: ds.SpaceID, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention,
+		BackfillFrom: backfill, Status: store.StatusEnabled, Creator: "archive-mgr",
+	}
+	if _, err := s.store.CreateTask(ctx, task); err != nil {
+		var taken *store.DirNameTakenError
+		if errors.As(err, &taken) {
+			log.WarnContextf(ctx, "归档维护：自动补齐 %s 失败: %v", key, err)
+			return fmt.Sprintf("%s：目录名 %s 已被 %s 使用", key, taken.DirName, taken.DatasetID)
+		}
+		if errors.Is(err, store.ErrConflict) {
+			return ""
+		}
+		log.WarnContextf(ctx, "归档维护：自动补齐 %s 写库失败: %v", key, err)
+		return fmt.Sprintf("%s：创建归档任务失败（详见 archive-mgr 日志）", key)
+	}
+	log.InfoContextf(ctx, "归档维护：已自动补齐归档任务 %s（目录 %s/%s）", key, task.Purpose, task.DirName)
+	return ""
 }

@@ -78,6 +78,8 @@ func (datasets) GetDataset(_ context.Context, space, dataset string) (service.Da
 		DataSourceID: "binance", Attributes: map[string]string{"dataset_role": "raw_collection", "market_type": "spot"}}, nil
 }
 
+func (datasets) ListDatasets(context.Context) ([]service.Dataset, error) { return nil, nil }
+
 func (datasets) GetSpaceTimezone(context.Context, string) (string, error) { return "UTC", nil }
 
 type fakeStorage struct {

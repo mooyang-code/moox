@@ -13,13 +13,27 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
-// gatewayDatasets 经网关调用 Storage 的 Metadata.GetDataset 与 Metadata.GetSpace。
+// gatewayDatasets 经网关调用 Storage 的 Metadata.GetDataset、Metadata.ListDatasets 与 Metadata.GetSpace。
 type gatewayDatasets struct {
 	gateway gatewayclient.Invoker
 }
 
+const (
+	listDatasetsPageSize = 200
+	listDatasetsMaxPages = 50
+)
+
 func newGatewayDatasets(gateway gatewayclient.Invoker) *gatewayDatasets {
 	return &gatewayDatasets{gateway: gateway}
+}
+
+func datasetFromPB(ds *storagepb.Dataset) service.Dataset {
+	return service.Dataset{
+		SpaceID: ds.GetSpaceId(), DatasetID: ds.GetDatasetId(), Name: ds.GetName(), DataKind: dataKind(ds.GetDataKind()), Freq: ds.GetFreq(),
+		Status: ds.GetStatus(), Retention: ds.GetRetention(),
+		Description: ds.GetDescription(), DataSourceID: ds.GetDataSourceId(), RetentionSource: ds.GetRetentionSource(), SubjectTags: ds.GetSubjectTags(),
+		Attributes: ds.GetAttributes(), CreatedAt: ds.GetCreatedAt(), UpdatedAt: ds.GetUpdatedAt(), Revision: ds.GetRevision(),
+	}
 }
 
 // GetDataset 读取数据集的频率、保留期、状态与元数据。
@@ -43,12 +57,35 @@ func (g *gatewayDatasets) GetDataset(ctx context.Context, spaceID, datasetID str
 	if ds == nil {
 		return service.Dataset{}, fmt.Errorf("get dataset %s/%s returned no dataset", spaceID, datasetID)
 	}
-	return service.Dataset{
-		SpaceID: ds.GetSpaceId(), DatasetID: ds.GetDatasetId(), Name: ds.GetName(), DataKind: dataKind(ds.GetDataKind()), Freq: ds.GetFreq(),
-		Status: ds.GetStatus(), Retention: ds.GetRetention(),
-		Description: ds.GetDescription(), DataSourceID: ds.GetDataSourceId(), RetentionSource: ds.GetRetentionSource(), SubjectTags: ds.GetSubjectTags(),
-		Attributes: ds.GetAttributes(), CreatedAt: ds.GetCreatedAt(), UpdatedAt: ds.GetUpdatedAt(), Revision: ds.GetRevision(),
-	}, nil
+	return datasetFromPB(ds), nil
+}
+
+// ListDatasets 分页读取 Storage 的全部数据集元数据，供维护定时器自动补齐归档任务使用。
+func (g *gatewayDatasets) ListDatasets(ctx context.Context) ([]service.Dataset, error) {
+	if g == nil || g.gateway == nil {
+		return nil, errors.New("archive Storage gateway client is required")
+	}
+	var out []service.Dataset
+	for page := uint32(1); page <= listDatasetsMaxPages; page++ {
+		rsp := &storagepb.ListDatasetsRsp{}
+		req := &storagepb.ListDatasetsReq{Page: &commonpb.Page{Page: page, Size: listDatasetsPageSize}}
+		if err := g.gateway.Invoke(ctx, "trpc.moox.storage.Metadata", "ListDatasets", req, rsp); err != nil {
+			return nil, fmt.Errorf("list datasets page %d: %w", page, err)
+		}
+		if info := rsp.GetRetInfo(); info.GetCode() != commonpb.ErrorCode_SUCCESS {
+			return nil, fmt.Errorf("list datasets page %d: %s", page, info.GetMsg())
+		}
+		for _, ds := range rsp.GetDatasets() {
+			if ds == nil {
+				continue
+			}
+			out = append(out, datasetFromPB(ds))
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("list datasets exceeds %d pages", listDatasetsMaxPages)
 }
 
 // GetSpaceTimezone 从 Storage 的 Metadata.GetSpace 读取空间时区（为空时按 UTC）。

@@ -21,8 +21,10 @@ type fakeDatasets struct {
 	datasets   map[string]Dataset
 	spaces     map[string]string
 	calls      int
+	listCalls  int
 	spaceCalls int
 	datasetErr error
+	listErr    error
 	spaceErr   error
 	spaceErrs  map[string]error
 }
@@ -39,6 +41,23 @@ func (f *fakeDatasets) GetDataset(_ context.Context, space, dataset string) (Dat
 		return Dataset{}, fmt.Errorf("%w: %s/%s", ErrDatasetNotFound, space, dataset)
 	}
 	return ds, nil
+}
+
+func (f *fakeDatasets) ListDatasets(_ context.Context) ([]Dataset, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listCalls++
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if f.datasetErr != nil {
+		return nil, f.datasetErr
+	}
+	out := make([]Dataset, 0, len(f.datasets))
+	for _, ds := range f.datasets {
+		out = append(out, ds)
+	}
+	return out, nil
 }
 
 func (f *fakeDatasets) GetSpaceTimezone(_ context.Context, space string) (string, error) {
@@ -748,6 +767,8 @@ func TestMaintainRefreshesDatasetInfoOncePerHour(t *testing.T) {
 func TestMaintainMarksSourceDatasetMissingAndRecoversWhenDatasetReappears(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
+	// 本用例只聚焦 ds_1m 与 ds_1h 的源数据集缺失生命周期，去掉其他无关夹具数据集以免自动补齐干扰计数。
+	delete(h.datasets.datasets, "stockcn/cn_1m")
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
 	requireOK(t, h.create("ds_1h", func(r *archivepb.CreateArchiveTaskReq) {
 		r.Paused = true
@@ -854,6 +875,120 @@ func TestMaintainMarksSourceDatasetMissingAndRecoversWhenDatasetReappears(t *tes
 	active, _ := h.store.ListActiveRuns(ctx, "crypto")
 	if len(active) != 1 || active[0].DatasetID != "ds_1m" || active[0].Kind != store.KindFollow {
 		t.Fatalf("ds_1m 应恢复生成 follow，人工停用的 ds_1h 不生成: %+v", active)
+	}
+}
+
+// 维护定时器自动为活跃、有限保留期的时序数据集补齐归档任务；永久保留、记录表、非 active 不补齐；
+// 人工停用的任务保持停用、不重建；手工删除的任务会被重新补齐。
+func TestMaintainAutoEnsuresEligibleDatasetsAndRespectsPausedTasks(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	// 初始没有任何任务：Maintain 应只补齐 crypto/ds_1m 与 stockcn/cn_1m（ds_1h 为 forever、rec 为 record、off 为 building）。
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if issues := h.svc.EnsureIssues(); len(issues) != 0 {
+		t.Fatalf("不应有自动补齐关注项: %v", issues)
+	}
+	tasks, total, err := h.store.ListTasks(ctx, "", 100, 0)
+	if err != nil || total != 2 {
+		t.Fatalf("tasks = %+v total=%d err=%v", tasks, total, err)
+	}
+	if tasks[0].SpaceID != "crypto" || tasks[0].DatasetID != "ds_1m" || tasks[0].Status != store.StatusEnabled ||
+		tasks[1].SpaceID != "stockcn" || tasks[1].DatasetID != "cn_1m" || tasks[1].Status != store.StatusEnabled {
+		t.Fatalf("自动补齐的任务不符: %+v", tasks)
+	}
+
+	// 停用 crypto/ds_1m：下一轮 Maintain 不重建，也不改回启用。
+	upd, err := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m", Status: store.StatusPaused})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, upd.GetRetInfo())
+	pausedID := h.task("crypto", "ds_1m").ID
+
+	// 删除 stockcn/cn_1m：下一轮 Maintain 应重新补齐。
+	del, err := h.mgr.DeleteArchiveTask(ctx, &archivepb.DeleteArchiveTaskReq{SpaceId: "stockcn", DatasetId: "cn_1m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, del.GetRetInfo())
+
+	h.now = h.now.Add(time.Minute)
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ds1m := h.task("crypto", "ds_1m")
+	if ds1m.Status != store.StatusPaused || ds1m.ID != pausedID {
+		t.Fatalf("停用的任务不应重建或恢复启用: %+v", ds1m)
+	}
+	cn1m := h.task("stockcn", "cn_1m")
+	if cn1m.Status != store.StatusEnabled {
+		t.Fatalf("手工删除的任务应自动重建并启用: %+v", cn1m)
+	}
+}
+
+// 自动补齐遇到目录名冲突、不支持的频率或 Storage 清单不可用时记录关注项；不影响其他符合条件的数据集，修复后关注项清空。
+func TestMaintainAutoEnsureReportsAttentionOnConflictAndStorageFailure(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.datasets.datasets = map[string]Dataset{
+		"crypto/ds_a":   {SpaceID: "crypto", DatasetID: "ds_a", DataKind: "time_series", Freq: "1m", Status: "active", Retention: "168h", DataSourceID: "binance", Attributes: map[string]string{"dataset_role": "raw_collection", "market_type": "spot"}},
+		"crypto/ds_b":   {SpaceID: "crypto", DatasetID: "ds_b", DataKind: "time_series", Freq: "1m", Status: "active", Retention: "168h", DataSourceID: "binance", Attributes: map[string]string{"dataset_role": "raw_collection", "market_type": "spot"}},
+		"crypto/ds_bad": {SpaceID: "crypto", DatasetID: "ds_bad", DataKind: "time_series", Freq: "badfreq", Status: "active", Retention: "168h"},
+	}
+
+	// 1. ds_a 成功占用目录名 binance-spot-kline-1m；ds_b 撞目录名、ds_bad 频率不合法，两者进关注项。
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.GetTask(ctx, "crypto", "ds_a"); err != nil {
+		t.Fatalf("无冲突的 ds_a 应已补齐: %v", err)
+	}
+	issues := h.svc.EnsureIssues()
+	if len(issues) != 2 {
+		t.Fatalf("期望 2 条自动补齐问题，实际: %v", issues)
+	}
+	joined := strings.Join(issues, "；")
+	if !strings.Contains(joined, "crypto/ds_b：目录名 binance-spot-kline-1m 已被 ds_a 使用") ||
+		!strings.Contains(joined, "crypto/ds_bad：") {
+		t.Fatalf("关注项文案不对: %s", joined)
+	}
+
+	// 2. 人工为 ds_b 指定不冲突的目录名建好任务，并修正 ds_bad 频率后，下一轮自动补齐成功并清空关注项。
+	requireOK(t, h.createOnly("ds_b", func(r *archivepb.CreateArchiveTaskReq) { r.DirName = "binance-spot-kline-1m-v2" }).GetRetInfo())
+	bad := h.datasets.datasets["crypto/ds_bad"]
+	bad.Freq = "5m"
+	h.datasets.datasets["crypto/ds_bad"] = bad
+
+	h.now = h.now.Add(time.Minute)
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.GetTask(ctx, "crypto", "ds_bad"); err != nil {
+		t.Fatalf("修正频率后的 ds_bad 应已补齐: %v", err)
+	}
+	if issues := h.svc.EnsureIssues(); len(issues) != 0 {
+		t.Fatalf("全部补齐后关注项应清空: %v", issues)
+	}
+
+	// 3. Storage ListDatasets 失败时上报关注项，恢复后清空。
+	h.datasets.listErr = fmt.Errorf("storage dial timeout")
+	h.now = h.now.Add(time.Minute)
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if issues := h.svc.EnsureIssues(); len(issues) != 1 || !strings.Contains(issues[0], "读取 Storage 数据集清单失败") {
+		t.Fatalf("清单读取失败应记录关注项: %v", issues)
+	}
+	h.datasets.listErr = nil
+	h.now = h.now.Add(time.Minute)
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if issues := h.svc.EnsureIssues(); len(issues) != 0 {
+		t.Fatalf("Storage 恢复后关注项应清空: %v", issues)
 	}
 }
 

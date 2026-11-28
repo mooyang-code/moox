@@ -42,6 +42,7 @@ type Dataset struct {
 // DatasetProvider 读取数据集与空间信息；数据集或空间不存在时分别返回 ErrDatasetNotFound、ErrSpaceNotFound。
 type DatasetProvider interface {
 	GetDataset(ctx context.Context, spaceID, datasetID string) (Dataset, error)
+	ListDatasets(ctx context.Context) ([]Dataset, error)
 	GetSpaceTimezone(ctx context.Context, spaceID string) (string, error)
 }
 
@@ -72,11 +73,12 @@ type Service struct {
 	// life 是模块的生命周期控制器：ArchiveMgr 的 GetLifecycle、ControlLifecycle 转给它（见 lifecycle.go）。
 	life *lifecycle.Controller
 
-	mu          sync.Mutex
-	lastRefresh time.Time
-	lastCleanup time.Time
-	lastVacuum  time.Time
-	spaceTZ     map[string]spaceTZEntry
+	mu           sync.Mutex
+	lastRefresh  time.Time
+	lastCleanup  time.Time
+	lastVacuum   time.Time
+	spaceTZ      map[string]spaceTZEntry
+	ensureIssues []string
 }
 
 // Option 调整 Service。

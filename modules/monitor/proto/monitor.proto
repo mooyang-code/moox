@@ -274,6 +274,7 @@ message ImportNotificationChannel {
   string webhook_url = 2;
   string secret = 3;
 }
+// ImportNotificationChannelsReq 批量导入告警渠道，按 webhook_url 幂等覆盖，只给 moox-cli 重装恢复使用。
 message ImportNotificationChannelsReq {
   repeated ImportNotificationChannel channels = 1;
 }

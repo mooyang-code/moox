@@ -2447,6 +2447,7 @@ func (x *ImportNotificationChannel) GetSecret() string {
 	return ""
 }
 
+// ImportNotificationChannelsReq 批量导入告警渠道，按 webhook_url 幂等覆盖，只给 moox-cli 重装恢复使用。
 type ImportNotificationChannelsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

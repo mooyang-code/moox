@@ -323,7 +323,7 @@ function isTimeSeries(dataset: Pick<Dataset, "data_kind">): boolean {
 
 /**
  * 应该归档的数据集：时序、active、有限的线上保留期。
- * 和 Monitor 的 ListArchivableDatasets（modules/monitor/internal/metrics/storage.go）同口径。
+ * 和 ArchiveMgr 的 isAutoArchivable（modules/archive/internal/service/jobs.go）同口径。
  */
 export function archivableDataset(dataset: Dataset): boolean {
   const retention = (dataset.retention || "").trim();
