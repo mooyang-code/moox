@@ -72,9 +72,9 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 		source := item.toPB()
 		calls = append(calls, metadataImportCall{
 			Resource: "data_sources",
-			Method:   "CreateDataSource",
-			Request:  &pb.CreateDataSourceReq{DataSource: source},
-			Response: &pb.CreateDataSourceRsp{},
+			Method:   "UpsertDataSource",
+			Request:  &pb.UpsertDataSourceReq{DataSource: source},
+			Response: &pb.UpsertDataSourceRsp{},
 			Exists: &metadataExistsProbe{
 				Method:   "GetDataSource",
 				Request:  &pb.GetDataSourceReq{SpaceId: source.GetSpaceId(), DataSourceId: source.GetDataSourceId()},
@@ -99,9 +99,9 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 		}
 		calls = append(calls, metadataImportCall{
 			Resource: "datasets",
-			Method:   "CreateDataset",
-			Request:  &pb.CreateDatasetReq{Dataset: dataset},
-			Response: &pb.CreateDatasetRsp{},
+			Method:   "UpsertDataset",
+			Request:  &pb.UpsertDatasetReq{Dataset: dataset},
+			Response: &pb.UpsertDatasetRsp{},
 			Exists: &metadataExistsProbe{
 				Method:   "GetDataset",
 				Request:  &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()},
@@ -344,9 +344,9 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 	}
 	var expected proto.Message
 	switch req := request.(type) {
-	case *pb.CreateDataSourceReq:
+	case *pb.UpsertDataSourceReq:
 		expected = req.GetDataSource()
-	case *pb.CreateDatasetReq:
+	case *pb.UpsertDatasetReq:
 		expected = req.GetDataset()
 	case *pb.UpsertDatasetColumnReq:
 		expected = req.GetColumn()

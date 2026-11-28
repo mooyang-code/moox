@@ -64,8 +64,8 @@ func (c *gatewayStorageClient) ListDatasetColumns(ctx context.Context, request *
 	return invokeStorage[storagepb.ListDatasetColumnsRsp](ctx, c.gateway, "Metadata", "ListDatasetColumns", request, options)
 }
 
-func (c *gatewayStorageClient) CreateDataset(ctx context.Context, request *storagepb.CreateDatasetReq, options ...client.Option) (*storagepb.CreateDatasetRsp, error) {
-	return invokeStorage[storagepb.CreateDatasetRsp](ctx, c.gateway, "Metadata", "CreateDataset", request, options)
+func (c *gatewayStorageClient) UpsertDataset(ctx context.Context, request *storagepb.UpsertDatasetReq, options ...client.Option) (*storagepb.UpsertDatasetRsp, error) {
+	return invokeStorage[storagepb.UpsertDatasetRsp](ctx, c.gateway, "Metadata", "UpsertDataset", request, options)
 }
 
 func (c *gatewayStorageClient) UpsertDatasetColumn(ctx context.Context, request *storagepb.UpsertDatasetColumnReq, options ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
@@ -74,10 +74,6 @@ func (c *gatewayStorageClient) UpsertDatasetColumn(ctx context.Context, request 
 
 func (c *gatewayStorageClient) DeleteDataset(ctx context.Context, request *storagepb.DeleteDatasetReq, options ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
 	return invokeStorage[storagepb.DeleteDatasetRsp](ctx, c.gateway, "Metadata", "DeleteDataset", request, options)
-}
-
-func (c *gatewayStorageClient) UpdateDataset(ctx context.Context, request *storagepb.UpdateDatasetReq, options ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
-	return invokeStorage[storagepb.UpdateDatasetRsp](ctx, c.gateway, "Metadata", "UpdateDataset", request, options)
 }
 
 func (c *gatewayStorageClient) ListDatasetSubjects(ctx context.Context, request *storagepb.ListDatasetSubjectsReq, options ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {

@@ -20,17 +20,14 @@ const callStorage = <TReq extends object, TRsp>(method: string, req: TReq, optio
 
 type RetRsp = { ret_info: RetInfo };
 
-export async function createDataSource(data_source: DataSource) {
-  const rsp = await callStorage<{ data_source: DataSource }, RetRsp & { data_source: DataSource }>("CreateDataSource", {
-    data_source
-  });
-  return rsp.data_source;
-}
-
-export async function updateDataSource(data_source: DataSource) {
-  const rsp = await callStorage<{ data_source: DataSource }, RetRsp & { data_source: DataSource }>("UpdateDataSource", {
-    data_source
-  });
+export async function upsertDataSource(data_source: DataSource, createOnly = false) {
+  const rsp = await callStorage<{ data_source: DataSource; create_only?: boolean }, RetRsp & { data_source: DataSource }>(
+    "UpsertDataSource",
+    {
+      data_source,
+      ...(createOnly ? { create_only: true } : {})
+    }
+  );
   return rsp.data_source;
 }
 

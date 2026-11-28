@@ -102,18 +102,11 @@ func (w *collectorGatewayWire) GetDataset(ctx context.Context, request *storagep
 	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) CreateDataset(ctx context.Context, request *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "CreateDataset", request); err != nil {
+func (w *collectorGatewayWire) UpsertDataset(ctx context.Context, request *storagepb.UpsertDatasetReq) (*storagepb.UpsertDatasetRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpsertDataset", request); err != nil {
 		return nil, err
 	}
-	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) UpdateDataset(ctx context.Context, request *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpdateDataset", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.UpdateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.UpsertDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func (w *collectorGatewayWire) DeleteDataset(ctx context.Context, request *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
@@ -277,12 +270,8 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{})
 		require.NoError(t, err)
 	})
-	t.Run("CreateDataset", func(t *testing.T) {
-		_, err := adapter.CreateDataset(t.Context(), &storagepb.CreateDatasetReq{})
-		require.NoError(t, err)
-	})
-	t.Run("UpdateDataset", func(t *testing.T) {
-		_, err := adapter.UpdateDataset(t.Context(), &storagepb.UpdateDatasetReq{})
+	t.Run("UpsertDataset", func(t *testing.T) {
+		_, err := adapter.UpsertDataset(t.Context(), &storagepb.UpsertDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("DeleteDataset", func(t *testing.T) {
@@ -340,7 +329,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 17)
+	require.Len(t, wire.calls, 16)
 	wire.mu.Unlock()
 	// 云账号密钥经网关读 Admin 的专用方法 GetCloudCredential。
 	credential, err := (&cloud.GatewayCredentials{Gateway: gateway}).Resolve(t.Context(), store.CloudAccount{AccountID: "account-a", Provider: "tencent", CredentialSecretID: "secret-1"})

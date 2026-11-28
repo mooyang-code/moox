@@ -23,8 +23,7 @@ var ErrTargetViewNotReady = errors.New("target View is not ready")
 
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
-	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
-	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
+	UpsertDataset(context.Context, *storagepb.UpsertDatasetReq, ...client.Option) (*storagepb.UpsertDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 }
@@ -106,7 +105,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	columns := targetDatasetColumns(rules)
 	if taskresult.IsDatasetNotFound(target.GetRetInfo().GetCode()) {
 		// 数据集连同列在一次调用里建好，建好即可写入。
-		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: &storagepb.Dataset{
+		created, createErr := c.Metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: &storagepb.Dataset{
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID,
 			// 数据集名称在空间内唯一且必须含中文：用目标 ID 派生一个稳定的短后缀，避免不同合成目标重名。
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
@@ -156,7 +155,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			for key, value := range missing {
 				updated.Attributes[key] = value
 			}
-			resp, updateErr := c.Metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: updated})
+			resp, updateErr := c.Metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: updated})
 			if updateErr != nil {
 				return fmt.Errorf("update target Dataset attributes: %w", updateErr)
 			}

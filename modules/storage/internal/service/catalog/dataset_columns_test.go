@@ -118,7 +118,7 @@ func TestDatasetCacheRefreshOnlyTriggeredByDatasetMutations(t *testing.T) {
 		Items:   []*pb.SubjectAttributes{{SubjectId: "BTC-USDT", Attributes: map[string]string{"sector": "layer1"}}},
 	})
 	require.NoError(t, err)
-	_, err = service.CreateDataSource(ctx, &pb.CreateDataSourceReq{DataSource: &pb.DataSource{SpaceId: dataset.GetSpaceId(), DataSourceId: "ds_extra", Name: "扩展源"}})
+	_, err = service.UpsertDataSource(ctx, &pb.UpsertDataSourceReq{DataSource: &pb.DataSource{SpaceId: dataset.GetSpaceId(), DataSourceId: "ds_extra", Name: "扩展源"}})
 	require.NoError(t, err)
 	require.Equal(t, 0, refreshes, "非数据集变更不应触发 DatasetCache 刷新")
 
@@ -150,7 +150,7 @@ func TestDeleteDatasetNeedsNoViewStep(t *testing.T) {
 func TestDatasetMaintenancePriorityAndStatusFilter(t *testing.T) {
 	ctx := context.Background()
 	_, service, dataset := newDatasetFixture(t)
-	created, err := service.CreateDataset(ctx, &pb.CreateDatasetReq{Dataset: &pb.Dataset{
+	created, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: &pb.Dataset{
 		SpaceId: dataset.GetSpaceId(), DatasetId: "dataset_factor_eth_1m", DataSourceId: "factor",
 		Name: "ETH 因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", MaintenancePriority: 10,
 	}})
@@ -160,7 +160,7 @@ func TestDatasetMaintenancePriorityAndStatusFilter(t *testing.T) {
 
 	update := created.GetDataset()
 	update.MaintenancePriority, update.Status = 3, "disabled"
-	updated, err := service.UpdateDataset(ctx, &pb.UpdateDatasetReq{Dataset: update})
+	updated, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: update})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, updated.GetRetInfo().GetCode(), updated.GetRetInfo().GetMsg())
 	require.Equal(t, uint32(3), updated.GetDataset().GetMaintenancePriority())
@@ -169,6 +169,53 @@ func TestDatasetMaintenancePriorityAndStatusFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, active.GetDatasets(), 1)
 	require.Equal(t, dataset.GetDatasetId(), active.GetDatasets()[0].GetDatasetId())
+}
+
+// UpsertDataSource 与 UpsertDataset 默认覆盖写，带 create_only 时遇到已存在对象返回冲突。
+func TestUpsertDataSourceAndDatasetCreateOnly(t *testing.T) {
+	ctx := context.Background()
+	_, service, dataset := newDatasetFixture(t)
+	spaceID := dataset.GetSpaceId()
+
+	dsFirst, err := service.UpsertDataSource(ctx, &pb.UpsertDataSourceReq{
+		DataSource: &pb.DataSource{SpaceId: spaceID, DataSourceId: "ds_upsert", Name: "初始来源"},
+		CreateOnly: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, dsFirst.GetRetInfo().GetCode())
+
+	dsConflict, err := service.UpsertDataSource(ctx, &pb.UpsertDataSourceReq{
+		DataSource: &pb.DataSource{SpaceId: spaceID, DataSourceId: "ds_upsert", Name: "冲突来源"},
+		CreateOnly: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_CONFLICT, dsConflict.GetRetInfo().GetCode())
+
+	dsOverwrite, err := service.UpsertDataSource(ctx, &pb.UpsertDataSourceReq{
+		DataSource: &pb.DataSource{SpaceId: spaceID, DataSourceId: "ds_upsert", Name: "更新来源"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, dsOverwrite.GetRetInfo().GetCode())
+	require.Equal(t, "更新来源", dsOverwrite.GetDataSource().GetName())
+
+	newDataset := &pb.Dataset{
+		SpaceId: spaceID, DatasetId: "dataset_upsert_only", DataSourceId: "ds_upsert",
+		Name: "只建数据集", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+	}
+	first, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: newDataset, CreateOnly: true})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, first.GetRetInfo().GetCode())
+
+	conflict, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: newDataset, CreateOnly: true})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_CONFLICT, conflict.GetRetInfo().GetCode())
+
+	updated := first.GetDataset()
+	updated.Description = "已覆盖"
+	overwrite, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: updated})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, overwrite.GetRetInfo().GetCode())
+	require.Equal(t, "已覆盖", overwrite.GetDataset().GetDescription())
 }
 
 func TestMetadataReturnsDatasetRetentionFromPolicy(t *testing.T) {

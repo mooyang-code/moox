@@ -64,9 +64,13 @@ type Writer interface {
 	CreateSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
+	// CreateDataSource 原子地创建数据来源，已存在或同空间重名时返回冲突。
+	CreateDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
 	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
 	UpsertDataset(ctx context.Context, item *pb.Dataset, columns ...*pb.DatasetColumn) (*pb.Dataset, error)
+	// CreateDataset 原子地创建数据集及其初始列，已存在或同空间重名时返回冲突。
+	CreateDataset(ctx context.Context, item *pb.Dataset, columns ...*pb.DatasetColumn) (*pb.Dataset, error)
 	DeleteDataset(ctx context.Context, spaceID string, datasetID string) error
 	UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error)
 }

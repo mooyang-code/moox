@@ -163,9 +163,10 @@ func seedLifecycleParents(t *testing.T, ctx context.Context, store *metasqlite.S
 
 func createDataset(t *testing.T, ctx context.Context, service *catalog.Service, datasetID, name string) *pb.Dataset {
 	t.Helper()
-	rsp, err := service.CreateDataset(ctx, &pb.CreateDatasetReq{
-		Dataset: &pb.Dataset{SpaceId: "quant", DatasetId: datasetID, DataSourceId: "source_a", Name: name, DataKind: pb.DataKind_DATA_KIND_RECORD},
-		Columns: []*pb.DatasetColumn{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active", DisplayName: "数值"}},
+	rsp, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{
+		Dataset:    &pb.Dataset{SpaceId: "quant", DatasetId: datasetID, DataSourceId: "source_a", Name: name, DataKind: pb.DataKind_DATA_KIND_RECORD},
+		Columns:    []*pb.DatasetColumn{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active", DisplayName: "数值"}},
+		CreateOnly: true,
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("create Dataset %s: rsp=%v err=%v", datasetID, rsp, err)
@@ -175,7 +176,7 @@ func createDataset(t *testing.T, ctx context.Context, service *catalog.Service, 
 
 func updateDataset(t *testing.T, ctx context.Context, service *catalog.Service, dataset *pb.Dataset) *pb.Dataset {
 	t.Helper()
-	rsp, err := service.UpdateDataset(ctx, &pb.UpdateDatasetReq{Dataset: dataset})
+	rsp, err := service.UpsertDataset(ctx, &pb.UpsertDatasetReq{Dataset: dataset})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("update Dataset %s: rsp=%v err=%v", dataset.GetDatasetId(), rsp, err)
 	}

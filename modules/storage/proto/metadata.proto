@@ -277,31 +277,19 @@ message ListSpacesRsp {
   common.PageResult page_result = 3;
 }
 
-// CreateDataSourceReq 表示创建数据来源的请求。
-message CreateDataSourceReq {
-  // data_source 是待创建的数据来源元数据。
+// UpsertDataSourceReq 表示创建或更新数据来源的请求。
+message UpsertDataSourceReq {
+  // data_source 是待写入的数据来源元数据。
   DataSource data_source = 2;
+  // create_only 为真时只允许新建，已存在时返回冲突。
+  bool create_only = 3;
 }
 
-// CreateDataSourceRsp 表示创建数据来源的响应。
-message CreateDataSourceRsp {
+// UpsertDataSourceRsp 表示创建或更新数据来源的响应。
+message UpsertDataSourceRsp {
   // ret_info 是接口返回状态。
   common.RetInfo ret_info = 1;
-  // data_source 是创建后的数据来源元数据。
-  DataSource data_source = 2;
-}
-
-// UpdateDataSourceReq 表示更新数据来源的请求。
-message UpdateDataSourceReq {
-  // data_source 是更新后的数据来源元数据。
-  DataSource data_source = 2;
-}
-
-// UpdateDataSourceRsp 表示更新数据来源的响应。
-message UpdateDataSourceRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // data_source 是更新后的数据来源元数据。
+  // data_source 是写入后的数据来源元数据。
   DataSource data_source = 2;
 }
 
@@ -442,33 +430,21 @@ message SetTagMemberTradingStatusRsp { common.RetInfo ret_info = 1; uint32 updat
 message ResolveSubjectsReq { string space_id = 2; repeated string tag_ids = 3; }
 message ResolveSubjectsRsp { common.RetInfo ret_info = 1; repeated Subject subjects = 2; }
 
-// CreateDatasetReq 表示创建数据集的请求。
-message CreateDatasetReq {
-  // dataset 是待创建的数据集元数据。
+// UpsertDatasetReq 表示创建或更新数据集的请求。
+message UpsertDatasetReq {
+  // dataset 是待写入的数据集元数据。
   Dataset dataset = 2;
-  // columns 是随数据集一起创建的列定义，与数据集在同一事务内写入；数据集建好即可写入。
+  // columns 是随数据集一起写入的列定义，新建时与数据集在同一事务内写入，更新时逐列写入。
   repeated DatasetColumn columns = 3;
+  // create_only 为真时只允许新建，已存在时返回冲突。
+  bool create_only = 4;
 }
 
-// CreateDatasetRsp 表示创建数据集的响应。
-message CreateDatasetRsp {
+// UpsertDatasetRsp 表示创建或更新数据集的响应。
+message UpsertDatasetRsp {
   // ret_info 是接口返回状态。
   common.RetInfo ret_info = 1;
-  // dataset 是创建后的数据集元数据。
-  Dataset dataset = 2;
-}
-
-// UpdateDatasetReq 表示更新数据集的请求。
-message UpdateDatasetReq {
-  // dataset 是更新后的数据集元数据。
-  Dataset dataset = 2;
-}
-
-// UpdateDatasetRsp 表示更新数据集的响应。
-message UpdateDatasetRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // dataset 是更新后的数据集元数据。
+  // dataset 是写入后的数据集元数据。
   Dataset dataset = 2;
 }
 
@@ -596,10 +572,8 @@ service Metadata {
   // 列出使用空间。
   rpc ListSpaces(ListSpacesReq) returns (ListSpacesRsp);
 
-  // 创建数据来源。
-  rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);
-  // 更新数据来源。
-  rpc UpdateDataSource(UpdateDataSourceReq) returns (UpdateDataSourceRsp);
+  // 创建或更新数据来源。
+  rpc UpsertDataSource(UpsertDataSourceReq) returns (UpsertDataSourceRsp);
   // 删除数据来源。
   rpc DeleteDataSource(DeleteDataSourceReq) returns (DeleteDataSourceRsp);
   // 按 ID 获取数据来源。
@@ -627,10 +601,8 @@ service Metadata {
   rpc SetTagMemberTradingStatus(SetTagMemberTradingStatusReq) returns (SetTagMemberTradingStatusRsp);
   rpc ResolveSubjects(ResolveSubjectsReq) returns (ResolveSubjectsRsp);
 
-  // 创建数据集。
-  rpc CreateDataset(CreateDatasetReq) returns (CreateDatasetRsp);
-  // 更新数据集。
-  rpc UpdateDataset(UpdateDatasetReq) returns (UpdateDatasetRsp);
+  // 创建或更新数据集。
+  rpc UpsertDataset(UpsertDatasetReq) returns (UpsertDatasetRsp);
   // 删除数据集。
   rpc DeleteDataset(DeleteDatasetReq) returns (DeleteDatasetRsp);
   // 按 ID 获取数据集。

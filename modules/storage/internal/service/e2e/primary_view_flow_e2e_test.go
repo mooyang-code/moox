@@ -69,7 +69,7 @@ func newPrimaryViewEnv(t *testing.T, datasets []readyBenchDataset) *followEnv {
 				for j, column := range dataset.columns {
 					columns[j] = &pb.DatasetColumn{ColumnName: column.name, ValueType: column.kind, Status: "active", DisplayName: column.name}
 				}
-				rsp, err := metadataService.CreateDataset(ctx, &pb.CreateDatasetReq{
+				rsp, err := metadataService.UpsertDataset(ctx, &pb.UpsertDatasetReq{
 					Dataset: &pb.Dataset{
 						SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Name: fmt.Sprintf("压测数据%d", i),
 						DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: readyBenchFreq,

@@ -127,7 +127,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { GetDataTypeConfigWithFields } from "@/api/collector";
 import { reportError } from "@/api/http";
-import { createDataSource, listDataSources, updateDataSource } from "@/api/storage/metadata";
+import { listDataSources, upsertDataSource } from "@/api/storage/metadata";
 import type { DataSource } from "@/api/storage/types";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { useSpaceStore } from "@/store/modules/space";
@@ -255,8 +255,7 @@ async function submit(): Promise<boolean> {
   const payload = { ...form, space_id: spaceId };
   const submission = sourceScope.begin();
   try {
-    if (editing.value) await updateDataSource(payload);
-    else await createDataSource(payload);
+    await upsertDataSource(payload, !editing.value);
   } catch (error) {
     reportError(error);
     return false;

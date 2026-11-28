@@ -735,8 +735,7 @@ components:
           - name: ListSpaces
             read_only: true
             callers: [collector, factor-mgr, monitor, strategy]
-          - name: CreateDataSource
-          - name: UpdateDataSource
+          - name: UpsertDataSource
           - name: DeleteDataSource
           - name: GetDataSource
             read_only: true
@@ -777,9 +776,7 @@ components:
           - name: ResolveSubjects
             read_only: true
             callers: [collector, factor-mgr, monitor, strategy]
-          - name: CreateDataset
-            callers: [collector, factor-mgr]
-          - name: UpdateDataset
+          - name: UpsertDataset
             callers: [collector, factor-mgr]
           - name: DeleteDataset
             callers: [collector, factor-mgr]

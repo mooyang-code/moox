@@ -20,8 +20,7 @@ vi.mock("vue-router", async () => {
 
 const api = vi.hoisted(() => ({
   listDataSources: vi.fn(async () => ({ data_sources: [], page_result: { total: 0 } })),
-  createDataSource: vi.fn(async () => ({})),
-  updateDataSource: vi.fn(async () => ({})),
+  upsertDataSource: vi.fn(async () => ({})),
   listAllDatasets: vi.fn(async () => [
     {
       space_id: "crypto",
@@ -161,7 +160,7 @@ beforeEach(() => {
   routeMocks.replace.mockReset().mockImplementation(async ({ query }: { query: Record<string, string> }) => {
     routeMocks.route!.query = query;
   });
-  api.createDataSource.mockReset().mockResolvedValue({});
+  api.upsertDataSource.mockReset().mockResolvedValue({});
   api.listAllDatasetColumns.mockClear();
 });
 afterEach(() => {
@@ -198,7 +197,7 @@ describe("数据源弹窗", () => {
     const vm = await openCreateDialog();
     vm.form.name = "币安";
     await clickOk();
-    expect(api.createDataSource).not.toHaveBeenCalled();
+    expect(api.upsertDataSource).not.toHaveBeenCalled();
     expect(vm.visible).toBe(true);
     expect(vm.form.name).toBe("币安");
   });
@@ -206,14 +205,18 @@ describe("数据源弹窗", () => {
   it("保存失败时弹窗不关，填的内容还在；成功后才关", async () => {
     const vm = await openCreateDialog();
     Object.assign(vm.form, { data_source_id: "binance", name: "币安" });
-    api.createDataSource.mockRejectedValueOnce(new Error("服务不可用"));
+    api.upsertDataSource.mockRejectedValueOnce(new Error("服务不可用"));
     await clickOk();
-    expect(api.createDataSource).toHaveBeenCalledTimes(1);
+    expect(api.upsertDataSource).toHaveBeenCalledTimes(1);
+    expect(api.upsertDataSource).toHaveBeenLastCalledWith(
+      expect.objectContaining({ space_id: "crypto", data_source_id: "binance", name: "币安" }),
+      true
+    );
     expect(vm.visible).toBe(true);
     expect(vm.form.data_source_id).toBe("binance");
 
     await clickOk();
-    expect(api.createDataSource).toHaveBeenCalledTimes(2);
+    expect(api.upsertDataSource).toHaveBeenCalledTimes(2);
     expect(vm.visible).toBe(false);
   });
 });

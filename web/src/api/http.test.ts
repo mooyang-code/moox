@@ -87,7 +87,7 @@ describe("Storage 读缓存", () => {
     await call("storage", "ListDataSources", req);
     await call("storage", "ListDataSources", req);
     expect(transport.post).toHaveBeenCalledTimes(1);
-    await call("storage", "UpdateDataSource", { space_id: "cache-space" });
+    await call("storage", "UpsertDataSource", { space_id: "cache-space" });
     await call("storage", "ListDataSources", req);
     expect(transport.post).toHaveBeenCalledTimes(3);
   });

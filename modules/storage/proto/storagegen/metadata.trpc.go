@@ -29,10 +29,8 @@ type MetadataService interface {
 	GetSpace(ctx context.Context, req *GetSpaceReq) (*GetSpaceRsp, error)
 	// ListSpaces 列出使用空间。
 	ListSpaces(ctx context.Context, req *ListSpacesReq) (*ListSpacesRsp, error)
-	// CreateDataSource 创建数据来源。
-	CreateDataSource(ctx context.Context, req *CreateDataSourceReq) (*CreateDataSourceRsp, error)
-	// UpdateDataSource 更新数据来源。
-	UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq) (*UpdateDataSourceRsp, error)
+	// UpsertDataSource 创建或更新数据来源。
+	UpsertDataSource(ctx context.Context, req *UpsertDataSourceReq) (*UpsertDataSourceRsp, error)
 	// DeleteDataSource 删除数据来源。
 	DeleteDataSource(ctx context.Context, req *DeleteDataSourceReq) (*DeleteDataSourceRsp, error)
 	// GetDataSource 按 ID 获取数据来源。
@@ -69,10 +67,8 @@ type MetadataService interface {
 	SetTagMemberTradingStatus(ctx context.Context, req *SetTagMemberTradingStatusReq) (*SetTagMemberTradingStatusRsp, error)
 
 	ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq) (*ResolveSubjectsRsp, error)
-	// CreateDataset 创建数据集。
-	CreateDataset(ctx context.Context, req *CreateDatasetReq) (*CreateDatasetRsp, error)
-	// UpdateDataset 更新数据集。
-	UpdateDataset(ctx context.Context, req *UpdateDatasetReq) (*UpdateDatasetRsp, error)
+	// UpsertDataset 创建或更新数据集。
+	UpsertDataset(ctx context.Context, req *UpsertDatasetReq) (*UpsertDatasetRsp, error)
 	// DeleteDataset 删除数据集。
 	DeleteDataset(ctx context.Context, req *DeleteDatasetReq) (*DeleteDatasetRsp, error)
 	// GetDataset 按 ID 获取数据集。
@@ -177,32 +173,14 @@ func MetadataService_ListSpaces_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
-func MetadataService_CreateDataSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateDataSourceReq{}
+func MetadataService_UpsertDataSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertDataSourceReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).CreateDataSource(ctx, reqbody.(*CreateDataSourceReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_UpdateDataSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateDataSourceReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).UpdateDataSource(ctx, reqbody.(*UpdateDataSourceReq))
+		return svr.(MetadataService).UpsertDataSource(ctx, reqbody.(*UpsertDataSourceReq))
 	}
 
 	var rsp interface{}
@@ -537,32 +515,14 @@ func MetadataService_ResolveSubjects_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
-func MetadataService_CreateDataset_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateDatasetReq{}
+func MetadataService_UpsertDataset_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertDatasetReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).CreateDataset(ctx, reqbody.(*CreateDatasetReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_UpdateDataset_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateDatasetReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).UpdateDataset(ctx, reqbody.(*UpdateDatasetReq))
+		return svr.(MetadataService).UpsertDataset(ctx, reqbody.(*UpsertDatasetReq))
 	}
 
 	var rsp interface{}
@@ -707,12 +667,8 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_ListSpaces_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Metadata/CreateDataSource",
-			Func: MetadataService_CreateDataSource_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/UpdateDataSource",
-			Func: MetadataService_UpdateDataSource_Handler,
+			Name: "/trpc.moox.storage.Metadata/UpsertDataSource",
+			Func: MetadataService_UpsertDataSource_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Metadata/DeleteDataSource",
@@ -787,12 +743,8 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_ResolveSubjects_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Metadata/CreateDataset",
-			Func: MetadataService_CreateDataset_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/UpdateDataset",
-			Func: MetadataService_UpdateDataset_Handler,
+			Name: "/trpc.moox.storage.Metadata/UpsertDataset",
+			Func: MetadataService_UpsertDataset_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Metadata/DeleteDataset",
@@ -857,14 +809,9 @@ func (s *UnimplementedMetadata) ListSpaces(ctx context.Context, req *ListSpacesR
 	return nil, errors.New("rpc ListSpaces of service Metadata is not implemented")
 }
 
-// CreateDataSource 创建数据来源。
-func (s *UnimplementedMetadata) CreateDataSource(ctx context.Context, req *CreateDataSourceReq) (*CreateDataSourceRsp, error) {
-	return nil, errors.New("rpc CreateDataSource of service Metadata is not implemented")
-}
-
-// UpdateDataSource 更新数据来源。
-func (s *UnimplementedMetadata) UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq) (*UpdateDataSourceRsp, error) {
-	return nil, errors.New("rpc UpdateDataSource of service Metadata is not implemented")
+// UpsertDataSource 创建或更新数据来源。
+func (s *UnimplementedMetadata) UpsertDataSource(ctx context.Context, req *UpsertDataSourceReq) (*UpsertDataSourceRsp, error) {
+	return nil, errors.New("rpc UpsertDataSource of service Metadata is not implemented")
 }
 
 // DeleteDataSource 删除数据来源。
@@ -935,14 +882,9 @@ func (s *UnimplementedMetadata) ResolveSubjects(ctx context.Context, req *Resolv
 	return nil, errors.New("rpc ResolveSubjects of service Metadata is not implemented")
 }
 
-// CreateDataset 创建数据集。
-func (s *UnimplementedMetadata) CreateDataset(ctx context.Context, req *CreateDatasetReq) (*CreateDatasetRsp, error) {
-	return nil, errors.New("rpc CreateDataset of service Metadata is not implemented")
-}
-
-// UpdateDataset 更新数据集。
-func (s *UnimplementedMetadata) UpdateDataset(ctx context.Context, req *UpdateDatasetReq) (*UpdateDatasetRsp, error) {
-	return nil, errors.New("rpc UpdateDataset of service Metadata is not implemented")
+// UpsertDataset 创建或更新数据集。
+func (s *UnimplementedMetadata) UpsertDataset(ctx context.Context, req *UpsertDatasetReq) (*UpsertDatasetRsp, error) {
+	return nil, errors.New("rpc UpsertDataset of service Metadata is not implemented")
 }
 
 // DeleteDataset 删除数据集。
@@ -993,10 +935,8 @@ type MetadataClientProxy interface {
 	GetSpace(ctx context.Context, req *GetSpaceReq, opts ...client.Option) (rsp *GetSpaceRsp, err error)
 	// ListSpaces 列出使用空间。
 	ListSpaces(ctx context.Context, req *ListSpacesReq, opts ...client.Option) (rsp *ListSpacesRsp, err error)
-	// CreateDataSource 创建数据来源。
-	CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (rsp *CreateDataSourceRsp, err error)
-	// UpdateDataSource 更新数据来源。
-	UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq, opts ...client.Option) (rsp *UpdateDataSourceRsp, err error)
+	// UpsertDataSource 创建或更新数据来源。
+	UpsertDataSource(ctx context.Context, req *UpsertDataSourceReq, opts ...client.Option) (rsp *UpsertDataSourceRsp, err error)
 	// DeleteDataSource 删除数据来源。
 	DeleteDataSource(ctx context.Context, req *DeleteDataSourceReq, opts ...client.Option) (rsp *DeleteDataSourceRsp, err error)
 	// GetDataSource 按 ID 获取数据来源。
@@ -1033,10 +973,8 @@ type MetadataClientProxy interface {
 	SetTagMemberTradingStatus(ctx context.Context, req *SetTagMemberTradingStatusReq, opts ...client.Option) (rsp *SetTagMemberTradingStatusRsp, err error)
 
 	ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq, opts ...client.Option) (rsp *ResolveSubjectsRsp, err error)
-	// CreateDataset 创建数据集。
-	CreateDataset(ctx context.Context, req *CreateDatasetReq, opts ...client.Option) (rsp *CreateDatasetRsp, err error)
-	// UpdateDataset 更新数据集。
-	UpdateDataset(ctx context.Context, req *UpdateDatasetReq, opts ...client.Option) (rsp *UpdateDatasetRsp, err error)
+	// UpsertDataset 创建或更新数据集。
+	UpsertDataset(ctx context.Context, req *UpsertDatasetReq, opts ...client.Option) (rsp *UpsertDatasetRsp, err error)
 	// DeleteDataset 删除数据集。
 	DeleteDataset(ctx context.Context, req *DeleteDatasetReq, opts ...client.Option) (rsp *DeleteDatasetRsp, err error)
 	// GetDataset 按 ID 获取数据集。
@@ -1160,40 +1098,20 @@ func (c *MetadataClientProxyImpl) ListSpaces(ctx context.Context, req *ListSpace
 	return rsp, nil
 }
 
-func (c *MetadataClientProxyImpl) CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (*CreateDataSourceRsp, error) {
+func (c *MetadataClientProxyImpl) UpsertDataSource(ctx context.Context, req *UpsertDataSourceReq, opts ...client.Option) (*UpsertDataSourceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateDataSource")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertDataSource")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("CreateDataSource")
+	msg.WithCalleeMethod("UpsertDataSource")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateDataSourceRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) UpdateDataSource(ctx context.Context, req *UpdateDataSourceReq, opts ...client.Option) (*UpdateDataSourceRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateDataSource")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("UpdateDataSource")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpdateDataSourceRsp{}
+	rsp := &UpsertDataSourceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1560,40 +1478,20 @@ func (c *MetadataClientProxyImpl) ResolveSubjects(ctx context.Context, req *Reso
 	return rsp, nil
 }
 
-func (c *MetadataClientProxyImpl) CreateDataset(ctx context.Context, req *CreateDatasetReq, opts ...client.Option) (*CreateDatasetRsp, error) {
+func (c *MetadataClientProxyImpl) UpsertDataset(ctx context.Context, req *UpsertDatasetReq, opts ...client.Option) (*UpsertDatasetRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateDataset")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertDataset")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("CreateDataset")
+	msg.WithCalleeMethod("UpsertDataset")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateDatasetRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) UpdateDataset(ctx context.Context, req *UpdateDatasetReq, opts ...client.Option) (*UpdateDatasetRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateDataset")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("UpdateDataset")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpdateDatasetRsp{}
+	rsp := &UpsertDatasetRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

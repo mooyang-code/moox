@@ -3,7 +3,7 @@
   "summary": {
     "components": 16,
     "services": 23,
-    "methods": 295,
+    "methods": 293,
     "read_only_methods": 136,
     "retryable_methods": 139,
     "callers": 19,
@@ -1257,18 +1257,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "CreateDataSource",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "CreateDataset",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "CreateSpace",
           "read_only": false,
           "retryable": false,
@@ -1401,18 +1389,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "UpdateDataSource",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "UpdateDataset",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "UpdateSpace",
           "read_only": false,
           "retryable": false,
@@ -1420,6 +1396,18 @@
         },
         {
           "name": "UpdateSubjectAttributes",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpsertDataSource",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "UpsertDataset",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -1963,7 +1951,6 @@
       "trpc.moox.storage.DataView/SearchRecordRows",
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/ApplyTagSnapshot",
-      "trpc.moox.storage.Metadata/CreateDataset",
       "trpc.moox.storage.Metadata/DeleteDataset",
       "trpc.moox.storage.Metadata/GetDataSource",
       "trpc.moox.storage.Metadata/GetDataset",
@@ -1980,8 +1967,8 @@
       "trpc.moox.storage.Metadata/ListTags",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.Metadata/SetTagMemberTradingStatus",
-      "trpc.moox.storage.Metadata/UpdateDataset",
       "trpc.moox.storage.Metadata/UpdateSubjectAttributes",
+      "trpc.moox.storage.Metadata/UpsertDataset",
       "trpc.moox.storage.Metadata/UpsertDatasetColumn",
       "trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
       "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
@@ -2127,8 +2114,6 @@
       "trpc.moox.storage.DataView/SearchRecordRows",
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/AddTagMembers",
-      "trpc.moox.storage.Metadata/CreateDataSource",
-      "trpc.moox.storage.Metadata/CreateDataset",
       "trpc.moox.storage.Metadata/CreateSpace",
       "trpc.moox.storage.Metadata/DeleteDataSource",
       "trpc.moox.storage.Metadata/DeleteDataset",
@@ -2150,9 +2135,9 @@
       "trpc.moox.storage.Metadata/RemoveTagMembers",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.Metadata/SetTagMemberStatus",
-      "trpc.moox.storage.Metadata/UpdateDataSource",
-      "trpc.moox.storage.Metadata/UpdateDataset",
       "trpc.moox.storage.Metadata/UpdateSpace",
+      "trpc.moox.storage.Metadata/UpsertDataSource",
+      "trpc.moox.storage.Metadata/UpsertDataset",
       "trpc.moox.storage.Metadata/UpsertDatasetColumn",
       "trpc.moox.storage.Metadata/UpsertSubject",
       "trpc.moox.storage.Metadata/UpsertTag",
@@ -2249,7 +2234,6 @@
       "trpc.moox.storage.DataView/QueryTimeSeriesRows",
       "trpc.moox.storage.DataView/SearchRecordRows",
       "trpc.moox.storage.DataView/WaitViewApplied",
-      "trpc.moox.storage.Metadata/CreateDataset",
       "trpc.moox.storage.Metadata/DeleteDataset",
       "trpc.moox.storage.Metadata/GetDataSource",
       "trpc.moox.storage.Metadata/GetDataset",
@@ -2265,7 +2249,7 @@
       "trpc.moox.storage.Metadata/ListTagMembers",
       "trpc.moox.storage.Metadata/ListTags",
       "trpc.moox.storage.Metadata/ResolveSubjects",
-      "trpc.moox.storage.Metadata/UpdateDataset",
+      "trpc.moox.storage.Metadata/UpsertDataset",
       "trpc.moox.storage.Metadata/UpsertDatasetColumn",
       "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
       "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
@@ -2461,8 +2445,6 @@
       "trpc.moox.storage.DataView/SearchRecordRows",
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/AddTagMembers",
-      "trpc.moox.storage.Metadata/CreateDataSource",
-      "trpc.moox.storage.Metadata/CreateDataset",
       "trpc.moox.storage.Metadata/CreateSpace",
       "trpc.moox.storage.Metadata/DeleteDataSource",
       "trpc.moox.storage.Metadata/DeleteDataset",
@@ -2484,9 +2466,9 @@
       "trpc.moox.storage.Metadata/RemoveTagMembers",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.Metadata/SetTagMemberStatus",
-      "trpc.moox.storage.Metadata/UpdateDataSource",
-      "trpc.moox.storage.Metadata/UpdateDataset",
       "trpc.moox.storage.Metadata/UpdateSpace",
+      "trpc.moox.storage.Metadata/UpsertDataSource",
+      "trpc.moox.storage.Metadata/UpsertDataset",
       "trpc.moox.storage.Metadata/UpsertDatasetColumn",
       "trpc.moox.storage.Metadata/UpsertSubject",
       "trpc.moox.storage.Metadata/UpsertTag",

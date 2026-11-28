@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/sqlitedb"
 )
 
 func (s *Store) UpsertSpace(ctx context.Context, item *pb.Space) (*pb.Space, error) {
@@ -132,9 +133,38 @@ func (s *Store) UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.
 			c_item_json = excluded.c_item_json
 	`, item.GetSpaceId(), item.GetDataSourceId(), item.GetName(), item.GetStatus(), raw)
 	if err != nil {
-		return nil, err
+		return nil, mapDataSourceUniqueConflict(item, err)
 	}
 	return s.GetDataSource(ctx, item.GetSpaceId(), item.GetDataSourceId())
+}
+
+// CreateDataSource 原子地创建数据来源，已存在或同空间重名时返回冲突。
+func (s *Store) CreateDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error) {
+	if item == nil || item.GetSpaceId() == "" || item.GetDataSourceId() == "" || item.GetName() == "" {
+		return nil, storeerr.Invalidf("space_id, data_source_id and name are required")
+	}
+	item.Status = defaultStatus(item.GetStatus())
+	raw, err := marshal(item)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO t_data_sources (c_space_id, c_data_source_id, c_name, c_status, c_item_json)
+		VALUES (?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetDataSourceId(), item.GetName(), item.GetStatus(), raw); err != nil {
+		return nil, mapDataSourceUniqueConflict(item, err)
+	}
+	return s.GetDataSource(ctx, item.GetSpaceId(), item.GetDataSourceId())
+}
+
+func mapDataSourceUniqueConflict(item *pb.DataSource, err error) error {
+	if code, ok := sqlitedb.ErrorCode(err); ok && code == 2067 {
+		if strings.Contains(strings.ToLower(err.Error()), "c_name") {
+			return storeerr.Conflictf("数据来源名称 %q 在空间 %s 中已存在：%w", item.GetName(), item.GetSpaceId(), err)
+		}
+		return storeerr.Conflictf("数据来源 %s/%s 已存在：%w", item.GetSpaceId(), item.GetDataSourceId(), err)
+	}
+	return err
 }
 
 func (s *Store) GetDataSource(ctx context.Context, spaceID string, dataSourceID string) (*pb.DataSource, error) {

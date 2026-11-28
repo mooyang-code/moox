@@ -14,10 +14,10 @@ import (
 
 // 本文件聚合数据源、主体、数据集及其列相关的元数据 CRUD 入口。
 
-func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSourceReq) (*pb.CreateDataSourceRsp, error) {
+func (s *Service) UpsertDataSource(ctx context.Context, req *pb.UpsertDataSourceReq) (*pb.UpsertDataSourceRsp, error) {
 	item := req.GetDataSource()
 	if item == nil || item.GetSpaceId() == "" || (item.GetDataSourceId() == "" && item.GetName() == "") {
-		return &pb.CreateDataSourceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and data_source_id or name are required"))}, nil
+		return &pb.UpsertDataSourceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and data_source_id or name are required"))}, nil
 	}
 	if item.DataSourceId == "" {
 		item.DataSourceId = defaultID(item.GetName(), "data_source")
@@ -25,19 +25,19 @@ func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSource
 	if item.Name == "" {
 		item.Name = item.GetDataSourceId()
 	}
-	created, err := s.metadata.UpsertDataSource(ctx, item)
-	if err != nil {
-		return &pb.CreateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
+	var (
+		saved *pb.DataSource
+		err   error
+	)
+	if req.GetCreateOnly() {
+		saved, err = s.metadata.CreateDataSource(ctx, item)
+	} else {
+		saved, err = s.metadata.UpsertDataSource(ctx, item)
 	}
-	return &pb.CreateDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: created}, nil
-}
-
-func (s *Service) UpdateDataSource(ctx context.Context, req *pb.UpdateDataSourceReq) (*pb.UpdateDataSourceRsp, error) {
-	updated, err := s.metadata.UpsertDataSource(ctx, req.GetDataSource())
 	if err != nil {
-		return &pb.UpdateDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
+		return &pb.UpsertDataSourceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	return &pb.UpdateDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: updated}, nil
+	return &pb.UpsertDataSourceRsp{RetInfo: retinfo.Success("success"), DataSource: saved}, nil
 }
 
 func (s *Service) DeleteDataSource(ctx context.Context, req *pb.DeleteDataSourceReq) (*pb.DeleteDataSourceRsp, error) {
@@ -100,10 +100,10 @@ func (s *Service) ListSubjects(ctx context.Context, req *pb.ListSubjectsReq) (*p
 	return &pb.ListSubjectsRsp{RetInfo: retinfo.Success("success"), Subjects: items, PageResult: page}, nil
 }
 
-func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (*pb.CreateDatasetRsp, error) {
+func (s *Service) UpsertDataset(ctx context.Context, req *pb.UpsertDatasetReq) (*pb.UpsertDatasetRsp, error) {
 	item := req.GetDataset()
 	if item == nil || item.GetSpaceId() == "" || (item.GetDatasetId() == "" && item.GetName() == "") {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id or name are required"))}, nil
+		return &pb.UpsertDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id or name are required"))}, nil
 	}
 	if item.DatasetId == "" {
 		item.DatasetId = defaultID(item.GetName(), "dataset")
@@ -112,55 +112,39 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 		}
 	}
 	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
+		return &pb.UpsertDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
+		return &pb.UpsertDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	for _, column := range req.GetColumns() {
 		if column == nil || strings.TrimSpace(column.GetColumnName()) == "" {
-			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("column_name is required"))}, nil
+			return &pb.UpsertDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("column_name is required"))}, nil
 		}
 		if err := validateDatasetColumnName(column.GetColumnName()); err != nil {
-			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+			return &pb.UpsertDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		if err := validateColumnDisplayName("dataset column display_name", column.GetDisplayName()); err != nil {
-			return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
+			return &pb.UpsertDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 		}
 	}
-	created, err := s.metadata.UpsertDataset(ctx, item, req.GetColumns()...)
+	var (
+		saved *pb.Dataset
+		err   error
+	)
+	if req.GetCreateOnly() {
+		saved, err = s.metadata.CreateDataset(ctx, item, req.GetColumns()...)
+	} else {
+		saved, err = s.metadata.UpsertDataset(ctx, item, req.GetColumns()...)
+	}
 	if err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
+		return &pb.UpsertDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	// 建好即可写入：返回前把数据集缓存发布出去，写入方紧接着的写入才能在缓存里查到数据集和列。
-	if err := s.refreshDatasetCache(ctx, "CreateDataset"); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集已创建，但元数据缓存尚未发布，请重试")), Dataset: s.withRetention(created)}, nil
+	if err := s.refreshDatasetCache(ctx, "UpsertDataset"); err != nil {
+		return &pb.UpsertDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集已写入，但元数据缓存尚未发布，请重试")), Dataset: s.withRetention(saved)}, nil
 	}
-	return &pb.CreateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(created)}, nil
-}
-
-func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (*pb.UpdateDatasetRsp, error) {
-	item := req.GetDataset()
-	if item == nil || item.GetDatasetId() == "" {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
-	}
-	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := validateDatasetID(item.GetDatasetId()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	updated, err := s.metadata.UpsertDataset(ctx, item)
-	if err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := s.refreshDatasetCache(ctx, "UpdateDataset"); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	return &pb.UpdateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(updated)}, nil
+	return &pb.UpsertDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(saved)}, nil
 }
 
 func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (*pb.DeleteDatasetRsp, error) {

@@ -188,7 +188,7 @@ func (c *Client) CreateResultDataset(ctx context.Context, spec ResultDatasetSpec
 		return err
 	}
 	// 数据集与列在同一事务里建好，返回前 Storage 已发布元数据缓存，建好即可写入。
-	created, err := c.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: expected, Columns: columns})
+	created, err := c.metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: expected, Columns: columns, CreateOnly: true})
 	if err != nil {
 		return rpcError("create result dataset", err)
 	}
@@ -236,7 +236,7 @@ func (c *Client) SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID s
 	}
 	dataset := proto.Clone(current.GetDataset()).(*storagepb.Dataset)
 	dataset.SubjectTags = append([]string(nil), tags...)
-	updated, err := c.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{Dataset: dataset})
+	updated, err := c.metadata.UpsertDataset(ctx, &storagepb.UpsertDatasetReq{Dataset: dataset})
 	if err != nil {
 		return rpcError("set dataset subject tags", err)
 	}
