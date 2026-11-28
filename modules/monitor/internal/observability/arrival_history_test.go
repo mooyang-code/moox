@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -179,7 +180,7 @@ func TestDatasetStatusCarriesTheMarketTimezone(t *testing.T) {
 	require.Equal(t, "UTC", datasetStatus(now, key, healthyRun(now, now.Add(-2*time.Minute), now), testRealtimePolicy(), cryptoClock).Timezone)
 	stock := datasetStatus(cst("2026-10-16", "10:00:00"), stockKey, healthyRun(cst("2026-10-16", "10:00:00"), cst("2026-10-16", "09:58:00"), cst("2026-10-16", "09:59:01")), testRealtimePolicy(), stockSpaceClock(t, stockDays))
 	require.Equal(t, "Asia/Shanghai", stock.Timezone)
-	system := datasetStatus(now, key, healthyRun(now, now.Add(-time.Minute), now), testRealtimePolicy(), spaceClock{err: monmetrics.ErrNoTradingCalendar})
+	system := datasetStatus(now, key, healthyRun(now, now.Add(-time.Minute), now), testRealtimePolicy(), spaceClock{err: marketclock.ErrNoTradingCalendar})
 	require.Equal(t, "UTC", system.Timezone)
 }
 

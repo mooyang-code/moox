@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"context"
@@ -7,9 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
@@ -27,16 +26,16 @@ func unixSeconds(value time.Time) float64 {
 	return float64(value.Unix())
 }
 
-// buildBusinessFreshnessReporterWithInterval 返回业务域每轮的评估：按本轮指标算出组件、模块健康、数据集、K 线、关注项与
-// Monitor 自己的检查的事实和冻结集合，交给 checks.Applier 推进检查表。本轮不再产出且没有冻结的检查当轮删除，
+// NewBusinessReporter 返回业务域每轮的评估：按本轮指标算出组件、模块健康、数据集、K 线、关注项与
+// Monitor 自己的检查的事实和冻结集合，交给 Applier 推进检查表。本轮不再产出且没有冻结的检查当轮删除，
 // 所以产出方读不到依赖、无法判断时必须把它负责的检查冻结，不能省略不报。
-func buildBusinessFreshnessReporterWithInterval(
+func NewBusinessReporter(
 	builder *monitorobservability.Builder,
 	repositories *store.Repositories,
-	applier *checks.Applier,
-	observation func(now time.Time) observationState,
+	applier *Applier,
+	observation func(now time.Time) ObservationState,
 	klineInterval time.Duration,
-	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
+	klineEvaluators ...*kline.KlineFreshnessEvaluator,
 ) func(context.Context) error {
 	if builder == nil || repositories == nil || applier == nil {
 		return nil
@@ -44,9 +43,9 @@ func buildBusinessFreshnessReporterWithInterval(
 	if klineInterval <= 0 {
 		klineInterval = 30 * time.Second
 	}
-	var kline *monmetrics.KlineFreshnessEvaluator
+	var klineEvaluator *kline.KlineFreshnessEvaluator
 	if len(klineEvaluators) > 0 {
-		kline = klineEvaluators[0]
+		klineEvaluator = klineEvaluators[0]
 	}
 	var lastKlineEvaluation time.Time
 	return func(ctx context.Context) error {
@@ -63,33 +62,33 @@ func buildBusinessFreshnessReporterWithInterval(
 				return err
 			}
 		}
-		round := checks.Round{Domain: checks.DomainBusiness}
-		facts := make(map[store.CheckKey]checks.Fact)
-		add := func(fact checks.Fact) { facts[fact.Key()] = fact }
-		var obsState observationState
+		round := Round{Domain: DomainBusiness}
+		facts := make(map[store.CheckKey]Fact)
+		add := func(fact Fact) { facts[fact.Key()] = fact }
+		var obsState ObservationState
 		obsSuspended := false
 		if observation != nil {
 			obsState = observation(overview.GeneratedAt)
 			obsSuspended = obsState.Suspended
 		}
-		if kline != nil {
-			if obsSuspended || collectorHalted(overview.Services) || (!lastKlineEvaluation.IsZero() && overview.GeneratedAt.Sub(lastKlineEvaluation) < klineInterval) {
+		if klineEvaluator != nil {
+			if obsSuspended || CollectorHalted(overview.Services) || (!lastKlineEvaluation.IsZero() && overview.GeneratedAt.Sub(lastKlineEvaluation) < klineInterval) {
 				// 观测输入暂停时 storage-view 摘要不会更新；Collector 暂停或恢复追赶时采集是有意停下的；
 				// 没到评估时间也不评估：以上情形 K 线检查保持原状态。
 				round.FrozenPrefixes = append(round.FrozenPrefixes, klineCheckPrefix)
 			} else {
 				lastKlineEvaluation = overview.GeneratedAt
-				reports, err := kline.Evaluate(ctx, overview.GeneratedAt)
+				reports, err := klineEvaluator.Evaluate(ctx, overview.GeneratedAt)
 				if err != nil {
-					var inventoryErr *monmetrics.TaskResultInventoryRefreshError
+					var inventoryErr *kline.TaskResultInventoryRefreshError
 					if !errors.As(err, &inventoryErr) {
 						return err
 					}
 					// 任务清单拿不到：K 线检查保持原状态，任务清单检查本身照常产出失败事实。
 					round.FrozenPrefixes = append(round.FrozenPrefixes, klineCheckPrefix)
 					state := inventoryErr.State
-					add(checks.Fact{
-						SpaceID: events.SystemSpaceID, CheckID: monmetrics.TaskResultInventoryCheckID, Name: "采集任务清单",
+					add(Fact{
+						SpaceID: events.SystemSpaceID, CheckID: kline.TaskResultInventoryCheckID, Name: "采集任务清单",
 						Status: domain.CheckStatusDown, Reason: "无法获取采集任务清单：采集服务接口异常，K线结果检查暂停",
 						Diagnostic: fmt.Sprintf("cache_available=%t cache_age_seconds=%.0f last_success_timestamp_seconds=%.0f error=%s", state.Available, state.Age.Seconds(), unixSeconds(state.LastSuccess), inventoryErr.Cause),
 					})
@@ -105,7 +104,7 @@ func buildBusinessFreshnessReporterWithInterval(
 						}
 						name := "采集任务清单"
 						reason := klineReasonText(report, overview.GeneratedAt)
-						if report.CheckID == monmetrics.TaskResultInventoryCheckID {
+						if report.CheckID == kline.TaskResultInventoryCheckID {
 							reason = "采集任务清单正常"
 							if !report.Success {
 								reason = "控制面数据过期：采集服务暂不可用，K线检查沿用最后一份有效的任务清单"
@@ -113,12 +112,12 @@ func buildBusinessFreshnessReporterWithInterval(
 						} else {
 							name = klineCheckName(datasetSubject(builder.Metrics.DatasetDisplayName(ctx, report.Rule.SpaceID, report.Rule.DatasetID), report.Rule.DatasetID, report.Rule.Frequency))
 						}
-						status := passStatus(report.Success)
+						status := PassStatus(report.Success)
 						if report.Success && (report.PendingCount > 0 || report.Reason == "first_bar_pending") {
 							// 新上线对象在等首根 K 线：按通过记录，页面显示“需关注”。
 							status = domain.CheckStatusDegraded
 						}
-						add(checks.Fact{SpaceID: report.Rule.SpaceID, CheckID: report.CheckID, Name: name, Status: status, Reason: reason, Diagnostic: report.Diagnostic})
+						add(Fact{SpaceID: report.Rule.SpaceID, CheckID: report.CheckID, Name: name, Status: status, Reason: reason, Diagnostic: report.Diagnostic})
 					}
 				}
 			}
@@ -133,7 +132,7 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		// datasetOwners 记下每项数据集检查由哪个服务上报：上报方停止上报时（producer stale）检查保持原状态。
 		datasetOwners := make(map[store.CheckKey]string)
-		collectorDatasets, inventoryKnown := collectorDatasetSet(ctx, builder.Inventory, kline, overview.GeneratedAt)
+		collectorDatasets, inventoryKnown := collectorDatasetSet(ctx, builder.Inventory, klineEvaluator, overview.GeneratedAt)
 		if !inventoryKnown {
 			// 清单尚未取到，无法区分 storage / storage_view 中哪些属于采集任务、哪些属于因子等非采集生产者：冻结这两类前缀。
 			round.FrozenPrefixes = append(round.FrozenPrefixes, "dataset:storage:", "dataset:storage_view:")
@@ -151,8 +150,8 @@ func buildBusinessFreshnessReporterWithInterval(
 				round.Freeze(key)
 				continue
 			}
-			add(checks.Fact{SpaceID: item.SpaceID, CheckID: item.CheckID, Name: item.Name, Severity: item.Severity,
-				Status: passStatus(item.Status == "healthy"), Reason: item.Reason, RawError: item.RawError})
+			add(Fact{SpaceID: item.SpaceID, CheckID: item.CheckID, Name: item.Name, Severity: item.Severity,
+				Status: PassStatus(item.Status == "healthy"), Reason: item.Reason, RawError: item.RawError})
 		}
 		moduleFacts, err := moduleHealthItems(ctx, builder.Metrics, report.BuiltInModuleHealthChecks(), overview.GeneratedAt)
 		if err != nil {
@@ -180,12 +179,12 @@ func buildBusinessFreshnessReporterWithInterval(
 			if obsSuspended {
 				round.FrozenAll = true
 				for key := range facts {
-					if !observationIndependent(key.CheckID) {
+					if !ObservationIndependent(key.CheckID) {
 						delete(facts, key)
 					}
 				}
 			}
-			ingest := checks.Fact{SpaceID: events.SystemSpaceID, CheckID: observationIngestCheckID, Name: "观测输入", Status: domain.CheckStatusOK, Reason: "观测输入正常"}
+			ingest := Fact{SpaceID: events.SystemSpaceID, CheckID: ObservationIngestCheckID, Name: "观测输入", Status: domain.CheckStatusOK, Reason: "观测输入正常"}
 			if !obsState.Ready {
 				ingest.Status, ingest.Reason = domain.CheckStatusDown, "观测输入中断：Monitor 的 EventBus 观测消费者没有连上，依赖服务指标的检查（含主机类检查）已冻结"
 				ingest.RawError = obsState.Reason
@@ -193,7 +192,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			add(ingest)
 		}
 		if len(facts) > store.MaxChecks {
-			return fmt.Errorf("business freshness checks exceed limit %d", store.MaxChecks)
+			return fmt.Errorf("业务新鲜度检查数量超过上限 %d", store.MaxChecks)
 		}
 		for _, fact := range facts {
 			round.Facts = append(round.Facts, fact)
@@ -207,7 +206,7 @@ func buildBusinessFreshnessReporterWithInterval(
 func collectorDatasetSet(
 	ctx context.Context,
 	inventory monitorobservability.InventorySource,
-	kline *monmetrics.KlineFreshnessEvaluator,
+	klineEvaluator *kline.KlineFreshnessEvaluator,
 	now time.Time,
 ) (map[[2]string]struct{}, bool) {
 	if inventory != nil {
@@ -223,8 +222,8 @@ func collectorDatasetSet(
 		}
 		return datasets, true
 	}
-	if kline != nil {
-		return kline.StaticDatasets(), true
+	if klineEvaluator != nil {
+		return klineEvaluator.StaticDatasets(), true
 	}
 	return nil, true
 }
@@ -254,7 +253,7 @@ func addDatasetFacts(
 	overview monitorobservability.Overview,
 	collectorDatasets map[[2]string]struct{},
 	inventoryKnown bool,
-	add func(checks.Fact),
+	add func(Fact),
 	owners map[store.CheckKey]string,
 ) error {
 	factorExpected, factorExpectedKnown := false, false
@@ -300,17 +299,17 @@ func addDatasetFacts(
 			}
 			displayName = builder.Metrics.DatasetDisplayName(ctx, dataset.SpaceID, nameDatasetID)
 		}
-		add(checks.Fact{
+		add(Fact{
 			SpaceID: dataset.SpaceID, CheckID: checkID,
 			Name:   datasetCheckName(dataset.Producer, datasetSubject(displayName, dataset.DatasetID, dataset.Freq)),
-			Status: passStatus(datasetCheckPasses(dataset)), Reason: datasetReasonText(dataset, overview.GeneratedAt),
+			Status: PassStatus(datasetCheckPasses(dataset)), Reason: datasetReasonText(dataset, overview.GeneratedAt),
 		})
 	}
 	return nil
 }
 
 // silentReporters 返回本轮有 reporter:<主机>:<服务> 失败事实的服务，即停止上报的服务。
-func silentReporters(facts map[store.CheckKey]checks.Fact) map[string]bool {
+func silentReporters(facts map[store.CheckKey]Fact) map[string]bool {
 	silent := make(map[string]bool)
 	for key, fact := range facts {
 		parts := strings.Split(key.CheckID, ":")
@@ -321,9 +320,9 @@ func silentReporters(facts map[store.CheckKey]checks.Fact) map[string]bool {
 	return silent
 }
 
-// collectorHalted 报告 Collector 模块是否处于暂停或恢复追赶：按它最近一次新鲜上报带的生命周期判断，
+// CollectorHalted 报告 Collector 模块是否处于暂停或恢复追赶：按它最近一次新鲜上报带的生命周期判断，
 // 上报不新鲜或没有生命周期时算没有暂停。
-func collectorHalted(services []monitorobservability.ServiceStatus) bool {
+func CollectorHalted(services []monitorobservability.ServiceStatus) bool {
 	for _, service := range services {
 		if service.ServiceName != "collector" || service.Lifecycle == nil {
 			continue
@@ -335,14 +334,14 @@ func collectorHalted(services []monitorobservability.ServiceStatus) bool {
 	return false
 }
 
-// observationIngestCheckID 是"观测输入"检查：观测消费者连上时通过，没连上时失败，说明其他检查为什么冻结。
-const observationIngestCheckID = "observation:ingest"
+// ObservationIngestCheckID 是"观测输入"检查：观测消费者连上时通过，没连上时失败，说明其他检查为什么冻结。
+const ObservationIngestCheckID = "observation:ingest"
 
-// observationIndependent 报告一项业务检查是否不依赖观测输入：
+// ObservationIndependent 报告一项业务检查是否不依赖观测输入：
 // 业务域中只有“观测输入”本身不依赖观测输入；K 线新鲜度读的是经 EventBus 入库的 storage-view 视图摘要，观测暂停时一并冻结。
 // 行情探针（直读 Storage）与标签巡检在探针域，不受观测输入冻结影响。
-func observationIndependent(checkID string) bool {
-	return checkID == observationIngestCheckID
+func ObservationIndependent(checkID string) bool {
+	return checkID == ObservationIngestCheckID
 }
 
 // datasetCheckPasses 决定数据集新鲜度检查按通过还是失败记录。数据积累中（warming）页面显示降级，但生产者在正常工作、

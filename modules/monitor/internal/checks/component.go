@@ -1,10 +1,9 @@
-package bootstrap
+package checks
 
 import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
-	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
@@ -13,7 +12,7 @@ import (
 
 // componentItem 是一项组件检查；frozen 表示这一轮保持原状态（无法确认）。
 type componentItem struct {
-	checks.Fact
+	Fact
 	frozen bool
 }
 
@@ -23,7 +22,7 @@ type componentItem struct {
 //   - 未就绪 ready:{主机}:{组件}：上报新鲜时按上报里的就绪判断；停止上报期间保持原状态，由停止上报那一条说明；
 //   - 反复重启 restart:{主机}:{组件}：10 分钟内启动标识变了 3 次（全新部署的第一次启动不算变化）。
 //
-// 三类都依赖观测输入：观测输入中断或刚恢复时随其余依赖观测输入的检查一起冻结（见 observationIndependent）。
+// 三类都依赖观测输入：观测输入中断或刚恢复时随其余依赖观测输入的检查一起冻结（见 ObservationIndependent）。
 func componentHealthItems(services []monitorobservability.ServiceStatus) []componentItem {
 	var out []componentItem
 	for _, service := range services {
@@ -33,13 +32,13 @@ func componentHealthItems(services []monitorobservability.ServiceStatus) []compo
 		subject := alerttext.Service(service.ServiceName) + "（" + alerttext.Node(service.NodeID) + "）"
 		suffix := service.NodeID + ":" + service.ServiceName
 		if service.Source == monitorobservability.SourceReporter {
-			out = append(out, componentItem{Fact: checks.Fact{
+			out = append(out, componentItem{Fact: Fact{
 				SpaceID: events.SystemSpaceID, CheckID: "reporter:" + suffix,
-				Name: reporterCheckName(service.ServiceName, service.NodeID), Status: passStatus(service.ReporterStatus == "healthy"),
+				Name: reporterCheckName(service.ServiceName, service.NodeID), Status: PassStatus(service.ReporterStatus == "healthy"),
 				Reason: reporterReasonText(service.ReporterStatus),
 			}})
 		}
-		ready := checks.Fact{SpaceID: events.SystemSpaceID, CheckID: "ready:" + suffix, Name: checkName(subject, "就绪"), Status: domain.CheckStatusDown}
+		ready := Fact{SpaceID: events.SystemSpaceID, CheckID: "ready:" + suffix, Name: checkName(subject, "就绪"), Status: domain.CheckStatusDown}
 		switch {
 		case service.ReporterStatus != "healthy":
 			out = append(out, componentItem{Fact: ready, frozen: true})
@@ -53,7 +52,7 @@ func componentHealthItems(services []monitorobservability.ServiceStatus) []compo
 		if service.ReporterStatus == "missing" {
 			continue
 		}
-		restart := checks.Fact{SpaceID: events.SystemSpaceID, CheckID: "restart:" + suffix, Name: checkName(subject, "反复重启"), Status: domain.CheckStatusOK, Reason: "最近 10 分钟没有反复重启"}
+		restart := Fact{SpaceID: events.SystemSpaceID, CheckID: "restart:" + suffix, Name: checkName(subject, "反复重启"), Status: domain.CheckStatusOK, Reason: "最近 10 分钟没有反复重启"}
 		if service.BootChanges >= monmetrics.RestartChanges {
 			restart.Status = domain.CheckStatusDown
 			restart.Reason = fmt.Sprintf("最近 10 分钟重启了 %d 次（启动标识变了 %d 次）：进程可能在退出后被反复拉起，查看 %s 的日志找退出原因", service.BootChanges, service.BootChanges, service.ServiceName)
@@ -61,12 +60,4 @@ func componentHealthItems(services []monitorobservability.ServiceStatus) []compo
 		out = append(out, componentItem{Fact: restart})
 	}
 	return out
-}
-
-// passStatus 把通过与否换成检查状态。
-func passStatus(passed bool) string {
-	if passed {
-		return domain.CheckStatusOK
-	}
-	return domain.CheckStatusDown
 }

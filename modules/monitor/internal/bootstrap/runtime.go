@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
@@ -39,7 +40,7 @@ type Runtime struct {
 	// life 是 Monitor 的生命周期控制器（在健康检查注册时创建，创建之前为空）：暂停时告警静默，只记录、不推送。
 	life atomic.Pointer[lifecycle.Controller]
 	// mutes 记录进入静默的时间，静默结束时据此补发汇总。
-	mutes muteTracker
+	mutes checks.MuteTracker
 
 	ObservabilityIngestReady atomic.Bool
 	// ingestReadySince 是观测消费者最近一次由未连接变为已连接的时刻（Unix 纳秒）；未连接时为 0。
@@ -154,25 +155,17 @@ func (r *Runtime) setObservabilityIngestState(ready bool, err error) {
 // 否则旧的 last_seen 一恢复就会把主机和服务判成"已停止上报"。
 const observationRecoveryGrace = 5 * time.Minute
 
-// observationState 是观测输入当前的状态：Suspended 时所有依赖观测输入的超时判定都要冻结（既不新增告警，也不恢复已有告警）。
-type observationState struct {
-	Suspended bool
-	// Ready 是观测消费者是否已连接；Reason 是未连接的原因，只在 !Ready 时有意义。
-	Ready  bool
-	Reason string
-}
-
 // observationState 在观测消费者未连接，或刚重新连上、还在恢复宽限期内时报告 Suspended。
 // 观测输入没有启用时（没有消费者）永远不冻结。
-func (r *Runtime) observationState(enabled bool, now time.Time) observationState {
+func (r *Runtime) observationState(enabled bool, now time.Time) checks.ObservationState {
 	if !enabled || r == nil {
-		return observationState{Ready: true}
+		return checks.ObservationState{Ready: true}
 	}
 	if !r.ObservabilityIngestReady.Load() {
-		return observationState{Suspended: true, Reason: r.observabilityIngestErrorMessage()}
+		return checks.ObservationState{Suspended: true, Reason: r.observabilityIngestErrorMessage()}
 	}
 	since := r.ingestReadySince.Load()
-	return observationState{Suspended: since != 0 && now.Sub(time.Unix(0, since)) < observationRecoveryGrace, Ready: true}
+	return checks.ObservationState{Suspended: since != 0 && now.Sub(time.Unix(0, since)) < observationRecoveryGrace, Ready: true}
 }
 
 func (r *Runtime) observabilityIngestErrorMessage() string {

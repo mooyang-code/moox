@@ -268,3 +268,31 @@ func TestFailureReasonNamesTheFailingStepWithoutTheRawError(t *testing.T) {
 	assert.False(t, ready)
 	assert.Equal(t, "metrics catalog write failed", reason, "a catalog failure must not be reported as an eventbus problem")
 }
+
+// 观测输入的状态：没连上就冻结；刚连上的宽限期内冻结；宽限结束或没有启用观测输入时不冻结。
+func TestRuntimeObservationStateFollowsIngestAndGrace(t *testing.T) {
+	r := &Runtime{}
+	now := time.Now()
+	require.False(t, r.observationState(false, now).Suspended, "没有启用观测输入时永远不冻结")
+
+	state := r.observationState(true, now)
+	require.True(t, state.Suspended)
+	require.False(t, state.Ready)
+
+	r.setObservabilityIngestState(false, errors.New("dial timeout"))
+	require.NotEmpty(t, r.observationState(true, now).Reason, "未连接时带上失败原因（已脱敏归类）")
+
+	r.setObservabilityIngestState(true, nil)
+	state = r.observationState(true, time.Now())
+	require.True(t, state.Ready)
+	require.True(t, state.Suspended, "刚连上，处在恢复宽限期内")
+	require.False(t, r.observationState(true, time.Now().Add(observationRecoveryGrace+time.Second)).Suspended, "宽限期结束")
+
+	// 重复的就绪回调不能重置宽限起点。
+	since := r.ingestReadySince.Load()
+	r.setObservabilityIngestState(true, nil)
+	require.Equal(t, since, r.ingestReadySince.Load())
+
+	r.setObservabilityIngestState(false, errors.New("lost"))
+	require.True(t, r.observationState(true, time.Now().Add(time.Hour)).Suspended, "断开之后重新进入冻结")
+}

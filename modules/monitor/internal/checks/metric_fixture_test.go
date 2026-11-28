@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import "gorm.io/gorm/clause"
 

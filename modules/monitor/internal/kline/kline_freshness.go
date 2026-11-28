@@ -1,4 +1,5 @@
-package metrics
+// Package kline 负责采集任务结果清单缓存与 K 线结果新鲜度评估。
+package kline
 
 import (
 	"context"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -20,16 +23,9 @@ import (
 )
 
 const (
-	// Storage View publishes these per-View subject summaries; see
-	// modules/storage/internal/observability/view_subject_tracker.go.
-	ViewOutputLatestMetric         = "moox_storage_view_output_latest_data_time_seconds"
-	ViewOutputTrackedSinceMetric   = "moox_storage_view_output_tracked_since_data_time_seconds"
-	ViewOutputSubjectsMetric       = "moox_storage_view_output_subjects"
-	ViewOutputLaggingMetric        = "moox_storage_view_output_lagging_subjects"
-	ViewOutputLaggingSubjectMetric = "moox_storage_view_output_lagging_subject_data_time_seconds"
-	KlineDefaultSeriesTag          = "default"
-	TaskResultInventoryCheckID     = "kline_freshness:task_result_inventory"
-	klineFutureTolerance           = 10 * time.Minute
+	KlineDefaultSeriesTag      = "default"
+	TaskResultInventoryCheckID = "kline_freshness:task_result_inventory"
+	klineFutureTolerance       = 10 * time.Minute
 	// newSubjectCollectionAllowance 是新上线对象从进入采集清单到采集计划生效、首根数据写入的额外余量：
 	// 采集计划按周期刷新，生产上现货分钟线的新对象要 3～5 分钟才有第一根。
 	newSubjectCollectionAllowance = 10 * time.Minute
@@ -80,7 +76,7 @@ type KlineFreshnessReport struct {
 }
 
 type KlineFreshnessEvaluator struct {
-	query       *QueryService
+	query       *monmetrics.QueryService
 	rules       []KlineFreshnessRule
 	maxSubjects int
 	inventory   *TaskResultInventoryCache
@@ -128,7 +124,7 @@ func (e *KlineFreshnessEvaluator) SetSubjectFirstSeenStore(store SubjectFirstSee
 	}
 }
 
-func NewKlineFreshnessEvaluator(query *QueryService, rules []KlineFreshnessRule, maxSubjects int) *KlineFreshnessEvaluator {
+func NewKlineFreshnessEvaluator(query *monmetrics.QueryService, rules []KlineFreshnessRule, maxSubjects int) *KlineFreshnessEvaluator {
 	if maxSubjects <= 0 {
 		maxSubjects = 20
 	}
@@ -139,7 +135,7 @@ func NewKlineFreshnessEvaluator(query *QueryService, rules []KlineFreshnessRule,
 }
 
 // NewKlineFreshnessEvaluatorWithInventory 按采集任务清单生成规则；允许迟到按健康策略的周期规则给出。
-func NewKlineFreshnessEvaluatorWithInventory(query *QueryService, inventory *TaskResultInventoryCache, policy report.RealtimeTimeSeriesPolicy, maxSubjects int) *KlineFreshnessEvaluator {
+func NewKlineFreshnessEvaluatorWithInventory(query *monmetrics.QueryService, inventory *TaskResultInventoryCache, policy report.RealtimeTimeSeriesPolicy, maxSubjects int) *KlineFreshnessEvaluator {
 	evaluator := NewKlineFreshnessEvaluator(query, nil, maxSubjects)
 	evaluator.inventory = inventory
 	evaluator.policy = policy
@@ -157,7 +153,7 @@ func (e *KlineFreshnessEvaluator) SetSeeding(seeding func(spaceID string, now ti
 
 func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...time.Time) ([]KlineFreshnessReport, error) {
 	if e == nil || e.query == nil {
-		return nil, ErrMetricsStoreUnavailable
+		return nil, monmetrics.ErrMetricsStoreUnavailable
 	}
 	now := time.Time{}
 	if len(nowValues) > 0 {
@@ -182,12 +178,12 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	if inventoryEvaluated && !inventoryStale {
 		e.pruneDeletedDatasets(ctx, rules)
 	}
-	filters := make([]ViewMetricScope, 0, len(rules))
+	filters := make([]monmetrics.ViewMetricScope, 0, len(rules))
 	for _, rule := range rules {
 		if !rule.Enabled || rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
 			continue
 		}
-		filters = append(filters, ViewMetricScope{SpaceID: rule.SpaceID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
+		filters = append(filters, monmetrics.ViewMetricScope{SpaceID: rule.SpaceID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
 	}
 	summaries, err := e.loadViewSummaries(ctx, filters, now)
 	if err != nil {
@@ -307,7 +303,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 }
 
 // completedPeriodViewLag 判断结果视图是否落后于采集已完成的最新一期；落后时返回该期之后视图还缺的第一根已过收线多久。
-func completedPeriodViewLag(clock MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, viewLatest time.Time, now time.Time) (time.Duration, bool) {
+func completedPeriodViewLag(clock marketclock.MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, viewLatest time.Time, now time.Time) (time.Duration, bool) {
 	status := strings.ToLower(strings.TrimSpace(rule.LatestCompletedStatus))
 	if rule.LatestCompletedPeriod.IsZero() || (status != "complete" && status != "degraded") {
 		return 0, false
@@ -335,7 +331,7 @@ const KlineReasonSeedingViewCatchingUp = "history_seeding_view_catching_up"
 
 // completedPeriodFresh 判断采集侧已完成的最新一期（来自采集任务清单）在清单观测的时刻有没有过期：
 // 之后应收的第一根从收线起没超过允许迟到。按清单的观测时刻判断，免得清单刷新间隔里新收线的根被当成逾期；清单本身过期另有检查。
-func completedPeriodFresh(clock MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, now time.Time) bool {
+func completedPeriodFresh(clock marketclock.MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, now time.Time) bool {
 	if rule.LatestCompletedPeriod.IsZero() {
 		return false
 	}
@@ -359,18 +355,18 @@ func laterOf(left, right time.Time) time.Time {
 }
 
 // klineExpectedBar 按规则声明的市场日历算出此刻应已收线的最新一根。
-func klineExpectedBar(rule KlineFreshnessRule, now time.Time) (MarketClock, frequencypkg.Frequency, Bar, error) {
+func klineExpectedBar(rule KlineFreshnessRule, now time.Time) (marketclock.MarketClock, frequencypkg.Frequency, marketclock.Bar, error) {
 	freq, err := frequencypkg.Parse(rule.Frequency)
 	if err != nil {
-		return MarketClock{}, "", Bar{}, fmt.Errorf("周期 %q 无效：%w", rule.Frequency, err)
+		return marketclock.MarketClock{}, "", marketclock.Bar{}, fmt.Errorf("周期 %q 无效：%w", rule.Frequency, err)
 	}
-	clock, err := MarketClockFor(rule.MarketID, rule.CalendarID, rule.Timezone, rule.Sessions)
+	clock, err := marketclock.MarketClockFor(rule.MarketID, rule.CalendarID, rule.Timezone, rule.Sessions)
 	if err != nil {
-		return MarketClock{}, "", Bar{}, err
+		return marketclock.MarketClock{}, "", marketclock.Bar{}, err
 	}
 	expected, err := clock.LatestClosed(now, freq)
 	if err != nil {
-		return MarketClock{}, "", Bar{}, err
+		return marketclock.MarketClock{}, "", marketclock.Bar{}, err
 	}
 	return clock, freq, expected, nil
 }
@@ -378,11 +374,11 @@ func klineExpectedBar(rule KlineFreshnessRule, now time.Time) (MarketClock, freq
 // klineClockReason 把无法按日历判断的原因转成报告原因码。
 func klineClockReason(err error) string {
 	switch {
-	case errors.Is(err, ErrCalendarNotCovered):
+	case errors.Is(err, marketclock.ErrCalendarNotCovered):
 		return "calendar_not_covered"
-	case errors.Is(err, ErrNoTradingCalendar), errors.Is(err, barclock.ErrUnknownMarket):
+	case errors.Is(err, marketclock.ErrNoTradingCalendar), errors.Is(err, barclock.ErrUnknownMarket):
 		return "calendar_unknown"
-	case errors.Is(err, ErrAlignmentUnconfirmed):
+	case errors.Is(err, marketclock.ErrAlignmentUnconfirmed):
 		return "alignment_unconfirmed"
 	default:
 		return "calendar_error"
@@ -391,7 +387,7 @@ func klineClockReason(err error) string {
 
 // overdueAfter 返回 latest 之后、截至 expected 还缺的第一根已过收线多久；latest 已经是（或晚于）应收的最新一根时为 0。
 // latest 为零（从未产出）时无法确定缺的是哪一根，返回 0。
-func overdueAfter(clock MarketClock, freq frequencypkg.Frequency, latest time.Time, expected Bar, now time.Time) (time.Duration, error) {
+func overdueAfter(clock marketclock.MarketClock, freq frequencypkg.Frequency, latest time.Time, expected marketclock.Bar, now time.Time) (time.Duration, error) {
 	if latest.IsZero() {
 		return 0, nil
 	}
@@ -409,19 +405,7 @@ func overdueAfter(clock MarketClock, freq frequencypkg.Frequency, latest time.Ti
 	return positive(now.Sub(next.Close)), nil
 }
 
-// ReportSnapshotGrace 是上报快照可以代表“此刻”的最长时间：生产者每 30 秒上报一次，超过它还没有新快照（漏报、
-// 停止上报，或重启后某个视图一直没有新写入、不再产生摘要）就不能再按快照时刻判断，否则停更会一直被当作没逾期。
-const ReportSnapshotGrace = time.Minute
-
-// SnapshotTime 返回判逾期用的观测时刻：快照在 ReportSnapshotGrace 之内用快照时刻（之后才收线、可能已写完但还没上报的根
-// 不算逾期）；没有快照、快照太旧或晚于 now（生产者时钟偏快）时用 now。
-func SnapshotTime(at, now time.Time) time.Time {
-	if at.IsZero() || at.After(now) || now.Sub(at) > ReportSnapshotGrace {
-		return now
-	}
-	return at
-}
-
+// ReportSnapshotGrace 等已移至 metrics 包；保留 positive 辅助函数。
 func positive(value time.Duration) time.Duration {
 	return max(value, 0)
 }
@@ -578,10 +562,10 @@ func (s viewSummaries) find(rule KlineFreshnessRule) viewSummary {
 	return *best
 }
 
-var viewSummaryMetrics = []string{ViewOutputLatestMetric, ViewOutputTrackedSinceMetric, ViewOutputSubjectsMetric, ViewOutputLaggingMetric, ViewOutputLaggingSubjectMetric}
+var viewSummaryMetrics = []string{monmetrics.ViewOutputLatestMetric, monmetrics.ViewOutputTrackedSinceMetric, monmetrics.ViewOutputSubjectsMetric, monmetrics.ViewOutputLaggingMetric, monmetrics.ViewOutputLaggingSubjectMetric}
 
-func (e *KlineFreshnessEvaluator) loadViewSummaries(ctx context.Context, filters []ViewMetricScope, now time.Time) (viewSummaries, error) {
-	rowsByMetric := make(map[string][]MetricSeries, len(viewSummaryMetrics))
+func (e *KlineFreshnessEvaluator) loadViewSummaries(ctx context.Context, filters []monmetrics.ViewMetricScope, now time.Time) (viewSummaries, error) {
+	rowsByMetric := make(map[string][]monmetrics.MetricSeries, len(viewSummaryMetrics))
 	for _, name := range viewSummaryMetrics {
 		rows, err := e.query.ListLatestByViewScopes(ctx, name, filters, 0)
 		if err != nil {
@@ -606,24 +590,24 @@ func (e *KlineFreshnessEvaluator) loadViewSummaries(ctx context.Context, filters
 			}
 			summary := at(identity)
 			switch name {
-			case ViewOutputLatestMetric, ViewOutputTrackedSinceMetric:
+			case monmetrics.ViewOutputLatestMetric, monmetrics.ViewOutputTrackedSinceMetric:
 				value, err := klineUnixTime(row.Value)
 				if err != nil || value.After(now.Add(klineFutureTolerance)) {
 					continue
 				}
-				if name == ViewOutputLatestMetric {
+				if name == monmetrics.ViewOutputLatestMetric {
 					summary.latest = value
 				} else {
 					summary.trackedSince = value
 				}
-			case ViewOutputSubjectsMetric:
+			case monmetrics.ViewOutputSubjectsMetric:
 				summary.subjects, summary.snapshotAt = int(row.Value), row.ObservedAt
-			case ViewOutputLaggingMetric:
+			case monmetrics.ViewOutputLaggingMetric:
 				summary.lagging = int(row.Value)
 			}
 		}
 	}
-	for _, row := range rowsByMetric[ViewOutputLaggingSubjectMetric] {
+	for _, row := range rowsByMetric[monmetrics.ViewOutputLaggingSubjectMetric] {
 		identity, subjectID, err := parseViewSummaryLabels(row.LabelsJSON, true)
 		if err != nil {
 			continue
@@ -663,12 +647,12 @@ func parseViewSummaryLabels(rawLabels string, withSubject bool) (viewSummaryIden
 // whole once the bar after its latest bar is overdue. Otherwise its lagging
 // subjects, and active subjects with no output once the View has moved a bar
 // past the start of tracking, are stale.
-func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, clock MarketClock, freq frequencypkg.Frequency, expected Bar, summary viewSummary, active map[string]struct{}, suffix string, newSubjects map[string]time.Time, now time.Time) {
+func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, clock marketclock.MarketClock, freq frequencypkg.Frequency, expected marketclock.Bar, summary viewSummary, active map[string]struct{}, suffix string, newSubjects map[string]time.Time, now time.Time) {
 	report.ObservedCount = summary.subjects
 	report.OldestDataTime = summary.latest
 	// 摘要是 Storage View 上报快照那一刻的状态（每 30 秒上报一次，整分与半分对齐）：逾期按快照时刻算。按当前时间算会把
 	// 快照之后才写完、还没来得及上报的准时 K 线算成逾期——半分评估若早于那次快照入库，就会误判“整体停止更新”。
-	seen := SnapshotTime(summary.snapshotAt, now)
+	seen := monmetrics.SnapshotTime(summary.snapshotAt, now)
 	// 视图最新一根之后、应收的最新一根之前还缺的第一根，到快照时已晚超过允许迟到仍没有，就算整体停止更新。
 	// 缺的根按交易日历数：午休、收盘后、节假日不会被算成缺失。
 	overdue, err := overdueAfter(clock, freq, summary.latest, expected, seen)
@@ -870,7 +854,7 @@ func (e *KlineFreshnessEvaluator) pruneDeletedDatasets(ctx context.Context, rule
 
 // newSubjectDeadlines 返回仍在宽限期内的新上线对象及其宽限截止时间。没有配置存储、清单读取失败或周期无法按日历推算时返回空，
 // 即不给宽限：宁可多告警，也不因为记录问题掩盖真故障。
-func (e *KlineFreshnessEvaluator) newSubjectDeadlines(ctx context.Context, rule KlineFreshnessRule, clock MarketClock, freq frequencypkg.Frequency, active map[string]struct{}, now time.Time) map[string]time.Time {
+func (e *KlineFreshnessEvaluator) newSubjectDeadlines(ctx context.Context, rule KlineFreshnessRule, clock marketclock.MarketClock, freq frequencypkg.Frequency, active map[string]struct{}, now time.Time) map[string]time.Time {
 	if e.firstSeen == nil || active == nil || strings.TrimSpace(rule.DatasetID) == "" {
 		return nil
 	}
@@ -891,7 +875,7 @@ func (e *KlineFreshnessEvaluator) newSubjectDeadlines(ctx context.Context, rule 
 
 // firstBarPending 判断还没有任何输出的数据集是否仍在等第一根 K 线：从数据集的对象最早出现在清单里算起，
 // 第一根完整 K 线收线再加允许迟到之前都算在等，返回截止时间。没有首次出现记录时不推测，按没有输出报出来。
-func (e *KlineFreshnessEvaluator) firstBarPending(ctx context.Context, rule KlineFreshnessRule, clock MarketClock, freq frequencypkg.Frequency, now time.Time) (time.Time, bool) {
+func (e *KlineFreshnessEvaluator) firstBarPending(ctx context.Context, rule KlineFreshnessRule, clock marketclock.MarketClock, freq frequencypkg.Frequency, now time.Time) (time.Time, bool) {
 	if e.firstSeen == nil || strings.TrimSpace(rule.DatasetID) == "" {
 		return time.Time{}, false
 	}
@@ -908,7 +892,7 @@ func (e *KlineFreshnessEvaluator) firstBarPending(ctx context.Context, rule Klin
 
 // newSubjectDeadline 返回新对象应当已有首根 K 线的最晚时间：首次出现之后开盘的第一根（出现时正在走的那一根数据不完整）收线，
 // 再加允许迟到和采集生效余量。
-func newSubjectDeadline(clock MarketClock, freq frequencypkg.Frequency, firstSeen time.Time, lateness time.Duration) (time.Time, error) {
+func newSubjectDeadline(clock marketclock.MarketClock, freq frequencypkg.Frequency, firstSeen time.Time, lateness time.Duration) (time.Time, error) {
 	latest, err := clock.LatestClosed(firstSeen, freq)
 	if err != nil {
 		return time.Time{}, err

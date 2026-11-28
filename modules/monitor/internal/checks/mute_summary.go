@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"context"
@@ -11,9 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
-	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/notification"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // 告警静默（暂停，包括 moox-cli monitor mute 设置的屏蔽）期间告警只记录、不推送。静默结束时补发一条汇总，
@@ -24,19 +23,20 @@ const (
 	// 触发中的告警数量天然受检查项总数约束（几百），上限只是兜底；取不全时「已恢复」的分类可能不准，正文会写明。
 	muteSummaryFiringLimit = 5000
 	muteSummaryLineLimit   = 20
-	// muteSummaryFallbackWindow 是重启后丢了静默起点时回看的范围（一次屏蔽最长 24 小时）。
-	muteSummaryFallbackWindow = 24 * time.Hour
+	// MuteSummaryFallbackWindow 是重启后丢了静默起点时回看的范围（一次屏蔽最长 24 小时）。
+	MuteSummaryFallbackWindow = 24 * time.Hour
 )
 
-// muteTracker 记录模块进入静默的时间，静默结束时据此汇总。
-type muteTracker struct{ since atomic.Int64 }
+// MuteTracker 记录模块进入静默的时间，静默结束时据此汇总。
+type MuteTracker struct{ since atomic.Int64 }
 
-func (t *muteTracker) enter(at time.Time) {
-	// 已经在静默中（暂停 → 恢复追赶 → 暂停）保留最早的起点。
+// Enter 记录进入静默的起点；已经在静默中（暂停 → 恢复追赶 → 暂停）时保留最早的起点。
+func (t *MuteTracker) Enter(at time.Time) {
 	t.since.CompareAndSwap(0, at.UnixNano())
 }
 
-func (t *muteTracker) leave() time.Time {
+// Leave 取走并清空静默起点。
+func (t *MuteTracker) Leave() time.Time {
 	nanos := t.since.Swap(0)
 	if nanos == 0 {
 		return time.Time{}
@@ -44,44 +44,25 @@ func (t *muteTracker) leave() time.Time {
 	return time.Unix(0, nanos).UTC()
 }
 
-// onLifecycleChange 是 Monitor 生命周期的状态变化回调：进入暂停时记起点（重启后载入暂停时也记），回到运行时补发汇总。
-func (r *Runtime) onLifecycleChange(from, to lifecycle.Stage, reason string) {
-	log.Infof("monitor_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
-	switch {
-	case to == lifecycle.StagePaused:
-		// 起点取生命周期持久化的暂停时间：Monitor 在静默期间重启时，回调里的「现在」是重启时刻，会丢掉重启前的事件。
-		at := time.Now()
-		if life := r.life.Load(); life != nil {
-			if since := life.State().PausedSince; !since.IsZero() {
-				at = since
-			}
-		}
-		r.mutes.enter(at)
-	case from != "" && to == lifecycle.StageRunning:
-		since := r.mutes.leave()
-		if since.IsZero() {
-			since = time.Now().Add(-muteSummaryFallbackWindow)
-		}
-		r.Go(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := r.sendMuteSummary(ctx, since, time.Now()); err != nil {
-				log.Errorf("monitor mute summary failed: %v", err)
-			}
-		})
+// Since 返回当前记录的静默起点；未在静默中时为零值。
+func (t *MuteTracker) Since() time.Time {
+	nanos := t.since.Load()
+	if nanos == 0 {
+		return time.Time{}
 	}
+	return time.Unix(0, nanos).UTC()
 }
 
-// sendMuteSummary 在静默结束后补发汇总；没有值得说的内容时不发。
-func (r *Runtime) sendMuteSummary(ctx context.Context, since, until time.Time) error {
-	if r == nil || r.Repositories == nil {
+// SendMuteSummary 在静默结束后补发汇总；没有值得说的内容时不发。
+func SendMuteSummary(ctx context.Context, repositories *store.Repositories, since, until time.Time) error {
+	if repositories == nil {
 		return nil
 	}
-	body, severity, ok, err := r.buildMuteSummary(ctx, since, until)
+	body, severity, ok, err := BuildMuteSummary(ctx, repositories, since, until)
 	if err != nil || !ok {
 		return err
 	}
-	sender, err := notifier.Sender(ctx, r.Repositories.Notifications)
+	sender, err := notifier.Sender(ctx, repositories.Notifications)
 	if err != nil {
 		return err
 	}
@@ -103,12 +84,13 @@ type mutedCheck struct {
 	first, end time.Time
 }
 
-func (r *Runtime) buildMuteSummary(ctx context.Context, since, until time.Time) (string, notification.Severity, bool, error) {
-	events, err := r.Repositories.Alerts.ListEventsSince(ctx, nil, since, muteSummaryEventLimit)
+// BuildMuteSummary 汇总静默期间仍未恢复和期间触发后已恢复的告警。
+func BuildMuteSummary(ctx context.Context, repositories *store.Repositories, since, until time.Time) (string, notification.Severity, bool, error) {
+	events, err := repositories.Alerts.ListEventsSince(ctx, nil, since, muteSummaryEventLimit)
 	if err != nil {
 		return "", "", false, err
 	}
-	firing, err := r.Repositories.Checks.ListFiring(ctx, "", muteSummaryFiringLimit)
+	firing, err := repositories.Checks.ListFiring(ctx, "", muteSummaryFiringLimit)
 	if err != nil {
 		return "", "", false, err
 	}

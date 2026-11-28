@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -70,7 +71,7 @@ func TestBusinessFreshnessRecordsNewSubjectsAsDegradedWithoutFailing(t *testing.
 	})
 	require.NoError(t, err)
 	repositories := manager.Repositories()
-	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+	evaluator := kline.NewKlineFreshnessEvaluator(query, []kline.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	evaluator.SetSubjectFirstSeenStore(newSubjectFirstSeen{"NEW1": time.Date(2026, 10, 21, 12, 13, 31, 0, time.UTC)})

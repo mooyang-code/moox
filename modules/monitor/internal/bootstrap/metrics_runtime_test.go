@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/prometheus/client_golang/prometheus"
@@ -21,56 +20,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
-
-func TestReporterExpectationUsesStableDeploymentIdentity(t *testing.T) {
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-	require.NoError(t, manager.ApplySchema(schema.SQL()))
-	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
-	require.NoError(t, err)
-	query := monmetrics.NewQueryService(messages, nil)
-	catalog, err := servicecatalog.LoadEmbedded()
-	require.NoError(t, err)
-	now := time.Now().UTC()
-	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: now,
-		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
-		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"}},
-	}
-	repos := manager.Repositories()
-	err = repos.Topology.Reconcile(t.Context(), snapshot)
-	require.NoError(t, err)
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}, repos)
-	require.NoError(t, run(t.Context()))
-	const id = "reporter:control:factor-mgr"
-	result, ok := latestResult(t, repos, "mooxsys", id)
-	require.True(t, ok)
-	require.False(t, result.Success, "登记了部署就要求上报：从没上报过按停止上报处理")
-	_, err = messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "factor-mgr-1", OccurredAt: now.UnixMilli()}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}, nil)
-	require.NoError(t, err)
-	require.NoError(t, run(t.Context()))
-	result, _ = latestResult(t, repos, "mooxsys", id)
-	require.True(t, result.Success, "the first report resolves the same check identity")
-	rows, err := repos.Checks.List(t.Context(), "")
-	require.NoError(t, err)
-	require.Len(t, rows, 2, "停止上报一条、反复重启一条；上报里没有就绪判断时不生成未就绪检查")
-	snapshot.Deployments[0].Status = "disabled"
-	err = repos.Topology.Reconcile(t.Context(), snapshot)
-	require.NoError(t, err)
-	require.NoError(t, run(t.Context()))
-	require.Nil(t, checkRow(t, repos, "mooxsys", id), "停用部署后组件检查不再产出，当轮删除")
-	require.Empty(t, alertEvents(t, repos, id), "没在告警的检查删除时不写恢复事件")
-	snapshot.Deployments[0].Status = "enabled"
-	err = repos.Topology.Reconcile(t.Context(), snapshot)
-	require.NoError(t, err)
-	require.NoError(t, run(t.Context()))
-	require.NotNil(t, checkRow(t, repos, "mooxsys", id), "重新启用的部署恢复组件检查")
-	snapshot.Deployments = nil
-	err = repos.Topology.Reconcile(t.Context(), snapshot)
-	require.NoError(t, err)
-	require.NoError(t, run(t.Context()))
-	require.Nil(t, checkRow(t, repos, "mooxsys", id), "删除部署后组件检查删除")
-}
 
 func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
@@ -247,65 +196,4 @@ func TestObservabilityConnectionHandlerFollowsEventBusConnection(t *testing.T) {
 	stopped.Store(true)
 	handler(false, nil)
 	require.True(t, r.ObservabilityIngestReady.Load(), "连接收尾后的回调不改状态")
-}
-
-// Collector 模块暂停或恢复追赶时采集是有意停下的：K 线结果检查不评估（不新增失败结果），放行后恢复评估。
-func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-	require.NoError(t, manager.ApplySchema(schema.SQL()))
-	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
-	require.NoError(t, err)
-	now := time.Now().UTC()
-	labels := `{"space_id":"crypto","dataset_id":"dataset","freq":"1m"}`
-	_, err = store.WithDatabase(manager, func(db *gorm.DB) error {
-		for _, row := range []monmetrics.MetricSeries{
-			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
-			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
-		} {
-			require.NoError(t, db.Create(&row).Error)
-		}
-		return nil
-	})
-	require.NoError(t, err)
-	query := monmetrics.NewQueryService(messages, nil)
-	catalog, err := servicecatalog.LoadEmbedded()
-	require.NoError(t, err)
-	repos := manager.Repositories()
-	require.NoError(t, repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now,
-		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
-		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "collector", Status: "enabled"}},
-	}))
-	report := func(stage string) {
-		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "collector-" + stage, OccurredAt: now.UnixMilli()},
-			&metricspb.MetricReport{ServiceName: "collector", NodeId: "control", InstanceId: "collector@control", BootId: "boot-1",
-				Lifecycle: &metricspb.ModuleLifecycle{Stage: stage}}, nil)
-		require.NoError(t, err)
-	}
-	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
-	}}, 20)
-	builder := &monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}
-	run := buildBusinessFreshnessReporter(builder, repos, evaluator)
-	const id = "kline_freshness:crypto:dataset:1m"
-
-	for _, stage := range []string{"paused", "resuming"} {
-		report(stage)
-		services, err := builder.Services(t.Context(), now)
-		require.NoError(t, err)
-		require.True(t, collectorHalted(services), stage)
-		require.NoError(t, run(t.Context()))
-		_, judged := latestResult(t, repos, "crypto", id)
-		require.False(t, judged, "Collector %s 时不评估 K 线结果", stage)
-	}
-
-	report("running")
-	services, err := builder.Services(t.Context(), now)
-	require.NoError(t, err)
-	require.False(t, collectorHalted(services))
-	require.NoError(t, run(t.Context()))
-	result, judged := latestResult(t, repos, "crypto", id)
-	require.True(t, judged)
-	require.False(t, result.Success, "放行后照常判定")
 }

@@ -1,10 +1,11 @@
-package metrics
+package kline
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	"github.com/mooyang-code/moox/packages/frequency"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ var stockHKSessions = []string{"09:30-12:00", "13:00-16:00"}
 
 // 港股 5m 的应收最新一根按内嵌的港股日历和交易时段算：普通日、午休、收市后，以及半日市（2026-12-24 只开上午）。
 func TestStockHKClockFollowsSessionsAndHalfDays(t *testing.T) {
-	clock, err := MarketClockFor("stockhk", "hk_stock", "Asia/Hong_Kong", stockHKSessions)
+	clock, err := marketclock.MarketClockFor("stockhk", "hk_stock", "Asia/Hong_Kong", stockHKSessions)
 	require.NoError(t, err)
 	require.True(t, clock.Exchange())
 	for _, tc := range []struct {
@@ -56,7 +57,7 @@ func TestStockHKClockFollowsSessionsAndHalfDays(t *testing.T) {
 	require.True(t, next.Open.Equal(hkAt(t, "2026-12-28", "09:30:00")), "下一根是 %s", next.Open.In(hongKong))
 	// 半日市下午的时间不属于任何一根。
 	_, err = clock.BarAt(hkAt(t, "2026-12-24", "13:00:00"), frequency.Minute5)
-	require.ErrorIs(t, err, ErrOutsideSession)
+	require.ErrorIs(t, err, marketclock.ErrOutsideSession)
 }
 
 // 港股 5m 的 K 线新鲜度：午休、收市后、半日市下午与其后的假期里，View 停在该时段最后一根不算过期；
@@ -104,8 +105,7 @@ func TestKlineFreshnessEvaluatorUsesTheStockHKCalendar(t *testing.T) {
 func TestKlineFreshnessFallsBackToIndexedUpperBoundWithoutViewSummary(t *testing.T) {
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockhk", DatasetID: "dataset", Frequency: "5m", MarketID: "stockhk", CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: stockHKSessions, Lateness: 90 * time.Second}
 	evaluate := func(rule KlineFreshnessRule, now time.Time) KlineFreshnessReport {
-		query := newViewSummaryQuery(t, nil)
-		query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("00700.XHKG")})
+		query := newViewSummaryQuery(t, nil, &fakeMetadata{subjects: activeSubjects("00700.XHKG")})
 		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 		require.NoError(t, err)
 		require.Len(t, reports, 1)
@@ -138,8 +138,7 @@ func TestKlineFreshnessFallsBackToIndexedUpperBoundWithoutViewSummary(t *testing
 	require.Equal(t, "no_observation", got.Reason)
 
 	// 有摘要、但最新一根为零（Storage 跟踪的序列超过上限）：不是重启丢了摘要，不兜底。
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{SpaceID: "stockhk", DatasetID: "dataset", Freq: "5m", ObservedAt: hkAt(t, "2026-11-22", "11:59:30")}})
-	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("00700.XHKG")})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{SpaceID: "stockhk", DatasetID: "dataset", Freq: "5m", ObservedAt: hkAt(t, "2026-11-22", "11:59:30")}}, &fakeMetadata{subjects: activeSubjects("00700.XHKG")})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{indexed}, 20).Evaluate(context.Background(), hkAt(t, "2026-11-22", "12:00:00"))
 	require.NoError(t, err)
 	require.Len(t, reports, 1)

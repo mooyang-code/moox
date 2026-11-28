@@ -16,6 +16,8 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/report"
@@ -222,9 +224,9 @@ func formatGrace(grace time.Duration) string {
 	return fmt.Sprintf("%d 小时", int(grace/time.Hour))
 }
 
-// InventorySource 提供最近一份有效的采集任务清单；monmetrics.TaskResultInventoryCache 实现它。
+// InventorySource 提供最近一份有效的采集任务清单；kline.TaskResultInventoryCache 实现它。
 type InventorySource interface {
-	GetAllowStale(ctx context.Context, now time.Time) (monmetrics.TaskResultInventorySnapshot, bool, error)
+	GetAllowStale(ctx context.Context, now time.Time) (kline.TaskResultInventorySnapshot, bool, error)
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -636,7 +638,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 	for identity, current := range aggregated {
 		clock, ok := clocks[current.key.spaceID]
 		if !ok {
-			clock = spaceClock{err: monmetrics.ErrNoTradingCalendar}
+			clock = spaceClock{err: marketclock.ErrNoTradingCalendar}
 		}
 		item := datasetStatus(now, current.key, current.value, b.Policy, clock)
 		item.DisplayName = displayNames[identity]
@@ -953,7 +955,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "degraded", "尚无成功运行"
 	case !marketIdle && successLag > 0 && now.Sub(successFrom) > successLag:
 		item.Status, item.Reason = "degraded", "success stale"
-	case errors.Is(bars.issue, monmetrics.ErrCalendarNotCovered):
+	case errors.Is(bars.issue, marketclock.ErrCalendarNotCovered):
 		// 日历覆盖不到就无法判断应收哪一根：不推测，报出来让人更新交易日历。
 		item.Status, item.Reason = "unknown", item.ClockIssue
 	case item.LateConfirmed:

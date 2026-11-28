@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -25,13 +25,13 @@ import (
 )
 
 type businessFreshnessInventoryProvider struct {
-	snapshot monmetrics.TaskResultInventorySnapshot
+	snapshot kline.TaskResultInventorySnapshot
 	err      error
 }
 
-func (p *businessFreshnessInventoryProvider) FetchTaskResultInventory(context.Context) (monmetrics.TaskResultInventorySnapshot, error) {
+func (p *businessFreshnessInventoryProvider) FetchTaskResultInventory(context.Context) (kline.TaskResultInventorySnapshot, error) {
 	if p.err != nil {
-		return monmetrics.TaskResultInventorySnapshot{}, p.err
+		return kline.TaskResultInventorySnapshot{}, p.err
 	}
 	return p.snapshot, nil
 }
@@ -106,19 +106,19 @@ func requireRemovedWithRecovery(t *testing.T, repositories *store.Repositories, 
 	events := alertEvents(t, repositories, checkID)
 	require.NotEmpty(t, events, checkID)
 	require.Equal(t, domain.AlertEventResolved, events[0].EventType)
-	require.Contains(t, events[0].Payload, checks.ReasonRemoved)
+	require.Contains(t, events[0].Payload, ReasonRemoved)
 }
 
-func testApplier(repositories *store.Repositories) *checks.Applier {
-	return &checks.Applier{Checks: repositories.Checks}
+func testApplier(repositories *store.Repositories) *Applier {
+	return &Applier{Checks: repositories.Checks}
 }
 
 func buildBusinessFreshnessReporter(
 	builder *monitorobservability.Builder,
 	repositories *store.Repositories,
-	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
+	klineEvaluators ...*kline.KlineFreshnessEvaluator,
 ) func(context.Context) error {
-	return buildBusinessFreshnessReporterWithInterval(builder, repositories, testApplier(repositories), nil, 30*time.Second, klineEvaluators...)
+	return NewBusinessReporter(builder, repositories, testApplier(repositories), nil, 30*time.Second, klineEvaluators...)
 }
 
 // 对象不再产出（数据集删除）：在告警的检查写一条恢复事件并删行。
@@ -134,12 +134,12 @@ func TestBusinessFreshnessReporterRemovesDatasetNoLongerExpected(t *testing.T) {
 // 业务域不删探针域（行情探针、标签巡检）的检查。
 func TestBusinessFreshnessReporterKeepsCanaryDomainChecks(t *testing.T) {
 	_, repositories := openBusinessStore(t)
-	for _, checkID := range []string{"market_canary:market_kline:BTC-USDT:1m:venue:binance", checks.SubjectTagPrefix + "crypto:binance_spot"} {
+	for _, checkID := range []string{"market_canary:market_kline:BTC-USDT:1m:venue:binance", SubjectTagPrefix + "crypto:binance_spot"} {
 		seedCheckRow(t, repositories, "crypto", checkID, true)
 	}
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Topology: repositories.Topology}, repositories)
 	require.NoError(t, run(t.Context()))
-	for _, checkID := range []string{"market_canary:market_kline:BTC-USDT:1m:venue:binance", checks.SubjectTagPrefix + "crypto:binance_spot"} {
+	for _, checkID := range []string{"market_canary:market_kline:BTC-USDT:1m:venue:binance", SubjectTagPrefix + "crypto:binance_spot"} {
 		row := checkRow(t, repositories, "crypto", checkID)
 		require.NotNil(t, row, checkID)
 		require.True(t, row.Firing(), checkID)
@@ -167,7 +167,7 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	manager, repositories := openBusinessStore(t)
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	query := klineViewQuery(t, manager, now)
-	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+	evaluator := kline.NewKlineFreshnessEvaluator(query, []kline.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
@@ -193,7 +193,7 @@ func TestBusinessFreshnessReporterRemovesKlineChecksWhenDisabledAndRecreates(t *
 	require.NoError(t, buildBusinessFreshnessReporter(builder, repositories)(t.Context()))
 	requireRemovedWithRecovery(t, repositories, "crypto", checkID)
 
-	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+	evaluator := kline.NewKlineFreshnessEvaluator(query, []kline.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	require.NoError(t, buildBusinessFreshnessReporter(builder, repositories, evaluator)(t.Context()))
@@ -210,10 +210,10 @@ func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testi
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
 	require.NoError(t, err)
-	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+	evaluator := kline.NewKlineFreshnessEvaluator(query, []kline.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
-	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology}, repositories, testApplier(repositories), nil, 5*time.Minute, evaluator)
+	run := NewBusinessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology}, repositories, testApplier(repositories), nil, 5*time.Minute, evaluator)
 	require.NoError(t, run(t.Context()))
 	require.NoError(t, run(t.Context()))
 	row := checkRow(t, repositories, "crypto", "kline_freshness:crypto:dataset:1m")
@@ -230,18 +230,18 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
 	require.NoError(t, err)
-	provider := &businessFreshnessInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
+	provider := &businessFreshnessInventoryProvider{snapshot: kline.TaskResultInventorySnapshot{
 		ID: "inventory-1", ObservedAt: now,
-		Entries: []monmetrics.TaskResultInventoryEntry{{
+		Entries: []kline.TaskResultInventoryEntry{{
 			SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", Frequency: "1m",
 			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now,
 		}},
 	}}
-	cache, err := monmetrics.NewTaskResultInventoryCache(provider, time.Minute, 10)
+	cache, err := kline.NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20)
+	evaluator := kline.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20)
 	builder := &monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}
-	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, testApplier(repositories), nil, time.Second, evaluator)
+	run := NewBusinessReporter(builder, repositories, testApplier(repositories), nil, time.Second, evaluator)
 	require.NoError(t, run(t.Context()))
 	klineID := "kline_freshness:crypto:dataset-a:1m"
 	row := checkRow(t, repositories, "crypto", klineID)
@@ -253,7 +253,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	provider.err = errors.New("collector inventory endpoint unavailable")
 	require.NoError(t, run(t.Context()))
 	// 采集服务不可用时沿用最后一份有效清单继续检查，同时单独告警“控制面数据过期”。
-	inventory := checkRow(t, repositories, events.SystemSpaceID, monmetrics.TaskResultInventoryCheckID)
+	inventory := checkRow(t, repositories, events.SystemSpaceID, kline.TaskResultInventoryCheckID)
 	require.NotNil(t, inventory)
 	require.Equal(t, domain.CheckStatusDown, inventory.Status)
 	require.True(t, strings.HasPrefix(inventory.Reason, "控制面数据过期"), inventory.Reason)
@@ -272,18 +272,18 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
 	require.NoError(t, err)
-	entry := monmetrics.TaskResultInventoryEntry{
+	entry := kline.TaskResultInventoryEntry{
 		SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", Frequency: "1m",
 		MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now,
 	}
-	provider := &businessFreshnessInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
-		ID: "inventory-ready", ObservedAt: now, Entries: []monmetrics.TaskResultInventoryEntry{entry},
+	provider := &businessFreshnessInventoryProvider{snapshot: kline.TaskResultInventorySnapshot{
+		ID: "inventory-ready", ObservedAt: now, Entries: []kline.TaskResultInventoryEntry{entry},
 	}}
-	cache, err := monmetrics.NewTaskResultInventoryCache(provider, time.Minute, 10)
+	cache, err := kline.NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20)
+	evaluator := kline.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20)
 	builder := &monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}
-	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, testApplier(repositories), nil, time.Second, evaluator)
+	run := NewBusinessReporter(builder, repositories, testApplier(repositories), nil, time.Second, evaluator)
 	require.NoError(t, run(t.Context()))
 	klineID := "kline_freshness:crypto:dataset-a:1m"
 	row := checkRow(t, repositories, "crypto", klineID)
@@ -293,7 +293,7 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 	entry.OwnershipVerified = false
 	entry.ResultStatus = "error"
 	entry.ObservedAt = now.Add(2 * time.Minute)
-	provider.snapshot = monmetrics.TaskResultInventorySnapshot{ID: "inventory-error", ObservedAt: entry.ObservedAt, Entries: []monmetrics.TaskResultInventoryEntry{entry}}
+	provider.snapshot = kline.TaskResultInventorySnapshot{ID: "inventory-error", ObservedAt: entry.ObservedAt, Entries: []kline.TaskResultInventoryEntry{entry}}
 	now = entry.ObservedAt
 	require.NoError(t, run(t.Context()))
 	row = checkRow(t, repositories, "crypto", klineID)
@@ -302,7 +302,7 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 
 	entry.ResultStatus = "pending"
 	entry.ObservedAt = now.Add(2 * time.Minute)
-	provider.snapshot = monmetrics.TaskResultInventorySnapshot{ID: "inventory-pending", ObservedAt: entry.ObservedAt, Entries: []monmetrics.TaskResultInventoryEntry{entry}}
+	provider.snapshot = kline.TaskResultInventorySnapshot{ID: "inventory-pending", ObservedAt: entry.ObservedAt, Entries: []kline.TaskResultInventoryEntry{entry}}
 	now = entry.ObservedAt
 	require.NoError(t, run(t.Context()))
 	row = checkRow(t, repositories, "crypto", klineID)
@@ -628,18 +628,18 @@ func TestBusinessFreshnessReporterSplitsCollectorAndNonCollectorDatasetsByInvent
 	})
 	require.NoError(t, err)
 
-	provider := &businessFreshnessInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
+	provider := &businessFreshnessInventoryProvider{snapshot: kline.TaskResultInventorySnapshot{
 		ID: "inv-1", ObservedAt: now,
-		Entries: []monmetrics.TaskResultInventoryEntry{{
+		Entries: []kline.TaskResultInventoryEntry{{
 			SpaceID: "crypto", TaskID: "t1", DatasetID: klineDataset, Frequency: "1m",
 			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now,
 		}},
 	}}
-	cache, err := monmetrics.NewTaskResultInventoryCache(provider, time.Minute, 10)
+	cache, err := kline.NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
 	clock := now
-	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(5*time.Minute), 20)
-	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
+	evaluator := kline.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(5*time.Minute), 20)
+	run := NewBusinessReporter(&monitorobservability.Builder{
 		Metrics: query, Topology: repositories.Topology, Inventory: cache, Policy: latenessPolicy(5 * time.Minute),
 		Now: func() time.Time { return clock },
 	}, repositories, testApplier(repositories), nil, time.Hour, evaluator)
@@ -666,12 +666,12 @@ func TestBusinessFreshnessReporterSplitsCollectorAndNonCollectorDatasetsByInvent
 	require.True(t, exists("dataset:storage_view:"+factorDataset+":1m"))
 
 	// 从未取到清单时：冻结 dataset:storage: 与 dataset:storage_view:，既不误删已有因子检查，也不给采集数据集建重复检查。
-	brokenCache, err := monmetrics.NewTaskResultInventoryCache(&businessFreshnessInventoryProvider{err: errors.New("collector down")}, time.Minute, 10)
+	brokenCache, err := kline.NewTaskResultInventoryCache(&businessFreshnessInventoryProvider{err: errors.New("collector down")}, time.Minute, 10)
 	require.NoError(t, err)
-	brokenRun := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
+	brokenRun := NewBusinessReporter(&monitorobservability.Builder{
 		Metrics: query, Topology: repositories.Topology, Inventory: brokenCache, Policy: latenessPolicy(5 * time.Minute),
 		Now: func() time.Time { return clock },
-	}, repositories, testApplier(repositories), nil, time.Second, monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, brokenCache, latenessPolicy(5*time.Minute), 20))
+	}, repositories, testApplier(repositories), nil, time.Second, kline.NewKlineFreshnessEvaluatorWithInventory(query, brokenCache, latenessPolicy(5*time.Minute), 20))
 	require.NoError(t, brokenRun(t.Context()))
 	require.False(t, exists("dataset:storage:"+klineDataset+":1m"))
 	require.False(t, exists("dataset:storage_view:"+klineDataset+":1m"))
@@ -752,15 +752,15 @@ func TestBusinessFreshnessReporterFreezesObservationChecksWhileIngestIsDown(t *t
 	// 观测输入中断前就有的旧检查：冻结期间不删除。
 	seedCheckRow(t, repositories, "crypto", "dataset:collector:old:1m", true)
 
-	state := observationState{Suspended: true, Reason: "eventbus unreachable"}
-	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology},
-		repositories, testApplier(repositories), func(time.Time) observationState { return state }, 30*time.Second)
+	state := ObservationState{Suspended: true, Reason: "eventbus unreachable"}
+	run := NewBusinessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology},
+		repositories, testApplier(repositories), func(time.Time) ObservationState { return state }, 30*time.Second)
 	const reporterCheck = "reporter:node-a:collector"
 
 	// 观测消费者没连上：上报方已经 10 分钟没样本，但这是因为输入断了，不判定；"观测输入"检查失败并带上原因。
 	require.NoError(t, run(t.Context()))
 	require.Nil(t, checkRow(t, repositories, events.SystemSpaceID, reporterCheck), "观测输入中断期间不能判定上报方停止上报")
-	ingest := checkRow(t, repositories, events.SystemSpaceID, observationIngestCheckID)
+	ingest := checkRow(t, repositories, events.SystemSpaceID, ObservationIngestCheckID)
 	require.NotNil(t, ingest)
 	require.Equal(t, domain.CheckStatusDown, ingest.Status)
 	require.Contains(t, ingest.Reason, "观测输入中断")
@@ -768,13 +768,13 @@ func TestBusinessFreshnessReporterFreezesObservationChecksWhileIngestIsDown(t *t
 	require.NotNil(t, checkRow(t, repositories, "crypto", "dataset:collector:old:1m"), "冻结期间旧检查不删除")
 
 	// 刚重新连上、还在宽限期内：输入已恢复（观测输入检查通过），超时判定继续冻结，等上报方补上样本。
-	state = observationState{Suspended: true, Ready: true}
+	state = ObservationState{Suspended: true, Ready: true}
 	require.NoError(t, run(t.Context()))
 	require.Nil(t, checkRow(t, repositories, events.SystemSpaceID, reporterCheck), "恢复宽限期内仍然冻结")
-	require.Equal(t, domain.CheckStatusOK, checkRow(t, repositories, events.SystemSpaceID, observationIngestCheckID).Status)
+	require.Equal(t, domain.CheckStatusOK, checkRow(t, repositories, events.SystemSpaceID, ObservationIngestCheckID).Status)
 
 	// 宽限结束，上报方仍然没有样本：这时才是真正的"已停止上报"。
-	state = observationState{Ready: true}
+	state = ObservationState{Ready: true}
 	require.NoError(t, run(t.Context()))
 	row := checkRow(t, repositories, events.SystemSpaceID, reporterCheck)
 	require.NotNil(t, row)
@@ -800,16 +800,16 @@ func TestBusinessFreshnessReporterFreezesKlineChecksWhileIngestIsDown(t *testing
 	})
 	require.NoError(t, err)
 
-	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
+	evaluator := kline.NewKlineFreshnessEvaluator(query, []kline.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute,
 	}}, 20)
 	currentNow := now
-	state := observationState{Ready: true}
-	run := buildBusinessFreshnessReporterWithInterval(
+	state := ObservationState{Ready: true}
+	run := NewBusinessReporter(
 		&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return currentNow }},
 		repositories,
 		testApplier(repositories),
-		func(time.Time) observationState { return state },
+		func(time.Time) ObservationState { return state },
 		30*time.Second,
 		evaluator,
 	)
@@ -825,29 +825,29 @@ func TestBusinessFreshnessReporterFreezesKlineChecksWhileIngestIsDown(t *testing
 	// 5 分钟后观测输入断开：库里的 storage-view 摘要仍停在 t0（距今超过 1 分钟快照宽限，按当前时间已超过 2 分钟允许迟到），
 	// 但此时观测输入中断，K 线检查必须保持冻结，不得误报为“整体停止更新”。
 	currentNow = now.Add(5 * time.Minute)
-	state = observationState{Suspended: true, Reason: "eventbus unreachable"}
+	state = ObservationState{Suspended: true, Reason: "eventbus unreachable"}
 	require.NoError(t, run(t.Context()))
 	row = checkRow(t, repositories, "crypto", klineCheckID)
 	require.NotNil(t, row, "观测输入中断时冻结 K 线检查，不得删除")
 	require.Equal(t, domain.CheckStatusOK, row.Status, "观测输入中断时 K 线检查不得误报停止更新")
 	require.Zero(t, row.FailureCount)
-	ingest := checkRow(t, repositories, events.SystemSpaceID, observationIngestCheckID)
+	ingest := checkRow(t, repositories, events.SystemSpaceID, ObservationIngestCheckID)
 	require.NotNil(t, ingest)
 	require.Equal(t, domain.CheckStatusDown, ingest.Status)
 
 	// 观测刚重连，仍在恢复宽限期内：继续冻结。
 	currentNow = now.Add(6 * time.Minute)
-	state = observationState{Suspended: true, Ready: true}
+	state = ObservationState{Suspended: true, Ready: true}
 	require.NoError(t, run(t.Context()))
 	row = checkRow(t, repositories, "crypto", klineCheckID)
 	require.NotNil(t, row)
 	require.Equal(t, domain.CheckStatusOK, row.Status, "恢复宽限期内 K 线检查继续冻结")
 	require.Zero(t, row.FailureCount)
-	require.Equal(t, domain.CheckStatusOK, checkRow(t, repositories, events.SystemSpaceID, observationIngestCheckID).Status)
+	require.Equal(t, domain.CheckStatusOK, checkRow(t, repositories, events.SystemSpaceID, ObservationIngestCheckID).Status)
 
 	// 宽限期结束后快照依然落后：此时恢复判定并报出停止更新。
 	currentNow = now.Add(7 * time.Minute)
-	state = observationState{Ready: true}
+	state = ObservationState{Ready: true}
 	require.NoError(t, run(t.Context()))
 	row = checkRow(t, repositories, "crypto", klineCheckID)
 	require.NotNil(t, row)
@@ -857,7 +857,7 @@ func TestBusinessFreshnessReporterFreezesKlineChecksWhileIngestIsDown(t *testing
 }
 
 func TestObservationIndependentChecksKeepRunning(t *testing.T) {
-	require.True(t, observationIndependent(observationIngestCheckID), observationIngestCheckID)
+	require.True(t, ObservationIndependent(ObservationIngestCheckID), ObservationIngestCheckID)
 	for _, id := range []string{
 		"kline_freshness:crypto:1m",
 		"kline_freshness:task_result_inventory",
@@ -869,36 +869,8 @@ func TestObservationIndependentChecksKeepRunning(t *testing.T) {
 		"data_delivery:storage",
 		"attention:trade:auto_paused",
 	} {
-		require.False(t, observationIndependent(id), id)
+		require.False(t, ObservationIndependent(id), id)
 	}
-}
-
-// 观测输入的状态：没连上就冻结；刚连上的宽限期内冻结；宽限结束或没有启用观测输入时不冻结。
-func TestRuntimeObservationStateFollowsIngestAndGrace(t *testing.T) {
-	r := &Runtime{}
-	now := time.Now()
-	require.False(t, r.observationState(false, now).Suspended, "没有启用观测输入时永远不冻结")
-
-	state := r.observationState(true, now)
-	require.True(t, state.Suspended)
-	require.False(t, state.Ready)
-
-	r.setObservabilityIngestState(false, errors.New("dial timeout"))
-	require.NotEmpty(t, r.observationState(true, now).Reason, "未连接时带上失败原因（已脱敏归类）")
-
-	r.setObservabilityIngestState(true, nil)
-	state = r.observationState(true, time.Now())
-	require.True(t, state.Ready)
-	require.True(t, state.Suspended, "刚连上，处在恢复宽限期内")
-	require.False(t, r.observationState(true, time.Now().Add(observationRecoveryGrace+time.Second)).Suspended, "宽限期结束")
-
-	// 重复的就绪回调不能重置宽限起点。
-	since := r.ingestReadySince.Load()
-	r.setObservabilityIngestState(true, nil)
-	require.Equal(t, since, r.ingestReadySince.Load())
-
-	r.setObservabilityIngestState(false, errors.New("lost"))
-	require.True(t, r.observationState(true, time.Now().Add(time.Hour)).Suspended, "断开之后重新进入冻结")
 }
 
 // 策略实例因上游历史补齐暂停（enabled=-1）：不生成数据集新鲜度检查；原来在告警的检查本轮没有事实，按“不再检查”删除并推恢复。
@@ -918,4 +890,107 @@ func TestBusinessFreshnessReporterSkipsDatasetCheckWhileSeeding(t *testing.T) {
 	}, repositories)
 	require.NoError(t, run(t.Context()))
 	requireRemovedWithRecovery(t, repositories, "stockus", checkID)
+}
+
+func TestReporterExpectationUsesStableDeploymentIdentity(t *testing.T) {
+	manager, repos := openBusinessStore(t)
+	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	query := monmetrics.NewQueryService(messages, nil)
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: now,
+		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
+		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"}},
+	}
+	err = repos.Topology.Reconcile(t.Context(), snapshot)
+	require.NoError(t, err)
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}, repos)
+	require.NoError(t, run(t.Context()))
+	const id = "reporter:control:factor-mgr"
+	result, ok := latestResult(t, repos, "mooxsys", id)
+	require.True(t, ok)
+	require.False(t, result.Success, "登记了部署就要求上报：从没上报过按停止上报处理")
+	_, err = messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "factor-mgr-1", OccurredAt: now.UnixMilli()}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}, nil)
+	require.NoError(t, err)
+	require.NoError(t, run(t.Context()))
+	result, _ = latestResult(t, repos, "mooxsys", id)
+	require.True(t, result.Success, "the first report resolves the same check identity")
+	rows, err := repos.Checks.List(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "停止上报一条、反复重启一条；上报里没有就绪判断时不生成未就绪检查")
+	snapshot.Deployments[0].Status = "disabled"
+	err = repos.Topology.Reconcile(t.Context(), snapshot)
+	require.NoError(t, err)
+	require.NoError(t, run(t.Context()))
+	require.Nil(t, checkRow(t, repos, "mooxsys", id), "停用部署后组件检查不再产出，当轮删除")
+	require.Empty(t, alertEvents(t, repos, id), "没在告警的检查删除时不写恢复事件")
+	snapshot.Deployments[0].Status = "enabled"
+	err = repos.Topology.Reconcile(t.Context(), snapshot)
+	require.NoError(t, err)
+	require.NoError(t, run(t.Context()))
+	require.NotNil(t, checkRow(t, repos, "mooxsys", id), "重新启用的部署恢复组件检查")
+	snapshot.Deployments = nil
+	err = repos.Topology.Reconcile(t.Context(), snapshot)
+	require.NoError(t, err)
+	require.NoError(t, run(t.Context()))
+	require.Nil(t, checkRow(t, repos, "mooxsys", id), "删除部署后组件检查删除")
+}
+
+// Collector 模块暂停或恢复追赶时采集是有意停下的：K 线结果检查不评估（不新增失败结果），放行后恢复评估。
+func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
+	manager, repos := openBusinessStore(t)
+	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	labels := `{"space_id":"crypto","dataset_id":"dataset","freq":"1m"}`
+	_, err = store.WithDatabase(manager, func(db *gorm.DB) error {
+		for _, row := range []monmetrics.MetricSeries{
+			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
+			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
+		} {
+			require.NoError(t, db.Create(&row).Error)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	query := monmetrics.NewQueryService(messages, nil)
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	require.NoError(t, repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now,
+		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
+		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "collector", Status: "enabled"}},
+	}))
+	report := func(stage string) {
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "collector-" + stage, OccurredAt: now.UnixMilli()},
+			&metricspb.MetricReport{ServiceName: "collector", NodeId: "control", InstanceId: "collector@control", BootId: "boot-1",
+				Lifecycle: &metricspb.ModuleLifecycle{Stage: stage}}, nil)
+		require.NoError(t, err)
+	}
+	evaluator := kline.NewKlineFreshnessEvaluator(query, []kline.KlineFreshnessRule{{
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+	}}, 20)
+	builder := &monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}
+	run := buildBusinessFreshnessReporter(builder, repos, evaluator)
+	const id = "kline_freshness:crypto:dataset:1m"
+
+	for _, stage := range []string{"paused", "resuming"} {
+		report(stage)
+		services, err := builder.Services(t.Context(), now)
+		require.NoError(t, err)
+		require.True(t, CollectorHalted(services), stage)
+		require.NoError(t, run(t.Context()))
+		_, judged := latestResult(t, repos, "crypto", id)
+		require.False(t, judged, "Collector %s 时不评估 K 线结果", stage)
+	}
+
+	report("running")
+	services, err := builder.Services(t.Context(), now)
+	require.NoError(t, err)
+	require.False(t, CollectorHalted(services))
+	require.NoError(t, run(t.Context()))
+	result, judged := latestResult(t, repos, "crypto", id)
+	require.True(t, judged)
+	require.False(t, result.Success, "放行后照常判定")
 }

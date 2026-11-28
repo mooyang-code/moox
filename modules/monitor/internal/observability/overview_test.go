@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/marketclock"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -101,7 +102,7 @@ func TestDatasetStatusRejectsStaleInventory(t *testing.T) {
 	}
 }
 
-var cryptoClock = spaceClock{clock: monmetrics.ContinuousClock()}
+var cryptoClock = spaceClock{clock: marketclock.ContinuousClock()}
 
 func testRealtimePolicy() report.RealtimeTimeSeriesPolicy {
 	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{

@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -97,10 +96,10 @@ func newHostCheckHarness(t *testing.T) *hostCheckHarness {
 
 	now := func() time.Time { return h.clock }
 	facts := &observability.Builder{Metrics: monmetrics.NewQueryService(h.messages, nil), Hosts: h.hosts, Topology: h.repos.Topology, Now: now}
-	applier := &checks.Applier{Checks: h.repos.Checks, Sender: func(context.Context) (notification.Sender, error) { return h.sender, nil }, Now: now}
-	observation := func(time.Time) observationState { return observationState{Ready: true, Suspended: h.suspended} }
-	h.hostRun = buildHostCheckReporter(facts, applier, observation)
-	h.businessRun = buildBusinessFreshnessReporterWithInterval(facts, h.repos, applier, observation, 30*time.Second)
+	applier := &Applier{Checks: h.repos.Checks, Sender: func(context.Context) (notification.Sender, error) { return h.sender, nil }, Now: now}
+	observation := func(time.Time) ObservationState { return ObservationState{Ready: true, Suspended: h.suspended} }
+	h.hostRun = NewHostReporter(facts, applier, observation)
+	h.businessRun = NewBusinessReporter(facts, h.repos, applier, observation, 30*time.Second)
 	h.run = func(ctx context.Context) error {
 		if err := h.hostRun(ctx); err != nil {
 			return err

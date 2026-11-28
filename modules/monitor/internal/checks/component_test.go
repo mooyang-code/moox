@@ -1,4 +1,4 @@
-package bootstrap
+package checks
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ type componentHarness struct {
 	db    *gorm.DB
 	repos *store.Repositories
 	run   func() error
-	state observationState
+	state ObservationState
 }
 
 func newComponentHarness(t *testing.T, componentID string, rows ...monmetrics.MetricService) *componentHarness {
@@ -40,11 +40,11 @@ func newComponentHarness(t *testing.T, componentID string, rows ...monmetrics.Me
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
 	require.NoError(t, err)
-	h := &componentHarness{t: t, db: handle, repos: manager.Repositories(), state: observationState{Ready: true}}
+	h := &componentHarness{t: t, db: handle, repos: manager.Repositories(), state: ObservationState{Ready: true}}
 	seedBusinessTopology(t, h.repos, "node-a", componentID, true)
-	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
+	run := NewBusinessReporter(&monitorobservability.Builder{
 		Metrics: query, Topology: h.repos.Topology,
-	}, h.repos, testApplier(h.repos), func(time.Time) observationState { return h.state }, 30*time.Second)
+	}, h.repos, testApplier(h.repos), func(time.Time) ObservationState { return h.state }, 30*time.Second)
 	h.run = func() error { return run(t.Context()) }
 	return h
 }
@@ -168,24 +168,24 @@ func TestComponentChecksFreezeWhileObservationIsSuspended(t *testing.T) {
 	rows := bootRows("collector", now, monmetrics.RestartChanges, true)
 	rows[0].LastSeenAt, rows[0].Readiness, rows[0].NotReadyReason = now, monmetrics.ReadinessNotReady, "数据库不可用"
 	h := newComponentHarness(t, "collector", rows...)
-	h.state = observationState{Suspended: true, Reason: "eventbus unreachable"}
+	h.state = ObservationState{Suspended: true, Reason: "eventbus unreachable"}
 	require.NoError(t, h.run())
 	for _, checkID := range []string{"reporter:node-a:collector", "ready:node-a:collector", "restart:node-a:collector"} {
 		_, judged := h.latest(checkID)
 		require.False(t, judged, "%s 在观测输入中断时冻结", checkID)
 	}
-	ingest, ok := h.latest(observationIngestCheckID)
+	ingest, ok := h.latest(ObservationIngestCheckID)
 	require.True(t, ok)
 	require.False(t, ingest.Success)
 
-	h.state = observationState{Suspended: true, Ready: true}
+	h.state = ObservationState{Suspended: true, Ready: true}
 	require.NoError(t, h.run())
 	for _, checkID := range []string{"reporter:node-a:collector", "ready:node-a:collector", "restart:node-a:collector"} {
 		_, judged := h.latest(checkID)
 		require.False(t, judged, "%s 在恢复宽限期内仍冻结", checkID)
 	}
 
-	h.state = observationState{Ready: true}
+	h.state = ObservationState{Ready: true}
 	require.NoError(t, h.run())
 	ready, _ := h.latest("ready:node-a:collector")
 	require.False(t, ready.Success)

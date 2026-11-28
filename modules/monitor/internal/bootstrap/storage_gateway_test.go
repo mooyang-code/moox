@@ -24,7 +24,7 @@ import (
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/kline"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -178,7 +178,7 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	rows, err := runtime.StorageGateway.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{})
 	require.NoError(t, err)
 	require.Equal(t, storagepb.ErrorCode_SUCCESS, rows.GetRetInfo().GetCode())
-	inventory, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)
+	inventory, err := kline.NewCollectorInventoryGatewayClient(runtime.Gateway)
 	require.NoError(t, err)
 	inventoryResponse, err := inventory.GetTaskResultInventory(t.Context(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", SnapshotId: "generation-1"})
 	require.NoError(t, err)

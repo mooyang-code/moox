@@ -25,6 +25,13 @@ type MetricMessageStore struct {
 }
 
 const (
+	// Storage View 发布的按 View 汇总指标；见 modules/storage/internal/observability/view_subject_tracker.go。
+	ViewOutputLatestMetric         = "moox_storage_view_output_latest_data_time_seconds"
+	ViewOutputTrackedSinceMetric   = "moox_storage_view_output_tracked_since_data_time_seconds"
+	ViewOutputSubjectsMetric       = "moox_storage_view_output_subjects"
+	ViewOutputLaggingMetric        = "moox_storage_view_output_lagging_subjects"
+	ViewOutputLaggingSubjectMetric = "moox_storage_view_output_lagging_subject_data_time_seconds"
+
 	// K-line freshness reads are scoped to configured Views and need only cover
 	// the active subject set. Keep a hard cap so a malformed configuration cannot
 	// turn the timer into an unbounded database read.
