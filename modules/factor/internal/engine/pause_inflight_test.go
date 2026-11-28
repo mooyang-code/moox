@@ -115,7 +115,7 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 	require.Len(t, runner.plans, 1, "暂停之后没有再写任何分块")
 	require.NotContains(t, reportedStatuses(client), jobStatusFailed)
 	statuses := reportedStatuses(client)
-	require.Equal(t, jobStatusAccepted, statuses[len(statuses)-1], "放弃的作业要归还，不等作业租约过期")
+	require.Equal(t, jobStatusQueued, statuses[len(statuses)-1], "放弃的作业要归还，不等作业租约过期")
 	<-pauseDone // 暂停命令还会写生命周期状态文件：等它结束，临时目录才能干净清理
 }
 
@@ -165,7 +165,7 @@ func TestJobPulledBeforePauseDoesNotContinueDuringCatchup(t *testing.T) {
 	require.False(t, got.found)
 	require.Less(t, time.Since(started), 2*time.Second, "不等门禁重开")
 	require.Empty(t, runner.plans, "恢复追赶期间不续跑暂停前领取的作业")
-	require.Equal(t, []string{jobStatusAccepted}, reportedStatuses(client), "作业被归还")
+	require.Equal(t, []string{jobStatusQueued}, reportedStatuses(client), "作业被归还")
 }
 
 type hookRunner struct {

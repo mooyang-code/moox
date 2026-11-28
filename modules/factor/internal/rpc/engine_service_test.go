@@ -35,7 +35,7 @@ type hubFake struct {
 
 func (f *hubFake) HoldsLease(domain.EngineIdentity) bool { return !f.noLease }
 
-func (f *hubFake) SnapshotWithExisting(_ context.Context, knownHash string) (string, bool, []domain.EngineTask, []string, error) {
+func (f *hubFake) Snapshot(_ context.Context, knownHash string) (string, bool, []domain.EngineTask, []string, error) {
 	if knownHash == f.hash {
 		return f.hash, true, nil, nil, f.err
 	}
@@ -92,7 +92,6 @@ func TestSyncEngineCatalogReturnsTasksWithSpec(t *testing.T) {
 	require.Len(t, rsp.GetTasks(), 1)
 	require.True(t, rsp.GetTasks()[0].GetResultReady())
 	require.Contains(t, rsp.GetTasks()[0].GetMembers()[0].GetFactor().GetSpec(), "ts_mean(close, 5)")
-	require.True(t, rsp.GetHasExistingTaskIds())
 	require.Equal(t, []string{"ftask_a", "ftask_disabled"}, rsp.GetExistingTaskIds())
 }
 
@@ -103,8 +102,8 @@ func TestSyncEngineCatalogNotModified(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, rsp.GetNotModified())
-	require.False(t, rsp.GetHasExistingTaskIds())
 	require.Empty(t, rsp.GetTasks())
+	require.Empty(t, rsp.GetExistingTaskIds())
 }
 
 func TestSyncEngineCatalogRequiresEngineID(t *testing.T) {

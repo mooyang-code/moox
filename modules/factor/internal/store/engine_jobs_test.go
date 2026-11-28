@@ -20,7 +20,7 @@ func seedPullJob(t *testing.T, s *Store, jobID, taskID string) RecalcJob {
 		require.NoError(t, s.CreateTask(ctx, set))
 	}
 	job, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: jobID, RequestID: jobID, TaskID: taskID, StartTime: 100, EndTime: 400,
+		JobID: jobID, TaskID: taskID, StartTime: 100, EndTime: 400,
 	})
 	require.NoError(t, err)
 	return job
@@ -102,7 +102,7 @@ func TestPullReturnsTheRunningJobFirst(t *testing.T) {
 	require.Equal(t, int64(200), again.ProgressTime, "a running job resumes from its progress")
 	other, err := s.GetRecalcJob(ctx, "job-2")
 	require.NoError(t, err)
-	require.Equal(t, RecalcStatusAccepted, other.Status, "有运行中的作业时不发新的")
+	require.Equal(t, RecalcStatusQueued, other.Status, "有运行中的作业时不发新的")
 }
 
 func TestPullSkipsExcludedTasks(t *testing.T) {
@@ -133,7 +133,7 @@ func TestPullReturnsAnExcludedRunningJobToTheQueue(t *testing.T) {
 	require.Equal(t, "job-b", next.JobID)
 	returned, err := s.GetRecalcJob(ctx, "job-a")
 	require.NoError(t, err)
-	require.Equal(t, RecalcStatusAccepted, returned.Status)
+	require.Equal(t, RecalcStatusQueued, returned.Status)
 	require.Equal(t, int64(200), returned.ProgressTime)
 	running, err := s.ListRecalcJobs(ctx, RecalcJobFilter{Statuses: []string{RecalcStatusRunning}})
 	require.NoError(t, err)

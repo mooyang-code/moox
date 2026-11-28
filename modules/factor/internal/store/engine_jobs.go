@@ -35,13 +35,13 @@ func (s *Store) PullRecalcJob(ctx context.Context, now time.Time, skipTasks map[
 				pulled, found = job, err == nil
 				return err
 			}
-			if err := tx.Exec(`UPDATE t_factor_recalc_jobs SET c_status = 'accepted', c_mtime = ? WHERE c_job_id = ? AND c_status = 'running'`,
+			if err := tx.Exec(`UPDATE t_factor_recalc_jobs SET c_status = 'queued', c_mtime = ? WHERE c_job_id = ? AND c_status = 'running'`,
 				now.UTC(), row.JobID).Error; err != nil {
 				return err
 			}
 		}
 		var rows []recalcJobRow
-		if err := tx.Raw(`SELECT ` + recalcJobColumns + ` FROM t_factor_recalc_jobs WHERE c_status = 'accepted'
+		if err := tx.Raw(`SELECT ` + recalcJobColumns + ` FROM t_factor_recalc_jobs WHERE c_status = 'queued'
 			ORDER BY c_mtime, c_job_id`).Scan(&rows).Error; err != nil {
 			return err
 		}
@@ -50,7 +50,7 @@ func (s *Store) PullRecalcJob(ctx context.Context, now time.Time, skipTasks map[
 				continue
 			}
 			result := tx.Exec(`UPDATE t_factor_recalc_jobs SET c_status = 'running', c_progress_time = ?, c_mtime = ?
-				WHERE c_job_id = ? AND c_status = 'accepted'`, max(row.ProgressTime, row.StartTime), now.UTC(), row.JobID)
+				WHERE c_job_id = ? AND c_status = 'queued'`, max(row.ProgressTime, row.StartTime), now.UTC(), row.JobID)
 			if result.Error != nil {
 				return result.Error
 			}
@@ -75,13 +75,13 @@ func (s *Store) PullRecalcJob(ctx context.Context, now time.Time, skipTasks map[
 // ReportRecalcProgress 记录引擎上报的一个分块（调用方已确认它是登记的引擎进程）。已取消或已结束的作业原样返回，引擎据此停下；
 // 作业不在运行中或进度倒退是 ErrConflict。
 // defaultFilled 是引擎到目前为止累计的「按默认参数新补的期次」；nil 表示这次没有变化，非 nil 时整体替换。
-// status 为 accepted 表示引擎归还作业（被门禁挡住、引擎停止）：作业回到待领取，进度保持管理端已记下的值。
+// status 为 queued 表示引擎归还作业（被门禁挡住、引擎停止）：作业回到待领取，进度保持管理端已记下的值。
 func (s *Store) ReportRecalcProgress(ctx context.Context, jobID string, progress int64, status, errText string, defaultFilled map[string][]TimeRange, now time.Time) (RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
 	}
 	switch status {
-	case RecalcStatusAccepted, RecalcStatusRunning, RecalcStatusSucceeded, RecalcStatusFailed:
+	case RecalcStatusQueued, RecalcStatusRunning, RecalcStatusSucceeded, RecalcStatusFailed:
 	default:
 		return RecalcJob{}, fmt.Errorf("engine cannot report recalc status %q", status)
 	}
@@ -102,7 +102,7 @@ func (s *Store) ReportRecalcProgress(ctx context.Context, jobID string, progress
 		if current.Status != RecalcStatusRunning {
 			return fmt.Errorf("%w: recalc job %q is not running", ErrConflict, jobID)
 		}
-		if status == RecalcStatusAccepted {
+		if status == RecalcStatusQueued {
 			// 归还不改进度，也不清掉前面分块记下的降级说明。
 			progress, errText = current.ProgressTime, current.Error
 		}

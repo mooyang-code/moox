@@ -23,7 +23,7 @@ const periodStatusTags: Record<PeriodFactorStatus, StatusTag> = {
 };
 
 const jobStatusTags: Record<RecalcJobStatus, StatusTag> = {
-  accepted: { label: "已受理", color: "orange" },
+  queued: { label: "排队中", color: "orange" },
   running: { label: "执行中", color: "blue" },
   succeeded: { label: "已完成", color: "green" },
   failed: { label: "失败", color: "red" },
@@ -40,7 +40,7 @@ export const jobStatusTag = (status: string) => jobStatusTags[status as RecalcJo
 export const factorTypeLabel = (type: string) =>
   (({ timeseries: "时序因子", cross_section: "截面因子" }) as Record<string, string>)[type] || type;
 
-export const isActiveJob = (job: Pick<RecalcJob, "status">) => job.status === "accepted" || job.status === "running";
+export const isActiveJob = (job: Pick<RecalcJob, "status">) => job.status === "queued" || job.status === "running";
 
 const DEGRADED_PREFIX = "degraded:";
 

@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // ErrLeaseConflict 表示管理端拒绝了调用：本进程不是当前登记的引擎（另一个 engine_id 还在心跳，或已被重启后的新进程顶替），
@@ -39,11 +38,10 @@ func NewManagerClient(gateway gatewayclient.Invoker, timeout time.Duration, iden
 
 // CatalogSnapshot is one SyncEngineCatalog answer.
 type CatalogSnapshot struct {
-	Hash               string
-	NotModified        bool
-	Sets               []domain.EngineTask
-	ExistingTaskIDs    []string
-	HasExistingTaskIDs bool
+	Hash            string
+	NotModified     bool
+	Sets            []domain.EngineTask
+	ExistingTaskIDs []string
 }
 
 func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (CatalogSnapshot, error) {
@@ -53,10 +51,9 @@ func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (Cata
 		return CatalogSnapshot{}, err
 	}
 	snapshot := CatalogSnapshot{
-		Hash:               rsp.GetCatalogHash(),
-		NotModified:        rsp.GetNotModified(),
-		ExistingTaskIDs:    append([]string(nil), rsp.GetExistingTaskIds()...),
-		HasExistingTaskIDs: !rsp.GetNotModified() && rsp.GetHasExistingTaskIds(),
+		Hash:            rsp.GetCatalogHash(),
+		NotModified:     rsp.GetNotModified(),
+		ExistingTaskIDs: append([]string(nil), rsp.GetExistingTaskIds()...),
 	}
 	for _, raw := range rsp.GetTasks() {
 		set, err := factorwire.EngineTaskFromPB(raw)
@@ -65,18 +62,14 @@ func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (Cata
 		}
 		snapshot.Sets = append(snapshot.Sets, set)
 	}
-	if !snapshot.NotModified && snapshot.HasExistingTaskIDs {
+	if !snapshot.NotModified {
 		existing := make(map[string]struct{}, len(snapshot.ExistingTaskIDs))
 		for _, id := range snapshot.ExistingTaskIDs {
 			existing[id] = struct{}{}
 		}
 		for _, set := range snapshot.Sets {
 			if _, ok := existing[set.Set.TaskID]; !ok {
-				log.WarnContextf(ctx, "factor_catalog_existing_task_ids_inconsistent missing_task_id=%s catalog_hash=%s（忽略本次全量现存清单以防误清活跃任务状态）",
-					set.Set.TaskID, snapshot.Hash)
-				snapshot.HasExistingTaskIDs = false
-				snapshot.ExistingTaskIDs = nil
-				break
+				return CatalogSnapshot{}, fmt.Errorf("目录快照不一致：启用任务 %s 不在 existing_task_ids 中（catalog_hash=%s）", set.Set.TaskID, snapshot.Hash)
 			}
 		}
 	}

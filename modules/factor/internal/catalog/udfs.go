@@ -367,7 +367,7 @@ func (s *Service) noStartedJobs(ctx context.Context, tasks []string) Prerequisit
 	p := Prerequisite{Name: "受影响任务没有已经开始的补算作业"}
 	var started []string
 	for _, taskID := range tasks {
-		jobs, err := s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: []string{store.RecalcStatusAccepted, store.RecalcStatusRunning}})
+		jobs, err := s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: []string{store.RecalcStatusQueued, store.RecalcStatusRunning}})
 		if err != nil {
 			p.Detail = "读取补算作业失败：" + err.Error()
 			return p

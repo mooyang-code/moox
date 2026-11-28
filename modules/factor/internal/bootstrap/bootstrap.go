@@ -134,7 +134,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.stopRecalcPrune = stopRecalcPrune
 
-	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)), factorrpc.WithLifecycle(life),
+	factorService := factorrpc.NewService(catalogService, recalcService, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)), factorrpc.WithLifecycle(life),
 		factorrpc.WithPreviewer(preview.New(storageio.NewAxis(storage), previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService))
@@ -318,34 +318,3 @@ func startRecalcJobPruner(ctx context.Context, db *store.Store, interval, retent
 		return nil
 	}, nil
 }
-
-type recalcRPCAdapter struct{ service *recalc.Service }
-
-func (a recalcRPCAdapter) Submit(ctx context.Context, taskID string, members, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
-	job, err := a.service.Submit(ctx, taskID, members, subjects, requestID, start, end)
-	return factorrpc.JobFromStore(job), err
-}
-
-func (a recalcRPCAdapter) List(ctx context.Context, taskID string, statuses []string) ([]factorrpc.RecalcJob, error) {
-	jobs, err := a.service.List(ctx, taskID, statuses)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]factorrpc.RecalcJob, 0, len(jobs))
-	for _, job := range jobs {
-		out = append(out, factorrpc.JobFromStore(job))
-	}
-	return out, nil
-}
-
-func (a recalcRPCAdapter) Get(ctx context.Context, jobID string) (factorrpc.RecalcJob, error) {
-	job, err := a.service.Get(ctx, jobID)
-	return factorrpc.JobFromStore(job), err
-}
-
-func (a recalcRPCAdapter) Cancel(ctx context.Context, jobID string) (factorrpc.RecalcJob, error) {
-	job, err := a.service.Cancel(ctx, jobID)
-	return factorrpc.JobFromStore(job), err
-}
-
-var _ factorrpc.RecalcAPI = recalcRPCAdapter{}

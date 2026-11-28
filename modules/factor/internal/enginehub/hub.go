@@ -161,7 +161,7 @@ func (h *Hub) Engine(ctx context.Context) (domain.EngineInfo, domain.EngineStatu
 	if state == nil {
 		return domain.EngineInfo{}, domain.EngineStatus{}, false, nil
 	}
-	hash, _, _, err := h.Snapshot(ctx, "")
+	hash, _, _, _, err := h.Snapshot(ctx, "")
 	if err != nil {
 		return domain.EngineInfo{}, domain.EngineStatus{}, false, err
 	}

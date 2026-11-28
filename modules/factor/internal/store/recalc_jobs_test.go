@@ -19,25 +19,25 @@ func seedRecalcParentTask(t *testing.T, s *Store, taskID string) {
 	require.NoError(t, s.CreateTask(context.Background(), task))
 }
 
-func TestRecalcJobRequestIDIsIdempotent(t *testing.T) {
+func TestRecalcJobIDIsIdempotent(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	seedRecalcParentTask(t, s, "task_prices")
 	first, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-first", RequestID: "request-1", TaskID: "task_prices",
-		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
+		JobID: "job-1", TaskID: "task_prices", Members: []string{"a"},
+		StartTime: 100, EndTime: 200, Status: RecalcStatusQueued,
 	})
 	require.NoError(t, err)
 	second, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-retry", RequestID: "request-1", TaskID: "task_prices",
-		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
+		JobID: "job-1", TaskID: "task_prices", Members: []string{"b"},
+		StartTime: 100, EndTime: 200, Status: RecalcStatusQueued,
 	})
 	require.NoError(t, err)
 	require.Equal(t, first.JobID, second.JobID)
 	require.Equal(t, first, second)
 }
 
-func TestConcurrentRecalcJobRequestIDIsIdempotent(t *testing.T) {
+func TestConcurrentRecalcJobIDIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "factor.db")
 	firstStore, err := Open(&Options{Path: path, MaxOpenConns: 2})
 	require.NoError(t, err)
@@ -47,8 +47,8 @@ func TestConcurrentRecalcJobRequestIDIsIdempotent(t *testing.T) {
 	seedRecalcParentTask(t, firstStore, "set")
 
 	jobs := []RecalcJob{
-		{JobID: "job-a", RequestID: "request-race", TaskID: "set", Members: []string{"a"}, Subjects: []string{"BTC"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
-		{JobID: "job-b", RequestID: "request-race", TaskID: "set", Members: []string{"a", "b"}, Subjects: []string{"BTC", "ETH"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
+		{JobID: "job-race", TaskID: "set", Members: []string{"a"}, Subjects: []string{"BTC"}, StartTime: 1, EndTime: 2},
+		{JobID: "job-race", TaskID: "set", Members: []string{"a", "b"}, Subjects: []string{"BTC", "ETH"}, StartTime: 1, EndTime: 2},
 	}
 	results := concurrentCreate(t, firstStore, secondStore, jobs)
 	require.NoError(t, results[0].err)
@@ -56,27 +56,6 @@ func TestConcurrentRecalcJobRequestIDIsIdempotent(t *testing.T) {
 	require.Equal(t, results[0].job.JobID, results[1].job.JobID)
 	require.Equal(t, results[0].job.Members, results[1].job.Members)
 	require.Equal(t, results[0].job.Subjects, results[1].job.Subjects)
-}
-
-func TestConcurrentDifferentRecalcPayloadConflicts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "factor.db")
-	firstStore, err := Open(&Options{Path: path, MaxOpenConns: 2})
-	require.NoError(t, err)
-	secondStore, err := Open(&Options{Path: path, MaxOpenConns: 2})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, firstStore.Close()); require.NoError(t, secondStore.Close()) })
-	seedRecalcParentTask(t, firstStore, "set")
-	jobs := []RecalcJob{
-		{JobID: "job-a", RequestID: "request-conflict", TaskID: "set", Members: []string{"a"}, StartTime: 1, EndTime: 2},
-		{JobID: "job-b", RequestID: "request-conflict", TaskID: "set", Members: []string{"b"}, StartTime: 1, EndTime: 2},
-	}
-	results := concurrentCreate(t, firstStore, secondStore, jobs)
-	require.NotEqual(t, results[0].err == nil, results[1].err == nil)
-	conflict := results[0].err
-	if conflict == nil {
-		conflict = results[1].err
-	}
-	require.ErrorIs(t, conflict, ErrConflict)
 }
 
 type createResult struct {
@@ -108,8 +87,8 @@ func TestUpdateRecalcProgressAndCancel(t *testing.T) {
 	ctx := context.Background()
 	seedRecalcParentTask(t, s, "task_prices")
 	job, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-1", RequestID: "request-1", TaskID: "task_prices",
-		StartTime: 100, EndTime: 500, Status: RecalcStatusAccepted,
+		JobID: "job-1", TaskID: "task_prices",
+		StartTime: 100, EndTime: 500, Status: RecalcStatusQueued,
 	})
 	require.NoError(t, err)
 
@@ -152,9 +131,9 @@ func TestListRecalcJobsFiltersTaskAndStatuses(t *testing.T) {
 	seedRecalcParentTask(t, s, "set")
 	seedRecalcParentTask(t, s, "other")
 	for _, job := range []RecalcJob{
-		{JobID: "job-a", RequestID: "req-a", TaskID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusAccepted},
-		{JobID: "job-b", RequestID: "req-b", TaskID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
-		{JobID: "job-c", RequestID: "req-c", TaskID: "other", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
+		{JobID: "job-a", TaskID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusQueued},
+		{JobID: "job-b", TaskID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
+		{JobID: "job-c", TaskID: "other", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
 	} {
 		_, err := s.CreateRecalcJob(ctx, job)
 		require.NoError(t, err)
@@ -179,8 +158,8 @@ func TestRecalcJobPersistsAcrossStoreReopen(t *testing.T) {
 	require.NoError(t, err)
 	seedRecalcParentTask(t, s, "task_prices")
 	job, err := s.CreateRecalcJob(context.Background(), RecalcJob{
-		JobID: "job-1", RequestID: "request-1", TaskID: "task_prices",
-		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
+		JobID: "job-1", TaskID: "task_prices",
+		StartTime: 100, EndTime: 200, Status: RecalcStatusQueued,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Close())
@@ -199,8 +178,8 @@ func TestRecalcJobSchemaForeignKeyCascadeAndIndex(t *testing.T) {
 
 	// 外键约束拒绝引用不存在的 c_task_id。
 	_, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-orphan", RequestID: "req-orphan", TaskID: "task_missing",
-		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
+		JobID: "job-orphan", TaskID: "task_missing",
+		StartTime: 100, EndTime: 200, Status: RecalcStatusQueued,
 	})
 	require.Error(t, err)
 
@@ -209,7 +188,7 @@ func TestRecalcJobSchemaForeignKeyCascadeAndIndex(t *testing.T) {
 	task.Name, task.ResultDatasetID = "task_cascade", "dataset_factor_cascade"
 	require.NoError(t, s.CreateTask(ctx, task))
 	_, err = s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-cascade", RequestID: "req-cascade", TaskID: "task_cascade",
+		JobID: "job-cascade", TaskID: "task_cascade",
 		StartTime: 100, EndTime: 200, Status: RecalcStatusSucceeded,
 	})
 	require.NoError(t, err)
@@ -234,7 +213,7 @@ func TestPruneRecalcJobsRespectsRetentionPerTaskCapAndActiveJobs(t *testing.T) {
 	insertJob := func(jobID, taskID, status string, ctime, mtime string) {
 		t.Helper()
 		_, err := s.CreateRecalcJob(ctx, RecalcJob{
-			JobID: jobID, RequestID: "req-" + jobID, TaskID: taskID,
+			JobID: jobID, TaskID: taskID,
 			StartTime: 100, EndTime: 200, Status: status,
 		})
 		require.NoError(t, err)
@@ -250,7 +229,7 @@ func TestPruneRecalcJobsRespectsRetentionPerTaskCapAndActiveJobs(t *testing.T) {
 	insertJob("a_recent_1", "task_a", RecalcStatusCancelled, now.Add(-10*time.Hour).Format(time.RFC3339Nano), now.Add(-10*time.Hour).Format(time.RFC3339Nano))
 	insertJob("a_recent_2", "task_a", RecalcStatusSucceeded, now.Add(-5*time.Hour).Format(time.RFC3339Nano), now.Add(-5*time.Hour).Format(time.RFC3339Nano))
 	insertJob("a_recent_3", "task_a", RecalcStatusFailed, now.Add(-1*time.Hour).Format(time.RFC3339Nano), now.Add(-1*time.Hour).Format(time.RFC3339Nano))
-	insertJob("a_accepted_old", "task_a", RecalcStatusAccepted, now.Add(-50*time.Hour).Format(time.RFC3339Nano), now.Add(-50*time.Hour).Format(time.RFC3339Nano))
+	insertJob("a_queued_old", "task_a", RecalcStatusQueued, now.Add(-50*time.Hour).Format(time.RFC3339Nano), now.Add(-50*time.Hour).Format(time.RFC3339Nano))
 	insertJob("a_running_old", "task_a", RecalcStatusRunning, now.Add(-45*time.Hour).Format(time.RFC3339Nano), now.Add(-45*time.Hour).Format(time.RFC3339Nano))
 
 	// task_b: 2 条窗口内已完结，应按任务独立保留。
@@ -267,7 +246,7 @@ func TestPruneRecalcJobsRespectsRetentionPerTaskCapAndActiveJobs(t *testing.T) {
 	for _, job := range taskAJobs {
 		taskAIDs = append(taskAIDs, job.JobID)
 	}
-	require.ElementsMatch(t, []string{"a_recent_3", "a_recent_2", "a_accepted_old", "a_running_old"}, taskAIDs)
+	require.ElementsMatch(t, []string{"a_recent_3", "a_recent_2", "a_queued_old", "a_running_old"}, taskAIDs)
 
 	taskBJobs, err := s.ListRecalcJobs(ctx, RecalcJobFilter{TaskID: "task_b"})
 	require.NoError(t, err)

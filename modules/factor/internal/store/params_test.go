@@ -145,7 +145,7 @@ func TestRecalcJobDefaultFilledRoundTrip(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
-	job, err := s.CreateRecalcJob(ctx, RecalcJob{JobID: "job-1", RequestID: "req-1", TaskID: "task_prices", StartTime: 100, EndTime: 1000})
+	job, err := s.CreateRecalcJob(ctx, RecalcJob{JobID: "job-1", TaskID: "task_prices", StartTime: 100, EndTime: 1000})
 	require.NoError(t, err)
 	require.Empty(t, job.DefaultFilled)
 	now := time.Unix(500, 0)

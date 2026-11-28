@@ -57,20 +57,19 @@ describe("factor API contract", () => {
     expect(info.usages[0].status).toBe(member.status);
   });
 
-  it("accepts set-scoped async recalc jobs with a request id", () => {
+  it("accepts set-scoped async recalc jobs with a job id", () => {
     const request: RecalcFactorsReq = {
       task_id: "factor_task_crypto_1m",
-      factor_ids: ["Bias"],
+      members: ["Bias"],
       subjects: ["BTC-USDT"],
-      request_id: "recalc-1",
+      job_id: "recalc-1",
       start_time: "2026-07-26T00:00:00Z",
       end_time: "2026-07-27T00:00:00Z"
     };
     const job: RecalcJob = {
-      job_id: "job-1",
-      request_id: request.request_id,
+      job_id: request.job_id,
       task_id: request.task_id,
-      factor_ids: request.factor_ids,
+      members: request.members,
       subjects: request.subjects,
       start_time: request.start_time,
       end_time: request.end_time,
@@ -80,7 +79,7 @@ describe("factor API contract", () => {
       created_at: request.start_time,
       updated_at: request.start_time
     };
-    const list: ListRecalcJobsReq = { task_id: job.task_id, statuses: ["accepted", "running"] };
+    const list: ListRecalcJobsReq = { task_id: job.task_id, statuses: ["queued", "running"] };
     expect(list.task_id).toBe(request.task_id);
     expect(job.progress_time).toBe(request.start_time);
   });

@@ -50,34 +50,6 @@ type CatalogAPI interface {
 	GetParams(ctx context.Context, taskID string) ([]domain.MemberParamState, error)
 }
 
-// RecalcJob is the RPC-facing representation of one durable recalc request.
-type RecalcJob struct {
-	JobID        string
-	RequestID    string
-	TaskID       string
-	Members      []string
-	Subjects     []string
-	StartTime    time.Time
-	EndTime      time.Time
-	Status       string
-	ProgressTime time.Time
-	Error        string
-	// DefaultFilled 是按默认参数新补的期次（成员键 → 闭区间）。
-	DefaultFilled map[string][]store.TimeRange
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-}
-
-// JobFromStore converts a stored recalc job to its RPC representation.
-func JobFromStore(job store.RecalcJob) RecalcJob {
-	return RecalcJob{
-		JobID: job.JobID, RequestID: job.RequestID, TaskID: job.TaskID,
-		Members: append([]string(nil), job.Members...), Subjects: append([]string(nil), job.Subjects...),
-		StartTime: unixTime(job.StartTime), EndTime: unixTime(job.EndTime), ProgressTime: unixTime(job.ProgressTime),
-		Status: job.Status, Error: job.Error, DefaultFilled: job.DefaultFilled, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
-	}
-}
-
 func unixTime(value int64) time.Time {
 	if value == 0 {
 		return time.Time{}
@@ -87,10 +59,10 @@ func unixTime(value int64) time.Time {
 
 // RecalcAPI isolates asynchronous recalculation orchestration from RPC.
 type RecalcAPI interface {
-	Submit(ctx context.Context, taskID string, members, subjects []string, requestID string, start, end time.Time) (RecalcJob, error)
-	List(ctx context.Context, taskID string, statuses []string) ([]RecalcJob, error)
-	Get(ctx context.Context, jobID string) (RecalcJob, error)
-	Cancel(ctx context.Context, jobID string) (RecalcJob, error)
+	Submit(ctx context.Context, taskID string, members, subjects []string, jobID string, start, end time.Time) (store.RecalcJob, error)
+	List(ctx context.Context, taskID string, statuses []string) ([]store.RecalcJob, error)
+	Get(ctx context.Context, jobID string) (store.RecalcJob, error)
+	Cancel(ctx context.Context, jobID string) (store.RecalcJob, error)
 }
 
 // EngineAPI is the manager's view of the compute engine, fed by heartbeats.
@@ -526,8 +498,8 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 	if err := s.mutationAllowed(); err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: unavailable(err)}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetRequestId()) == "" {
-		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("task_id and request_id are required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetJobId()) == "" {
+		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("task_id and job_id are required"))}, nil
 	}
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(err)}, nil
@@ -552,7 +524,7 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 	if err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("recalc range must be aligned to %s: %w", set.Freq, err))}, nil
 	}
-	job, err := s.recalc.Submit(ctx, req.GetTaskId(), factorwire.CloneStrings(req.GetMembers()), factorwire.CloneStrings(req.GetSubjects()), req.GetRequestId(), start, end)
+	job, err := s.recalc.Submit(ctx, req.GetTaskId(), factorwire.CloneStrings(req.GetMembers()), factorwire.CloneStrings(req.GetSubjects()), req.GetJobId(), start, end)
 	if err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: inner(err)}, nil
 	}

@@ -380,7 +380,7 @@ func (s *Service) checkBoundTask(ctx context.Context, task domain.FactorTask, in
 
 // requireNoActiveRecalc 拒绝删除有补算正在排队或执行的任务。
 func (s *Service) requireNoActiveRecalc(ctx context.Context, taskID string) error {
-	jobs, err := s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: []string{store.RecalcStatusAccepted, store.RecalcStatusRunning}})
+	jobs, err := s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: []string{store.RecalcStatusQueued, store.RecalcStatusRunning}})
 	if err != nil {
 		return err
 	}

@@ -220,7 +220,7 @@ func TestActivationPrerequisites(t *testing.T) {
 	// 停用成员后，正在运行的作业（刚领取、进度还在起点）仍算已经开始。
 	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_mean", domain.MemberStatusDisabled)
 	require.NoError(t, err)
-	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{JobID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusQueued})
 	require.NoError(t, err)
 	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusRunning, 1; return nil })
 	require.NoError(t, err)
@@ -230,10 +230,10 @@ func TestActivationPrerequisites(t *testing.T) {
 	name, _, _ := db.GetUdf(ctx, "ts_mean_udf")
 	require.Equal(t, v1.Hash, name.ActiveHash, "前提不满足时不改数据")
 
-	// 领取过又被引擎归还的作业（回到 accepted，进度已越过起点）同样拒绝；从未开始的 accepted 作业不拦。
-	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusAccepted, 50; return nil })
+	// 领取过又被引擎归还的作业（回到 queued，进度已越过起点）同样拒绝；从未开始的 queued 作业不拦。
+	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusQueued, 50; return nil })
 	require.NoError(t, err)
-	fresh, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-2", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	fresh, err := db.CreateRecalcJob(ctx, store.RecalcJob{JobID: "req-2", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusQueued})
 	require.NoError(t, err)
 	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
 	require.ErrorContains(t, err, job.JobID)
@@ -277,7 +277,7 @@ func TestUpdateFactorRejectsStartedRecalcJob(t *testing.T) {
 
 	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_plain", domain.MemberStatusDisabled)
 	require.NoError(t, err)
-	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{JobID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusQueued})
 	require.NoError(t, err)
 	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusRunning, 30; return nil })
 	require.NoError(t, err)

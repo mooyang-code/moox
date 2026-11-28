@@ -123,15 +123,12 @@ CREATE TABLE IF NOT EXISTS t_factor_member_params (
 -- 补算作业：记录异步补算请求的进度与终态，随所属因子任务级联删除，已完结历史由管理端定期清理
 CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_job_id TEXT NOT NULL PRIMARY KEY,
-    c_request_id TEXT NOT NULL,
     c_task_id TEXT NOT NULL,
     c_members_json TEXT NOT NULL DEFAULT '[]',
     c_subjects_json TEXT NOT NULL DEFAULT '[]',
-    c_members_omitted INTEGER NOT NULL DEFAULT 0,
-    c_subjects_omitted INTEGER NOT NULL DEFAULT 0,
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'accepted',
+    c_status TEXT NOT NULL DEFAULT 'queued',
     c_progress_time INTEGER NOT NULL DEFAULT 0,
     c_error TEXT NOT NULL DEFAULT '',
     -- 按默认参数新补的期次：补算时原行不存在、或原行的 __params 里没有这个成员，只能用默认参数算出来，
@@ -139,12 +136,9 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_default_filled_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_members_omitted IN (0, 1)),
-    CHECK (c_subjects_omitted IN (0, 1)),
-    CHECK (c_status IN ('accepted', 'running', 'succeeded', 'failed', 'cancelled')),
+    CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
     CHECK (c_end_time > c_start_time),
-    FOREIGN KEY (c_task_id) REFERENCES t_factor_tasks (c_task_id) ON DELETE CASCADE,
-    UNIQUE (c_request_id)
+    FOREIGN KEY (c_task_id) REFERENCES t_factor_tasks (c_task_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_status ON t_factor_recalc_jobs (c_status, c_mtime);

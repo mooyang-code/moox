@@ -15,7 +15,6 @@ import {
 
 const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
   job_id: "job-1",
-  request_id: "factor-recalc-1",
   task_id: "task_a",
   members: ["Bias"],
   subjects: [],
@@ -43,7 +42,7 @@ const member = (factorId: string, status: FactorMember["status"]): FactorMember 
 describe("recalc model", () => {
   it("status segment filters (all / running / succeeded / failed+cancelled)", () => {
     expect(segmentStatuses("all")).toBeUndefined();
-    expect(segmentStatuses("running")).toEqual(["accepted", "running"]);
+    expect(segmentStatuses("running")).toEqual(["queued", "running"]);
     expect(segmentStatuses("succeeded")).toEqual(["succeeded"]);
     expect(segmentStatuses("failed")).toEqual(["failed", "cancelled"]);
   });

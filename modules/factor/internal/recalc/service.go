@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -67,14 +68,14 @@ func NewService(db *store.Store, options ...Option) *Service {
 	return &Service{db: db, cfg: cfg}
 }
 
-func (s *Service) Submit(ctx context.Context, taskID string, memberKeys, subjects []string, requestID string, start, end time.Time) (store.RecalcJob, error) {
+func (s *Service) Submit(ctx context.Context, taskID string, memberKeys, subjects []string, jobID string, start, end time.Time) (store.RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
 	}
-	requestID = strings.TrimSpace(requestID)
+	jobID = strings.TrimSpace(jobID)
 	taskID = strings.TrimSpace(taskID)
-	if requestID == "" || taskID == "" {
-		return store.RecalcJob{}, errors.New("request_id and task_id are required")
+	if jobID == "" || taskID == "" {
+		return store.RecalcJob{}, errors.New("job_id and task_id are required")
 	}
 	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
@@ -84,19 +85,12 @@ func (s *Service) Submit(ctx context.Context, taskID string, memberKeys, subject
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	if existing, found, err := s.db.FindRecalcJobByRequestID(ctx, requestID); err != nil {
-		return store.RecalcJob{}, err
-	} else if found {
-		if !matchesSubmitRequest(existing, taskID, memberKeys, subjects, start.Unix(), end.Unix()) {
-			return store.RecalcJob{}, fmt.Errorf("request_id %q already belongs to a different recalc request", requestID)
-		}
+	if existing, err := s.db.GetRecalcJob(ctx, jobID); err == nil {
 		return existing, nil
-	}
-	set, selected, normalizedSubjects, err := s.selection(ctx, taskID, memberKeys, subjects)
-	if err != nil {
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return store.RecalcJob{}, err
 	}
-	start, end, err = AlignRange(set.SpaceID, set.Freq, start, end)
+	_, selected, normalizedSubjects, err := s.selection(ctx, taskID, memberKeys, subjects)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -104,39 +98,11 @@ func (s *Service) Submit(ctx context.Context, taskID string, memberKeys, subject
 	for _, member := range selected {
 		ids = append(ids, member.Key)
 	}
-	job, err := s.db.CreateRecalcJob(ctx, store.RecalcJob{
-		JobID: requestID, RequestID: requestID, TaskID: taskID,
+	return s.db.CreateRecalcJob(ctx, store.RecalcJob{
+		JobID: jobID, TaskID: taskID,
 		Members: ids, Subjects: normalizedSubjects,
-		MembersOmitted: len(memberKeys) == 0, SubjectsOmitted: len(subjects) == 0,
-		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
+		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusQueued,
 	})
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	if !matchesSubmitRequest(job, taskID, memberKeys, subjects, start.Unix(), end.Unix()) {
-		return store.RecalcJob{}, fmt.Errorf("request_id %q already belongs to a different recalc request", requestID)
-	}
-	return job, nil
-}
-
-func matchesSubmitRequest(job store.RecalcJob, taskID string, memberKeys, subjects []string, start, end int64) bool {
-	if job.TaskID != taskID || job.StartTime != start || job.EndTime != end ||
-		job.MembersOmitted != (len(memberKeys) == 0) || job.SubjectsOmitted != (len(subjects) == 0) {
-		return false
-	}
-	if !job.MembersOmitted {
-		normalized, err := normalizeIDs(memberKeys)
-		if err != nil || !sameStrings(job.Members, normalized) {
-			return false
-		}
-	}
-	if !job.SubjectsOmitted {
-		normalized, err := normalizeSubjects(subjects)
-		if err != nil || !sameStrings(job.Subjects, normalized) {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Service) Get(ctx context.Context, jobID string) (store.RecalcJob, error) {
@@ -295,24 +261,6 @@ func AlignRange(spaceID, freq string, start, end time.Time) (time.Time, time.Tim
 	return start, end, nil
 }
 
-func normalizeIDs(values []string) ([]string, error) {
-	result := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return nil, errors.New("members contains an empty value")
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result, nil
-}
-
 func normalizeSubjects(values []string) ([]string, error) {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -329,36 +277,4 @@ func normalizeSubjects(values []string) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
-}
-
-func sortedUnique(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func sameStrings(left, right []string) bool {
-	left = sortedUnique(left)
-	right = sortedUnique(right)
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
 }

@@ -160,7 +160,6 @@ func TestDeleteTaskAndDeleteBoundTaskPropagateToSyncEngineCatalog(t *testing.T) 
 	rsp4, err := engSvc.SyncEngineCatalog(ctx, &factorpb.SyncEngineCatalogReq{Engine: testEngine, KnownHash: rsp3.GetCatalogHash()})
 	require.NoError(t, err)
 	require.False(t, rsp4.GetNotModified())
-	require.True(t, rsp4.GetHasExistingTaskIds())
 	require.Empty(t, rsp4.GetTasks())
 	require.Empty(t, rsp4.GetExistingTaskIds())
 }

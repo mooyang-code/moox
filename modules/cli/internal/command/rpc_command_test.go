@@ -230,23 +230,23 @@ func TestSpecAutoIDsNumberMapAndTimeValidation(t *testing.T) {
 	gateway := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
 	useRPCGateway(t, gateway)
 	spec := rpcSpec{Path: []string{"x", "recalc"}, Short: "t", Service: "trpc.moox.factor.FactorMgr", Method: "RecalcFactors", NoSpace: true,
-		AutoIDs: []string{"request_id"},
+		AutoIDs: []string{"job_id"},
 		Flags: []rpcFlag{
 			{Name: "param", Field: "params", Kind: rpcNumberMap},
 			{Name: "from", Field: "start_time", Kind: rpcTime},
-			{Name: "request-id", Field: "request_id", Kind: rpcString},
+			{Name: "job-id", Field: "job_id", Kind: rpcString},
 		}}
 	_, _, err := runSpecCommand(t, spec, "--param", "window=20", "--param", "ratio=0.5")
 	require.NoError(t, err)
 	var request map[string]any
 	require.NoError(t, json.Unmarshal(gateway.body, &request))
 	assert.Equal(t, map[string]any{"window": float64(20), "ratio": 0.5}, request["params"])
-	assert.Len(t, request["request_id"], 24, "缺省时自动生成请求 ID")
+	assert.Len(t, request["job_id"], 24, "缺省时自动生成作业 ID")
 
-	_, _, err = runSpecCommand(t, spec, "--request-id", "mine")
+	_, _, err = runSpecCommand(t, spec, "--job-id", "mine")
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(gateway.body, &request))
-	assert.Equal(t, "mine", request["request_id"])
+	assert.Equal(t, "mine", request["job_id"])
 
 	_, _, err = runSpecCommand(t, spec, "--from", "yesterday")
 	require.ErrorContains(t, err, "RFC3339")

@@ -17,7 +17,7 @@ import (
 // engineView is the part of the engine hub the observer reads: the catalog the
 // engine computes and the engine's latest heartbeat.
 type engineView interface {
-	Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, error)
+	Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, []string, error)
 	Engine(ctx context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error)
 }
 
@@ -100,7 +100,7 @@ func newFactorDatasetObserver(engine engineView, metrics *report.DatasetMetrics)
 func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	_, _, sets, err := o.engine.Snapshot(ctx, "")
+	_, _, sets, _, err := o.engine.Snapshot(ctx, "")
 	if err != nil {
 		o.metrics.ObserveInventoryRefreshError()
 		return fmt.Errorf("load factor tasks: %w", err)

@@ -15,7 +15,7 @@ export const STATUS_SEGMENTS: ReadonlyArray<{ key: StatusSegment; label: string 
 export function segmentStatuses(segment: StatusSegment): RecalcJobStatus[] | undefined {
   return {
     all: undefined,
-    running: ["accepted", "running"] as RecalcJobStatus[],
+    running: ["queued", "running"] as RecalcJobStatus[],
     succeeded: ["succeeded"] as RecalcJobStatus[],
     failed: ["failed", "cancelled"] as RecalcJobStatus[]
   }[segment];

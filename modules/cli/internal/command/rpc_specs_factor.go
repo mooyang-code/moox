@@ -73,9 +73,9 @@ func init() {
 		rpcSpec{Path: []string{"factor", "member", "disable"}, Destructive: true, Short: "停用因子成员（默认只预览，--yes 才执行）", Service: factorMgr, Method: "SetTaskMemberStatus", Fixed: map[string]any{"status": "disabled"},
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID"), reqFlag("member-key", "member_key", "成员键")}},
 
-		rpcSpec{Path: []string{"factor", "recalc", "submit"}, Short: "提交历史补算（时间左闭右开；不给 --request-id 时自动生成）", Service: factorMgr, Method: "RecalcFactors", AutoIDs: []string{"request_id"},
+		rpcSpec{Path: []string{"factor", "recalc", "submit"}, Short: "提交历史补算（时间左闭右开；不给 --job-id 时自动生成）", Service: factorMgr, Method: "RecalcFactors", AutoIDs: []string{"job_id"},
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID"), listFlag("member", "members", "只补这些成员键，可重复"), listFlag("subject", "subjects", "只补这些标的，可重复"),
-				timeFlag("from", "start_time", "起点（RFC3339，含）", true), timeFlag("to", "end_time", "终点（RFC3339，不含）", true), strFlag("request-id", "request_id", "幂等请求 ID")}},
+				timeFlag("from", "start_time", "起点（RFC3339，含）", true), timeFlag("to", "end_time", "终点（RFC3339，不含）", true), strFlag("job-id", "job_id", "幂等作业 ID")}},
 		rpcSpec{Path: []string{"factor", "recalc", "list"}, Short: "列出补算作业", Service: factorMgr, Method: "ListRecalcJobs", Page: rpcPageSize,
 			Flags: []rpcFlag{strFlag("task-id", "task_id", "任务 ID"), listFlag("status", "statuses", "按状态过滤，可重复")}},
 		rpcSpec{Path: []string{"factor", "recalc", "show"}, Short: "查看一个补算作业", Service: factorMgr, Method: "GetRecalcJob",

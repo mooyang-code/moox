@@ -227,7 +227,7 @@ func TestRecalcFactorsValidatesTimeRange(t *testing.T) {
 				TaskId:    catalog.set.TaskID,
 				StartTime: tt.start,
 				EndTime:   tt.end,
-				RequestId: "request-1",
+				JobId:     "job-1",
 			})
 
 			require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestRecalcFactorsSubmitsAlignedRange(t *testing.T) {
 		Subjects:  []string{"BTCUSDT"},
 		StartTime: "2026-10-04T10:00:00+00:00",
 		EndTime:   "2026-10-04T10:05:00Z",
-		RequestId: "request-1",
+		JobId:     "job-1",
 	})
 
 	require.NoError(t, err)
@@ -266,10 +266,10 @@ func TestRecalcFactorsSubmitsAlignedRange(t *testing.T) {
 	require.Equal(t, "ftask_binance_kline_1m", recalc.taskID)
 	require.Equal(t, []string{"rolling_mean"}, recalc.factorIDs)
 	require.Equal(t, []string{"BTCUSDT"}, recalc.subjects)
-	require.Equal(t, "request-1", recalc.requestID)
+	require.Equal(t, "job-1", recalc.jobID)
 	require.Equal(t, time.Date(2026, 10, 4, 10, 0, 0, 0, time.UTC), recalc.start)
 	require.Equal(t, time.Date(2026, 10, 4, 10, 5, 0, 0, time.UTC), recalc.end)
-	require.Equal(t, "request-1", rsp.GetJob().GetJobId())
+	require.Equal(t, "job-1", rsp.GetJob().GetJobId())
 }
 
 func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
@@ -425,35 +425,35 @@ func (f *catalogFake) GetParams(context.Context, string) ([]domain.MemberParamSt
 
 type recalcFake struct {
 	submitCalls int
-	jobs        []RecalcJob
+	jobs        []store.RecalcJob
 	listTaskID  string
 	listStatus  []string
-	job         RecalcJob
+	job         store.RecalcJob
 	taskID      string
 	factorIDs   []string
 	subjects    []string
-	requestID   string
+	jobID       string
 	start       time.Time
 	end         time.Time
 }
 
-func (f *recalcFake) Submit(_ context.Context, taskID string, factorIDs, subjects []string, requestID string, start, end time.Time) (RecalcJob, error) {
+func (f *recalcFake) Submit(_ context.Context, taskID string, factorIDs, subjects []string, jobID string, start, end time.Time) (store.RecalcJob, error) {
 	f.submitCalls++
-	f.taskID, f.factorIDs, f.subjects, f.requestID, f.start, f.end = taskID, factorIDs, subjects, requestID, start, end
-	f.job = RecalcJob{JobID: requestID, RequestID: requestID, TaskID: taskID, Members: factorIDs, Subjects: subjects, StartTime: start, EndTime: end}
+	f.taskID, f.factorIDs, f.subjects, f.jobID, f.start, f.end = taskID, factorIDs, subjects, jobID, start, end
+	f.job = store.RecalcJob{JobID: jobID, TaskID: taskID, Members: factorIDs, Subjects: subjects, StartTime: start.Unix(), EndTime: end.Unix()}
 	return f.job, nil
 }
-func (f *recalcFake) List(_ context.Context, taskID string, statuses []string) ([]RecalcJob, error) {
+func (f *recalcFake) List(_ context.Context, taskID string, statuses []string) ([]store.RecalcJob, error) {
 	f.listTaskID, f.listStatus = taskID, statuses
 	return f.jobs, nil
 }
-func (f *recalcFake) Get(_ context.Context, jobID string) (RecalcJob, error) {
+func (f *recalcFake) Get(_ context.Context, jobID string) (store.RecalcJob, error) {
 	if f.job.JobID == "" {
-		return RecalcJob{JobID: jobID}, nil
+		return store.RecalcJob{JobID: jobID}, nil
 	}
 	return f.job, nil
 }
-func (f *recalcFake) Cancel(context.Context, string) (RecalcJob, error) {
+func (f *recalcFake) Cancel(context.Context, string) (store.RecalcJob, error) {
 	return f.job, nil
 }
 
@@ -476,7 +476,7 @@ func TestTaskTaskMemberStatusEnablesAndDisablesMembers(t *testing.T) {
 }
 
 func TestListRecalcJobsFiltersByTaskAndPaginates(t *testing.T) {
-	recalc := &recalcFake{jobs: []RecalcJob{{JobID: "job-3"}, {JobID: "job-2"}, {JobID: "job-1"}}}
+	recalc := &recalcFake{jobs: []store.RecalcJob{{JobID: "job-3"}, {JobID: "job-2"}, {JobID: "job-1"}}}
 	svc := NewService(&catalogFake{}, recalc)
 
 	missing, err := svc.ListRecalcJobs(context.Background(), &factorpb.ListRecalcJobsReq{})

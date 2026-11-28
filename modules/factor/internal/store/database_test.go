@@ -99,7 +99,7 @@ func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
 	_, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil)
 	require.NoError(t, err)
 	_, err = s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-1", RequestID: "req-1", TaskID: "task_prices", StartTime: 100, EndTime: 200,
+		JobID: "job-1", TaskID: "task_prices", StartTime: 100, EndTime: 200,
 	})
 	require.NoError(t, err)
 

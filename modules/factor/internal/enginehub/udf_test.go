@@ -52,7 +52,7 @@ func TestSnapshotCarriesUdfBindingsAndTheirSwitchChangesTheCatalogHash(t *testin
 	require.NoError(t, db.SetActiveUdf(ctx, v1.Name, v1.Hash))
 	seedUdfTask(t, db)
 
-	hash1, _, sets, err := hub.Snapshot(ctx, "")
+	hash1, _, sets, _, err := hub.Snapshot(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
 	def := sets[0].Members[0].Factor
@@ -60,7 +60,7 @@ func TestSnapshotCarriesUdfBindingsAndTheirSwitchChangesTheCatalogHash(t *testin
 	require.NotNil(t, def.Compiled())
 
 	require.NoError(t, db.SetActiveUdf(ctx, v2.Name, v2.Hash))
-	hash2, notModified, sets, err := hub.Snapshot(ctx, hash1)
+	hash2, notModified, sets, _, err := hub.Snapshot(ctx, hash1)
 	require.NoError(t, err)
 	require.False(t, notModified)
 	require.NotEqual(t, hash1, hash2, "切换版本后目录指纹变化")
