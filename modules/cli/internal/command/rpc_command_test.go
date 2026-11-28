@@ -100,6 +100,7 @@ func TestGatewayCallRefusesSecretPlaintextWithoutConnecting(t *testing.T) {
 		{"trpc.moox.ops.SecretMgr", "ImportSecrets"},
 		{"trpc.moox.monitor.MonitorMgr", "ListNotificationChannels"},
 		{"trpc.moox.monitor.MonitorMgr", "ExportNotificationChannels"},
+		{"trpc.moox.monitor.MonitorMgr", "ImportNotificationChannels"},
 	} {
 		cmd := newGatewayCallCommand()
 		cmd.SetArgs([]string{target[0], target[1]})

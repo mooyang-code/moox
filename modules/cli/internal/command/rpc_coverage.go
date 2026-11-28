@@ -83,6 +83,7 @@ var cliOnlyCoverage = map[string]string{
 	"trpc.moox.admin.Setup/GetSetupStatus": "setup status",
 
 	"trpc.moox.monitor.MonitorMgr/ExportNotificationChannels": "setup backup",
+	"trpc.moox.monitor.MonitorMgr/ImportNotificationChannels": "setup install",
 
 	"trpc.moox.collector.CollectMgr/DeleteCloudFunctions": "collector function delete",
 	"trpc.moox.collector.CollectMgr/ProbeFunctionEgress":  "collector function probe-egress",

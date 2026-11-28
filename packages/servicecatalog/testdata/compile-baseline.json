@@ -206,6 +206,7 @@
         {"service":"trpc.moox.monitor.MonitorMgr","method":"GetDoctorContext","component":"monitor","port":11410,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.monitor.MonitorMgr","method":"GetHealthOverview","component":"monitor","port":11410,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.monitor.MonitorMgr","method":"GetHostPolicy","component":"monitor","port":11410,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["host-agent"]},
+        {"service":"trpc.moox.monitor.MonitorMgr","method":"ImportNotificationChannels","component":"monitor","port":11410,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["moox-cli"]},
         {"service":"trpc.moox.monitor.MonitorMgr","method":"ListHostAgents","component":"monitor","port":11410,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.monitor.MonitorMgr","method":"ListNotificationChannels","component":"monitor","port":11410,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.monitor.MonitorMgr","method":"MuteAlerts","component":"monitor","port":11410,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["moox-cli"]},

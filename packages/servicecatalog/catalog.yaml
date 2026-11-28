@@ -155,7 +155,7 @@ components:
             callers: [monitor]
           - name: GetHostRoutes
             read_only: true
-          # 按 moox.toml 整份覆盖主机与部署的登记（setup deploy、setup update 部署每台主机前调用）。
+          # 按 moox.toml 整份覆盖主机与部署的登记（setup deploy、setup install 部署每台主机前调用）。
           - name: SyncTopology
             operators: [moox-cli]
       - path: trpc.moox.admin.Setup
@@ -254,6 +254,9 @@ components:
           # 卸载前备份导出告警渠道（含完整 Webhook URL 与签名密钥），只给 moox-cli。
           - name: ExportNotificationChannels
             read_only: true
+            operators: [moox-cli]
+          # 重装后按地址幂等覆盖导入告警渠道（含完整 Webhook URL 与签名密钥），只给 moox-cli。
+          - name: ImportNotificationChannels
             operators: [moox-cli]
           - name: AddNotificationChannel
           - name: DeleteNotificationChannel

@@ -3,7 +3,7 @@
   "summary": {
     "components": 16,
     "services": 24,
-    "methods": 296,
+    "methods": 297,
     "read_only_methods": 138,
     "retryable_methods": 140,
     "callers": 20,
@@ -1015,6 +1015,12 @@
           "name": "GetHostPolicy",
           "read_only": false,
           "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ImportNotificationChannels",
+          "read_only": false,
+          "retryable": false,
           "timeout_ms": 5000
         },
         {
@@ -2447,6 +2453,7 @@
       "trpc.moox.monitor.MonitorMgr/GetAlertMute",
       "trpc.moox.monitor.MonitorMgr/GetDoctorContext",
       "trpc.moox.monitor.MonitorMgr/GetHealthOverview",
+      "trpc.moox.monitor.MonitorMgr/ImportNotificationChannels",
       "trpc.moox.monitor.MonitorMgr/ListHostAgents",
       "trpc.moox.monitor.MonitorMgr/ListNotificationChannels",
       "trpc.moox.monitor.MonitorMgr/MuteAlerts",
