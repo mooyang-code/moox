@@ -82,40 +82,7 @@ func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.
 	require.Equal(t, int32(1), atomic.LoadInt32(&fallbackCalls))
 }
 
-func TestFetchKlinesFromChainUsesConfiguredHTTPMaxAttempts(t *testing.T) {
-	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "4")
-	var calls int32
-	bar := marketdata.NormalizedKline{
-		SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m",
-		BarStart: time.Date(2026, 9, 3, 3, 0, 0, 0, time.UTC), BarEnd: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC),
-		Open: 100, High: 101, Low: 99, Close: 100.5, Volume: 10, Amount: 1005,
-		ProviderTimestamp: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "retry-4",
-	}
-	registry := marketdata.NewRegistry()
-	require.NoError(t, registry.Register(pipelineProvider{
-		id: "binance", rows: []marketdata.NormalizedKline{bar}, calls: &calls,
-		errFor: func() error {
-			if atomic.LoadInt32(&calls) < 4 {
-				return marketdata.ErrTimeout
-			}
-			return nil
-		},
-	}))
-	router, err := marketdata.NewRouter(registry, 10, nil, nil)
-	require.NoError(t, err)
-
-	rows, selected, _, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
-		MarketID: "crypto", ExchangeID: "binance", SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT",
-		Frequency: "1m", Limit: 1, RequestID: "retry-4",
-	}, []string{"binance"}, 0)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	require.Equal(t, "binance", selected)
-	require.Equal(t, int32(4), atomic.LoadInt32(&calls))
-}
-
 func TestFetchKlinesFromChainUsesConfiguredRequestTimeout(t *testing.T) {
-	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "1")
 	t.Setenv("MOOX_FETCH_REQUEST_TIMEOUT_MS", "10")
 	var calls int32
 	bar := marketdata.NormalizedKline{
@@ -134,8 +101,8 @@ func TestFetchKlinesFromChainUsesConfiguredRequestTimeout(t *testing.T) {
 		Frequency: "1m", Limit: 1, RequestID: "request-timeout",
 	}, []string{"binance"}, 0)
 	require.ErrorIs(t, err, marketdata.ErrTimeout)
-	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
-	require.Equal(t, 1, attempts, "失败时返回实际尝试次数，供 CLS 失败明细使用")
+	require.Equal(t, int32(klineProviderAttemptBudget), atomic.LoadInt32(&calls))
+	require.Equal(t, klineProviderAttemptBudget, attempts, "失败时返回实际尝试次数，供 CLS 失败明细使用")
 }
 
 func TestLatestClosedIsTradingBarHonorsSessionsAndClosedDays(t *testing.T) {
@@ -356,7 +323,7 @@ func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, nil)
 	require.NoError(t, err)
 	pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "history", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "history", Items: []domain.CollectionItem{{SubjectID: recent.SubjectID, Symbol: recent.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3}}})
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "history", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "history", Items: []domain.CollectionItem{{SubjectID: recent.SubjectID, Symbol: recent.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3}}})
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.Status)
 	require.Contains(t, payload.ErrorSummary, "coverage")
@@ -591,7 +558,7 @@ func TestKlinePipelineUsesRetrySourceEventID(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
-	_, err = pipeline.Execute(context.Background(), Request{BatchID: "retry-attempt-batch", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-retry", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, SourceEventID: "retry-key", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
+	_, err = pipeline.Execute(context.Background(), Request{BatchID: "retry-attempt-batch", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-retry", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, SourceEventID: "retry-key", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
 	require.NoError(t, err)
 }
 
@@ -806,7 +773,7 @@ func TestKlinePipelineAssignsSourcesPerSubjectAndFallsBack(t *testing.T) {
 	require.Equal(t, "succeeded", payload.Status)
 	require.Len(t, storage.rows, 20)
 	require.Equal(t, int32(20), atomic.LoadInt32(&tencentCalls), "每个标的最终都由腾讯取到")
-	require.Equal(t, int32(assignedToSina*RuntimeKlineProviderAttemptBudget()), atomic.LoadInt32(&sinaCalls), "分到新浪的标的只试新浪一轮，分到腾讯的不试新浪")
+	require.Equal(t, int32(assignedToSina*klineProviderAttemptBudget), atomic.LoadInt32(&sinaCalls), "分到新浪的标的只试新浪一轮，分到腾讯的不试新浪")
 	for _, row := range storage.rows {
 		fields := map[string]string{}
 		for _, field := range row.GetFields() {
@@ -822,9 +789,7 @@ func TestKlinePipelineAssignsSourcesPerSubjectAndFallsBack(t *testing.T) {
 func TestOnlyLongRunningBatchesUseTheAdaptiveRate(t *testing.T) {
 	require.False(t, adaptiveBatch(domain.BatchKindRealtime))
 	require.False(t, adaptiveBatch(""))
-	for _, kind := range []domain.BatchKind{domain.BatchKindBackfill, domain.BatchKindCatchup, domain.BatchKindGapRepair} {
-		require.True(t, adaptiveBatch(kind), kind)
-	}
+	require.True(t, adaptiveBatch(domain.BatchKindBackfill))
 }
 
 // 强制补采只去掉开高低收不完整的来源，完整的备源照常回落（A 股日线超出通达信回看的部分由东方财富补）。

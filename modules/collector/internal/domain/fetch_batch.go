@@ -1,27 +1,10 @@
 package domain
 
-import (
-	"time"
-)
-
 type BatchKind string
 
 const (
-	BatchKindRealtime  BatchKind = "realtime"
-	BatchKindCatchup   BatchKind = "catchup"
-	BatchKindBackfill  BatchKind = "backfill"
-	BatchKindGapRepair BatchKind = "gap_repair"
-)
-
-type BatchStatus string
-
-const (
-	BatchStatusPlanned       BatchStatus = "planned"
-	BatchStatusDispatched    BatchStatus = "dispatched"
-	BatchStatusSucceeded     BatchStatus = "succeeded"
-	BatchStatusPartialFailed BatchStatus = "partial_failed"
-	BatchStatusFailed        BatchStatus = "failed"
-	BatchStatusTimedOut      BatchStatus = "timed_out"
+	BatchKindRealtime BatchKind = "realtime"
+	BatchKindBackfill BatchKind = "backfill"
 )
 
 type ItemOutcome string
@@ -88,24 +71,3 @@ type ItemResult struct {
 }
 
 type TargetResult struct{ WriteTargetID, DatasetID, Status, ErrorSummary string }
-
-type PeriodFailureReportState string
-
-const (
-	PeriodFailureReportPending        PeriodFailureReportState = "pending"
-	PeriodFailureReportAcknowledged   PeriodFailureReportState = "acknowledged"
-	PeriodFailureReportMissedDeadline PeriodFailureReportState = "missed_deadline"
-)
-
-type PeriodFailureTargetResult struct {
-	WriteTargetID string    `json:"write_target_id"`
-	SpaceID       string    `json:"space_id"`
-	DatasetID     string    `json:"dataset_id"`
-	Frequency     string    `json:"frequency"`
-	PeriodTime    time.Time `json:"period_time"`
-	SeriesHash    string    `json:"series_hash"`
-	ExpectedCount uint32    `json:"expected_count"`
-	SeriesIndex   uint32    `json:"series_index"`
-	Disposition   string    `json:"disposition"`
-	ObservedAt    time.Time `json:"observed_at"`
-}

@@ -193,7 +193,7 @@ func TestEgressTransportNativeLocalDirect(t *testing.T) {
 			require.NoError(t, err)
 			defer client.Close()
 			api := binanceapi.NewSpotAPI(binanceapi.NewClient(client))
-			symbols, err := api.GetExchangeInfoWithDomainIPs(context.Background(), "api.binance.com", nil)
+			symbols, err := api.GetExchangeInfoWithDomain(context.Background(), "api.binance.com")
 			require.NoError(t, err)
 			require.Len(t, symbols, 1)
 			require.Equal(t, "BTC-USDT", symbols[0].Symbol)

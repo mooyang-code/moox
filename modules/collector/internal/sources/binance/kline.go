@@ -51,11 +51,11 @@ func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *source
 	switch params.InstType {
 	case InstTypeSPOT:
 		return tryEndpoints(ctx, c.client.SpotDomains(), func(attemptCtx context.Context, domain string) ([]*binanceapi.Kline, error) {
-			return c.spotAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, nil)
+			return c.spotAPI.GetKlineWithDomain(attemptCtx, req, domain)
 		})
 	case InstTypeSWAP:
 		return tryEndpoints(ctx, c.client.SwapDomains(), func(attemptCtx context.Context, domain string) ([]*binanceapi.Kline, error) {
-			return c.swapAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, nil)
+			return c.swapAPI.GetKlineWithDomain(attemptCtx, req, domain)
 		})
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)

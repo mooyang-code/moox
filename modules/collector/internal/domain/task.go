@@ -27,24 +27,24 @@ func (s CollectionTaskPrepareState) Valid() bool {
 
 // CollectionTask is the Collector-owned collection task.
 type CollectionTask struct {
-	ID          int    `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID     string `gorm:"column:c_space_id"`
-	TaskID      string `gorm:"column:c_task_id"`
-	TaskName    string `gorm:"column:c_task_name"`
-	Description string `gorm:"column:c_description"`
-	DataType    string `gorm:"column:c_data_type"`
+	ID          int
+	SpaceID     string
+	TaskID      string
+	TaskName    string
+	Description string
+	DataType    string
 	// Ingest 是 K 线任务的采集方式（IngestStreaming、IngestSCF、IngestLocal），其他任务为空。
-	Ingest          string                     `gorm:"column:c_ingest"`
-	TagIDs          []string                   `gorm:"-"`
-	DefinitionHash  string                     `gorm:"column:c_definition_hash"`
-	CollectParams   string                     `gorm:"column:c_collect_params"`
-	Enabled         bool                       `gorm:"column:c_enabled"`
-	Creator         string                     `gorm:"column:c_creator"`
-	PrepareState    CollectionTaskPrepareState `gorm:"column:c_prepare_state"`
-	LastError       string                     `gorm:"column:c_last_error"`
-	ResultDatasetID string                     `gorm:"column:c_result_dataset_id"`
-	CreateTime      time.Time                  `gorm:"column:c_ctime"`
-	ModifyTime      time.Time                  `gorm:"column:c_mtime"`
+	Ingest          string
+	TagIDs          []string
+	DefinitionHash  string
+	CollectParams   string
+	Enabled         bool
+	Creator         string
+	PrepareState    CollectionTaskPrepareState
+	LastError       string
+	ResultDatasetID string
+	CreateTime      time.Time
+	ModifyTime      time.Time
 }
 
 // DataTypeKline 是直接采集 K 线的任务类型；只有它有采集方式。
@@ -88,9 +88,4 @@ func ValidateCollectionTaskName(name string) error {
 		return fmt.Errorf("task_name must contain 1-80 Unicode characters")
 	}
 	return nil
-}
-
-// TableName returns the Collector collection-task table.
-func (r *CollectionTask) TableName() string {
-	return "t_collector_tasks"
 }

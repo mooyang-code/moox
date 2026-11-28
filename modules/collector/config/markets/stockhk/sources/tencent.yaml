@@ -8,8 +8,6 @@ provider:
   kline:
     # 一次返回当天全部分钟，最多合成 66 根。
     max_bars_per_request: 66
-    volume_unit: shares
-    amount_unit: HKD
   rate_limit:
     scope: egress_ip
     # 沿用 A 股腾讯的值。港股每个函数约 25 只，东方财富整期失败时 5 秒左右取完，在 90 秒迟到上限内。

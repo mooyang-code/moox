@@ -141,7 +141,7 @@ func TestHandlerManualInvokeWritesRowsOnly(t *testing.T) {
 		}
 	}}
 	req := marketfetch.Request{
-		BatchID: "backfill-1", BatchKind: domain.BatchKindGapRepair, SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m",
+		BatchID: "backfill-1", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m",
 		Provider: "binance", SourceID: "spot_http", MarketType: "spot",
 		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars-a", Frequency: "1m", StartTime: "2026-10-11T00:00:00Z", BarLimit: 100}},
 	}

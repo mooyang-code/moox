@@ -57,12 +57,7 @@ type TargetResult struct {
 }
 
 func isHistoricalBatchKind(kind domain.BatchKind) bool {
-	switch kind {
-	case domain.BatchKindCatchup, domain.BatchKindBackfill, domain.BatchKindGapRepair:
-		return true
-	default:
-		return false
-	}
+	return kind == domain.BatchKindBackfill
 }
 
 func successResult(item domain.CollectionItem) domain.ItemResult {

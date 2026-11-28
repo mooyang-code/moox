@@ -140,7 +140,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*BatchComplet
 	if deadline, ok := ctx.Deadline(); ok {
 		// 记录本次取数窗口，便于判断行情源延迟尖峰是否吃光了预算。
 		log.InfoContextf(ctx, "market_fetch_pipeline_budget frequency=%s items=%d window_ms=%d chain=%d attempts_per_provider=%d request_timeout_ms=%d",
-			req.Frequency, len(req.Items), time.Until(deadline).Milliseconds(), len(chain), RuntimeKlineProviderAttemptBudget(), attemptTimeoutFloor().Milliseconds())
+			req.Frequency, len(req.Items), time.Until(deadline).Milliseconds(), len(chain), klineProviderAttemptBudget, attemptTimeoutFloor().Milliseconds())
 	}
 	concurrency := req.Concurrency
 	if concurrency <= 0 {
@@ -500,7 +500,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 		startIndex += len(chain)
 	}
 	attempts := 0
-	attemptBudget := RuntimeKlineProviderAttemptBudget()
+	attemptBudget := klineProviderAttemptBudget
 	for index := 0; index < len(chain); index++ {
 		chainIndex := (startIndex + index) % len(chain)
 		provider := chain[chainIndex]
@@ -658,14 +658,10 @@ func klineRouteID(marketID string, instrumentType marketdata.InstrumentType, pro
 	return fixed, nil
 }
 
-// adaptiveBatch 报告这类批次是否使用自适应速率：补采、追赶、缺口修复是持续几分钟到几小时的请求，能边跑边学出安全的速率；
+// adaptiveBatch 报告这类批次是否使用自适应速率：补采是持续几分钟到几小时的请求，能边跑边学出安全的速率；
 // 实时采集每 5 分钟只有 1～2 秒的突发，用配置里的固定上限。
 func adaptiveBatch(kind domain.BatchKind) bool {
-	switch kind {
-	case domain.BatchKindBackfill, domain.BatchKindCatchup, domain.BatchKindGapRepair:
-		return true
-	}
-	return false
+	return kind == domain.BatchKindBackfill
 }
 
 func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {

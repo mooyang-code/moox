@@ -6,12 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -22,19 +20,9 @@ type HTTPClient struct {
 	// ResponseObserver 在每次收到响应（含非 200）后同步调用，用于读取限流相关的响应头。
 	ResponseObserver func(domain string, status int, header http.Header)
 	httpClient       *http.Client
-	ipMu             sync.Mutex
-	ipClients        map[string]*http.Client
-	ipOrder          []string
 }
 
-const maxIPClients = 32
-
 const defaultRequestTimeout = 5 * time.Second
-
-// Keep a small portion of a bounded invocation for the hostname fallback. A
-// stale SCF address must not consume the entire K-line request deadline before
-// the platform resolver gets a chance to try the original domain.
-const hostnameFallbackReserve = time.Second
 
 // StatusError reports a non-success HTTP response.
 type StatusError struct {
@@ -84,164 +72,6 @@ func (c *HTTPClient) GetStream(ctx context.Context, domain, path string, query u
 		return fmt.Errorf("response consumer is required")
 	}
 	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
-}
-
-// GetWithIPs first dials the supplied addresses while keeping domain in the
-// URL. This preserves the Host header and TLS SNI. Only after every supplied
-// address fails does it make one normal hostname request.
-func (c *HTTPClient) GetWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, result interface{}) error {
-	return c.getWithIPs(ctx, domain, ips, path, query, func(reader io.Reader) error {
-		if result == nil {
-			return nil
-		}
-		return json.NewDecoder(reader).Decode(result)
-	})
-}
-
-// GetStreamWithIPs is the streaming counterpart of GetWithIPs.
-func (c *HTTPClient) GetStreamWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, consume func(io.Reader) error) error {
-	if consume == nil {
-		return fmt.Errorf("response consumer is required")
-	}
-	return c.getWithIPs(ctx, domain, ips, path, query, consume)
-}
-
-func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, consume func(io.Reader) error) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	candidates := uniqueIPs(ips)
-	proxy, proxied := c.httpClient.Transport.(*EgressTransport)
-	if skipControlPlaneIPs(domain) || proxied && proxy.domains.Allows(domain) {
-		candidates = nil
-	}
-	ipDeadline, hasIPDeadline := ipAttemptDeadline(ctx)
-	for index, ip := range candidates {
-		client := c.clientForIP(ip)
-		if client == nil {
-			// A custom RoundTripper may not be cloneable. Skip that address and
-			// continue with the remaining snapshot entries before falling back to
-			// the platform resolver.
-			continue
-		}
-		ipCtx, cancel := ipCandidateContext(ctx, ipDeadline, hasIPDeadline, len(candidates)-index)
-		log.InfoContextf(ctx, "collector_http_resolved_ip_attempted domain=%s ip=%s", domain, ip)
-		err := c.getWithClient(ipCtx, client, domain, path, query, consume)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s error=%v", domain, ip, err)
-	}
-	// 没有指定地址时直接走系统解析是常态，不记日志；指定的地址全部失败才值得记录。
-	if len(candidates) > 0 {
-		log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d", domain, len(candidates))
-	}
-	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
-}
-
-func ipAttemptDeadline(ctx context.Context) (time.Time, bool) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return time.Time{}, false
-	}
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		return deadline, true
-	}
-	reserve := hostnameFallbackReserve
-	if half := remaining / 2; half < reserve {
-		reserve = half
-	}
-	if reserve <= 0 {
-		return deadline, true
-	}
-	return deadline.Add(-reserve), true
-}
-
-func ipCandidateContext(parent context.Context, deadline time.Time, hasDeadline bool, remainingCandidates int) (context.Context, context.CancelFunc) {
-	if parent == nil {
-		parent = context.Background()
-	}
-	if !hasDeadline {
-		return parent, func() {}
-	}
-	if remainingCandidates <= 0 {
-		remainingCandidates = 1
-	}
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		return context.WithDeadline(parent, deadline)
-	}
-	budget := remaining / time.Duration(remainingCandidates)
-	if budget <= 0 {
-		budget = remaining
-	}
-	return context.WithTimeout(parent, budget)
-}
-
-func skipControlPlaneIPs(domain string) bool {
-	host := strings.ToLower(strings.TrimSpace(domain))
-	if host == "" || !strings.Contains(host, "binance.com") {
-		return false
-	}
-	return strings.HasPrefix(host, "fapi")
-}
-
-func (c *HTTPClient) clientForIP(ip string) *http.Client {
-	if c == nil || c.httpClient == nil {
-		return nil
-	}
-	roundTripper := c.httpClient.Transport
-	if proxy, ok := roundTripper.(*EgressTransport); ok {
-		roundTripper = proxy.direct
-	}
-	base, ok := roundTripper.(*http.Transport)
-	if !ok || base == nil {
-		return nil
-	}
-	parsed := net.ParseIP(strings.TrimSpace(ip))
-	if parsed == nil {
-		return nil
-	}
-	ip = parsed.String()
-	c.ipMu.Lock()
-	defer c.ipMu.Unlock()
-	if client := c.ipClients[ip]; client != nil {
-		return client
-	}
-	transport := base.Clone()
-	originalDial := transport.DialContext
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		_, port, err := net.SplitHostPort(address)
-		if err != nil || port == "" {
-			port = "443"
-		}
-		target := net.JoinHostPort(parsed.String(), port)
-		if originalDial != nil {
-			return originalDial(ctx, network, target)
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, target)
-	}
-	client := *c.httpClient
-	client.Transport = transport
-	if c.ipClients == nil {
-		c.ipClients = make(map[string]*http.Client)
-	}
-	// Bound rotated DNS snapshots and release idle sockets on FIFO eviction.
-	// Active requests remain valid while their transport finishes naturally.
-	if len(c.ipOrder) >= maxIPClients {
-		oldest := c.ipOrder[0]
-		c.ipClients[oldest].CloseIdleConnections()
-		delete(c.ipClients, oldest)
-		c.ipOrder = c.ipOrder[1:]
-	}
-	c.ipClients[ip] = &client
-	c.ipOrder = append(c.ipOrder, ip)
-	return &client
 }
 
 func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, domain, path string, query url.Values, consume func(io.Reader) error) (retErr error) {
@@ -300,21 +130,3 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 
 // slowRequestLogThreshold 是需要记录成功请求耗时的下限。
 const slowRequestLogThreshold = 500 * time.Millisecond
-
-func uniqueIPs(ips []string) []string {
-	seen := make(map[string]struct{}, len(ips))
-	result := make([]string, 0, len(ips))
-	for _, value := range ips {
-		ip := net.ParseIP(strings.TrimSpace(value))
-		if ip == nil {
-			continue
-		}
-		value = ip.String()
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
-}

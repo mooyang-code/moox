@@ -179,15 +179,8 @@ func (t *EgressTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // Close releases the HTTP transports; the process closes its borrowed gateway
 // only after all workers using these transports have stopped.
 func (c *HTTPClient) Close() {
-	if c == nil {
+	if c == nil || c.httpClient == nil {
 		return
 	}
-	c.ipMu.Lock()
-	defer c.ipMu.Unlock()
-	if c.httpClient != nil {
-		c.httpClient.CloseIdleConnections()
-	}
-	for _, client := range c.ipClients {
-		client.CloseIdleConnections()
-	}
+	c.httpClient.CloseIdleConnections()
 }

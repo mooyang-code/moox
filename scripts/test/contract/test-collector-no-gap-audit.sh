@@ -20,7 +20,7 @@ do
   fi
 done
 
-for token in BatchKindBackfill BatchKindGapRepair; do
+for token in BatchKindBackfill; do
   if ! rg -n -F -- "$token" "$COLLECTOR/internal/marketfetch" >/dev/null; then
     printf 'collector is missing preserved contract %q\n' "$token" >&2
     exit 1

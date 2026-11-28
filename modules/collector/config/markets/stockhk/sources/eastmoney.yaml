@@ -8,8 +8,6 @@ provider:
     endpoint: /api/qt/stock/kline/get
     # 港股单次请求不限根数（2026-11-12 实测 1496 根一次返回，约 23 个交易日）；沿用 A 股的 1205，补采按区间分批。
     max_bars_per_request: 1205
-    volume_unit: shares
-    amount_unit: HKD
   rate_limit:
     scope: egress_ip
     # 沿用 A 股东方财富的值：同一个域名，2026-11-06 南京实测单个出口 IP 512 并发突发、每秒 640 次持续都没有触顶。

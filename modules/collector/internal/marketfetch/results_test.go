@@ -18,7 +18,7 @@ func TestProviderResponseErrorsRemainRetryableForLaterCandidateWindow(t *testing
 
 func TestRuntimeKlineBreakerThresholdScalesWithFeedConcurrency(t *testing.T) {
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
-	require.Equal(t, RuntimeKlineProviderAttemptBudget(), RuntimeKlineBreakerThreshold())
+	require.Equal(t, KlineProviderAttemptBudget, RuntimeKlineBreakerThreshold())
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "50")
-	require.Equal(t, 50*RuntimeKlineProviderAttemptBudget(), RuntimeKlineBreakerThreshold())
+	require.Equal(t, 50*KlineProviderAttemptBudget, RuntimeKlineBreakerThreshold())
 }

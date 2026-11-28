@@ -72,7 +72,7 @@ func newRoutedKlinePipeline(storage marketfetch.Storage, marketID string, instru
 			return nil, err
 		}
 	}
-	threshold := len(chain) * marketfetch.RuntimeKlineProviderAttemptBudget()
+	threshold := len(chain) * marketfetch.KlineProviderAttemptBudget
 	if len(kline.PrimarySources()) == 1 {
 		threshold = max(threshold, singleSourceBreakerThreshold(limits))
 	}
@@ -139,7 +139,7 @@ func newSingleSourceKlinePipeline(storage marketfetch.Storage, marketID string, 
 // 没带时按进程环境（计划下发的 MOOX_FETCH_FEED_CONCURRENCY，未设置按 1）。
 func singleSourceBreakerThreshold(limits *marketfetch.FeedLimits) int {
 	if limits != nil && limits.FeedConcurrency > 0 {
-		return marketfetch.RuntimeKlineProviderAttemptBudget() * limits.FeedConcurrency
+		return marketfetch.KlineProviderAttemptBudget * limits.FeedConcurrency
 	}
 	return marketfetch.RuntimeKlineBreakerThreshold()
 }
