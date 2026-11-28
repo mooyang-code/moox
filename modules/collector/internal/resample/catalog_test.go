@@ -165,15 +165,26 @@ func cryptoColumnTypes() map[string]storagepb.FieldValueType {
 	}
 }
 
+// stockColumnTypes 与默认建出的股票 K 线数据集一致：列里有 quote_volume、trade_num，但股票行只写 amount。
 func stockColumnTypes() map[string]storagepb.FieldValueType {
 	return map[string]storagepb.FieldValueType{
-		"open":   storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		"high":   storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		"low":    storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		"close":  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		"amount": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"open":         storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"high":         storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"low":          storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"close":        storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"volume":       storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"trade_num":    storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
+		"amount":       storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 	}
+}
+
+// stockSelectedColumnTypes 是采集任务显式只选了 OHLCV 与 amount 时建出的股票数据集：没有 quote_volume、trade_num 两列。
+func stockSelectedColumnTypes() map[string]storagepb.FieldValueType {
+	columns := stockColumnTypes()
+	delete(columns, "quote_volume")
+	delete(columns, "trade_num")
+	return columns
 }
 
 func ohlcvColumnTypes() map[string]storagepb.FieldValueType {
@@ -395,7 +406,7 @@ func TestPrepareTargetInheritsAlignmentCalendarAndColumnsFromSourceDataset(t *te
 		{
 			name: "session cn_stock", spaceID: "stockcn", sourceAlign: "session", sourceCal: "cn_stock",
 			sourceCols: stockColumnTypes(), wantCalendar: "cn_stock", wantAlign: "session",
-			wantCols: []string{"open", "high", "low", "close", "volume", "amount"},
+			wantCols: []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num", "amount"},
 		},
 		{
 			name: "epoch crypto", spaceID: "crypto", sourceAlign: "epoch_utc", sourceCal: "",

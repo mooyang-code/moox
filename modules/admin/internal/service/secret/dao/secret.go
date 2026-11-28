@@ -162,7 +162,7 @@ func (d *SecretDAO) Update(ctx context.Context, secret *model.Secret) error {
 	return nil
 }
 
-// Delete 物理硬删除秘钥；仅对 setup init 管理的初始密钥（tencent-default、exchange-*）写墓碑，防止静默复活。
+// Delete 物理硬删除秘钥；仅对初始交易所密钥（exchange-*）写墓碑，防止 setup init 静默重建。
 func (d *SecretDAO) Delete(ctx context.Context, secretID string) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Scopes(userSecrets).Where("c_secret_id = ?", secretID).Delete(&model.Secret{})

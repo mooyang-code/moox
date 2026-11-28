@@ -81,7 +81,10 @@ func (i *TaskIndex) space(ctx context.Context, spaceID string) ([]*Task, error) 
 		}
 		sourceInfo, sourceErr := i.Source.GetDataset(ctx, collection.SpaceID, params.SourceDatasetID)
 		if sourceErr != nil {
-			return nil, fmt.Errorf("load resample source dataset %s/%s: %w", collection.SpaceID, params.SourceDatasetID, sourceErr)
+			// 一个任务的源数据集读不到（例如已删但任务仍启用）只跳过它自己，不能让同空间其余合成任务的事件一起失败；
+			// 临时读取失败的任务在缓存过期（一个 TTL）后重新加载，期间由每分钟兜底覆盖。
+			log.WarnContextf(ctx, "[Collector] resample task %s source dataset %s/%s is unavailable, skipped: %v", collection.TaskID, collection.SpaceID, params.SourceDatasetID, sourceErr)
+			continue
 		}
 		task, err := NewTaskForSource(collection, sourceInfo)
 		if err != nil {

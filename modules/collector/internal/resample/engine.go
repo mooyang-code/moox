@@ -397,6 +397,8 @@ func (e *Engine) commit(ctx context.Context, task *Task, bucket barclock.Bucket,
 	expectation := &storagepb.DatasetPeriodExpectation{
 		SpaceId: task.Spec.SpaceID, DatasetId: task.Spec.TargetDatasetID, Frequency: task.Spec.TargetFrequency.Storage,
 		PeriodTime: bucket.Key.Unix(), SeriesHash: set.Hash, ExpectedCount: uint32(len(set.Series)),
+		// 桶的真实收盘时刻：Storage 按它加迟到容忍算截止，与 splitForCommit 的判断一致（交易时段的日线、半日市都不是整周期长度）。
+		PeriodEndAt: bucket.End.Unix(),
 	}
 	return e.Period.CommitTimeSeriesBatch(ctx, expectation, items)
 }

@@ -16,6 +16,9 @@ message DatasetPeriodExpectation {
   int64 period_time = 4;
   string series_hash = 5;
   uint32 expected_count = 6;
+  // 周期的真实结束时刻（Unix 秒），由写入方声明；Storage 按它加迟到容忍算截止时间。
+  // 不填（0）时按 period_time 加一个周期长度算。交易时段数据集的重采样结果填桶的真实收盘时刻（含半日市）。
+  int64 period_end_at = 7;
 }
 
 // SeriesSnapshotEntry 是快照中一条序列的身份（标的加 series_tag），Storage 用它重算 series_hash。

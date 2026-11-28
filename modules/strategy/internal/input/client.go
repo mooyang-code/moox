@@ -542,7 +542,7 @@ func RawCause(err error) error {
 	}
 }
 
-// viewRetError 把 DataView 的错误映射为输入层错误：读取期间索引变化 → ErrStale；列不存在 → config_error 跳过；
+// viewRetError 把 DataView 的错误映射为输入层错误：读取期间索引变化、或读取时恰有一批写入在进行 → ErrStale（重读即可）；列不存在 → config_error 跳过；
 // 其余 → *ServiceError。服务端原文只经 Unwrap 留给日志。
 func viewRetError(operation, datasetID string, columns []string, info *commonpb.RetInfo) error {
 	if info == nil || info.GetCode() == commonpb.ErrorCode_SUCCESS {
@@ -550,7 +550,7 @@ func viewRetError(operation, datasetID string, columns []string, info *commonpb.
 	}
 	raw := errors.New(info.GetMsg())
 	message := strings.ToLower(info.GetMsg())
-	if info.GetCode() == commonpb.ErrorCode_VIEW_NOT_READY && (strings.Contains(message, "revision changed") || strings.Contains(message, "index changed") || strings.Contains(message, "updated during query")) {
+	if info.GetCode() == commonpb.ErrorCode_VIEW_NOT_READY && (strings.Contains(message, "revision changed") || strings.Contains(message, "index changed") || strings.Contains(message, "updated during query") || strings.Contains(message, "write in progress")) {
 		return &staleError{message: fmt.Sprintf("View %s 在读取期间有新的写入或换了活动索引", datasetID), raw: raw}
 	}
 	if info.GetCode() == commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND || info.GetCode() == commonpb.ErrorCode_FIELD_NOT_FOUND {

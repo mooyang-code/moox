@@ -46,7 +46,7 @@ type DatasetPeriodExpectation struct {
 	DatasetID  string
 	Frequency  string
 	PeriodTime int64
-	// PeriodEndAt 可选指定该周期的真实收盘时刻（Unix 秒），供 session 1d 按市场收盘时刻（含半日市）计算截止时间；
+	// PeriodEndAt 是写入方声明的周期真实收盘时刻（Unix 秒），重采样结果按桶的收盘时刻（含半日市）填写；
 	// 为 0 时由存储层按 frequency.BarEnd(PeriodTime) 计算。
 	PeriodEndAt    int64
 	SeriesHash     string

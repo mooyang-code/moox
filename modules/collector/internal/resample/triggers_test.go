@@ -2,9 +2,12 @@ package resample
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
@@ -66,4 +69,34 @@ func TestBackfillTriggerSubmitsSourceBackfillJobWithSettleDelay(t *testing.T) {
 	require.Equal(t, utc("2026-10-21T10:00:00Z"), job.Start, "向外对齐到目标桶")
 	require.Equal(t, utc("2026-10-21T10:30:00Z"), job.End)
 	require.Equal(t, confirmed.Add(time.Minute), job.NotBefore, "最早开始时间 = 确认时刻 + 2×执行超时")
+}
+
+// brokenSource 对指定源数据集返回读取失败，其余走 fakeSource。
+type brokenSource struct {
+	fakeSource
+	broken string
+}
+
+func (b brokenSource) GetDataset(ctx context.Context, spaceID, datasetID string) (storagesource.DatasetInfo, error) {
+	if datasetID == b.broken {
+		return storagesource.DatasetInfo{}, errors.New("dataset not found")
+	}
+	return b.fakeSource.GetDataset(ctx, spaceID, datasetID)
+}
+
+// 一个任务的源数据集读不到（已删但任务仍启用）只跳过它自己，同空间其余合成任务照常匹配事件。
+func TestTaskIndexSkipsTaskWhoseSourceDatasetIsUnavailable(t *testing.T) {
+	mgr := openState(t)
+	seedTask(t, mgr, newFakeStorage(), nil, time.Time{}, time.Time{})
+	params := `{"source_dataset_id":"dataset_gone","source_frequency":"5m","source_series_tag":"venue:binance","target_dataset_id":"dataset_orphan","target_frequency":"15m"}`
+	require.NoError(t, mgr.Tasks().Create(context.Background(), domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "orphan", DataType: "kline_resample", CollectParams: params, Enabled: true,
+		ResultDatasetID: "dataset_orphan", PrepareState: domain.PrepareStateReady,
+	}))
+	index := &TaskIndex{Tasks: mgr.Tasks(), Source: brokenSource{broken: "dataset_gone"}}
+
+	tasks, err := index.Match(context.Background(), "crypto", "dataset_src", "5m")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.Equal(t, "task", tasks[0].Spec.TaskID)
 }

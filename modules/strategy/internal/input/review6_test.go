@@ -274,6 +274,11 @@ func TestStorageErrorsAreChinese(t *testing.T) {
 	if !errors.Is(stale, ErrStale) || leaksRaw(stale) {
 		t.Fatalf("索引变化应是中文的 ErrStale：%v", stale)
 	}
+	// 读取时恰有一批写入在进行：同样是重读即可，不能算成服务故障去消耗重试次数。
+	writing := viewRetError("读取 View v 的行", "v", nil, &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_READY, Msg: "active View index write in progress: revision=7"})
+	if !errors.Is(writing, ErrStale) || leaksRaw(writing) {
+		t.Fatalf("写入进行中应是中文的 ErrStale：%v", writing)
+	}
 	other := viewRetError("读取 View v 的行", "v", nil, &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "duckdb: io error"})
 	if !errors.As(other, &service) || strings.Contains(other.Error(), "duckdb") {
 		t.Fatalf("其他 DataView 错误应是中文概述：%v", other)

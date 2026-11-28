@@ -46,10 +46,11 @@ func ExchangeSecretID(exchange, environment, name string) string {
 	return strings.ToLower(ExchangeSecretIDPrefix + exchange + "-" + environment + "-" + name)
 }
 
-// IsInitialSecretID 报告秘钥 ID 是否属于 setup init 管理的初始密钥（tencent-default 或 exchange-*）。
-// 仅这类初始密钥在管理台硬删除时需要写入墓碑表，避免删除普通随机 UUID 密钥时污染墓碑表。
+// IsInitialSecretID 报告秘钥 ID 是否是 [[exchange_keys]] 生成的初始交易所密钥（exchange-*）。
+// 只有这类密钥在管理台硬删除时写墓碑：setup init 对它们只建不改，删掉的作废密钥不能被静默重建。
+// 默认腾讯云密钥（tencent-default）不写墓碑：它是云函数采集必需的，删除后 setup init 按 moox.toml 重建。
 func IsInitialSecretID(secretID string) bool {
-	return secretID == TencentDefaultSecretID || strings.HasPrefix(secretID, ExchangeSecretIDPrefix)
+	return strings.HasPrefix(secretID, ExchangeSecretIDPrefix)
 }
 
 // Secret 秘钥管理表（物理硬删除，c_secret_value 与 c_extra_config 均 AES-GCM 加密存储）。
