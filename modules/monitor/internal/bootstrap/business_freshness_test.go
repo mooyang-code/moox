@@ -311,7 +311,8 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 	require.Equal(t, domain.CheckStatusDown, row.Status, "pending preparation must not synthesize a Kline resolution")
 }
 
-func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *testing.T) {
+// dataset: 检查只管非采集生产者（因子、策略等），不再为 collector 生成 dataset:collector: 检查。
+func TestBusinessFreshnessReporterSkipsCollectorProducerDatasets(t *testing.T) {
 	manager, repositories := openBusinessStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	labels := `{"dataset_id":"bars","freq":"1m","space_id":"crypto"}`
@@ -324,31 +325,7 @@ func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *test
 	require.NoError(t, err)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}, repositories)
 	require.NoError(t, run(t.Context()))
-	row := checkRow(t, repositories, "crypto", "dataset:collector:bars:1m")
-	require.NotNil(t, row)
-	require.Equal(t, domain.CheckStatusDown, row.Status)
-	require.Equal(t, "还没有收到任何运行记录", row.Reason)
-}
-
-func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.T) {
-	manager, repositories := openBusinessStore(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		labels := `{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto"}`
-		seedSeries(t, db, "collector", "collector@control", "enabled", "moox_collector_dataset_enabled", labels, 1, now)
-		seedSeries(t, db, "collector", "collector@control", "interval", "moox_collector_dataset_expected_interval_seconds", labels, 60, now)
-		seedSeries(t, db, "collector", "collector@control", "inventory", "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
-		seedSeries(t, db, "storage-view", "storage-view@control", "view-watermark", "moox_storage_view_output_watermark_timestamp_seconds",
-			`{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto"}`, float64(now.Add(-time.Minute).Unix()), now)
-		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
-	})
-	require.NoError(t, err)
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}, repositories)
-	require.NoError(t, run(t.Context()))
-	require.Nil(t, checkRow(t, repositories, "crypto", "dataset:collector:dataset_binance_kline_1m:1m"), "collector result should be covered by storage view")
-	view := checkRow(t, repositories, "crypto", "dataset:storage_view:dataset_binance_kline_1m:1m")
-	require.NotNil(t, view)
-	require.Equal(t, domain.CheckStatusOK, view.Status)
+	require.Nil(t, checkRow(t, repositories, "crypto", "dataset:collector:bars:1m"))
 }
 
 func commitSeriesForTest(t *testing.T, messages *monmetrics.MetricMessageStore, eventID, service string, observed time.Time, names ...string) {
@@ -471,27 +448,27 @@ func TestServiceDeploymentExpectedRequiresExplicitRegistration(t *testing.T) {
 	require.False(t, expected)
 }
 
-// staleCollectorQuery 是 node-a 上的 collector 10 分钟前停止上报：服务行与它的数据集序列都过期。
-func staleCollectorQuery(t *testing.T, manager *store.Store, now time.Time) *monmetrics.QueryService {
+// staleFactorQuery 是 node-a 上的 factor-mgr 10 分钟前停止上报：服务行与它的数据集序列都过期。
+func staleFactorQuery(t *testing.T, manager *store.Store, now time.Time) *monmetrics.QueryService {
 	t.Helper()
 	staleAt := now.Add(-10 * time.Minute)
-	labels := `{"dataset_id":"market_kline","freq":"1m","space_id":"crypto"}`
+	labels := `{"dataset_id":"factor_output","freq":"1m","space_id":"crypto"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		require.NoError(t, db.Create(&monmetrics.MetricService{
-			ServiceName: "collector", InstanceID: "collector@node-a", BootID: "boot-a", NodeID: "node-a", LastSeenAt: staleAt,
+			ServiceName: "factor-mgr", InstanceID: "factor-mgr@node-a", BootID: "boot-a", NodeID: "node-a", LastSeenAt: staleAt,
 		}).Error)
 		for _, metric := range []struct {
 			id, name, labels string
 			value            float64
 		}{
-			{"enabled", "moox_collector_dataset_enabled", labels, 1},
-			{"interval", "moox_collector_dataset_expected_interval_seconds", labels, 60},
-			{"inventory", "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix())},
-			{"run", "moox_collector_dataset_last_run_timestamp_seconds", labels, float64(now.Unix())},
-			{"success", "moox_collector_dataset_last_success_timestamp_seconds", labels, float64(now.Unix())},
-			{"output", "moox_collector_dataset_output_watermark_timestamp_seconds", labels, float64(now.Unix())},
+			{"enabled", "moox_factor_dataset_enabled", labels, 1},
+			{"interval", "moox_factor_dataset_expected_interval_seconds", labels, 60},
+			{"inventory", "moox_factor_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix())},
+			{"run", "moox_factor_dataset_last_run_timestamp_seconds", labels, float64(now.Unix())},
+			{"success", "moox_factor_dataset_last_success_timestamp_seconds", labels, float64(now.Unix())},
+			{"output", "moox_factor_dataset_output_watermark_timestamp_seconds", labels, float64(now.Unix())},
 		} {
-			seedSeries(t, db, "collector", "collector@node-a", metric.id, metric.name, metric.labels, metric.value, staleAt)
+			seedSeries(t, db, "factor-mgr", "factor-mgr@node-a", metric.id, metric.name, metric.labels, metric.value, staleAt)
 		}
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
@@ -506,8 +483,8 @@ var stalePolicy = report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeS
 func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDatasets(t *testing.T) {
 	manager, repositories := openBusinessStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
-	query := staleCollectorQuery(t, manager, now)
-	seedBusinessTopology(t, repositories, "node-a", "collector", true)
+	query := staleFactorQuery(t, manager, now)
+	seedBusinessTopology(t, repositories, "node-a", "factor-mgr", true)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Policy: stalePolicy}, repositories)
 	require.NoError(t, run(t.Context()))
 	rows, err := repositories.Checks.List(t.Context(), "")
@@ -517,15 +494,15 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 		ids = append(ids, row.CheckID)
 	}
 	slices.Sort(ids)
-	require.Equal(t, []string{"reporter:node-a:collector", "restart:node-a:collector"}, ids, "只有停止上报与反复重启两条组件检查，数据集不重复告警")
-	reporterCheckID := "reporter:node-a:collector"
+	require.Equal(t, []string{"reporter:node-a:factor-mgr", "restart:node-a:factor-mgr"}, ids, "只有停止上报与反复重启两条组件检查，数据集不重复告警")
+	reporterCheckID := "reporter:node-a:factor-mgr"
 	row := checkRow(t, repositories, events.SystemSpaceID, reporterCheckID)
 	require.Equal(t, domain.CheckStatusDown, row.Status)
 	require.Equal(t, reporterReasonText("stale"), row.Reason)
 
 	_, err = store.WithDatabase(manager, func(db *gorm.DB) struct{} {
 		require.NoError(t, db.Model(&monmetrics.MetricService{}).
-			Where("c_service_name = ? AND c_instance_id = ?", "collector", "collector@node-a").
+			Where("c_service_name = ? AND c_instance_id = ?", "factor-mgr", "factor-mgr@node-a").
 			Updates(map[string]any{"c_last_seen_at": now}).Error)
 		return struct{}{}
 	})
@@ -541,10 +518,10 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 func TestBusinessFreshnessReporterFreezesChecksOfSilentReporter(t *testing.T) {
 	manager, repositories := openBusinessStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
-	query := staleCollectorQuery(t, manager, now)
-	seedBusinessTopology(t, repositories, "node-a", "collector", true)
-	attention := monitorobservability.AttentionCheckID("collector", "delist_source_failed")
-	dataset := "dataset:collector:market_kline:1m"
+	query := staleFactorQuery(t, manager, now)
+	seedBusinessTopology(t, repositories, "node-a", "factor-mgr", true)
+	attention := monitorobservability.AttentionCheckID("factor-mgr", "engine_offline")
+	dataset := "dataset:factor:factor_output:1m"
 	seedCheckRow(t, repositories, events.SystemSpaceID, attention, true)
 	seedCheckRow(t, repositories, "crypto", dataset, true)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Policy: stalePolicy}, repositories)
@@ -559,7 +536,7 @@ func TestBusinessFreshnessReporterFreezesChecksOfSilentReporter(t *testing.T) {
 		require.Empty(t, alertEvents(t, repositories, key.CheckID), "上报方停报时不推假恢复: %s", key.CheckID)
 	}
 
-	seedBusinessTopology(t, repositories, "node-a", "collector", false)
+	seedBusinessTopology(t, repositories, "node-a", "factor-mgr", false)
 	require.NoError(t, run(t.Context()))
 	requireRemovedWithRecovery(t, repositories, events.SystemSpaceID, attention)
 	requireRemovedWithRecovery(t, repositories, "crypto", dataset)
@@ -612,68 +589,95 @@ func seedBusinessTopology(t *testing.T, repositories *store.Repositories, hostID
 	require.NoError(t, err)
 }
 
-// K 线新鲜度已覆盖的结果视图，不再重复生成 dataset 新鲜度检查（同一条数据链路只告警一次）；
-// 别的数据集的视图不受影响，覆盖解除后恢复兜底。
-func TestBusinessFreshnessReporterSkipsDatasetChecksCoveredByKlineFreshness(t *testing.T) {
+// K 线类采集数据集只由 K 线新鲜度出检查，storage / storage_view 按采集任务清单区分采集数据集与因子等非采集数据集；
+// 任务清单从未取到时冻结 dataset:storage: 与 dataset:storage_view:，不误建采集数据集检查也不误删已有因子检查。
+func TestBusinessFreshnessReporterSplitsCollectorAndNonCollectorDatasetsByInventory(t *testing.T) {
 	manager, repositories := openBusinessStore(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	viewLabels := func(dataset string) string {
-		return `{"freq":"1m","space_id":"crypto","dataset_id":"` + dataset + `"}`
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	seedBusinessTopology(t, repositories, "control", "factor-mgr", true)
+	labelsOf := func(dataset string) string {
+		return `{"dataset_id":"` + dataset + `","freq":"1m","space_id":"crypto"}`
 	}
-	klineLabels := `{"space_id":"crypto","dataset_id":"dataset_binance_kline_1m","freq":"1m"}`
+	const (
+		klineDataset  = "dataset_binance_kline_1m"
+		factorDataset = "dataset_factor_ema_1m"
+	)
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		seedSeries(t, db, "storage-view", "storage-view@control", "watermark-a", "moox_storage_view_output_watermark_timestamp_seconds", viewLabels("dataset_binance_kline_1m"), float64(now.Add(-time.Minute).Unix()), now)
-		seedSeries(t, db, "storage-view", "storage-view@control", "watermark-b", "moox_storage_view_output_watermark_timestamp_seconds", viewLabels("dataset_other_1m"), float64(now.Add(-time.Minute).Unix()), now)
-		seedSeries(t, db, "storage-view", "storage-view@control", "latest", monmetrics.ViewOutputLatestMetric, klineLabels, float64(now.Add(-time.Minute).Unix()), now)
-		seedSeries(t, db, "storage-view", "storage-view@control", "subjects", monmetrics.ViewOutputSubjectsMetric, klineLabels, 1, now)
+		// 采集与因子两条数据集同时有 storage、storage_view 与各自生产者指标。
+		seedSeries(t, db, "collector", "collector@control", "col-en", "moox_collector_dataset_enabled", labelsOf(klineDataset), 1, now)
+		seedSeries(t, db, "collector", "collector@control", "col-iv", "moox_collector_dataset_expected_interval_seconds", labelsOf(klineDataset), 60, now)
+		seedSeries(t, db, "storage-primary", "storage-primary@control", "st-col-run", "moox_storage_dataset_last_run_timestamp_seconds", labelsOf(klineDataset), float64(now.Unix()), now)
+		seedSeries(t, db, "storage-primary", "storage-primary@control", "st-col-ok", "moox_storage_dataset_last_success_timestamp_seconds", labelsOf(klineDataset), float64(now.Unix()), now)
+		seedSeries(t, db, "storage-primary", "storage-primary@control", "st-col-out", "moox_storage_dataset_output_watermark_timestamp_seconds", labelsOf(klineDataset), float64(now.Add(-time.Minute).Unix()), now)
+		seedSeries(t, db, "storage-view", "storage-view@control", "vw-col", "moox_storage_view_output_watermark_timestamp_seconds", labelsOf(klineDataset), float64(now.Add(-time.Minute).Unix()), now)
+
+		seedSeries(t, db, "factor-mgr", "factor-mgr@control", "fac-en", "moox_factor_dataset_enabled", labelsOf(factorDataset), 1, now)
+		seedSeries(t, db, "factor-mgr", "factor-mgr@control", "fac-iv", "moox_factor_dataset_expected_interval_seconds", labelsOf(factorDataset), 60, now)
+		seedSeries(t, db, "factor-mgr", "factor-mgr@control", "fac-inv", "moox_factor_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
+		seedSeries(t, db, "factor-mgr", "factor-mgr@control", "fac-run", "moox_factor_dataset_last_run_timestamp_seconds", labelsOf(factorDataset), float64(now.Unix()), now)
+		seedSeries(t, db, "factor-mgr", "factor-mgr@control", "fac-ok", "moox_factor_dataset_last_success_timestamp_seconds", labelsOf(factorDataset), float64(now.Unix()), now)
+		seedSeries(t, db, "factor-mgr", "factor-mgr@control", "fac-out", "moox_factor_dataset_output_watermark_timestamp_seconds", labelsOf(factorDataset), float64(now.Add(-time.Minute).Unix()), now)
+		seedSeries(t, db, "storage-primary", "storage-primary@control", "st-fac-run", "moox_storage_dataset_last_run_timestamp_seconds", labelsOf(factorDataset), float64(now.Unix()), now)
+		seedSeries(t, db, "storage-primary", "storage-primary@control", "st-fac-ok", "moox_storage_dataset_last_success_timestamp_seconds", labelsOf(factorDataset), float64(now.Unix()), now)
+		seedSeries(t, db, "storage-primary", "storage-primary@control", "st-fac-out", "moox_storage_dataset_output_watermark_timestamp_seconds", labelsOf(factorDataset), float64(now.Add(-time.Minute).Unix()), now)
+		seedSeries(t, db, "storage-view", "storage-view@control", "vw-fac", "moox_storage_view_output_watermark_timestamp_seconds", labelsOf(factorDataset), float64(now.Add(-time.Minute).Unix()), now)
+
+		seedSeries(t, db, "storage-view", "storage-view@control", "latest", monmetrics.ViewOutputLatestMetric, labelsOf(klineDataset), float64(now.Add(-time.Minute).Unix()), now)
+		seedSeries(t, db, "storage-view", "storage-view@control", "subjects", monmetrics.ViewOutputSubjectsMetric, labelsOf(klineDataset), 1, now)
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
 	require.NoError(t, err)
+
+	provider := &businessFreshnessInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
+		ID: "inv-1", ObservedAt: now,
+		Entries: []monmetrics.TaskResultInventoryEntry{{
+			SpaceID: "crypto", TaskID: "t1", DatasetID: klineDataset, Frequency: "1m",
+			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now,
+		}},
+	}}
+	cache, err := monmetrics.NewTaskResultInventoryCache(provider, time.Minute, 10)
+	require.NoError(t, err)
 	clock := now
-	build := func(withKline bool) func(context.Context) error {
-		var evaluators []*monmetrics.KlineFreshnessEvaluator
-		if withKline {
-			rule := monmetrics.KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute}
-			evaluators = append(evaluators, monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{rule}, 20))
-		}
-		// K 线评估间隔 1 小时：同一个 reporter 的后续轮次不重新评估，验证覆盖集合会沿用。
-		return buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
-			Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return clock },
-		}, repositories, testApplier(repositories), nil, time.Hour, evaluators...)
-	}
+	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(5*time.Minute), 20)
+	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
+		Metrics: query, Topology: repositories.Topology, Inventory: cache, Policy: latenessPolicy(5 * time.Minute),
+		Now: func() time.Time { return clock },
+	}, repositories, testApplier(repositories), nil, time.Hour, evaluator)
+
 	exists := func(checkID string) bool { return checkRow(t, repositories, "crypto", checkID) != nil }
-	const viewA, viewB = "dataset:storage_view:dataset_binance_kline_1m:1m", "dataset:storage_view:dataset_other_1m:1m"
-	const klineCheck = "kline_freshness:crypto:dataset_binance_kline_1m:1m"
 
-	// 没有 K 线新鲜度时，两个视图的 dataset 检查是唯一的新鲜度信号。
-	require.NoError(t, build(false)(t.Context()))
-	require.True(t, exists(viewA))
-	require.True(t, exists(viewB))
+	// 第一轮：采集数据集只产出 kline_freshness:，不产出 dataset:collector/storage/storage_view；因子数据集全部产出。
+	require.NoError(t, run(t.Context()))
+	require.True(t, exists("kline_freshness:crypto:"+klineDataset+":1m"))
+	require.False(t, exists("dataset:collector:"+klineDataset+":1m"))
+	require.False(t, exists("dataset:storage:"+klineDataset+":1m"))
+	require.False(t, exists("dataset:storage_view:"+klineDataset+":1m"))
+	require.True(t, exists("dataset:factor:"+factorDataset+":1m"))
+	require.True(t, exists("dataset:storage:"+factorDataset+":1m"))
+	require.True(t, exists("dataset:storage_view:"+factorDataset+":1m"))
 
-	// K 线新鲜度覆盖视图 A 后：A 的检查删除，别的数据集的视图 B 不受影响。
-	covered := build(true)
-	require.NoError(t, covered(t.Context()))
-	require.False(t, exists(viewA), "被 K 线新鲜度覆盖的视图检查不再产出")
-	require.True(t, exists(viewB), "别的数据集的视图仍要自己的检查")
-	require.True(t, exists(klineCheck))
-
-	// 没到下次 K 线评估的轮次沿用覆盖集合，不会把 A 的检查重新生成；K 线检查保持原状态。
+	// 没到 K 线评估间隔的下一轮：K 线冻结，采集数据集依然不出 dataset: 检查，因子数据集照常存在。
 	clock = clock.Add(30 * time.Second)
-	require.NoError(t, covered(t.Context()))
-	require.False(t, exists(viewA))
-	require.True(t, exists(klineCheck), "没到评估时间时 K 线检查冻结，不能删除")
+	require.NoError(t, run(t.Context()))
+	require.True(t, exists("kline_freshness:crypto:"+klineDataset+":1m"))
+	require.False(t, exists("dataset:storage:"+klineDataset+":1m"))
+	require.False(t, exists("dataset:storage_view:"+klineDataset+":1m"))
+	require.True(t, exists("dataset:storage:"+factorDataset+":1m"))
+	require.True(t, exists("dataset:storage_view:"+factorDataset+":1m"))
 
-	// 覆盖解除（这里用没有 K 线评估器的 reporter 代表评估关闭）：兜底的 dataset 检查重新产出。
-	require.NoError(t, build(false)(t.Context()))
-	require.True(t, exists(viewA), "覆盖解除后必须恢复 dataset 检查兜底")
-}
-
-func TestKlineReportCoversDatasets(t *testing.T) {
-	require.True(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: "kline_freshness:crypto:v:1m", Success: true}))
-	require.True(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: "kline_freshness:stockcn:v:1m", Skipped: true, Reason: "market closed"}),
-		"休市等正常跳过仍然覆盖，否则开闭市会让 dataset 检查反复生成又删除")
-	require.False(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: "kline_freshness:crypto:v:1m", Skipped: true, Reason: "disabled"}))
-	require.False(t, klineReportCoversDatasets(monmetrics.KlineFreshnessReport{CheckID: monmetrics.TaskResultInventoryCheckID}))
+	// 从未取到清单时：冻结 dataset:storage: 与 dataset:storage_view:，既不误删已有因子检查，也不给采集数据集建重复检查。
+	brokenCache, err := monmetrics.NewTaskResultInventoryCache(&businessFreshnessInventoryProvider{err: errors.New("collector down")}, time.Minute, 10)
+	require.NoError(t, err)
+	brokenRun := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
+		Metrics: query, Topology: repositories.Topology, Inventory: brokenCache, Policy: latenessPolicy(5 * time.Minute),
+		Now: func() time.Time { return clock },
+	}, repositories, testApplier(repositories), nil, time.Second, monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, brokenCache, latenessPolicy(5*time.Minute), 20))
+	require.NoError(t, brokenRun(t.Context()))
+	require.False(t, exists("dataset:storage:"+klineDataset+":1m"))
+	require.False(t, exists("dataset:storage_view:"+klineDataset+":1m"))
+	require.True(t, exists("dataset:storage:"+factorDataset+":1m"), "清单不可用时冻结已有的因子 storage 检查，不误删")
+	require.True(t, exists("dataset:storage_view:"+factorDataset+":1m"), "清单不可用时冻结已有的因子 storage_view 检查，不误删")
+	require.True(t, exists("dataset:factor:"+factorDataset+":1m"), "因子生产者检查不依赖清单，照常推进")
 }
 
 // 数据积累中的数据集检查按通过记录（不告警），其余非健康状态仍然失败。

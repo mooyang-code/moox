@@ -214,9 +214,6 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(app.yaml) error = %v", err)
 	}
-	if !cfg.KlineFreshness.Enabled {
-		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
-	}
 	freshness, ok := app["kline_freshness"].(map[string]any)
 	if !ok {
 		t.Fatal("kline freshness configuration is missing")
@@ -322,7 +319,6 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
 	cfg.Deployment.Enabled = false
-	cfg.KlineFreshness.Enabled = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
 	}
@@ -351,9 +347,13 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 }
 
 func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
-	_, err := Load(writeConfig(t, "kline_freshness:\n  enabled: true\n  typo_interval: 30s\n"))
-	if err == nil {
-		t.Fatal("Load() accepted unknown kline freshness field")
+	for _, raw := range []string{
+		"kline_freshness:\n  typo_interval: 30s\n",
+		"kline_freshness:\n  enabled: true\n",
+	} {
+		if _, err := Load(writeConfig(t, raw)); err == nil {
+			t.Fatalf("Load(%q) accepted unknown or removed kline freshness field", raw)
+		}
 	}
 }
 

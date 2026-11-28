@@ -45,7 +45,6 @@ market_canary:
       frequency: 1m
       series_tag: venue:binance|market:spot|source:spot_http
 kline_freshness:
-  enabled: true
   evaluation_interval: 30s
   inventory_refresh_interval: 1m
   inventory_page_size: 100

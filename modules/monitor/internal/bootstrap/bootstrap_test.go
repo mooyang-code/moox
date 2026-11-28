@@ -49,19 +49,12 @@ func (f collectorInventoryTestInvoke) Invoke(ctx context.Context, service, metho
 
 func TestBuildTaskResultInventoryBorrowsGateway(t *testing.T) {
 	cfg := config.Default()
-	cfg.KlineFreshness.Enabled = true
 	gateway := collectorInventoryTestInvoke(func(context.Context, string, string, any, any) error { return nil })
 	cache, err := buildTaskResultInventory(cfg, gateway)
 	require.NoError(t, err)
 	require.NotNil(t, cache)
 	_, err = buildTaskResultInventory(cfg, nil)
 	require.ErrorContains(t, err, "gateway client")
-	// 清单还决定数据集新鲜度用哪套交易日历：关掉 K 线新鲜度检查也照常构造。
-	disabled := *cfg
-	disabled.KlineFreshness.Enabled = false
-	cache, err = buildTaskResultInventory(&disabled, gateway)
-	require.NoError(t, err)
-	require.NotNil(t, cache)
 	invalid := *cfg
 	invalid.KlineFreshness.InventoryPageSize = 101
 	_, err = buildTaskResultInventory(&invalid, gateway)

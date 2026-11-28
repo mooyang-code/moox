@@ -49,9 +49,6 @@ func buildBusinessFreshnessReporterWithInterval(
 		kline = klineEvaluators[0]
 	}
 	var lastKlineEvaluation time.Time
-	// 上一次成功评估时被 K 线新鲜度覆盖的结果数据集与视图（键：空间\x00ID\x00频率）。评估按自己的间隔进行，
-	// 没到评估时间的轮次沿用它；评估失败或没有评估器时清空，dataset 新鲜度检查恢复兜底。
-	var lastCoveredDatasets map[string]struct{}
 	return func(ctx context.Context) error {
 		overview, err := builder.Build(ctx, "")
 		if err != nil {
@@ -75,71 +72,57 @@ func buildBusinessFreshnessReporterWithInterval(
 			obsState = observation(overview.GeneratedAt)
 			obsSuspended = obsState.Suspended
 		}
-		// K 线新鲜度已覆盖的结果数据集：同一条数据链路（Storage 写入水位、View 水位）不再各自生成 dataset 新鲜度检查。
-		coveredKey := func(spaceID, id, freq string) string {
-			return spaceID + "\x00" + id + "\x00" + strings.ToLower(freq)
-		}
-		coveredDatasets := lastCoveredDatasets
-		if kline == nil {
-			// 没有 K 线评估器（关闭了 K 线新鲜度）：K 线检查不再产出，随之删除。
-			coveredDatasets = nil
-		} else if obsSuspended || collectorHalted(overview.Services) || (!lastKlineEvaluation.IsZero() && overview.GeneratedAt.Sub(lastKlineEvaluation) < klineInterval) {
-			// 观测输入暂停时 storage-view 摘要不会更新；Collector 暂停或恢复追赶时采集是有意停下的；
-			// 没到评估时间也不评估：以上情形 K 线检查保持原状态。
-			round.FrozenPrefixes = append(round.FrozenPrefixes, klineCheckPrefix)
-		} else {
-			lastKlineEvaluation = overview.GeneratedAt
-			coveredDatasets = map[string]struct{}{}
-			reports, err := kline.Evaluate(ctx, overview.GeneratedAt)
-			if err != nil {
-				var inventoryErr *monmetrics.TaskResultInventoryRefreshError
-				if !errors.As(err, &inventoryErr) {
-					// K 线评估没有成功：清空覆盖集合，下一轮 dataset 新鲜度检查恢复兜底（评估时间已推进，不会在间隔内重试）。
-					lastCoveredDatasets = nil
-					return err
-				}
-				// 任务清单拿不到：K 线检查保持原状态，任务清单检查本身照常产出失败事实。
+		if kline != nil {
+			if obsSuspended || collectorHalted(overview.Services) || (!lastKlineEvaluation.IsZero() && overview.GeneratedAt.Sub(lastKlineEvaluation) < klineInterval) {
+				// 观测输入暂停时 storage-view 摘要不会更新；Collector 暂停或恢复追赶时采集是有意停下的；
+				// 没到评估时间也不评估：以上情形 K 线检查保持原状态。
 				round.FrozenPrefixes = append(round.FrozenPrefixes, klineCheckPrefix)
-				coveredDatasets = nil
-				state := inventoryErr.State
-				add(checks.Fact{
-					SpaceID: events.SystemSpaceID, CheckID: monmetrics.TaskResultInventoryCheckID, Name: "采集任务清单",
-					Status: domain.CheckStatusDown, Reason: "无法获取采集任务清单：采集服务接口异常，K线结果检查暂停",
-					Diagnostic: fmt.Sprintf("cache_available=%t cache_age_seconds=%.0f last_success_timestamp_seconds=%.0f error=%s", state.Available, state.Age.Seconds(), unixSeconds(state.LastSuccess), inventoryErr.Cause),
-				})
 			} else {
-				for _, report := range reports {
-					if klineReportCoversDatasets(report) {
-						coveredDatasets[coveredKey(report.Rule.SpaceID, report.Rule.DatasetID, report.Rule.Frequency)] = struct{}{}
+				lastKlineEvaluation = overview.GeneratedAt
+				reports, err := kline.Evaluate(ctx, overview.GeneratedAt)
+				if err != nil {
+					var inventoryErr *monmetrics.TaskResultInventoryRefreshError
+					if !errors.As(err, &inventoryErr) {
+						return err
 					}
-					key := store.CheckKey{SpaceID: report.Rule.SpaceID, CheckID: report.CheckID}
-					if report.Skipped {
-						// 规则已停用的不再产出（删除）；其余跳过（休市、预热等）本轮无法判断，保持原状态。
-						if report.Reason != "disabled" {
-							round.Freeze(key)
+					// 任务清单拿不到：K 线检查保持原状态，任务清单检查本身照常产出失败事实。
+					round.FrozenPrefixes = append(round.FrozenPrefixes, klineCheckPrefix)
+					state := inventoryErr.State
+					add(checks.Fact{
+						SpaceID: events.SystemSpaceID, CheckID: monmetrics.TaskResultInventoryCheckID, Name: "采集任务清单",
+						Status: domain.CheckStatusDown, Reason: "无法获取采集任务清单：采集服务接口异常，K线结果检查暂停",
+						Diagnostic: fmt.Sprintf("cache_available=%t cache_age_seconds=%.0f last_success_timestamp_seconds=%.0f error=%s", state.Available, state.Age.Seconds(), unixSeconds(state.LastSuccess), inventoryErr.Cause),
+					})
+				} else {
+					for _, report := range reports {
+						key := store.CheckKey{SpaceID: report.Rule.SpaceID, CheckID: report.CheckID}
+						if report.Skipped {
+							// 规则已停用的不再产出（删除）；其余跳过（休市、预热等）本轮无法判断，保持原状态。
+							if report.Reason != "disabled" {
+								round.Freeze(key)
+							}
+							continue
 						}
-						continue
-					}
-					name := "采集任务清单"
-					reason := klineReasonText(report, overview.GeneratedAt)
-					if report.CheckID == monmetrics.TaskResultInventoryCheckID {
-						reason = "采集任务清单正常"
-						if !report.Success {
-							reason = "控制面数据过期：采集服务暂不可用，K线检查沿用最后一份有效的任务清单"
+						name := "采集任务清单"
+						reason := klineReasonText(report, overview.GeneratedAt)
+						if report.CheckID == monmetrics.TaskResultInventoryCheckID {
+							reason = "采集任务清单正常"
+							if !report.Success {
+								reason = "控制面数据过期：采集服务暂不可用，K线检查沿用最后一份有效的任务清单"
+							}
+						} else {
+							name = klineCheckName(datasetSubject(builder.Metrics.DatasetDisplayName(ctx, report.Rule.SpaceID, report.Rule.DatasetID), report.Rule.DatasetID, report.Rule.Frequency))
 						}
-					} else {
-						name = klineCheckName(datasetSubject(builder.Metrics.DatasetDisplayName(ctx, report.Rule.SpaceID, report.Rule.DatasetID), report.Rule.DatasetID, report.Rule.Frequency))
+						status := passStatus(report.Success)
+						if report.Success && (report.PendingCount > 0 || report.Reason == "first_bar_pending") {
+							// 新上线对象在等首根 K 线：按通过记录，页面显示“需关注”。
+							status = domain.CheckStatusDegraded
+						}
+						add(checks.Fact{SpaceID: report.Rule.SpaceID, CheckID: report.CheckID, Name: name, Status: status, Reason: reason, Diagnostic: report.Diagnostic})
 					}
-					status := passStatus(report.Success)
-					if report.Success && (report.PendingCount > 0 || report.Reason == "first_bar_pending") {
-						// 新上线对象在等首根 K 线：按通过记录，页面显示“需关注”。
-						status = domain.CheckStatusDegraded
-					}
-					add(checks.Fact{SpaceID: report.Rule.SpaceID, CheckID: report.CheckID, Name: name, Status: status, Reason: reason, Diagnostic: report.Diagnostic})
 				}
 			}
 		}
-		lastCoveredDatasets = coveredDatasets
 
 		for _, item := range componentHealthItems(overview.Services) {
 			if item.frozen {
@@ -150,7 +133,12 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		// datasetOwners 记下每项数据集检查由哪个服务上报：上报方停止上报时（producer stale）检查保持原状态。
 		datasetOwners := make(map[store.CheckKey]string)
-		if err := addDatasetFacts(ctx, builder, repositories, overview, coveredDatasets, coveredKey, add, datasetOwners); err != nil {
+		collectorDatasets, inventoryKnown := collectorDatasetSet(ctx, builder.Inventory, kline, overview.GeneratedAt)
+		if !inventoryKnown {
+			// 清单尚未取到，无法区分 storage / storage_view 中哪些属于采集任务、哪些属于因子等非采集生产者：冻结这两类前缀。
+			round.FrozenPrefixes = append(round.FrozenPrefixes, "dataset:storage:", "dataset:storage_view:")
+		}
+		if err := addDatasetFacts(ctx, builder, repositories, overview, collectorDatasets, inventoryKnown, add, datasetOwners); err != nil {
 			return err
 		}
 		business, err := builder.BusinessChecks(ctx, overview.GeneratedAt)
@@ -214,35 +202,68 @@ func buildBusinessFreshnessReporterWithInterval(
 	}
 }
 
-// addDatasetFacts 按数据集新鲜度生成检查事实，并记下每项检查的上报服务。被 K 线新鲜度覆盖的、生产者没有部署的、
-// 上报方停止上报的不产出（后者由上报方的组件检查决定冻结还是删除）。
+// collectorDatasetSet 返回采集任务清单里的全部结果数据集（键为 [空间, 数据集 ID]），供 dataset: 检查区分
+// storage / storage_view 行属于采集数据集还是因子等非采集数据集。清单源存在但从未获取成功时 known 为 false。
+func collectorDatasetSet(
+	ctx context.Context,
+	inventory monitorobservability.InventorySource,
+	kline *monmetrics.KlineFreshnessEvaluator,
+	now time.Time,
+) (map[[2]string]struct{}, bool) {
+	if inventory != nil {
+		snapshot, _, err := inventory.GetAllowStale(ctx, now)
+		if err != nil {
+			return nil, false
+		}
+		datasets := make(map[[2]string]struct{}, len(snapshot.Entries))
+		for _, entry := range snapshot.Entries {
+			if entry.SpaceID != "" && entry.DatasetID != "" {
+				datasets[[2]string{entry.SpaceID, entry.DatasetID}] = struct{}{}
+			}
+		}
+		return datasets, true
+	}
+	if kline != nil {
+		return kline.StaticDatasets(), true
+	}
+	return nil, true
+}
+
+func isCollectorDataset(datasets map[[2]string]struct{}, dataset monitorobservability.DatasetFrequencyStatus) bool {
+	if len(datasets) == 0 {
+		return false
+	}
+	if _, ok := datasets[[2]string{dataset.SpaceID, dataset.DatasetID}]; ok {
+		return true
+	}
+	if dataset.PrimaryDatasetID != "" {
+		if _, ok := datasets[[2]string{dataset.SpaceID, dataset.PrimaryDatasetID}]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// addDatasetFacts 按数据集新鲜度生成检查事实，并记下每项检查的上报服务。
+// K 线类采集数据集只由 K 线新鲜度（kline_freshness:）出检查：collector 生产者直接跳过，
+// storage 与 storage_view 行按采集任务清单排除采集数据集，仅保留因子、策略等非采集生产者的数据集。
 func addDatasetFacts(
 	ctx context.Context,
 	builder *monitorobservability.Builder,
 	repositories *store.Repositories,
 	overview monitorobservability.Overview,
-	coveredDatasets map[string]struct{},
-	coveredKey func(spaceID, id, freq string) string,
+	collectorDatasets map[[2]string]struct{},
+	inventoryKnown bool,
 	add func(checks.Fact),
 	owners map[store.CheckKey]string,
 ) error {
 	factorExpected, factorExpectedKnown := false, false
-	storageScopes := make(map[string]struct{})
-	for _, dataset := range overview.Datasets {
-		if dataset.Producer == "storage" {
-			storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
-		} else if dataset.Producer == "storage_view" && strings.TrimSpace(dataset.PrimaryDatasetID) != "" {
-			storageScopes[dataset.SpaceID+"\x00"+strings.TrimSpace(dataset.PrimaryDatasetID)+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
-		}
-	}
 	for _, dataset := range overview.Datasets {
 		if dataset.Producer == "collector" {
-			// Collector's Timer path intentionally has no per-run observer.
-			// Once Storage has a fact row, its write watermark is authoritative
-			// and the inventory row must not create a duplicate stale alert. If
-			// Storage has never reported, retain this expectation so a newly
-			// enabled but never-running Dataset is still visible as unhealthy.
-			if _, exists := storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+strings.ToLower(dataset.Freq)]; exists {
+			continue
+		}
+		if dataset.Producer == "storage" || dataset.Producer == "storage_view" {
+			if !inventoryKnown || isCollectorDataset(collectorDatasets, dataset) {
 				continue
 			}
 		}
@@ -250,15 +271,6 @@ func addDatasetFacts(
 		key := store.CheckKey{SpaceID: dataset.SpaceID, CheckID: checkID}
 		if dataset.ServiceName != "" {
 			owners[key] = dataset.ServiceName
-		}
-		// Storage 写入水位与 View 水位都按结果数据集匹配：每个数据集恰好一个 View。
-		covered := false
-		switch dataset.Producer {
-		case "storage", "storage_view":
-			_, covered = coveredDatasets[coveredKey(dataset.SpaceID, dataset.DatasetID, dataset.Freq)]
-		}
-		if covered {
-			continue
 		}
 		if dataset.Producer == "factor" {
 			if !factorExpectedKnown {
@@ -337,16 +349,6 @@ func observationIndependent(checkID string) bool {
 // 只是数据还没攒够，不是需要有人处理的故障：按通过记录，不触发也不延续告警；其余非健康状态仍按失败记录。
 func datasetCheckPasses(dataset monitorobservability.DatasetFrequencyStatus) bool {
 	return dataset.Status == "healthy" || dataset.Reason == monitorobservability.DatasetReasonWarming
-}
-
-// klineReportCoversDatasets 判断一条 K 线新鲜度报告是否让对应结果的 dataset 新鲜度检查成为重复：
-// 规则仍在评估（含休市、预热等正常的日历跳过，此时 dataset 的固定周期水位判断反而会误报）就算覆盖；
-// 任务清单自身的报告、以及规则已停用（disabled）的不算。
-func klineReportCoversDatasets(report monmetrics.KlineFreshnessReport) bool {
-	if report.CheckID == monmetrics.TaskResultInventoryCheckID {
-		return false
-	}
-	return !(report.Skipped && report.Reason == "disabled")
 }
 
 func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepository, componentID string) (bool, error) {

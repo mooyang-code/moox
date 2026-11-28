@@ -89,42 +89,23 @@ type KlineFreshnessEvaluator struct {
 	// seeding 非空时报告空间是否在首次接入的历史补齐中或刚补齐（见 SetSeeding）。
 	seeding func(spaceID string, now time.Time) bool
 
-	disabledMu     sync.Mutex
-	disabledChecks map[string]struct{}
-
 	pruneMu    sync.Mutex
 	prunedOnce bool
 	lastPruned [][2]string
 }
 
-// RuleDisabledCheckIDs 返回最近一次评估时规则存在但关闭了新鲜度监控的检查 ID。这些检查会在每次评估里被补建出来（页面据此显示“已关闭”），
-// 不是失效的检查，清理时必须保留。还没成功评估过时第二个返回值为 false：此时不知道哪些检查会被补建，调用方不应清理 K 线检查。
-func (e *KlineFreshnessEvaluator) RuleDisabledCheckIDs() (map[string]struct{}, bool) {
-	if e == nil {
-		return nil, false
+// StaticDatasets 返回静态规则声明的采集数据集集合（键为 [空间, 数据集 ID]），供未配清单缓存的测试按规则区分采集与非采集数据集。
+func (e *KlineFreshnessEvaluator) StaticDatasets() map[[2]string]struct{} {
+	if e == nil || len(e.rules) == 0 {
+		return nil
 	}
-	e.disabledMu.Lock()
-	defer e.disabledMu.Unlock()
-	if e.disabledChecks == nil {
-		return nil, false
-	}
-	out := make(map[string]struct{}, len(e.disabledChecks))
-	for id := range e.disabledChecks {
-		out[id] = struct{}{}
-	}
-	return out, true
-}
-
-func (e *KlineFreshnessEvaluator) recordDisabledChecks(rules []KlineFreshnessRule) {
-	disabled := make(map[string]struct{})
-	for _, rule := range rules {
-		if !rule.Enabled {
-			disabled[KlineFreshnessCheckID(rule)] = struct{}{}
+	out := make(map[[2]string]struct{}, len(e.rules))
+	for _, rule := range e.rules {
+		if rule.SpaceID != "" && rule.DatasetID != "" {
+			out[[2]string{rule.SpaceID, rule.DatasetID}] = struct{}{}
 		}
 	}
-	e.disabledMu.Lock()
-	e.disabledChecks = disabled
-	e.disabledMu.Unlock()
+	return out
 }
 
 // SubjectFirstSeenStore 持久化活跃对象第一次出现在采集清单里的时间。ObserveSubjects 返回新上线对象（不含部署前的存量）
@@ -198,7 +179,6 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		inventoryEvaluated = true
 		inventoryStale = stale
 	}
-	e.recordDisabledChecks(rules)
 	if inventoryEvaluated && !inventoryStale {
 		e.pruneDeletedDatasets(ctx, rules)
 	}

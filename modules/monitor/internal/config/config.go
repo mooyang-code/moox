@@ -82,7 +82,6 @@ type MarketCanaryConfig struct {
 }
 
 type KlineFreshnessConfig struct {
-	Enabled                  bool          `yaml:"enabled"`
 	SpaceIDs                 []string      `yaml:"space_ids"`
 	EvaluationInterval       time.Duration `yaml:"evaluation_interval"`
 	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval"`
@@ -152,7 +151,7 @@ func Default() *Config {
 		// from deployment config; without subjects the canary stays disabled.
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
 		KlineFreshness: KlineFreshnessConfig{
-			Enabled: false, SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
+			SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
 		Metrics: MetricsConfig{Enabled: true, DatasetHealth: report.DefaultRealtimeTimeSeriesPolicy(), NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000},

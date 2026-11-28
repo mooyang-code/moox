@@ -130,7 +130,6 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		// 新上线对象的首次出现时间持久化：Monitor 重启后宽限期不重新计时，部署前的存量对象不给宽限。
 		klineFreshness.SetSubjectFirstSeenStore(store.NewSubjectFirstSeenRepository(runtime.Store))
 	}
-	runtime.klineFreshness = klineFreshness
 	// 两个 Builder 与 K 线新鲜度共用一份“历史补齐空间”记忆：补齐中与结束后 24 小时内，storage-view 的“View 跟随数据变更落后”
 	// 不告警，K 线结果视图落后于已完成的一期也不告警（采集侧已完成的一期过期照样报）。记忆在 Builder 构建概览时记下。
 	seedingMemory := &monitorobservability.SeedingMemory{}
@@ -185,8 +184,8 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 	return s, nil
 }
 
-// buildTaskResultInventory 构造采集任务清单缓存。清单声明了每个空间的市场交易日历，数据集新鲜度按它判断应收的最新一根，
-// 所以不随 K 线新鲜度检查的开关关闭；开关只决定是否运行 K 线新鲜度检查。
+// buildTaskResultInventory 构造采集任务清单缓存。清单声明了每个空间的市场交易日历和采集结果数据集，
+// 供 K 线新鲜度评估、数据集检查分工和概览按交易日历判断使用。
 func buildTaskResultInventory(cfg *config.Config, gateway gatewayclient.Invoker) (*monmetrics.TaskResultInventoryCache, error) {
 	if cfg == nil {
 		return nil, nil
@@ -215,7 +214,7 @@ func inventorySource(cache *monmetrics.TaskResultInventoryCache) monitorobservab
 }
 
 func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *monmetrics.TaskResultInventoryCache, policy report.RealtimeTimeSeriesPolicy) *monmetrics.KlineFreshnessEvaluator {
-	if query == nil || cfg == nil || !cfg.KlineFreshness.Enabled {
+	if query == nil || cfg == nil {
 		return nil
 	}
 	return monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, inventory, policy, cfg.KlineFreshness.MaxSubjectsPerAlert)
