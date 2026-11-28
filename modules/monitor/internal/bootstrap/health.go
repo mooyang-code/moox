@@ -100,8 +100,8 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 }
 
 // evaluationStaleAfter 内没有一次完整成功的评估（检查结果写库失败、检查定时器卡住，或业务评估一直失败），就判为未就绪：
-// 这时 Monitor 进程活着、/healthz 正常，但所有告警都会静默失效。除了就绪位，GetHostPolicy 也据此返回失败，
-// 各主机 HostAgent 连续 3 次拉取失败后直推“控制机或 Monitor 不可达”。
+// 这时 Monitor 进程活着、/healthz 正常，但所有告警都会静默失效。除了就绪位，SyncHostAgent 也据此返回失败，
+// 各主机 HostAgent 连续 3 次同步失败后直推“控制机或 Monitor 不可达”。
 // 检查定时器每 30 秒一轮，3 分钟相当于连续 6 轮失败；刚启动的 3 分钟内不判断。
 const evaluationStaleAfter = 3 * time.Minute
 
@@ -123,7 +123,7 @@ func evaluationFresh(runtime *Runtime, now time.Time) (bool, string) {
 }
 
 // businessEvaluationFresh 判断业务评估（数据集、网关、上报方等检查）最近是否成功过：它连续失败时这些检查都不产生结果、
-// 不告警，同样判为未就绪（并经 GetHostPolicy 失败由 HostAgent 直推告警）。没有业务评估时不判断。
+// 不告警，同样判为未就绪（并经 SyncHostAgent 失败由 HostAgent 直推告警）。没有业务评估时不判断。
 func businessEvaluationFresh(runtime *Runtime, now time.Time) (bool, string) {
 	if !runtime.businessEvaluation {
 		return true, ""

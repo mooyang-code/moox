@@ -15,10 +15,10 @@ import (
 
 const wecom = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=sync"
 
-func response(url string) *monitorpb.GetHostPolicyRsp {
-	return &monitorpb.GetHostPolicyRsp{
+func response(url string) *monitorpb.SyncHostAgentRsp {
+	return &monitorpb.SyncHostAgentRsp{
 		RetInfo:  &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-		Channels: []*monitorpb.HostPolicyChannel{{ChannelType: "wecom", WebhookUrl: url}},
+		Channels: []*monitorpb.HostNotificationChannel{{ChannelType: "wecom", WebhookUrl: url}},
 	}
 }
 
@@ -31,7 +31,7 @@ func TestSyncOverridesCacheAndKeepsItOnFailure(t *testing.T) {
 
 	current := response(wecom)
 	var fetchErr error
-	syncer, err := New(path, func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
+	syncer, err := New(path, func(context.Context, *monitorpb.SyncHostAgentReq) (*monitorpb.SyncHostAgentRsp, error) {
 		return current, fetchErr
 	})
 	require.NoError(t, err)
@@ -60,10 +60,10 @@ func TestSyncOverridesCacheAndKeepsItOnFailure(t *testing.T) {
 	_, err = syncer.SyncOnce(t.Context(), nil)
 	require.ErrorContains(t, err, "gateway unavailable")
 	fetchErr = nil
-	current = &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "db"}}
+	current = &monitorpb.SyncHostAgentRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "db"}}
 	_, err = syncer.SyncOnce(t.Context(), nil)
 	require.Error(t, err)
-	current = &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Channels: []*monitorpb.HostPolicyChannel{{ChannelType: "sms", WebhookUrl: "x"}}}
+	current = &monitorpb.SyncHostAgentRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Channels: []*monitorpb.HostNotificationChannel{{ChannelType: "sms", WebhookUrl: "x"}}}
 	_, err = syncer.SyncOnce(t.Context(), nil)
 	require.ErrorContains(t, err, "invalid host policy")
 	kept, err := hostpolicy.Read(path)
@@ -74,8 +74,8 @@ func TestSyncOverridesCacheAndKeepsItOnFailure(t *testing.T) {
 // Monitor 删光渠道时也同步（主机侧随之停止推送），缓存不存在时从版本 1 开始。
 func TestSyncWritesEmptyChannels(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host-agent", "host-policy.json")
-	syncer, err := New(path, func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
-		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	syncer, err := New(path, func(context.Context, *monitorpb.SyncHostAgentReq) (*monitorpb.SyncHostAgentRsp, error) {
+		return &monitorpb.SyncHostAgentRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 	})
 	require.NoError(t, err)
 	result, err := syncer.SyncOnce(t.Context(), nil)
@@ -90,10 +90,10 @@ func TestSyncWritesEmptyChannels(t *testing.T) {
 // 主机快照随同一次拉取带给 Monitor。
 func TestSyncCarriesHostReport(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host-agent", "host-policy.json")
-	var got *monitorpb.GetHostPolicyReq
-	syncer, err := New(path, func(_ context.Context, req *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
+	var got *monitorpb.SyncHostAgentReq
+	syncer, err := New(path, func(_ context.Context, req *monitorpb.SyncHostAgentReq) (*monitorpb.SyncHostAgentRsp, error) {
 		got = req
-		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+		return &monitorpb.SyncHostAgentRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 	})
 	require.NoError(t, err)
 	report := &monitorpb.HostReport{ReportId: "r1"}

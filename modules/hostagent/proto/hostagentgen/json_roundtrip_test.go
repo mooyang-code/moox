@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/codec"
 )
@@ -13,7 +14,7 @@ import (
 // 主机代理状态与快照的时刻都是 Unix 毫秒；经 trpc 的 JSON 序列化往返不变，JSON 里是数字字符串。
 func TestHostAgentTRPCJSONRoundTrip(t *testing.T) {
 	const at = int64(1700000000123)
-	assertTRPCJSONRoundTrip(t, &GetStatusRsp{HostId: "control", LastCollectAt: at, LastReportAt: at + 1}, new(GetStatusRsp),
+	assertTRPCJSONRoundTrip(t, &GetStatusRsp{HostId: "control", LastCollectAt: at, LastReportAt: at + 1, RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, new(GetStatusRsp),
 		map[string]int64{"last_collect_at": at, "last_report_at": at + 1})
 }
 

@@ -1,6 +1,6 @@
 # moox-host-agent
 
-Linux 主机代理：每分钟采集 CPU、内存、文件系统、磁盘、网络和进程，经主机网关随 `MonitorMgr.GetHostPolicy` 上报主机快照给 Monitor 并拉取告警渠道存到本机（不连接 EventBus）；非控制机发现控制机或 Monitor 连不上时由本机直接发通知。
+Linux 主机代理：每分钟采集 CPU、内存、文件系统、磁盘、网络和进程，经主机网关随 `MonitorMgr.SyncHostAgent` 上报主机快照给 Monitor 并拉取告警渠道存到本机（不连接 EventBus）；非控制机发现控制机或 Monitor 连不上时由本机直接发通知。
 
 设计文档：[主机代理](../../docs/模块/主机代理.md)
 

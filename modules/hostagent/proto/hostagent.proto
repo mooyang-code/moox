@@ -15,7 +15,7 @@ message GetStatusRsp {
   string boot_id = 4;
   // 最近一次采集完成的时刻（Unix 毫秒），没采集过为 0。
   int64 last_collect_at = 5;
-  // 最近一次把快照成功报给 Monitor（随拉取主机策略那次调用）的时刻（Unix 毫秒），没报过为 0。
+  // 最近一次把快照成功报给 Monitor（随 SyncHostAgent 调用）的时刻（Unix 毫秒），没报过为 0。
   int64 last_report_at = 6;
   string last_error = 7;
   uint64 collected = 8;
@@ -23,9 +23,10 @@ message GetStatusRsp {
   uint64 dropped = 10;
   uint64 skipped = 11;
   HostSnapshot latest = 12;
+  common.RetInfo ret_info = 13;
 }
 message RunOnceReq {}
-// RunOnce 立即采集一次，并随拉取主机策略报给 Monitor。
+// RunOnce 立即采集一次，并随 SyncHostAgent 报给 Monitor。
 message RunOnceRsp {
   string report_id = 1;
   bool reported = 2;

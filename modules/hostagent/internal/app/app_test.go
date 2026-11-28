@@ -111,6 +111,7 @@ func TestAgent_GetStatus_ShouldExposeCountersAndLatest(t *testing.T) {
 
 	rsp, err := a.GetStatus(context.Background(), &hostagentpb.GetStatusReq{})
 	require.NoError(t, err)
+	assert.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	assert.Equal(t, a.cfg.HostID, rsp.GetHostId())
 	assert.Equal(t, a.version, rsp.GetVersion())
 	assert.Equal(t, a.hostname, rsp.GetHostname())
@@ -267,6 +268,7 @@ func TestHostAgentNativeRPCPreservesSnapshot(t *testing.T) {
 		proxy := hostagentpb.NewHostAgentMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithProtocol("trpc"), client.WithNetwork("tcp"), client.WithSerializationType(serialization), client.WithTimeout(3*time.Second), client.WithTransport(transport.NewClientTransport()), client.WithDisableConnectionPool())
 		status, err := proxy.GetStatus(t.Context(), &hostagentpb.GetStatusReq{})
 		require.NoError(t, err)
+		require.Equal(t, commonpb.ErrorCode_SUCCESS, status.GetRetInfo().GetCode())
 		require.Equal(t, agent.cfg.HostID, status.GetHostId())
 		require.Equal(t, agent.hostname, status.GetHostname())
 		require.Equal(t, agent.latest.GetCpu().GetLogicalCores(), status.GetLatest().GetCpu().GetLogicalCores())

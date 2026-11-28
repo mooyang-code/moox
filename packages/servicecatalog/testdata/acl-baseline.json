@@ -988,12 +988,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "GetHostPolicy",
-          "read_only": false,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "ImportNotificationChannels",
           "read_only": false,
           "retryable": true,
@@ -1032,6 +1026,12 @@
         {
           "name": "QueryPipelineArrivalHistory",
           "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "SyncHostAgent",
+          "read_only": false,
           "retryable": true,
           "timeout_ms": 5000
         },
@@ -2275,7 +2275,7 @@
       "trpc.moox.storage.PrimaryStore/UpsertFields"
     ],
     "host-agent": [
-      "trpc.moox.monitor.MonitorMgr/GetHostPolicy"
+      "trpc.moox.monitor.MonitorMgr/SyncHostAgent"
     ],
     "host-gateway": [
       "trpc.moox.admin.GatewayControl/PullSnapshot"
