@@ -352,7 +352,7 @@ func (c *Config) cloudAccountInUse(ctx context.Context, functions cloud.Function
 		}
 		if len(refs) > 0 {
 			return fmt.Errorf("%w：%s 里还有 %d 个它建的函数（例如 %s）。collector function delete 只删当前配置账号下的函数，"+
-				"删不到这个账号的：用 moox-cli setup inspect-scf 查出这些函数，在腾讯云控制台手工删除后再删账号", cloud.ErrAccountInUse, region, len(refs), refs[0].Name)
+				"删不到这个账号的：用 moox-cli collector function inspect 查出这些函数，在腾讯云控制台手工删除后再删账号", cloud.ErrAccountInUse, region, len(refs), refs[0].Name)
 		}
 	}
 	return nil

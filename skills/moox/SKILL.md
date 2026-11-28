@@ -13,7 +13,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **配置是两份文件**：`moox.toml` 是明文的拓扑与部署参数（没有秘密，可以直接看和改）；同目录的 `moox.secrets.toml` 是加密的秘密，Agent 不直接读取、打印、复制或 `source` 它；要看用 `moox-cli config get --file ./moox.secrets.toml <路径>`（默认打码），改单个值用 `moox-cli config set 表.键=值`（见 [`references/config-access.md`](references/config-access.md)）。Agent 也不打开 `config init` / `config edit` 的本机页面；
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
-- **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`collector function delete`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
+- **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`host reboot`、`factor task delete`、`collector function delete`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
   `setup install` 不带 `--yes` 是只读预检：CLI 不做交互式提问；没装过时把输出的步骤、防火墙放行内容与 `manual_steps` 一次给用户确认后带 `--yes` 执行；装过（没装完或已装好）时把预检并排列出的两个选项（`--keep` 保留数据与 `--wipe <摘要>` 全部覆盖）、数据格式比对结果与待备份条数给用户看，问清保留还是覆盖后再带 `--keep --yes` 或 `--wipe <摘要> --yes` 执行，只在计划变化或失败时再问；单独的 `setup deploy`、`setup init` 没有预览，执行前同样先向用户说明会动哪台主机、哪些组件会重启；单独卸载（`setup wipe`）要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
 - **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
 - **本机身份和线上密钥不碰**：不读取、不打印、不手工拷贝或恢复 `~/.config/moox/` 下的操作员身份，也不读线上部署根的 `secrets/`；不在目标机器上手动执行 `moox-admin-cli bootstrap`、手工改 `version.json` 或单元文件；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。

@@ -95,6 +95,17 @@ type archiveImportCheck struct {
 	DiskFree, MinFree uint64
 }
 
+// archiveCall 在已打开的网关上调用 ArchiveMgr 的一个方法，业务错误转成 error。
+func archiveCall(ctx context.Context, gateway gatewayclient.Invoker, method string, req, rsp proto.Message, ret func() *commonpb.RetInfo) error {
+	if err := gateway.Invoke(ctx, archiveMgrService, method, req, rsp); err != nil {
+		return fmt.Errorf("%s: %w", method, err)
+	}
+	if info := ret(); info.GetCode() != commonpb.ErrorCode_SUCCESS {
+		return fmt.Errorf("%s: %s (code %d)", method, info.GetMsg(), info.GetCode())
+	}
+	return nil
+}
+
 // checkArchiveImport 确认数据集有归档任务、worker 在线，返回 worker 的磁盘余量。
 func checkArchiveImport(ctx context.Context, gateway gatewayclient.Invoker, spaceID, datasetID string) (archiveImportCheck, error) {
 	found := false

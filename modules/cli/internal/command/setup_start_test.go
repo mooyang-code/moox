@@ -270,18 +270,3 @@ func TestSetupStartImportsOnlyThisSpaceFromTheFactorSeed(t *testing.T) {
 	require.Empty(t, empty.plan.Tasks, "种子里没有这个空间的任务时不导入")
 	require.Contains(t, strings.Join(summary.Notes, "\n"), "factor-tasks.yaml 里没有这个空间的因子任务")
 }
-
-// setup start 结束时（即使没有默认因子或默认策略）也会为该空间的有限保留期时序数据集补建归档任务。
-func TestSetupStartEnsuresArchiveTasksForSpace(t *testing.T) {
-	var calledSpace string
-	deps := setupDeps{
-		ensureArchiveTasks: func(_ context.Context, _ *setupSnapshot, spaceID string) (*setupArchiveTasksSummary, error) {
-			calledSpace = spaceID
-			return &setupArchiveTasksSummary{Enabled: true, Planned: 4, Created: 2, Unchanged: 2}, nil
-		},
-	}
-	summary, err := runSetupStart(context.Background(), deps, startClient(), testSetupSnapshot(t), startRepository(t), "crypto", time.Millisecond)
-	require.NoError(t, err)
-	require.Equal(t, "crypto", calledSpace)
-	require.Equal(t, &setupArchiveTasksSummary{Enabled: true, Planned: 4, Created: 2, Unchanged: 2}, summary.ArchiveTasks)
-}

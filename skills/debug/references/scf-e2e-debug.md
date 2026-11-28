@@ -25,7 +25,7 @@ MooX collector 的云函数没有按 Timer 运行，或者没有把 K 线数据�
 
 1. 没有代码包：本地构建或 COS 上传失败。
 2. 没有函数或 Timer 被停用：对账器连不上腾讯云 SCF（Monitor 的 market-fetch 检查会给出失败原因，例如 `cloud` 或 `quota`）；下次读回时它会修复函数。
-3. Timer 触发了但什么都没采：函数环境里的计划没有这个周期的条目（用 `moox-cli collector fetch-plan` 核对），或者事件时间已经超过迟到截止时间。
+3. Timer 触发了但什么都没采：函数环境里的计划没有这个周期的条目（用 `moox-cli collector fetch-plan show` 核对），或者事件时间已经超过迟到截止时间。
 4. 采集成功但 Storage 里没有行：经外部入口的写入失败（身份 / 方法白名单、`scf-collector` 密钥过期；看入口主机网关上的 `moox_gateway_external_denials_total`）。
 5. 行已写入但 View 是空的：查看 View 的跟随进度（`moox-cli data view state`）和 `storage-view` 日志；View 跟随 Primary 的变更日志，没有 JetStream consumer。历史补采先看 `[storage_view.max_age]` 和 `moox_storage_view_expired_rows_dropped_total{space,freq}`：过期的行在写 View 时被有意丢弃，因子结果也一样，而处理本身仍算成功。Primary 的保留期是独立的（crypto 1m 默认：Primary 35 天，View 7 天）。
 6. 动代码之前保留 `git status --short`。
@@ -41,11 +41,11 @@ moox-cli collector function upload --space-id crypto --cloud-account-id <account
 ## 查看函数
 
 ```bash
-bin/moox-cli collector fetch-plan --file ./moox.toml --space-id crypto
+bin/moox-cli collector fetch-plan show --file ./moox.toml --space-id crypto
 bin/moox-cli collector function list --file ./moox.toml --space-id crypto --drift
 ```
 
-`collector function list` 是只读的：Collector 从腾讯云读回计划里的每个函数，比对是否存在、定时器（cron、是否启用、qualifier、message）、环境里的分配哈希（`MOOX_MARKET_FETCH_ASSIGNMENT_HASH`）和代码包。列表不比对入口地址和调用方身份（`MOOX_ENTRY_ADDRESS`、`MOOX_ENTRY_HOST`、`MOOX_CALLER_KEY_ID`），这几项只由对账器在读回修复时比对并改回。`--drift` 只保留不一致的；符合本空间命名格式但不在任何计划里的函数列在 `unplanned` 下，它们的定时器已停，确认后用 `collector function delete` 删除。旧云账号下创建的函数 Collector 看不到，用 `setup inspect-scf` 查找。
+`collector function list` 是只读的：Collector 从腾讯云读回计划里的每个函数，比对是否存在、定时器（cron、是否启用、qualifier、message）、环境里的分配哈希（`MOOX_MARKET_FETCH_ASSIGNMENT_HASH`）和代码包。列表不比对入口地址和调用方身份（`MOOX_ENTRY_ADDRESS`、`MOOX_ENTRY_HOST`、`MOOX_CALLER_KEY_ID`），这几项只由对账器在读回修复时比对并改回。`--drift` 只保留不一致的；符合本空间命名格式但不在任何计划里的函数列在 `unplanned` 下，它们的定时器已停，确认后用 `collector function delete` 删除。旧云账号下创建的函数 Collector 看不到，用 `collector function inspect` 查找。
 
 ## 控制面检查
 

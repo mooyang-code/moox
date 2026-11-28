@@ -6,7 +6,7 @@ describe("删除云账号", () => {
     expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("只删除这条登记，不会删除云上的函数");
     expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("Collector 会拒绝并说明原因");
     expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("moox-cli collector function delete 也删不到");
-    expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("moox-cli setup inspect-scf");
+    expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("moox-cli collector function inspect");
     expect(CLOUD_ACCOUNT_DELETE_TEXT).toContain("腾讯云控制台手工删除");
   });
 

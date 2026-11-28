@@ -1,73 +1,51 @@
 package command
 
 import (
-	"bytes"
-	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
-
-	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type exclusionFakeGateway struct {
-	methods []string
-	reqs    []any
-}
-
-func (g *exclusionFakeGateway) Invoke(_ context.Context, service, method string, req, rsp any) error {
-	g.methods = append(g.methods, service+"/"+method)
-	g.reqs = append(g.reqs, req)
-	ok := &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}
-	switch out := rsp.(type) {
-	case *collectorpb.SetSubjectExclusionsRsp:
-		in := req.(*collectorpb.SetSubjectExclusionsReq)
-		out.RetInfo, out.Exclusions = ok, []*collectorpb.SubjectExclusion{{SubjectId: in.GetSubjectIds()[0], MarketType: in.GetMarketType(), Reason: in.GetReason(), ExpiresAt: in.GetExpiresAt()}}
-	case *collectorpb.ClearSubjectExclusionsRsp:
-		out.RetInfo, out.Removed = ok, 2
-	case *collectorpb.ListSubjectExclusionsRsp:
-		out.RetInfo, out.Exclusions = ok, []*collectorpb.SubjectExclusion{{SubjectId: "BTC-USDT", Reason: "公告下架"}}
-	}
-	return nil
-}
-func (g *exclusionFakeGateway) Close() error { return nil }
-func (g *exclusionFakeGateway) Forward(context.Context, string, string, int, []byte) ([]byte, error) {
-	return nil, nil
-}
-
 func TestCollectorSubjectExclusionCommands(t *testing.T) {
-	gateway := &exclusionFakeGateway{}
-	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return gateway, nil }
-	t.Cleanup(func() { openCommandGateway = previous })
-	ctx := context.Background()
-	var out bytes.Buffer
+	gw := &rpcFakeGateway{responses: map[string]string{
+		"SetSubjectExclusions":   `{"ret_info":{"code":0},"exclusions":[{"subject_id":"BTC-USDT","market_type":"swap","reason":"公告下架"}]}`,
+		"ClearSubjectExclusions": `{"ret_info":{"code":0},"removed":2}`,
+		"ListSubjectExclusions":  `{"ret_info":{"code":0},"exclusions":[{"subject_id":"BTC-USDT","reason":"公告下架"}]}`,
+	}}
+	useRPCGateway(t, gw)
 
-	require.ErrorContains(t, runSubjectExclude(ctx, &out, subjectExclusionFlags{SpaceID: "crypto", Subjects: []string{"BTC-USDT"}}), "--reason")
-	require.ErrorContains(t, runSubjectExclude(ctx, &out, subjectExclusionFlags{SpaceID: "crypto", Reason: "x"}), "--subjects")
-	require.ErrorContains(t, runSubjectExclusions(ctx, &out, subjectExclusionFlags{}), "--space-id")
-	require.Empty(t, gateway.methods)
+	_, _, err := runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--subjects", "BTC-USDT")
+	require.ErrorContains(t, err, "--reason")
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--reason", "x")
+	require.ErrorContains(t, err, "--subjects")
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"), "--subjects", "BTC-USDT", "--reason", "x", "--expires-in", "-1h")
+	require.ErrorContains(t, err, "--expires-in")
+	assert.Zero(t, gw.calls)
 
 	before := time.Now()
-	require.NoError(t, runSubjectExclude(ctx, &out, subjectExclusionFlags{SpaceID: "crypto", Subjects: []string{" BTC-USDT ", ""}, Market: "swap", Reason: "公告下架", ExpiresIn: 72 * time.Hour}))
-	set := gateway.reqs[0].(*collectorpb.SetSubjectExclusionsReq)
-	require.Equal(t, []string{"BTC-USDT"}, set.GetSubjectIds())
-	require.Equal(t, "swap", set.GetMarketType())
-	require.Contains(t, set.GetOperator(), "moox-cli:")
-	require.WithinDuration(t, before.Add(72*time.Hour), time.UnixMilli(set.GetExpiresAt()), 2*time.Second)
-	require.Contains(t, out.String(), `"market": "swap"`)
+	out, _, err := runSpecCommand(t, specByPath(t, "collector", "subjects", "exclude"),
+		"--space-id", "crypto", "--subjects", "BTC-USDT", "--market", "swap", "--reason", "公告下架", "--expires-in", "72h")
+	require.NoError(t, err)
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(gw.bodies["SetSubjectExclusions"], &req))
+	assert.Equal(t, []any{"BTC-USDT"}, req["subject_ids"])
+	assert.Equal(t, "swap", req["market_type"])
+	assert.Contains(t, req["operator"], "moox-cli:")
+	expiresAt, ok := req["expires_at"].(float64)
+	require.True(t, ok)
+	require.WithinDuration(t, before.Add(72*time.Hour), time.UnixMilli(int64(expiresAt)), 2*time.Second)
+	assert.Contains(t, out, `"market_type": "swap"`)
 
-	out.Reset()
-	require.NoError(t, runSubjectUnexclude(ctx, &out, subjectExclusionFlags{SpaceID: "crypto", Subjects: []string{"BTC-USDT", "ETH-USDT"}}))
-	require.Contains(t, out.String(), `"removed": 2`)
-	out.Reset()
-	require.NoError(t, runSubjectExclusions(ctx, &out, subjectExclusionFlags{SpaceID: "crypto"}))
-	require.Contains(t, out.String(), `"market": "all"`)
-	require.Equal(t, []string{
-		"trpc.moox.collector.CollectMgr/SetSubjectExclusions",
-		"trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
-		"trpc.moox.collector.CollectMgr/ListSubjectExclusions",
-	}, gateway.methods)
+	out, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "unexclude"),
+		"--space-id", "crypto", "--subjects", "BTC-USDT,ETH-USDT")
+	require.NoError(t, err)
+	assert.Contains(t, out, `"removed": 2`)
+
+	out, _, err = runSpecCommand(t, specByPath(t, "collector", "subjects", "exclusions"), "--space-id", "crypto")
+	require.NoError(t, err)
+	assert.Contains(t, out, `"subject_id": "BTC-USDT"`)
+	assert.Equal(t, []string{"SetSubjectExclusions", "ClearSubjectExclusions", "ListSubjectExclusions"}, gw.methods)
 }

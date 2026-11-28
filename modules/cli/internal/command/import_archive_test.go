@@ -22,6 +22,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func ok() *commonpb.RetInfo { return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS} }
+
 // archiveImportGateway 按方法回响应：GetArchiveRun 依次返回 statuses（用完后停在最后一个）。
 type archiveImportGateway struct {
 	mu         sync.Mutex

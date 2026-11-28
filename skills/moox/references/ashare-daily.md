@@ -93,7 +93,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 
 ```bash
 ./bin/moox-cli collector status --space-id stockcn         # 数据集出现在列表里、level 为 ok
-./bin/moox-cli collector fetch-plan --space-id stockcn     # 计划已生效，函数分配里有这个数据集
+./bin/moox-cli collector fetch-plan show --space-id stockcn     # 计划已生效，函数分配里有这个数据集
 ```
 
 实时采集从计划生效之后的第一个交易日起：那天的日线在下一天北京时间 08:00 到。
@@ -105,7 +105,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 ```bash
 ./bin/moox-cli collector kline backfill --space-id stockcn --dataset-id dataset_<task_id> \
   --from 2025-11-01 --to 2026-11-11 --force
-./bin/moox-cli collector kline backfill-status --space-id stockcn --dataset-id dataset_<task_id>      # 看作业进度
+./bin/moox-cli collector kline backfill-list --space-id stockcn --dataset-id dataset_<task_id>        # 列出作业进度
 ./bin/moox-cli collector kline backfill-status --space-id stockcn --job-id <job_id>                   # 看单个作业与失败分块
 ./bin/moox-cli collector kline backfill-retry --space-id stockcn --job-id <job_id>                    # 重试失败分块
 ```

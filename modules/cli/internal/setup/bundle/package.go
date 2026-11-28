@@ -58,7 +58,7 @@ func PackageComponents(catalog servicecatalog.Catalog, binaryDir, outputDir, ver
 			source := filepath.Join(binaryDir, name)
 			digest, err := regularFileDigest(source)
 			if err != nil {
-				return nil, fmt.Errorf("package_binary_missing: 组件 %s 缺 %s（%s）：先用 setup build-linux 或 build-linux-local.sh 编译：%w", component.ID, name, source, err)
+				return nil, fmt.Errorf("package_binary_missing: 组件 %s 缺 %s（%s）：先用 scripts/build/build-linux-local.sh 编译：%w", component.ID, name, source, err)
 			}
 			entries["bin/"+name] = packageEntry{source: source, mode: 0o755}
 			artifact.Binaries[name] = digest

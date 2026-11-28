@@ -431,7 +431,7 @@ func (o Options) binaries(catalog servicecatalog.Catalog, selected []string) (ma
 		component, _ := catalog.Component(id)
 		if o.BinaryDirectory == "" {
 			if o.Bundle == nil {
-				return nil, errors.New("binary_dir_required: 在源码目录里部署要用 --binary-dir 指定预先编译好的 Linux 二进制目录（scripts/build/build-linux-local.sh 或 setup build-linux 的输出）")
+				return nil, errors.New("binary_dir_required: 在源码目录里部署要用 --binary-dir 指定预先编译好的 Linux 二进制目录（scripts/build/build-linux-local.sh 的输出）")
 			}
 			artifact, ok := o.Bundle.Component(id)
 			if !ok {

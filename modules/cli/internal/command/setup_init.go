@@ -83,7 +83,6 @@ type setupInitSummary struct {
 	LoginAPI      string                    `json:"login_api"`
 	Metadata      setupInitMetadataCounts   `json:"metadata"`
 	Verification  setupInitMetadataCounts   `json:"verification"`
-	ArchiveTasks  *setupArchiveTasksSummary `json:"archive_tasks,omitempty"`
 	Console       *setupConsoleLinks        `json:"console,omitempty"`
 	BrowserTrust  *setupBrowserTrustSummary `json:"browser_trust,omitempty"`
 }
@@ -105,7 +104,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 		Long: `--stage storage 在控制机只装了 Admin、存储机装好之后运行：写入默认云账号密钥、把业务空间与元数据导入 Storage，控制机上的 Collector 等要这些就绪才能启动。
 不带 --stage 在全部组件装好后运行：完成全部初始化。初始秘密只含秘密文件 moox.secrets.toml 里的腾讯云默认密钥（tencent-default），规则为只建不改，管理台已有时以管理台为准。
 业务空间已在 Storage 时以管理台为准，不比对；告警通知渠道与交易所密钥不在配置文件里填写，这里只检查 Monitor 是否已有告警渠道并在为空时提醒，安装完成后在管理台页面录入。
-还会登记云账户、开通日志服务，并在部署了数据归档时为有限保留期的内置时序数据集自动创建归档任务；因子任务由 setup start 导入（同时为新建的因子结果数据集补建归档任务）。已经做过的步骤不会重复写入。
+还会登记云账户、开通日志服务；因子任务由 setup start 导入；部署了数据归档时由 ArchiveMgr 自动为有限保留期的时序数据集补齐归档任务。已经做过的步骤不会重复写入。
 云函数代码包从 --source-dir（默认当前目录）下的 modules/collector 构建，元数据种子默认读它下面的 config/setup：
 要装哪个分支或工作副本的代码，就把 --source-dir 指到那里，并和 setup deploy、setup start 用同一个目录。`,
 		Args: cobra.NoArgs,
@@ -247,10 +246,6 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
-	archiveTasks, err := deps.ensureArchiveTasks(ctx, snapshot, "")
-	if err != nil {
-		return setupInitSummary{}, fmt.Errorf("archive_tasks: %w", err)
-	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.SpaceIDs), BusinessSpaceIDs: bundle.SpaceIDs,
 		Admin: admin, Notification: notification, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, LoginAPI: login.LoginAPI,
@@ -260,7 +255,6 @@ func runSetupInit(
 		Verification: setupInitMetadataCounts{
 			Planned: verification.Planned, Unchanged: verification.Unchanged,
 		},
-		ArchiveTasks: archiveTasks,
 		Console:      describeSetupConsoleLinks(snapshot),
 		BrowserTrust: describeSetupBrowserTrust(snapshot),
 	}, nil

@@ -26,15 +26,15 @@
 | 数据集与列（没有单独的页面；每个数据集恰好一个查询索引 View，随数据集建删） | 数据集、列 | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`；可采字段的中文名与分组看 `collector data-type show` |
 | 数据采集 › 采集运行（“采集结果”页签看数据；导入没有页面） | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`、`import` |
 | 数据采集 › 采集运行 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
-| 数据采集 › 采集运行（“运行状态”“补采”页签） | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |
-| 数据采集 › 采集运行（“运行状态”页签里的云账号、代码包、云上状态） | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress` |
+| 数据采集 › 采集运行（“运行状态”“补采”页签） | 状态、缺口、补采、合成、标的、采集方式、历史补齐 | `collector status`、`collector kline check|backfill|backfill-list|backfill-status|backfill-cancel|backfill-retry|absences-clear`、`collector resample preview|backfill|jobs|show|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan show|pause|resume|reregister`、`collector history-seed list|skip` |
+| 数据采集 › 采集运行（“运行状态”页签里的云账号、代码包、云上状态） | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress|inspect|attach-vpc|invoke` |
 | 因子计算 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
 | 因子计算 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params|status|apply`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
 | 策略管理 | 定义、实例、结果、回放 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable|confirm|delete`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy display get|set` |
 | 交易管理 | 账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者；写操作默认只预览 | `trade account list|show|create|update|leverage|sync|reinspect|flatten`、`trade logical list|show|target|create|update|order-settings|fund-settings|add-member|remove-member|pause|resume|flatten`、`trade order list|show|submit|cancel`、`trade paper create|close`、`trade fills|positions|holdings|equity|ledger|instruments|capabilities|inspect-credential|action|actions|pnl|holders`、`trade shadow list`、`trade blocked list`、`trade delist list` |
 | 数据归档 | 归档任务、运行、分区、历史导入 | `archive overview`、`archive tasks list|prepare|create|update|run|backfill|delete|clear-unrecoverable`、`archive runs list|get|cancel`、`archive partitions list|get`、`import --target archive` |
 | 资源与运维 › 监控告警 | 总览、到达历史、主机资源、重要日志、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|logs|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
-| 资源与运维 › 主机工作台、服务管理 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog`、`host agent status|run-once --host`、`setup hosts|deploy …`（启停与移除改 `moox.toml` 后部署） |
+| 资源与运维 › 主机工作台、服务管理 | 查询、诊断与重启；增删启停只走 setup | `host list|deployments|routes|catalog|diagnostics|reboot`、`host agent status|run-once --host`、`setup hosts|deploy …`（启停与移除改 `moox.toml` 后部署） |
 | 资源与运维 › 日志中心（“活动日志”页签） | 活动日志 | `activity list` |
 
 常用写法：

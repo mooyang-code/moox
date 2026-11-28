@@ -41,5 +41,5 @@
 
 ## 验收证据
 
-- `setup inspect-scf --region <地域> --function <函数名>` 回读函数的 `vpc_id`、`subnet_id`、`public_net_status`、`entry_address`（public 地域 `vpc_id` 为空、`entry_address` 是入口主机公网地址）；`collector function list --drift` 不比较 VPC 和入口地址；
+- `collector function inspect --region <地域> --function <函数名>` 回读函数的 `vpc_id`、`subnet_id`、`public_net_status`、`entry_address`（public 地域 `vpc_id` 为空、`entry_address` 是入口主机公网地址）；`collector function list --drift` 不比较 VPC 和入口地址；
 - 函数日志里认领与写入成功，Storage 能读回刚写入的数据。

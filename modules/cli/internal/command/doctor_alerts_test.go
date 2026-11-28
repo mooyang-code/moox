@@ -2,17 +2,42 @@ package command
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
-func runDoctorAlerts(t *testing.T, overview *monitorpb.HealthOverview, args ...string) (string, error, *archiveFakeGateway) {
+type doctorAlertsFakeGateway struct {
+	service, method string
+	req             proto.Message
+	rsp             proto.Message
+	closed          bool
+}
+
+func (g *doctorAlertsFakeGateway) Invoke(_ context.Context, service, method string, req, rsp any) error {
+	g.service, g.method, g.req = service, method, req.(proto.Message)
+	if g.rsp != nil {
+		proto.Merge(rsp.(proto.Message), g.rsp)
+	}
+	return nil
+}
+func (g *doctorAlertsFakeGateway) Close() error { g.closed = true; return nil }
+func (g *doctorAlertsFakeGateway) Forward(context.Context, string, string, int, []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func runDoctorAlerts(t *testing.T, overview *monitorpb.HealthOverview, args ...string) (string, error, *doctorAlertsFakeGateway) {
 	t.Helper()
-	gateway := &archiveFakeGateway{rsp: &monitorpb.GetHealthOverviewRsp{RetInfo: ok(), Overview: overview}}
-	useArchiveGateway(t, gateway)
+	gateway := &doctorAlertsFakeGateway{rsp: &monitorpb.GetHealthOverviewRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Overview: overview}}
+	previous := openCommandGateway
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return gateway, nil }
+	t.Cleanup(func() { openCommandGateway = previous })
 	cmd := newDoctorAlertsCommand(doctorCommandDeps{})
 	var out bytes.Buffer
 	cmd.SetOut(&out)

@@ -79,7 +79,7 @@ func TestCollectorFunctionDeletePreviewUsesTheServerDryRun(t *testing.T) {
 	require.Len(t, targets, 1)
 	assert.Equal(t, "legacy", targets[0].(map[string]any)["namespace"])
 	require.Len(t, preview["refused"].([]any), 1)
-	assert.Contains(t, preview["note"], "setup inspect-scf", "提示旧账号下的函数怎么找")
+	assert.Contains(t, preview["note"], "collector function inspect", "提示旧账号下的函数怎么找")
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(gateway.bodies["DeleteCloudFunctions"], &body))
 	assert.Equal(t, true, body["dry_run"])
@@ -161,5 +161,5 @@ func TestCollectorAccountAndPackageCommandsPreviewDeletes(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(gateway.bodies["ListFunctionPackages"], &body))
 	assert.Equal(t, "stockcn", body["space_id"])
-	assert.Contains(t, specs[collectMgr+"/DeleteCloudAccount"].Short, "setup inspect-scf", "删账号的说明里写明旧账号下的函数怎么处理")
+	assert.Contains(t, specs[collectMgr+"/DeleteCloudAccount"].Short, "collector function inspect", "删账号的说明里写明旧账号下的函数怎么处理")
 }

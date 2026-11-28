@@ -5,37 +5,40 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// 没有 --yes 或 --space-id 时在连接网关之前就拒绝：该命令会清空补采作业，不能被误触发。
-func TestFetchPlanReregisterRequiresSpaceAndConfirmation(t *testing.T) {
-	var out bytes.Buffer
-	err := runFetchPlanReregister(context.Background(), &out, klineRangeFlags{File: "/nonexistent/moox.toml"}, true)
-	require.ErrorContains(t, err, "--space-id")
+// 没有 --yes 时只预览、不连接网关：reregister 会清空补采作业，不能被误触发。
+func TestFetchPlanReregisterOnlyPreviewsWithoutYes(t *testing.T) {
+	gw := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
+	useRPCGateway(t, gw)
 
-	err = runFetchPlanReregister(context.Background(), &out, klineRangeFlags{File: "/nonexistent/moox.toml", SpaceID: "crypto"}, false)
-	require.ErrorContains(t, err, "--yes")
-	require.Empty(t, out.String())
-}
-
-func TestFetchPlanReregisterIsRegisteredUnderFetchPlan(t *testing.T) {
-	found, _, err := collectorCmd.Find([]string{"fetch-plan", "reregister"})
+	out, _, err := runSpecCommand(t, specByPath(t, "collector", "fetch-plan", "reregister"), "--space-id", "crypto")
 	require.NoError(t, err)
-	require.Equal(t, "reregister", found.Name())
-	require.NotNil(t, found.Flags().Lookup("yes"))
-	require.NotNil(t, found.Flags().Lookup("space-id"))
+	assert.Zero(t, gw.calls)
+	preview := parsePreview(t, out)
+	assert.Equal(t, "ReregisterFetchPlan", preview["method"])
+
+	_, _, err = runSpecCommand(t, specByPath(t, "collector", "fetch-plan", "reregister"), "--space-id", "crypto", "--yes")
+	require.NoError(t, err)
+	assert.Equal(t, 1, gw.calls)
+	assert.Equal(t, "ReregisterFetchPlan", gw.method)
 }
 
-func TestFetchPlanPauseAndResumeAreRegisteredUnderFetchPlan(t *testing.T) {
-	for _, name := range []string{"pause", "resume"} {
-		found, _, err := collectorCmd.Find([]string{"fetch-plan", name})
-		require.NoError(t, err)
+func TestFetchPlanSubcommandsAreRegistered(t *testing.T) {
+	mountCommands(rootCmd)
+	for _, name := range []string{"show", "reregister", "pause", "resume"} {
+		found, rest, err := rootCmd.Find([]string{"collector", "fetch-plan", name})
+		require.NoError(t, err, name)
+		require.Empty(t, rest, name)
 		require.Equal(t, name, found.Name())
-		require.NotNil(t, found.Flags().Lookup("space-id"))
+		require.NotNil(t, found.Flags().Lookup("space-id"), name)
 	}
-	pause, _, _ := collectorCmd.Find([]string{"fetch-plan", "pause"})
+	reregister, _, _ := rootCmd.Find([]string{"collector", "fetch-plan", "reregister"})
+	require.NotNil(t, reregister.Flags().Lookup("yes"))
+	pause, _, _ := rootCmd.Find([]string{"collector", "fetch-plan", "pause"})
 	require.NotNil(t, pause.Flags().Lookup("wait"))
 	var out bytes.Buffer
-	require.Error(t, runFetchPlanPause(context.Background(), &out, klineRangeFlags{File: "/nonexistent/moox.toml"}, true, 0), "缺少 --space-id")
+	require.Error(t, runFetchPlanPause(context.Background(), &out, fetchPlanPauseConfig{File: "/nonexistent/moox.toml"}, true, 0), "缺少 --space-id")
 }

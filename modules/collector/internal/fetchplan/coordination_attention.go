@@ -75,7 +75,7 @@ func (m *ControlMetrics) CoordinationAttention(kind string, staleAfter, pendingG
 
 // coordinationFailureTexts 是各协调失败原因的告警文案。
 var coordinationFailureTexts = map[string]string{
-	"quota":       "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function list --space-id <空间> --drift 找出计划外的函数（unplanned 一组），确认后按各行的 delete_command 删除（moox-cli collector function delete --space-id <空间> --name <函数名> --namespace <命名空间> --region <地域>，带上命名空间与地域才不会连同在用的同名函数一起删）；换过云账号的，旧账号下的函数用 moox-cli setup inspect-scf 查出来到腾讯云控制台手工删",
+	"quota":       "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function list --space-id <空间> --drift 找出计划外的函数（unplanned 一组），确认后按各行的 delete_command 删除（moox-cli collector function delete --space-id <空间> --name <函数名> --namespace <命名空间> --region <地域>，带上命名空间与地域才不会连同在用的同名函数一起删）；换过云账号的，旧账号下的函数用 moox-cli collector function inspect 查出来到腾讯云控制台手工删",
 	"cloud":       "调用腾讯云失败：检查云账号密钥、限频和网络",
 	"environment": "函数运行环境生成失败：请检查环境变量大小",
 	"rules":       "采集规则读取失败：请检查 Collector 规则配置和存储连接",

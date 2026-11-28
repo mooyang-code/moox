@@ -187,11 +187,8 @@ func newInstallHarness(t *testing.T) *installHarness {
 			}, record("init")
 		},
 		openInitFactor: func(context.Context, *setupSnapshot) (setupInitFactor, error) { return &fakeSetupInitFactor{}, nil },
-		ensureArchiveTasks: func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error) {
-			return &setupArchiveTasksSummary{Enabled: true}, nil
-		},
-		runDoctor:   func(context.Context, string, *setupSnapshot) error { return record("doctor") },
-		verifySpace: func(context.Context, string, *setupSnapshot, string) error { return record("verify") },
+		runDoctor:      func(context.Context, string, *setupSnapshot) error { return record("doctor") },
+		verifySpace:    func(context.Context, string, *setupSnapshot, string) error { return record("verify") },
 		markInstallComplete: func(_ context.Context, _ *setupSnapshot, _ string) error {
 			if err := record("mark-complete"); err != nil {
 				return err

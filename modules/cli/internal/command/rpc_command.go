@@ -123,8 +123,9 @@ const (
 	rpcFloat                 // 浮点数
 	rpcBool                  // 布尔；只在显式传入时写入请求
 	rpcStrings               // 可重复或逗号分隔的字符串列表
-	rpcTime                  // 数据时间（data_time 及其上下界）：RFC3339，按字符串原样写入
+	rpcTime                  // 数据时间（data_time 及其上下界）：RFC3339 或 UTC 日期简写，按 RFC3339 字符串写入
 	rpcInstant               // 时刻（创建、截止、查询起止等墙钟时刻）：输入 RFC3339，换成 int64 毫秒写入
+	rpcAfterNow              // 相对当前时间的时长（如 72h），换成 int64 毫秒写入
 	rpcJSON                  // JSON 文本，或 @文件
 	rpcFile                  // 文件路径（- 为标准输入），内容按字符串写入
 	rpcStringMap             // k=v，可重复，按字符串映射写入
@@ -350,10 +351,11 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 		return v, true, nil
 	case rpcTime:
 		v, _ := flags.GetString(f.Name)
-		if _, err := time.Parse(time.RFC3339, v); err != nil {
-			return nil, false, fmt.Errorf("--%s 需要 RFC3339 时间，例如 2026-10-01T00:00:00Z", f.Name)
+		normalized, err := parseRPCTime(f.Name, v)
+		if err != nil {
+			return nil, false, err
 		}
-		return v, true, nil
+		return normalized, true, nil
 	case rpcInstant:
 		v, _ := flags.GetString(f.Name)
 		at, err := time.Parse(time.RFC3339, v)
@@ -361,6 +363,12 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 			return nil, false, fmt.Errorf("--%s 需要 RFC3339 时刻，例如 2026-10-01T00:00:00Z 或 2026-10-01T08:00:00+08:00", f.Name)
 		}
 		return at.UnixMilli(), true, nil
+	case rpcAfterNow:
+		d, _ := flags.GetDuration(f.Name)
+		if d <= 0 {
+			return nil, false, fmt.Errorf("--%s 需要大于 0 的时长，例如 72h", f.Name)
+		}
+		return time.Now().Add(d).UnixMilli(), true, nil
 	case rpcJSON:
 		v, _ := flags.GetString(f.Name)
 		raw := []byte(v)
@@ -420,6 +428,8 @@ func (f rpcFlag) register(cmd *cobra.Command) {
 		cmd.Flags().StringSlice(f.Name, nil, f.Usage)
 	case rpcStringMap, rpcNumberMap:
 		cmd.Flags().StringToString(f.Name, nil, f.Usage)
+	case rpcAfterNow:
+		cmd.Flags().Duration(f.Name, 0, f.Usage)
 	default:
 		cmd.Flags().String(f.Name, f.Default, f.Usage)
 	}
@@ -678,6 +688,32 @@ func timeFlag(name, field, usage string, required bool) rpcFlag {
 func instantFlag(name, field, usage string, required bool) rpcFlag {
 	return rpcFlag{Name: name, Field: field, Kind: rpcInstant, Usage: usage, Required: required}
 }
+func afterNowFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcAfterNow, Usage: usage}
+}
 func mapFlag(name, field, usage string) rpcFlag {
 	return rpcFlag{Name: name, Field: field, Kind: rpcStringMap, Usage: usage}
+}
+
+// parseRPCTime 接受标准 RFC3339（原样保留），以及不带时区的 UTC 日期时间简写（如 2026-10-12、2026-10-12T08:00）。
+func parseRPCTime(name, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("--%s 不能为空", name)
+	}
+	if _, err := time.Parse(time.RFC3339, value); err == nil {
+		return value, nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02 15:04", "2006-01-02"} {
+		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+			return parsed.UTC().Format(time.RFC3339), nil
+		}
+	}
+	return "", fmt.Errorf("--%s 需要 RFC3339 时间，例如 2026-10-01T00:00:00Z", name)
+}
+
+func printJSON(out io.Writer, value any) error {
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
 }

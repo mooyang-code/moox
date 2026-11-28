@@ -32,7 +32,7 @@ description: 用于调试、排查 MooX 端到端（e2e）故障：collector 的
 2. 代码包上传：COS 对象存在，地域 / 桶 / key 与发布请求一致。
 3. SCF 函数：存在于预期的地域和命名空间，代码包是最新的，环境里的分配哈希与计划一致（`collector function list --drift`）。
 4. Timer：触发器已启用，cron 与预期一致（同一条命令；计划外的函数单独列出，它们的定时器已停）。
-5. 计划：确认数据集走 SCF（stream / local 另有执行器）；函数环境里带着当前的采集计划（`collector fetch-plan`）。
+5. 计划：确认数据集走 SCF（stream / local 另有执行器）；函数环境里带着当前的采集计划（`collector fetch-plan show`）。
 6. 执行：CLS 日志里有每个标的的数据源请求结果。
 7. Storage：`CommitTimeSeriesBatch` 经网关外部入口写入成功。
 8. 结果：任务的结果 View 里出现对应空间、标的和频率的行。

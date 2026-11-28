@@ -17,7 +17,7 @@ import (
 
 // oldAccountFunctionsHint 是换过云账号之后的提示：Collector 只按当前配置的云账号列举函数，旧账号下建的函数它管不到。
 const oldAccountFunctionsHint = "只删当前 scf_plan 云账号下、属于本空间的函数；旧云账号下建的函数 Collector 管不到，本命令也删不到，" +
-	"要用 moox-cli setup inspect-scf 查出来，再到腾讯云控制台手工删。"
+	"要用 moox-cli collector function inspect 查出来，再到腾讯云控制台手工删。"
 
 type collectorFunctionFlags struct {
 	File      string

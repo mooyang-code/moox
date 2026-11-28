@@ -37,7 +37,7 @@ var collectorCmd = &cobra.Command{
 
 var collectorFunctionCmd = &cobra.Command{
 	Use:   "function",
-	Short: "采集云函数：代码包构建与上传、云上状态、删除、出口探测",
+	Short: "采集云函数：代码包构建与上传、云上状态、删除、出口探测与直调诊断",
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
 	},

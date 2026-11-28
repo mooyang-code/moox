@@ -87,10 +87,10 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
 | 8 | 自动导入待恢复备份 | 若本机存在带“卸载后待导入”标记的 `moox.backup`，在完整初始化前按覆盖导入密钥（`SecretMgr.ImportSecrets`）与告警渠道（`MonitorMgr.ImportNotificationChannels`），成功后清掉标记；无备份则跳过并提示 |
-| 9 | `setup init` | 默认云账号密钥（只建不改）、告警渠道只读检查（为空时提醒）、云账户、日志服务、云函数代码包、登录校验、自动为有限保留期的内置时序数据集建归档任务、输出管理台入口地址（这些要等 Collector、Monitor、ArchiveMgr 起来） |
-| 10 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入，同时为该空间新建的因子结果数据集自动建归档任务；验收通过后在控制机部署根写出完成标记 `install-complete.json` |
+| 9 | `setup init` | 默认云账号密钥（只建不改）、告警渠道只读检查（为空时提醒）、云账户、日志服务、云函数代码包、登录校验、输出管理台入口地址（这些要等 Collector、Monitor 起来） |
+| 10 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入；验收通过后在控制机部署根写出完成标记 `install-complete.json` |
 
-- `setup init` 与 `setup start` 在部署了 `archive-mgr` 时会自动为所有已激活且有限保留期的时序数据集（内置原始 K 线数据集与默认因子结果数据集）幂等创建归档任务，全新安装完成后即覆盖归档、不会触发“未归档的数据集”告警；自己后续手工新建的采集任务或因子任务仍可在管理台“数据归档 › 归档任务”页或用 `moox-cli archive tasks create` 建归档任务。
+- 部署了 `archive-mgr` 时，ArchiveMgr 会自动为所有已激活且有限保留期的时序数据集（含内置原始 K 线数据集与新建的因子结果数据集）补齐归档任务，不再由 `setup init` 或 `setup start` 代建；**手工删除的归档任务会被 ArchiveMgr 重新建出来，不想归档某个数据集应把任务停用（停用的任务不会被重建）**。
 - 全新安装时数据集首次接入要补历史（crypto 两个 1m 数据集要几小时），补齐期间因子任务不计算：`setup verify` 把这些任务算通过，因子检查的说明写“补历史中，下游待生效”，不用为了验收先 `collector history-seed skip`。
 - 任何一步失败先看原因和日志（`setup logs --host <主机> --component <组件> --journal`），修好后重跑同一条 `setup install`：每一步都可以重做，没有变化的组件不重启。
 - 改了代码要重新构建二进制再重跑；`setup deploy` 按二进制摘要判断哪些组件有变化。
@@ -153,8 +153,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 港股按交易时段推进：完整交易日 66 期（09:30～11:55、13:00～15:55），半日市（圣诞前夕、新年前夕、农历新年前夕）只有上午 30 期。港股实例可以挂港股模拟账户（交易模块新建账户时选“港股”，按港元结算）：
 整手（每手股数逐只不同，取自腾讯实时快照）、当日买入可卖、没有涨跌停、港股费用；只有模拟盘，没有实盘通道。规则与已知差别见 `docs/模块/交易.md` 的“港股模拟盘”一节。
 
-`setup start` 导入默认因子任务后会自动为该空间有限保留期的结果数据集补建归档任务；自己手工通过 `factor task apply` 新建的因子任务结果数据集默认不代建归档任务，命令结束时会逐个打出
-`moox-cli archive tasks create --space-id <空间> --dataset-id <结果数据集>`，要归档就执行它。
+部署了数据归档时，ArchiveMgr 会自动为所有已激活且有限保留期的时序数据集（含默认和手工新建的因子结果数据集）补齐归档任务；不想归档某个数据集应将对应任务停用（手工删除会被重新建出来）。
 
 ### 交易日历的年度更新
 
@@ -188,7 +187,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 4. **自动接管与计划外函数**（验收前先不清腾讯云上已有的函数）：
    ```bash
    $CLI setup start --file ./moox.toml --source-dir $WT --space-id stockcn
-   $CLI collector fetch-plan --space-id stockcn
+   $CLI collector fetch-plan show --space-id stockcn
    $CLI collector function list --space-id stockcn
    ```
    等计划变成已生效，Collector 日志里没有 `already exists`；函数列表里每个函数存在、定时器一致、代码包最新。上一次安装留下、不在计划里的函数列在 `unplanned`，第一次读回之后定时器都是停用（第二片及以后的命名空间里的也是）。

@@ -98,7 +98,7 @@ func activityMillis(name, value string) (int64, error) {
 	if strings.TrimSpace(value) == "" {
 		return 0, nil
 	}
-	text, err := parseKlineTime(name, value)
+	text, err := parseRPCTime(name, value)
 	if err != nil {
 		return 0, err
 	}

@@ -140,7 +140,6 @@ verify-custom-setup:
 
 test-moox-ca:
 	bash scripts/test/contract/test-install-moox-ca.sh
-	bash skills/moox/scripts/test-moox-ca.sh
 
 test-collector-scf-package-contract:
 	bash scripts/build/build-collector-scf-package_test.sh
