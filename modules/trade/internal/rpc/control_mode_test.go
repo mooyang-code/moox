@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/stretchr/testify/require"
 )

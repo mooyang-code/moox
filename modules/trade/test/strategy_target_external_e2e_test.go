@@ -24,7 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
-	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"

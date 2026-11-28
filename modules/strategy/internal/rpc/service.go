@@ -12,7 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
-	"github.com/mooyang-code/moox/modules/strategy/internal/spacecontext"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"

@@ -9,7 +9,7 @@ import (
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/modules/strategy/internal/spacecontext"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorname"
 )

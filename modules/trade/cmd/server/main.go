@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	_ "github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
+	_ "github.com/mooyang-code/moox/packages/spacecontext"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-filter/validation"
