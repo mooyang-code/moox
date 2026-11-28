@@ -37,11 +37,9 @@
           <a-descriptions-item label="计算任务 ID">{{ set.task_id }}</a-descriptions-item>
           <a-descriptions-item label="频率">{{ set.frequency }}</a-descriptions-item>
           <a-descriptions-item label="关联策略实例">
-            <a-link
-              v-if="set.bound_instance_id"
-              @click="router.push({ name: 'strategy-detail', params: { instanceId: set.bound_instance_id } })"
-              >{{ set.bound_instance_id }}</a-link
-            >
+            <a-link v-if="set.bound_instance_id" @click="router.push(strategyInstanceDetailLink(set.bound_instance_id))">{{
+              set.bound_instance_id
+            }}</a-link>
             <span v-else class="detail-hint">尚未关联：创建策略实例时选择这个任务，关联后永久有效</span>
           </a-descriptions-item>
           <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>
@@ -83,6 +81,7 @@ import { formatInstant } from "@/utils/time-zone";
 import { computed } from "vue";
 import { useRouter } from "vue-router";
 import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
+import { factorDefinitionsPath, factorTasksLocation, strategyInstanceDetailLink } from "@/router/links";
 import { useFactorStore } from "@/store/modules/factor";
 import { taskHealth } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
@@ -115,11 +114,11 @@ const sourceName = computed(() =>
   set.value ? store.datasetNames[set.value.source_dataset_id] || set.value.source_dataset_id : ""
 );
 function goDefinitions() {
-  void router.push("/factor/definitions");
+  void router.push(factorDefinitionsPath());
 }
 
 function goTab(tab: "results" | "recalc") {
-  void router.push({ path: "/factor/tasks", query: { tab, task: set.value.task_id } });
+  void router.push(factorTasksLocation({ tab, task: set.value.task_id }));
 }
 </script>
 

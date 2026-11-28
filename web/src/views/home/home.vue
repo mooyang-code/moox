@@ -4,7 +4,7 @@
       <section v-if="!selectedSpaceId" class="home-empty">
         <h2>还没有可用的空间</h2>
         <p>空间是采集、因子、策略与交易的隔离边界。先创建一个空间，再配置数据源和采集任务。</p>
-        <a-button type="primary" status="success" @click="go('/settings/spaces')">新建空间</a-button>
+        <a-button type="primary" status="success" @click="go(settingsSpacesPath())">新建空间</a-button>
       </section>
 
       <template v-else>
@@ -106,7 +106,7 @@
               <h3>
                 需要处理<small v-if="attention.length" class="is-warn">{{ attention.length }}</small>
               </h3>
-              <a @click="go('/ops/monitor')">监控 →</a>
+              <a @click="go(opsMonitorPath())">监控 →</a>
             </header>
             <div class="tile-body">
               <div v-if="!attention.length" class="all-clear">
@@ -129,7 +129,7 @@
               </button>
             </div>
             <footer class="tile-foot">
-              <a v-if="foldedAttention.hidden" @click="go('/ops/monitor')">另有 {{ foldedAttention.hidden }} 项</a>
+              <a v-if="foldedAttention.hidden" @click="go(opsMonitorPath())">另有 {{ foldedAttention.hidden }} 项</a>
             </footer>
           </section>
 
@@ -138,7 +138,7 @@
               <h3>
                 因子计算<small>{{ factors.length }}</small>
               </h3>
-              <a @click="go('/factor/tasks?tab=results')">计算结果 →</a>
+              <a @click="go(factorTasksPath({ tab: 'results' }))">计算结果 →</a>
             </header>
             <div class="tile-body">
               <p v-if="!factors.length" class="tile-empty">
@@ -163,7 +163,7 @@
               </template>
             </div>
             <footer class="tile-foot">
-              <a v-if="foldedFactors.hidden" @click="go('/factor/tasks')">另有 {{ foldedFactors.hidden }} 项</a>
+              <a v-if="foldedFactors.hidden" @click="go(factorTasksPath())">另有 {{ foldedFactors.hidden }} 项</a>
             </footer>
           </section>
 
@@ -172,7 +172,7 @@
               <h3>
                 数据新鲜度<small>{{ freshness.length }}</small>
               </h3>
-              <a @click="go('/collector/tasks?tab=results')">采集结果 →</a>
+              <a @click="go(collectorTasksPath({ tab: 'results' }))">采集结果 →</a>
             </header>
             <div class="tile-body">
               <p v-if="!freshness.length" class="tile-empty">
@@ -195,7 +195,7 @@
               </button>
             </div>
             <footer class="tile-foot">
-              <a v-if="foldedFreshness.hidden" @click="go('/ops/monitor')">另有 {{ foldedFreshness.hidden }} 项</a>
+              <a v-if="foldedFreshness.hidden" @click="go(opsMonitorPath())">另有 {{ foldedFreshness.hidden }} 项</a>
             </footer>
           </section>
 
@@ -204,7 +204,7 @@
               <h3>
                 主机工作台<small>{{ hosts.length }}</small>
               </h3>
-              <a @click="go('/ops/hosts?tab=monitor')">全部主机 →</a>
+              <a @click="go(opsHostsPath({ tab: 'monitor' }))">全部主机 →</a>
             </header>
             <div class="tile-body">
               <p v-if="!hosts.length" class="tile-empty">
@@ -228,14 +228,14 @@
               </template>
             </div>
             <footer class="tile-foot">
-              <a v-if="foldedHosts.hidden" @click="go('/ops/hosts?tab=monitor')">另有 {{ foldedHosts.hidden }} 台</a>
+              <a v-if="foldedHosts.hidden" @click="go(opsHostsPath({ tab: 'monitor' }))">另有 {{ foldedHosts.hidden }} 台</a>
             </footer>
           </section>
 
           <section class="tile tile-wide" aria-label="最近动态">
             <header class="tile-head">
               <h3>最近动态</h3>
-              <a @click="go('/ops/logs?tab=activity')">日志中心 →</a>
+              <a @click="go(opsLogsPath('activity'))">日志中心 →</a>
             </header>
             <div class="tile-body activity-body">
               <p v-if="!activity.length" class="tile-empty">
@@ -249,7 +249,7 @@
                 type="button"
                 class="line activity-line"
                 :title="row.title"
-                @click="go('/ops/logs?tab=activity')"
+                @click="go(opsLogsPath('activity'))"
               >
                 <span class="muted" :title="row.whenTitle">{{ row.when }}</span>
                 <span class="ellipsis">{{ row.title }}</span>
@@ -286,6 +286,18 @@ import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { datasetMatchesAttribution, isFactorResultDataset } from "@/views/data/shared/module-attribution";
 import { alertHref } from "@/views/ops/monitor/health-display";
+import {
+  collectorTasksPath,
+  dataSourcesPath,
+  factorDefinitionsPath,
+  factorTasksPath,
+  opsHostsPath,
+  opsLogsPath,
+  opsMonitorPath,
+  settingsSpacesPath,
+  strategyTasksPath,
+  tradingAccountsPath
+} from "@/router/links";
 import { instancesLink, replayLink } from "@/views/strategy/links";
 import {
   TILE_LIMITS,
@@ -432,23 +444,23 @@ function stepStrategy(delta: number) {
 }
 
 const quickLinks: { label: string; icon: string; target: HomeTarget }[] = [
-  { label: "采集结果", icon: "icon-bar-chart", target: "/collector/tasks?tab=results" },
-  { label: "因子结果", icon: "icon-experiment", target: "/factor/tasks?tab=results" },
+  { label: "采集结果", icon: "icon-bar-chart", target: collectorTasksPath({ tab: "results" }) },
+  { label: "因子结果", icon: "icon-experiment", target: factorTasksPath({ tab: "results" }) },
   { label: "策略实例", icon: "icon-compass", target: instancesLink() },
   { label: "策略回放", icon: "icon-history", target: replayLink() },
-  { label: "交易账户", icon: "icon-safe", target: "/trading/paper" },
-  { label: "监控告警", icon: "icon-notification", target: "/ops/monitor" }
+  { label: "交易账户", icon: "icon-safe", target: tradingAccountsPath("paper") },
+  { label: "监控告警", icon: "icon-notification", target: opsMonitorPath() }
 ];
 
 const inventory = computed(() => [
-  { label: "数据源", value: counts.sources, path: "/data/sources" },
-  { label: "采集任务", value: counts.rules, path: "/collector/tasks?tab=tasks" },
-  { label: "采集结果", value: counts.datasets, path: "/collector/tasks?tab=results" },
-  { label: "因子", value: counts.factors, path: "/factor/definitions" },
-  { label: "计算任务", value: counts.factorTasks, path: "/factor/tasks" },
-  { label: "策略实例", value: counts.instances, path: "/strategy/tasks" },
-  { label: "执行账户", value: counts.accounts, path: "/trading/paper?list=execution" },
-  { label: "云函数", value: counts.nodes, path: "/collector/tasks?tab=status" }
+  { label: "数据源", value: counts.sources, path: dataSourcesPath() },
+  { label: "采集任务", value: counts.rules, path: collectorTasksPath({ tab: "tasks" }) },
+  { label: "采集结果", value: counts.datasets, path: collectorTasksPath({ tab: "results" }) },
+  { label: "因子", value: counts.factors, path: factorDefinitionsPath() },
+  { label: "计算任务", value: counts.factorTasks, path: factorTasksPath() },
+  { label: "策略实例", value: counts.instances, path: strategyTasksPath() },
+  { label: "执行账户", value: counts.accounts, path: tradingAccountsPath("paper", { list: "execution" }) },
+  { label: "云函数", value: counts.nodes, path: collectorTasksPath({ tab: "status" }) }
 ]);
 
 function fmt(value: number | null | undefined) {

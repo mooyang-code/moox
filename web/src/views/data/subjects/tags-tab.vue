@@ -150,11 +150,9 @@
           <a-table-column title="数据集名称" data-index="dataset_name" />
           <a-table-column title="采集任务 ID">
             <template #cell="{ record }">
-              <a-link
-                v-if="record.collector_task_id"
-                :href="`#/collector/tasks?detail=${encodeURIComponent(record.collector_task_id)}`"
-                >{{ record.collector_task_id }}</a-link
-              >
+              <a-link v-if="record.collector_task_id" :href="collectorTaskDetailHref(record.collector_task_id)">{{
+                record.collector_task_id
+              }}</a-link>
               <span v-else>-</span>
             </template>
           </a-table-column>
@@ -165,6 +163,7 @@
 </template>
 
 <script setup lang="ts">
+import { collectorTaskDetailHref } from "@/router/links";
 import { RequestError, reportError } from "@/api/http";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";

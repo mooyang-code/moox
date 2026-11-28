@@ -109,6 +109,7 @@ import type { FactorCategory, MemberParamState } from "@/api/factor/types";
 import { listAllDatasetColumns } from "@/api/storage/metadata";
 import { getStrategyDisplaySettings, listStrategyResults, setStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden, StrategyInstance, StrategyResult } from "@/api/strategy-types";
+import { factorTasksLocation } from "@/router/links";
 import { useSpaceStore } from "@/store/modules/space";
 import { memberParamsSummary, nextParamsRows, parseFactorBinding, periodText } from "@/views/strategy/factor-params-model";
 import { formatInstant } from "@/utils/time-zone";
@@ -209,7 +210,7 @@ function clearHidden() {
 }
 
 function openResults() {
-  if (binding.value) void router.push({ path: "/factor/tasks", query: { tab: "results", task: binding.value.taskId } });
+  if (binding.value) void router.push(factorTasksLocation({ tab: "results", task: binding.value.taskId }));
 }
 
 // 多源 watch 按每个源逐个比较：父页面每 10 秒整体替换实例对象时，实例与会话没变就不重新加载，

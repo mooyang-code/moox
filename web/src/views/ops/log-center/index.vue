@@ -12,9 +12,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { useQueryTab } from "@/hooks/useQueryTab";
 import ActivityTab from "./activity-tab.vue";
 import ImportantTab from "./important-tab.vue";
 
@@ -26,14 +25,11 @@ const tabs = [
   { key: "important", label: "重要日志" }
 ] as const;
 
-const route = useRoute();
-const router = useRouter();
 // 只认 important，其余一律落到默认的活动日志
-const activeTab = computed<"activity" | "important">(() => (route.query.tab === "important" ? "important" : "activity"));
-
-function onTabChange(value: string) {
-  void router.replace({ path: "/ops/logs", query: value === "important" ? { tab: "important" } : {} });
-}
+const { activeTab, setTab: onTabChange } = useQueryTab<"activity" | "important">({
+  tabs: ["activity", "important"],
+  target: { path: "/ops/logs" }
+});
 </script>
 
 <style scoped>

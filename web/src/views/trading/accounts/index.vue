@@ -138,6 +138,7 @@
 import InfoTip from "@/components/info-tip/index.vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { strategyInstanceDetailLink } from "@/router/links";
 import { useSpaceStore } from "@/store/modules/space";
 import { ControlMode, listLogicalAccounts, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
@@ -233,7 +234,7 @@ function onRowClick(record: ComboRow, event: Event) {
 }
 
 function openStrategy(instanceId: string) {
-  void router.push({ name: "strategy-detail", params: { instanceId } });
+  void router.push(strategyInstanceDetailLink(instanceId));
 }
 
 /** 新建的账户属于别的环境时，跳到那个环境的菜单；否则重读当前列表。 */

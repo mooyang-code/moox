@@ -19,6 +19,7 @@
 import { computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { useQueryTab } from "@/hooks/useQueryTab";
 import { useSpaceStore } from "@/store/modules/space";
 import FieldsTab from "./fields-tab.vue";
 import SourcesTab from "./sources-tab.vue";
@@ -36,17 +37,14 @@ const spaceStore = useSpaceStore();
 const route = useRoute();
 const router = useRouter();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
-const activeTab = computed<DataSourceTab>(() => (route.query.tab === "fields" ? "fields" : "sources"));
-
-function onTabChange(value: string | number) {
-  const tab: DataSourceTab = value === "fields" ? "fields" : "sources";
-  if (tab === "sources") {
-    void router.replace({ path: route.path, query: {} });
-    return;
+const { activeTab, setTab: onTabChange } = useQueryTab<DataSourceTab>({
+  tabs: ["sources", "fields"],
+  buildQuery(tab, currentQuery) {
+    if (tab === "sources") return {};
+    const rest = Object.fromEntries(Object.entries(currentQuery).filter(([key]) => key !== "tab"));
+    return { ...rest, tab: "fields" };
   }
-  const rest = Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab"));
-  void router.replace({ path: route.path, query: { ...rest, tab: "fields" } });
-}
+});
 
 function openFieldsForProvider(providerId: string) {
   const query: Record<string, string> = { tab: "fields" };

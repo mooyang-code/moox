@@ -122,8 +122,8 @@ describe("factor API contract", () => {
 
 describe("factor pages contract", () => {
   it("keeps the selected set and tab in the URL query", () => {
-    expect(taskHost).toContain("route.query.tab");
-    expect(taskHost).toContain("PageTitleTabs");
+    expect(taskHost).toContain("TitleTabsWorkbench");
+    expect(taskHost).toContain("buildTabQuery");
     expect(factorScope).toContain("route.query.task");
     expect(factorScope).toContain("usePolling");
     expect(computeTasks).toContain("extraPoll");
@@ -142,7 +142,7 @@ describe("factor pages contract", () => {
 
   it("lays out the definitions page as a two-tab host with definitions workbench and output fields tab", () => {
     expect(definitionsHost).toContain("PageTitleTabs");
-    expect(definitionsHost).toContain("route.query.tab");
+    expect(definitionsHost).toContain("useQueryTab");
     expect(definitionsHost).toContain('label: "因子定义"');
     expect(definitionsHost).toContain('label: "产出字段"');
     // 因子定义页签保持搜索、筛选、查询在左，新增在右；下方提示条；左侧分类树，右侧批量栏加表格

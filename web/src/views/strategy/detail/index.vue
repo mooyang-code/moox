@@ -37,9 +37,8 @@
           <a-button
             size="small"
             @click="
-              router.push({
-                path: `/trading/accounts/${logicalAccount?.logical_account_id}`
-              })
+              logicalAccount?.logical_account_id &&
+                router.push({ path: tradingAccountDetailPath(logicalAccount.logical_account_id) })
             "
             >去恢复</a-button
           >
@@ -71,11 +70,7 @@
           <a-descriptions-item label="组合账户"
             ><a-link
               v-if="detail.instance.logical_account_id"
-              @click="
-                router.push({
-                  path: `/trading/accounts/${detail.instance.logical_account_id}`
-                })
-              "
+              @click="router.push({ path: tradingAccountDetailPath(detail.instance.logical_account_id) })"
               >{{ logicalAccount?.name || detail.instance.logical_account_id }}</a-link
             ><span v-else>未关联账户</span></a-descriptions-item
           >
@@ -136,6 +131,7 @@ import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
 import StrategyFactorParams from "@/views/strategy/components/strategy-factor-params.vue";
 import { parseFactorBinding } from "@/views/strategy/factor-params-model";
+import { tradingAccountDetailPath } from "@/router/links";
 import { instancesLink, replayLink } from "@/views/strategy/links";
 import { runningVersionText } from "@/views/strategy/model";
 import { useInstanceResults } from "@/views/strategy/use-instance-results";

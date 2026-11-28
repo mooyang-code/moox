@@ -9,6 +9,7 @@ import { readAllPages } from "@/api/read-all-pages";
 import { listArchiveTasks, type ArchiveTask } from "@/api/archive";
 import { listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
+import { archiveTasksPath } from "@/router/links";
 import { healthLabel, healthTone, type Tone } from "./archive-model";
 
 const TTL_MS = 60_000;
@@ -57,7 +58,7 @@ export function coverageFor(data: ArchiveCoverageData | null, datasetId?: string
   return {
     text: `已归档 · ${healthLabel(task.health)}`,
     tone: task.health === "ok" ? "muted" : healthTone(task.health),
-    link: `/archive/tasks?task=${encodeURIComponent(datasetId)}`
+    link: archiveTasksPath(datasetId)
   };
 }
 

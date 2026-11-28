@@ -52,6 +52,7 @@ import { useRoute, useRouter } from "vue-router";
 import { listFactorCategories } from "@/api/factor";
 import { UNCATEGORIZED, type FactorCategory } from "@/api/factor/types";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { useQueryTab } from "@/hooks/useQueryTab";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import DefinitionsTab from "./definitions-tab.vue";
 import FactorDetailDrawer from "./factor-detail-drawer.vue";
@@ -71,7 +72,6 @@ const router = useRouter();
 const { store, spaceId } = useFactorScope({ poll: false });
 
 const categories = ref<FactorCategory[]>([]);
-const activeTab = computed<FactorDefinitionsTabKey>(() => (route.query.tab === "fields" ? "fields" : "definitions"));
 // 打开的因子详情写进 ?detail=：刷新、后退、分享链接都能回到同一个因子，两个页签共用同一个详情抽屉。
 const detailId = computed(() => (typeof route.query.detail === "string" ? route.query.detail : ""));
 
@@ -86,24 +86,19 @@ function categoryHasOutputFields(categoryId: string): boolean {
   );
 }
 
-function onTabChange(value: string | number) {
-  const tab: FactorDefinitionsTabKey = value === "fields" ? "fields" : "definitions";
-  const category = typeof route.query.category === "string" ? route.query.category : "";
-  if (tab === "definitions") {
-    const query: Record<string, string> = {};
-    if (category) query.category = category;
+const { activeTab, setTab: onTabChange } = useQueryTab<FactorDefinitionsTabKey>({
+  tabs: ["definitions", "fields"],
+  buildQuery(tab, currentQuery) {
+    const category = typeof currentQuery.category === "string" ? currentQuery.category : "";
+    const query: Record<string, string> = tab === "fields" ? { tab: "fields" } : {};
+    // 切到产出字段时，若当前空间任务已加载且所选分类无产出列，不透传空分类避免静默空表。
+    if (category && (tab === "definitions" || !store.isLoadedFor(spaceId.value) || categoryHasOutputFields(category))) {
+      query.category = category;
+    }
     if (detailId.value) query.detail = detailId.value;
-    void router.replace({ path: route.path, query });
-    return;
+    return query;
   }
-  const query: Record<string, string> = { tab: "fields" };
-  // 切到产出字段时，若当前空间任务已加载且所选分类无产出列，不透传空分类避免静默空表。
-  if (category && (!store.isLoadedFor(spaceId.value) || categoryHasOutputFields(category))) {
-    query.category = category;
-  }
-  if (detailId.value) query.detail = detailId.value;
-  void router.replace({ path: route.path, query });
-}
+});
 
 /** 分类只用于归类与筛选；加载失败时分类显示为 ID，不影响列表。 */
 async function loadCategories() {

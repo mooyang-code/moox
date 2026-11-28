@@ -7,6 +7,7 @@ import type { StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-ty
 import { seedEtaText } from "@/views/collector/runtime-status/runtime-status-model";
 import { freqSeconds, runBarLag, taskHealth } from "@/views/factor/shared/health";
 import { statusLabel } from "@/views/ops/monitor/health-display";
+import { collectorTasksPath, factorTasksPath, opsHostsPath, opsMonitorPath } from "@/router/links";
 import { detailLink, instancesLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
 import { pendingItems, sortInstancesByPriority, stateOf } from "@/views/strategy/attention-model";
@@ -146,7 +147,7 @@ export function freshnessRows(overview: HealthOverview | undefined, names: NameB
         tone,
         status: statusLabel(item.status),
         reason: item.reason || "",
-        path: producer === "factor" ? "/factor/tasks?tab=results" : "/collector/tasks?tab=results",
+        path: producer === "factor" ? factorTasksPath({ tab: "results" }) : collectorTasksPath({ tab: "results" }),
         seconds: behind,
         closeMs
       };
@@ -199,7 +200,7 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
         lag: behindSeconds === null ? "—" : behindText(behindSeconds),
         behindSeconds,
         periodEndMs,
-        path: `/factor/tasks?tab=results&task=${encodeURIComponent(set.task_id)}`
+        path: factorTasksPath({ tab: "results", task: set.task_id })
       };
     })
     .sort((a, b) => TONE_RANK[a.tone] - TONE_RANK[b.tone] || a.label.localeCompare(b.label));
@@ -399,7 +400,7 @@ export function hostRows(hosts: HealthHost[]): HostRow[] {
       memory: percentText(host.memory_percent, host.memory_available),
       disk: percentText(host.disk_percent, host.disk_available),
       hot,
-      path: `/ops/hosts?tab=monitor&host_id=${encodeURIComponent(host.host_id || "")}`
+      path: opsHostsPath({ tab: "monitor", hostId: host.host_id || undefined })
     };
   });
 }
@@ -686,7 +687,7 @@ export function kpiCards(input: {
           ? `${factorBad} 个异常 · 收盘 ${factorTime}`
           : `${factorCount} 个因子 · 收盘 ${factorTime}`,
       hint: "计算任务最近一个已计算周期的收盘时间；有异常的任务时是异常最重的那一个",
-      target: "/factor/tasks?tab=results"
+      target: factorTasksPath({ tab: "results" })
     },
     {
       key: "freshness",
@@ -703,7 +704,7 @@ export function kpiCards(input: {
             ? `${stale} 条落后 · 收盘 ${dataTime}`
             : `收盘 ${dataTime}`,
       hint: "数据链路已写到的最近一根 K 线的收盘时间；有落后的数据集时是落后最多的那一个",
-      target: "/collector/tasks?tab=results"
+      target: collectorTasksPath({ tab: "results" })
     },
     {
       key: "alerts",
@@ -713,7 +714,7 @@ export function kpiCards(input: {
       value: monitorDown || input.alertCount === undefined ? "—" : String(input.alertCount),
       unit: "",
       note: monitorDown ? "监控数据暂不可用" : "组件、数据与主机",
-      target: "/ops/monitor"
+      target: opsMonitorPath()
     }
   ];
 }

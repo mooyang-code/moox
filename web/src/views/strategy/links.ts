@@ -2,6 +2,7 @@
  * 策略模块内的跳转目标统一在这里构造：页面之间只通过这些函数互相链接，路由名与 query 键改动时只改一处。
  * 「策略运行」是一个带标题 Tab 的工作台（运行实例 / 策略回放），Tab 由 query.tab 决定，运行实例是默认 Tab。
  */
+import { strategyInstanceDetailLink } from "@/router/links";
 import { formatFactorTasks } from "@/views/strategy/market-mode";
 
 export const STRATEGY_TASKS_ROUTE = "strategy-tasks";
@@ -51,7 +52,7 @@ export function replayLink(
 }
 
 export function detailLink(instanceId: string): StrategyLink {
-  return { name: "strategy-detail", params: { instanceId } };
+  return strategyInstanceDetailLink(instanceId);
 }
 
 export function definitionsLink(definitionId = ""): StrategyLink {

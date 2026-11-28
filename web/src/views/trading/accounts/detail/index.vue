@@ -312,6 +312,7 @@ import {
 import type { LogicalAccount, LogicalAccountTarget, Order, TargetLane, TradingAccount } from "@/api/trade";
 import { accountMapOf } from "../account-list";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
+import { strategyInstanceDetailLink } from "@/router/links";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import {
   environmentMenus,
@@ -558,7 +559,7 @@ function backToList() {
 }
 
 function openStrategy() {
-  if (strategy.value) void router.push({ name: "strategy-detail", params: { instanceId: strategy.value.instanceId } });
+  if (strategy.value) void router.push(strategyInstanceDetailLink(strategy.value.instanceId));
 }
 
 function afterAction() {

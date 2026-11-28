@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { defineComponent, h, KeepAlive, nextTick, ref } from "vue";
+import { defineComponent, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { FactorTaskInfo } from "@/api/factor/types";
 
@@ -170,32 +170,6 @@ describe("useFactorScope", () => {
     hoisted.replace.mockClear();
     hoisted.route.query = { task: "b" };
     await nextTick();
-    expect(store.currentTaskId).toBe("b");
-  });
-
-  it("re-syncs ?task= changed while deactivated when the page is activated again", async () => {
-    vi.mocked(listFactorTasks).mockResolvedValue(sets([info("a"), info("b")]));
-    const store = useFactorStore();
-    hoisted.route.query = { tab: "results", task: "a" };
-    const Scoped = defineComponent({
-      setup() {
-        useFactorScope({ requireTask: true, poll: false });
-        return () => null;
-      }
-    });
-    const shown = ref(true);
-    mount(defineComponent({ setup: () => () => h(KeepAlive, null, shown.value ? h(Scoped) : null) }));
-    await flushPromises();
-    expect(store.currentTaskId).toBe("a");
-
-    shown.value = false;
-    await nextTick();
-    hoisted.route.query = { tab: "results", task: "b" };
-    await nextTick();
-    expect(store.currentTaskId).toBe("a");
-
-    shown.value = true;
-    await flushPromises();
     expect(store.currentTaskId).toBe("b");
   });
 

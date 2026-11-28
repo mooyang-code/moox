@@ -97,11 +97,12 @@
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, h, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { addFactorToTask, listFactorCategories, listFactors, setFactorMemberStatus } from "@/api/factor";
+import { addFactorToTask, listFactorCategories, listFactors } from "@/api/factor";
 import { readAllPages } from "@/api/read-all-pages";
 import type { FactorCategory, FactorDef, FactorParamDecl, FactorTaskInfo, MemberKind } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
+import { factorTaskRecalcHref } from "@/router/links";
 import { useSpaceStore } from "@/store/modules/space";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { precheckAddFactor, type PrecheckMember, type PrecheckResult } from "./add-factor-precheck";
@@ -283,8 +284,6 @@ async function submit() {
   errors.value = {};
   const done: string[] = [];
   const enable = enableAfterAdd.value && taskEnabled.value;
-  // 已添加但没能启用的成员键（失败原因）：成员已经在任务里，只是还停用着。
-  const enableFailures: string[] = [];
   try {
     for (const factorId of [...selected.value]) {
       if (stale()) break;
@@ -297,14 +296,7 @@ async function submit() {
           ? Object.fromEntries(decls.map(decl => [decl.name, draft?.params[decl.name] ?? decl.default_value]))
           : undefined;
         const kind = draft?.kind ?? "fixed";
-        const member = await addFactorToTask(taskId, factorId, kind, params);
-        if (enable && !stale()) {
-          try {
-            await setFactorMemberStatus(taskId, member.member_key, "enabled");
-          } catch (error) {
-            enableFailures.push(`${member.member_key}（${error instanceof Error ? error.message : "启用失败"}）`);
-          }
-        }
+        const member = await addFactorToTask(taskId, factorId, kind, params, enable ? "enabled" : undefined);
         addedMembers.value = [
           ...addedMembers.value,
           {
@@ -334,14 +326,9 @@ async function submit() {
     for (const id of done) delete drafts.value[id];
     emit("added", done);
   }
-  if (enableFailures.length) {
-    Message.warning({ content: `已添加，但这些没能启用，请在成员列表里再启用：${enableFailures.join("、")}`, duration: 8000 });
-  }
   if (!Object.keys(errors.value).length) {
     if (!enable) Message.success(`已添加 ${done.length} 个因子（已停用），在成员列表里启用后才会计算`);
-    else if (done.length > enableFailures.length) {
-      Message.success({ content: () => addedAndEnabledText(done.length - enableFailures.length, taskId), duration: 6000 });
-    }
+    else Message.success({ content: () => addedAndEnabledText(done.length, taskId), duration: 6000 });
     visible.value = false;
   } else {
     Message.warning(`${done.length} 个已添加，${Object.keys(errors.value).length} 个失败，原因见对应行`);
@@ -350,7 +337,7 @@ async function submit() {
 
 /** 启用不自动补算历史：提示里带上补算页的链接。 */
 function addedAndEnabledText(count: number, taskId: string) {
-  const href = `#/factor/tasks?tab=recalc&task=${encodeURIComponent(taskId)}`;
+  const href = factorTaskRecalcHref(taskId);
   return h("span", [`已添加并启用 ${count} 个因子。历史数据需要补算：`, h("a", { href }, "去补算")]);
 }
 

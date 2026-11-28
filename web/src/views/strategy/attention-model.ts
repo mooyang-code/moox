@@ -1,4 +1,5 @@
 import type { Replay, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
+import { tradingAccountDetailLink } from "@/router/links";
 import { toInstantMs } from "@/utils/time-zone";
 import { deriveTargetState, type TargetState } from "@/views/strategy/model";
 import { detailLink, type StrategyLink } from "@/views/strategy/links";
@@ -68,7 +69,7 @@ export function pendingItems(input: AttentionInput): PendingItem[] {
         ...base,
         kind: "paused",
         text: "组合账户已暂停，目标不会执行，到组合账户恢复自动执行",
-        target: { name: "trading-account-detail", params: { logical_account_id: instance.logical_account_id } }
+        target: tradingAccountDetailLink(instance.logical_account_id)
       });
     } else if (instance.enabled && stateOf(instance, input.targets, input.nowMs) === "expired") {
       items.push({ ...base, kind: "expired", text: "目标已过期，最近一期之后没有产出新结果" });

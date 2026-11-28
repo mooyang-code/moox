@@ -1,38 +1,55 @@
-import fs from "node:fs";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import { describe, expect, it, vi } from "vitest";
+import { createMemoryHistory, createRouter } from "vue-router";
 
-const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-const normalizeSource = (value: string) => value.replace(/\s+/g, "").replace(/'/g, '"');
-const normalized = normalizeSource(source);
+vi.mock("@/views/factor/compute-tasks/index.vue", () => ({ default: { template: '<div class="tab">tasks</div>' } }));
+vi.mock("@/views/factor/results/index.vue", () => ({ default: { template: '<div class="tab">results</div>' } }));
+vi.mock("@/views/factor/recalc/index.vue", () => ({ default: { template: '<div class="tab">recalc</div>' } }));
+
+import FactorTaskManagement from "./index.vue";
+
+async function setup(query: Record<string, string>) {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: "/factor/tasks", name: "factor-tasks", component: FactorTaskManagement }]
+  });
+  await router.push({ path: "/factor/tasks", query });
+  const wrapper = mount(FactorTaskManagement, { global: { plugins: [router] } });
+  await flushPromises();
+  return { router, wrapper };
+}
 
 describe("compute task host", () => {
-  it("uses PageTitleTabs with keep-alive", () => {
-    expect(source).toContain("<PageTitleTabs");
-    expect(source).toContain('aria-label="计算任务"');
-    expect(source).toContain("<keep-alive>");
-    expect(source).toContain("moox-page");
-    expect(source).toContain("moox-inner");
+  it("renders tabs in order 计算任务 -> 计算结果 -> 补算 without keep-alive", async () => {
+    const { wrapper } = await setup({});
+    const tabs = wrapper.findAll("button.page-title-tab");
+    expect(tabs.map(tab => tab.text())).toEqual(["计算任务", "计算结果", "补算"]);
+    expect(wrapper.find('[role="tablist"]').attributes("aria-label")).toBe("计算任务");
+    expect(wrapper.find(".tab").text()).toBe("tasks");
   });
 
-  it("orders the tabs 计算任务 -> 计算结果 -> 补算 with no explanation row under them", () => {
-    const positions = ["计算任务", "计算结果", "补算"].map(label => source.indexOf(`label: "${label}"`));
-    expect(positions.every(position => position >= 0)).toBe(true);
-    expect(positions.every((position, index) => index === 0 || position > positions[index - 1])).toBe(true);
-    expect(source).not.toContain("tab-hint");
-    expect(source).not.toContain("<a-alert");
+  it("derives the active tab from the URL and normalizes unknown values to tasks", async () => {
+    expect((await setup({ tab: "results" })).wrapper.find(".tab").text()).toBe("results");
+    expect((await setup({ tab: "recalc" })).wrapper.find(".tab").text()).toBe("recalc");
+    expect((await setup({ tab: "unknown" })).wrapper.find(".tab").text()).toBe("tasks");
   });
 
-  it("normalizes ?tab=, keeps ?task= when switching tabs and drops detail/job", () => {
-    expect(normalized).toContain("route.query.tab");
-    expect(normalized).toContain('value==="results"||value==="recalc"?value:"tasks"');
-    expect(normalized).toContain("router.replace");
-    expect(normalized).toContain('path:"/factor/tasks"');
-    expect(normalized).toContain("buildTabQuery(route.query,normalizeTab(value))");
-  });
+  it("keeps ?task= and ?fc= when switching tabs and drops unrelated detail/job", async () => {
+    const { router, wrapper } = await setup({ task: "ft_1", detail: "ft_1", fc: "x>1" });
+    await wrapper
+      .findAll("button.page-title-tab")
+      .find(btn => btn.text() === "计算结果")!
+      .trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ tab: "results", task: "ft_1", fc: "x>1" });
+    expect(wrapper.find(".tab").text()).toBe("results");
 
-  it("derives the active tab from the URL only, so a click cannot be undone by a stale query", () => {
-    expect(normalized).toContain("constactiveTab=computed<ComputeTaskTab>(()=>normalizeTab(route.query.tab))");
-    expect(normalized).not.toContain("activeTab.value=");
+    await wrapper
+      .findAll("button.page-title-tab")
+      .find(btn => btn.text() === "补算")!
+      .trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ tab: "recalc", task: "ft_1", fc: "x>1" });
+    expect(wrapper.find(".tab").text()).toBe("recalc");
   });
 });
