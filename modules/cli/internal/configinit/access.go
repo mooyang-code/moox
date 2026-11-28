@@ -23,9 +23,9 @@ const MaskedValue = "***"
 
 var secretKeyPattern = regexp.MustCompile(`(?i)(password|passphrase|secret|token|api_key|access_key|private_key)`)
 
-// secretsVisibleKeys 是秘密文件里默认就能看到的键：都不是秘密，用来辨认是哪一项。其余的值（密码、密钥、Webhook 地址等）
+// secretsVisibleKeys 是秘密文件里默认就能看到的键：不是秘密，用来辨认是哪一项。其余的值（密码、密钥等）
 // 在秘密文件里一律打码，加 --reveal 才明文。
-var secretsVisibleKeys = map[string]bool{"username": true, "channel_type": true, "name": true, "exchange": true, "environment": true, "readonly": true}
+var secretsVisibleKeys = map[string]bool{"username": true}
 
 // isSecretKey 判断 moox.toml 里的键名是不是密钥类（路径类的 *_file、*_path 不算）。
 func isSecretKey(key string) bool {
@@ -45,7 +45,7 @@ func secretSectionHint(path, target string) string {
 		return ""
 	}
 	switch strings.SplitN(target, ".", 2)[0] {
-	case "admin", "tencent_cloud", "notification", "exchange_keys":
+	case "admin", "tencent_cloud":
 		return "；它在同目录的 " + topology.SecretsFileName + " 里，加 --file " + topology.SecretsPathFor(path)
 	}
 	return ""

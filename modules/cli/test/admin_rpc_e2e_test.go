@@ -22,7 +22,6 @@ import (
 type adminRPCWire struct {
 	monitorpb.UnimplementedMonitorMgr
 	adminpb.UnimplementedSecretMgr
-	adminpb.UnimplementedSetup
 	adminpb.UnimplementedSysDeploy
 }
 
@@ -33,7 +32,6 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	service := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTimeout(time.Minute))
 	adminpb.RegisterSecretMgrService(service, wire)
 	monitorpb.RegisterMonitorMgrService(service, wire)
-	adminpb.RegisterSetupService(service, wire)
 	adminpb.RegisterSysDeployService(service, wire)
 	go func() { _ = service.Serve() }()
 	t.Cleanup(func() { _ = service.Close(nil) })
@@ -64,12 +62,10 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "fixture-secret", secret.SecretValue)
 	setup := setupclient.New(gateway)
-	status, err := setup.Status(t.Context(), secrets)
-	require.NoError(t, err)
-	require.Equal(t, "ready", status.State)
 	applied, err := setup.Apply(t.Context(), secrets)
 	require.NoError(t, err)
 	require.Equal(t, "created", applied.Action)
+	require.Equal(t, "tencent-default", applied.SecretID)
 	require.NoError(t, setup.SyncTopology(t.Context(), cfg))
 	doctor := doctorcli.New(gateway)
 	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
@@ -90,12 +86,8 @@ func (w *adminRPCWire) GetSecretValue(_ context.Context, req *adminpb.GetSecretV
 	return &adminpb.GetSecretValueRsp{RetInfo: &adminpb.RetInfo{}, Secret: &adminpb.SecretMaterial{SecretId: req.GetSecretId(), Category: "cloud", Provider: "tencent", Status: "active", KeyId: "fixture-id", SecretValue: "fixture-secret"}}, nil
 }
 
-func (w *adminRPCWire) GetSetupStatus(_ context.Context, req *adminpb.GetSetupStatusReq) (*adminpb.GetSetupStatusRsp, error) {
-	return &adminpb.GetSetupStatusRsp{RetInfo: &adminpb.RetInfo{}, State: "ready"}, nil
-}
-
-func (w *adminRPCWire) ApplySetup(_ context.Context, req *adminpb.ApplySetupReq) (*adminpb.ApplySetupRsp, error) {
-	return &adminpb.ApplySetupRsp{RetInfo: &adminpb.RetInfo{}, Action: "created"}, nil
+func (w *adminRPCWire) EnsureInitialSecret(_ context.Context, req *adminpb.EnsureInitialSecretReq) (*adminpb.EnsureInitialSecretRsp, error) {
+	return &adminpb.EnsureInitialSecretRsp{RetInfo: &commonpb.RetInfo{}, Action: "created", SecretId: req.GetSecret().GetSecretId()}, nil
 }
 
 func (w *adminRPCWire) ListHosts(_ context.Context, req *adminpb.ListDeploymentHostsReq) (*adminpb.ListDeploymentHostsRsp, error) {

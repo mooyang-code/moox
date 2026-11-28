@@ -31,10 +31,6 @@ password = "admin-password"
 [tencent_cloud]
 secret_id = "secret-id"
 secret_key = "secret-key"
-
-[notification]
-channel_type = "wecom"
-webhook_url = ""
 `
 
 func TestParseRepositoryExample(t *testing.T) {
@@ -96,8 +92,8 @@ func TestParseRejectsRemovedSectionsAndSaysWhich(t *testing.T) {
 		"[admin]":                 {"[admin]\nusername = \"admin\"\n" + validConfig, []string{"[admin]", SecretsFileName}},
 		"[tencent_cloud]":         {"[tencent_cloud]\nsecret_id = \"x\"\n" + validConfig, []string{"[tencent_cloud]", SecretsFileName}},
 		"tencent_cloud.region":    {"[tencent_cloud]\nregion = \"ap-guangzhou\"\n" + validConfig, []string{"tencent_cloud.region 已删除", "控制机"}},
-		"[notification]":          {validConfig + "\n[notification]\nchannel_type = \"wecom\"\n", []string{"[notification]", SecretsFileName}},
-		"[[exchange_keys]]":       {validConfig + "\n[[exchange_keys]]\nname = \"main\"\n", []string{"[[exchange_keys]]", SecretsFileName}},
+		"[notification]":          {validConfig + "\n[notification]\nchannel_type = \"wecom\"\n", []string{"[notification]", "监控告警"}},
+		"[[exchange_keys]]":       {validConfig + "\n[[exchange_keys]]\nname = \"main\"\n", []string{"[[exchange_keys]]", "密钥管理"}},
 		"CLS 写入密钥":                {validConfig + "\n[logging.cls]\nwriter_secret_key = \"x\"\n", []string{"logging.cls.writer_secret_key", SecretsFileName}},
 		"[local_logs]":            {validConfig + "\n[local_logs]\nmax_size_mb = 50\n", []string{"[local_logs] 已删除"}},
 		"[observability]":         {validConfig + "\n[observability]\ndeliver_policy = \"all\"\n", []string{"[observability] 已删除"}},
@@ -207,15 +203,19 @@ func TestLoadAnyPathAndSecretsBeside(t *testing.T) {
 	secrets, err = LoadSecrets(configPath)
 	require.NoError(t, err)
 	assert.Equal(t, "secret-id", secrets.TencentCloud.SecretID)
-	assert.Equal(t, "wecom", secrets.Notification.ChannelType)
 	secrets.Clear()
 	assert.Empty(t, secrets.Admin.Password)
 	assert.Empty(t, secrets.TencentCloud.SecretKey)
 }
 
 func TestParseSecretsRules(t *testing.T) {
-	_, err := ParseSecrets([]byte(validSecrets + "\n[[exchange_keys]]\nname = \"main\"\nexchange = \"okx\"\nenvironment = \"production\"\napi_key = \"k\"\nsecret_key = \"s\"\n"))
-	require.ErrorContains(t, err, "passphrase")
+	_, err := ParseSecrets([]byte(validSecrets + "\n[notification]\nchannel_type = \"wecom\"\nwebhook_url = \"\"\n"))
+	require.ErrorContains(t, err, "[notification] 已从秘密文件移除")
+	require.ErrorContains(t, err, "监控告警")
+
+	_, err = ParseSecrets([]byte(validSecrets + "\n[[exchange_keys]]\nname = \"main\"\nexchange = \"okx\"\nenvironment = \"production\"\napi_key = \"k\"\nsecret_key = \"s\"\n"))
+	require.ErrorContains(t, err, "[[exchange_keys]] 已从秘密文件移除")
+	require.ErrorContains(t, err, "密钥管理")
 
 	_, err = ParseSecrets([]byte(strings.Replace(validSecrets, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \"ap-guangzhou\"", 1)))
 	require.ErrorContains(t, err, "tencent_cloud.region 已删除")

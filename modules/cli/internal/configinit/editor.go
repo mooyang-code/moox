@@ -15,7 +15,6 @@ import (
 	"runtime"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -51,30 +50,12 @@ type EditorResult struct {
 
 // Overview 是配置页的概览：秘密只给出「有没有」，要看具体值时再单独取。Encrypted 说的是秘密文件。
 type Overview struct {
-	Encrypted  bool         `json:"encrypted"`
-	KeyStore   string       `json:"key_store"`
-	Servers    []ServerView `json:"servers"`
-	SecretID   string       `json:"secret_id"`
-	Region     string       `json:"region"`
-	Admin      string       `json:"admin"`
-	Channel    string       `json:"channel"`
-	HasWebhook bool         `json:"has_webhook"`
-	// HasNotifySecret 表示告警渠道配了密钥（飞书签名校验、钉钉加签或通用 Webhook 签名）。
-	HasNotifySecret bool `json:"has_notify_secret"`
-	// ExchangeKeys 是 [[exchange_keys]] 的概览，顺序与配置里一致；明文只在 reveal 时按序号给出。
-	ExchangeKeys []ExchangeKeyView `json:"exchange_keys"`
-}
-
-// ExchangeKeyView 是一把交易所密钥的概览：只给出打码的 API Key，Secret Key 与 passphrase 只说有没有。
-type ExchangeKeyView struct {
-	Index         int    `json:"index"`
-	Name          string `json:"name"`
-	Exchange      string `json:"exchange"`
-	Environment   string `json:"environment"`
-	ReadOnly      bool   `json:"readonly"`
-	SecretID      string `json:"secret_id"`
-	APIKey        string `json:"api_key"`
-	HasPassphrase bool   `json:"has_passphrase"`
+	Encrypted bool         `json:"encrypted"`
+	KeyStore  string       `json:"key_store"`
+	Servers   []ServerView `json:"servers"`
+	SecretID  string       `json:"secret_id"`
+	Region    string       `json:"region"`
+	Admin     string       `json:"admin"`
 }
 
 // ServerView 是一台主机的概览。
@@ -233,37 +214,13 @@ func (e *editorSession) reveal(w http.ResponseWriter, r *http.Request) {
 	}
 	m := state.Secrets
 	var value string
-	switch field := request.Field; {
-	case field == "admin.password":
+	switch request.Field {
+	case "admin.password":
 		value = m.Admin.Password
-	case field == "tencent.secret_id":
+	case "tencent.secret_id":
 		value = m.TencentCloud.SecretID
-	case field == "tencent.secret_key":
+	case "tencent.secret_key":
 		value = m.TencentCloud.SecretKey
-	case field == "notification.webhook_url":
-		value = m.Notification.WebhookURL
-	case field == "notification.secret":
-		value = m.Notification.Secret
-	case strings.HasPrefix(field, "exchange_keys."):
-		// 按序号取：exchange_keys.<序号>.api_key | secret_key | passphrase。
-		parts := strings.Split(field, ".")
-		index, err := strconv.Atoi(parts[1])
-		if len(parts) != 3 || err != nil || index < 0 || index >= len(m.ExchangeKeys) {
-			reply(w, http.StatusNotFound, response{Message: "没有这把交易所密钥"})
-			return
-		}
-		key := m.ExchangeKeys[index]
-		switch parts[2] {
-		case "api_key":
-			value = key.APIKey
-		case "secret_key":
-			value = key.SecretKey
-		case "passphrase":
-			value = key.Passphrase
-		default:
-			reply(w, http.StatusNotFound, response{Message: "没有这一项"})
-			return
-		}
 	default:
 		reply(w, http.StatusNotFound, response{Message: "没有这一项"})
 		return
@@ -422,26 +379,14 @@ func EncryptFile(path string, keys configcrypt.KeyStore) (alreadyEncrypted bool,
 	return false, replaceFile(path, sealed)
 }
 
-// channelNames 是告警渠道类型在页面上的称呼，与录入页、编辑页的下拉选项一致。
-var channelNames = map[string]string{"wecom": "企业微信群机器人", "feishu": "飞书群机器人", "dingtalk": "钉钉群机器人", "webhook": "通用 Webhook"}
-
 // describe 把两份配置整理成给人看的概览，不含任何秘密值。
 func describe(state loaded, where string) Overview {
 	m, sec := state.Config, state.Secrets
-	view := Overview{
+	return Overview{
 		Encrypted: state.encrypted, KeyStore: where, SecretID: maskID(sec.TencentCloud.SecretID),
 		Region: regionName(m.CloudRegion()), Admin: sec.Admin.Username,
-		Channel: channelNames[sec.Notification.ChannelType], HasWebhook: sec.Notification.WebhookURL != "", HasNotifySecret: sec.Notification.Secret != "",
+		Servers: describeServers(m),
 	}
-	view.ExchangeKeys = make([]ExchangeKeyView, 0, len(sec.ExchangeKeys))
-	for i, key := range sec.ExchangeKeys {
-		view.ExchangeKeys = append(view.ExchangeKeys, ExchangeKeyView{
-			Index: i, Name: key.Name, Exchange: key.Exchange, Environment: key.Environment, ReadOnly: key.ReadOnly,
-			SecretID: key.ID(), APIKey: maskID(key.APIKey), HasPassphrase: key.Passphrase != "",
-		})
-	}
-	view.Servers = describeServers(m)
-	return view
 }
 
 // describeServers 按用途排序列出主机：管理台、数据存储、海外、因子机，其余在后。

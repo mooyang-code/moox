@@ -78,9 +78,10 @@ type setupUpdateHost struct {
 	Remove  []string `json:"remove"`
 }
 
-// setupInstallState 保存一次 setup install 执行过程中产生的备份恢复摘要。
+// setupInstallState 保存一次 setup install 执行过程中产生的备份恢复与初始化摘要。
 type setupInstallState struct {
 	restoreBackup *setupRestoreBackupSummary
+	initSummary   *setupInitSummary
 }
 
 // dependencyComponents 是控制机上其余组件启动前就要在的组件：Collector 等启动时要连 EventBus 与 Storage 核对元数据。
@@ -95,7 +96,7 @@ func hostHasAny(manifest *topology.Config, host string, components []string) boo
 
 // setupInstallSteps 排出完整安装顺序：这台电脑的 moox-cli 签名私钥（已有就复用，重跑不换）；防火墙；控制机先装 Admin 与主机级组件（别的主机要向它要身份）；
 // 再装带 EventBus、Storage 的主机；导入业务空间与元数据（Collector 启动要它）；控制机其余组件；其余主机（外部程序所在的排最后）；
-// 统一等一次全部就绪；自动按覆盖导入待恢复的密钥与告警渠道备份（无待导入备份则跳过并提示）；完整初始化（云账号、日志服务、采集计划、告警渠道）；启动空间；验收。
+// 统一等一次全部就绪；自动按覆盖导入待恢复的密钥与告警渠道备份（无待导入备份则跳过并提示）；完整初始化（默认云密钥、云账号、日志服务、采集计划、告警渠道检查）；启动空间；验收。
 func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstallStep {
 	spaceLabel := strings.TrimSpace(spaceID)
 	if spaceLabel == "" {
@@ -594,17 +595,32 @@ func executeFullInstall(
 	if err := deps.markInstallComplete(cmd.Context(), snapshot, options.spaceID); err != nil {
 		return fmt.Errorf("install_complete_marker_failed: 安装与验收已通过，但写控制机完成标记失败：%w", err)
 	}
+	console := describeSetupConsoleLinks(snapshot)
 	output := map[string]any{
 		"status":   "installed",
 		"mode":     mode,
 		"space_id": options.spaceID,
 		"seconds":  time.Since(started).Round(time.Second).Seconds(),
 	}
+	if console != nil {
+		output["console"] = console
+	}
 	if backupSummary != nil {
 		output["backup"] = backupSummary
 	}
 	if state.restoreBackup != nil {
 		output["backup_restore"] = state.restoreBackup
+	}
+	if state.initSummary != nil && state.initSummary.Notification != nil {
+		output["notification"] = state.initSummary.Notification
+	}
+	if console != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "安装完成。管理台入口：%s\n", console.URL)
+		fmt.Fprintf(cmd.ErrOrStderr(), "录入交易所密钥（系统设置 › 密钥管理）：%s\n", console.SecretsURL)
+		fmt.Fprintf(cmd.ErrOrStderr(), "配置告警通知渠道（资源与运维 › 监控告警）：%s\n", console.MonitorURL)
+	}
+	if state.initSummary != nil && state.initSummary.Notification != nil && state.initSummary.Notification.Warning != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), "提示：", state.initSummary.Notification.Warning)
 	}
 	return writeSetupJSON(cmd, output)
 }
@@ -665,8 +681,14 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 		if err != nil {
 			return err
 		}
-		_, err = deps.initStorage(ctx, snapshot, storageHost, options.source.root, bundle)
-		return err
+		summary, err := deps.initStorage(ctx, snapshot, storageHost, options.source.root, bundle)
+		if err != nil {
+			return err
+		}
+		if state != nil {
+			state.initSummary = &summary
+		}
+		return nil
 	case installStart:
 		client, closeClient, err := deps.openStart(ctx, options.file, snapshot)
 		if err != nil {

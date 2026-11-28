@@ -140,13 +140,13 @@ func TestEditorPageAndOverviewNeverCarrySecrets(t *testing.T) {
 	if status != http.StatusOK || reply.Overview == nil {
 		t.Fatalf("概览: %d %s", status, text)
 	}
-	for _, secret := range []string{"Adm1n-P@ss", "key-example", "AKIDexample", "webhook/send"} {
+	for _, secret := range []string{"Adm1n-P@ss", "key-example", "AKIDexample"} {
 		if strings.Contains(text, secret) || strings.Contains(string(page), secret) {
 			t.Fatalf("页面或概览里不应出现秘密 %q", secret)
 		}
 	}
 	view := reply.Overview
-	if view.Encrypted || view.KeyStore != "测试内存" || len(view.Servers) != 3 || view.Admin != "admin" || !view.HasWebhook || view.Region != "广州" {
+	if view.Encrypted || view.KeyStore != "测试内存" || len(view.Servers) != 3 || view.Admin != "admin" || view.Region != "广州" {
 		t.Fatalf("概览 = %+v", view)
 	}
 	uses := map[string]string{}
@@ -165,7 +165,6 @@ func TestEditorRevealsOneSecretAtATime(t *testing.T) {
 	h := startEditor(t, nil)
 	for field, want := range map[string]string{
 		"admin.password": "Adm1n-P@ss", "tencent.secret_key": "key-example", "tencent.secret_id": "AKIDexample",
-		"notification.webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc",
 	} {
 		status, reply, _ := h.call("config/reveal", map[string]string{"field": field}, nil)
 		if status != http.StatusOK || reply.Value != want {
@@ -210,8 +209,8 @@ func TestEditorFormShowsTheCommonSettings(t *testing.T) {
 	if status != http.StatusOK || form == nil {
 		t.Fatalf("表单: %d %+v", status, reply)
 	}
-	if form.Admin.Username != "admin" || form.Admin.Password != "Adm1n-P@ss" || form.Tencent.SecretKey != "key-example" || form.Notification.ChannelType != "wecom" {
-		t.Fatalf("账号与通知 = %+v %+v %+v", form.Admin, form.Tencent, form.Notification)
+	if form.Admin.Username != "admin" || form.Admin.Password != "Adm1n-P@ss" || form.Tencent.SecretKey != "key-example" {
+		t.Fatalf("账号 = %+v %+v", form.Admin, form.Tencent)
 	}
 	if len(form.Hosts) != 3 || form.Hosts[0].ID != "control" || form.Hosts[0].SSHUser != "ubuntu" || form.Hosts[0].Address == "" {
 		t.Fatalf("主机 = %+v", form.Hosts)
@@ -285,7 +284,7 @@ func TestEditorSavesFormChangesLineByLine(t *testing.T) {
 			t.Fatalf("moox.toml 应保留 %q", kept)
 		}
 	}
-	if !strings.Contains(h.plain(), "# 告警渠道的初始值") {
+	if !strings.Contains(h.plain(), "# 腾讯云账号的管理密钥") {
 		t.Fatal("秘密文件里的注释应保留")
 	}
 	// 只改拓扑时不重写秘密文件。

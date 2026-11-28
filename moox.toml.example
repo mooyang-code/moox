@@ -1,5 +1,5 @@
 # moox.toml：拓扑与部署参数，明文保存，可以放进自己的私有仓库；不写任何秘密。
-# 秘密（管理员、腾讯云密钥、告警渠道、CLS 写入密钥、交易所密钥）写在同目录加密保存的 moox.secrets.toml 里（见 moox.secrets.toml.example）。
+# 秘密（管理员、腾讯云密钥、CLS 写入密钥）写在同目录加密保存的 moox.secrets.toml 里（见 moox.secrets.toml.example）。
 # 两份文件都由 moox-cli config init 生成；拓扑直接编辑这份文件，改完重新部署对应主机生效。
 # 业务初值不在配置文件里：默认因子任务在 config/setup/factor-tasks.yaml（setup start 导入），自己的任务用 moox-cli factor task apply --file 导入。
 

@@ -98,6 +98,7 @@ func TestGatewayCallRefusesSecretPlaintextWithoutConnecting(t *testing.T) {
 		{"trpc.moox.ops.SecretMgr", "GetSecretValue"},
 		{"trpc.moox.ops.SecretMgr", "ExportSecrets"},
 		{"trpc.moox.ops.SecretMgr", "ImportSecrets"},
+		{"trpc.moox.ops.SecretMgr", "EnsureInitialSecret"},
 		{"trpc.moox.monitor.MonitorMgr", "ListNotificationChannels"},
 		{"trpc.moox.monitor.MonitorMgr", "ExportNotificationChannels"},
 		{"trpc.moox.monitor.MonitorMgr", "ImportNotificationChannels"},

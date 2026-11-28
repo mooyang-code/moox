@@ -174,9 +174,16 @@ func newInstallHarness(t *testing.T) *installHarness {
 		initMetadata: func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error) {
 			return setupInitStorageSummary{}, record("init-metadata")
 		},
-		initStorage: func(_ context.Context, _ *setupSnapshot, _, sourceRoot string, _ setupInitBundle) (setupInitSummary, error) {
+		initStorage: func(_ context.Context, snapshot *setupSnapshot, _, sourceRoot string, _ setupInitBundle) (setupInitSummary, error) {
 			h.initSources = append(h.initSources, sourceRoot)
-			return setupInitSummary{}, record("init")
+			console := describeSetupConsoleLinks(snapshot)
+			return setupInitSummary{
+				Notification: &setupNotificationSummary{
+					Status:  notificationEmpty,
+					Warning: fmt.Sprintf("尚未配置告警通知渠道，系统异常时不会推送通知；请打开管理台「资源与运维 › 监控告警」添加：%s", console.MonitorURL),
+				},
+				Console: console,
+			}, record("init")
 		},
 		openInitFactor: func(context.Context, *setupSnapshot) (setupInitFactor, error) { return &fakeSetupInitFactor{}, nil },
 		ensureArchiveTasks: func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error) {
@@ -457,6 +464,12 @@ func TestSetupInstallFreshRunsStepsInDependencyOrderAndMarksComplete(t *testing.
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"installed"`)
 	require.Contains(t, out, `"mode":"fresh"`)
+	require.Contains(t, out, `"url":"https://203.0.113.10:9527"`)
+	require.Contains(t, out, `"secrets_url":"https://203.0.113.10:9527/#/settings/secrets"`)
+	require.Contains(t, out, `"monitor_url":"https://203.0.113.10:9527/#/ops/monitor"`)
+	require.Contains(t, h.stderr, "https://203.0.113.10:9527/#/settings/secrets")
+	require.Contains(t, h.stderr, "https://203.0.113.10:9527/#/ops/monitor")
+	require.Contains(t, h.stderr, "尚未配置告警通知渠道")
 	ready := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "ready:") })
 	require.Len(t, ready, 4, "最后对四台主机各等一次就绪")
 	sequence := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return strings.HasPrefix(call, "ready:") })

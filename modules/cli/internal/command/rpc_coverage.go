@@ -58,7 +58,6 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.factor.FactorMgr/ActivateUdf": "udf activate",
 
 	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels": "setup init",
-	"trpc.moox.monitor.MonitorMgr/AddNotificationChannel":   "setup init",
 	"trpc.moox.monitor.MonitorMgr/GetAlertMute":             "monitor mute-status",
 	"trpc.moox.monitor.MonitorMgr/GetDoctorContext":         "doctor diagnose",
 
@@ -79,8 +78,7 @@ var handWrittenCoverage = map[string]string{
 
 // cliOnlyCoverage 记录管理台不开放、只有 moox-cli 能调用的方法由哪个手写命令覆盖（接口 → 命令路径）。
 var cliOnlyCoverage = map[string]string{
-	"trpc.moox.admin.Setup/ApplySetup":     "setup init",
-	"trpc.moox.admin.Setup/GetSetupStatus": "setup status",
+	"trpc.moox.ops.SecretMgr/EnsureInitialSecret": "setup init",
 
 	"trpc.moox.monitor.MonitorMgr/ExportNotificationChannels": "setup backup",
 	"trpc.moox.monitor.MonitorMgr/ImportNotificationChannels": "setup install",
@@ -120,7 +118,8 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.Ssh/SftpMkdir":         sshReason,
 	"trpc.moox.ops.Ssh/SftpDelete":        sshReason,
 
-	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "告警渠道的增删改在管理台「资源与运维 › 监控告警」的“消息通知设置”做；初始渠道由 setup init 在 Monitor 还没有渠道时写入一次",
+	"trpc.moox.monitor.MonitorMgr/AddNotificationChannel":    "告警渠道的增删改在管理台「资源与运维 › 监控告警」的“消息通知设置”做（不经命令行传 Webhook 与签名密钥明文）",
+	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "告警渠道的增删改在管理台「资源与运维 › 监控告警」的“消息通知设置”做",
 
 	"trpc.moox.ops.SecretMgr/CreateSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/UpdateSecret":       secretWriteReason,

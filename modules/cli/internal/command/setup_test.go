@@ -428,10 +428,6 @@ password = "admin-test-password"
 [tencent_cloud]
 secret_id = "AKID-test-secret"
 secret_key = "cloud-test-secret"
-
-[notification]
-channel_type = "wecom"
-webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
 `))
 	require.NoError(t, err)
 	return &setupSnapshot{Manifest: &cfg, Secrets: &secrets}

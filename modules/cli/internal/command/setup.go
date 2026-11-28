@@ -8,7 +8,6 @@ import (
 	"os"
 	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -38,9 +37,8 @@ type setupDeps struct {
 	loadInitBundle func(string) (setupInitBundle, error)
 	validate       func(context.Context, *setupSnapshot) (setupvalidate.Result, error)
 	trustHost      func(context.Context, *setupSnapshot, string, string) error
-	// applySecrets 把秘密文件里的初始秘密写进管理台（只建不改）；setupStatus 核对它们是否都在。
+	// applySecrets 把秘密文件里的默认腾讯云密钥写进管理台（只建不改）。
 	applySecrets          func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error)
-	setupStatus           func(context.Context, *setupSnapshot) (setupclient.StatusResult, error)
 	registerCloudAccounts func(context.Context, *setupSnapshot) (*setupCloudAccountSummary, error)
 	provisionCLS          func(context.Context, *setupSnapshot) (*setupCLSSummary, error)
 	// ensureSCFPlan 的最后一个参数是源码或产物包目录：云函数代码包从它下面的 modules/collector 构建。
@@ -48,8 +46,8 @@ type setupDeps struct {
 	login           func(context.Context, *setupSnapshot) (setupclient.LoginResult, error)
 	openInitStorage func(context.Context, *setupSnapshot, string) (setupInitStorage, error)
 	openInitFactor  func(context.Context, *setupSnapshot) (setupInitFactor, error)
-	// ensureNotification 在 Monitor 还没有任何告警渠道时写入初始渠道（只建不改）；测试里替换。
-	ensureNotification func(context.Context, *setupSnapshot) (*setupNotificationSummary, error)
+	// checkNotification 只读检查 Monitor 是否已配置告警渠道（为空时提醒用户到管理台添加）；测试里替换。
+	checkNotification func(context.Context, *setupSnapshot) (*setupNotificationSummary, error)
 	// ensureArchiveTasks 为已激活且保留期有限的时序数据集幂等创建归档任务（spaceID 为空表示全部空间）。
 	ensureArchiveTasks func(context.Context, *setupSnapshot, string) (*setupArchiveTasksSummary, error)
 	// initStorage 的参数依次是存储机、源码或产物包目录、种子。
@@ -509,14 +507,13 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.validate, defaults.validate)
 	fillSetupDep(&deps.trustHost, defaults.trustHost)
 	fillSetupDep(&deps.applySecrets, defaults.applySecrets)
-	fillSetupDep(&deps.setupStatus, defaults.setupStatus)
 	fillSetupDep(&deps.registerCloudAccounts, defaults.registerCloudAccounts)
 	fillSetupDep(&deps.provisionCLS, defaults.provisionCLS)
 	fillSetupDep(&deps.ensureSCFPlan, defaults.ensureSCFPlan)
 	fillSetupDep(&deps.login, defaults.login)
 	fillSetupDep(&deps.openInitStorage, defaults.openInitStorage)
 	fillSetupDep(&deps.openInitFactor, defaults.openInitFactor)
-	fillSetupDep(&deps.ensureNotification, defaults.ensureNotification)
+	fillSetupDep(&deps.checkNotification, defaults.checkNotification)
 	fillSetupDep(&deps.ensureArchiveTasks, defaults.ensureArchiveTasks)
 	fillSetupDep(&deps.exportSkillConfig, defaults.exportSkillConfig)
 	fillSetupDep(&deps.ensureOperatorKey, defaults.ensureOperatorKey)
@@ -595,7 +592,6 @@ func defaultSetupDeps() setupDeps {
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
 		applySecrets:          defaultSetupApplySecrets,
-		setupStatus:           defaultSetupStatus,
 		registerCloudAccounts: defaultSetupRegisterCloudAccounts,
 		provisionCLS:          defaultSetupProvisionCLS,
 		ensureSCFPlan:         defaultSetupEnsureSCFPlan,
@@ -603,7 +599,7 @@ func defaultSetupDeps() setupDeps {
 		openInitFactor: func(ctx context.Context, snapshot *setupSnapshot) (setupInitFactor, error) {
 			return defaultOpenSetupFactor(ctx, snapshot.Manifest)
 		},
-		ensureNotification:  defaultSetupEnsureNotification,
+		checkNotification:   defaultSetupCheckNotification,
 		ensureArchiveTasks:  defaultSetupEnsureArchiveTasks,
 		exportSkillConfig:   defaultSetupExportSkillConfig,
 		ensureOperatorKey:   defaultSetupEnsureOperatorKey,
@@ -619,18 +615,6 @@ func defaultSetupDeps() setupDeps {
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Secrets.Admin.Username, snapshot.Secrets.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
 		},
 	}
-}
-
-// loginSkippedKeptAdmin 是管理员以管理台为准保留时跳过登录校验的说明。
-const loginSkippedKeptAdmin = "管理员以管理台为准（管理台改过密码或用户名），没有用秘密文件里的密码校验登录"
-
-// verifySetupLogin 用秘密文件里的管理员校验管理台能登录；管理员被保留（kept 含 admin）时秘密文件里的密码不是现在的密码，跳过校验并返回说明。
-func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, kept []string) (setupclient.LoginResult, string, error) {
-	if slices.Contains(kept, "admin") {
-		return setupclient.LoginResult{}, loginSkippedKeptAdmin, nil
-	}
-	login, err := deps.login(ctx, snapshot)
-	return login, "", err
 }
 
 func defaultSetupValidate(ctx context.Context, snapshot *setupSnapshot) (setupvalidate.Result, error) {
@@ -782,15 +766,6 @@ func defaultSetupApplySecrets(ctx context.Context, snapshot *setupSnapshot) (set
 	}
 	defer gateway.Close()
 	return setupclient.New(gateway).Apply(ctx, snapshot.Secrets)
-}
-
-func defaultSetupStatus(ctx context.Context, snapshot *setupSnapshot) (setupclient.StatusResult, error) {
-	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
-	if err != nil {
-		return setupclient.StatusResult{}, err
-	}
-	defer gateway.Close()
-	return setupclient.New(gateway).Status(ctx, snapshot.Secrets)
 }
 
 func dialSetupHost(ctx context.Context, host topology.Host) (setupssh.Client, error) {

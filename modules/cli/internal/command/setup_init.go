@@ -44,23 +44,47 @@ type setupCloudAccountSummary struct {
 	Unchanged  int  `json:"unchanged"`
 }
 
+// setupConsoleLinks 给出管理台入口与安装后需要在页面完成的引导地址（交易所密钥、告警渠道）。
+type setupConsoleLinks struct {
+	URL        string `json:"url"`
+	SecretsURL string `json:"secrets_url"`
+	MonitorURL string `json:"monitor_url"`
+	Note       string `json:"note"`
+}
+
+func describeSetupConsoleLinks(snapshot *setupSnapshot) *setupConsoleLinks {
+	if snapshot == nil || snapshot.Manifest == nil {
+		return nil
+	}
+	address := strings.TrimSpace(snapshot.Manifest.ControlHost().Address)
+	if address == "" {
+		return nil
+	}
+	base := fmt.Sprintf("https://%s:9527", address)
+	return &setupConsoleLinks{
+		URL:        base,
+		SecretsURL: base + "/#/settings/secrets",
+		MonitorURL: base + "/#/ops/monitor",
+		Note:       "交易所密钥请到管理台「系统设置 › 密钥管理」录入，告警通知渠道请到「资源与运维 › 监控告警」录入",
+	}
+}
+
 type setupInitSummary struct {
 	Status           string                  `json:"status"`
 	Firewall         setupFirewallSummary    `json:"firewall"`
 	BusinessSpaces   int                     `json:"business_spaces"`
 	BusinessSpaceIDs []string                `json:"business_space_ids"`
 	Admin            setupclient.ApplyResult `json:"admin"`
-	// Notification 是告警渠道初始值的处理结果：Monitor 没有任何渠道时才写入。
+	// Notification 是 Monitor 告警渠道的只读检查结果；尚未配置渠道时附带提醒。
 	Notification  *setupNotificationSummary `json:"notification,omitempty"`
 	CloudAccounts *setupCloudAccountSummary `json:"cloud_accounts,omitempty"`
 	CLS           *setupCLSSummary          `json:"cls,omitempty"`
 	SCFPlan       *setupSCFPlanSummary      `json:"scf_plan,omitempty"`
-	AdminState    string                    `json:"admin_state"`
 	LoginAPI      string                    `json:"login_api"`
-	LoginSkipped  string                    `json:"login_skipped,omitempty"`
 	Metadata      setupInitMetadataCounts   `json:"metadata"`
 	Verification  setupInitMetadataCounts   `json:"verification"`
 	ArchiveTasks  *setupArchiveTasksSummary `json:"archive_tasks,omitempty"`
+	Console       *setupConsoleLinks        `json:"console,omitempty"`
 	BrowserTrust  *setupBrowserTrustSummary `json:"browser_trust,omitempty"`
 }
 
@@ -77,16 +101,13 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "导入默认空间与元数据，写入初始秘密（云密钥、交易所密钥、告警渠道，只建不改）",
-		Long: `--stage storage 在控制机只装了 Admin、存储机装好之后运行：写初始秘密、把业务空间与元数据导入 Storage，控制机上的 Collector 等要这些就绪才能启动。
-不带 --stage 在全部组件装好后运行：完成全部初始化。初始秘密取自秘密文件 moox.secrets.toml，规则都是只建不改：
-管理员在部署控制机时已建好，这里只核对；腾讯云密钥、交易所密钥在管理台已有时以管理台为准，已在管理台删除的交易所密钥不重建；
-业务空间已在 Storage 时以管理台为准，不比对；
-告警渠道只在 Monitor 还没有任何渠道时写入一次（在管理台把渠道全删掉之后重跑，会把秘密文件里的渠道写回）。
+		Short: "导入默认空间与元数据，写入默认云账号密钥（只建不改）并检查告警渠道",
+		Long: `--stage storage 在控制机只装了 Admin、存储机装好之后运行：写入默认云账号密钥、把业务空间与元数据导入 Storage，控制机上的 Collector 等要这些就绪才能启动。
+不带 --stage 在全部组件装好后运行：完成全部初始化。初始秘密只含秘密文件 moox.secrets.toml 里的腾讯云默认密钥（tencent-default），规则为只建不改，管理台已有时以管理台为准。
+业务空间已在 Storage 时以管理台为准，不比对；告警通知渠道与交易所密钥不在配置文件里填写，这里只检查 Monitor 是否已有告警渠道并在为空时提醒，安装完成后在管理台页面录入。
 还会登记云账户、开通日志服务，并在部署了数据归档时为有限保留期的内置时序数据集自动创建归档任务；因子任务由 setup start 导入（同时为新建的因子结果数据集补建归档任务）。已经做过的步骤不会重复写入。
 云函数代码包从 --source-dir（默认当前目录）下的 modules/collector 构建，元数据种子默认读它下面的 config/setup：
-要装哪个分支或工作副本的代码，就把 --source-dir 指到那里，并和 setup deploy、setup start 用同一个目录。
-交易所密钥在 Trade 部署好之后用 moox-cli trade inspect-credential 检测。`,
+要装哪个分支或工作副本的代码，就把 --source-dir 指到那里，并和 setup deploy、setup start 用同一个目录。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stage != "" && stage != "storage" {
@@ -118,6 +139,9 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if result.Notification != nil && result.Notification.Warning != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "提示：", result.Notification.Warning)
+			}
 			return writeSetupJSON(cmd, result)
 		},
 	}
@@ -146,19 +170,10 @@ func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupSn
 	}, nil
 }
 
-// applySetupSecrets 写入初始秘密并核对都在。
+// applySetupSecrets 经 SecretMgr.EnsureInitialSecret 写入默认云账号密钥（只建不改）。
 func applySetupSecrets(ctx context.Context, deps setupDeps, snapshot *setupSnapshot) error {
-	if _, err := deps.applySecrets(ctx, snapshot); err != nil {
-		return err
-	}
-	status, err := deps.setupStatus(ctx, snapshot)
-	if err != nil {
-		return err
-	}
-	if status.State != "completed" {
-		return fmt.Errorf("setup_incomplete")
-	}
-	return nil
+	_, err := deps.applySecrets(ctx, snapshot)
+	return err
 }
 
 // applySetupMetadata 导入元数据并核对，重复运行结果不变；数据集建好即可写入，不用另外激活。
@@ -203,14 +218,7 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
-	adminStatus, err := deps.setupStatus(ctx, snapshot)
-	if err != nil {
-		return setupInitSummary{}, err
-	}
-	if adminStatus.State != "completed" {
-		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
-	}
-	notification, err := deps.ensureNotification(ctx, snapshot)
+	notification, err := deps.checkNotification(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, fmt.Errorf("notification: %w", err)
 	}
@@ -230,7 +238,7 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
-	login, loginSkipped, err := verifySetupLogin(ctx, deps, snapshot, admin.Kept)
+	login, err := deps.login(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, err
 	}
@@ -245,7 +253,7 @@ func runSetupInit(
 	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.SpaceIDs), BusinessSpaceIDs: bundle.SpaceIDs,
-		Admin: admin, Notification: notification, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped,
+		Admin: admin, Notification: notification, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, LoginAPI: login.LoginAPI,
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 		},
@@ -253,6 +261,7 @@ func runSetupInit(
 			Planned: verification.Planned, Unchanged: verification.Unchanged,
 		},
 		ArchiveTasks: archiveTasks,
+		Console:      describeSetupConsoleLinks(snapshot),
 		BrowserTrust: describeSetupBrowserTrust(snapshot),
 	}, nil
 }

@@ -37,6 +37,7 @@ var gatewayCallDenied = map[string]string{
 	"trpc.moox.ops.SecretMgr/UpdateSecret":                    secretWriteDenied,
 	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":              secretWriteDenied,
 	"trpc.moox.ops.SecretMgr/DeleteSecret":                    secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/EnsureInitialSecret":             "请求含初始密钥明文；仅供 setup init 在进程内写入默认云账号密钥，不得经由通用入口传递",
 }
 
 // rpcBusinessError 是服务返回了业务失败（ret_info.code 非成功）。响应已经打印，这里只负责非 0 退出。
