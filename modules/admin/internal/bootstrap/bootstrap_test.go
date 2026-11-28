@@ -34,7 +34,7 @@ func TestAdminCertificateWatchTimerConfig(t *testing.T) {
 	for _, service := range cfg.Server.Service {
 		if service.Name == certificateWatchTimerService {
 			assert.Equal(t, 11307, service.Port)
-			assert.Equal(t, "0 0 0 * * *", service.Network)
+			assert.Equal(t, "0 */10 * * * *", service.Network)
 			assert.Equal(t, "timer", service.Protocol)
 			assert.Equal(t, int(certificateWatchTimeout/time.Millisecond), service.Timeout)
 			return

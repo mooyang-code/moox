@@ -95,7 +95,7 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-// certificateRenewer 是浏览器入口：每天随证书巡检检查一次网页证书，剩余不足 30 天就重签。
+// certificateRenewer 是浏览器入口：随证书巡检定期检查网页证书（幂等判断，有效且剩余不少于 30 天时无副作用），剩余不足 30 天时重签。
 type certificateRenewer interface {
 	RefreshCertificate(context.Context) error
 }
