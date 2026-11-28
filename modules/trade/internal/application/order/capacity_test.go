@@ -200,7 +200,8 @@ func TestCapacityFloorsExactRationalBelowStepBoundary(t *testing.T) {
 
 func TestCapacityAccountLockHonorsDeadline(t *testing.T) {
 	s, db, _ := newTestService(t)
-	unlock := db.LockTradingAccount("account-1")
+	unlock, err := db.LockTradingAccountContext(context.Background(), "account-1")
+	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)

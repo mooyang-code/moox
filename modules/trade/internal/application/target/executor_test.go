@@ -210,7 +210,7 @@ func TestTargetExecutorDiscardsPendingChildWhenSessionChangesAfterPlace(t *testi
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.now = time.Now().UTC()
 	now := fixture.now
-	_, accepted, err := fixture.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(context.Background(), fixture.store, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-session-change",
 		InstanceID: "instance-1", SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",
 		BarEndTime: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
@@ -1017,8 +1017,9 @@ func sessionStartedAt(sessionID string) int64 {
 
 func (f *targetFixture) target(t *testing.T, targets []store.InstrumentQuantity) {
 	t.Helper()
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(
+	_, accepted, err := storetest.AcceptTarget(
 		context.Background(),
+		f.store,
 		store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
 			TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",

@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	paperexec "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
@@ -54,7 +55,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 		}
 		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
 	}))
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(ctx, store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(ctx, f.store, store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "live-target",
 		InstanceID: "live-instance", SessionID: "live-session", SessionStartedAt: 1000, StrategyID: "live-strategy",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
@@ -244,7 +245,7 @@ func TestTargetRejectionDoesNotLoopE2E(t *testing.T) {
 		}
 		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
 	}))
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(ctx, store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(ctx, f.store, store.LogicalAccountTargetRecord{
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "reject-target",
 		InstanceID: "live-instance", SessionID: "live-session", SessionStartedAt: 1000, StrategyID: "live-strategy",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),

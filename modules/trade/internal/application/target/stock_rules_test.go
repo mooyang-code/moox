@@ -136,7 +136,7 @@ func (f *stockFixture) target(t *testing.T, targets ...store.InstrumentQuantity)
 		BarEndTime: f.now.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 		Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 	}
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), record)
+	_, accepted, err := storetest.AcceptTarget(context.Background(), f.store, record)
 	require.NoError(t, err)
 	require.True(t, accepted)
 	current, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")

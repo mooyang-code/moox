@@ -417,7 +417,7 @@ func TestDustConvertsOnlyManagedNonTargetNonExcludedBelowFiveUSDT(t *testing.T) 
 		{Asset: "BNB", Quantity: shared.MustDecimal("0.001"), ValueBTC: btcValue("1")},   // BNB 自己：不兑
 	})
 	f.markManaged("DOGE", "LTC", "XRP", "ETH", "USDC")
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(context.Background(), f.store, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "t1", InstanceID: "i1", SessionID: "s1", SessionStartedAt: 1000, StrategyID: "st",
 		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}}, Status: "PENDING", AcceptedAt: 2_000,

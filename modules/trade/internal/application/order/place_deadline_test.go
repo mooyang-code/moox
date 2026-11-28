@@ -13,7 +13,8 @@ import (
 func TestPlaceAccountLockHonorsDeadline(t *testing.T) {
 	s, db, _ := newTestService(t)
 	spec := testSpec(s.now())
-	unlock := db.LockTradingAccount(spec.TradingAccountID)
+	unlock, lockErr := db.LockTradingAccountContext(context.Background(), spec.TradingAccountID)
+	require.NoError(t, lockErr)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,7 +99,7 @@ func TestClosedSessionBeforeBarEndExpiresAtBarEndPlusOne(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	barEnd := f.now.Add(10 * time.Minute)
-	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+	_, accepted, err := storetest.AcceptTarget(context.Background(), f.store, store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-current",
 		InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",
 		BarEndTime: barEnd.UnixMilli(), ValidUntil: barEnd.Add(time.Hour).UnixMilli(),
