@@ -249,7 +249,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if rtErr != nil && !errors.As(rtErr, &skip) {
 		return rtErr
 	}
-	// 绑定快照（会话与实例上的副本）都无法解析：不知道日历、周期与触发类型，写不出正确的跳过记录，只记日志与计数。
+	// 会话的绑定快照无法解析：不知道日历与周期，写不出正确的跳过记录，只记日志与计数。
 	if rt == nil || rt.resolved.Bar == "" {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 的绑定快照无法解析，本期丢弃：%v", instance.InstanceID, rtErr)

@@ -47,7 +47,7 @@ func NewService(db *store.Store, metadata storageio.Metadata, options ...Option)
 	return s
 }
 
-// Locks exposes the per-set locks shared with live pipeline and recalculation.
+// Locks 返回管理端进程内用于串行化任务、因子定义与 UDF 变更的锁集合（实时流水线与补算在引擎进程内持有独立锁）。
 func (s *Service) Locks() *setlock.Locks { return s.locks }
 
 // CreateTask 创建因子任务及其结果数据集。TaskID 为空时生成随机后缀的任务 ID；调用方也可以指定 ftask_<后缀>，
