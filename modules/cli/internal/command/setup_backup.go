@@ -145,10 +145,13 @@ func checkBackupWritable(backupPath string) error {
 	return nil
 }
 
-// exportBackupToFile 经已打开的操作员网关导出全部非系统密钥与告警渠道，并在待导入守卫通过后原子落盘。
-func exportBackupToFile(ctx context.Context, gateway gatewayclient.Invoker, backupPath string, pendingImport bool) (setupBackupOutput, error) {
-	if err := checkBackupWritable(backupPath); err != nil {
-		return setupBackupOutput{}, err
+// exportBackupToFile 经已打开的操作员网关导出全部非系统密钥与告警渠道，原子落盘为不带待导入标记的备份文件。
+// overwritePending 为 false 时若本机备份已带待导入标记则拒绝覆盖；为 true 时允许覆盖（仅用于系统仍处于已装好状态时覆盖过期的待导入备份）。
+func exportBackupToFile(ctx context.Context, gateway gatewayclient.Invoker, backupPath string, overwritePending bool) (setupBackupOutput, error) {
+	if !overwritePending {
+		if err := checkBackupWritable(backupPath); err != nil {
+			return setupBackupOutput{}, err
+		}
 	}
 	creds, err := setupbackup.DeriveCredentials(configcrypt.Default(), true)
 	if err != nil {
@@ -175,17 +178,18 @@ func exportBackupToFile(ctx context.Context, gateway gatewayclient.Invoker, back
 			CreatedAt:   item.GetCreatedAt(),
 		})
 	}
-	var sealed []byte
-	if pendingImport {
-		sealed, err = setupbackup.SealPending(secretRsp.GetBundle(), int(secretRsp.GetCount()), channels, creds, time.Now())
-	} else {
-		sealed, err = setupbackup.Seal(secretRsp.GetBundle(), int(secretRsp.GetCount()), channels, creds, time.Now())
-	}
+	sealed, err := setupbackup.Seal(secretRsp.GetBundle(), int(secretRsp.GetCount()), channels, creds, time.Now())
 	if err != nil {
 		return setupBackupOutput{}, err
 	}
-	if err := setupbackup.WriteGuarded(backupPath, sealed); err != nil {
-		return setupBackupOutput{}, err
+	if overwritePending {
+		if err := setupbackup.WriteAtomic(backupPath, sealed); err != nil {
+			return setupBackupOutput{}, err
+		}
+	} else {
+		if err := setupbackup.WriteGuarded(backupPath, sealed); err != nil {
+			return setupBackupOutput{}, err
+		}
 	}
 	return setupBackupOutput{
 		Path:         backupPath,
@@ -245,7 +249,7 @@ func isEnvironmentBoundSecret(secret *adminpb.Secret) bool {
 	return secret.GetCategory() == "eventbus" && secret.GetProvider() == "moox_eventbus"
 }
 
-func defaultSetupBackupBeforeWipe(ctx context.Context, file string, snapshot *setupSnapshot, backupPath string) (setupBackupOutput, error) {
+func defaultSetupBackupBeforeWipe(ctx context.Context, file string, snapshot *setupSnapshot, backupPath string, overwritePending bool) (setupBackupOutput, error) {
 	if snapshot == nil || snapshot.Manifest == nil {
 		return setupBackupOutput{}, fmt.Errorf("缺少拓扑配置")
 	}
@@ -254,7 +258,7 @@ func defaultSetupBackupBeforeWipe(ctx context.Context, file string, snapshot *se
 		return setupBackupOutput{}, err
 	}
 	defer gateway.Close()
-	return exportBackupToFile(ctx, gateway, backupPath, true)
+	return exportBackupToFile(ctx, gateway, backupPath, overwritePending)
 }
 
 // defaultSetupRestoreBackup 在全部组件就绪后、完整初始化之前，按覆盖自动导入带有待导入标记的备份。
@@ -365,7 +369,9 @@ func importBackupFile(ctx context.Context, gateway gatewayclient.Invoker, backup
 }
 
 // previewWipeBackup 构造清空前自动备份的只读预览：线上不可达时不让预览失败，以便用户仍能拿到 digest 决定是否加 --no-backup。
-func previewWipeBackup(ctx context.Context, deps setupDeps, file string, snapshot *setupSnapshot, noBackup bool) setupBackupPreview {
+// 当控制机完成标记仍存在（route == RouteInstalled）时，本机带待导入标记的备份视为过期，将照常重新导出覆盖；
+// 沿用本机已有备份的两条路径会核对当前钥匙串主密钥指纹，不符时在预览中明确标出。
+func previewWipeBackup(ctx context.Context, deps setupDeps, file string, snapshot *setupSnapshot, route string, noBackup bool) setupBackupPreview {
 	backupPath := setupBackupPath(file, snapshot.Manifest)
 	meta, exists, err := setupbackup.ReadMetadata(backupPath)
 	if err != nil {
@@ -376,7 +382,20 @@ func previewWipeBackup(ctx context.Context, deps setupDeps, file string, snapsho
 			Note:   fmt.Sprintf("本机已有备份文件 %s 无法读取或格式损坏（%v），执行前请先处理该文件", backupPath, err),
 		}
 	}
-	if exists && meta.PendingImport {
+	stalePending := exists && meta.PendingImport && route == deployscan.RouteInstalled
+	if exists && meta.PendingImport && !stalePending {
+		if fpErr := setupbackup.VerifyKeyFingerprint(meta, configcrypt.Default()); fpErr != nil {
+			return setupBackupPreview{
+				Status:       "key_mismatch",
+				Path:         backupPath,
+				SecretCount:  meta.Secrets.Count,
+				ChannelCount: meta.NotificationChannels.Count,
+				ExportedAt:   meta.ExportedAt,
+				Error:        fpErr.Error(),
+				Note: fmt.Sprintf("本机已有“卸载后待导入”的备份（%d 把密钥、%d 个告警渠道），但钥匙串指纹校验未通过（%v），执行清空前会拒绝继续；请切回生成该备份的钥匙串或先处理该备份文件",
+					meta.Secrets.Count, meta.NotificationChannels.Count, fpErr),
+			}
+		}
 		return setupBackupPreview{
 			Status:       "reuse_pending",
 			Path:         backupPath,
@@ -389,13 +408,25 @@ func previewWipeBackup(ctx context.Context, deps setupDeps, file string, snapsho
 	}
 	if noBackup {
 		if exists {
+			if fpErr := setupbackup.VerifyKeyFingerprint(meta, configcrypt.Default()); fpErr != nil {
+				return setupBackupPreview{
+					Status:       "key_mismatch",
+					Path:         backupPath,
+					SecretCount:  meta.Secrets.Count,
+					ChannelCount: meta.NotificationChannels.Count,
+					ExportedAt:   meta.ExportedAt,
+					Error:        fpErr.Error(),
+					Note: fmt.Sprintf("已指定 --no-backup 且本机已有备份（%d 把密钥、%d 个告警渠道），但钥匙串指纹校验未通过（%v），执行清空前会拒绝继续；请切回生成该备份的钥匙串，或移走该备份文件后再试",
+						meta.Secrets.Count, meta.NotificationChannels.Count, fpErr),
+				}
+			}
 			return setupBackupPreview{
 				Status:       "no_backup_reuse_existing",
 				Path:         backupPath,
 				SecretCount:  meta.Secrets.Count,
 				ChannelCount: meta.NotificationChannels.Count,
 				ExportedAt:   meta.ExportedAt,
-				Note: fmt.Sprintf("已指定 --no-backup：跳过在线备份，将沿用本机已有备份（%d 把密钥、%d 个告警渠道）并打上待导入标记，重装后自动导入",
+				Note: fmt.Sprintf("已指定 --no-backup：跳过在线备份，将在开始清空主机前沿用本机已有备份（%d 把密钥、%d 个告警渠道）并打上待导入标记，重装后自动导入",
 					meta.Secrets.Count, meta.NotificationChannels.Count),
 			}
 		}
@@ -418,17 +449,26 @@ func previewWipeBackup(ctx context.Context, deps setupDeps, file string, snapsho
 			preview.SecretCount = meta.Secrets.Count
 			preview.ChannelCount = meta.NotificationChannels.Count
 			preview.ExportedAt = meta.ExportedAt
-			preview.Note += fmt.Sprintf("（本机已有上一次备份含 %d 把密钥、%d 个告警渠道，带 --no-backup 卸载会沿用它并标记待导入）",
-				meta.Secrets.Count, meta.NotificationChannels.Count)
+			if fpErr := setupbackup.VerifyKeyFingerprint(meta, configcrypt.Default()); fpErr != nil {
+				preview.Note += fmt.Sprintf("（本机已有上一次备份含 %d 把密钥、%d 个告警渠道，但与当前钥匙串指纹不符：%v；带 --no-backup 也会在清空前被拒绝）",
+					meta.Secrets.Count, meta.NotificationChannels.Count, fpErr)
+			} else {
+				preview.Note += fmt.Sprintf("（本机已有上一次备份含 %d 把密钥、%d 个告警渠道，带 --no-backup 卸载会沿用它并标记待导入）",
+					meta.Secrets.Count, meta.NotificationChannels.Count)
+			}
 		}
 		return preview
+	}
+	note := fmt.Sprintf("清空前将自动备份 %d 把密钥、%d 个告警渠道到 %s（交易账户与组合账户不纳入，重装后自动导入）", secrets, channels, backupPath)
+	if stalePending {
+		note += "；本机已有的待导入备份因控制机仍处于已装好状态已过期，将被本次备份覆盖"
 	}
 	return setupBackupPreview{
 		Status:       "will_backup",
 		Path:         backupPath,
 		SecretCount:  secrets,
 		ChannelCount: channels,
-		Note:         fmt.Sprintf("清空前将自动备份 %d 把密钥、%d 个告警渠道到 %s（交易账户与组合账户不纳入，重装后自动导入）", secrets, channels, backupPath),
+		Note:         note,
 	}
 }
 
@@ -445,6 +485,17 @@ func previewRestoreBackup(file string, snapshot *setupSnapshot) setupBackupPrevi
 		}
 	}
 	if exists && meta.PendingImport {
+		if fpErr := setupbackup.VerifyKeyFingerprint(meta, configcrypt.Default()); fpErr != nil {
+			return setupBackupPreview{
+				Status:       "key_mismatch",
+				Path:         backupPath,
+				SecretCount:  meta.Secrets.Count,
+				ChannelCount: meta.NotificationChannels.Count,
+				ExportedAt:   meta.ExportedAt,
+				Error:        fpErr.Error(),
+				Note:         fmt.Sprintf("本机待导入备份（%d 把密钥、%d 个告警渠道）与当前钥匙串指纹不符（%v），安装导入阶段将失败", meta.Secrets.Count, meta.NotificationChannels.Count, fpErr),
+			}
+		}
 		return setupBackupPreview{
 			Status:       "will_import",
 			Path:         backupPath,
@@ -461,9 +512,11 @@ func previewRestoreBackup(file string, snapshot *setupSnapshot) setupBackupPrevi
 	}
 }
 
-// prepareBackupBeforeWipe 在清空任何主机之前完成自动备份或标记本机已有备份为待导入。
-// 若备份失败（且未传 --no-backup 且没有待导入备份），立即报错并中止清空。
-func prepareBackupBeforeWipe(ctx context.Context, deps setupDeps, file string, snapshot *setupSnapshot, plan deployscan.Plan, noBackup bool) (*setupWipeBackupSummary, error) {
+// prepareBackupBeforeWipe 在清空任何主机之前完成自动备份或核验将要沿用的本机已有备份。
+// 备份写出时不带“卸载后待导入”标记；标记统一由 executeSetupWipe 在真正开始清空主机前写入。
+// 若系统仍处于已装好状态（route == RouteInstalled），已有待导入标记视为过期，照常重新导出覆盖。
+// 沿用本机已有备份时先核对当前钥匙串主密钥指纹，不符则立即报错、不清空任何主机。
+func prepareBackupBeforeWipe(ctx context.Context, deps setupDeps, file string, snapshot *setupSnapshot, route string, plan deployscan.Plan, noBackup bool) (*setupWipeBackupSummary, error) {
 	if len(plan.Hosts) == 0 {
 		return nil, nil
 	}
@@ -472,7 +525,11 @@ func prepareBackupBeforeWipe(ctx context.Context, deps setupDeps, file string, s
 	if err != nil {
 		return nil, fmt.Errorf("backup_invalid: 读取本机备份文件 %s 失败：%w；没有清空任何主机", backupPath, err)
 	}
-	if exists && meta.PendingImport {
+	stalePending := exists && meta.PendingImport && route == deployscan.RouteInstalled
+	if exists && meta.PendingImport && !stalePending {
+		if fpErr := setupbackup.VerifyKeyFingerprint(meta, configcrypt.Default()); fpErr != nil {
+			return nil, fmt.Errorf("backup_key_mismatch: 本机待导入备份 %s 无法用当前钥匙串解密（%w）；没有清空任何主机。请切回生成该备份的钥匙串，或处理该备份文件后重试", backupPath, fpErr)
+		}
 		return &setupWipeBackupSummary{
 			Status:       "reused_pending",
 			Path:         backupPath,
@@ -483,16 +540,15 @@ func prepareBackupBeforeWipe(ctx context.Context, deps setupDeps, file string, s
 	}
 	if noBackup {
 		if exists {
-			marked, _, err := setupbackup.MarkPendingImport(backupPath)
-			if err != nil {
-				return nil, fmt.Errorf("backup_mark_failed: 标记本机已有备份为待导入失败：%w；没有清空任何主机", err)
+			if fpErr := setupbackup.VerifyKeyFingerprint(meta, configcrypt.Default()); fpErr != nil {
+				return nil, fmt.Errorf("backup_key_mismatch: 本机已有备份 %s 无法用当前钥匙串解密（%w）；没有清空任何主机。请切回生成该备份的钥匙串，或移走该备份文件后再带 --no-backup 重试", backupPath, fpErr)
 			}
 			return &setupWipeBackupSummary{
 				Status:       "marked_existing",
 				Path:         backupPath,
-				SecretCount:  marked.Secrets.Count,
-				ChannelCount: marked.NotificationChannels.Count,
-				Note:         "已跳过在线备份，本机已有备份已标记为待导入，重装后将自动导入",
+				SecretCount:  meta.Secrets.Count,
+				ChannelCount: meta.NotificationChannels.Count,
+				Note:         "已跳过在线备份，本机已有备份将在开始清空主机前标记为待导入，重装后自动导入",
 			}, nil
 		}
 		return &setupWipeBackupSummary{
@@ -501,16 +557,20 @@ func prepareBackupBeforeWipe(ctx context.Context, deps setupDeps, file string, s
 			Note:   "已指定 --no-backup 且本机没有已有备份，清空前未备份",
 		}, nil
 	}
-	out, err := deps.backupBeforeWipe(ctx, file, snapshot, backupPath)
+	out, err := deps.backupBeforeWipe(ctx, file, snapshot, backupPath, stalePending)
 	if err != nil {
 		return nil, fmt.Errorf("backup_failed: 清空前自动备份失败：%w。没有清空任何主机；修好后重试，或加 --no-backup 跳过在线备份（本机已有备份会被沿用并标记待导入）", err)
+	}
+	note := fmt.Sprintf("已备份 %d 把密钥、%d 个告警渠道，并在开始清空主机前标记为待导入", out.SecretCount, out.ChannelCount)
+	if stalePending {
+		note = fmt.Sprintf("已覆盖过期的待导入备份（%d 把密钥、%d 个告警渠道），并在开始清空主机前标记为待导入", out.SecretCount, out.ChannelCount)
 	}
 	return &setupWipeBackupSummary{
 		Status:       "backed_up",
 		Path:         out.Path,
 		SecretCount:  out.SecretCount,
 		ChannelCount: out.ChannelCount,
-		Note:         fmt.Sprintf("已备份 %d 把密钥、%d 个告警渠道并标记为待导入", out.SecretCount, out.ChannelCount),
+		Note:         note,
 	}, nil
 }
 

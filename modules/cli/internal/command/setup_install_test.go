@@ -208,7 +208,7 @@ func newInstallHarness(t *testing.T) *installHarness {
 			}
 			return h.previewSecrets, h.previewChannels, nil
 		},
-		backupBeforeWipe: func(_ context.Context, _ string, _ *setupSnapshot, backupPath string) (setupBackupOutput, error) {
+		backupBeforeWipe: func(_ context.Context, _ string, _ *setupSnapshot, backupPath string, overwritePending bool) (setupBackupOutput, error) {
 			if err := record("backup-before-wipe"); err != nil {
 				return setupBackupOutput{}, err
 			}
@@ -224,12 +224,18 @@ func newInstallHarness(t *testing.T) *installHarness {
 			for i := range channels {
 				channels[i] = setupbackup.Channel{ChannelType: "wecom", WebhookURL: fmt.Sprintf("https://example.com/hook/%d", i)}
 			}
-			sealed, err := setupbackup.SealPending(`{"format":"moox.secrets/v1","ciphertext":"auto"}`, h.previewSecrets, channels, creds, time.Now())
+			sealed, err := setupbackup.Seal(`{"format":"moox.secrets/v1","ciphertext":"auto"}`, h.previewSecrets, channels, creds, time.Now())
 			if err != nil {
 				return setupBackupOutput{}, err
 			}
-			if err := setupbackup.WriteGuarded(backupPath, sealed); err != nil {
-				return setupBackupOutput{}, err
+			if overwritePending {
+				if err := setupbackup.WriteAtomic(backupPath, sealed); err != nil {
+					return setupBackupOutput{}, err
+				}
+			} else {
+				if err := setupbackup.WriteGuarded(backupPath, sealed); err != nil {
+					return setupBackupOutput{}, err
+				}
 			}
 			return setupBackupOutput{Path: backupPath, SecretCount: h.previewSecrets, ChannelCount: h.previewChannels}, nil
 		},
@@ -760,6 +766,165 @@ func TestSetupWipePendingBackupProtectionAndNoBackupMarksExisting(t *testing.T) 
 		require.NoError(t, err)
 		require.True(t, exists)
 		require.False(t, meta.PendingImport)
+	})
+
+	t.Run("pending_flag_deferred_until_wipe_and_stale_when_installed", func(t *testing.T) {
+		h := newInstallHarness(t)
+		h.markInstalled()
+		h.previewSecrets, h.previewChannels = 5, 2
+
+		// 拦截 backupBeforeWipe 与 wipeHost，确认写出备份时不带 pending_import，真正开始清空主机时才打上标记。
+		origBackup := h.deps.backupBeforeWipe
+		origWipe := h.deps.wipeHost
+		var pendingRightAfterExport, pendingWhenWipeStarts bool
+		h.deps.backupBeforeWipe = func(ctx context.Context, file string, snapshot *setupSnapshot, backupPath string, overwritePending bool) (setupBackupOutput, error) {
+			out, err := origBackup(ctx, file, snapshot, backupPath, overwritePending)
+			if err == nil {
+				meta, exists, readErr := setupbackup.ReadMetadata(backupPath)
+				require.NoError(t, readErr)
+				require.True(t, exists)
+				pendingRightAfterExport = meta.PendingImport
+			}
+			return out, err
+		}
+		h.deps.wipeHost = func(ctx context.Context, host topology.Host, root string) (deployscan.HostResult, error) {
+			meta, exists, readErr := setupbackup.ReadMetadata(h.backupPath())
+			require.NoError(t, readErr)
+			require.True(t, exists)
+			h.mu.Lock()
+			if meta.PendingImport {
+				pendingWhenWipeStarts = true
+			}
+			h.mu.Unlock()
+			return origWipe(ctx, host, root)
+		}
+
+		// 模拟卸载清空 control 时失败（control 仍有 install-complete.json，系统仍处于已装好状态），但备份已打上待导入标记。
+		out, err := h.run("wipe")
+		require.NoError(t, err)
+		digest := parsePreview(t, out)["plan"].(map[string]any)["digest"].(string)
+		h.fail = "wipe:control"
+		_, err = h.run("wipe", "--yes", "--expect", digest)
+		require.ErrorContains(t, err, "boom wipe:control")
+		require.False(t, pendingRightAfterExport, "备份刚写出时不得带待导入标记")
+		require.True(t, pendingWhenWipeStarts, "真正开始清空主机前必须已打上待导入标记")
+
+		// 恢复其余主机状态、保留 control 的完成标记，模拟用户此时处于已装好状态却残留了 pending_import=true 的旧备份。
+		h.fail, h.calls = "", nil
+		h.markInstalled()
+		meta, exists, err := setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists && meta.PendingImport)
+
+		// 1) 控制机仍是 installed 时，待导入标记视为过期：下次卸载预览显示 will_backup，执行会重新导出并覆盖旧备份。
+		h.previewSecrets, h.previewChannels = 7, 3
+		out, err = h.run("wipe")
+		require.NoError(t, err)
+		preview := parsePreview(t, out)
+		backupPreview := preview["backup"].(map[string]any)
+		require.Equal(t, "will_backup", backupPreview["status"], "已装好状态下过期的待导入备份应重新导出覆盖")
+		require.EqualValues(t, 7, backupPreview["secret_count"])
+		digestNext := preview["plan"].(map[string]any)["digest"].(string)
+
+		// 2) 用户改走 --keep 保留数据更新：更新成功后应清掉过期的待导入标记。
+		out, err = h.run("install", "--keep", "--yes")
+		require.NoError(t, err)
+		require.Contains(t, out, `"status":"updated"`)
+		require.Contains(t, h.stderr, "已清除本机备份")
+		meta, exists, err = setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.False(t, meta.PendingImport, "--keep 更新成功后必须清掉过期的待导入标记")
+
+		// 3) 再次打上过期标记后走卸载：应重新导出（7 把密钥、3 个渠道）覆盖旧备份（5 把密钥）。
+		_, _, err = setupbackup.MarkPendingImport(h.backupPath())
+		require.NoError(t, err)
+		h.calls = nil
+		out, err = h.run("wipe", "--yes", "--expect", digestNext)
+		require.NoError(t, err)
+		require.Contains(t, out, `"status":"backed_up"`)
+		require.Contains(t, h.calls, "backup-before-wipe")
+		meta, exists, err = setupbackup.ReadMetadata(h.backupPath())
+		require.NoError(t, err)
+		require.True(t, exists && meta.PendingImport)
+		require.Equal(t, 7, meta.Secrets.Count, "已装好状态下过期的待导入备份应被新导出覆盖")
+		require.Equal(t, 3, meta.NotificationChannels.Count)
+	})
+
+	t.Run("reuse_existing_backup_checks_key_fingerprint_before_wipe", func(t *testing.T) {
+		// 用另一把钥匙串主密钥生成一份备份文件。
+		otherStore := &configcrypt.MemoryStore{}
+		otherCreds, err := setupbackup.DeriveCredentials(otherStore, true)
+		require.NoError(t, err)
+		defer otherCreds.Clear()
+		foreignRaw, err := setupbackup.Seal(`{"format":"moox.secrets/v1","ciphertext":"foreign"}`, 3, []setupbackup.Channel{
+			{ChannelType: "feishu", WebhookURL: "https://open.feishu.cn/hook/foreign", Secret: "s"},
+		}, otherCreds, time.Now())
+		require.NoError(t, err)
+
+		// 路径 1：incomplete 状态下沿用待导入备份，钥匙串指纹不符时预览提示且清空前报错不动主机。
+		h1 := newInstallHarness(t)
+		h1.markIncomplete()
+		require.NoError(t, setupbackup.WriteAtomic(h1.backupPath(), foreignRaw))
+		_, _, err = setupbackup.MarkPendingImport(h1.backupPath())
+		require.NoError(t, err)
+
+		out, err := h1.run("wipe")
+		require.NoError(t, err)
+		preview := parsePreview(t, out)
+		require.Equal(t, "key_mismatch", preview["backup"].(map[string]any)["status"])
+		digest1 := preview["plan"].(map[string]any)["digest"].(string)
+
+		_, err = h1.run("wipe", "--yes", "--expect", digest1)
+		require.ErrorContains(t, err, "backup_key_mismatch")
+		require.Empty(t, h1.calls, "指纹不符时不得清空任何主机")
+
+		// 路径 2：installed 状态下带 --no-backup 沿用本机已有备份，钥匙串指纹不符时预览提示且清空前报错不动主机。
+		h2 := newInstallHarness(t)
+		h2.markInstalled()
+		require.NoError(t, setupbackup.WriteAtomic(h2.backupPath(), foreignRaw))
+
+		out, err = h2.run("wipe", "--no-backup")
+		require.NoError(t, err)
+		preview = parsePreview(t, out)
+		require.Equal(t, "key_mismatch", preview["backup"].(map[string]any)["status"])
+		digest2 := preview["plan"].(map[string]any)["digest"].(string)
+
+		_, err = h2.run("wipe", "--yes", "--expect", digest2, "--no-backup")
+		require.ErrorContains(t, err, "backup_key_mismatch")
+		require.Empty(t, h2.calls, "带 --no-backup 沿用不匹配备份时不得清空任何主机")
+	})
+
+	t.Run("fresh_route_with_residual_data_allows_wipe", func(t *testing.T) {
+		h := newInstallHarness(t)
+		// 主机没有 version.json（route=fresh），但部署根留有没有格式文件的数据目录。
+		h.report("control").Entries = []string{"data"}
+		h.report("control").DataFormats = map[string]deployscan.ComponentDataFormat{
+			"admin": {HasData: true, FormatText: ""},
+		}
+
+		// 预检应输出 data_format 与 wipe 摘要。
+		out, err := h.run("install", "--space-id", "crypto")
+		require.NoError(t, err)
+		preview := parsePreview(t, out)
+		require.Equal(t, deployscan.RouteFresh, preview["route"])
+		require.Contains(t, preview, "data_format")
+		require.Contains(t, preview, "wipe")
+		digest := preview["wipe"].(map[string]any)["digest"].(string)
+		require.NotEmpty(t, digest)
+
+		// 直接新装会因格式未知被拒并提示 --wipe。
+		_, err = h.run("install", "--space-id", "crypto", "--yes")
+		require.ErrorContains(t, err, "data_format_incompatible")
+		require.Empty(t, h.calls)
+
+		// 带 --wipe <digest> --no-backup --yes 不再报 wipe_not_needed，可正常清残留并全新安装。
+		out, err = h.run("install", "--space-id", "crypto", "--wipe", digest, "--no-backup", "--yes")
+		require.NoError(t, err)
+		require.Contains(t, out, `"status":"installed"`)
+		require.Contains(t, out, `"mode":"wipe"`)
+		require.Contains(t, h.calls, "wipe:control")
+		require.Contains(t, h.calls, "mark-complete")
 	})
 }
 

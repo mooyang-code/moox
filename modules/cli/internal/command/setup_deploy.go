@@ -475,6 +475,12 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 		}
 	}
 	if status.Route == deployscan.RouteFresh {
+		if !formatReport.CanKeep {
+			status.Modes = []string{setupModeWipe, setupModeUninstall}
+			status.Notes = append(status.Notes, setupdataformat.IncompatibleError(formatReport).Error())
+			status.NextSteps = append(status.NextSteps, "查看预检并清空残留后重装（--wipe）：moox-cli setup install --space-id <空间>")
+			return status, nil
+		}
 		status.Modes = []string{setupModeInstall}
 		status.NextSteps = append(status.NextSteps, "新安装：moox-cli setup install --space-id <空间>（先不带 --yes 看预检）")
 		return status, nil
@@ -498,6 +504,27 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 			"单独卸载（删除全部数据，不可恢复）：moox-cli setup wipe（先不带 --yes 看预览）")
 	}
 	return status, nil
+}
+
+// deploymentHasResidualData 判断目标机是否存在残留的部署根条目、用户服务、进程或有数据的组件目录。
+func deploymentHasResidualData(status *setupDeployment) bool {
+	if status == nil {
+		return false
+	}
+	if status.DataFormat != nil && !status.DataFormat.CanKeep {
+		return true
+	}
+	for _, report := range status.Hosts {
+		if len(report.Entries) != 0 || len(report.Units) != 0 || report.Processes != 0 {
+			return true
+		}
+		for _, df := range report.DataFormats {
+			if df.HasData {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func newSetupValidateCommand(deps setupDeps) *cobra.Command {

@@ -167,7 +167,7 @@ func TestPendingImportGuardAndLifecycle(t *testing.T) {
 	assert.Equal(t, "https://example.com/2", opened.Channels[0].WebhookURL)
 
 	// 标记存在时 WriteGuarded 必须拒绝覆盖并保留原文件内容。
-	overwriteAttempt, err := SealPending(`{"v":3}`, 1, nil, creds, time.Date(2026, 11, 27, 3, 0, 0, 0, time.UTC))
+	overwriteAttempt, err := Seal(`{"v":3}`, 1, nil, creds, time.Date(2026, 11, 27, 3, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	err = WriteGuarded(path, overwriteAttempt)
 	require.ErrorIs(t, err, ErrPendingImport)
@@ -191,12 +191,55 @@ func TestPendingImportGuardAndLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, opened.File.PendingImport)
 
-	nextPending, err := SealPending(`{"v":4}`, 4, nil, creds, time.Date(2026, 11, 28, 5, 0, 0, 0, time.UTC))
+	nextRaw, err := Seal(`{"v":4}`, 4, nil, creds, time.Date(2026, 11, 28, 5, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	require.NoError(t, WriteGuarded(path, nextPending))
+	require.NoError(t, WriteGuarded(path, nextRaw))
 	meta, exists, err = ReadMetadata(path)
 	require.NoError(t, err)
 	require.True(t, exists)
-	assert.True(t, meta.PendingImport)
+	assert.False(t, meta.PendingImport, "Seal 写出时不得自带待导入标记")
 	assert.Equal(t, 4, meta.Secrets.Count)
+
+	// ClearPendingImport 在无标记时为无操作；打标后可清除且备份仍能正常解密。
+	cleared, err := ClearPendingImport(path)
+	require.NoError(t, err)
+	assert.False(t, cleared)
+
+	_, _, err = MarkPendingImport(path)
+	require.NoError(t, err)
+	cleared, err = ClearPendingImport(path)
+	require.NoError(t, err)
+	assert.True(t, cleared)
+
+	raw, err = ReadFile(path)
+	require.NoError(t, err)
+	opened, err = Open(raw, creds)
+	require.NoError(t, err)
+	assert.False(t, opened.File.PendingImport)
+}
+
+func TestVerifyKeyFingerprint(t *testing.T) {
+	store := &configcrypt.MemoryStore{}
+	creds, err := DeriveCredentials(store, true)
+	require.NoError(t, err)
+	defer creds.Clear()
+
+	raw, err := Seal(`{"v":1}`, 1, nil, creds, time.Date(2026, 11, 28, 6, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "moox.backup")
+	require.NoError(t, WriteAtomic(path, raw))
+	meta, exists, err := ReadMetadata(path)
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	// 同一钥匙串通过校验。
+	require.NoError(t, VerifyKeyFingerprint(meta, store))
+
+	// 空钥匙串（没有主密钥）或另一把主密钥都必须报 ErrKeyFingerprintMismatch。
+	require.ErrorIs(t, VerifyKeyFingerprint(meta, &configcrypt.MemoryStore{}), ErrKeyFingerprintMismatch)
+	otherStore := &configcrypt.MemoryStore{}
+	otherCreds, err := DeriveCredentials(otherStore, true)
+	require.NoError(t, err)
+	defer otherCreds.Clear()
+	require.ErrorIs(t, VerifyKeyFingerprint(meta, otherStore), ErrKeyFingerprintMismatch)
 }

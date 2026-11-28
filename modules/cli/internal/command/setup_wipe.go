@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	setupbackup "github.com/mooyang-code/moox/modules/cli/internal/setup/backup"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
@@ -61,8 +62,8 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 					return fmt.Errorf("functions_unread: 这些地域读不了云函数，没有清除任何东西：%v", unread)
 				}
 			}
+			route := deployscan.RouteForControl(reports, snapshot.Manifest.ControlHost().Name)
 			if !yes {
-				route := deployscan.RouteForControl(reports, snapshot.Manifest.ControlHost().Name)
 				preview := map[string]any{
 					"action":      "wipe",
 					"route":       route,
@@ -70,7 +71,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 					"left_behind": wipeLeftBehind(snapshot.Manifest, cleanFunctions),
 				}
 				if len(plan.Hosts) > 0 {
-					preview["backup"] = previewWipeBackup(cmd.Context(), deps, file, snapshot, noBackup)
+					preview["backup"] = previewWipeBackup(cmd.Context(), deps, file, snapshot, route, noBackup)
 				}
 				if note := wipeTradeNote(snapshot.Manifest, plan); note != "" {
 					preview["note"] = note
@@ -87,11 +88,11 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			if expect != plan.Digest {
 				return fmt.Errorf("wipe_scope_changed: 清除范围和预览不一致（现在是 %s），没有清除任何主机；重新预览并让用户确认", plan.Digest)
 			}
-			backupSummary, err := prepareBackupBeforeWipe(cmd.Context(), deps, file, snapshot, plan, noBackup)
+			backupSummary, err := prepareBackupBeforeWipe(cmd.Context(), deps, file, snapshot, route, plan, noBackup)
 			if err != nil {
 				return err
 			}
-			results, err := executeSetupWipe(cmd.Context(), deps, snapshot, plan, source.operatorDir)
+			results, err := executeSetupWipe(cmd.Context(), deps, snapshot, plan, source.operatorDir, backupSummary)
 			if err != nil {
 				return err
 			}
@@ -149,9 +150,15 @@ func wipeTradeNote(manifest *topology.Config, plan deployscan.Plan) string {
 	return "主机 " + strings.Join(hosts, "、") + " 上有 Trade：清空会删除 Trade 库（交易账户与组合账户不纳入重装备份），先确认没有持仓和挂单"
 }
 
-// executeSetupWipe 并行清空清除范围里的全部主机并确认结果，setup wipe 和 setup install 共用。一台失败时全部重跑，清空脚本可重复执行。
+// executeSetupWipe 在真正开始清空主机前给备份打上“卸载后待导入”标记，随后并行清空清除范围里的全部主机并确认结果，setup wipe 和 setup install 共用。
+// 一台失败时全部重跑，清空脚本可重复执行。
 // 全部清空之后删掉这台电脑上的操作员身份（moox-cli 的私钥、控制机根证书与它的指纹）与缓存的管理台证书：重装的控制机会生成新的 CA，moox-cli 的密钥也重新生成。
-func executeSetupWipe(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, plan deployscan.Plan, operatorDir string) ([]deployscan.HostResult, error) {
+func executeSetupWipe(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, plan deployscan.Plan, operatorDir string, backupSummary *setupWipeBackupSummary) ([]deployscan.HostResult, error) {
+	if len(plan.Hosts) > 0 && backupSummary != nil && backupSummary.Status != "skipped" && backupSummary.Status != "reused_pending" {
+		if _, _, err := setupbackup.MarkPendingImport(backupSummary.Path); err != nil {
+			return nil, fmt.Errorf("backup_mark_failed: 开始清空前标记本机备份为待导入失败：%w；没有清空任何主机", err)
+		}
+	}
 	manifest := snapshot.Manifest
 	results := make([]deployscan.HostResult, len(plan.Hosts))
 	errs := make([]error, len(plan.Hosts))

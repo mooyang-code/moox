@@ -74,8 +74,8 @@ type setupDeps struct {
 	markInstallComplete func(context.Context, *setupSnapshot, string) error
 	// previewBackup 只读统计清空前将备份的密钥与告警渠道条数（不落盘、不解密）。
 	previewBackup func(context.Context, string, *setupSnapshot) (int, int, error)
-	// backupBeforeWipe 在清空前自动导出密钥与告警渠道并写入带待导入标记的 moox.backup。
-	backupBeforeWipe func(context.Context, string, *setupSnapshot, string) (setupBackupOutput, error)
+	// backupBeforeWipe 在清空前自动导出密钥与告警渠道到 moox.backup（写出时不带待导入标记，overwritePending 允许覆盖已过期的待导入备份）。
+	backupBeforeWipe func(context.Context, string, *setupSnapshot, string, bool) (setupBackupOutput, error)
 	// restoreBackup 在安装全部组件就绪之后、完整初始化之前按覆盖自动导入待导入的备份。
 	restoreBackup func(context.Context, string, *setupSnapshot) (*setupRestoreBackupSummary, error)
 	regionCloud   func(*setupSnapshot, string) (setupFunctionCloud, error)

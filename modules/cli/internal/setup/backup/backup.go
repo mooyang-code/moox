@@ -43,6 +43,9 @@ type Channel struct {
 // ErrPendingImport 表示备份文件带有“卸载后待导入”标记，任何自动或手动备份都不得覆盖。
 var ErrPendingImport = errors.New("backup_pending_import")
 
+// ErrKeyFingerprintMismatch 表示当前本机钥匙串密钥与备份文件记录的指纹不一致，重装后无法解密导入。
+var ErrKeyFingerprintMismatch = errors.New("backup_key_fingerprint_mismatch")
+
 // File 是落盘的备份文件外层结构：不含任何明文密钥、口令或 Webhook。
 type File struct {
 	Format         string `json:"format"`
@@ -113,17 +116,9 @@ func (c *Credentials) Clear() {
 	c.key = nil
 }
 
-// Seal 把加密的密钥迁移包与告警渠道清单合成为加密备份文件内容（手动备份，不设待导入标记）。
+// Seal 把加密的密钥迁移包与告警渠道清单合成为加密备份文件内容（写出时不带待导入标记；
+// 待导入标记只在卸载真正开始清空主机前通过 MarkPendingImport 写入）。
 func Seal(secretsBundle string, secretCount int, channels []Channel, creds *Credentials, now time.Time) ([]byte, error) {
-	return seal(secretsBundle, secretCount, channels, creds, now, false)
-}
-
-// SealPending 与 Seal 相同，但同时写入“卸载后待导入”标记（pending_import=true），用于卸载前自动备份。
-func SealPending(secretsBundle string, secretCount int, channels []Channel, creds *Credentials, now time.Time) ([]byte, error) {
-	return seal(secretsBundle, secretCount, channels, creds, now, true)
-}
-
-func seal(secretsBundle string, secretCount int, channels []Channel, creds *Credentials, now time.Time, pendingImport bool) ([]byte, error) {
 	if creds == nil || len(creds.key) == 0 {
 		return nil, errors.New("缺少备份派生密钥")
 	}
@@ -154,7 +149,6 @@ func seal(secretsBundle string, secretCount int, channels []Channel, creds *Cred
 		Format:         Format,
 		ExportedAt:     now.UTC().Format(time.RFC3339),
 		KeyFingerprint: creds.Fingerprint,
-		PendingImport:  pendingImport,
 		Secrets:        SecretsSection{Count: secretCount, Bundle: secretsBundle},
 		NotificationChannels: NotificationSection{
 			Count:  len(channels),
@@ -170,6 +164,25 @@ func seal(secretsBundle string, secretCount int, channels []Channel, creds *Cred
 		return nil, fmt.Errorf("序列化备份文件失败：%w", err)
 	}
 	return append(encoded, '\n'), nil
+}
+
+// VerifyKeyFingerprint 核对备份文件记录的主密钥指纹与当前本机钥匙串密钥是否一致（不自动生成新密钥）。
+func VerifyKeyFingerprint(meta *File, store configcrypt.KeyStore) error {
+	if meta == nil {
+		return errors.New("缺少备份元数据")
+	}
+	creds, err := DeriveCredentials(store, false)
+	if err != nil {
+		if errors.Is(err, configcrypt.ErrKeyMissing) {
+			return fmt.Errorf("%w: 本机钥匙串里没有与该备份对应的密钥，重装后将无法解密导入", ErrKeyFingerprintMismatch)
+		}
+		return fmt.Errorf("读取本机钥匙串密钥失败：%w", err)
+	}
+	defer creds.Clear()
+	if meta.KeyFingerprint == "" || meta.KeyFingerprint != creds.Fingerprint {
+		return fmt.Errorf("%w: 备份文件不是用当前这台电脑的钥匙串密钥生成的（指纹不匹配），重装后将无法解密导入", ErrKeyFingerprintMismatch)
+	}
+	return nil
 }
 
 // ReadMetadata 只读解析备份文件外层元数据（不解密告警渠道，也不访问钥匙串）。
@@ -214,7 +227,7 @@ func WriteGuarded(path string, data []byte) error {
 	return WriteAtomic(path, data)
 }
 
-// MarkPendingImport 给本机已有备份打上“卸载后待导入”标记（用于带 --no-backup 卸载时保护并复用已有备份）。
+// MarkPendingImport 给本机已有备份打上“卸载后待导入”标记（在卸载真正开始清空主机前调用）。
 // 备份文件不存在时返回 (nil, false, nil)。
 func MarkPendingImport(path string) (*File, bool, error) {
 	meta, exists, err := ReadMetadata(path)
@@ -233,6 +246,24 @@ func MarkPendingImport(path string) (*File, bool, error) {
 		return nil, true, err
 	}
 	return meta, true, nil
+}
+
+// ClearPendingImport 清除本机备份上过期的“卸载后待导入”标记（例如系统仍处于已装好状态并完成 --keep 更新后）。
+// 备份文件不存在或未带待导入标记时不做改动，返回 (false, nil)。
+func ClearPendingImport(path string) (bool, error) {
+	meta, exists, err := ReadMetadata(path)
+	if err != nil || !exists || !meta.PendingImport {
+		return false, err
+	}
+	meta.PendingImport = false
+	encoded, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("序列化备份文件失败：%w", err)
+	}
+	if err := WriteAtomic(path, append(encoded, '\n')); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // MarkImported 在安装自动导入成功后清掉“卸载后待导入”标记并记录导入时刻。

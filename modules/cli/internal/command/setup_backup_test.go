@@ -284,11 +284,15 @@ func TestSetupBackupRefusesOverwriteWhenPendingImport(t *testing.T) {
 	require.NoError(t, err)
 	defer creds.Clear()
 
-	pendingRaw, err := setupbackup.SealPending(`{"format":"moox.secrets/v1","ciphertext":"GOOD"}`, 3, []setupbackup.Channel{
+	raw, err := setupbackup.Seal(`{"format":"moox.secrets/v1","ciphertext":"GOOD"}`, 3, []setupbackup.Channel{
 		{ChannelType: "feishu", WebhookURL: "https://open.feishu.cn/hook/good", Secret: "s"},
 	}, creds, time.Date(2026, 11, 28, 1, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	require.NoError(t, setupbackup.WriteAtomic(backupPath, pendingRaw))
+	require.NoError(t, setupbackup.WriteAtomic(backupPath, raw))
+	_, _, err = setupbackup.MarkPendingImport(backupPath)
+	require.NoError(t, err)
+	pendingRaw, err := os.ReadFile(backupPath)
+	require.NoError(t, err)
 
 	called := false
 	previous := openCommandGateway
@@ -335,12 +339,14 @@ func TestImportBackupFileOverwritesSecretsAndImportsChannelsThenClearsPendingFla
 	require.NoError(t, err)
 	defer creds.Clear()
 
-	pendingRaw, err := setupbackup.SealPending(`{"format":"moox.secrets/v1","ciphertext":"RESTORE-ME"}`, 2, []setupbackup.Channel{
+	raw, err := setupbackup.Seal(`{"format":"moox.secrets/v1","ciphertext":"RESTORE-ME"}`, 2, []setupbackup.Channel{
 		{ChannelID: "old-id", ChannelType: "feishu", WebhookURL: "https://open.feishu.cn/hook/abc", Secret: "sec-abc"},
 		{ChannelID: "old-id-2", ChannelType: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/hook/def"},
 	}, creds, time.Date(2026, 11, 28, 2, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	require.NoError(t, setupbackup.WriteAtomic(backupPath, pendingRaw))
+	require.NoError(t, setupbackup.WriteAtomic(backupPath, raw))
+	_, _, err = setupbackup.MarkPendingImport(backupPath)
+	require.NoError(t, err)
 
 	// 先模拟渠道导入失败：此时不能清掉 pending_import，以便重跑继续恢复。
 	failingGateway := &fakeBackupGateway{

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
+	setupbackup "github.com/mooyang-code/moox/modules/cli/internal/setup/backup"
 	setupdataformat "github.com/mooyang-code/moox/modules/cli/internal/setup/dataformat"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
@@ -289,7 +290,10 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupSnapshot
 	switch status.Route {
 	case deployscan.RouteFresh:
 		if options.wipe != "" {
-			return errors.New("wipe_not_needed: 目标机没有装过，去掉 --wipe 再运行")
+			if !deploymentHasResidualData(status) {
+				return errors.New("wipe_not_needed: 目标机没有装过且没有残留数据，去掉 --wipe 再运行")
+			}
+			return executeWipeInstall(cmd, deps, snapshot, options, status, fullSteps)
 		}
 		if options.keep {
 			return errors.New("keep_not_needed: 目标机没有装过，去掉 --keep 直接运行 setup install --space-id <空间> --yes")
@@ -331,7 +335,7 @@ func previewSetupInstall(
 	formatReport setupdataformat.Report,
 	fullSteps []setupInstallStep,
 ) error {
-	// 没装过：直接展示新安装预检，不问保留还是覆盖。
+	// 没装过：干净主机直接展示新安装预检；若发现残留数据或无格式文件的数据目录，同时给出 --wipe 预检与摘要。
 	if status.Route == deployscan.RouteFresh {
 		if options.spaceID != "" {
 			if err := setupStartPrerequisites(snapshot.Manifest, options.spaceID); err != nil {
@@ -347,10 +351,27 @@ func previewSetupInstall(
 			"warnings":       status.Warnings,
 			"notes":          status.Notes,
 		}
+		hasResidual := deploymentHasResidualData(status)
 		if !formatReport.CanKeep {
 			preview["data_format"] = formatReport
 		}
 		note := "目标机没装过，将执行全新安装；确认后加 --yes 执行"
+		if hasResidual {
+			wipeReports, wipeScanErr := deps.scanDeployment(cmd.Context(), snapshot, deployscan.Options{Sizes: true, Wipe: true})
+			if wipeScanErr == nil {
+				wipePlan := deployscan.BuildPlan(wipeReports)
+				if len(wipePlan.Hosts) > 0 {
+					backupPreview := previewWipeBackup(cmd.Context(), deps, options.file, snapshot, status.Route, options.noBackup)
+					preview["wipe"] = wipePlan
+					preview["backup"] = backupPreview
+					if !formatReport.CanKeep {
+						note = fmt.Sprintf("目标机没有版本文件但留有格式不兼容或未记录格式的数据，需先清空残留再安装；确认后带 --wipe %s --yes（若旧管理台未运行请加 --no-backup）执行", wipePlan.Digest)
+					} else {
+						note = fmt.Sprintf("目标机没有版本文件但部署根有残留条目，可直接加 --yes 安装，或带 --wipe %s --yes 先清空残留再安装", wipePlan.Digest)
+					}
+				}
+			}
+		}
 		if options.spaceID == "" {
 			note += "（执行时要带 --space-id <空间>）"
 		}
@@ -380,7 +401,7 @@ func previewSetupInstall(
 		}
 	} else {
 		wipePlan = deployscan.BuildPlan(wipeReports)
-		backupPreview := previewWipeBackup(cmd.Context(), deps, options.file, snapshot, options.noBackup)
+		backupPreview := previewWipeBackup(cmd.Context(), deps, options.file, snapshot, status.Route, options.noBackup)
 		wipeOption = buildWipeOptionPreview(snapshot.Manifest, options.spaceID, wipePlan, backupPreview, fullSteps)
 	}
 
@@ -532,6 +553,12 @@ func executeKeepInstall(
 		if err := runSetupSteps(cmd, deps, snapshot, options, steps, len(steps), "install_step_failed", state); err != nil {
 			return err
 		}
+		backupPath := setupBackupPath(options.file, snapshot.Manifest)
+		if cleared, err := setupbackup.ClearPendingImport(backupPath); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "提示：保留数据更新已完成，但清理本机备份 %s 上过期的待导入标记失败：%v\n", backupPath, err)
+		} else if cleared {
+			fmt.Fprintf(cmd.ErrOrStderr(), "已清除本机备份 %s 上过期的待导入标记\n", backupPath)
+		}
 		return writeSetupJSON(cmd, map[string]any{
 			"status":  "updated",
 			"mode":    "keep",
@@ -575,11 +602,11 @@ func executeWipeInstall(
 	if options.wipe != plan.Digest {
 		return fmt.Errorf("wipe_scope_changed: 清空范围和预检不一致（现在是 %s），没有动任何主机；先不带 --yes 预检，让用户确认后带 --wipe", plan.Digest)
 	}
-	backupSummary, err := prepareBackupBeforeWipe(ctx, deps, options.file, snapshot, plan, options.noBackup)
+	backupSummary, err := prepareBackupBeforeWipe(ctx, deps, options.file, snapshot, status.Route, plan, options.noBackup)
 	if err != nil {
 		return err
 	}
-	if _, err := executeSetupWipe(ctx, deps, snapshot, plan, options.source.operatorDir); err != nil {
+	if _, err := executeSetupWipe(ctx, deps, snapshot, plan, options.source.operatorDir, backupSummary); err != nil {
 		return err
 	}
 	return executeFullInstall(cmd, deps, snapshot, options, fullSteps, "wipe", backupSummary)

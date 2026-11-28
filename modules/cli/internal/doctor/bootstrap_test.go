@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	core "github.com/mooyang-code/moox/packages/doctor"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,11 +23,15 @@ func (s deploymentClientStub) ListDeployments(context.Context, string) ([]Deploy
 }
 
 type overviewClientStub struct {
-	overview *monitorpb.HealthOverview
-	err      error
+	overview    *monitorpb.HealthOverview
+	err         error
+	lastSpaceID *string
 }
 
-func (s overviewClientStub) GetHealthOverview(context.Context, string) (*monitorpb.HealthOverview, error) {
+func (s overviewClientStub) GetHealthOverview(_ context.Context, spaceID string) (*monitorpb.HealthOverview, error) {
+	if s.lastSpaceID != nil {
+		*s.lastSpaceID = spaceID
+	}
 	return s.overview, s.err
 }
 
@@ -284,4 +290,45 @@ func TestRunBootstrapReadsMonitorHealthOverview(t *testing.T) {
 	require.Equal(t, core.StatusUnknown, report.CheckByID("monitor.overview").Status)
 	require.Equal(t, core.StatusBlocked, report.CheckByID("monitor.component:collector@control").Status)
 	require.Equal(t, core.StatusBlocked, report.CheckByID("monitor.alerts:control").Status)
+
+	// 4. 新装后暂停态组件通过自检；请求只查 mooxsys 空间，业务空间的严重告警（未启动空间标的或首根 K 线未闭合的行情探针）不阻塞安装自检。
+	var requestedSpace string
+	freshOpts := BootstrapOptions{
+		NodeID:        "control",
+		LocalNodeID:   "control",
+		DeployRoot:    root,
+		Client:        deploymentClientStub{rows: append(deployments, Deployment{ComponentID: "strategy", HostID: "control", Status: "enabled"})},
+		MonitorClient: overviewClientStub{
+			lastSpaceID: &requestedSpace,
+			overview: &monitorpb.HealthOverview{
+				TopologyKnown: true,
+				Components: []*monitorpb.HealthComponent{
+					{HostId: "control", ComponentId: "monitor", Status: "healthy", Readiness: "ready", Reporter: &monitorpb.HealthSignal{Status: "healthy"}},
+					{HostId: "control", ComponentId: "collector", Status: "healthy", Readiness: "ready", Reporter: &monitorpb.HealthSignal{Status: "healthy"}},
+					{
+						HostId: "control", ComponentId: "strategy", Status: "healthy", Readiness: "ready",
+						Reporter:  &monitorpb.HealthSignal{Status: "healthy"},
+						Lifecycle: &commonpb.LifecycleSnapshot{Stage: "paused"},
+					},
+				},
+				Alerts: []*monitorpb.HealthAlert{
+					{Id: "stockcn-tag", Severity: "critical", Title: "A 股标的标签为空", Object: &monitorpb.HealthObject{Type: "subject_tag", SpaceId: "stockcn"}},
+					{Id: "crypto-canary", Severity: "critical", Title: "行情探针无 K 线", Object: &monitorpb.HealthObject{Type: "market_canary", SpaceId: "crypto"}},
+				},
+			},
+		},
+		Probe: func(context.Context, string, int, string) (ProbeResult, error) {
+			return ProbeResult{StatusCode: 200}, nil
+		},
+		CheckIDs: []string{
+			"monitor.component:strategy@control",
+			"monitor.alerts:control",
+		},
+	}
+	report, err = RunBootstrap(context.Background(), freshOpts)
+	require.NoError(t, err)
+	require.Equal(t, events.SystemSpaceID, requestedSpace, "自检应只请求 mooxsys 系统空间概览")
+	require.Equal(t, core.ConclusionHealthy, report.Conclusion)
+	require.Equal(t, core.StatusPass, report.CheckByID("monitor.component:strategy@control").Status)
+	require.Equal(t, core.StatusPass, report.CheckByID("monitor.alerts:control").Status)
 }

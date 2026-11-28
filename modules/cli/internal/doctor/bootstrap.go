@@ -15,6 +15,7 @@ import (
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -108,7 +109,9 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 		if options.MonitorClient == nil {
 			runner.overviewErr = fmt.Errorf("Monitor 客户端不可用")
 		} else {
-			runner.overview, runner.overviewErr = options.MonitorClient.GetHealthOverview(ctx, "")
+			// 自检只看系统与组件级健康（mooxsys）：避免新装时未启动业务空间的标的健康或尚未闭合首根 K 线的行情探针告警误伤安装自检；
+			// 业务空间的数据链路验证由后续的 setup verify 负责。
+			runner.overview, runner.overviewErr = options.MonitorClient.GetHealthOverview(ctx, events.SystemSpaceID)
 			if runner.overviewErr == nil && runner.overview == nil {
 				runner.overviewErr = fmt.Errorf("Monitor 返回了空的健康概览")
 			}
@@ -396,6 +399,9 @@ func (r *bootstrapRunner) checkMonitorAlerts(checkID string) core.CheckResult {
 func (r *bootstrapRunner) alertAppliesToNode(object *monitorpb.HealthObject) bool {
 	if object == nil {
 		return true
+	}
+	if spaceID := strings.TrimSpace(object.GetSpaceId()); spaceID != "" && spaceID != events.SystemSpaceID {
+		return false
 	}
 	if hostID := strings.TrimSpace(object.GetHostId()); hostID != "" {
 		return hostID == r.options.NodeID
