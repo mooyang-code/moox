@@ -68,9 +68,7 @@ export function accountStatusConfirm(input: { accountName: string; enable: boole
   if (input.paper && !input.enable) {
     return {
       title: `关闭模拟账户「${input.accountName}」`,
-      lines: [
-        "撤掉它的未完成订单并停用账户。关闭后不能再下单，也不能重新启用；历史订单和成交保留。"
-      ],
+      lines: ["撤掉它的未完成订单并停用账户。关闭后不能再下单，也不能重新启用；历史订单和成交保留。"],
       nameRequired: false,
       danger: true,
       confirmText: "关闭模拟账户"

@@ -77,12 +77,9 @@ describe("跟随", () => {
     expect(lastFollowText(task({}), "UTC")).toBe("还没有成功的跟随");
     // 没有时 Admin 给 "0"
     expect(lastFollowText(task({ last_success_at: "0" }), "UTC")).toBe("还没有成功的跟随");
-    expect(
-      rescanProgressText(
-        { rescan_from: "2026-11-01T00:00:00Z", rescan_until: "2026-11-07T04:00:00Z" },
-        "UTC"
-      )
-    ).toBe("整段重读：已读到 2026-11-01 00:00 UTC，截止 2026-11-07 04:00 UTC");
+    expect(rescanProgressText({ rescan_from: "2026-11-01T00:00:00Z", rescan_until: "2026-11-07T04:00:00Z" }, "UTC")).toBe(
+      "整段重读：已读到 2026-11-01 00:00 UTC，截止 2026-11-07 04:00 UTC"
+    );
     expect(rescanProgressText({}, "UTC")).toBe("");
   });
 

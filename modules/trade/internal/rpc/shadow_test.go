@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/packages/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 // shadowStore 打开一个空库，建好两个空间里的组合 logical-1（目标历史按组合挂外键）。

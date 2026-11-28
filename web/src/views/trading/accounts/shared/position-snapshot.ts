@@ -1,5 +1,5 @@
 import { listPositions } from "@/api/trade";
-import type { LogicalAccount, Position, TradingAccount } from "@/api/trade/types";
+import type { LogicalAccount, Position } from "@/api/trade/types";
 import { coinOf } from "./markets";
 
 export interface PositionSnapshot {
@@ -12,10 +12,7 @@ export interface PositionSnapshot {
 /**
  * 读组合账户的实际持仓：统一调用一次 ListPositions，由后端返回启用成员的永续合约持仓与现货/股票余额。
  */
-export async function loadPositionSnapshot(
-  logical: LogicalAccount,
-  _accounts?: ReadonlyMap<string, TradingAccount>
-): Promise<PositionSnapshot> {
+export async function loadPositionSnapshot(logical: LogicalAccount): Promise<PositionSnapshot> {
   const response = await listPositions({ logical_account_id: logical.logical_account_id });
   const positions = response.positions || [];
   return {

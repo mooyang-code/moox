@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"

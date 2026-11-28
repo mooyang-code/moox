@@ -89,7 +89,7 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 						targetTime := start.Format(time.RFC3339)
 						req := marketfetch.Request{
 							BatchID: "batch", BatchKind: domain.BatchKindRealtime, RequirePeriodCommit: true, SpaceID: "crypto", MarketID: "crypto", InstrumentType: product, DatasetID: "bars", Frequency: frequency, Provider: "binance", SourceID: product + "_http", MarketType: product, RequestID: "request",
-							Items: []domain.CollectionItem{{InstanceID: "i1", SubjectID: subject, Provider: "binance", SourceID: product + "_http", MarketType: product, DataType: "kline", DatasetID: "bars", Frequency: frequency, TargetDataTime: targetTime, BarLimit: 1}},
+							Items:   []domain.CollectionItem{{InstanceID: "i1", SubjectID: subject, Provider: "binance", SourceID: product + "_http", MarketType: product, DataType: "kline", DatasetID: "bars", Frequency: frequency, TargetDataTime: targetTime, BarLimit: 1}},
 							Targets: []domain.WriteTarget{{ID: "t1", SpaceID: "crypto", InstanceID: "i1", TaskID: "task-1", DatasetID: "bars", Frequency: frequency, TargetDataTime: targetTime, SeriesIndex: 0, SeriesHash: "h", ExpectedCount: 1}},
 						}
 						encoded, marshalErr := json.Marshal(req)

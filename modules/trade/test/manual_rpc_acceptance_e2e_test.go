@@ -8,8 +8,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
-	"github.com/mooyang-code/moox/packages/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/stretchr/testify/require"
 )
 

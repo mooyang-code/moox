@@ -71,7 +71,7 @@ type ingestModeSnapshot struct {
 	stream *collectorpb.StreamWorkerStatus
 }
 
-func (s ingestModeSnapshot) GetModes() []*collectorpb.IngestMode         { return s.modes }
+func (s ingestModeSnapshot) GetModes() []*collectorpb.IngestMode        { return s.modes }
 func (s ingestModeSnapshot) GetStream() *collectorpb.StreamWorkerStatus { return s.stream }
 
 func getIngestMode(ctx context.Context, invoke func(context.Context, string, string, any, any) error, spaceID, datasetID string) (ingestModeSnapshot, error) {

@@ -236,7 +236,14 @@ describe("monitor page", () => {
           id: "storage",
           status: "healthy",
           datasets: [
-            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", frequency: "1m", status: "healthy", timezone: "UTC" }
+            {
+              producer: "storage",
+              space_id: "crypto",
+              dataset_id: "dataset_abc",
+              frequency: "1m",
+              status: "healthy",
+              timezone: "UTC"
+            }
           ]
         }
       ]
@@ -361,7 +368,14 @@ describe("monitor page", () => {
           id: "storage",
           status: "healthy",
           datasets: [
-            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", frequency: "1m", status: "healthy", timezone: "UTC" }
+            {
+              producer: "storage",
+              space_id: "crypto",
+              dataset_id: "dataset_abc",
+              frequency: "1m",
+              status: "healthy",
+              timezone: "UTC"
+            }
           ]
         }
       ]

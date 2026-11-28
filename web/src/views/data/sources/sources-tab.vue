@@ -192,8 +192,7 @@ async function loadExtraFieldSources() {
   extraFieldSources.value = [];
   if (!currentSpace) return;
   try {
-    const options =
-      (await GetDataTypeConfigs()).configs?.find(item => item.data_type === "kline")?.extra_fields || [];
+    const options = (await GetDataTypeConfigs()).configs?.find(item => item.data_type === "kline")?.extra_fields || [];
     if (!request.isLatest() || currentSpace !== props.spaceId) return;
     const mine = options.filter(option => (option.market_id || "").trim().toLowerCase() === currentSpace.trim().toLowerCase());
     if (!mine.length) return;

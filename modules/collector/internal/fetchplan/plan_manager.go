@@ -242,7 +242,7 @@ type PlanManager struct {
 	// Timeout 是单轮对账的超时。
 	Timeout time.Duration
 
-	mu sync.Mutex
+	mu       sync.Mutex
 	workers  map[string]*planWorker
 	disabled map[string]bool
 	wg       sync.WaitGroup

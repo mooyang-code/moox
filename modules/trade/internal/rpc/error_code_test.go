@@ -14,8 +14,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
-	"github.com/mooyang-code/moox/packages/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 // 会话未启动、需要接管各有专门的错误码，前端按码判断（重试、提示勾选接管），不再匹配消息文字。

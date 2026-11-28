@@ -149,7 +149,13 @@ describe("新建账户", () => {
     expect(swapReq).not.toHaveProperty("logical_account_id");
     expect(swapReq).not.toHaveProperty("control_mode");
 
-    const spotForm = { ...createDefaultForm(), name: "a", markets: ["spot"] as 1[], join: "exist" as const, existingLogicalId: "l" };
+    const spotForm = {
+      ...createDefaultForm(),
+      name: "a",
+      markets: ["spot"] as 1[],
+      join: "exist" as const,
+      existingLogicalId: "l"
+    };
     const spotReq = buildPaperRequest(spotForm);
     expect(spotReq.margin_mode).toBe("");
     expect(spotReq.paper.order_retention_days).toBe(5);

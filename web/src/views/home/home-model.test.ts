@@ -161,7 +161,10 @@ describe("home data rows", () => {
           lag_seconds: String(engineLag("1m", 600))
         }
       },
-      { factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", frequency: "1h", status: "enabled" }, members: [] }
+      {
+        factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", frequency: "1h", status: "enabled" },
+        members: []
+      }
     ] as unknown as FactorTaskInfo[];
     const rows = factorRows(sets, "crypto", names, NOW, "UTC");
     expect(rows.map(row => [row.taskId, row.label, row.factors, row.health.label, row.tone])).toEqual([
@@ -501,7 +504,12 @@ describe("home tiles", () => {
     const covered = attentionItems({
       ...base,
       alerts: [
-        { id: "a", severity: "warning", title: "入库落后", object: { type: "dataset", dataset_id: "dataset_abc", frequency: "1m" } }
+        {
+          id: "a",
+          severity: "warning",
+          title: "入库落后",
+          object: { type: "dataset", dataset_id: "dataset_abc", frequency: "1m" }
+        }
       ]
     });
     expect(covered.map(item => item.source)).toEqual(["监控", "数据"]);

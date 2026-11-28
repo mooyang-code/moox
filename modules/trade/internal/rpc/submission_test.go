@@ -7,8 +7,8 @@ import (
 
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/packages/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 func ordinaryRequest() *tradepb.SubmitOrderReq {

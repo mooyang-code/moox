@@ -78,11 +78,7 @@
           </a-row>
           <a-row :gutter="16">
             <a-col :span="12">
-              <a-form-item
-                field="frequency"
-                :label="editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'"
-                required
-              >
+              <a-form-item field="frequency" :label="editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'" required>
                 <a-select v-if="frequencyOptions.length" v-model="frequencyValue" placeholder="请选择频率" allow-clear>
                   <a-option v-for="option in frequencyOptions" :key="option.value" :value="option.value">{{
                     option.label

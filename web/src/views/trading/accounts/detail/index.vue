@@ -481,7 +481,7 @@ async function reload() {
   target.value = targetRsp.target || null;
   targetLanes.value = targetRsp.lanes || [];
   allAccounts.value = accountRsp.accounts || [];
-  const next = await loadPositionSnapshot(logicalRsp.logical_account, accounts.value).catch(() => null);
+  const next = await loadPositionSnapshot(logicalRsp.logical_account).catch(() => null);
   if (next && request.isLatest() && id === logicalId.value) snapshot.value = next;
 }
 

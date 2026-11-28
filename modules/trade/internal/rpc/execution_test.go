@@ -11,8 +11,8 @@ import (
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
-	"github.com/mooyang-code/moox/packages/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 type manualReplayDependencies struct{}

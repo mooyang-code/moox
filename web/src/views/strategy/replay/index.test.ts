@@ -305,7 +305,9 @@ describe("strategy replay page", () => {
   it("waits for partial metrics only on the cancelled replay", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), replay("r2", "succeeded")], page: { total: 2 } });
     api.getReplay.mockImplementation((id: string) =>
-      Promise.resolve(id === "r1" ? replay("r1", "running") : replay("r2", "succeeded", '{"bars":2,"ok_bars":2,"limitations":[]}'))
+      Promise.resolve(
+        id === "r1" ? replay("r1", "running") : replay("r2", "succeeded", '{"bars":2,"ok_bars":2,"limitations":[]}')
+      )
     );
     api.cancelReplay.mockResolvedValue({});
     const wrapper = mountPage();
@@ -323,7 +325,9 @@ describe("strategy replay page", () => {
     // 回到被取消的回放，指标写入后显示部分指标。
     api.getReplay.mockImplementation((id: string) =>
       Promise.resolve(
-        id === "r1" ? justCancelled("r1", '{"bars":3,"ok_bars":3,"total_return":0.01,"limitations":[]}') : replay("r2", "succeeded")
+        id === "r1"
+          ? justCancelled("r1", '{"bars":3,"ok_bars":3,"total_return":0.01,"limitations":[]}')
+          : replay("r2", "succeeded")
       )
     );
     await wrapper.findAll("button.replay-row")[0].trigger("click");
@@ -862,7 +866,9 @@ describe("strategy replay page", () => {
     expect((wrapper.vm as any).pollFailures).toBe(0);
     expect((wrapper.vm as any).awaitingMetrics).toBeNull();
     nextList.resolve({
-      items: [replay("s1", "succeeded", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })],
+      items: [
+        replay("s1", "succeeded", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })
+      ],
       page: { total: 1 }
     });
     api.getReplay.mockResolvedValue(

@@ -26,7 +26,13 @@ const overview: HealthOverview = {
     {
       id: "storage",
       datasets: [
-        { producer: "storage", space_id: "stockcn", dataset_id: "dataset_stockcn_1m", frequency: "1m", timezone: "Asia/Shanghai" },
+        {
+          producer: "storage",
+          space_id: "stockcn",
+          dataset_id: "dataset_stockcn_1m",
+          frequency: "1m",
+          timezone: "Asia/Shanghai"
+        },
         { producer: "storage", space_id: "crypto", dataset_id: "dataset_spot_1m", frequency: "1m", timezone: "UTC" },
         { producer: "storage", space_id: "crypto", dataset_id: "", frequency: "1m" }
       ]
@@ -34,7 +40,13 @@ const overview: HealthOverview = {
     {
       id: "strategy",
       datasets: [
-        { producer: "strategy", space_id: "crypto", dataset_id: "strategy_abc", frequency: "1m", display_name: "动量轮动（26d51f7e）" }
+        {
+          producer: "strategy",
+          space_id: "crypto",
+          dataset_id: "strategy_abc",
+          frequency: "1m",
+          display_name: "动量轮动（26d51f7e）"
+        }
       ]
     }
   ]

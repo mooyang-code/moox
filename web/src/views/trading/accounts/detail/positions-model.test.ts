@@ -401,7 +401,9 @@ describe("A 股持仓", () => {
         blocked,
         lanes,
         swapPositions: [],
-        spotHoldings: [{ asset: "600519.XSHG", signed_quantity: "300", sellable: "300", instrument_id: "600519.XSHG" } as Position],
+        spotHoldings: [
+          { asset: "600519.XSHG", signed_quantity: "300", sellable: "300", instrument_id: "600519.XSHG" } as Position
+        ],
         converged: false,
         hasTarget: true
       })[0];

@@ -1124,20 +1124,27 @@ func TestFirstStreamPlanUsesShortLead(t *testing.T) {
 
 func TestPlanManagerTriggerWakesWorkerAndKeepsRunContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	manager := &PlanManager{
 		Interval: time.Hour,
 		Spaces:   func(context.Context) ([]string, error) { return []string{"crypto"}, nil },
 	}
 	worker := &planWorker{wake: make(chan struct{}, 1), done: make(chan struct{})}
 	manager.workers = map[string]*planWorker{"crypto": worker}
-	go manager.Run(ctx)
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		manager.Run(ctx)
+	}()
 	manager.Trigger("CRYPTO")
 	manager.Trigger("crypto")
 	select {
 	case <-worker.wake:
 	case <-time.After(5 * time.Second):
+		cancel()
+		<-runDone
 		t.Fatal("没有唤醒空间协程")
 	}
+	cancel()
+	<-runDone
 	close(worker.done)
 }

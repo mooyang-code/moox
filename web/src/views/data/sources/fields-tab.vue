@@ -295,9 +295,7 @@ async function load() {
     const specFailed = specResult.status === "rejected";
     const datasetsFailed = datasetsResult.status === "rejected";
     const detail =
-      specResult.status === "fulfilled"
-        ? specResult.value.configs?.find(item => item.data_type === "kline")
-        : undefined;
+      specResult.status === "fulfilled" ? specResult.value.configs?.find(item => item.data_type === "kline") : undefined;
 
     const bundles: DatasetColumnBundle[] = [];
     let failedColumns = 0;

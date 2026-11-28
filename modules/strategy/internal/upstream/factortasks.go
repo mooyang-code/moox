@@ -9,9 +9,9 @@ import (
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/packages/spacecontext"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorname"
+	"github.com/mooyang-code/moox/packages/spacecontext"
 )
 
 // 策略实例与因子任务的关联、参数提交（设计 6.2、8.1、8.3）。实例创建时选定因子任务；声明了 factor_params 的实例第一次启用时

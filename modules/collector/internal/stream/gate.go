@@ -69,13 +69,13 @@ const (
 )
 
 type periodSlot struct {
-	period   time.Time
-	close    time.Time
-	deadline time.Time
-	due      time.Time               // 最晚开始提交时刻 D
-	dataset  marketfetch.PlanDataset // 只带这一期生效的那一份
-	index    map[string]int          // 订阅符号 → 该份标的下标
-	bars     []marketdata.NormalizedKline
+	period      time.Time
+	close       time.Time
+	deadline    time.Time
+	due         time.Time               // 最晚开始提交时刻 D
+	dataset     marketfetch.PlanDataset // 只带这一期生效的那一份
+	index       map[string]int          // 订阅符号 → 该份标的下标
+	bars        []marketdata.NormalizedKline
 	got         []bool
 	sent        []bool
 	arrived     int
