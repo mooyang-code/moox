@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { getFactorStatus, listAllFactorTasks } from "@/api/factor";
 import type { EngineStatus, FactorTask, FactorTaskInfo } from "@/api/factor/types";
+import { readAllPages } from "@/api/read-all-pages";
 import { listDatasets } from "@/api/storage/metadata";
 import { createLatestRequestGuard, type LatestRequest } from "@/utils/latest-request";
 
@@ -13,14 +14,13 @@ async function fetchAllTasks(spaceId: string) {
 }
 
 async function fetchDatasetNames(spaceId: string) {
-  const names: Record<string, string> = {};
-  for (let page = 1; ; page += 1) {
+  const datasets = await readAllPages(async page => {
     // 名称只用于展示，失败时回落到 dataset_id：一律静默（读取失败时每次刷新都会重试）
     const rsp = await listDatasets({ space_id: spaceId, page: { page, size: PAGE_SIZE } });
-    const batch = rsp.datasets || [];
-    for (const dataset of batch) names[dataset.dataset_id] = dataset.name;
-    if (!rsp.page_result?.has_more || !batch.length) break;
-  }
+    return { items: rsp.datasets || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
+  const names: Record<string, string> = {};
+  for (const dataset of datasets) names[dataset.dataset_id] = dataset.name;
   return names;
 }
 

@@ -21,13 +21,20 @@ export function routeViewKey(route: RouteViewLike, spaceGeneration = 0): string 
 /**
  * 真正切换空间（A → B）时，空间内页面需要做的路由清理：
  * - 带对象 ID 的详情页（声明了 meta.spaceRedirect）：对象不属于新空间，跳回对应列表；
- * - 其余带 URL 查询参数的空间内页面：清掉旧空间的筛选、选中与分页参数；
- * - 全局页面或没有 URL 参数的页面无需导航。
+ * - 其余带 URL 查询参数的空间内页面：保留 `tab` 页签参数，清掉旧空间的筛选、选中与分页参数；
+ * - 全局页面、没有 URL 参数或仅带有效 `tab` 的页面无需导航。
  */
-export function spaceSwitchNavigation(route: RouteViewLike): { path: string; query?: Record<string, never> } | null {
+export function spaceSwitchNavigation(route: RouteViewLike): { path: string; query?: Record<string, string> } | null {
   if (route.meta?.scope !== "space") return null;
   const redirect = route.meta?.spaceRedirect;
   if (typeof redirect === "string" && redirect) return { path: redirect };
-  if (route.query && Object.keys(route.query).length > 0) return { path: route.path, query: {} };
-  return null;
+  const query = route.query;
+  if (!query) return null;
+  const keys = Object.keys(query);
+  if (keys.length === 0) return null;
+  const rawTab = query.tab;
+  const firstTab = Array.isArray(rawTab) ? rawTab[0] : rawTab;
+  const keptTab = typeof firstTab === "string" && firstTab ? firstTab : undefined;
+  if (keys.length === 1 && keys[0] === "tab" && keptTab !== undefined) return null;
+  return { path: route.path, query: keptTab !== undefined ? { tab: keptTab } : {} };
 }

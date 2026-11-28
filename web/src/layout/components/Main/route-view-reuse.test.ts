@@ -143,7 +143,7 @@ describe("route view reuse with a real router", () => {
     wrapper.unmount();
   });
 
-  it("切空间时空间内列表页先清空 URL 参数再整页重建，只按新空间挂载一次", async () => {
+  it("切空间时空间内列表页保留 tab 页签并清空其余 URL 参数，再按新空间整页重建一次", async () => {
     const { counts, seenQueries, router } = setup();
     await router.push({ path: "/strategy/tasks", query: { tab: "replay", replay_id: "r1" } });
     const wrapper = await mountMain(router);
@@ -154,9 +154,9 @@ describe("route view reuse with a real router", () => {
     useSpaceStore().setSelectedSpace("stockcn");
     await flushPromises();
     expect(router.currentRoute.value.path).toBe("/strategy/tasks");
-    expect(router.currentRoute.value.query).toEqual({});
+    expect(router.currentRoute.value.query).toEqual({ tab: "replay" });
     expect(counts.spaceList).toBe(2);
-    expect(seenQueries.spaceList).toEqual([{ tab: "replay", replay_id: "r1" }, {}]);
+    expect(seenQueries.spaceList).toEqual([{ tab: "replay", replay_id: "r1" }, { tab: "replay" }]);
     wrapper.unmount();
   });
 

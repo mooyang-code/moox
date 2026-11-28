@@ -40,11 +40,32 @@ describe("spaceSwitchNavigation", () => {
     ).toEqual({ path: "/strategy/tasks" });
   });
 
-  it("带查询参数的空间内列表页切空间清空 query；无 query 时无需导航", () => {
+  it("带查询参数的空间内列表页切空间保留 tab 页签、清空其余参数；无 query 或仅含有效 tab 时无需导航", () => {
     expect(
       spaceSwitchNavigation({
         path: "/strategy/tasks",
-        query: { tab: "replay", replay_id: "r1" },
+        query: { tab: "replay", replay_id: "r1", page: "2" },
+        meta: { scope: "space" }
+      })
+    ).toEqual({ path: "/strategy/tasks", query: { tab: "replay" } });
+    expect(
+      spaceSwitchNavigation({
+        path: "/strategy/tasks",
+        query: { tab: "replay" },
+        meta: { scope: "space" }
+      })
+    ).toBeNull();
+    expect(
+      spaceSwitchNavigation({
+        path: "/archive/tasks",
+        query: { task: "ds_1", rpage: "2" },
+        meta: { scope: "space" }
+      })
+    ).toEqual({ path: "/archive/tasks", query: {} });
+    expect(
+      spaceSwitchNavigation({
+        path: "/strategy/tasks",
+        query: { tab: "" },
         meta: { scope: "space" }
       })
     ).toEqual({ path: "/strategy/tasks", query: {} });

@@ -1,5 +1,6 @@
 import { computed, ref, type Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { readAllPages } from "@/api/read-all-pages";
 import { queryTimeSeriesRows } from "@/api/storage/view";
 import type { FilterSpec, Row, RowKey, TimeRange } from "@/api/storage/types";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -163,9 +164,10 @@ export function useViewKline(options: UseViewKlineOptions) {
   ): Promise<ViewBrowseTableRow[]> {
     const space_id = options.spaceId();
     const timeRange = options.previewRange();
-    const rows: Row[] = [];
     const limit = query.limit;
-    for (let pageNo = 1; rows.length < limit; pageNo += 1) {
+    let read = 0;
+    const maxPages = Math.max(50, Math.ceil(limit / KLINE_PAGE_SIZE) * 2);
+    const rows = await readAllPages<Row>(async pageNo => {
       const rsp = await queryTimeSeriesRows({
         space_id,
         dataset_id: datasetId,
@@ -177,11 +179,11 @@ export function useViewKline(options: UseViewKlineOptions) {
         page: { page: pageNo, size: KLINE_PAGE_SIZE },
         total_mode: "NONE"
       });
-      if (!isCurrent()) break; // 已失效：不再翻页
+      if (!isCurrent()) return { items: [], hasMore: false }; // 已失效：不再翻页
       const pageRows = rsp.rows || [];
-      rows.push(...pageRows);
-      if (!rsp.page_result?.has_more || pageRows.length === 0) break;
-    }
+      read += pageRows.length;
+      return { items: pageRows, hasMore: Boolean(rsp.page_result?.has_more) && read < limit };
+    }, maxPages);
     return timeSeriesRowsToTableRows(rows).map((row, index) => ({
       ...row,
       freq: rows[index]?.key?.time_series?.frequency || "-",

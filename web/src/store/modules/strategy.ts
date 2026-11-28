@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
 import { errorMessage } from "@/api/http";
+import { readAllPages } from "@/api/read-all-pages";
 import { deleteStrategy, listStrategies } from "@/api/strategy";
 import type { Strategy } from "@/api/strategy-types";
 
@@ -42,15 +43,17 @@ export const useStrategyStore = defineStore("strategy", () => {
     catalogLoading.value = true;
     catalogError.value = "";
     try {
-      const items: Strategy[] = [];
-      let total = 0;
-      for (let page = 1; ; page += 1) {
+      let read = 0;
+      const items = await readAllPages<Strategy>(async page => {
         const response = await listStrategies({ page, size: pageSize });
-        if (requestId !== catalogRequest) return;
-        items.push(...response.items);
-        total = response.page.total;
-        if (!response.items.length || (!response.page.has_more && items.length >= total)) break;
-      }
+        if (requestId !== catalogRequest) return { items: [], hasMore: false };
+        read += response.items.length;
+        return {
+          items: response.items,
+          hasMore: response.page.has_more || read < response.page.total
+        };
+      });
+      if (requestId !== catalogRequest) return;
       strategyCatalog.value = items;
       strategiesComplete.value = true;
     } catch (err) {
